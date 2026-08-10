@@ -17,7 +17,7 @@ cask "deviceterm" do
   homepage "https://deviceterm.com"
 
   # macOS 14+ (Sonoma), matching the app's LSMinimumSystemVersion.
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   # In-app updates are handled by Sparkle; `brew upgrade` also works
   # (re-installs the DMG). Both are supported.
