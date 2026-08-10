@@ -1,0 +1,43 @@
+{
+  "info" : {
+    "arguments" : [
+      "devicectl",
+      "device",
+      "simulate",
+      "location",
+      "list",
+      "--device",
+      "00000000-0000-0000-0000-000000000000",
+      "--json-output",
+      "list.json"
+    ],
+    "commandType" : "devicectl.device.simulate.location.list",
+    "environment" : {
+      "TERM" : "xterm-256color"
+    },
+    "jsonVersion" : 4,
+    "outcome" : "success",
+    "version" : "629.3"
+  },
+  "result" : {
+    "availableScenarios" : [
+      {
+        "localizedName" : "City Run",
+        "name" : "City Run"
+      },
+      {
+        "localizedName" : "City Bicycle Ride",
+        "name" : "City Bicycle Ride"
+      },
+      {
+        "localizedName" : "Apple",
+        "name" : "Apple"
+      },
+      {
+        "localizedName" : "Freeway Drive",
+        "name" : "Freeway Drive"
+      }
+    ],
+    "deviceIdentifier" : "00000000-0000-0000-0000-000000000000"
+  }
+}

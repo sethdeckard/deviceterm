@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# commit-msg hook: enforce subject + body conventions.
+# Spec lives in AGENTS.md "Commit Messages".
+# Activate via `make hooks` (one-time after clone).
+
+set -eu
+
+msg_file="${1:-}"
+[ -z "$msg_file" ] && exit 0
+
+# Strip everything from the `# ------- >8 -------` scissors line onward
+# (the diff that `git commit -v` appends for editor preview), then strip
+# `#`-prefixed comment lines and collapse trailing blanks. Git itself
+# truncates at the scissors marker, but only after this hook runs — so
+# we have to do it here too, otherwise the `+`/`-` diff body lines fail
+# the 72-char body check below.
+stripped=$(awk '/^# *-+ *>8 *-+ *$/{exit} {print}' "$msg_file" \
+            | git stripspace --strip-comments)
+
+# Skip merges, reverts, fixups, squashes — git generates these for us.
+first_line=$(printf '%s\n' "$stripped" | head -n 1)
+case "$first_line" in
+    "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
+esac
+
+fail() {
+    echo "commit-msg: $1" >&2
+    exit 1
+}
+
+# Subject line.
+subject_len=${#first_line}
+[ "$subject_len" -le 50 ] || fail "subject exceeds 50 chars ($subject_len) — keep it concise"
+
+case "$first_line" in
+    [A-Z]*) ;;
+    *) fail "subject must start with a capital letter" ;;
+esac
+
+case "$first_line" in
+    *.) fail "subject must not end with a period" ;;
+esac
+
+# If the message has more than one line, line 2 must be blank, and body lines wrap at 72.
+total_lines=$(printf '%s\n' "$stripped" | wc -l | tr -d '[:space:]')
+if [ "$total_lines" -gt 1 ]; then
+    second_line=$(printf '%s\n' "$stripped" | sed -n '2p')
+    [ -z "$second_line" ] || fail "subject must be followed by a blank line before the body"
+
+    printf '%s\n' "$stripped" | awk 'NR>2 && length>72 {
+        printf "commit-msg: body line %d exceeds 72 chars (%d): %s\n", NR, length, $0 > "/dev/stderr"
+        bad=1
+    } END { exit bad+0 }' || exit 1
+fi
+
+exit 0

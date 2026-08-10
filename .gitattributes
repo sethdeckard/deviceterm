@@ -1,0 +1,20 @@
+* text=auto eol=lf
+
+# XCFrameworks — binary, large, machine-generated.
+*.xcframework/** binary
+
+# Standard binary types.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.icns binary
+*.zip binary
+*.tar.gz binary
+*.dmg binary
+
+# Swift sources keep their natural formatting.
+*.swift text diff=swift
+*.m text diff=objc
+*.h text diff=objc

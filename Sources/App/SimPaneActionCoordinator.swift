@@ -1,0 +1,408 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// SimPaneActionCoordinator: the sim pane's menu/chrome action wiring,
+// lifted out of `TabContentViewController`. One instance per tab. It owns
+// the recording-destination map (written on record-start, consumed on
+// record-stop and on cleanup teardown) and the shutdown→boot resequencing,
+// screenshot/record shell-outs, Finder reveals, Simulator.app launch,
+// install, and the resurrect-watch dispatch: everything the sim pane's VC
+// callbacks fire. Device and pending panes wire far less, so they stay on
+// the VC.
+//
+// Live tab credentials (the primary terminal's session + cap) are read from
+// the tab view model at action time, because terminals can change between
+// wiring and invocation, so nothing is snapshotted at construction.
+
+import AppKit
+import DaemonProtocol
+import Foundation
+
+@MainActor
+final class SimPaneActionCoordinator {
+    private let tabID: TabID
+    private let router: Router
+    private let daemonClient: any DeviceControlling
+    private let simResurrect: SimResurrect
+    /// The window's tab-list nav state. A `var` (not `let`) because a
+    /// cross-window tab move relocates the tab's `TabState` into a
+    /// different window's `TabListViewModel` instance; the owning
+    /// `TabContentViewController` calls `rebind` so credential + pane
+    /// lookups keep resolving against the tab's new home. Every closure
+    /// here reads it live through `self`, so repointing is enough.
+    private var tabListVM: TabListViewModel
+    /// Active simctl recordVideo destinations, keyed by sim UDID. Populated
+    /// by `onRecordStart`; consumed (and removed) by `onRecordStop` so the
+    /// stop closure can reveal the finalized file in Finder, and by
+    /// `stopRecordingForCleanup` on teardown. Only the recording `Process`
+    /// itself lives on the VC (menu validation reads it).
+    private var recordingDestinations: [String: String] = [:]
+
+    /// The tab's primary-terminal session + cap, the ownership binding a
+    /// reboot / erase re-asserts. Read live; empty strings if the tab is
+    /// already gone (the action is then a harmless no-op).
+    private var credentials: (sessionId: String, capability: String) {
+        let primary = tabListVM.tab(id: tabID)?.primaryTerminal
+        return (primary?.sessionId ?? "", primary?.capability ?? "")
+    }
+
+    init(
+        tabID: TabID,
+        router: Router,
+        daemonClient: any DeviceControlling,
+        simResurrect: SimResurrect,
+        tabListVM: TabListViewModel
+    ) {
+        self.tabID = tabID
+        self.router = router
+        self.daemonClient = daemonClient
+        self.simResurrect = simResurrect
+        self.tabListVM = tabListVM
+    }
+
+    /// Repoint at the tab's new-home nav state after a cross-window move.
+    func rebind(tabListVM: TabListViewModel) {
+        self.tabListVM = tabListVM
+    }
+
+    func wire(paneVC: SimulatorPaneViewController, simPane: SimPaneState) {
+        let tabID = self.tabID
+        let udid = simPane.udid
+        let displayName = simPane.displayName
+        // Stamp tabID before viewDidLoad runs so the chrome's drag
+        // host has it when constructed; the chrome strip drag-source
+        // ships `(tabID, slot)` in the pasteboard payload and the
+        // destination decoder rejects cross-tab drags. Without this
+        // the drag would be silently dropped.
+        paneVC.tabID = tabID
+        paneVC.onClose = { [weak self] in
+            self?.router.dispatch(.detachSimPane(tab: tabID, udid: udid, mode: .detach))
+        }
+        paneVC.onReboot = { [weak self] in
+            guard let self else { return }
+            let (sessionId, capability) = self.credentials
+            Task { @MainActor in
+                try? await self.daemonClient.bootDevice(
+                    udid: udid,
+                    sessionId: sessionId,
+                    capability: capability
+                )
+            }
+        }
+        paneVC.onLiveReboot = { [weak self, weak paneVC] in
+            guard let self, let paneVC else { return }
+            let (sessionId, capability) = self.credentials
+            Task { @MainActor in
+                // Sequence the shutdown→boot half through the pane's
+                // locally-observed `.shutdown` state, which the
+                // daemon's pane subscription drives once
+                // CoreSimulator has fully left ShuttingDown. The
+                // boot only fires once that signal arrives. A
+                // fixed sleep would either hurt the fast case or
+                // race the slow one (CoreSimulator's
+                // ShuttingDown→Shutdown timing varies from sub-100ms
+                // on fresh phones to multiple seconds on slow
+                // machines or watchOS sims), and an unconditional
+                // boot-after-timeout would silently fail the same
+                // way the fixed-delay shape did.
+                //
+                // The poll is capped at ~5s of 25ms ticks. On a sim
+                // that's still shutting down past the cap we
+                // bail without booting; the shutdown overlay's
+                // existing Reboot button is the recovery path once
+                // the transition finally completes. Ownership is
+                // re-asserted on the boot leg.
+                try? await self.daemonClient.shutdownDevice(udid: udid)
+                var attempts = 0
+                while paneVC.currentState != .shutdown, attempts < 200 {
+                    try? await Task.sleep(nanoseconds: 25_000_000)
+                    attempts += 1
+                }
+                guard paneVC.currentState == .shutdown else { return }
+                try? await self.daemonClient.bootDevice(
+                    udid: udid,
+                    sessionId: sessionId,
+                    capability: capability
+                )
+            }
+        }
+        paneVC.onEraseContent = { [weak self, weak paneVC] in
+            guard let self, let paneVC else { return }
+            let (sessionId, capability) = self.credentials
+            Task { @MainActor in
+                // Erase requires the sim to be shut down. Reuses the
+                // live-reboot shape: shutdown → wait for `.shutdown`
+                // (capped at ~5s of 25ms ticks) → erase → boot.
+                // Same recovery-by-fall-through-bail discipline: if
+                // the transition never lands the action stops short
+                // of the shell-out and the user can retry via the
+                // shutdown overlay's Reboot button once the
+                // transition completes. Ownership is re-asserted
+                // on the post-erase boot leg so the wiped sim
+                // re-mounts under this session.
+                try? await self.daemonClient.shutdownDevice(udid: udid)
+                var attempts = 0
+                while paneVC.currentState != .shutdown, attempts < 200 {
+                    try? await Task.sleep(nanoseconds: 25_000_000)
+                    attempts += 1
+                }
+                guard paneVC.currentState == .shutdown else { return }
+                do {
+                    try await SimulatorShellOut.eraseContent(udid: udid)
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Erase failed"
+                    alert.informativeText = "\(error)"
+                    alert.alertStyle = .critical
+                    alert.runModal()
+                    return
+                }
+                try? await self.daemonClient.bootDevice(
+                    udid: udid,
+                    sessionId: sessionId,
+                    capability: capability
+                )
+            }
+        }
+        paneVC.onScreenshot = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                let path = self.screenshotDestination(for: displayName)
+                do {
+                    try await SimulatorShellOut.captureScreenshot(
+                        udid: udid,
+                        to: path
+                    )
+                    // Reveal the new file in Finder. The user picked
+                    // the menu item, so a side effect that surfaces
+                    // the output is the natural follow-through,
+                    // matching Apple's Simulator.app's
+                    // "screenshot-in-Finder" behavior.
+                    NSWorkspace.shared.selectFile(
+                        path,
+                        inFileViewerRootedAtPath: ""
+                    )
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Screenshot failed"
+                    alert.informativeText = "\(error)"
+                    alert.alertStyle = .critical
+                    alert.runModal()
+                }
+            }
+        }
+        paneVC.onRecordStart = { [weak self, weak paneVC] in
+            guard let self, let paneVC else { return }
+            let path = self.recordingDestination(for: displayName)
+            do {
+                let process = try SimulatorShellOut.startRecording(
+                    udid: udid,
+                    to: path
+                )
+                paneVC.recordingProcess = process
+                // Remember where we put the file so the stop closure
+                // (which doesn't take parameters) can reveal it.
+                self.recordingDestinations[udid] = path
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Recording failed to start"
+                alert.informativeText = "\(error)"
+                alert.alertStyle = .critical
+                alert.runModal()
+            }
+        }
+        paneVC.onRecordStop = { [weak self, weak paneVC] in
+            guard let self, let paneVC,
+                let process = paneVC.recordingProcess else { return }
+            paneVC.recordingProcess = nil
+            let path = self.recordingDestinations.removeValue(forKey: udid)
+            Task { @MainActor in
+                await SimulatorShellOut.stopRecording(process)
+                // Reveal the finalized mp4 in Finder when the user
+                // ended the recording deliberately, matching the
+                // Screenshot flow's follow-through.
+                if let path {
+                    NSWorkspace.shared.selectFile(
+                        path,
+                        inFileViewerRootedAtPath: ""
+                    )
+                }
+            }
+        }
+        paneVC.onOpenInSimulatorApp = {
+            // Resolve Simulator.app through Launch Services so the
+            // selected Xcode (DEVELOPER_DIR, Xcode-beta, a
+            // non-default install path) wins. Hardcoding
+            // `/Applications/Xcode.app/...` breaks for those setups
+            // even when the daemon's CoreSimulator bridge happily
+            // uses the same alternative Xcode. Foregrounds the sim
+            // with `-CurrentDeviceUDID <udid>`. No daemon side
+            // effects.
+            let url = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.apple.iphonesimulator"
+            )
+            guard let url else {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't find Simulator.app"
+                alert.informativeText = "Launch Services has no "
+                    + "registration for com.apple.iphonesimulator. "
+                    + "Open Xcode once to register it, then retry."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
+            let config = NSWorkspace.OpenConfiguration()
+            config.arguments = ["-CurrentDeviceUDID", udid]
+            Task { @MainActor in
+                do {
+                    _ = try await NSWorkspace.shared
+                        .openApplication(at: url, configuration: config)
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Couldn't open Simulator.app"
+                    alert.informativeText = "\(error)"
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
+            }
+        }
+        paneVC.onInstallApp = { url in
+            Task { @MainActor in
+                do {
+                    try await SimulatorShellOut.installApp(
+                        udid: udid,
+                        path: url.path
+                    )
+                    let alert = NSAlert()
+                    alert.messageText = "Installed \(url.lastPathComponent)"
+                    alert.informativeText = "on \(displayName)."
+                    alert.alertStyle = .informational
+                    alert.runModal()
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Install failed"
+                    alert.informativeText = "\(error)"
+                    alert.alertStyle = .critical
+                    alert.runModal()
+                }
+            }
+        }
+        paneVC.onShutDownSim = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                try? await self.daemonClient.shutdownDevice(udid: udid)
+            }
+        }
+        paneVC.onRevealInFinder = {
+            // The sim's CoreSimulator device folder is the natural
+            // root for poking at app data / logs / preferences. We
+            // reveal it at the FOLDER level (Finder opens the
+            // parent, with this folder highlighted) so the user
+            // can navigate down into the `data/` subtree from a
+            // familiar starting point.
+            let path = NSHomeDirectory()
+                + "/Library/Developer/CoreSimulator/Devices/\(udid)"
+            NSWorkspace.shared.selectFile(
+                path,
+                inFileViewerRootedAtPath: ""
+            )
+        }
+        paneVC.onStateChange = { [weak self, weak paneVC] state in
+            guard let self else { return }
+            switch state {
+            case .shutdown:
+                self.simResurrect.watch(
+                    udid: udid,
+                    displayName: displayName
+                ) { [weak self] in
+                    self?.dispatchResurrect(udid: udid, displayName: displayName)
+                }
+
+            case .rendering:
+                self.simResurrect.unwatch(udid: udid)
+
+            default:
+                break
+            }
+            _ = paneVC  // keep the closure capturing the pane lifetime
+        }
+    }
+
+    /// Stop an in-flight recording on a pane being removed (close
+    /// pane / tab close / window close / quit). Detaches the SIGINT
+    /// + flush so the cleanup path stays synchronous. The simctl
+    /// child writes its mp4 trailer and exits on its own; the file
+    /// stays on Desktop where the user can find it later. Skips
+    /// the Finder reveal that the deliberate Stop button does;
+    /// surfacing N Finder windows from a tab-close with multiple
+    /// recordings would be obnoxious. No-op if no recording is in
+    /// flight.
+    func stopRecordingForCleanup(_ paneVC: SimulatorPaneViewController) {
+        guard let process = paneVC.recordingProcess else { return }
+        paneVC.recordingProcess = nil
+        recordingDestinations.removeValue(forKey: paneVC.udid)
+        Task.detached {
+            await SimulatorShellOut.stopRecording(process)
+        }
+    }
+
+    /// Re-attach a sim that shut down out from under its pane, restoring
+    /// its tree position. Fired by the SimResurrect watch set in
+    /// `onStateChange`.
+    private func dispatchResurrect(udid: String, displayName: String) {
+        guard let tabState = tabListVM.tab(id: tabID),
+            let index = tabState.simPanes.firstIndex(where: { $0.udid == udid })
+        else { return }
+        _ = displayName  // kept on the signature for the watch overlay above
+        let family = tabState.simPanes[index].family
+        let slot = PaneSlot.sim(udid: udid)
+        let leaves = PaneTreeOps.leavesInOrder(tabState.paneTree)
+        let anchor: ResurrectAnchor?
+        if let position = leaves.firstIndex(of: slot) {
+            if position > 0 {
+                anchor = ResurrectAnchor(slot: leaves[position - 1], side: .after)
+            } else if position + 1 < leaves.count {
+                anchor = ResurrectAnchor(slot: leaves[position + 1], side: .before)
+            } else {
+                anchor = nil  // sole leaf, nothing to anchor against
+            }
+        } else {
+            anchor = nil
+        }
+        router.dispatch(.detachSimPane(tab: tabID, udid: udid, mode: .detach))
+        router.dispatch(
+            .attachSimPane(
+            tab: tabID,
+            udid: udid,
+            displayName: nil,
+            family: family,
+            atIndex: index,
+            anchor: anchor
+        )
+            )
+    }
+
+    private func screenshotDestination(for displayName: String) -> String {
+        desktopPath(name: "Simulator Screen Shot - \(displayName)", ext: "png")
+    }
+
+    /// Sibling to `screenshotDestination` for `simctl io recordVideo`.
+    /// Same format, different prefix + extension. Apple's Simulator.app
+    /// uses "Simulator Screen Recording" for the video file.
+    private func recordingDestination(for displayName: String) -> String {
+        desktopPath(name: "Simulator Screen Recording - \(displayName)", ext: "mp4")
+    }
+
+    private func desktopPath(name: String, ext: String) -> String {
+        let desktop = FileManager.default
+            .urls(for: .desktopDirectory, in: .userDomainMask)
+            .first
+            ?? URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Desktop")
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let stamp = formatter.string(from: Date())
+        return desktop
+            .appendingPathComponent("\(name) - \(stamp).\(ext)")
+            .path
+    }
+}

@@ -1,0 +1,79 @@
+{
+  "info": {
+    "arguments": ["devicectl", "list", "devices", "--json-output", "out.json"],
+    "commandType": "devicectl.list.devices",
+    "jsonVersion": 4,
+    "outcome": "success",
+    "version": "629.3"
+  },
+  "result": {
+    "devices": [
+      {
+        "identifier": "00000000-1111-2222-3333-444455556666",
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "pairingState": "paired",
+          "transportType": "wired",
+          "tunnelState": "connected",
+          "tunnelIPAddress": "fdaa:bbbb:cccc::1",
+          "tunnelTransportProtocol": "tcp"
+        },
+        "deviceProperties": {
+          "bootState": "booted",
+          "name": "Test iPhone",
+          "osVersionNumber": "27.0"
+        },
+        "hardwareProperties": {
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 16 Pro",
+          "platform": "iOS",
+          "productType": "iPhone17,1",
+          "reality": "physical",
+          "udid": "00000000-1111-2222-3333-444455556666"
+        }
+      },
+      {
+        "identifier": "77778888-9999-AAAA-BBBB-CCCCDDDDEEEE",
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "pairingState": "paired",
+          "transportType": "localNetwork",
+          "tunnelState": "disconnected"
+        },
+        "deviceProperties": {
+          "bootState": "booted",
+          "name": "Old iPhone",
+          "osVersionNumber": "26.5"
+        },
+        "hardwareProperties": {
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 11 Pro",
+          "platform": "iOS",
+          "productType": "iPhone12,3",
+          "reality": "physical",
+          "udid": "77778888-9999-AAAA-BBBB-CCCCDDDDEEEE"
+        }
+      },
+      {
+        "identifier": "FACE0000-0000-0000-0000-0000SIMULATED",
+        "connectionProperties": {
+          "transportType": "sameMachine",
+          "tunnelState": "disconnected"
+        },
+        "deviceProperties": {
+          "bootState": "shutdown",
+          "name": "iPhone 17 Pro",
+          "osVersionNumber": "27.0"
+        },
+        "hardwareProperties": {
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 17 Pro",
+          "platform": "iOS",
+          "productType": "iPhone18,1",
+          "reality": "simulated",
+          "udid": "FACE0000-0000-0000-0000-0000SIMULATED"
+        }
+      }
+    ]
+  }
+}

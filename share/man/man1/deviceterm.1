@@ -1,0 +1,400 @@
+.\" deviceterm(1) manual page.
+.\" Groups and orders its COMMANDS to match the topic table in
+.\" Sources/DeviceTermCLI/HelpCatalog.swift, which is what
+.\" `deviceterm help` renders. Update both together when adding or
+.\" renaming a verb; HelpCatalogTests guards the verb set, not the
+.\" prose, so the wording here is maintained by hand.
+.TH DEVICETERM 1 "2026-08-03" "deviceterm" "DeviceTerm Manual"
+.SH NAME
+deviceterm \- macOS terminal where Apple devices behave as first-class panes
+.SH SYNOPSIS
+.B deviceterm
+.I command
+.RI [ args ...]
+.RB [ --pane
+.IR ref ]
+.RB [ --json ]
+.PP
+.B deviceterm help
+.RI [ command | topic ]
+.SH DESCRIPTION
+.B deviceterm
+is a macOS-native terminal application in which Apple-platform devices —
+booted simulators (iOS, watchOS, iPadOS, tvOS) and physically-connected
+iPhones/iPads — attach as first-class panes inside the tab. The
+.B deviceterm
+CLI runs inside a tab and drives its terminal session's device pane: touch,
+hardware buttons, keyboard, rotation, the watchOS Digital Crown, and
+accessibility inspection. Pass
+.B --pane
+.I ref
+to disambiguate when the session owns more than one device pane (resolving a
+shortId, name, sim UDID, physical deviceId, or paneId).
+.SH COMMANDS
+Grouped below in the order
+.B deviceterm help
+lists them. Run
+.B deviceterm help
+.I command
+to read that command's reference page, or
+.B deviceterm agents
+for the workflow and triage guide.
+.SS Drive the device
+Coords are normalized; (0,0) top-left, (1,1) bottom-right.
+.TP
+.B tap " " \fIx\fR " " \fIy\fR
+Single discrete tap.
+.TP
+.B swipe " " \fIfromX\fR " " \fIfromY\fR " " \fItoX\fR " " \fItoY\fR " " [\fB--duration\fR \fIms\fR] " " [\fB--hold\fR \fIms\fR]
+Interpolated drag at ~60 Hz. Default 200 ms.
+.B --hold
+adds an active dwell at the end point (the finger is reported,
+decelerated to a stop, before lifting).
+.TP
+.B long-press " " \fIx\fR " " \fIy\fR " " [\fB--duration\fR \fIms\fR]
+Down at point, hold, up. Default 500 ms.
+.TP
+.B pinch " " \fIf1x f1y f2x f2y tf1x tf1y tf2x tf2y\fR " " [\fB--duration\fR \fIms\fR]
+Two-finger interpolated path. Default 300 ms.
+.TP
+.B app-switcher
+Open the iOS App Switcher with an edge-tagged swipe up from the bottom
+edge with a dwell \(em a system gesture, not a content swipe (portrait). A
+physical device that doesn't support the edge gesture falls back to a
+consumer-HID Home double-press.
+.SS Hardware input
+.TP
+.B button " " \fIhome\fR|\fIlock\fR|\fIside\fR|\fIapple-pay\fR|\fIsiri\fR|\fIdigital-crown\fR
+Press a hardware button. Names are accepted in kebab-case (canonical),
+snake_case, camelCase, or all lowercase. Use
+.B crown
+for watchOS rotation.
+.TP
+.B key " " \fIkeyCode\fR " " \fIdown\fR|\fIup\fR
+kVK virtual key code (decimal or 0x-hex). Discrete events.
+.TP
+.B text " " \fIstring\fR
+Type an ASCII string.
+.TP
+.B rotate " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR
+Set device orientation. Names match UIKit's UIDeviceOrientation, in the
+same spellings
+.B button
+accepts.
+.TP
+.B crown " " \fIdelta\fR " " [\fB--velocity\fR \fIv\fR] " " [\fB--duration\fR \fIms\fR]
+Rotate the watchOS Digital Crown. Signed
+.IR delta ;
+positive is forward/down.
+.B --velocity
+is accepted on the wire but ignored at the daemon.
+.SS Inspect
+.TP
+.B ax tree
+Dump the frontmost iOS app's accessibility tree as JSON. On watchOS often
+returns an empty walk by design; use
+.B ax sweep
+as the documented workaround.
+.TP
+.B ax point " " \fIx\fR " " \fIy\fR
+Single AX element at a normalized point.
+.TP
+.B ax sweep " " [\fB--step\fR \fI0..1\fR]
+Grid-walk the screen via objectAtPoint and aggregate unique elements.
+.SS Devices
+.TP
+.B devices list
+The aggregate live roster: owned booted sims + connected physical devices,
+each annotated with its attach/ownership state. Physical devices also
+report model and OS version, disambiguating two devices that share a
+name.
+.TP
+.B device attach " " \fIref\fR
+The unified explicit-attach verb. Resolve
+.I ref
+against
+.B devices list
+(sim UDID, physical deviceId, or name) to claim a booted/orphan sim or
+mirror a connected physical device into the caller's tab. A bare UDID
+absent from the roster is claimed as an externally-booted sim.
+This is the only explicit-attach verb; there is no
+.BR "pane attach" .
+.TP
+.B panes list
+List the current session's device panes.
+.SS Manage the workspace
+Back-channel verbs.
+.TP
+.B tab open " " [\fB--window\fR \fIref\fR] " " [\fB--cwd\fR \fIpath\fR] " " [\fB--cmd\fR \fIcmd\fR]
+Mint a fresh agent-role tab in the chosen window (default: the window
+holding the calling tab).
+.B --cwd
+sets the shell's startup directory; without it the new tab inherits the
+GUI login-shell default.
+.B --cmd
+is typed into the new shell after attach, so the command runs once and
+the user is left at an interactive prompt.
+.TP
+.B tab close " " [\fB--tab\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
+Close the named tab. Default
+.B --tab
+is the caller's current tab.
+.B --mode
+controls what happens to any linked sims.
+.TP
+.B tab rename " " [\fB--tab\fR \fIref\fR] " " [\fIname\fR]
+Apply a manual title; omit
+.I name
+to restore the automatic title.
+.TP
+.B tab select " " [\fB--tab\fR \fIref\fR]
+Focus the named tab in its window.
+.TP
+.B tab info " " [\fB--tab\fR \fIref\fR]
+Print a structured description of the named tab (role, session, linked sim
+panes).
+.B --json
+emits the raw payload.
+.TP
+.B tab move " " [\fB--tab\fR \fIref\fR] " " [\fB--to\fR \fIindex\fR] " " [\fB--to-window\fR \fIref\fR]
+Reorder the named tab within its window
+.RB ( --to )
+or move it to another window
+.RB ( --to-window ,
+optionally at
+.BR --to ;
+default appends at the end). At least one of
+.B --to
+/
+.B --to-window
+is required. Mirrors dragging a tab in the strip.
+.TP
+.B tab set-private " " \fItrue\fR|\fIfalse\fR " " [\fB--tab\fR \fIref\fR]
+Hide the named tab from other sessions, or unhide it. A private tab and
+its panes drop out of every other session's
+.B tabs list
+and
+.B windows list
+views, can't be reached by their refs, and are refused to
+.B tab send-input
+/
+.B tab capture
+even from an orchestrator tab. The caller's own views are unchanged, and
+only a tab the caller owns a terminal in can be flipped. The value takes
+true/false, yes/no, on/off, or 1/0.
+.TP
+.B tab send-input " " [\fB--tab\fR \fIref\fR] " " [\fB--type-delay\fR \fIms\fR] " " \fItext\fR
+Requires a live orchestration grant \(em authority is the grant, not a
+role. Write
+.I text
+into the resolved tab's terminal as though the user had typed it. Control
+sequences (\\n, \\r, \\x03) flow through libghostty's input pipeline like
+real keypresses. A caller whose session holds no grant is rejected at the
+dispatcher's scope check with
+.BR error.role_violation .
+The receipt reports only the byte count, never the typed text.
+.B --type-delay
+.I ms
+animates the injection one character at a time (for screencasts); omit
+it for the instant one-shot. The verb returns as soon as the typing is
+enqueued (it does not block for the animation), and concurrent paced
+calls to one tab type out in order. Pacing is per-character, so keep
+paced text to plain commands plus a trailing newline. The delay is
+capped at 1000 ms.
+.TP
+.B tab capture " " [\fB--tab\fR \fIref\fR]
+Requires a live orchestration grant. Print the resolved tab's
+currently-visible viewport (the rendered terminal screen) to stdout.
+Captures the visible viewport only; there are no scrollback or
+line-count flags. Human mode emits the raw text;
+.B --json
+emits a
+.B {text}
+object. A caller whose session holds no grant is rejected with
+.BR error.role_violation .
+.TP
+.B tabs list
+List every open daemon session.
+.TP
+.B tabs current
+Print the caller's own tab row.
+.TP
+.B pane open --terminal " " [\fB--tab\fR \fIref\fR] " " [\fB--cwd\fR \fIpath\fR] " " [\fB--cmd\fR \fIcmd\fR]
+Open a fresh terminal pane alongside the tab's existing panes, splitting
+the tab rather than opening a new one.
+.B --cwd
+and
+.B --cmd
+carry the same meaning as on
+.BR "tab open" .
+.TP
+.B pane close " " [\fB--pane\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
+Detach or shut down the named sim pane.
+.TP
+.B pane info " " [\fB--pane\fR \fIref\fR]
+Print a structured description of the named sim pane.
+.TP
+.B pane rename " " [\fB--pane\fR \fIref\fR] " " [\fIname\fR]
+Not implemented; returns
+.B intent.internalError
+.TP
+.B pane move " " [\fB--pane\fR \fIref\fR] " " \fB--to-tab\fR \fIref\fR
+Not implemented; returns
+.B intent.internalError
+.TP
+.B window open
+Mint a new window with one fresh agent-role tab.
+.TP
+.B window close " " [\fB--window\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
+Close the named window.
+.TP
+.B window focus " " [\fB--window\fR \fIref\fR]
+Bring the named window forward.
+.TP
+.B windows list " " [\fB--all\fR]
+List the visible windows.
+.B --json
+emits a
+.B WindowInfoPayload
+array.
+.TP
+.B with-pane " " \fIref\fR " " \fIcmd\fR " " [\fIargs\fR ...]
+Resolve the device pane matching
+.I ref
+(shortId, name, sim UDID, physical deviceId, or paneId prefix), inject
+.B DEVICETERM_TARGET_PANE
+into the env, and exec
+.IR cmd .
+Downstream
+.B deviceterm tap
+/
+.B swipe
+/ etc. inside
+.I cmd
+auto-target without
+.BR --pane .
+.PP
+Refs accept:
+.B --tab
+takes a session UUID, a shortId, a quoted name, or the literal
+.BR current ;
+.B --pane
+takes a paneId UUID, a shortId, or
+.BR current ;
+.B --window
+takes a 1-based index or
+.BR current .
+.SS Setup and health
+.TP
+.B doctor
+Check the pieces every other verb depends on: the session env vars,
+whether
+.B xcrun
+resolves to the shim, the daemon socket and ping, and whether this
+session is live and authenticates. Also reports the caller's identity,
+its linked device panes, and the methods its transport and grant admit.
+.B --json
+emits the same report as an object. Exits 1 when any axis fails;
+warnings alone still exit 0.
+.TP
+.B events
+Subscribe to this session's event stream as one JSON object per line.
+Long-running; exits on daemon EOF or Ctrl-C.
+.TP
+.B version
+Print versions of deviceterm + daemon + RPC wire + macOS.
+.TP
+.B dump-config
+Print every recognized
+.I ~/.config/deviceterm/config
+key with its current value and source layer.
+.TP
+.B completions install " " \fIzsh\fR|\fIbash\fR|\fIfish\fR
+Generate and install the per-shell completion script. Prints the install
+path and a one-line activation hint.
+.SS Docs
+.TP
+.B help " " [\fIcommand\fR|\fItopic\fR]
+Print the command list, or one command's reference page.
+.B --help
+and
+.B -h
+are the same verb. The concepts named at the foot of the list
+(targeting, refs, output, troubleshooting) are addressable the same way.
+.TP
+.B agents
+Print the workflow and triage guide: how a device pane attaches to a
+tab, recipes for the common automation shapes, and the permission model
+behind the errors the CLI returns.
+.SH OUTPUT
+Data commands (lists, receipts) support
+.B --json
+for machine-readable output: lists become JSON arrays, receipts become
+JSON objects with the same fields as the human form. Successful output
+goes to stdout; errors stay on stderr in human form. Documentation
+commands
+.RB ( --help ,
+.BR agents )
+are prose either way; AX commands always emit JSON.
+.SH ENVIRONMENT
+.TP
+.B DEVICETERM_SESSION
+UUID identifying the caller's terminal session. Daemon-minted, injected by
+the GUI when the terminal opens; each terminal split has its own session.
+.TP
+.B DEVICETERM_SESSION_CAP
+Capability token for the session, validated on every session-scoped RPC.
+.TP
+.B DEVICETERM_DAEMON_SOCK
+Path to the daemon's Unix-domain socket. Defaults to the per-user
+location under Application Support.
+.TP
+.B DEVICETERM_SHIM_DIR
+Per-session
+.I bin/
+holding the xcrun/simctl shim and the deviceterm-cli symlink.
+.TP
+.B DEVICETERM_TARGET_PANE
+Optional device-pane target consumed by pane-targeted commands. Set by
+.B deviceterm with-pane
+(to the resolved pane's key) so child processes auto-target.
+.SH FILES
+.TP
+.I ~/.config/deviceterm/config
+User overrides. See
+.B deviceterm dump-config
+for recognized keys.
+.TP
+.I ~/Library/Caches/deviceterm/sessions/<sessionId>/
+Per-session scratch directory: shim
+.IR bin/ ,
+the zsh
+.IR ZDOTDIR ,
+and the owner manifest.
+.SH DIAGNOSTICS
+Pane attachment is a precondition for input and AX commands. If
+.B deviceterm tap
+returns
+.RI \(lq no device pane in this session\(rq ,
+boot a sim from this terminal with
+.B xcrun simctl boot \fIUDID\fR
+\(em the deviceterm shim intercepts the boot and creates the pane. Custom
+helpers that bypass
+.B xcrun simctl boot
+won't create a pane. Run
+.B deviceterm doctor
+for an env + daemon + session health check, or
+.B deviceterm agents
+for the full triage guide.
+.SH SEE ALSO
+.BR simctl (1),
+.BR xcrun (1)
+.PP
+.B deviceterm help
+\(em the command list, one line per verb.
+.PP
+.B deviceterm help \fIcommand\fR
+\(em that command's reference page.
+.PP
+.B deviceterm agents
+\(em workflow and triage guide.

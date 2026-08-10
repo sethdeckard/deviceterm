@@ -1,0 +1,139 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// SimulatorShellOut: synchronous wrappers around the `xcrun simctl`
+// subcommands that don't belong on the daemon's RPC surface. Per the
+// project philosophy (cat E in docs/PHILOSOPHY.md), wholesale shelling-out
+// to `simctl` for actions Apple already exposes is preferable to
+// reimplementing them as new RPC verbs: the daemon owns the sim's
+// runtime state (HID/AX/display), `simctl` owns one-shot device
+// administration (erase / install / `simctl io` capture).
+//
+// Each entry point is a small wrapper around `Process`, with no new
+// daemon types, no wire surface. Callers run them from the GUI
+// process; the running sim's ownership is preserved because the
+// caller frames the shutdown→action→boot sequence and the boot leg
+// re-asserts `(sessionId, capability)` through the daemon's
+// `device.boot` RPC.
+
+import Foundation
+
+enum SimulatorShellOut {
+    /// `xcrun simctl erase <udid>`: wipe the device back to factory
+    /// state. The sim must already be shut down; callers sequence
+    /// shutdown → erase → boot. Throws on non-zero exit.
+    ///
+    /// Async-only: a real `simctl erase` can take many seconds
+    /// (Apple's tool blocks while CoreSimulator writes the data
+    /// container back to factory), and `Process.waitUntilExit()` is
+    /// synchronous. The implementation hops to a detached Task so
+    /// the caller's actor (typically `@MainActor`) is free to
+    /// continue painting + responding to events while the wipe
+    /// runs. A sync variant would invite call-site bugs that
+    /// silently freeze the GUI.
+    static func eraseContent(udid: String) async throws {
+        try await runDetached(arguments: ["simctl", "erase", udid])
+    }
+
+    /// `xcrun simctl io <udid> screenshot <path>`: write a PNG of
+    /// the current sim frame to `path`. Same async-detach discipline
+    /// as `eraseContent`; throws on non-zero exit.
+    static func captureScreenshot(udid: String, to path: String) async throws {
+        try await runDetached(
+            arguments: ["simctl", "io", udid, "screenshot", path]
+        )
+    }
+
+    /// `xcrun simctl install <udid> <path>`: install a built .app
+    /// bundle on the sim. simctl install only accepts unpacked .app
+    /// bundles; the GUI picker enforces that so this entry point
+    /// doesn't need to validate. Same async-detach discipline as
+    /// `eraseContent`; throws on non-zero exit so the caller can
+    /// surface simctl's stderr (on failure the error usually
+    /// identifies what's wrong with the bundle: missing
+    /// architecture, mismatched runtime, etc.).
+    static func installApp(udid: String, path: String) async throws {
+        try await runDetached(
+            arguments: ["simctl", "install", udid, path]
+        )
+    }
+
+    /// `xcrun simctl io <udid> recordVideo <path>`: start an mp4
+    /// recording that continues until the returned Process is
+    /// interrupted (SIGINT). Throws on launch failure; the long-lived
+    /// recording itself runs asynchronously in the child process. The
+    /// caller is responsible for stopping it via `stopRecording(_:)`.
+    static func startRecording(udid: String, to path: String) throws -> Process {
+        let process = Process()
+        process.launchPath = "/usr/bin/xcrun"
+        process.arguments = ["simctl", "io", udid, "recordVideo", path]
+        // Route both streams to /dev/null rather than `Pipe()`, because a
+        // Pipe whose reader nobody drains deadlocks the writer once
+        // its kernel buffer (64KB on macOS) fills. simctl io
+        // recordVideo prints status output during long recordings,
+        // and an unread pipe would eventually wedge the child;
+        // FileHandle.nullDevice forwards to /dev/null at the kernel
+        // level so writes always succeed.
+        process.standardError = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        return process
+    }
+
+    /// Stop a recording started by `startRecording`. simctl io
+    /// recordVideo flushes its mp4 trailer and exits cleanly on
+    /// SIGINT; the async-detach wait avoids blocking @MainActor
+    /// during the final flush (sub-second on most recordings but
+    /// not guaranteed bounded). No-op if the process has already
+    /// exited.
+    static func stopRecording(_ process: Process) async {
+        guard process.isRunning else { return }
+        process.interrupt()
+        await Task.detached { process.waitUntilExit() }.value
+    }
+
+    private static func runDetached(arguments: [String]) async throws {
+        try await Task.detached {
+            try runSync(arguments: arguments)
+        }.value
+    }
+
+    /// Synchronous core, isolated from the public surface and kept
+    /// nonisolated so `Task.detached` runs it off the calling actor.
+    nonisolated private static func runSync(arguments: [String]) throws {
+        let process = Process()
+        process.launchPath = "/usr/bin/xcrun"
+        process.arguments = arguments
+        // Capture stderr so the surfaced error message has a
+        // chance of being useful; stdout is dropped (simctl
+        // commands here don't produce useful output on success).
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        process.standardOutput = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw SimulatorShellOutError.commandFailed(
+                arguments: arguments,
+                status: process.terminationStatus,
+                stderr: message
+            )
+        }
+    }
+}
+
+enum SimulatorShellOutError: Error, CustomStringConvertible {
+    case commandFailed(arguments: [String], status: Int32, stderr: String)
+
+    var description: String {
+        switch self {
+        case let .commandFailed(arguments, status, stderr):
+            let cmd = (["xcrun"] + arguments).joined(separator: " ")
+            return stderr.isEmpty
+                ? "`\(cmd)` failed (exit \(status))"
+                : "`\(cmd)` failed (exit \(status)): \(stderr)"
+        }
+    }
+}

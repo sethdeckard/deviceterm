@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/0" version="1.0" creator="deviceterm-tests">
+    <trk><trkseg>
+        <trkpt lat="9.0" lon="10.0"><name>Old Schema</name></trkpt>
+        <trkpt lat="11.0" lon="12.0"/>
+    </trkseg></trk>
+</gpx>

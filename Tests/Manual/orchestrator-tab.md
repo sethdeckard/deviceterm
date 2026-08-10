@@ -1,0 +1,107 @@
+# Orchestrator Tab Manual Checklist
+
+The Router tests cover the in-process path:
+`Route.openOrchestratorTab` mints a session with `role: .orchestrator`
+and the tab state records the granted role. This checklist covers the
+*end-to-end UX*: the menu item, the tab-strip marker, and the env-var
+propagation into the orchestrator tab's shell.
+
+Run before any release that touches `MainMenu`, `TabStripViewController`,
+`Router.openOrchestratorTab`, or the daemon's `session.create` handler.
+
+## Preconditions
+
+- A clean build: `make build`.
+- No leftover daemon: `pkill -f deviceterm-daemon`.
+- Launch with `make run`.
+
+---
+
+## 1. Open Orchestrator Tab: happy path
+
+| # | Action | Expected |
+|---|--------|----------|
+| 1.1 | Shell menu → look for "Open Orchestrator Tab" | Item present with the ⌘⇧T shortcut (⌘T stays the muscle-memory default for a plain tab, so an orchestrator tab isn't opened by accident). |
+| 1.2 | Click it | A new tab opens with a live shell, as with regular New Tab. |
+| 1.3 | Inspect the new tab's title in the tab strip | A small accent-colored key icon (SF Symbol `key.fill`, 12pt) appears immediately to the left of the title. |
+| 1.4 | Mouse-hover the icon | Tooltip reads "Orchestrator-role tab (opened from the menu)" (the text lives in `TabStripViewController.orchestratorMarker`). |
+| 1.5 | Open a second regular tab (⌘T) | The new tab has NO key icon: only orchestrator tabs are marked. |
+
+## 2. Orchestrator role visible to the CLI
+
+| # | Action | Expected |
+|---|--------|----------|
+| 2.1 | Inside the orchestrator tab's shell: `env \| grep DEVICETERM_SESSION_ROLE` | Prints `DEVICETERM_SESSION_ROLE=orchestrator`. |
+| 2.2 | `deviceterm help` (first line) | The "Command reference" prefix shows `session role: orchestrator`. |
+| 2.3 | `deviceterm doctor` (a beat after the shell appears) | Reports `role: orchestrator`. `tab.sendInput` / `tab.capture` **are** in `allowedMethods`: the GUI grants the tab's session once its terminal binds, and advertising follows the live grant. (Run immediately at spawn and you may briefly see them absent before the bind+grant lands; re-run.) |
+| 2.4 | Inside a regular agent tab: `deviceterm doctor` | Reports `role: agent` for contrast. |
+
+## 3. Trust boundary: orchestrator mint is refused off the GUI path
+
+The daemon enforces "human-only escalation" rather than assuming it.
+An orchestrator mint arriving over UDS is refused outright; over XPC
+it is accepted only after the peer's audit token validates against
+the daemon's own code signature.
+
+**Setup.** Open any tab (agent role is fine) so the shell has
+`DEVICETERM_DAEMON_SOCK` set.
+
+| # | Action | Expected |
+|---|--------|----------|
+| 3.1 | Send a raw `session.create` with `role: "orchestrator"` over the daemon socket (see below) | Error `-32011`, message `orchestrator sessions can only be minted from the GUI`. |
+| 3.2 | Repeat with `role: "agent"` | Succeeds: proves the socket path works and only the role is refused. |
+| 3.3 | `deviceterm tab capture` inside an orchestrator tab (against a second, non-private tab: `deviceterm tab capture --tab <shortId>`) | **Succeeds**: prints the target tab's visible text. The GUI granted this tab's session after its terminal bound, and the CLI authenticates over UDS via the bound terminal, so the live-grant scope check admits it. |
+| 3.4 | The same `deviceterm tab capture` inside a **regular agent tab** | Fails with `-32011`, "this session has no live orchestration grant…". An agent tab is never granted, so the elevated verbs stay refused. |
+
+## 3a. Grant lifecycle: reconnect and close
+
+| # | Action | Expected |
+|---|--------|----------|
+| 3a.1 | In a working orchestrator tab, `pkill -9 deviceterm-daemon`; wait for the pane to recover | After the GUI reconnects and rebinds the terminal, it **reissues** the grant. `deviceterm tab capture` works again (the daemon's in-memory grant store was lost on restart; reissue-on-reconnect repopulates it). |
+| 3a.2 | Close the orchestrator tab, then in another tab try to reach its (now-dead) session | The grant is gone: closing the tab called `session.close`, and the daemon revokes on session removal. No lingering authority. |
+
+The raw frame is `[uint32 BE length][JSON]`:
+
+```sh
+python3 - <<'EOF'
+import json, os, socket, struct
+body = {"id": 1, "type": "request", "method": "session.create",
+        "params": {"role": "orchestrator"}}
+raw = json.dumps(body).encode()
+s = socket.socket(socket.AF_UNIX)
+s.connect(os.environ["DEVICETERM_DAEMON_SOCK"])
+s.sendall(struct.pack(">I", len(raw)) + raw)
+n = struct.unpack(">I", s.recv(4))[0]
+print(s.recv(n).decode())
+EOF
+```
+
+The GUI's XPC side of the same gate (a Developer-ID-signed build
+accepted, an ad-hoc re-sign rejected) is covered by
+`launchd-xpc-coexistence.md` §4, which needs a real signed bundle.
+
+## 4. GUI menu under stress
+
+| # | Action | Expected |
+|---|--------|----------|
+| 4.1 | Quit DeviceTerm; relaunch | The orchestrator-tab menu still works: re-opening an orchestrator tab from the Shell menu mints a fresh orchestrator session. |
+| 4.2 | Open multiple orchestrator tabs in succession | Each gets its own session + its own key-icon marker; closing one doesn't affect the others. |
+
+---
+
+## Pass criteria
+
+- §1: menu item present, opens a tab, key icon visible only on the
+  orchestrator tab.
+- §2: `DEVICETERM_SESSION_ROLE` env var set; `deviceterm help` /
+  `deviceterm doctor` report orchestrator.
+- §3: a raw UDS `session.create` with `role: "orchestrator"` is
+  refused with `-32011`; the same request as `agent` succeeds;
+  `deviceterm tab capture` works from inside an orchestrator tab and
+  is refused (`-32011`) from an agent tab.
+- §3a: the grant survives a daemon respawn (reissued on reconnect) and
+  is gone after the tab closes.
+- §4: orchestrator-tab menu survives quit/relaunch and supports
+  multiple concurrent orchestrator tabs.
+
+There is no committed run-log: the fix commits are the record.

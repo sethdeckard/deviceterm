@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="deviceterm-tests">
+    <trk>
+        <name>Paused Recording</name>
+        <trkseg>
+            <trkpt lat="0.0" lon="0.0"><time>2026-01-01T00:00:00Z</time></trkpt>
+            <trkpt lat="0.0" lon="0.001"><time>2026-01-01T00:00:10Z</time></trkpt>
+        </trkseg>
+        <trkseg>
+            <trkpt lat="0.0" lon="0.002"><time>2026-01-01T00:00:20Z</time></trkpt>
+            <trkpt lat="0.0" lon="0.003"><time>2026-01-01T00:00:30Z</time></trkpt>
+        </trkseg>
+    </trk>
+</gpx>

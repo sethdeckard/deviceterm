@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>DeviceTerm</string>
+    <key>CFBundleDisplayName</key>
+    <string>DeviceTerm</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.deviceterm</string>
+    <key>CFBundleExecutable</key>
+    <string>deviceterm</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Seth Deckard</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <!-- Shown in the macOS permission prompt the first time someone
+         chooses Device ▸ Location ▸ Use My Location. Without this key
+         macOS never prompts and CoreLocation stays silent, so a binary
+         run outside this bundle reports that instead of waiting. -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>DeviceTerm uses this Mac's location so you can simulate the same position on a device pane, from Device ▸ Location ▸ Use My Location.</string>
+    <!-- Sparkle auto-update. The feed is a GitHub Releases permalink that
+         always serves the newest release's appcast asset. SUPublicEDKey is
+         the EdDSA public key from `generate_keys`; the matching private key
+         signs each release at publish time and lives in the login Keychain
+         (see docs/RELEASING.md). Automatic-check behavior is set at runtime
+         from the `auto-update` config key, so SUEnableAutomaticChecks is
+         intentionally omitted (no Sparkle first-run prompt). -->
+    <key>SUFeedURL</key>
+    <string>https://github.com/sethdeckard/deviceterm/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>sAkFIDvA0TfhguBaQvUfI8nwSrazJkc7BUQwjXYtBoY=</string>
+</dict>
+</plist>

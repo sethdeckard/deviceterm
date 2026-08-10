@@ -1,0 +1,47 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+xcuserdata/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Build artefacts
+*.dmg
+*.pkg
+build/
+release/
+
+# Signing material — never commit
+*.p12
+*.cer
+*.provisionprofile
+*.mobileprovision
+
+# Editor / tooling
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.cursor/
+
+# Per-machine agent settings — absolute paths, local-only permissions.
+# The tracked agent tooling (.claude/skills, .agents/, AGENTS.md) stays in git.
+.claude/settings.local.json
+
+# Local-only logs (never committed) — e.g. deviceterm-probe's run trail
+*.log
+
+# Local release signing/notarization config (secrets stay out of git)
+.env.release

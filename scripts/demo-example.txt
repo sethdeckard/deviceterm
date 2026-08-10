@@ -1,0 +1,44 @@
+# demo-example.txt: an example DeviceTerm demo script.
+#
+# Run it with the presenter helper from an off-camera orchestrator tab:
+#   scripts/demo-present.sh scripts/demo-example.txt --target <recorded-tab-ref>
+#
+# Each non-comment line is one step. Press any key in the driver window
+# to type the next line into the recorded tab. Blank lines and lines
+# beginning with `#` are skipped.
+#
+# Before recording, shut the device down so the boot happens on camera.
+# The presenter waits for a keypress between every step, so there are no
+# sleeps here: advance when the screen looks right.
+
+# Boot a Simulator with Apple's tool and wait for the boot to finish.
+# `bootstatus -b` boots the device if needed and then blocks until it is
+# up, so the home screen is drawn before the next step runs. DeviceTerm
+# attaches the Simulator to this tab when the invocation actually
+# transitions it to Booted; run against an already-booted device it
+# succeeds but attaches nothing.
+#
+# Pass a UDID from `xcrun simctl list devices available` when the name
+# exists in more than one installed runtime, so the demo boots the
+# device you meant rather than whichever one simctl picks.
+xcrun simctl bootstatus "iPhone 17 Pro" -b
+
+# Open Maps, and give it a beat to draw the map before advancing.
+xcrun simctl launch booted com.apple.Maps
+
+# Pan the map: drag down, then drag right. Both are slower than the
+# 200 ms default so the movement reads on camera.
+deviceterm swipe 0.5 0.35 0.5 0.72 --duration 500
+deviceterm swipe 0.25 0.5 0.75 0.5 --duration 500
+
+# A quick flick, which leaves the map coasting under its own momentum.
+deviceterm swipe 0.7 0.65 0.3 0.3 --duration 120
+
+# Zoom in with two fingers. The eight coordinates are both fingers'
+# start points followed by both their end points, so this spreads them
+# diagonally apart from the middle of the screen. Slower than the 300 ms
+# default, for the same reason the swipes are.
+deviceterm pinch 0.44 0.46 0.56 0.54 0.22 0.28 0.78 0.72 --duration 700
+
+# Rotate to landscape.
+deviceterm rotate landscape-left
