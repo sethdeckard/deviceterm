@@ -57,7 +57,10 @@ response behavior. Do not commit a separate run log.
 - [ ] Open a normal tab. Commands run in that shell pass through DeviceTerm's
   `xcrun` shim, which associates successful boots with the tab.
 
-The `📱 N` menu-bar badge reports the number of owned booted Simulators.
+The menu-bar badge, a monochrome iPhone glyph followed by a count, reports
+the number of owned booted Simulators. The glyph is fixed: it does not change
+with the booted device's family, so a booted watch still shows the phone
+glyph.
 
 ## Manual Release Gate
 
@@ -65,7 +68,7 @@ The `📱 N` menu-bar badge reports the number of owned booted Simulators.
 
 | # | Action | Expected |
 |---|---|---|
-| 1.1 | Run `xcrun simctl boot <watch-udid>` in the tab. | A Simulator pane attaches within a few seconds. The badge reads `📱 1`. |
+| 1.1 | Run `xcrun simctl boot <watch-udid>` in the tab. | A Simulator pane attaches within a few seconds. The badge reads `1`. |
 | 1.2 | Inspect the pane. | The watch face renders with the model's correct round or rectangular shape. It is not stranded as a small image in a wide black pane. |
 | 1.3 | Drag the split divider inward. | The watch pane reaches a minimum width near 220 points. An iPhone pane stops near 380 points. |
 | 1.4 | Run `deviceterm panes list`. | One row contains `<paneId>  <udid>  rendering  watch  sim`. |

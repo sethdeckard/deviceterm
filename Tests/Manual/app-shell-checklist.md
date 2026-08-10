@@ -23,8 +23,9 @@ Launch the app with `make run` (builds + opens `DeviceTerm.app`). The shim
 is symlinked into each tab's `bin/`, so `xcrun` / `simctl` inside a tab
 route through DeviceTerm and tag boots with the tab's session provenance.
 
-Throughout: the daemon's menu-bar item reads `📱 N` where N is the count
-of DeviceTerm-owned booted sims. "Badge" below means that item.
+Throughout: the daemon's menu-bar item shows a monochrome iPhone glyph
+followed by N, the count of DeviceTerm-owned booted sims. "Badge" below
+means that item.
 
 ---
 
@@ -52,17 +53,18 @@ of DeviceTerm-owned booted sims. "Badge" below means that item.
 | # | Action | Expected |
 |---|--------|----------|
 | 3.1 | In **tab A**, run `xcrun simctl boot <udid>` | Within ~2s a simulator pane attaches **in tab A**, transitions booting → rendering, and shows live SpringBoard. |
-| 3.2 | Look at the badge | Badge appears / increments to include this sim (`📱 1`). |
+| 3.2 | Look at the badge | Badge appears / increments to include this sim (iPhone glyph, then `1`). |
 | 3.3 | Switch to **tab B** | Tab B has **no** sim pane — the boot attached to tab A only. |
-| 3.4 | Boot a *second* udid in tab A | A second sim pane attaches in tab A; badge shows `📱 2`. |
+| 3.4 | Boot a *second* udid in tab A | A second sim pane attaches in tab A; badge shows the glyph, then `2`. |
+| 3.5 | Toggle System Settings → Appearance between Light and Dark | The glyph stays monochrome and legible against the menu bar in both appearances. It never renders in color. |
 
 ## 4. Status-item shutdown menu
 
 | # | Action | Expected |
 |---|--------|----------|
-| 4.1 | With 2 sims booted, click the badge | The menu groups both sims by session. Each sim is a top-level item with `Shut Down`, `Open in Simulator.app`, and `Reveal in Finder` in its submenu. A separator and `Shut Down All` follow the sim groups. |
+| 4.1 | With 2 sims booted, click the badge | The menu opens with a non-clickable `DeviceTerm` title row, then a separator. Below that it groups both sims by session. Each sim is a top-level item with `Shut Down`, `Open in Simulator.app`, and `Reveal in Finder` in its submenu. A separator and `Shut Down All` follow the sim groups. |
 | 4.2 | If both sims share a device name | Their menu titles disambiguate (`<name> — <SHORTUDID>`). |
-| 4.3 | Open one sim's submenu and click `Shut Down` | That sim shuts down; its pane shows the shutdown overlay; badge decrements to `📱 1`. |
+| 4.3 | Open one sim's submenu and click `Shut Down` | That sim shuts down; its pane shows the shutdown overlay; badge decrements to `1`. |
 | 4.4 | Click the badge → `Shut Down All` | Remaining sim(s) shut down; badge disappears (count 0 → item hidden). |
 
 ## 5. Pane shutdown overlay + Reboot/Close

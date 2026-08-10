@@ -7,12 +7,17 @@
 // `SimDeviceHandle` references transiently and track *which session
 // booted each sim we own*. The ownership map is the trust anchor for
 // `device.list({scope: "owned"})` and for the menu bar's
-// "📱 N running" count, and is updated by:
+// running-sim badge count, and is updated by:
 //
-//   - `device.boot` (this chunk) when the daemon initiates a boot
-//     on behalf of a caller that's holding session creds.
-//   - `shim.event` (future chunk) when a `simctl boot` runs inside a
-//     tab's shell and the shim posts a provenance-tagged event.
+//   - `boot(udid:owningSession:)` when the daemon initiates a boot on
+//     behalf of a caller that's holding session creds.
+//   - `recordOwnership`, reached by `shim.event` when a `simctl boot`
+//     runs inside a tab's shell and the shim posts a provenance-tagged
+//     event, and by `device.attach` when a caller claims an
+//     already-booted sim.
+//
+// Entries are removed by daemon shutdowns, by shim-reported shutdown
+// events, and by CoreSimulator shutdown notifications.
 //
 // Handles never escape this actor: every public method either
 // returns a `Sendable` snapshot (`CSBDeviceInfo`) or just an ack.
@@ -137,9 +142,10 @@ public actor DeviceCoordinator {
     /// successor event.
     private let debounceWindow: TimeInterval = 0.5
 
-    /// Diagnostic accessor: number of sims deviceterm currently
-    /// considers itself the owner of. Used by tests and (later) by
-    /// the status item's "📱 N" count.
+    /// Diagnostic accessor: raw size of the ownership map, i.e. how
+    /// many sims deviceterm considers itself the owner of. Tests only;
+    /// it does not reflect live boot state, so nothing user-facing
+    /// derives from it. The status item counts `listOwnedBooted()`.
     public var ownedCount: Int { ownership.count }
 
     /// Whether the CoreSimulator notification subscription is
@@ -197,8 +203,8 @@ public actor DeviceCoordinator {
 
     /// Owned sims currently in the `Booted` state, as plain `Sendable`
     /// snapshots for the status-item menu. The status item takes one of
-    /// these per poll tick and derives *both* its "📱 N" badge (the
-    /// count) and its shutdown menu (`statusMenuEntries`) from the same
+    /// these per poll tick and derives *both* its badge visibility and
+    /// count and its shutdown menu (`statusMenuEntries`) from the same
     /// snapshot, so the two can never disagree across separate
     /// CoreSimulator reads. Falls back to `[]` on bridge failure, the
     /// same degraded-but-honest posture as `ownedBootedCount()`.

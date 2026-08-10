@@ -2,32 +2,27 @@
 //
 // StatusItemController: the daemon's menu bar presence.
 //
-// One `NSStatusItem` in the system status bar. Title format is
-// the single source of truth referenced from `docs/ARCHITECTURE.md` and
-// the `make verify` GUI smoke tests:
+// One `NSStatusItem` in the system status bar. Badge format is
+// the single source of truth referenced from `docs/ARCHITECTURE.md`,
+// the `Tests/Manual/` checklists, and the e2e playbook's status-item
+// capture:
 //
 //   - Hidden when 0 owned booted sims.
-//   - Visible with title "📱 N" when N > 0.
+//   - Visible when N > 0, as a monochrome iPhone glyph followed by N.
 //
-// Visibility is load-bearing for the daemon's "I'm alive holding
-// sims" signal. Without it, orphaned sims after a GUI crash would
-// be invisible. The architecture deliberately omits a config knob
-// to override this; reviewers reject PRs that try to add one.
+// The glyph is an SF Symbol drawn as a template image, so AppKit owns
+// its coloring and renders it for the status button's current
+// appearance and state rather than burning in one color.
 //
 // Beyond the badge, the item carries an `NSMenu` that lists every
 // owned booted sim with a "Shut Down …" action (plus a "Shut Down
-// All"). That menu is how a user reclaims sims that outlive their
-// window: a detached sim stays owned and counted, and this is the
-// only GUI surface that can shut it down.
+// All"). A detached sim stays owned and counted, so this is how a user
+// reclaims one that outlived its window once the main GUI is gone.
 //
 // The controller polls `DeviceCoordinator.listOwnedBooted()` on a
 // slow timer and derives *both* the badge and the menu from that one
 // snapshot per tick, so they can't disagree across two CoreSimulator
-// reads. Polling is wasteful in the abstract but cheap in practice;
-// a push-based design would require the coordinator to know about UI,
-// which crosses the daemon/AppKit boundary the wrong way. If a perf
-// issue ever surfaces, an `AsyncStream` of ownership-change events on
-// DeviceCoordinator is the natural upgrade path.
+// reads.
 
 import AppKit
 
@@ -103,6 +98,21 @@ private func shortUDID(_ udid: String) -> String {
 
 @MainActor
 public final class StatusItemController {
+    /// SF Symbol drawn as a template image ahead of the count. Held as
+    /// a constant so a typo is one edit away from the test that pins
+    /// it, rather than buried in the button setup.
+    nonisolated public static let symbolName = "iphone"
+
+    /// Product name shown as the menu's title row. Hardcoded rather
+    /// than read from the bundle: the daemon's own `CFBundleName` is
+    /// `deviceterm-daemon` (a helper, not a product), and the host
+    /// app is only reachable by walking up out of
+    /// `Contents/Library/LoginItems`, which doesn't resolve at all in
+    /// an unbundled dev run. A fork rebrands by editing this line.
+    /// (The runtime bundle-id derivation in `PeerIdentity` is a
+    /// security check, not branding; it has different constraints.)
+    nonisolated public static let appDisplayName = "DeviceTerm"
+
     /// `NSStatusBar.system.statusItem` is created with variable
     /// length so the title sizes itself. We hide by setting
     /// `isVisible = false` rather than removing the item; either
@@ -129,13 +139,40 @@ public final class StatusItemController {
         self.sessionManager = sessionManager
         self.pollIntervalSeconds = pollIntervalSeconds
         self.statusItem.isVisible = false
+        configureButton()
     }
 
-    /// Format used by `make verify`'s GUI smoke check. Tests pin
-    /// this so the title shape can't silently drift. `nonisolated`
-    /// because it's pure: no AppKit, no state.
+    /// Count text shown trailing the glyph; nil hides the item
+    /// entirely. Pinned by tests so the shape can't silently drift.
+    /// `nonisolated` because it's pure: no AppKit, no state.
     nonisolated public static func titleForCount(_ count: Int) -> String? {
-        count > 0 ? "📱 \(count)" : nil
+        count > 0 ? "\(count)" : nil
+    }
+
+    /// Install the glyph once, at construction: every refresh changes
+    /// only the count, so rebuilding an `NSImage` per refresh would be
+    /// pure waste.
+    ///
+    /// `isTemplate` is the load-bearing line: it hands the glyph's
+    /// coloring to AppKit instead of burning in one color.
+    /// `accessibilityDescription` labels the glyph for VoiceOver,
+    /// which otherwise has only a bare digit to read.
+    ///
+    /// If the symbol can't be created, the badge falls back to the
+    /// count alone.
+    private func configureButton() {
+        guard let button = statusItem.button else { return }
+        let image = NSImage(
+            systemSymbolName: Self.symbolName,
+            accessibilityDescription: "Booted Simulators"
+        )?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        )
+        // Set on the *derived* image: `withSymbolConfiguration` vends a
+        // new instance, so flagging the original wouldn't carry over.
+        image?.isTemplate = true
+        button.image = image
+        button.imagePosition = .imageLeading
     }
 
     public func start() {
@@ -197,8 +234,40 @@ public final class StatusItemController {
         rebuildMenu(sims, sessionNames: sessionNames)
     }
 
+    /// Non-actionable title row naming the app this menu belongs to.
+    /// Nothing else in the menu says so: the badge is a generic phone
+    /// glyph and every row below names a *simulator*, so without this
+    /// the menu reads as Simulator.app's or Xcode's. That matters most
+    /// in exactly the case the status item exists for, where the GUI
+    /// has exited and this menu is the only DeviceTerm surface left.
+    ///
+    /// Semibold, so it reads as a title rather than as another session
+    /// group header (those are plain disabled rows). Setting
+    /// `attributedTitle` overrides AppKit's automatic dimming of a
+    /// disabled item, so the secondary color is applied explicitly.
+    private func appTitleItem() -> NSMenuItem {
+        let item = NSMenuItem(title: Self.appDisplayName, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.attributedTitle = NSAttributedString(
+            string: Self.appDisplayName,
+            attributes: [
+                // Take the size from the menu font so the title shares
+                // a baseline size with the rows below it, whatever
+                // that size turns out to be.
+                .font: NSFont.systemFont(
+                    ofSize: NSFont.menuFont(ofSize: 0).pointSize,
+                    weight: .semibold
+                ),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        return item
+    }
+
     private func rebuildMenu(_ sims: [OwnedSim], sessionNames: [UUID: String]) {
         let menu = NSMenu()
+        menu.addItem(appTitleItem())
+        menu.addItem(.separator())
         let rows = groupedStatusMenuRows(sims) { sessionNames[$0] }
         var lastHeader: String?? = .none
         for row in rows {

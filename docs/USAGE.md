@@ -232,8 +232,10 @@ prompt. Detached Simulators continue running.
 The daemon shows a menu bar status item while at least one owned Simulator is
 booted. It remains available when the main DeviceTerm GUI has exited.
 
-The menu groups live sessions by name and places Simulators without a live
-session under **Unlinked**. Each Simulator provides:
+The menu opens with a **DeviceTerm** title row, so the menu identifies itself
+even after the main GUI has exited. Below it, the menu groups live sessions by
+name and places Simulators without a live session under **Unlinked**. Each
+Simulator provides:
 
 - **Shut Down**
 - **Open in Simulator.app**

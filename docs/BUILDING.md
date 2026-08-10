@@ -387,11 +387,11 @@ back to your shell.
 deviceterm-uitest ping
 deviceterm-uitest doctor
 deviceterm-uitest capture window --out /tmp/win.png       # DeviceTerm's frontmost window (incl. a modal alert)
-deviceterm-uitest capture status-item --out /tmp/badge.png # just the daemon's 📱 N badge window
+deviceterm-uitest capture status-item --out /tmp/badge.png # just the daemon's menu bar badge window
 ```
 
 The harness **only ever captures DeviceTerm's own windows, never a whole
-display**: it can't screenshot other apps or the desktop. The `📱 N` status
+display**: it can't screenshot other apps or the desktop. The status
 item belongs to the *daemon*, not the app, and is a menu-bar-layer window of
 its own, so it is captured via `capture status-item` (not a window capture of
 the app, and not a display capture). When no owned sim is booted the badge is

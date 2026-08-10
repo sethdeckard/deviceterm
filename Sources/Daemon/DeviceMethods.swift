@@ -21,7 +21,7 @@
 // passes `sessionId` + `cap`, the daemon validates the pair through
 // `SessionManager` and records the booted sim as owned by that
 // session (so it's visible in `device.list({scope:"owned"})` and in
-// the status-item "📱 N" count). When the caller omits both, the
+// the status-item badge count). When the caller omits both, the
 // boot runs unattributed. Either way the method is `.session`-scoped:
 // the connection must already be authenticated, so omitting the pair
 // skips ownership bookkeeping without opening an unauthenticated
@@ -75,7 +75,7 @@ public enum DeviceMethods {
         /// shutdown Reboot button), passing `sessionId` + `cap` lets
         /// the daemon record the booted sim as owned by that session,
         /// so `device.list({scope: "owned"})` and the status-item
-        /// "📱 N" count include it.
+        /// badge count include it.
         ///
         /// Omitting both skips the ownership bookkeeping; the sim
         /// stays unattributed until `device.attach` claims it or a

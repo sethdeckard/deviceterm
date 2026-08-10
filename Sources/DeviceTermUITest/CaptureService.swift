@@ -88,7 +88,7 @@ enum CaptureService {
     }
 
     /// Screenshot just the daemon's menu-bar status-item window (the one
-    /// showing `📱 N`), or report it absent.
+    /// showing the iPhone glyph and count), or report it absent.
     ///
     /// The status item is the daemon's own on-screen window (menu-bar
     /// extras are windows, at the overlay layer), so it is captured

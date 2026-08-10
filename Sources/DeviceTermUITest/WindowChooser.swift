@@ -60,7 +60,7 @@ enum WindowChooser {
 
     /// Pick the app's menu-bar status-item window: an owned, on-screen
     /// window at the overlay layer. Returns nil when the app shows none,
-    /// which, for the daemon, is exactly how a hidden `📱 N` reads.
+    /// which, for the daemon, is exactly how a hidden badge reads.
     ///
     /// Selects by *smallest area*, not front-most: the status button is a
     /// tiny window, so if its dropdown menu is also open (a larger overlay

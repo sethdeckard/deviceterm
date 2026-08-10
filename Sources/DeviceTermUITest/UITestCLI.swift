@@ -44,7 +44,7 @@ enum UITestCLI {
                                     top of it) to a PNG.
       capture status-item --out <path>
                                     Screenshot just the daemon's menu-bar
-                                    status item (📱 N) to a PNG, or report
+                                    status item badge to a PNG, or report
                                     it absent (hidden at zero owned sims).
                                     The harness never captures a whole
                                     display; only deviceterm's own windows.

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 @testable import Daemon
 import Foundation
 import Testing
 
-// Status item visibility is the daemon's "alive holding sims"
-// signal. The title format is documented in docs/ARCHITECTURE.md and
-// the GUI smoke tests rely on this exact shape, so pin it here.
+// Status item visibility is the daemon's "alive holding sims" signal.
+// The badge format is documented in docs/ARCHITECTURE.md. These tests
+// pin its count text and symbol name; scripts/gui-smoke.sh does not
+// cover the status item.
 
 @Test
 func statusItemTitleHiddenWhenZeroSims() {
@@ -14,10 +16,25 @@ func statusItemTitleHiddenWhenZeroSims() {
 }
 
 @Test
-func statusItemTitleShowsPhoneEmojiAndCount() {
-    #expect(StatusItemController.titleForCount(1) == "📱 1")
-    #expect(StatusItemController.titleForCount(2) == "📱 2")
-    #expect(StatusItemController.titleForCount(10) == "📱 10")
+func statusItemTitleShowsBareCount() {
+    // The glyph is a template image on the button, not text, so the
+    // title carries the count alone.
+    #expect(StatusItemController.titleForCount(1) == "1")
+    #expect(StatusItemController.titleForCount(2) == "2")
+    #expect(StatusItemController.titleForCount(10) == "10")
+}
+
+@Test
+func statusItemSymbolResolvesToARealSFSymbol() {
+    // A typo'd symbol name fails silently at runtime: the badge just
+    // loses its icon and shows a bare number. Catch it here instead.
+    // Resolving an SF Symbol needs no window server, so this stays in
+    // the default headless gate.
+    let image = NSImage(
+        systemSymbolName: StatusItemController.symbolName,
+        accessibilityDescription: nil
+    )
+    #expect(image != nil)
 }
 
 @Test

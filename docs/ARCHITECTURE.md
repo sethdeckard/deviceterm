@@ -113,7 +113,7 @@ on the first send and it idle-exits once nothing needs it, which means no GUI
 or CLI peer connected, no live mirror pane whose owning GUI is still alive, and
 no DeviceTerm-owned sim still booted. An owned sim left running therefore keeps
 the daemon up after every tab is gone, which is exactly what the status item's
-`📱 N` is for.
+iPhone-glyph count is for.
 
 ## Daemon lifecycle
 
@@ -141,7 +141,8 @@ connected OR a non-terminal pane exists whose owner GUI is still alive (a
 mirror (sim or physical device) survives a momentary connection lapse, but
 a pane abandoned by a crashed GUI does not pin the daemon) OR any
 DeviceTerm-owned sim is booted. The status item keeps the sim clause visible:
-if the daemon is alive holding a sim, the user sees `📱 N` in the menu bar.
+if the daemon is alive holding a sim, the user sees an iPhone glyph and the
+count N in the menu bar.
 
 **Idle exit:** no 30 s poll has observed any condition busy for >60 s →
 `NSApp.terminate(nil)`. (Sampling is discrete, so the guarantee is "no

@@ -462,9 +462,6 @@ core rules to keep in hand at PR time:
   xpc dictionary. A future binary payload would ride as a base64 JSON
   string, but none exist today (renders pass XPC-marshalled IOSurfaces on
   a side-band, not inline bytes).
-- **Status item visibility** is hidden at zero owned booted sims and `📱 N` when
-  N > 0. Don't add a config key to override it: that visibility is how a
-  daemon still holding orphaned sims stays discoverable.
 - **CoreSimulatorBridge boundary.** No private selector or protocol is visible
   outside `Sources/CoreSimulatorBridge/`; it vends Swift wrappers
   (`SimDeviceHandle`, `SimDisplayHandle`, `SimHIDClient`, `SimAccessibility`,

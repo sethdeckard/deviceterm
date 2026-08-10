@@ -273,16 +273,19 @@ behavior; the CLI only sees the final lifecycle state.
   Drive `Close` via `drive click --ax "Close"` to dismiss. Forcing a failure is
   hard to do safely; treat this variant as opportunistic.
 
-### 4. Status item `📱 N` *(needs a sim — menu bar, daemon-owned)*
+### 4. Status item badge *(needs a sim — menu bar, daemon-owned)*
 
 - **Mutate:** with an **approved** sim booted and owned by deviceterm.
 - **Assert:** `deviceterm panes list --json` / `devices list --json` reflect the
   owned booted sim(s); count = N.
 - **Observe:** `deviceterm-uitest capture status-item --out /tmp/e2e-badge.png`.
   This captures **just** the daemon's badge window (not a display), so it's
-  monitor-independent. Read the PNG; it shows **`📱 N`**.
+  monitor-independent. Read the PNG; it shows a **monochrome iPhone glyph
+  followed by N**. The glyph is a template image, so its color tracks the menu
+  bar's appearance — read the integer, not the ink.
 - **Verify:** the badge integer equals N. With zero owned-booted sims the item
-  is **hidden entirely** (not `📱 0`), and the daemon then owns no badge window —
+  is **hidden entirely** (not a glyph with `0`), and the daemon then owns no
+  badge window —
   so `capture status-item` returns **`{ok:true, present:false}`** with no PNG.
   That `present:false` *is* the hidden-at-zero confirmation; a present badge
   returns `present:true` with the image.
