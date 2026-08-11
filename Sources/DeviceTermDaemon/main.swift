@@ -211,7 +211,14 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         // unloadable, registration refused) is logged but doesn't
         // abort daemon startup; the shim path stays useful.
         do {
-            try await deviceCoordinator.subscribeToCoreSimulator()
+            // The converger is a parameter, not a later `set…` call, so the
+            // notifier cannot be installed without the half that drives
+            // attached panes into `.shutdown`.
+            try await deviceCoordinator.subscribeToCoreSimulator(
+                paneShutdownConverger: { udid in
+                    await paneCoordinator.markPanesShutdown(forUDID: udid)
+                }
+            )
         } catch {
             let line = "deviceterm-daemon: CoreSimulator notification subscription failed: \(error);"
                 + " falling back to shim-only attribution\n"

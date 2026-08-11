@@ -30,6 +30,23 @@ import Testing
 private let validUDID = "11111111-1111-1111-1111-111111111111"
 private let otherUDID = "22222222-2222-2222-2222-222222222222"
 
+/// Records the UDIDs a coordinator asked to converge, in order.
+private actor ConvergedUDIDs {
+    private(set) var all: [String] = []
+
+    func record(_ udid: String) { all.append(udid) }
+}
+
+extension DeviceCoordinator {
+    /// Install the pane-shutdown converger without registering a real
+    /// CoreSimulator subscription. Production installs it as a required
+    /// parameter of `subscribeToCoreSimulator`, which also stands up the
+    /// notifier; these tests drive `noteExternal…` directly.
+    func installConverger(_ converger: @escaping @Sendable (String) async -> Void) {
+        paneShutdownConverger = converger
+    }
+}
+
 // MARK: - noteExternalBoot semantics
 
 @Test
@@ -182,6 +199,157 @@ func noteExternalShutdownPublishesDeviceShutdown() async throws {
     let event = try #require(await iterator.next())
     #expect(event.type == DaemonEventType.deviceShutdown)
     #expect(event.udid == validUDID.lowercased())
+
+    await broker.unsubscribe(subscriptionId)
+}
+
+@Test
+func noteExternalShutdownConvergesAttachedPanes() async {
+    // The pane half of an externally-observed shutdown. Quitting
+    // Simulator.app shuts down the sims it attached to, and nothing else
+    // tells deviceterm: the frames just stop and the pane sits on its
+    // last one with controls that no longer do anything. The notifier is
+    // the only surface that sees it, so it must converge the panes.
+    let coordinator = DeviceCoordinator()
+    let converged = ConvergedUDIDs()
+    await coordinator.installConverger { await converged.record($0) }
+
+    await coordinator.noteExternalShutdown(udid: validUDID)
+
+    #expect(await converged.all == [validUDID.lowercased()])
+}
+
+@Test
+func noteExternalBootDoesNotConvergePanes() async {
+    // Only the shutdown transition retires panes. A boot notification
+    // for a UDID a pane is already attached to (a reboot's second half,
+    // say) must leave that pane live.
+    let coordinator = DeviceCoordinator()
+    let converged = ConvergedUDIDs()
+    await coordinator.installConverger { await converged.record($0) }
+
+    await coordinator.noteExternalBoot(udid: validUDID)
+
+    #expect(await converged.all.isEmpty)
+}
+
+@Test
+func externalShutdownConvergesWithTheNormalizedUDID() async {
+    // Pins the hand-off contract: a converger is handed the canonical
+    // lowercased UDID and never has to normalize for itself. The
+    // production converger normalizes its own argument, so this guards
+    // the contract rather than a live failure, and keeps a converger that
+    // keys a dictionary directly from inheriting a case-sensitivity bug.
+    let coordinator = DeviceCoordinator()
+    let converged = ConvergedUDIDs()
+    await coordinator.installConverger { await converged.record($0) }
+
+    await coordinator.noteExternalShutdown(udid: validUDID.uppercased())
+
+    #expect(await converged.all == [validUDID.lowercased()])
+}
+
+@Test
+func externalShutdownPublishesBeforeConverging() async throws {
+    // Ordering, not just delivery. Convergence exposes the shutdown while
+    // this call is still suspended: retiring the pane tells its
+    // subscribers the sim is gone and puts a Reboot affordance in front of
+    // the user. A reaction to that publishes a boot, so the shutdown has
+    // to publish first or `deviceterm events` describes a live device as
+    // shut down. The converger here stands in for that reaction.
+    let broker = EventBroker()
+    let coordinator = DeviceCoordinator(eventBroker: broker)
+    let (subscriptionId, stream) = await broker.subscribe(as: .guiPeer)
+    await coordinator.installConverger { udid in
+        await broker.publish(.deviceBooted(udid: udid), to: .everyone)
+    }
+
+    await coordinator.noteExternalShutdown(udid: validUDID)
+
+    var iterator = stream.makeAsyncIterator()
+    let first = try #require(await iterator.next())
+    #expect(first.type == DaemonEventType.deviceShutdown)
+    let second = try #require(await iterator.next())
+    #expect(second.type == DaemonEventType.deviceBooted)
+
+    await broker.unsubscribe(subscriptionId)
+}
+
+@Test
+func slowPaneConvergenceStillSuppressesADuplicateNotification() async throws {
+    // The notifier's consumer loop is serial, so a duplicate shutdown
+    // notification for the same UDID can't begin until the first one's
+    // convergence finishes. With convergence slower than the debounce
+    // window, deciding the debounce after that work would give the
+    // duplicate a comparison timestamp far enough from the first to look
+    // like a fresh transition, and `deviceterm events` would report the
+    // sim shutting down twice. Sequential awaits here model that serial
+    // consumer exactly.
+    let broker = EventBroker()
+    // Short window + short sleep instead of the production 500 ms and a
+    // 600 ms sleep: the contract under test is "convergence outlasts the
+    // window", and the ratio is what matters, not the absolute duration.
+    let coordinator = DeviceCoordinator(eventBroker: broker, debounceWindow: 0.05)
+    let (subscriptionId, stream) = await broker.subscribe(as: .guiPeer)
+    await coordinator.installConverger { _ in
+        try? await Task.sleep(nanoseconds: 120_000_000)
+    }
+
+    // The two arrival timestamps are 10 ms apart, as a duplicate's would
+    // be, while serial processing starts them at least 120 ms apart
+    // because convergence holds the consumer. Supplying arrival instants
+    // models what the notifier does for real (see `NotifierArrival`), and
+    // is the whole point: timed by processing instead, these two would
+    // land outside the window and both publish.
+    let arrived = Date()
+    await coordinator.noteExternalShutdown(udid: validUDID, arrivedAt: arrived)
+    await coordinator.noteExternalShutdown(
+        udid: validUDID,
+        arrivedAt: arrived.addingTimeInterval(0.01)
+    )
+
+    var iterator = stream.makeAsyncIterator()
+    let first = try #require(await iterator.next())
+    #expect(first.udid == validUDID.lowercased())
+    // Probe with a different UDID: a leaked duplicate drains here instead.
+    await coordinator.noteExternalShutdown(udid: otherUDID)
+    let next = try #require(await iterator.next())
+    #expect(next.udid == otherUDID.lowercased())
+
+    await broker.unsubscribe(subscriptionId)
+}
+
+@Test
+func slowPaneConvergenceStillDebouncesTheShutdownPublish() async throws {
+    // Backend teardown holds the notifier's serial consumer for its whole
+    // duration, so a shutdown timed by when it got its turn rather than by
+    // when it arrived ages out of the window and emits a second
+    // `device.shutdown` for one the authoritative path already announced.
+    let broker = EventBroker()
+    let coordinator = DeviceCoordinator(eventBroker: broker, debounceWindow: 0.05)
+    try await coordinator.recordOwnership(udid: validUDID, sessionId: UUID())
+    let (subscriptionId, stream) = await broker.subscribe(as: .guiPeer)
+    await coordinator.installConverger { _ in
+        try? await Task.sleep(nanoseconds: 120_000_000)
+    }
+
+    // Shrink the window below the convergence delay so post-convergence
+    // processing time would escape it. Supplying an arrival at or before the
+    // authoritative stamp removes scheduler latency from the comparison.
+    // This test does not constrain admission placement; publication ordering
+    // is covered by `externalShutdownPublishesBeforeConverging`.
+    let arrived = Date()
+    await coordinator.releaseOwnership(udid: validUDID)
+    await coordinator.noteExternalShutdown(udid: validUDID, arrivedAt: arrived)
+
+    var iterator = stream.makeAsyncIterator()
+    let first = try #require(await iterator.next())
+    #expect(first.udid == validUDID.lowercased())
+    // Probe with a different UDID: if the slow path published a
+    // duplicate, this drains that instead of the probe.
+    await coordinator.noteExternalShutdown(udid: otherUDID)
+    let next = try #require(await iterator.next())
+    #expect(next.udid == otherUDID.lowercased())
 
     await broker.unsubscribe(subscriptionId)
 }

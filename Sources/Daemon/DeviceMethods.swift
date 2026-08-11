@@ -286,11 +286,19 @@ public enum DeviceMethods {
 
     /// Shut a device down *and* drive any attached panes into
     /// `.shutdown` so the GUI shows the overlay instead of a frozen
-    /// last frame. Every shutdown surface (the shim `shutdown`
-    /// event, the `device.shutdown` RPC, and the status-item menu)
-    /// must converge on this transition; without the
-    /// `markPanesShutdown` half, a sim shut down from the menu
-    /// leaves its pane frozen with no Reboot/Close affordance.
+    /// last frame. Every shutdown must reach `markPanesShutdown`;
+    /// without that half, a sim shut down from the menu leaves its pane
+    /// frozen with no Reboot/Close affordance.
+    ///
+    /// Four surfaces, split by who caused the shutdown. The two that
+    /// *issue* one come through here, pairing the device call with the
+    /// pane transition: the `device.shutdown` RPC and the status-item
+    /// menu. The two that merely *observe* one already done call
+    /// `markPanesShutdown` directly, having no device call to pair with:
+    /// the shim's `shutdown` event (`ShimMethods`) and the CoreSimulator
+    /// notifier (`DeviceCoordinator.noteExternalShutdown`). The notifier is
+    /// the only surface that sees a sim killed by something outside
+    /// deviceterm entirely.
     public static func shutdownConverged(
         udid: String,
         coordinator: DeviceCoordinator,

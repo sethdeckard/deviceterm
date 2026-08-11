@@ -86,6 +86,19 @@ public struct OwnedSim: Sendable, Equatable {
     }
 }
 
+/// One CoreSimulator notification paired with the instant it arrived.
+///
+/// The consumer handles events serially and a handler can run long, so
+/// "now" inside a handler is not when the notification landed. The publish
+/// debounce compares source timestamps, and for the notification path that
+/// timestamp is callback arrival rather than handler processing time.
+/// Otherwise a slow handler stretches the apparent gap and a duplicate
+/// queued right behind the first reads as a fresh transition.
+struct NotifierArrival: Sendable {
+    let event: CSBNotifierEvent
+    let arrivedAt: Date
+}
+
 public actor DeviceCoordinator {
     /// UDID (lowercased) → sessionId of the session that booted it.
     /// Populated by `boot(udid:owningSession:)` and (in a future
@@ -99,20 +112,28 @@ public actor DeviceCoordinator {
 
     /// CoreSimulator notification subscription. Held for the
     /// daemon's lifetime so set-level notifications continue to
-    /// arrive. Nil until `subscribeToCoreSimulator()` is called and
-    /// after `unsubscribeFromCoreSimulator()` runs.
+    /// arrive. Nil until `subscribeToCoreSimulator(paneShutdownConverger:)`
+    /// is called and after `unsubscribeFromCoreSimulator()` runs.
     ///
     /// `CSBDeviceNotifier` isn't `Sendable` (instance methods reach
     /// private framework state); keeping it inside the actor means
     /// it never crosses an isolation boundary.
     private var notifier: CSBDeviceNotifier?
 
-    /// Continuation for the `AsyncStream<CSBNotifierEvent>` that
+    /// Drives every pane attached to a shut-down UDID into `.shutdown`.
+    /// Supplied by `subscribeToCoreSimulator(paneShutdownConverger:)`
+    /// rather than at construction, since a coordinator that never
+    /// subscribes never observes an external shutdown. Module-internal
+    /// rather than private so the notification tests can drive
+    /// convergence without registering a real CoreSimulator subscription.
+    var paneShutdownConverger: (@Sendable (String) async -> Void)?
+
+    /// Continuation for the `AsyncStream<NotifierArrival>` that
     /// the bridge handler yields into. Held so `unsubscribe…` can
     /// `finish()` the stream and the consumer task can exit.
-    private var notifierContinuation: AsyncStream<CSBNotifierEvent>.Continuation?
+    private var notifierContinuation: AsyncStream<NotifierArrival>.Continuation?
 
-    /// Long-lived consumer task driving `for await event in stream`.
+    /// Long-lived consumer task driving `for await arrival in stream`.
     /// Naturally actor-isolated, serial, and a single allocation
     /// for the daemon's lifetime, versus a `Task { await … }` per
     /// event, which would scatter ordering across reentrancy.
@@ -139,8 +160,9 @@ public actor DeviceCoordinator {
     /// other source. 500 ms is comfortably wider than the observed
     /// shim-vs-notification skew and well below the shortest sim
     /// boot→render time, so it can't accidentally suppress a real
-    /// successor event.
-    private let debounceWindow: TimeInterval = 0.5
+    /// successor event. Injectable so tests covering "work slower than
+    /// the window" can shrink it instead of sleeping half a second each.
+    private let debounceWindow: TimeInterval
 
     /// Diagnostic accessor: raw size of the ownership map, i.e. how
     /// many sims deviceterm considers itself the owner of. Tests only;
@@ -154,9 +176,11 @@ public actor DeviceCoordinator {
     public var isSubscribedToCoreSimulator: Bool { notifier != nil }
 
     public init(
-        eventBroker: EventBroker? = nil
+        eventBroker: EventBroker? = nil,
+        debounceWindow: TimeInterval = 0.5
     ) {
         self.eventBroker = eventBroker
+        self.debounceWindow = debounceWindow
     }
 
     // MARK: - Listing
@@ -387,27 +411,43 @@ public actor DeviceCoordinator {
     /// and `device.list` polling still surfaces booted sims).
     ///
     /// Shape: the ObjC handler yields to an `AsyncStream`, and a
-    /// long-lived consumer task loops `for await event in stream`,
+    /// long-lived consumer task loops `for await arrival in stream`,
     /// calling the actor-isolated handler. The `DispatchQueue`
     /// passed to the bridge is an unavoidable CoreSimulator
     /// requirement (the private API takes a `dispatch_queue_t`);
     /// CoreSimulator retains it for the registration's lifetime so
     /// the local scope here is sound.
-    public func subscribeToCoreSimulator() throws {
+    ///
+    /// `paneShutdownConverger` is a parameter rather than a settable
+    /// property so the notifier cannot be installed without pane-shutdown
+    /// handling. An observed shutdown that doesn't reach the pane registry
+    /// leaves the pane frozen on its last frame with no Reboot/Close
+    /// affordance.
+    public func subscribeToCoreSimulator(
+        paneShutdownConverger: @escaping @Sendable (String) async -> Void
+    ) throws {
         if notifier != nil { return }
-        let (stream, continuation) = AsyncStream<CSBNotifierEvent>.makeStream()
+        let (stream, continuation) = AsyncStream<NotifierArrival>.makeStream()
         let queue = DispatchQueue(
             label: "com.deviceterm.daemon.devicenotifier",
             qos: .userInitiated
         )
         let notifier = try CSBDeviceNotifier.defaultNotifier(queue: queue) { event in
-            continuation.yield(event)
+            // Stamped on CoreSimulator's callback queue, the only place
+            // that knows when the notification arrived. The consumer below
+            // handles events one at a time and a handler can run long, so a
+            // queued event's own `Date()` can sit far from the transition it
+            // describes.
+            continuation.yield(NotifierArrival(event: event, arrivedAt: Date()))
         }
+        // Installed only once registration succeeded, so a bridge-load
+        // failure leaves no converger behind a notifier that never exists.
+        self.paneShutdownConverger = paneShutdownConverger
         self.notifier = notifier
         self.notifierContinuation = continuation
         self.notifierConsumer = Task { [weak self] in
-            for await event in stream {
-                await self?.handleNotifierEvent(event)
+            for await arrival in stream {
+                await self?.handleNotifierEvent(arrival)
             }
         }
     }
@@ -426,20 +466,22 @@ public actor DeviceCoordinator {
         notifierContinuation?.finish()
         notifierContinuation = nil
         notifierConsumer = nil
+        paneShutdownConverger = nil
     }
 
     /// Dispatch a notification arriving from CoreSimulator into
     /// the right state mutation. The notifier wrapper only
     /// surfaces `.stateChanged` events with a populated UDID;
     /// `.other` and empty-UDID events drop here without effect.
-    func handleNotifierEvent(_ event: CSBNotifierEvent) async {
+    func handleNotifierEvent(_ arrival: NotifierArrival) async {
+        let event = arrival.event
         guard event.kind == .stateChanged, !event.udid.isEmpty else { return }
         switch event.newState {
         case .booted:
-            await noteExternalBoot(udid: event.udid)
+            await noteExternalBoot(udid: event.udid, arrivedAt: arrival.arrivedAt)
 
         case .shutdown:
-            await noteExternalShutdown(udid: event.udid)
+            await noteExternalShutdown(udid: event.udid, arrivedAt: arrival.arrivedAt)
 
         case .unknown, .creating, .booting, .shuttingDown:
             // Intermediate states aren't actionable: the daemon's
@@ -460,19 +502,51 @@ public actor DeviceCoordinator {
     /// don't record ownership (the sim has no attributed session,
     /// matching the linkage-model's "external sims stay unattached"
     /// property, though the user can claim it via `deviceterm pane attach`).
-    func noteExternalBoot(udid: String) async {
+    /// `arrivedAt` defaults to now for direct callers; the notifier passes
+    /// the delivery timestamp. A boot queued behind a slow shutdown handler
+    /// would otherwise be timed from when it got a turn.
+    func noteExternalBoot(udid: String, arrivedAt: Date = Date()) async {
         let normalized = udid.lowercased()
-        await publishBootDebounced(udid: normalized)
+        await publishBootDebounced(udid: normalized, arrivedAt: arrivedAt)
     }
 
     /// External-shutdown path: a UDID transitioned to `.shutdown`.
     /// Drop any ownership record (the sim is gone regardless of
     /// who shut it down) and publish, debounced against a
     /// concurrent shim shutdown event for the same UDID.
-    func noteExternalShutdown(udid: String) async {
+    ///
+    /// Also converges any pane attached to that UDID. This is the
+    /// fourth shutdown surface, and the only one that catches a sim
+    /// killed by something outside deviceterm entirely: quitting
+    /// Simulator.app (which shuts down the devices it attached to), a
+    /// `simctl shutdown` from an unshimmed shell, or a crash. Without
+    /// it the sim's frames simply stop arriving and the pane sits on
+    /// its last frame with live-looking controls that no longer do
+    /// anything. Convergence is idempotent, so a shutdown deviceterm
+    /// itself initiated (already converged by its own path) costs a
+    /// no-op here.
+    /// `arrivedAt` carries the notification's true arrival instant; see
+    /// `NotifierArrival`. It defaults to now for direct callers.
+    func noteExternalShutdown(udid: String, arrivedAt: Date = Date()) async {
         let normalized = udid.lowercased()
         ownership.removeValue(forKey: normalized)
-        await publishShutdownDebounced(udid: normalized)
+        // Settle the debounce against `arrivedAt` before converging: both
+        // the window comparison and the recorded stamp. Backend teardown is
+        // unbounded and holds the serial consumer, so a queued duplicate
+        // doesn't start until it finishes; timing either half from
+        // processing would let that duplicate escape the window.
+        let shouldPublish = admitNotificationShutdown(udid: normalized, arrivedAt: arrivedAt)
+        // Publish first, matching the commanded path in
+        // `DeviceMethods.shutdownConverged`. Convergence suspends this actor
+        // and exposes the shutdown elsewhere: retiring a pane yields
+        // `.stateChanged(.shutdown)` to its subscribers and puts a Reboot
+        // affordance in front of the user. Anything that reacts by booting
+        // publishes while this call is still suspended, so a boot event
+        // would precede the shutdown that caused it.
+        if shouldPublish {
+            await eventBroker?.publish(.deviceShutdown(udid: normalized), to: .everyone)
+        }
+        await paneShutdownConverger?(normalized)
     }
 
     // MARK: - Publish debounce
@@ -509,8 +583,7 @@ public actor DeviceCoordinator {
     /// `noteExternalBoot`. Skipped when either an authoritative
     /// publish or another notification fired for the same UDID
     /// within the window.
-    private func publishBootDebounced(udid: String) async {
-        let now = Date()
+    private func publishBootDebounced(udid: String, arrivedAt now: Date = Date()) async {
         let lastAuth = recentAuthoritativeBoots[udid]
         let lastNotif = recentNotificationBoots[udid]
         recentNotificationBoots[udid] = now
@@ -537,20 +610,29 @@ public actor DeviceCoordinator {
         await eventBroker?.publish(.deviceShutdown(udid: udid), to: .everyone)
     }
 
-    /// Notification-path `deviceShutdown` publish, used by
-    /// `noteExternalShutdown`. Mirror of `publishBootDebounced`.
-    private func publishShutdownDebounced(udid: String) async {
-        let now = Date()
+    /// Notification-path `deviceShutdown` admission, used by
+    /// `noteExternalShutdown`. Records this arrival and answers whether it
+    /// is the one that should publish.
+    ///
+    /// Split into a decision instead of mirroring `publishBootDebounced`'s
+    /// decide-and-publish shape because pane convergence follows this call
+    /// and the notifier's consumer handles events one at a time. The next
+    /// notification waits out that convergence before it can be admitted,
+    /// so both halves of the debounce, the window comparison and recording
+    /// this arrival, settle synchronously against `arrivedAt` (see
+    /// `NotifierArrival`) rather than whenever a handler reaches them. The
+    /// boot path has no comparable work and needs no split.
+    private func admitNotificationShutdown(udid: String, arrivedAt now: Date) -> Bool {
         let lastAuth = recentAuthoritativeShutdowns[udid]
         let lastNotif = recentNotificationShutdowns[udid]
         recentNotificationShutdowns[udid] = now
         if let lastAuth, now.timeIntervalSince(lastAuth) < debounceWindow {
-            return
+            return false
         }
         if let lastNotif, now.timeIntervalSince(lastNotif) < debounceWindow {
-            return
+            return false
         }
-        await eventBroker?.publish(.deviceShutdown(udid: udid), to: .everyone)
+        return true
     }
 
     // MARK: - Internal helpers
