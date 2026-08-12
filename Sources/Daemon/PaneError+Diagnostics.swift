@@ -39,6 +39,9 @@ extension PaneError {
     /// A short, identifier-free name for this failure, safe to log `.public`.
     var diagnosticKind: String {
         switch self {
+        case .staleAttach:
+            return "stale-attach"
+
         case .notFound:
             return "pane-not-found"
 

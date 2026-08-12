@@ -4,9 +4,11 @@
 //
 // Wire shapes (canonical schema in `docs/ARCHITECTURE.md`):
 //
-//   pane.create({sessionId, cap, kind: "sim", udid})
-//                                              → {paneId, scale?, family?, ...}
-//   pane.close({paneId, mode?})                → {ok: true}
+//   pane.create({sessionId, cap, kind: "sim", udid, revision?})
+//                                              → {paneId, attachment,
+//                                                 scale?, family?, ...}
+//   pane.closeById({paneId, mode?, expectedAttachment?})
+//                                              → {ok: true}
 //     mode: "detach" (default) | "shutdown"
 //   pane.subscribe({paneId})                   → initial ack + stream of
 //                                                 state.changed / surface.changed
@@ -47,6 +49,16 @@ public enum PaneMethods {
         public let kind: String
         /// Required when `kind == "sim"`.
         public let udid: String?
+        /// See `DeviceMethods.AttachParams.revision`.
+        public let revision: UInt64?
+
+        public init(sessionId: String, cap: String, kind: String, udid: String?, revision: UInt64? = nil) {
+            self.sessionId = sessionId
+            self.cap = cap
+            self.kind = kind
+            self.udid = udid
+            self.revision = revision
+        }
     }
 
     /// Carries the three-layer identifier model: current daemons
@@ -56,6 +68,9 @@ public enum PaneMethods {
     /// Optionals so an older client tolerates the skew.
     public struct CreateResponse: Codable, Sendable, Equatable {
         public let paneId: String
+        /// Identifies this admission of the pane; see
+        /// `DaemonProtocol.PaneCreateResponse.attachment`.
+        public let attachment: UInt64?
         /// Sim only.
         public let scale: Double?
         /// Coarse device family (`watch`/`phone`/`pad`/`tv`/`unknown`)
@@ -85,6 +100,18 @@ public enum PaneMethods {
         /// `"detach"` (default): drop the pane, leave the underlying
         /// sim running. `"shutdown"`: also shut down the sim.
         public let mode: String?
+        /// The `attachment` from the attach response the caller is closing
+        /// against. Optional: when present the close is refused unless the
+        /// record is still that admission, so a close racing a re-attach
+        /// can't retire the pane the re-attach just handed to someone else.
+        /// Absent means close unconditionally.
+        public let expectedAttachment: UInt64?
+
+        public init(paneId: String, mode: String?, expectedAttachment: UInt64? = nil) {
+            self.paneId = paneId
+            self.mode = mode
+            self.expectedAttachment = expectedAttachment
+        }
     }
 
     public struct SubscribeParams: Codable, Sendable {
@@ -196,6 +223,7 @@ public enum PaneMethods {
                 result = try await paneCoordinator.createSim(
                     sessionId: sessionId,
                     udid: udid,
+                    revision: params.revision,
                     ownerIncarnation: ownerIncarnation,
                     requireConcreteIncarnation: true,
                     isOwnerSessionAlive: { [sessionManager] priorOwner in
@@ -208,6 +236,7 @@ public enum PaneMethods {
             return try JSONEncoder().encode(
                 CreateResponse(
                 paneId: result.paneId.uuidString,
+                attachment: result.attachment,
                 scale: result.scale,
                 family: result.family,
                 shortId: result.shortId,
@@ -246,7 +275,12 @@ public enum PaneMethods {
                 )
             }
             let principal = try requirePrincipal()
-            let outcome = await paneCoordinator.close(paneId: paneId, as: principal, mode: mode)
+            let outcome = await paneCoordinator.close(
+                paneId: paneId,
+                as: principal,
+                mode: mode,
+                expecting: params.expectedAttachment
+            )
             if let deviceId = outcome.deviceTunnelToRelease {
                 // The pane mirrored a physical device; drop its tunnel
                 // keepalive now that the pane is gone (ref-counted, so the
@@ -929,6 +963,14 @@ public enum PaneMethods {
 
     static func mapPaneError(_ error: PaneError) -> RPCMethodError {
         switch error {
+        case .staleAttach:
+            // The requester has already superseded this attach, so its only
+            // consumer is a caller that stopped waiting. Reported rather than
+            // silently succeeding, so a live caller could tell the difference.
+            return RPCMethodError.invalidParams(
+                "attach superseded by a newer request from the same caller"
+            )
+
         case .notFound:
             return RPCMethodError.invalidParams("unknown paneId")
 

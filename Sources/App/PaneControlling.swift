@@ -20,8 +20,10 @@ protocol PaneControlling: AnyObject {
     /// single-touch without breaking.
     var supportsMultitouchInput: Bool { get }
 
-    /// `pane.close` with `.detach` (sim keeps running) or `.shutdown`.
-    func closePane(paneId: String, mode: PaneCloseMode) async throws
+    /// `pane.closeById` with `.detach` (sim keeps running) or `.shutdown`.
+    /// `expecting` fences the close to one admission of the pane; see
+    /// `DaemonClient.closePane`. Nil closes unconditionally.
+    func closePane(paneId: String, mode: PaneCloseMode, expecting attachment: UInt64?) async throws
     func paneInputTap(paneId: String, x: Double, y: Double) async throws
     func paneInputTouch(
         paneId: String,

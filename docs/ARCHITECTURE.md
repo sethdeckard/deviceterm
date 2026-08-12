@@ -312,6 +312,44 @@ daemon/protocol error from the resubscribe (a missing pane binding after the
 daemon restarted; only a fresh attach recovers it). CLI clients are
 short-lived and don't resubscribe.
 
+**Bounded requests.** A daemon that stops answering keeps its connection open,
+so nothing fails and the GUI waits. Every request `DaemonClient` sends
+therefore carries a deadline, except the `app.commands` subscription handshake
+(below), and expiry surfaces `DaemonClientError.timedOut(method:)`. The default
+is 15 s; `device.boot`, `device.shutdown`, and `pane.create` block inside
+CoreSimulator for as long as the device takes, so they get 120 s.
+
+**A deadline ends the wait, not the work.** Nothing cancels the daemon's
+handler, so the call may still complete. For an ordinary request the transport
+is cancelled and the late reply discarded; the mutation's outcome is then
+unknown, but none of those calls return a one-time identity, so nothing is lost
+that the GUI would need to name what it may have changed. The calls that do
+return one are bounded by their caller through `Deadline.wait`, which leaves
+the call running and reconciles whatever it produced. Both reconciliations are
+best-effort: `session.create` attempts to close a session no tab ever received,
+and `Router.runAttach` attempts to detach a pane no window is showing, skipping
+it when another mounted or attaching pane claims that target. The detach then
+defers until nothing is attaching it, so a replacement that fails releases the
+pane it was holding. An attach also waits out a detach already in flight for
+its target, because dispatch is non-FIFO and the daemon would otherwise be free
+to hand it the record being closed. That fence covers the GUI's wait on the
+close. Past it the outcome is unknown, so every close the GUI issues also
+carries `expectedAttachment`: a close whose admission has been superseded is
+refused daemon-side, which is what makes a late one harmless.
+
+**Two deliberate gaps.** The `app.commands` handshake is not bounded. The
+daemon keeps one subscriber and a new subscribe evicts the incumbent, XPC
+dispatch is non-FIFO, and no wire method retires a raw subscription, so a
+handshake the GUI abandoned could be handled after the retry that replaced it
+and unseat a working subscriber. Nothing waits on that handshake, so parking it
+is the cheaper failure. Separately, a session whose capability the daemon
+refuses to authenticate cannot be closed by the GUI at all: every removal path
+is session-scoped, a first create leaves the connection with no other principal
+to borrow, and a same-epoch `session.restoreBatch` cannot reap it, because a
+live create's assertion outranks a restore baseline at that epoch. It clears on
+the next connection epoch, and `DaemonClient` logs it rather than reporting a
+cleanup that did not happen.
+
 **Method reference.** The method names below are the single source of truth
 `RPCMethod` enum (`Sources/DaemonProtocol/RPCMethod.swift`): the daemon
 registry is keyed by its `rawValue`s and clients build requests from its
@@ -832,7 +870,7 @@ bookkeeping.
 
 #### `device.attach`
 
-- Params: `{udid, sessionId, cap}`
+- Params: `{udid, sessionId, cap, revision?}`
 - Result: as `pane.create`
 - Scope: session
 
@@ -869,7 +907,7 @@ tab-private, hence daemon-wide.
 
 #### `physicalDevice.attach`
 
-- Params: `{deviceId, sessionId?}`
+- Params: `{deviceId, sessionId?, revision?}`
 - Result: as `pane.create`
 - Scope: session
 
@@ -912,9 +950,36 @@ caller doesn't own reads as `attached: false`. Backs
 
 #### `pane.create`
 
-- Params: `{sessionId, cap, kind: "sim", udid}`
-- Result: `{paneId, scale?, family, shortId, name?, deviceType?, pixelWidth?, pixelHeight?, capabilities, target}`
+- Params: `{sessionId, cap, kind: "sim", udid, revision?}`
+- Result: `{paneId, attachment, scale?, family, shortId, name?, deviceType?, pixelWidth?, pixelHeight?, capabilities, target}`
 - Scope: session
+
+`attachment` identifies this admission of the pane. A fresh create, an
+ownership transfer, and a *revisioned* same-owner re-attach each advance it, so
+two callers handed the same `paneId` hold different values. An unrevisioned
+same-owner re-attach is idempotent and leaves it alone: that caller doesn't
+fence its own closes, so advancing would only retire the token of whichever
+caller currently holds it, which never sees that response and would find its
+next close refused with the pane still running. The shim's contextual
+auto-attach takes that path on every command run in a tab already showing the
+sim.
+
+`revision` orders one caller's own attaches. It has to come from the caller,
+because `attachment` is assigned in the daemon's processing order and dispatch
+is non-FIFO: a caller with two attaches in flight (a timed-out one and its
+retry) can have the older handled second, and admitting it would move the
+record to an `attachment` that caller never receives, silently invalidating
+every close it later sends. A re-attach whose revision doesn't dominate the
+one that produced the record's current admission is refused with
+`invalidParams` instead. Omit it if you have no series to order, as the CLI
+does; the re-attach is then idempotent, and it neither advances `attachment`
+nor clears the series, so a stale revisioned request arriving afterwards is
+still caught. Pass it back as
+`expectedAttachment` on `pane.closeById` to fence a close to the admission it
+was meant for. It is deliberately neither the owner's session incarnation
+(unchanged by a same-owner re-attach, so it cannot tell two admissions apart)
+nor the record's internal epoch (advanced by speculative work that may abort,
+so a legitimate close would be refused).
 
 `kind` is reserved as a discriminator; only `"sim"` is valid, and `udid`
 is then required. `family` is the coarse device class
@@ -939,7 +1004,7 @@ prior owner.
 
 #### `pane.closeById`
 
-- Params: `{paneId, mode?}`
+- Params: `{paneId, mode?, expectedAttachment?}`
 - Result: `{ok}`
 - Scope: session
 
@@ -949,6 +1014,15 @@ shutdown. The user-facing `pane.close` (under Workspace verbs) is the
 ref-based wire shape that flows through the Intent layer. `"detach"`, the
 default when `mode` is omitted, drops the pane and leaves the sim
 running; `"shutdown"` also shuts down the sim.
+
+`expectedAttachment` is the `attachment` from the attach response the caller
+is closing against. When present, the close is a no-op unless the record is
+still that admission, checked in the same synchronous step that removes it.
+That is what makes a close safe to issue against a record another caller may
+have taken over: dispatch is non-FIFO, so a close sent before a re-attach can
+be handled after it, and without the fence it would retire the pane the
+re-attach just handed back. Omit it to close unconditionally, which is what
+the CLI does, having no admission to name.
 
 ### Pane input
 

@@ -54,6 +54,8 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
     /// Daemon pane id from device.attach. The glue creates a pane VM for
     /// this id (the attach already happened in the Router).
     let paneId: String
+    /// See `MirroredPaneState.attachment`.
+    let attachment: UInt64?
     let udid: String
     let displayName: String
     /// Coarse device family (drives watch-aware pane sizing).
@@ -93,6 +95,7 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
         udid: String,
         displayName: String,
         family: String,
+        attachment: UInt64? = nil,
         shortId: String? = nil,
         name: String? = nil,
         pixelWidth: Int? = nil,
@@ -100,6 +103,7 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
         capabilities: PaneCapabilities? = nil
     ) {
         self.paneId = paneId
+        self.attachment = attachment
         self.udid = udid
         self.displayName = displayName
         self.family = family

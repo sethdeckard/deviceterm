@@ -20,10 +20,13 @@ public enum PhysicalDeviceMethods {
     public struct AttachParams: Codable, Sendable {
         public let deviceId: String
         public let sessionId: String?
+        /// See `DeviceMethods.AttachParams.revision`.
+        public let revision: UInt64?
 
-        public init(deviceId: String, sessionId: String? = nil) {
+        public init(deviceId: String, sessionId: String? = nil, revision: UInt64? = nil) {
             self.deviceId = deviceId
             self.sessionId = sessionId
+            self.revision = revision
         }
     }
 
@@ -124,6 +127,7 @@ public enum PhysicalDeviceMethods {
                 result = try await paneCoordinator.createPane(
                     target: .device(deviceId: params.deviceId),
                     sessionId: sessionId,
+                    revision: params.revision,
                     ownerIncarnation: ownerIncarnation,
                     requireConcreteIncarnation: true,
                     // Match the sim attach paths: if the device is already
@@ -175,6 +179,7 @@ public enum PhysicalDeviceMethods {
             return try JSONEncoder().encode(
                 PaneMethods.CreateResponse(
                     paneId: result.paneId.uuidString,
+                    attachment: result.attachment,
                     scale: result.scale,
                     family: result.family,
                     shortId: result.shortId,

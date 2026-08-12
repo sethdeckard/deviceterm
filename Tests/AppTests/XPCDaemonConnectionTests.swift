@@ -180,4 +180,33 @@ struct XPCDaemonConnectionTests {
         #expect(await conn.pendingRequestCountForTesting == 0)  // pending-state cleaned up
         withExtendedLifetime(listener) {}
     }
+
+    @Test
+    func pendingRawSubscribeIsCancellableAndCleansUpPendingState() async {
+        // The `app.commands` handshake parks on the same map. It's cancelled
+        // at quit, when the subscriber task is torn down; without a handler
+        // that teardown would leave the continuation parked and the request
+        // pending for the connection's remaining life.
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        let task = Task {
+            try await conn.subscribeRaw(method: RPCMethod.appCommands.rawValue, params: nil)
+        }
+        let parked = await poll { await conn.pendingRequestCountForTesting == 1 }
+        #expect(parked)
+
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // The cancellation path, as above.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+        #expect(await conn.pendingRequestCountForTesting == 0)
+        withExtendedLifetime(listener) {}
+    }
 }

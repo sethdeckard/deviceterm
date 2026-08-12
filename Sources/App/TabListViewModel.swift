@@ -71,6 +71,56 @@ final class TabListViewModel {
         }
     }
 
+    /// Whether `target` is currently *shown* by `tab`: a mounted pane, or a
+    /// placeholder still attaching. Narrower than `isTargetPresent`, which
+    /// also counts a failed placeholder because it answers the dedup question
+    /// ("has this tab claimed the target"). This answers the cleanup question
+    /// ("is anything relying on the target's daemon pane"), and a failed
+    /// placeholder isn't treated as relying on one. Its attempt is over, and
+    /// if that attempt was a deadline expiry whose work is still running, the
+    /// pane it eventually returns is reconciled on its own
+    /// (`Router.detachUnclaimedPane`) rather than through this. Same
+    /// case-insensitive UDID comparison.
+    ///
+    /// `ignoring` drops one placeholder from the answer, for the caller that
+    /// IS that placeholder and is asking whether anyone *else* is relying on
+    /// the target.
+    static func isTargetShown(
+        _ target: PaneTarget,
+        in tab: TabState,
+        ignoring pendingId: PendingPaneID? = nil
+    ) -> Bool {
+        let attaching = tab.pendingPanes.contains {
+            $0.id != pendingId
+                && $0.phase == .attaching
+                && Self.targetsMatch($0.target, target)
+        }
+        if attaching { return true }
+        switch target {
+        case let .sim(udid):
+            return tab.simPanes.contains {
+                $0.udid.caseInsensitiveCompare(udid) == .orderedSame
+            }
+
+        case let .device(deviceId):
+            return tab.devicePanes.contains { $0.deviceId == deviceId }
+        }
+    }
+
+    /// Target equality with the UDID case-insensitivity the attach paths need.
+    static func targetsMatch(_ lhs: PaneTarget, _ rhs: PaneTarget) -> Bool {
+        switch (lhs, rhs) {
+        case let (.sim(left), .sim(right)):
+            return left.caseInsensitiveCompare(right) == .orderedSame
+
+        case let (.device(left), .device(right)):
+            return left == right
+
+        default:
+            return false
+        }
+    }
+
     /// Append a tab and select it, since new tabs become active.
     func append(_ tab: TabState) {
         tabs.append(tab)

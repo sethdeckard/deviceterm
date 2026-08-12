@@ -9,7 +9,7 @@
 //   device.boot({udid, sessionId?, cap?})  → {ok: true}
 //   device.shutdown({udid})                → {ok: true}
 //
-// `device.attach({udid, sessionId, cap}) → {paneId, scale?, family,
+// `device.attach({udid, sessionId, cap, revision?}) → {paneId, scale?, family,
 // …}` transfers ownership of an already-Booted udid to
 // (sessionId, cap) and creates a sim pane for it in one shot. The
 // orphan re-attach path uses it so adoption into a fresh session
@@ -107,11 +107,16 @@ public enum DeviceMethods {
         public let udid: String
         public let sessionId: String
         public let cap: String
+        /// Caller-monotonic ordering for this caller's own attaches; see
+        /// `PaneCoordinator.Record.admissionRevision`. Optional: a caller
+        /// that sends none (the CLI) has no series to order.
+        public let revision: UInt64?
 
-        public init(udid: String, sessionId: String, cap: String) {
+        public init(udid: String, sessionId: String, cap: String, revision: UInt64? = nil) {
             self.udid = udid
             self.sessionId = sessionId
             self.cap = cap
+            self.revision = revision
         }
     }
 
@@ -242,6 +247,7 @@ public enum DeviceMethods {
                 result = try await paneCoordinator.createSim(
                     sessionId: sessionId,
                     udid: params.udid,
+                    revision: params.revision,
                     ownerIncarnation: ownerIncarnation,
                     requireConcreteIncarnation: true,
                     isOwnerSessionAlive: { [sessionManager] priorOwner in
@@ -270,6 +276,7 @@ public enum DeviceMethods {
             }
             let response = PaneMethods.CreateResponse(
                 paneId: result.paneId.uuidString,
+                attachment: result.attachment,
                 scale: result.scale,
                 family: result.family,
                 shortId: result.shortId,

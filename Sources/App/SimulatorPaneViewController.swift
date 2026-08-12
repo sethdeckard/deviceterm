@@ -264,6 +264,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             udid: mirroredPane.target.key,
             displayName: mirroredPane.displayName,
             family: mirroredPane.family,
+            attachment: mirroredPane.attachment,
             capabilities: mirroredPane.capabilities
         )
         self.locationViewModel = PaneLocationViewModel(

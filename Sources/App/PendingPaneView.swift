@@ -42,6 +42,14 @@ struct PendingPaneView: View {
                 Text("Connecting…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                // An attach can outlast the user's patience (a slow boot, a
+                // helper that stopped answering), so the placeholder is
+                // escapable while it's still in flight and not only after it
+                // fails. The leaf goes immediately; the attach itself is left
+                // running so a timely reply still yields the pane id its
+                // cleanup needs.
+                Button("Close") { model.onCancel() }
+                    .padding(.top, 4)
             }
 
         case let .failed(message):

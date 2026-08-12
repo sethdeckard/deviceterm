@@ -31,6 +31,18 @@ import Darwin
 /// synchronization domain. Continuations are resumed from that
 /// queue.
 final class UDSDaemonConnection: DaemonRequestTransport, @unchecked Sendable {
+    /// One parked call's cancellation state. The send and the cancellation
+    /// handler both hop onto `queue` before touching it, so the serial queue
+    /// is its synchronization domain, the same invariant every other mutable
+    /// member of this class has. Which of the two runs first is unordered,
+    /// hence both fields: a cancel that arrives before the send finds no `id`
+    /// and leaves `cancelled` for the send to refuse on, and a cancel that
+    /// arrives after finds the `id` and resumes the parked continuation.
+    private final class CallTicket: @unchecked Sendable {
+        var id: UInt32?
+        var cancelled = false
+    }
+
     private let queue = DispatchQueue(label: "deviceterm.daemonclient.uds.io")
     private var fd: Int32
     private var readBuffer = Data()
@@ -55,31 +67,59 @@ final class UDSDaemonConnection: DaemonRequestTransport, @unchecked Sendable {
         source.resume()
     }
 
+    /// Round-trip a one-shot request.
+    ///
+    /// Cancellation-aware: the continuation is otherwise only resumed by a
+    /// matching reply, so a request a live-but-silent daemon never answers
+    /// would park forever and no external deadline could bound it. On
+    /// cancellation the pending entry is dropped and the continuation resumes
+    /// once with `CancellationError`, the same contract
+    /// `XPCDaemonConnection.requestReturningGeneration` implements.
     func request(method: String, params: Data?) async throws -> Data {
-        try await withCheckedThrowingContinuation { cont in
+        let queue = queue
+        let ticket = CallTicket()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                queue.async { [weak self] in
+                    guard let self, !self.closed else {
+                        cont.resume(throwing: DaemonClientError.transport("connection closed"))
+                        return
+                    }
+                    // Cancelled before the send reached the queue: don't write
+                    // a request nobody is waiting for.
+                    if ticket.cancelled {
+                        cont.resume(throwing: CancellationError())
+                        return
+                    }
+                    let id = self.nextId
+                    self.nextId &+= 1
+                    ticket.id = id
+                    let body: RPCEnvelope.Body = params.map { .params($0) } ?? .empty
+                    let env = RPCEnvelope(id: id, type: .request, method: method, body: body)
+                    let frame: Data
+                    do {
+                        frame = try RPCFraming.encode(env.encode())
+                    } catch {
+                        cont.resume(throwing: DaemonClientError.transport("encode: \(error)"))
+                        return
+                    }
+                    self.pending[id] = cont
+                    do {
+                        try UDSClientSocket.writeAll(fd: self.fd, data: frame)
+                    } catch {
+                        self.pending.removeValue(forKey: id)
+                        cont.resume(throwing: DaemonClientError.transport("write: \(error)"))
+                    }
+                }
+            }
+        } onCancel: {
             queue.async { [weak self] in
-                guard let self, !self.closed else {
-                    cont.resume(throwing: DaemonClientError.transport("connection closed"))
-                    return
-                }
-                let id = self.nextId
-                self.nextId &+= 1
-                let body: RPCEnvelope.Body = params.map { .params($0) } ?? .empty
-                let env = RPCEnvelope(id: id, type: .request, method: method, body: body)
-                let frame: Data
-                do {
-                    frame = try RPCFraming.encode(env.encode())
-                } catch {
-                    cont.resume(throwing: DaemonClientError.transport("encode: \(error)"))
-                    return
-                }
-                self.pending[id] = cont
-                do {
-                    try UDSClientSocket.writeAll(fd: self.fd, data: frame)
-                } catch {
-                    self.pending.removeValue(forKey: id)
-                    cont.resume(throwing: DaemonClientError.transport("write: \(error)"))
-                }
+                ticket.cancelled = true
+                guard let id = ticket.id else { return }
+                // Removing the entry is what makes this resume-once: a reply
+                // (or `failAll`) arriving afterwards finds nothing to resume.
+                self?.pending.removeValue(forKey: id)?
+                    .resume(throwing: CancellationError())
             }
         }
     }
@@ -87,40 +127,66 @@ final class UDSDaemonConnection: DaemonRequestTransport, @unchecked Sendable {
     /// Subscribe to a long-lived event stream. Returns the initial
     /// ack plus the AsyncStream of subsequent evt frames as raw
     /// (method, params) pairs.
+    ///
+    /// The subscribe handshake parks on the same `pending` map a request
+    /// does, so it gets the same cancellation contract: cancelling drops the
+    /// pending entry, finishes the event stream, and resumes once with
+    /// `CancellationError`. Unlike XPC there is no drain notification to send:
+    /// the daemon's UDS subscription is torn down when the connection closes,
+    /// so a cancelled handshake can leave one live on an open connection until
+    /// then.
     func subscribe(
         method: String,
         params: Data?
     ) async throws -> (initial: Data, events: AsyncStream<(String, Data)>) {
+        let queue = queue
+        let ticket = CallTicket()
         let (stream, cont) = AsyncStream.makeStream(of: (String, Data).self)
-        let initial: Data = try await withCheckedThrowingContinuation { ready in
+        let initial: Data = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { ready in
+                queue.async { [weak self] in
+                    guard let self, !self.closed else {
+                        ready.resume(throwing: DaemonClientError.transport("connection closed"))
+                        cont.finish()
+                        return
+                    }
+                    if ticket.cancelled {
+                        ready.resume(throwing: CancellationError())
+                        cont.finish()
+                        return
+                    }
+                    let id = self.nextId
+                    self.nextId &+= 1
+                    ticket.id = id
+                    let body: RPCEnvelope.Body = params.map { .params($0) } ?? .empty
+                    let env = RPCEnvelope(id: id, type: .request, method: method, body: body)
+                    let frame: Data
+                    do {
+                        frame = try RPCFraming.encode(env.encode())
+                    } catch {
+                        cont.finish()
+                        ready.resume(throwing: DaemonClientError.transport("encode: \(error)"))
+                        return
+                    }
+                    self.pending[id] = ready
+                    self.subscriptions[id] = cont
+                    do {
+                        try UDSClientSocket.writeAll(fd: self.fd, data: frame)
+                    } catch {
+                        self.pending.removeValue(forKey: id)
+                        self.subscriptions.removeValue(forKey: id)
+                        cont.finish()
+                        ready.resume(throwing: DaemonClientError.transport("write: \(error)"))
+                    }
+                }
+            }
+        } onCancel: {
             queue.async { [weak self] in
-                guard let self, !self.closed else {
-                    ready.resume(throwing: DaemonClientError.transport("connection closed"))
-                    cont.finish()
-                    return
-                }
-                let id = self.nextId
-                self.nextId &+= 1
-                let body: RPCEnvelope.Body = params.map { .params($0) } ?? .empty
-                let env = RPCEnvelope(id: id, type: .request, method: method, body: body)
-                let frame: Data
-                do {
-                    frame = try RPCFraming.encode(env.encode())
-                } catch {
-                    cont.finish()
-                    ready.resume(throwing: DaemonClientError.transport("encode: \(error)"))
-                    return
-                }
-                self.pending[id] = ready
-                self.subscriptions[id] = cont
-                do {
-                    try UDSClientSocket.writeAll(fd: self.fd, data: frame)
-                } catch {
-                    self.pending.removeValue(forKey: id)
-                    self.subscriptions.removeValue(forKey: id)
-                    cont.finish()
-                    ready.resume(throwing: DaemonClientError.transport("write: \(error)"))
-                }
+                ticket.cancelled = true
+                guard let id = ticket.id else { return }
+                self?.subscriptions.removeValue(forKey: id)?.finish()
+                self?.pending.removeValue(forKey: id)?
+                    .resume(throwing: CancellationError())
             }
         }
         return (initial, stream)

@@ -2284,4 +2284,417 @@ struct RouterTests {
         // Attach failed → dir is preserved so the orphan re-surfaces.
         #expect(FileManager.default.fileExists(atPath: dir))
     }
+
+    @Test
+    func reattachDoesNotHoldTheRouteDrain() async throws {
+        // Orphan reattach runs off the route drain, so a stalled attach
+        // doesn't block later routes, tab switching included.
+        let fake = FakeDaemonClient()
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let orphan = OrphanRecord(
+            sessionId: "old",
+            sessionDir: dir,
+            liveSims: [OrphanLiveSim(udid: "U", displayName: "iPhone")]
+        )
+        router.dispatch(.openWindow(reattach: [orphan]))
+        router.dispatch(.newTab(WindowID(value: 1)))
+        await settle()
+        #expect(workspace.window(id: WindowID(value: 1))?.tabs.tabs.count == 2)
+        #expect(fake.attachesWaiting == 1)
+        #expect(pendingPanes(workspace).first?.phase == .attaching)
+        // The dir survives while the batch is unsettled: cleanup is the last
+        // attach's decision, not the drain's.
+        #expect(FileManager.default.fileExists(atPath: dir))
+        fake.releaseAttach()
+        await settle()
+        #expect(simPanes(workspace).map(\.udid) == ["U"])
+        #expect(!FileManager.default.fileExists(atPath: dir))
+    }
+
+    @Test
+    func reattachPreservesOrphanDirWhenOnlySomeSimsMount() async throws {
+        // Partial adoption is not adoption: one sim of the record mounts,
+        // the other fails, and the dir stays so the survivor is re-offered
+        // next launch rather than silently dropped.
+        let fake = FakeDaemonClient()
+        fake.attachFailure = { udid, _ in
+            udid == "U2" ? FakeDaemonError.attachFailed : nil
+        }
+        let (router, workspace) = makeRouter(fake)
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let orphan = OrphanRecord(
+            sessionId: "old",
+            sessionDir: dir,
+            liveSims: [
+                OrphanLiveSim(udid: "U1", displayName: "iPhone"),
+                OrphanLiveSim(udid: "U2", displayName: "iPad")
+            ]
+        )
+        router.dispatch(.openWindow(reattach: [orphan]))
+        await settle()
+        #expect(simPanes(workspace).map(\.udid) == ["U1"])
+        #expect(pendingPanes(workspace).count == 1)  // U2's failed placeholder
+        #expect(FileManager.default.fileExists(atPath: dir))
+    }
+
+    @Test
+    func closingTheTabMidReattachPreservesTheOrphanDir() async throws {
+        // The batch owner outlives the drain, so it needs its own tombstone:
+        // a tab closed while its attaches are still in flight must not have
+        // its record cleaned up when they finally settle.
+        let fake = FakeDaemonClient()
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let orphan = OrphanRecord(
+            sessionId: "old",
+            sessionDir: dir,
+            liveSims: [OrphanLiveSim(udid: "U", displayName: "iPhone")]
+        )
+        router.dispatch(.openWindow(reattach: [orphan]))
+        await settle()
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .detach))
+        await settle()
+        fake.releaseAttach()
+        await settle()
+        #expect(workspace.window(id: WindowID(value: 1))?.tabs.tabs.isEmpty == true)
+        #expect(FileManager.default.fileExists(atPath: dir))
+    }
+
+    @Test
+    func closingAPendingPaneLeavesTheAttachRunningSoItCanCleanUp() async {
+        // Closing the placeholder doesn't cancel the attach, so the reply
+        // still reaches the post-await guard and the pane it names is
+        // detached. (Cancelling wouldn't strand it either, since the late
+        // cleanup would take it, but it would split replies across two paths
+        // for nothing.)
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "LEAK", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        guard let pendingId = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a pending pane")
+            return
+        }
+        router.dispatch(.cancelPendingPane(tab: TabID(value: 1), pendingId: pendingId, mode: .detach))
+        await settle()
+        // The escape is immediate: the leaf is gone before the daemon answers.
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(fake.attachesWaiting == 1)
+        fake.releaseAttach()
+        await settle()
+        #expect(simPanes(workspace).isEmpty)
+        #expect(fake.closePaneCalls == [.init(paneId: "LEAK", mode: .detach)])
+    }
+
+    @Test
+    func aClosedAttachDoesNotTearDownTheAttachThatReplacedIt() async {
+        // Closing a placeholder frees its target, so another attach for the
+        // same target can start (discovery re-offers a booted sim every couple
+        // of seconds) while the first request is still running. The daemon
+        // hands the owning session back its existing pane, so both land on the
+        // same paneId, and the first one's cleanup would otherwise close the
+        // pane the second just mounted, leaving a live-looking pane whose
+        // daemon side is gone.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "SHARED", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        guard let firstPending = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a pending pane")
+            return
+        }
+        router.dispatch(
+            .cancelPendingPane(tab: TabID(value: 1), pendingId: firstPending, mode: .detach)
+        )
+        await settle()
+        // Second attach for the same target, while the first is still parked.
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        #expect(fake.attachesWaiting == 2)
+        fake.releaseAttach()
+        await settle()
+        #expect(simPanes(workspace).map(\.paneId) == ["SHARED"])
+        #expect(fake.closePaneCalls.isEmpty, "the surviving pane must not be closed")
+    }
+
+    @Test
+    func everyCloseCarriesTheAdmissionItWasIssuedAgainst() async {
+        // The GUI-side half of the close fence: whatever the attach response
+        // said, the close echoes it back, so the daemon can refuse a close
+        // whose admission has been superseded. Covers the two paths that close
+        // a pane the GUI mounted and the one that closes a pane it never did.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, attachment: 42, family: "phone")
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        #expect(simPanes(workspace).first?.attachment == 42)
+        router.dispatch(.detachSimPane(tab: TabID(value: 1), udid: "U", mode: .detach))
+        await settle()
+        #expect(fake.closePaneCalls == [.init(paneId: "P1", mode: .detach, attachment: 42)])
+    }
+
+    @Test
+    func anUnclaimedPaneIsClosedAgainstItsOwnAdmission() async {
+        // The reconciliation path: the pane the GUI never mounted is closed
+        // against the admission the attach that produced it was given, not
+        // against whatever admission the record holds by then.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(
+            paneId: "LEAK",
+            scale: nil,
+            attachment: 7,
+            family: "phone"
+        )
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        guard let pendingId = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a pending pane")
+            return
+        }
+        router.dispatch(.cancelPendingPane(tab: TabID(value: 1), pendingId: pendingId, mode: .detach))
+        await settle()
+        fake.releaseAttach()
+        await settle()
+        #expect(fake.closePaneCalls == [.init(paneId: "LEAK", mode: .detach, attachment: 7)])
+    }
+
+    @Test
+    func anAttachWaitsOutADetachAlreadyInFlightForItsTarget() async {
+        // The claim check that authorizes a detach is synchronous, but the
+        // close itself suspends. An attach sent into that gap finds the target
+        // free, and because daemon dispatch is non-FIFO it can be handed the
+        // record being closed and mount it just in time to watch it die. So
+        // the attach waits for the close instead of racing it.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "DOOMED", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        fake.armClosePaneBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        guard let pendingId = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a pending pane")
+            return
+        }
+        // Close the placeholder, then let the attach land: nothing claims the
+        // target, so it detaches, and the close parks.
+        router.dispatch(.cancelPendingPane(tab: TabID(value: 1), pendingId: pendingId, mode: .detach))
+        await settle()
+        fake.releaseAttach()
+        await settle()
+        #expect(fake.closePanesWaiting == 1)
+        // A new attach for the same target, sent while the close is parked.
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        #expect(
+            fake.attachDeviceCalls.count == 1,
+            "the second attach must not reach the daemon until the detach lands"
+            )
+        fake.releaseClosePane()
+        await settle()
+        // Once the close is done the attach goes out and mounts normally.
+        #expect(fake.attachDeviceCalls.count == 2)
+        #expect(simPanes(workspace).map(\.udid) == ["U"])
+    }
+
+    @Test
+    func closingATabDoesNotDetachAPaneAnotherTabAdopted() async {
+        // Closing a tab kills its session, and a dead owner is exactly what
+        // lets another tab's in-flight attach adopt the same record: the
+        // daemon transfers the pane rather than refusing. So the closing tab's
+        // own late reply must not detach it. Its placeholder is discounted
+        // (it's the one going away); the other tab's claim is honored.
+        let fake = FakeDaemonClient()
+        fake.sessionSequence = [
+            SessionCreateResponse(sessionId: "S1", capability: "C1"),
+            SessionCreateResponse(sessionId: "S2", capability: "C2")
+        ]
+        // Both attaches land on one record, which is what adoption looks like
+        // from here.
+        fake.attachResult = PaneCreateResponse(paneId: "ADOPTED", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.newTab(WindowID(value: 1)))
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        // Second tab attaches the same sim while the first is still parked.
+        router.dispatch(.attachSimPane(tab: TabID(value: 2), udid: "U", displayName: "iPhone"))
+        await settle()
+        // Park the teardown at `closeSession`, so the first tab is still
+        // mid-close (its placeholder present, its tombstone set) when its
+        // attach resumes. That's the window this guard covers.
+        fake.armCloseSessionBarrier()
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .detach))
+        await settle()
+        #expect(fake.closeSessionsWaiting == 1)
+        fake.releaseAttach()
+        await settle()
+        let adopted = simPanes(workspace, tab: TabID(value: 2)).map(\.paneId)
+        #expect(adopted == ["ADOPTED"])
+        #expect(fake.closePaneCalls.isEmpty, "the adopting tab's pane must survive")
+        fake.releaseCloseSession()
+        await settle()
+    }
+
+    @Test
+    func anAdopterThatFailsReleasesTheClosingTabsPane() async {
+        // The other half of the adoption case. The closing tab's pane is
+        // deferred behind the adopter's attach, and then that attach fails.
+        // Nothing else will ever ask again: the closing tab's placeholder
+        // survives in nav state until its teardown finishes, and removing the
+        // tab fires no reconciliation. So the closing tab's placeholder must
+        // not count as a claim while its tab is being torn down, or the pane
+        // stays alive and invisible.
+        let fake = FakeDaemonClient()
+        fake.sessionSequence = [
+            SessionCreateResponse(sessionId: "S1", capability: "C1"),
+            SessionCreateResponse(sessionId: "S2", capability: "C2")
+        ]
+        fake.attachResult = PaneCreateResponse(paneId: "ORPHAN", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        // The closing tab's attach lands; the would-be adopter is refused.
+        fake.attachFailure = { _, index in index == 0 ? nil : FakeDaemonError.attachFailed }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.newTab(WindowID(value: 1)))
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 2), udid: "U", displayName: "iPhone"))
+        await settle()
+        fake.armCloseSessionBarrier()
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .detach))
+        await settle()
+        #expect(fake.closeSessionsWaiting == 1)
+        fake.releaseAttach()
+        await settle()
+        // Tab 2's attach failed, so nothing shows the target and the pane the
+        // closing tab produced is detached rather than deferred forever.
+        #expect(simPanes(workspace, tab: TabID(value: 2)).isEmpty)
+        #expect(fake.closePaneCalls == [.init(paneId: "ORPHAN", mode: .detach)])
+        fake.releaseCloseSession()
+        await settle()
+    }
+
+    @Test
+    func aReplacementThatFailsReleasesThePaneItWasProtecting() async {
+        // The claim that defers a detach is a bet, not a fact: the newer
+        // attach may be refused (another tab's session already owns the
+        // target). If a failed replacement kept deferring, the pane the first
+        // attach created would stay alive with nothing showing it and nothing
+        // left to reconcile it.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "SHARED", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        // The first attach succeeds; the replacement is rejected.
+        fake.attachFailure = { _, index in index == 0 ? nil : FakeDaemonError.attachFailed }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        guard let firstPending = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a pending pane")
+            return
+        }
+        router.dispatch(
+            .cancelPendingPane(tab: TabID(value: 1), pendingId: firstPending, mode: .detach)
+        )
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        fake.releaseAttach()
+        await settle()
+        // The replacement failed, so nothing claims the target and the pane
+        // the first attach left behind is detached after all.
+        #expect(simPanes(workspace).isEmpty)
+        #expect(fake.closePaneCalls == [.init(paneId: "SHARED", mode: .detach)])
+    }
+
+    @Test
+    func anAttachPastItsDeadlineFailsThePlaceholderAndDetachesTheLatePane() async {
+        // The deadline ends the wait, not the daemon's work. The placeholder
+        // flips to failed with Retry immediately, and the pane that shows up
+        // afterwards is detached rather than left owned and invisible.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "LATE", scale: nil, family: "phone")
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.attachDeadlineNanos = 10_000_000
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        await settle()
+        guard case let .failed(message) = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected the deadline to fail the placeholder")
+            return
+        }
+        #expect(message.contains("timed out"))
+        // The daemon finishes long after the client stopped waiting.
+        fake.releaseAttach()
+        await settle()
+        #expect(simPanes(workspace).isEmpty)
+        #expect(fake.closePaneCalls == [.init(paneId: "LATE", mode: .detach)])
+    }
+
+    @Test
+    func aTimedOutAttachConvergesOnOnePaneWhenRetried() async {
+        // A timeout abandons the wait, not the work: the daemon may have
+        // finished the attach and be holding a pane this GUI never saw.
+        // Retry is what converges that, because the daemon hands the owning
+        // session its existing pane back for the same target. The GUI's half
+        // of that contract is what's pinned here: one pane, and no close of
+        // a pane it never mounted.
+        let fake = FakeDaemonClient()
+        fake.attachFailure = { _, index in
+            index == 0
+                ? DaemonClientError.timedOut(method: RPCMethod.deviceAttach.rawValue)
+                : nil
+        }
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil)
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        guard let pendingId = pendingPanes(workspace).first?.id,
+            case let .failed(message) = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected a failed pending pane")
+            return
+        }
+        #expect(message.contains("timed out"))
+        router.dispatch(.retryPendingPane(tab: TabID(value: 1), pendingId: pendingId))
+        await settle()
+        #expect(simPanes(workspace).map(\.paneId) == ["P1"])
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(fake.closePaneCalls.isEmpty)
+    }
 }

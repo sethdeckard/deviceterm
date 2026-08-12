@@ -56,6 +56,16 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     struct ClosePaneCall: Equatable {
         let paneId: String
         let mode: PaneCloseMode
+        /// The admission the close was fenced to, nil for an unconditional
+        /// one. Defaulted so the many tests that only care about paneId and
+        /// mode stay terse.
+        var attachment: UInt64?
+
+        init(paneId: String, mode: PaneCloseMode, attachment: UInt64? = nil) {
+            self.paneId = paneId
+            self.mode = mode
+            self.attachment = attachment
+        }
     }
     struct SetPrivateBatchCall: Equatable {
         let sessionIds: [String]
@@ -206,6 +216,15 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     )
     /// When set, `attachDevice` throws this instead of returning.
     var attachError: Error?
+    /// Per-call failure hook for both attach verbs, consulted before
+    /// `attachError` with the target (udid / device id) and how many attaches
+    /// preceded this one. One knob covers both shapes a batch test needs:
+    /// failing a particular sim of a record, and failing only the first
+    /// attempt at one so the retry converges.
+    var attachFailure: (@MainActor (String, Int) -> Error?)?
+    /// Attaches begun, across both verbs. Counts invocations, not
+    /// completions, so a suspended attach is already numbered.
+    private(set) var attachCallCount = 0
     /// Errors to throw from `setPrivateBatch`, consumed one per call from
     /// the front. A `nil` entry (or an empty queue) yields a successful
     /// reply. Lets a transition test script "transport-fail then ack"
@@ -277,6 +296,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private var attachContinuations: [CheckedContinuation<Void, Never>] = []
     /// Number of attach calls currently suspended on the barrier.
     private(set) var attachesWaiting = 0
+    /// Barrier for `closePane`, so a detach can be held in flight.
+    private var closePaneGateArmed = false
+    private var closePaneContinuations: [CheckedContinuation<Void, Never>] = []
+    private(set) var closePanesWaiting = 0
     /// Separate barrier for `closeSession` so a test can suspend a tab
     /// teardown mid-flight (between cancelling the attach task and
     /// removing the tab) and reproduce the attach-resumes-during-close
@@ -299,6 +322,27 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private var createSessionGateArmed = false
     private var createSessionContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var createSessionsWaiting = 0
+
+    /// Park every attach until `releaseAttach()`. The barrier does NOT model
+    /// transport cancellation: a real request resumes with `CancellationError`
+    /// when its task is cancelled, and this one keeps waiting. That's sound
+    /// for what these tests drive, because the Router deliberately never
+    /// cancels an in-flight attach outside quit, so nothing under test depends
+    /// on how a cancelled attach unwinds. A test that needs that shape has to
+    /// model it directly, the way the deadline tests do.
+    /// Park every `closePane` until `releaseClosePane()`, so a test can hold a
+    /// detach in flight and watch what an attach for the same target does
+    /// while it is.
+    func armClosePaneBarrier() { closePaneGateArmed = true }
+
+    /// Resume every suspended close and disarm. Idempotent.
+    func releaseClosePane() {
+        closePaneGateArmed = false
+        let continuations = closePaneContinuations
+        closePaneContinuations.removeAll()
+        closePanesWaiting = 0
+        for continuation in continuations { continuation.resume() }
+    }
 
     func armAttachBarrier() { attachGateArmed = true }
 
@@ -582,7 +626,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         attachDeviceCalls.append(
             .init(sessionId: sessionId, capability: capability, udid: udid)
         )
+        let index = attachCallCount
+        attachCallCount += 1
         await awaitAttachGate()
+        if let error = attachFailure?(udid, index) { throw error }
         if let attachError { throw attachError }
         return attachResult
     }
@@ -602,15 +649,21 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         sessionId: String
     ) async throws -> PaneCreateResponse {
         attachPhysicalDeviceCalls.append(.init(deviceId: deviceId, sessionId: sessionId))
+        let index = attachCallCount
+        attachCallCount += 1
         await awaitAttachGate()
+        if let error = attachFailure?(deviceId, index) { throw error }
         if let attachError { throw attachError }
         return attachResult
     }
 
     // MARK: - PaneControlling
 
-    func closePane(paneId: String, mode: PaneCloseMode) {
-        closePaneCalls.append(.init(paneId: paneId, mode: mode))
+    func closePane(paneId: String, mode: PaneCloseMode, expecting attachment: UInt64?) async {
+        closePaneCalls.append(.init(paneId: paneId, mode: mode, attachment: attachment))
+        guard closePaneGateArmed else { return }
+        closePanesWaiting += 1
+        await withCheckedContinuation { closePaneContinuations.append($0) }
     }
 
     func paneInputTap(paneId: String, x: Double, y: Double) {

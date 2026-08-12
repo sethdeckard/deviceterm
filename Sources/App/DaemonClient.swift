@@ -36,6 +36,10 @@ import Darwin
 /// correlate the two.
 private let reconnectLog = Logger(subsystem: "com.deviceterm", category: "reconnect")
 
+/// Logs session-lifecycle outcomes the GUI has no other way to surface,
+/// notably a session it created but could neither hand to a tab nor close.
+private let sessionLog = Logger(subsystem: "com.deviceterm", category: "session")
+
 /// Decoded events from a `pane.subscribe` stream.
 ///
 /// The XPC transport delivers two messages per surface update: the JSON
@@ -78,6 +82,29 @@ enum DaemonClientError: Error, CustomStringConvertible {
     /// daemon that answers `ping` but never acks shutdown must not stall
     /// startup/reconnect. The daemon's state is unknown (indeterminate).
     case shutdownTimedOut
+    /// The call went out and no answer came back within its bound.
+    ///
+    /// The wait was abandoned, not the work: nothing cancels the daemon's
+    /// handler, so the call may still complete on its side. What happens to
+    /// that late reply depends on which bound raised this.
+    ///
+    /// For an ordinary request the transport was cancelled and the reply is
+    /// discarded. A mutation bounded that way still has an unknown outcome,
+    /// but none of those calls return a one-time identity, so nothing is lost
+    /// that the GUI would need to name what it may have changed.
+    ///
+    /// The calls that *do* return one are bounded by their own caller through
+    /// `Deadline.wait`, which lets the call finish and reconciles what it
+    /// produced: `createSession` attempts to close a session no tab ever
+    /// received, and `Router.runAttach` attempts to detach a pane no window is
+    /// showing. Both are best-effort. Without that,
+    /// a `session.create` reply would strand a session nobody can name (its
+    /// capability leaves the daemon exactly once, and it survives an omitting
+    /// `session.restoreBatch` on the same connection, since a live create's
+    /// assertion deliberately outranks a restore baseline at that epoch), and
+    /// an attach reply would strand a pane holding its device, and for a
+    /// physical device its tunnel.
+    case timedOut(method: String)
 
     var description: String {
         switch self {
@@ -98,6 +125,9 @@ enum DaemonClientError: Error, CustomStringConvertible {
 
         case .shutdownTimedOut:
             return "daemon.shutdown timed out awaiting acknowledgement"
+
+        case let .timedOut(method):
+            return "timed out: the deviceterm helper did not answer \(method)"
         }
     }
 
@@ -182,6 +212,27 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// credential.
     private static let notReadyConnectionCode = -32_002
     private static let maxNotReadyRetries = 10
+    /// Methods whose work is inherently long, given
+    /// `slowRequestDeadlineNanos` instead of `requestDeadlineNanos`. The
+    /// lifecycle calls block inside CoreSimulator, and `pane.create` acquires
+    /// a pane backend. Keyed by method rather than by call site so the
+    /// allowance follows the call wherever it's issued from.
+    private static let slowMethods: Set<RPCMethod> = [
+        .deviceBoot,
+        .deviceShutdown,
+        .paneCreate
+    ]
+    /// Calls that mint daemon state, so abandoning their reply loses the only
+    /// name for what they made. They are exempt from `bounded` (which cancels
+    /// the loser of its race) and bounded by their caller through
+    /// `Deadline.wait`, which lets the call finish and reconciles a late
+    /// reply. The two attaches are bounded by the Router's
+    /// `attachDeadlineNanos` instead.
+    private static let selfReconcilingMethods: Set<RPCMethod> = [
+        .sessionCreate,
+        .deviceAttach,
+        .physicalDeviceAttach
+    ]
 
     private let xpcConnection: XPCDaemonConnection
     private var udsConnection: UDSDaemonConnection?
@@ -239,6 +290,15 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// value that dominates the pre-reconnect grant (and the new connection
     /// epoch already dominates the old one regardless).
     private var grantRevision = 0
+    /// Monotonic per-send revision for the attach verbs, so the daemon can
+    /// refuse one this client has already superseded. Lives on the single
+    /// shared client (like `grantRevision`), so it stays monotonic across
+    /// reconnects and never rewinds. Needed because a timed-out attach keeps
+    /// running: its retry and it are both in flight, the daemon may handle
+    /// them in either order, and without this the older one could re-admit the
+    /// pane to an identity the GUI never learns and then silently refuse every
+    /// close it sends.
+    private var attachRevision: UInt64 = 0
     /// Invoked (main actor) after the client has handled a definite wire-version
     /// mismatch: the daemon was replaced by an incompatible build (e.g. a
     /// Sparkle update). By the time this fires the client has already attempted
@@ -263,6 +323,18 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// `ping` but never replies to shutdown must not wedge startup/reconnect.
     /// 5s is far more than the immediate ack needs; overridden small in tests.
     var shutdownAckTimeoutNanos: UInt64 = 5_000_000_000
+    /// Upper bound on a single transport round-trip for the ordinary methods.
+    /// Not an SLA: every one of these answers in milliseconds when the daemon
+    /// is healthy, so the only thing this number decides is how long the GUI
+    /// waits on a daemon that has stopped answering (a blocking CoreSimulator
+    /// call on its actor, a `kill -STOP`) before turning the wait into an
+    /// error the user can act on. Chosen to sit well above the latency a busy
+    /// daemon shows; it can't tell busy from wedged, it can only outlast the
+    /// former. Tests shorten it.
+    var requestDeadlineNanos: UInt64 = 15_000_000_000
+    /// The same bound for the methods in `slowMethods`, which legitimately run
+    /// far longer than a round-trip.
+    var slowRequestDeadlineNanos: UInt64 = 120_000_000_000
     /// Test-only override for the `request` half of the transport.
     /// When non-nil, `rawRequest` routes through it instead of the
     /// `transport` enum, so a test can script responses (e.g. the
@@ -566,17 +638,131 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             ].compactMapValues { $0 },
             options: []
         )
-        let data = try await request(method: .sessionCreate, params: params)
+        // Bounded here rather than in `rawRequest`, because the capability in
+        // this reply leaves the daemon exactly once: cancelling the wait would
+        // strand a session nobody can name or close, and an omitting
+        // `session.restoreBatch` can't reap it on the same connection (a live
+        // create's assertion deliberately outranks a restore baseline at that
+        // epoch). So let the call finish and close what it made. Nothing else
+        // can be using it: the GUI is the only party that ever sees this
+        // capability, and it is dropping it here.
+        let data = try await Deadline.wait(
+            nanos: requestDeadlineNanos,
+            expired: DaemonClientError.timedOut(method: RPCMethod.sessionCreate.rawValue),
+            late: { [weak self] late in await self?.closeUnclaimedSession(late) },
+            work: { [self] in try await request(method: .sessionCreate, params: params) }
+        )
         let response = try decode(SessionCreateResponse.self, data)
         // Auto-authenticate the long-lived GUI ↔ daemon connection so
         // session-scoped methods invoked from the GUI (panes.list,
         // device.attach, …) pass the dispatcher's auth gate.
-        try await authenticateConnection(
-            sessionId: response.sessionId,
-            capability: response.capability
-        )
+        do {
+            try await authenticateConnection(
+                sessionId: response.sessionId,
+                capability: response.capability
+            )
+        } catch {
+            // The session exists and this reply holds its only capability, but
+            // the caller is about to get an error instead of it, so nothing
+            // will ever name it again. Discard it here rather than let the
+            // failure strand it.
+            await discardSession(response)
+            throw error
+        }
         await refreshCapabilities()
         return response
+    }
+
+    /// Close a session whose `session.create` reply arrived after its caller
+    /// gave up waiting.
+    private func closeUnclaimedSession(_ data: Data) async {
+        guard let response = try? decode(SessionCreateResponse.self, data) else { return }
+        await discardSession(response)
+    }
+
+    /// Close a session the caller will never see, so it doesn't linger as a
+    /// tab nobody opened.
+    ///
+    /// `.shutdown` because the session was never handed to a tab, so nothing
+    /// it owns is wanted either. Best-effort, and "best" is the honest word:
+    /// if the close can't be confirmed it may still have landed daemon-side,
+    /// and if it genuinely didn't, the session waits for the next connection
+    /// epoch (a reconnect or a restart) to clear it.
+    private func discardSession(_ response: SessionCreateResponse) async {
+        do {
+            try await closeSession(
+                sessionId: response.sessionId,
+                capability: response.capability,
+                mode: .shutdown
+            )
+        } catch let DaemonClientError.daemon(code, _)
+            where code == Self.unauthorizedConnectionCode {
+            // `session.close` is session-scoped, so it's refused before it
+            // reaches its handler when the connection has no authenticated
+            // principal, which is exactly the case when the session being
+            // discarded is the FIRST one this connection ever created. The
+            // reply we're cleaning up carries the only capability that exists
+            // for it, so authenticate with that and close it properly.
+            //
+            // The connection is then briefly authenticated as a session that
+            // is immediately closed. That resolves itself: the next
+            // session-scoped call's own `-32001` walks `liveSessions` for a
+            // live credential, and `closeSession` has already dropped this
+            // dead one from that list.
+            do {
+                try await authenticateConnection(
+                    sessionId: response.sessionId,
+                    capability: response.capability
+                )
+            } catch {
+                // A refused capability is the one genuinely unrecoverable
+                // shape, so it's reported rather than swallowed. Every way to
+                // remove a session is session-scoped; this connection holds no
+                // other principal to borrow (that is why the close was refused
+                // in the first place); and the one credential that could
+                // authorize it is the one just rejected. An omitting
+                // `restoreBatch` can't reap it on this epoch either, so the
+                // session really does survive until the next one.
+                let detail = String(describing: error)
+                sessionLog.error(
+                    """
+                    could not discard an unclaimed session: no authenticated \
+                    principal, and its own capability was refused \
+                    (\(detail, privacy: .public))
+                    """
+                )
+                return
+            }
+            await reportUnconfirmedClose(of: response)
+        } catch {
+            await reportUnconfirmedClose(of: response)
+        }
+    }
+
+    /// Retry the close now that a principal exists, and describe the outcome
+    /// honestly if it still can't be confirmed.
+    ///
+    /// "Unconfirmed" rather than "failed": a close that times out or loses its
+    /// transport may well have landed daemon-side, exactly like any other
+    /// abandoned mutation. If it didn't, the session waits for the next
+    /// connection epoch.
+    private func reportUnconfirmedClose(of response: SessionCreateResponse) async {
+        do {
+            try await closeSession(
+                sessionId: response.sessionId,
+                capability: response.capability,
+                mode: .shutdown
+            )
+        } catch {
+            let detail = String(describing: error)
+            sessionLog.error(
+                """
+                could not confirm the close of an unclaimed session; the \
+                request may still have completed daemon-side \
+                (\(detail, privacy: .public))
+                """
+            )
+        }
     }
 
     /// Send `session.authenticate` over the live connection. Called
@@ -853,11 +1039,13 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         capability: String,
         udid: String
     ) async throws -> PaneCreateResponse {
+        attachRevision &+= 1
         let params = try JSONSerialization.data(
             withJSONObject: [
             "udid": udid,
             "sessionId": sessionId,
-            "cap": capability
+            "cap": capability,
+            "revision": attachRevision
             ]
             )
         let data = try await request(method: .deviceAttach, params: params)
@@ -881,26 +1069,37 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         deviceId: String,
         sessionId: String
     ) async throws -> PaneCreateResponse {
+        attachRevision &+= 1
         let params = try JSONSerialization.data(
             withJSONObject: [
             "deviceId": deviceId,
-            "sessionId": sessionId
+            "sessionId": sessionId,
+            "revision": attachRevision
             ]
             )
         let data = try await request(method: .physicalDeviceAttach, params: params)
         return try decode(PaneCreateResponse.self, data)
     }
 
-    /// `pane.close`: `mode` is "detach" (sim keeps running) or
+    /// `pane.closeById`: `mode` is "detach" (sim keeps running) or
     /// "shutdown" (daemon stops the sim too). Daemon honors `mode`
     /// here (unlike `session.close`).
-    func closePane(paneId: String, mode: PaneCloseMode = .detach) async throws {
-        let params = try JSONSerialization.data(
-            withJSONObject: [
+    ///
+    /// `expecting` is the `attachment` from the attach response this close is
+    /// meant for. Supplying it fences the close to that admission, so one
+    /// racing a re-attach can't retire the pane the re-attach handed back. Nil
+    /// closes unconditionally, for callers with no admission to name.
+    func closePane(
+        paneId: String,
+        mode: PaneCloseMode = .detach,
+        expecting attachment: UInt64? = nil
+    ) async throws {
+        var body: [String: Any] = [
             "paneId": paneId,
             "mode": mode.rawValue
-            ]
-            )
+        ]
+        if let attachment { body["expectedAttachment"] = attachment }
+        let params = try JSONSerialization.data(withJSONObject: body)
         _ = try await request(method: .paneCloseById, params: params)
     }
 
@@ -951,11 +1150,23 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
     }
 
+    /// The handshake is bounded like a one-shot request. Only the handshake
+    /// is: the stream it returns is long-lived by design and carries no
+    /// deadline.
     private func rawSubscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+        let params = try JSONSerialization.data(withJSONObject: ["paneId": paneId])
+        return try await bounded(.paneSubscribe) { [self] in
+            try await rawSubscribePaneOnTransport(paneId: paneId, params: params)
+        }
+    }
+
+    private func rawSubscribePaneOnTransport(
+        paneId: String,
+        params: Data
+    ) async throws -> AsyncStream<PaneEvent> {
         if let injectedSubscribeTransport {
             return try await injectedSubscribeTransport.subscribePane(paneId: paneId)
         }
-        let params = try JSONSerialization.data(withJSONObject: ["paneId": paneId])
         switch transport {
         case let .xpc(connection):
             let (_, stream) = try await connection.subscribe(
@@ -1323,6 +1534,21 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     }
 
     private func rawRequest(method: RPCMethod, params: Data?) async throws -> Data {
+        // The calls that mint daemon state are bounded by their own caller
+        // instead, because bounding them HERE would cancel the transport and
+        // discard the reply naming what was minted. `createSession` wraps
+        // itself; the attaches are wrapped by the Router, which is the layer
+        // that can tell whether a late pane is still wanted. See
+        // `DaemonClientError.timedOut`.
+        guard !Self.selfReconcilingMethods.contains(method) else {
+            return try await transportRequest(method: method, params: params)
+        }
+        return try await bounded(method) { [self] in
+            try await transportRequest(method: method, params: params)
+        }
+    }
+
+    private func transportRequest(method: RPCMethod, params: Data?) async throws -> Data {
         if let injectedRequestTransport {
             return try await injectedRequestTransport.request(
                 method: method.rawValue,
@@ -1335,6 +1561,49 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
 
         case let .uds(connection):
             return try await connection.request(method: method.rawValue, params: params)
+        }
+    }
+
+    /// Run one transport call under a deadline, so a daemon that accepts a
+    /// request and then stops answering can't park a caller forever.
+    ///
+    /// Every wrapped call is a *transport* call, not a whole retry loop: the
+    /// `-32002` retry in `request` and the reauth retry in `requestOnce` each
+    /// bound their attempts individually, which is what keeps a single bound
+    /// meaningful whether or not a call was retried.
+    ///
+    /// The loser of the race is cancelled and awaited at scope exit, so this
+    /// only terminates because both transports honor cancellation on a parked
+    /// continuation (`XPCDaemonConnection.requestReturningGeneration`,
+    /// `UDSDaemonConnection.request`, and both subscribe handshakes). A
+    /// transport that ignored cancellation would hang here rather than time
+    /// out, which is why test transports model a silent *peer*.
+    ///
+    /// Abandoning the wait does NOT cancel the daemon's handler, so a call
+    /// that mutates daemon state leaves an unknown outcome behind; see
+    /// `DaemonClientError.timedOut` for what that costs and what recovers it.
+    ///
+    /// `operation` stays `@MainActor` so the raced call runs in the same
+    /// isolation it would without the race, reaching `transport` and the
+    /// injected test seams directly.
+    private func bounded<T: Sendable>(
+        _ method: RPCMethod,
+        _ operation: @escaping @Sendable @MainActor () async throws -> T
+    ) async throws -> T {
+        let deadline = Self.slowMethods.contains(method)
+            ? slowRequestDeadlineNanos
+            : requestDeadlineNanos
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: deadline)
+                throw DaemonClientError.timedOut(method: method.rawValue)
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else {
+                throw DaemonClientError.timedOut(method: method.rawValue)
+            }
+            return first
         }
     }
 
@@ -1374,10 +1643,15 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// generation to race, so they sample the current value.
     private func pingWithGeneration() async throws -> (DaemonPingResponse, Int) {
         if injectedRequestTransport == nil, case let .xpc(connection) = transport {
-            let (data, generation) = try await connection.requestReturningGeneration(
-                method: RPCMethod.daemonPing.rawValue,
-                params: nil
-            )
+            // Bounded here rather than inherited from `request`: this branch
+            // reaches the transport directly, so an unanswered handshake ping
+            // would otherwise park launch (and every reconnect) forever.
+            let (data, generation) = try await bounded(.daemonPing) {
+                try await connection.requestReturningGeneration(
+                    method: RPCMethod.daemonPing.rawValue,
+                    params: nil
+                )
+            }
             return (try decode(DaemonPingResponse.self, data), generation)
         }
         let pong = try await ping()
@@ -1393,6 +1667,24 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
 
     // MARK: - AppCommandControlling
 
+    /// Deliberately NOT deadline-bounded, unlike every other call here.
+    ///
+    /// The daemon keeps one `app.commands` subscriber and a new subscribe
+    /// evicts the incumbent, XPC dispatch is non-FIFO, and no wire method
+    /// retires a raw subscription. So a handshake this side abandoned could
+    /// still be handled after the retry that replaced it, evicting the live
+    /// subscriber in favor of an envelope this client already dropped. The
+    /// eviction finishes the live stream and the drain loop resubscribes, so
+    /// it converges, but it converges through a window where CLI verbs from
+    /// other tabs go unanswered.
+    ///
+    /// Nothing *waits* on this handshake: no launch step or route dispatch
+    /// blocks on it, and a parked one is released either by the daemon
+    /// answering late or by the connection dropping (which fails it and sends
+    /// the drain loop around). CLI-originated routes do arrive over the
+    /// resulting subscription, so the cost of parking is the same delivery gap
+    /// the eviction window above would cause, without the risk of unseating a
+    /// working subscriber.
     func subscribeAppCommands() async throws
     -> (initial: Data, events: AsyncStream<(String, Data)>) {
         switch transport {

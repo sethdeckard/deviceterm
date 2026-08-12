@@ -79,7 +79,7 @@ struct DaemonRoleProtocolTests {
             ]
             )
 
-        fake.closePane(paneId: "p1", mode: .shutdown)
+        await fake.closePane(paneId: "p1", mode: .shutdown, expecting: nil)
         #expect(fake.closePaneCalls == [.init(paneId: "p1", mode: .shutdown)])
 
         fake.paneInputTap(paneId: "p1", x: 0.5, y: 0.5)

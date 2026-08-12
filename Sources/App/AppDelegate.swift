@@ -214,8 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Begin draining the back-channel before the first
                 // window mounts so an immediate CLI verb (`deviceterm tab
                 // open` issued during launch) lands on a live drain.
-                // The subscriber re-establishes on transport drops, so
-                // a wedged daemon doesn't strand the loop.
+                // The subscriber re-establishes on transport drops. A live
+                // connection that has simply stopped answering parks the
+                // handshake instead, until it replies or the connection goes
+                // away (see `DaemonClient.subscribeAppCommands`).
                 appCommandSubscriber.start()
                 let orphansToReattach = await recoverOrphansIfNeeded()
                 observation = App.observe { [weak self] in self?.reconcileWindows() }

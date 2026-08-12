@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-/// `pane.create` / `device.attach` → `{paneId, scale?, family?,
-/// shortId?, name?, deviceType?, pixelWidth?, pixelHeight?,
+/// `pane.create` / `device.attach` → `{paneId, attachment?, scale?,
+/// family?, shortId?, name?, deviceType?, pixelWidth?, pixelHeight?,
 /// capabilities?, target?}`. Mirrors `PaneMethods.CreateResponse`.
 ///
 /// Initial-render delivery flows through `pane.subscribe`, not this
@@ -15,6 +15,14 @@
 /// already uses.
 public struct PaneCreateResponse: Codable, Sendable, Equatable {
     public let paneId: String
+    /// Identifies this admission of the pane, advanced by every fresh create,
+    /// revisioned same-owner re-attach, and ownership transfer. Pass it back on
+    /// `pane.closeById` to fence the close to the admission it was issued
+    /// for: a close carrying a superseded value is refused, so a close racing
+    /// a re-attach can't retire the pane the re-attach handed to someone else.
+    /// Optional-decoded for daemon-version skew; a peer that omits it leaves
+    /// the caller with only the unconditional close.
+    public let attachment: UInt64?
     public let scale: Double?
     /// Coarse device family (see `DeviceFamily`). Optional-decoded for
     /// daemon-version skew.
@@ -54,6 +62,7 @@ public struct PaneCreateResponse: Codable, Sendable, Equatable {
     public init(
         paneId: String,
         scale: Double?,
+        attachment: UInt64? = nil,
         family: String? = nil,
         shortId: String? = nil,
         name: String? = nil,
@@ -64,6 +73,7 @@ public struct PaneCreateResponse: Codable, Sendable, Equatable {
         target: PaneTarget? = nil
     ) {
         self.paneId = paneId
+        self.attachment = attachment
         self.scale = scale
         self.family = family
         self.shortId = shortId

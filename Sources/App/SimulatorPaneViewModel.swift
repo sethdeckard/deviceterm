@@ -47,6 +47,10 @@ final class SimulatorPaneViewModel {
     private static let touchKeepaliveJitter: CGFloat = 0.001
 
     let paneId: String
+    /// The admission this pane was mounted from, echoed back on close so a
+    /// teardown racing a re-attach can't retire the newer admission. See
+    /// `MirroredPaneState.attachment`.
+    let attachment: UInt64?
     let udid: String
     let displayName: String
     /// Coarse device family (`watch`/`phone`/`pad`/`tv`/`unknown`) from
@@ -137,10 +141,12 @@ final class SimulatorPaneViewModel {
         udid: String,
         displayName: String,
         family: String,
+        attachment: UInt64? = nil,
         capabilities: PaneCapabilities? = nil,
         reconnectBackoffNs: UInt64 = SimulatorPaneViewModel.defaultReconnectBackoffNs
     ) {
         self.paneId = paneId
+        self.attachment = attachment
         self.daemonClient = daemonClient
         self.udid = udid
         self.displayName = displayName
@@ -315,7 +321,7 @@ final class SimulatorPaneViewModel {
         keyInputTask?.cancel()
         keyInputTask = nil
         keyInputContinuation.finish()
-        try? await daemonClient.closePane(paneId: paneId, mode: mode)
+        try? await daemonClient.closePane(paneId: paneId, mode: mode, expecting: attachment)
     }
 
     // MARK: - Input intents

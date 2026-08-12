@@ -108,6 +108,10 @@ public struct PaneOwnership: Sendable, Equatable {
 
 public struct PaneCreateResult: Sendable, Equatable {
     public let paneId: UUID
+    /// Identifies this admission of the pane. A close that carries it is
+    /// refused once a later admission has replaced it, so a close issued
+    /// before a re-attach can't retire the record the re-attach handed back.
+    public let attachment: UInt64
     /// Logical-point-to-pixel ratio for the device's display. The
     /// daemon doesn't compute this directly: the GUI derives an
     /// approximation from `family` for the four size presets, since
@@ -179,6 +183,13 @@ public enum PaneEvent: Sendable {
 }
 
 public enum PaneError: Error, Equatable, Sendable {
+    /// A re-attach whose requester has already issued a newer one. Only
+    /// reachable when the daemon handles two of one requester's attaches out
+    /// of order, so the caller seeing it has already moved on.
+    case staleAttach(
+        paneId:
+        UUID
+        )
     case notFound(
         paneId:
         UUID
@@ -405,6 +416,21 @@ public actor PaneCoordinator {
         /// the bridge handles. See `createSim`'s cross-session
         /// branch.
         var sessionId: UUID
+        /// Identifies THIS admission of the record, so a close issued against
+        /// one admission can't retire a later one. Advanced by a fresh create,
+        /// a revisioned same-owner re-attach, and an ownership transfer. Deliberately not the session incarnation
+        /// (unchanged by a same-owner re-attach, so it can't tell two
+        /// admissions apart) and not `epoch` (advanced by speculative work
+        /// that may abort, so a legitimate close would be refused).
+        var attachment: UInt64
+        /// The requester-supplied revision of the admission that produced the
+        /// current `attachment`, or nil when that admission carried none (the
+        /// CLI supplies no revision). Its only job is to reject a stale
+        /// re-attach: `attachment` is assigned in the daemon's processing
+        /// order, which is NOT the order the requests were issued in, so
+        /// without this an out-of-order request would advance the record past
+        /// the admission its issuer already acted on.
+        var admissionRevision: UInt64?
         let target: PaneTarget
         /// Device family classified at create time (see `DeviceFamily`).
         let family: String
@@ -590,6 +616,8 @@ public actor PaneCoordinator {
         init(
             id: UUID,
             sessionId: UUID,
+            attachment: UInt64,
+            admissionRevision: UInt64?,
             target: PaneTarget,
             state: PaneLifecycle,
             family: String,
@@ -600,6 +628,8 @@ public actor PaneCoordinator {
         ) {
             self.id = id
             self.sessionId = sessionId
+            self.attachment = attachment
+            self.admissionRevision = admissionRevision
             self.target = target
             self.state = state
             self.family = family
@@ -671,6 +701,10 @@ public actor PaneCoordinator {
     // live with the gesture logic in `SimInputSynthesis`, their only user.
 
     private var panes: [UUID: Record] = [:]
+    /// Source of `Record.attachment`. Monotonic across the coordinator, so a
+    /// value is unique to one admission of one record and a stale close can
+    /// never coincide with a live admission.
+    private var nextAttachment: UInt64 = 1
     /// PRODUCER-LOCAL active incarnation per session, pushed by `SessionManager`
     /// as a session reaches `.ready` (`noteSessionActive`) and CLEARED when its
     /// close sweep runs (`revokeSubscriptions(forSession:)`). Every pane
@@ -748,6 +782,7 @@ public actor PaneCoordinator {
     public func createSim(
         sessionId: UUID,
         udid: String,
+        revision: UInt64? = nil,
         ownerIncarnation: UInt64? = nil,
         requireConcreteIncarnation: Bool = false,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil
@@ -756,6 +791,7 @@ public actor PaneCoordinator {
         return try await createPane(
             target: .sim(udid: normalized),
             sessionId: sessionId,
+            revision: revision,
             ownerIncarnation: ownerIncarnation,
             requireConcreteIncarnation: requireConcreteIncarnation,
             isOwnerSessionAlive: isOwnerSessionAlive,
@@ -830,6 +866,7 @@ public actor PaneCoordinator {
     func createPane(
         target: PaneTarget,
         sessionId: UUID,
+        revision: UInt64? = nil,
         ownerIncarnation: UInt64? = nil,
         requireConcreteIncarnation: Bool = false,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil,
@@ -865,6 +902,7 @@ public actor PaneCoordinator {
             let (pixW, pixH) = record.displayPixelDimensions()
             return PaneCreateResult(
                 paneId: record.id,
+                attachment: record.attachment,
                 scale: 1.0,
                 family: record.family,
                 shortId: record.shortId,
@@ -900,6 +938,28 @@ public actor PaneCoordinator {
                 }
                 existing.ownerRevoked = false
                 existing.acceptedIncarnation = ownerIncarnation
+                // Only a revisioned re-attach re-admits the record. Advancing
+                // for an unrevisioned one would retire a token its holder is
+                // still using: that caller doesn't fence its own closes, so it
+                // gains nothing, while whoever holds the current `attachment`
+                // is a DIFFERENT caller that never sees this response, and its
+                // next close would be refused with the pane left running. The
+                // shim's contextual auto-attach reaches this on every command
+                // run in a tab that already shows the sim, so it is the
+                // ordinary case, not the exotic one. An unrevisioned re-attach
+                // is therefore idempotent: same record, same admission.
+                if let revision {
+                    // Refuse one the requester already superseded. The daemon
+                    // may handle two of one caller's requests in either order,
+                    // and admitting the older would move the record to an
+                    // `attachment` that caller never learns, silently
+                    // invalidating the close it eventually sends.
+                    guard admits(revision, over: existing) else {
+                        throw PaneError.staleAttach(paneId: existing.id)
+                    }
+                    existing.attachment = allocateAttachment()
+                    existing.admissionRevision = revision
+                }
                 return resultFor(existing)
             }
             let priorOwner = existing.sessionId
@@ -938,6 +998,17 @@ public actor PaneCoordinator {
                 newOwnerIncarnation: ownerIncarnation,
                 requireConcreteNewOwner: requireConcreteIncarnation
             ) {
+                // The transfer committed, so this is a new admission: stamp it
+                // before answering, or the adopting caller would be handed the
+                // prior owner's value and a close from that owner would still
+                // match. Unconditional, unlike the same-owner branch above:
+                // the record genuinely changed hands, so the prior owner's
+                // token must stop working whether or not the adopter tracks
+                // revisions. The adopter's revision replaces the prior
+                // owner's, which is why staleness is only ever compared within
+                // one requester's own series.
+                existing.attachment = allocateAttachment()
+                existing.admissionRevision = revision
                 return resultFor(existing)
             }
             continue
@@ -956,6 +1027,8 @@ public actor PaneCoordinator {
         let record = Record(
             id: paneId,
             sessionId: sessionId,
+            attachment: allocateAttachment(),
+            admissionRevision: revision,
             target: target,
             state: .booting,
             family: acquired.family,
@@ -1742,10 +1815,18 @@ public actor PaneCoordinator {
     /// `.shutdown`. The RPC layer then calls
     /// `DeviceCoordinator.shutdown` separately so pane lifecycle
     /// and device lifecycle stay decoupled.
+    /// `expecting` fences the close to one admission of the record. When it
+    /// is supplied and no longer matches, the close is a no-op: the record the
+    /// caller meant to retire has since been re-admitted (a same-owner
+    /// re-attach, or an adoption after its owner died) and belongs to whoever
+    /// holds the newer value. A caller with no value to check omits it and
+    /// gets the unconditional close, which is what the CLI's `pane close`
+    /// does.
     func close(
         paneId: UUID,
         as principal: PaneAccessPrincipal,
-        mode: PaneCloseMode
+        mode: PaneCloseMode,
+        expecting attachment: UInt64? = nil
     ) async -> PaneCloseOutcome {
         // Ownership gate. Unknown and foreign both resolve to "nothing to
         // close." Close stays non-throwing because a `device.shutdown` sweep
@@ -1757,6 +1838,11 @@ public actor PaneCoordinator {
         // validated GUI close still lands mid-transfer; it removes the
         // record and the transfer's post-`await` re-validation then bails.
         guard let record = try? authorize(paneId: paneId, as: principal, gatesInput: false) else {
+            return PaneCloseOutcome(udidToShutdown: nil)
+        }
+        // Checked in the same synchronous segment as the removal below, so a
+        // re-admission can't land between the two.
+        if let attachment, record.attachment != attachment {
             return PaneCloseOutcome(udidToShutdown: nil)
         }
         panes.removeValue(forKey: paneId)
@@ -2614,6 +2700,26 @@ public actor PaneCoordinator {
     /// `ShortID.maxMintAttempts` attempts elapse. Bounded retry: a
     /// buggy strategy or a pathologically saturated alphabet surfaces
     /// as `shortIDExhausted` rather than locking the actor.
+    /// Whether `revision` may re-admit `record`.
+    ///
+    /// Only called for a revisioned request, since an unrevisioned re-attach
+    /// doesn't re-admit at all. A record with no recorded revision accepts
+    /// any, there being no series to compare against; otherwise the revision
+    /// must strictly dominate, so a re-attach its own issuer has already
+    /// superseded is refused rather than advancing the record behind that
+    /// issuer's back.
+    private func admits(_ revision: UInt64, over record: Record) -> Bool {
+        guard let current = record.admissionRevision else { return true }
+        return revision > current
+    }
+
+    /// Take the next attachment value. Synchronous and actor-isolated, so an
+    /// admission stamps it in the same segment that commits the admission.
+    private func allocateAttachment() -> UInt64 {
+        defer { nextAttachment &+= 1 }
+        return nextAttachment
+    }
+
     private func allocateUniqueShortID() throws -> String {
         let existing = Set(panes.values.map(\.shortId))
         for _ in 0..<ShortID.maxMintAttempts {

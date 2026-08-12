@@ -20,6 +20,10 @@ protocol MirroredPaneState {
     /// Daemon pane id from the attach response. The glue creates a pane VM
     /// for this id (the attach already happened in the Router).
     var paneId: String { get }
+    /// The `attachment` from the attach response that produced this pane, so
+    /// a close the GUI issues can be fenced to that admission. Nil from a
+    /// daemon that predates the field, which closes unconditionally.
+    var attachment: UInt64? { get }
     /// Human-facing name shown in the pane chrome.
     var displayName: String { get }
     /// Coarse device family (drives watch-aware pane sizing). A physical

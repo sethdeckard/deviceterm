@@ -13,6 +13,8 @@ import DaemonProtocol
 struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
     /// Daemon pane id from `physicalDevice.attach`.
     let paneId: String
+    /// See `MirroredPaneState.attachment`.
+    let attachment: UInt64?
     /// The physical device's stable CoreDevice UDID; the layout-tree leaf key.
     let deviceId: String
     let displayName: String
@@ -30,6 +32,7 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
         deviceId: String,
         displayName: String,
         family: String,
+        attachment: UInt64? = nil,
         shortId: String? = nil,
         name: String? = nil,
         pixelWidth: Int? = nil,
@@ -37,6 +40,7 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
         capabilities: PaneCapabilities? = nil
     ) {
         self.paneId = paneId
+        self.attachment = attachment
         self.deviceId = deviceId
         self.displayName = displayName
         self.family = family

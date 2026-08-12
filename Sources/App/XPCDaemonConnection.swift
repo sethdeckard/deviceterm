@@ -637,22 +637,43 @@ actor XPCDaemonConnection: DaemonRequestTransport {
             body: body
         )
         let (stream, continuation) = AsyncStream<(String, Data)>.makeStream()
-        let initial: Data = try await withCheckedThrowingContinuation { ready in
-            pendingRequests[envelopeId] = ready
-            subscriptions[envelopeId] = .raw(continuation: continuation)
-            do {
-                let payload = try envelope.encode()
-                sendRPC(peer: peer, payload: payload)
-            } catch {
-                pendingRequests.removeValue(forKey: envelopeId)
-                subscriptions.removeValue(forKey: envelopeId)
-                continuation.finish()
-                ready.resume(
-                    throwing: DaemonClientError.transport("encode: \(error)")
-                )
+        // Same reasoning as the pane subscribe above: the checked continuation
+        // isn't cancellation-aware on its own, so a handshake a silent daemon
+        // never answers would park forever and no external deadline could
+        // bound it.
+        let initial: Data = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { ready in
+                pendingRequests[envelopeId] = ready
+                subscriptions[envelopeId] = .raw(continuation: continuation)
+                do {
+                    let payload = try envelope.encode()
+                    sendRPC(peer: peer, payload: payload)
+                } catch {
+                    pendingRequests.removeValue(forKey: envelopeId)
+                    subscriptions.removeValue(forKey: envelopeId)
+                    continuation.finish()
+                    ready.resume(
+                        throwing: DaemonClientError.transport("encode: \(error)")
+                    )
+                }
             }
+        } onCancel: {
+            Task { [weak self] in await self?.handleRawSubscribeCancelled(envelopeId: envelopeId) }
         }
         return (initial, stream)
+    }
+
+    /// A raw subscribe was cancelled before its ack: drop the pending entry,
+    /// resume it once, and finish the event stream. Unlike a pane
+    /// subscription there's no drain to send: the daemon pins a raw
+    /// subscriber to the subscribing connection (`app.commands` registers by
+    /// connection id) and releases it when that connection goes away, and no
+    /// wire method retires one early.
+    private func handleRawSubscribeCancelled(envelopeId: UInt32) {
+        if case let .raw(continuation) = subscriptions.removeValue(forKey: envelopeId) {
+            continuation.finish()
+        }
+        pendingRequests.removeValue(forKey: envelopeId)?.resume(throwing: CancellationError())
     }
 
     // MARK: - Send

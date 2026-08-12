@@ -218,11 +218,13 @@ private extension PaneCoordinator {
         udid: String,
         sessionId: UUID,
         backend: MockDeviceBackend,
+        revision: UInt64? = nil,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil
     ) async throws -> PaneCreateResult {
         try await createPane(
             target: .sim(udid: udid),
             sessionId: sessionId,
+            revision: revision,
             isOwnerSessionAlive: isOwnerSessionAlive,
             acquire: { AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone") }
         )
@@ -436,6 +438,215 @@ func sameSessionRecreateIsIdempotent() async throws {
     #expect(!secondBackend.startFramesCalled)
     let panes = await coordinator.panesForSession(session)
     #expect(panes.count == 1)
+}
+
+@Test
+func aReAdmissionInvalidatesTheEarlierAttachmentForClose() async throws {
+    // The close fence. A same-owner re-attach that re-admits the record hands
+    // the caller a NEW `attachment`, and a close still carrying the previous
+    // one is refused: dispatch is non-FIFO, so a close sent before the
+    // re-attach can arrive after it, and retiring the record then would take
+    // the pane away from the caller that just re-attached.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let first = try await coordinator.createMockPane(
+        udid: "udid-fence",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 1
+    )
+    let second = try await coordinator.createMockPane(
+        udid: "udid-fence",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 2
+    )
+    #expect(first.paneId == second.paneId)
+    #expect(first.attachment != second.attachment)
+
+    _ = await coordinator.close(
+        paneId: first.paneId,
+        as: .guiPeer,
+        mode: .detach,
+        expecting: first.attachment
+    )
+    #expect(await coordinator.panesForSession(session).count == 1)
+
+    _ = await coordinator.close(
+        paneId: second.paneId,
+        as: .guiPeer,
+        mode: .detach,
+        expecting: second.attachment
+    )
+    #expect(await coordinator.panesForSession(session).isEmpty)
+}
+
+@Test
+func anUnfencedCloseStillRetiresThePane() async throws {
+    // A caller with no admission to name (the CLI's `pane close`) omits the
+    // value and closes unconditionally.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let pane = try await coordinator.createMockPane(
+        udid: "udid-unfenced",
+        sessionId: session,
+        backend: MockDeviceBackend()
+    )
+    _ = await coordinator.close(paneId: pane.paneId, as: .guiPeer, mode: .detach)
+    #expect(await coordinator.panesForSession(session).isEmpty)
+}
+
+@Test
+func anAdoptionInvalidatesThePriorOwnersAttachment() async throws {
+    // The transfer half of the same rule: an adoption is a new admission, so
+    // the dead owner's close can't retire the record the adopter now holds.
+    let coordinator = PaneCoordinator()
+    let owner = UUID()
+    let adopter = UUID()
+    let original = try await coordinator.createMockPane(
+        udid: "udid-adopt-fence",
+        sessionId: owner,
+        backend: MockDeviceBackend()
+    )
+    let adopted = try await coordinator.createMockPane(
+        udid: "udid-adopt-fence",
+        sessionId: adopter,
+        backend: MockDeviceBackend(),
+        isOwnerSessionAlive: { _ in false }
+    )
+    #expect(original.paneId == adopted.paneId)
+    #expect(original.attachment != adopted.attachment)
+    _ = await coordinator.close(
+        paneId: original.paneId,
+        as: .guiPeer,
+        mode: .detach,
+        expecting: original.attachment
+    )
+    #expect(await coordinator.panesForSession(adopter).count == 1)
+}
+
+@Test
+func anUnrevisionedReAttachLeavesTheHoldersTokenWorking() async throws {
+    // A CLI attach (no revision) inside a tab that already shows the sim is
+    // the ordinary case, not an exotic one: the shim auto-attaches on every
+    // command run there. It returns the same record, so it must not re-admit
+    // it. Advancing would retire the GUI's token without telling the GUI, and
+    // its next close would be refused with the pane and its backend left
+    // running.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let held = try await coordinator.createMockPane(
+        udid: "udid-idempotent",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 1
+    )
+    let unrevisioned = try await coordinator.createMockPane(
+        udid: "udid-idempotent",
+        sessionId: session,
+        backend: MockDeviceBackend()
+    )
+    #expect(unrevisioned.paneId == held.paneId)
+    #expect(unrevisioned.attachment == held.attachment)
+
+    // The token the first caller is still holding continues to close it.
+    _ = await coordinator.close(
+        paneId: held.paneId,
+        as: .guiPeer,
+        mode: .detach,
+        expecting: held.attachment
+    )
+    #expect(await coordinator.panesForSession(session).isEmpty)
+}
+
+@Test
+func anUnrevisionedReAttachDoesNotClearTheRevisionSeries() async throws {
+    // The series survives an unrevisioned re-attach, so a stale revisioned
+    // one arriving afterwards is still refused. Resetting it to nil would
+    // reopen exactly the reordering the series exists to catch.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    _ = try await coordinator.createMockPane(
+        udid: "udid-series",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 2
+    )
+    let current = try await coordinator.createMockPane(
+        udid: "udid-series",
+        sessionId: session,
+        backend: MockDeviceBackend()
+    )
+    await #expect(throws: PaneError.staleAttach(paneId: current.paneId)) {
+        try await coordinator.createMockPane(
+            udid: "udid-series",
+            sessionId: session,
+            backend: MockDeviceBackend(),
+            revision: 1
+        )
+    }
+}
+
+@Test
+func aSupersededReAttachIsRefusedRatherThanReAdmitting() async throws {
+    // The ordering the response alone can't supply. Two of one caller's
+    // attaches are in flight (a timed-out one and its retry); the daemon may
+    // handle them in either order. If the older one were admitted second it
+    // would move the record to an `attachment` that caller never receives,
+    // and every close it sends afterwards would be silently refused while it
+    // dropped the pane from its own state, leaking the backend.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    _ = try await coordinator.createMockPane(
+        udid: "udid-stale",
+        sessionId: session,
+        backend: MockDeviceBackend()
+    )
+    let newer = try await coordinator.createMockPane(
+        udid: "udid-stale",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 2
+    )
+    await #expect(throws: PaneError.staleAttach(paneId: newer.paneId)) {
+        try await coordinator.createMockPane(
+            udid: "udid-stale",
+            sessionId: session,
+            backend: MockDeviceBackend(),
+            revision: 1
+        )
+    }
+    // The refused attach changed nothing, so the caller's close still lands.
+    _ = await coordinator.close(
+        paneId: newer.paneId,
+        as: .guiPeer,
+        mode: .detach,
+        expecting: newer.attachment
+    )
+    #expect(await coordinator.panesForSession(session).isEmpty)
+}
+
+@Test
+func anAdvancingRevisionStillReAdmits() async throws {
+    // The ordinary case the staleness gate must not break: each re-attach
+    // carries a higher revision than the last, so every one is admitted and
+    // hands back a fresh attachment.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let first = try await coordinator.createMockPane(
+        udid: "udid-advance",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 1
+    )
+    let second = try await coordinator.createMockPane(
+        udid: "udid-advance",
+        sessionId: session,
+        backend: MockDeviceBackend(),
+        revision: 2
+    )
+    #expect(first.paneId == second.paneId)
+    #expect(second.attachment > first.attachment)
 }
 
 @Test

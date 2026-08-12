@@ -31,6 +31,8 @@ private struct PendingAttachSpec {
     let family: String?
     let atIndex: Int?
     let anchor: ResurrectAnchor?
+    /// The wire method `attach` sends, for the deadline error's text.
+    let method: RPCMethod
     /// The attach RPC, given the tab's primary terminal (the
     /// ownership/attribution session). Sim uses the cap-authenticated
     /// `device.attach`; device uses `physicalDevice.attach` (deviceId +
@@ -45,6 +47,14 @@ private struct PendingAttachSpec {
     let mount: @MainActor (WindowState, PendingPaneID, PaneCreateResponse, String) -> Void
     /// Failure-log prefix (`": \(error)"` is appended).
     let failureLog: String
+}
+
+/// A pane whose detach is waiting for another attach on the same target to
+/// stop waiting. The admission id travels with it so the eventual close is
+/// still fenced to the admission that produced this pane.
+private struct DeferredDetach: Hashable {
+    let paneId: String
+    let attachment: UInt64?
 }
 
 /// One in-flight tab-privacy transition. `generation` is monotonic per
@@ -127,14 +137,48 @@ final class Router {
     private var nextPendingValue = 1
     /// In-flight attach tasks, keyed by the placeholder pane they back.
     /// The optimistic-insert handlers spawn the slow attach RPC *off*
-    /// the serial drain into one of these so navigation stays
-    /// responsive; Cancel / tab-close / window-close / quit cancel them
-    /// deterministically. Removed by each task on completion.
-    private var attachTasks: [PendingPaneID: Task<Void, Never>] = [:]
+    /// the serial drain into one of these so navigation stays responsive.
+    /// Removed by each task on completion; each task's value is whether the
+    /// pane mounted, which the orphan batch owner aggregates and every other
+    /// caller discards.
+    ///
+    /// Quit is the only thing that cancels them. Closing a placeholder or its
+    /// tab instead mutates nav state and lets `runAttach` observe that after
+    /// its await, which keeps every reply on one reconciliation path rather
+    /// than splitting it between that path and `Deadline.wait`'s late cleanup
+    /// (see `cancelPendingPane`).
+    private var attachTasks: [PendingPaneID: Task<Bool, Never>] = [:]
+    /// In-flight orphan-reattach batch owners, keyed by tab and then by a
+    /// per-batch token (one batch per adopted record, and a tab can adopt
+    /// several). Each owner spawns the record's attaches, aggregates their
+    /// outcomes, and makes the session-dir cleanup decision when the last one
+    /// settles, so `addTab` hands the work off and returns to the drain. Its
+    /// children are ordinary `attachTasks` entries and keep running when the
+    /// tab closes; only the owner is cancelled, which is what stops a partial
+    /// batch from cleaning up afterwards.
+    private var orphanBatchTasks: [TabID: [Int: Task<Void, Never>]] = [:]
+    private var nextOrphanBatchToken = 1
+    /// Panes whose detach was deferred because another attach for the same
+    /// target was still in flight, keyed by that (normalized) target. Emptied
+    /// by `reconcileDeferredDetaches` once nothing is attaching the target, so
+    /// a replacement that fails can't silently keep a pane alive.
+    private var deferredDetaches: [PaneTarget: Set<DeferredDetach>] = [:]
+    /// The detach RPC currently in flight per (normalized) target. An attach
+    /// for that target waits on it before sending, because a detach whose
+    /// claim check has already passed WILL close the record, and daemon
+    /// dispatch is non-FIFO: an attach sent into that gap can be handed the
+    /// very pane being closed and mount it just in time to watch it die.
+    /// Cleared by whichever detach installed the entry.
+    ///
+    /// The fence lasts as long as the GUI's wait on the close; a close that
+    /// outlives that wait is made harmless by its admission id instead. See
+    /// `detach`.
+    private var detachTasks: [PaneTarget: Task<Void, Never>] = [:]
     /// In-flight tab-privacy transitions, keyed by tab. The retry-until-ack
     /// loop that keeps the daemon and GUI converged lives off the serial
     /// drain (like `attachTasks`) so a lost response doesn't wedge
-    /// navigation; supersede / close / quit cancel deterministically.
+    /// navigation. Unlike an attach these hold no daemon identity worth
+    /// recovering, so supersede / close / quit all cancel them outright.
     private var privacyTransitions: [TabID: PrivacyTransition] = [:]
     /// GUI-side supersession identity, one per `setTabPrivate` call. It
     /// decides which transition *owns* the tab (cancel-previous, report
@@ -188,6 +232,13 @@ final class Router {
     /// transition inherit its target instead (no wait).
     private var inFlightCreates: [TabID: Set<Int>] = [:]
     private var nextCreateToken = 1
+    /// How long an attach may run before its placeholder flips to failed with
+    /// Retry. Generous because the work behind it genuinely is: acquiring a
+    /// simulator's display and HID, or bringing up a device tunnel. The call
+    /// itself is not cancelled at the deadline, so a pane arriving afterwards
+    /// is still reconciled (detached, or kept if something has since claimed
+    /// its target) rather than stranded. Tests shorten it.
+    var attachDeadlineNanos: UInt64 = 120_000_000_000
     /// Deadline for an awaited `applyTabPrivacy` to report `.pending` when
     /// the daemon is slow, so a stalled RPC can't wedge the serial command
     /// drain. Kept below the daemon's 5s back-channel timeout; tests
@@ -239,12 +290,18 @@ final class Router {
         // task via `scheduleReconcile`. Set before cancelling so cleanup is
         // authoritative.
         isShutdown = true
-        // Drop any in-flight attaches; a 10s tunnel bring-up must not
-        // wedge quit. A pane that materializes post-cancel is closed by
-        // the Task's own guard (best-effort). the daemon idle-exits and
-        // reaps orphans regardless.
+        // Drop any in-flight attaches; a 10s tunnel bring-up must not wedge
+        // quit. Cancelling ends the waiter, not the attach: a pane that lands
+        // afterwards still reaches `Deadline.wait`'s cleanup, now racing a
+        // process on its way out. Best-effort is the right trade here and only
+        // here, because the GUI is going away, so there's nobody to show the
+        // pane to, and the daemon idle-exits and reaps orphans anyway.
         for task in attachTasks.values { task.cancel() }
         attachTasks.removeAll()
+        for batch in orphanBatchTasks.values {
+            for task in batch.values { task.cancel() }
+        }
+        orphanBatchTasks.removeAll()
         for transition in privacyTransitions.values { transition.task.cancel() }
         privacyTransitions.removeAll()
         for task in privacyReconcileTasks.values { task.cancel() }
@@ -467,51 +524,122 @@ final class Router {
                 role: session.role ?? role
             )
             window.tabs.append(tab)
-            // Mount each orphan record's sims; clean its session dir only
-            // after every sim attached, else leave it so the orphan is
-            // re-offered next launch (matches the original addTab).
             for orphan in reattach {
-                var allAttached = true
-                for sim in orphan.liveSims {
-                    // Orphan mount happens at cold start with nothing else
-                    // competing for the drain, so awaiting the attach inline
-                    // here is fine, and it lets the cleanup decision still
-                    // hinge on real success. The pending pane is inserted
-                    // first so the sims appear immediately during the mount.
-                    let target = PaneTarget.sim(udid: sim.udid)
-                    guard let live = window.tabs.tab(id: tab.id) else {
-                        allAttached = false
-                        continue
-                    }
-                    if TabListViewModel.isTargetPresent(target, in: live) {
-                        continue  // already mounted/pending → idempotent success
-                    }
-                    let pendingId = allocatePendingPaneID()
-                    window.tabs.addPendingPane(
-                        PendingPaneState(
-                            id: pendingId,
-                            target: target,
-                            displayName: sim.displayName
-                        ),
-                        toTab: tab.id,
-                        spawningTerminal: tab.primaryTerminal.id
-                    )
-                    let ok = await runAttach(
-                        tab: tab.id,
-                        pendingId: pendingId,
-                        spec: simAttachSpec(
-                            tab: tab.id,
-                            udid: sim.udid,
-                            displayName: sim.displayName
-                        )
-                    )
-                    if !ok { allAttached = false }
-                }
-                if allAttached { OrphanRecovery.cleanup([orphan.sessionDir]) }
+                startOrphanReattach(orphan, tab: tab.id)
             }
         } catch {
             logError("session.create failed: \(error)")
         }
+    }
+
+    /// Mount one adopted orphan record's sims, cleaning its session dir only
+    /// once the record is fully adopted; otherwise the dir stays so the orphan
+    /// is re-offered next launch. "Fully adopted" means every sim either
+    /// mounted here or was already claimed by this tab, and a sim already
+    /// claimed counts however its own attach is doing, including a placeholder
+    /// still attaching or already failed: the record has been handed over
+    /// either way, and re-offering a target the tab is already showing would
+    /// stack a duplicate.
+    ///
+    /// The placeholders go in synchronously, so the sims appear immediately
+    /// and are already closable by the time this returns, but the attaches
+    /// themselves run off the serial drain under a batch owner. Awaiting them
+    /// inline holds the drain for the length of a cold-start mount, and one
+    /// attach that doesn't come back then freezes every later route, tab
+    /// switching included, which is exactly what the placeholder exists to
+    /// avoid.
+    private func startOrphanReattach(_ orphan: OrphanRecord, tab tabID: TabID) {
+        var children: [Task<Bool, Never>] = []
+        for sim in orphan.liveSims {
+            // Re-resolved each pass so a record naming the same udid twice
+            // dedups against the placeholder the previous pass just added.
+            guard let window = workspace.windowContaining(tab: tabID),
+                let live = window.tabs.tab(id: tabID) else {
+                // The tab is gone: stand in an unmounted sim so the batch
+                // can't go on to claim a full adoption.
+                children.append(Task { false })
+                continue
+            }
+            let target = PaneTarget.sim(udid: sim.udid)
+            if TabListViewModel.isTargetPresent(target, in: live) {
+                continue  // already mounted/pending → idempotent success
+            }
+            let pendingId = allocatePendingPaneID()
+            window.tabs.addPendingPane(
+                PendingPaneState(
+                    id: pendingId,
+                    target: target,
+                    displayName: sim.displayName
+                ),
+                toTab: tabID,
+                spawningTerminal: live.primaryTerminal.id
+            )
+            children.append(
+                spawnAttach(
+                    tab: tabID,
+                    pendingId: pendingId,
+                    spec: simAttachSpec(
+                        tab: tabID,
+                        udid: sim.udid,
+                        displayName: sim.displayName
+                    )
+                )
+            )
+        }
+        let token = nextOrphanBatchToken
+        nextOrphanBatchToken += 1
+        let owner = Task { @MainActor [weak self] in
+            var mounted = true
+            for child in children where await child.value == false {
+                mounted = false
+            }
+            // Cancellation means the tab (or the app) went away mid-batch, so
+            // the record is NOT fully adopted however its attaches landed.
+            self?.finishOrphanReattach(
+                orphan,
+                tab: tabID,
+                token: token,
+                adopted: mounted && !Task.isCancelled
+            )
+        }
+        orphanBatchTasks[tabID, default: [:]][token] = owner
+    }
+
+    /// Retire a finished orphan batch: drop the owner and, only on a fully
+    /// adopted record, delete the session dir it was recovered from.
+    private func finishOrphanReattach(
+        _ orphan: OrphanRecord,
+        tab tabID: TabID,
+        token: Int,
+        adopted: Bool
+    ) {
+        orphanBatchTasks[tabID]?.removeValue(forKey: token)
+        if orphanBatchTasks[tabID]?.isEmpty == true {
+            orphanBatchTasks[tabID] = nil
+        }
+        if adopted { OrphanRecovery.cleanup([orphan.sessionDir]) }
+    }
+
+    /// Start a placeholder's attach RPC off the serial drain and register it
+    /// under `pendingId`, which is how quit reaches it to cancel. Returns the
+    /// task for the one caller that needs the outcome.
+    @discardableResult
+    private func spawnAttach(
+        tab tabID: TabID,
+        pendingId: PendingPaneID,
+        spec: PendingAttachSpec
+    ) -> Task<Bool, Never> {
+        let task = Task { @MainActor [weak self] in
+            let mounted = await self?.runAttach(
+                tab: tabID,
+                pendingId: pendingId,
+                spec: spec
+            ) ?? false
+            self?.attachTasks[pendingId] = nil
+            return mounted
+        }
+        attachTasks[pendingId] = task
+        return task
     }
 
     /// Add an additional terminal pane to an existing tab. Mints a
@@ -1085,6 +1213,7 @@ final class Router {
             family: family,
             atIndex: atIndex,
             anchor: anchor,
+            method: .deviceAttach,
             attach: { [daemon] primary in
                 try await daemon.attachDevice(
                     sessionId: primary.sessionId,
@@ -1103,6 +1232,7 @@ final class Router {
                     udid: udid,
                     displayName: resolvedName,
                     family: response.family ?? DeviceFamily.unknown.rawValue,
+                    attachment: response.attachment,
                     shortId: response.shortId,
                     name: response.name,
                     pixelWidth: response.pixelWidth,
@@ -1132,6 +1262,7 @@ final class Router {
             family: nil,
             atIndex: nil,
             anchor: nil,
+            method: .physicalDeviceAttach,
             attach: { [daemon] primary in
                 try await daemon.attachPhysicalDevice(
                     deviceId: deviceId,
@@ -1149,6 +1280,7 @@ final class Router {
                     deviceId: deviceId,
                     displayName: resolvedName,
                     family: response.family ?? DeviceFamily.unknown.rawValue,
+                    attachment: response.attachment,
                     shortId: response.shortId,
                     name: response.name,
                     pixelWidth: response.pixelWidth,
@@ -1190,37 +1322,64 @@ final class Router {
             spawningTerminal: spawningTerminalID,
             anchor: spec.anchor
         )
-        let task = Task { @MainActor [weak self] in
-            _ = await self?.runAttach(tab: tabID, pendingId: pendingId, spec: spec)
-            self?.attachTasks[pendingId] = nil
-        }
-        attachTasks[pendingId] = task
+        spawnAttach(tab: tabID, pendingId: pendingId, spec: spec)
     }
 
     /// Run the attach RPC for a pending pane and reconcile the result: swap
     /// the placeholder for the real pane on success, flip it to `.failed` on
     /// error. Returns whether the pane mounted (the orphan-reattach loop
     /// reads this to decide cleanup). If the placeholder vanished during the
-    /// await (Cancel / tab close), the daemon pane that came back is closed
-    /// so it doesn't leak.
+    /// await (Cancel / tab close), the pane that came back goes to the
+    /// best-effort detach reconciliation, which skips it while another mounted
+    /// or attaching pane claims its target and defers the decision to
+    /// whichever attach stops waiting last.
     @discardableResult
     private func runAttach(
         tab tabID: TabID,
         pendingId: PendingPaneID,
         spec: PendingAttachSpec
     ) async -> Bool {
+        // Wait out a detach already in flight for this target before sending.
+        // See `detach`: the record it is closing is the one the daemon would
+        // hand back to a re-attach.
+        await awaitDetach(of: spec.target)
         guard let primary = workspace.windowContaining(tab: tabID)?
             .tabs.tab(id: tabID)?.primaryTerminal else { return false }
         do {
-            let response = try await spec.attach(primary)
-            // If teardown cancelled us mid-attach (tab/window close,
-            // explicit Cancel, or quit), do NOT mount. The pending record
-            // may still be in nav state (the tab is only removed after
-            // its close RPCs await) so the pending-still-present guard
-            // below isn't enough on its own; the cancellation flag is.
-            // Close the pane that just materialized so it doesn't leak.
-            if Task.isCancelled {
-                try? await daemon.closePane(paneId: response.paneId, mode: .detach)
+            // The bound lives here, not in `DaemonClient`, because only this
+            // layer can say whether a pane that arrives late is still wanted.
+            // The call is never cancelled, so however long the daemon takes, a
+            // returned pane is either mounted or sent through the best-effort
+            // detach reconciliation.
+            let response = try await Deadline.wait(
+                nanos: attachDeadlineNanos,
+                expired: DaemonClientError.timedOut(method: spec.method.rawValue),
+                late: { [weak self] late in
+                    await self?.detachUnclaimedPane(late, target: spec.target)
+                },
+                work: { try await spec.attach(primary) }
+            )
+            // If the tab is being torn down, or quit cancelled us, do NOT
+            // mount. Mid-teardown the pending record is still in nav state
+            // and the tab is still in the workspace (it's removed only after
+            // the close RPCs await), so the pending-still-present guard below
+            // isn't enough on its own: mounting here would hand the pane to a
+            // tab whose `closeTabRecords` already snapshotted its panes, and
+            // nothing would ever close it. `closingTabs` covers exactly that
+            // window and `Task.isCancelled` covers quit, which is the one
+            // path that cancels attaches. Detached through the same claim
+            // check as any other unclaimed pane, discounting this tab's own
+            // placeholder: closing the tab kills its session, which is exactly
+            // what lets ANOTHER tab's in-flight attach adopt this record (the
+            // daemon transfers a pane whose owner is dead), so an
+            // unconditional close here would take a pane away from the tab
+            // that just adopted it.
+            if Task.isCancelled || closingTabs.contains(tabID) {
+                await detachUnclaimedPane(
+                    response,
+                    target: spec.target,
+                    ignoring: pendingId
+                )
                 return false
             }
             // Resolve the bare name (the sim path may await a `device.list`
@@ -1234,17 +1393,18 @@ final class Router {
                 resolvedName = bareName
             }
             // Single post-await reconciliation covering every race (the
-            // attach await + the optional name-lookup await): mount iff
-            // the placeholder is still present; otherwise the attach
-            // outlived a Cancel / tab-close: close the materialized
-            // daemon pane so it doesn't leak.
+            // attach await + the optional name-lookup await): mount iff the
+            // placeholder is still present. Otherwise the attach outlived a
+            // Cancel or a tab close, and the pane it made is detached unless
+            // something else now claims its target.
             guard let window = workspace.windowContaining(tab: tabID),
                 window.tabs.tab(id: tabID)?.pendingPanes
                     .contains(where: { $0.id == pendingId }) == true else {
-                try? await daemon.closePane(paneId: response.paneId, mode: .detach)
+                await detachUnclaimedPane(response, target: spec.target)
                 return false
             }
             spec.mount(window, pendingId, response, resolvedName)
+            await reconcileDeferredDetaches(for: spec.target)
             return true
         } catch {
             logError("\(spec.failureLog): \(error)")
@@ -1253,7 +1413,168 @@ final class Router {
                 message: ErrorText.describing(error),
                 inTab: tabID
             )
+            // This attempt has stopped waiting, so a detach deferred behind
+            // it (including one deferred behind THIS placeholder while it was
+            // attaching) has to be retaken now: a placeholder that isn't
+            // attaching claims nothing.
+            await reconcileDeferredDetaches(for: spec.target)
             return false
+        }
+    }
+
+    /// Detach a pane whose placeholder is gone, unless something else now
+    /// claims its target, in which case hold the pane until that claim
+    /// resolves.
+    ///
+    /// Losing the placeholder frees the target, and an attach for it can start
+    /// again straight away (discovery re-offers a booted sim every couple of
+    /// seconds) while this one is still running. The daemon hands the owning
+    /// session back its existing pane rather than minting a second, so the
+    /// newer attach lands on the SAME paneId, and detaching it here would
+    /// leave the workspace showing a pane whose daemon side is closed. Testing
+    /// the target rather than the paneId catches that newer attach while it is
+    /// still in flight, when its placeholder is all it has.
+    ///
+    /// A claim isn't proof, though: the replacement may fail (its session may
+    /// be refused ownership of a target another tab holds), and then nobody
+    /// would be left to close this pane. So the claim only *defers* the
+    /// decision, and `reconcileDeferredDetaches` retakes it once every attach
+    /// for the target has settled.
+    private func detachUnclaimedPane(
+        _ response: PaneCreateResponse,
+        target: PaneTarget,
+        ignoring pendingId: PendingPaneID? = nil
+    ) async {
+        let paneId = response.paneId
+        // Already on screen: the daemon handed this record to a later caller
+        // (a re-attach for the same target, or an adoption once this pane's
+        // owning session died), and that caller mounted it. Detaching now
+        // would take a live pane away from whoever is showing it.
+        if isPaneMounted(paneId) { return }
+        guard !isTargetClaimed(target, ignoring: pendingId) else {
+            deferredDetaches[detachKey(target), default: []].insert(
+                DeferredDetach(paneId: paneId, attachment: response.attachment)
+            )
+            return
+        }
+        await detach(paneId, target: target, expecting: response.attachment)
+    }
+
+    /// Close a pane, holding the target's detach slot until the RPC returns.
+    ///
+    /// The claim check that authorized this close runs synchronously, but the
+    /// close itself suspends, and an attach starting in that gap would find
+    /// the target free and race the daemon into handing it this very record.
+    /// Publishing the in-flight close is what lets `runAttach` wait it out
+    /// instead. Everything that closes an unclaimed pane goes through here.
+    ///
+    /// The fence only covers the GUI's wait, and a close that times out leaves
+    /// the outcome unknown, so it is not the only protection: the close also
+    /// carries the admission it was issued against (`expecting`), and the
+    /// daemon refuses one whose admission has been superseded. A late close
+    /// therefore can't retire a record a re-attach has since handed to someone
+    /// else, which is the failure this fence alone could not prevent.
+    private func detach(
+        _ paneId: String,
+        target: PaneTarget,
+        expecting attachment: UInt64?
+    ) async {
+        let key = detachKey(target)
+        let close = Task { @MainActor [daemon] in
+            _ = try? await daemon.closePane(
+                paneId: paneId,
+                mode: .detach,
+                expecting: attachment
+            )
+        }
+        detachTasks[key] = close
+        await close.value
+        // Only the installer clears it; an overlapping detach for the same
+        // target has already taken the slot and owns its own release.
+        if detachTasks[key] == close { detachTasks[key] = nil }
+    }
+
+    /// Wait out a detach in flight for `target`.
+    ///
+    /// One await is enough. A detach only starts when nothing claims the
+    /// target, and every attach path inserts (or re-arms) its `.attaching`
+    /// placeholder synchronously before `runAttach` runs, so from here on the
+    /// target reads as claimed and no further detach can decide to close it.
+    private func awaitDetach(of target: PaneTarget) async {
+        guard let inFlight = detachTasks[detachKey(target)] else { return }
+        await inFlight.value
+    }
+
+    /// Settle any detach deferred while `target` looked claimed.
+    ///
+    /// Called whenever an attach for the target stops waiting, however it
+    /// stopped. A pane that ended up mounted is kept (the re-attach handed the
+    /// newer caller the same record); one that nothing is showing is detached;
+    /// and if another placeholder is still attaching the decision defers
+    /// again, to whichever of them stops waiting last. A call still running
+    /// past its own deadline isn't waited for here: whatever it returns
+    /// arrives at `detachUnclaimedPane` on its own.
+    private func reconcileDeferredDetaches(for target: PaneTarget) async {
+        let key = detachKey(target)
+        guard let deferred = deferredDetaches.removeValue(forKey: key) else { return }
+        guard !isTargetAttaching(target) else {
+            deferredDetaches[key] = deferred
+            return
+        }
+        for entry in deferred where !isPaneMounted(entry.paneId) {
+            await detach(entry.paneId, target: target, expecting: entry.attachment)
+        }
+    }
+
+    /// Whether any window shows this target, or is still attaching it,
+    /// discounting the placeholder named by `ignoring` (the caller's own).
+    private func isTargetClaimed(
+        _ target: PaneTarget,
+        ignoring pendingId: PendingPaneID? = nil
+    ) -> Bool {
+        liveTabs().contains {
+            TabListViewModel.isTargetShown(target, in: $0, ignoring: pendingId)
+        }
+    }
+
+    private func isTargetAttaching(_ target: PaneTarget) -> Bool {
+        liveTabs().contains { tab in
+            tab.pendingPanes.contains {
+                $0.phase == .attaching && TabListViewModel.targetsMatch($0.target, target)
+            }
+        }
+    }
+
+    /// Tabs whose claims still mean something, which is every tab not being
+    /// torn down. A closing tab keeps its placeholders in nav state until its
+    /// teardown RPCs finish, and those placeholders will never mount anything:
+    /// counting one as a claim would park a detach behind an attach that has
+    /// already given up, with no later event to retake the decision.
+    private func liveTabs() -> [TabState] {
+        workspace.windows
+            .flatMap(\.tabs.tabs)
+            .filter { !closingTabs.contains($0.id) }
+    }
+
+    private func isPaneMounted(_ paneId: String) -> Bool {
+        workspace.windows.contains { window in
+            window.tabs.tabs.contains { tab in
+                tab.simPanes.contains { $0.paneId == paneId }
+                    || tab.devicePanes.contains { $0.paneId == paneId }
+            }
+        }
+    }
+
+    /// Registry key for a target. Sim UDID casing varies across the attach
+    /// paths, so it is normalized here the way the presence checks compare it;
+    /// two spellings of one sim must not key two entries.
+    private func detachKey(_ target: PaneTarget) -> PaneTarget {
+        switch target {
+        case let .sim(udid):
+            return .sim(udid: udid.lowercased())
+
+        case .device:
+            return target
         }
     }
 
@@ -1273,7 +1594,11 @@ final class Router {
         guard let window = workspace.windowContaining(tab: tabID),
             let pane = window.tabs.tab(id: tabID)?.simPanes
                 .first(where: { $0.udid == udid }) else { return }
-        try? await daemon.closePane(paneId: pane.paneId, mode: mode)
+        try? await daemon.closePane(
+            paneId: pane.paneId,
+            mode: mode,
+            expecting: pane.attachment
+        )
         window.tabs.removeSimPane(udid: udid, fromTab: tabID)
     }
 
@@ -1286,7 +1611,10 @@ final class Router {
                 .first(where: { $0.id == pendingId }),
             case .failed = pending.phase else { return }
         window.tabs.retryPendingPane(id: pendingId, inTab: tabID)
-        attachTasks[pendingId]?.cancel()
+        // No cancel of the previous attempt: reaching `.failed` is what proves
+        // it already finished, and cancelling an attach anywhere but quit
+        // throws away the paneId its cleanup needs.
+        //
         // Rebuild the attach spec from the placeholder's target. Retry only
         // re-runs the attach: the resurrect metadata was consumed at the
         // original insert, so the sim spec's nil defaults are correct here.
@@ -1298,27 +1626,34 @@ final class Router {
         case let .device(deviceId):
             spec = deviceAttachSpec(tab: tabID, deviceId: deviceId, displayName: pending.displayName)
         }
-        let task = Task { @MainActor [weak self] in
-            _ = await self?.runAttach(tab: tabID, pendingId: pendingId, spec: spec)
-            self?.attachTasks[pendingId] = nil
-        }
-        attachTasks[pendingId] = task
+        // A retry can overlap the attempt that failed: the first one abandoned
+        // its *wait*, not its work, so the daemon may still be finishing it.
+        // Both converge on one pane, because the daemon hands the owning
+        // session back its existing pane for the same target rather than
+        // minting a second, and whichever attach ends up unclaimed detaches
+        // only if nothing is showing that target (`detachUnclaimedPane`).
+        spawnAttach(tab: tabID, pendingId: pendingId, spec: spec)
     }
 
-    /// Cancel/close a pending pane: cancel the in-flight attach Task and
-    /// drop the placeholder leaf. The Task's post-await guard closes any
-    /// daemon pane that materializes after this, so a cancel mid-attach
-    /// can't leak. The in-flight cancel always detaches (we never power
-    /// off a device whose attach we didn't finish), so `mode` is advisory:
-    /// the leaf removal itself ignores it.
+    /// Close a pending pane: drop the placeholder leaf and leave the in-flight
+    /// attach running until it replies or reaches its deadline. If it returns
+    /// a paneId with the placeholder gone, `runAttach` detaches that pane.
+    ///
+    /// Deliberately does NOT cancel the attach. Cancelling ends this waiter
+    /// but not the daemon's work, so it buys nothing: the reply still arrives,
+    /// and would be reconciled by `Deadline.wait`'s late cleanup instead of by
+    /// the post-await guard below. Leaving the call alone keeps every reply on
+    /// one path, and the escape is immediate either way because the leaf goes
+    /// now.
+    ///
+    /// The cleanup always detaches (we never power off a device whose attach
+    /// we didn't finish), so `mode` is advisory: the leaf removal ignores it.
     private func cancelPendingPane(
         tab tabID: TabID,
         pendingId: PendingPaneID,
         mode: PaneCloseMode
     ) {
         _ = mode
-        attachTasks[pendingId]?.cancel()
-        attachTasks[pendingId] = nil
         workspace.windowContaining(tab: tabID)?.tabs.removePendingPane(
             id: pendingId,
             fromTab: tabID
@@ -1333,7 +1668,11 @@ final class Router {
         guard let window = workspace.windowContaining(tab: tabID),
             let pane = window.tabs.tab(id: tabID)?.devicePanes
                 .first(where: { $0.deviceId == deviceId }) else { return }
-        try? await daemon.closePane(paneId: pane.paneId, mode: mode)
+        try? await daemon.closePane(
+            paneId: pane.paneId,
+            mode: mode,
+            expecting: pane.attachment
+        )
         window.tabs.removeDevicePane(deviceId: deviceId, fromTab: tabID)
     }
 
@@ -1355,12 +1694,21 @@ final class Router {
         // into the gap, and after removal the workspace check takes over).
         closingTabs.insert(tab.id)
         defer { closingTabs.remove(tab.id) }
-        // Cancel any in-flight attach for this tab. The attach Task's
-        // post-await guard closes a daemon pane that materializes after
-        // the tab is gone, so a tab closed mid-attach can't leak.
-        for pending in tab.pendingPanes {
-            attachTasks[pending.id]?.cancel()
-            attachTasks[pending.id] = nil
+        // In-flight attaches for this tab are left to finish, for the reason
+        // `cancelPendingPane` spells out: cancelling throws away the paneId
+        // the cleanup needs. A reply that beats the attach deadline is
+        // detached, whether it arrives while `closingTabs` still marks this
+        // tab or after the tab is gone; a reply past that deadline is detached
+        // too, by the late-arrival cleanup. Session close covers none of it:
+        // that revokes a pane's subscriptions and leaves the record orphaned
+        // rather than retiring it.
+        //
+        // The batch owner IS cancelled: it holds no daemon state, and its
+        // cancellation is what stops a batch still settling from deleting an
+        // orphan record's session dir after the tab it was adopted into is
+        // gone.
+        if let batch = orphanBatchTasks.removeValue(forKey: tab.id) {
+            for task in batch.values { task.cancel() }
         }
         // Cancel any in-flight privacy transition or snapshot reconcile for
         // the closing tab so neither outlives it.
@@ -1369,13 +1717,21 @@ final class Router {
         privacyReconcileTasks[tab.id]?.cancel()
         privacyReconcileTasks[tab.id] = nil
         for pane in tab.simPanes {
-            try? await daemon.closePane(paneId: pane.paneId, mode: mode)
+            try? await daemon.closePane(
+                paneId: pane.paneId,
+                mode: mode,
+                expecting: pane.attachment
+            )
         }
         // Device panes tear down the daemon pane + IOSurface stream the
         // same way; `mode` is moot for the physical device itself (we
         // never power it off, closing the pane just drops the mirror).
         for pane in tab.devicePanes {
-            try? await daemon.closePane(paneId: pane.paneId, mode: mode)
+            try? await daemon.closePane(
+                paneId: pane.paneId,
+                mode: mode,
+                expecting: pane.attachment
+            )
         }
         if mode == .shutdown {
             let owned = (try? await daemon.deviceList(scope: .owned)) ?? []
