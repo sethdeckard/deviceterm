@@ -840,8 +840,32 @@ final class TabContentViewController: NSViewController {
     }
 
     private func discoverBootedSims() async {
-        let owned = (try? await daemonClient.deviceList(scope: .owned)) ?? []
+        // Abort on a failed read: treating it as an empty roster would forget
+        // every handled udid, re-attach a pane for a sim the user deliberately
+        // detached, and erase the claims recovery reads.
+        //
+        // The generation comes back WITH the answer rather than being sampled
+        // after it. A replacement helper installed while this call was in
+        // flight would otherwise be credited with the previous helper's roster,
+        // which is the one attribution error the mirror cannot survive.
+        //
+        // Only one tab feeds the mirror per pass. Neither the order the
+        // requests went out in nor the order the answers came back in says
+        // which snapshot the daemon took later, so the mirror takes one read
+        // at a time; the rest of this pass runs for discovery regardless.
+        // Released on every path out, including the failure and cancellation
+        // returns below.
+        let token = router.beginOwnedSimsRead()
+        defer { if let token { router.endOwnedSimsRead(token) } }
+        guard let read = try? await daemonClient.deviceListWithGeneration(scope: .owned)
+        else { return }
         if Task.isCancelled || isTornDown { return }
+        // `.owned` is daemon-wide, so this tab's poll carries the whole roster,
+        // and the mirror is what makes it outlive the helper that answered.
+        if let token {
+            router.noteOwnedSims(read.entries, generation: read.generation, read: token)
+        }
+        let owned = read.entries
         // Discovery is tab-scoped: any sim owned by any terminal in
         // this tab counts as discoverable here. In practice that is
         // the same set as "owned by primary terminal" because

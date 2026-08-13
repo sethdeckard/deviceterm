@@ -313,6 +313,12 @@ public enum DaemonMethods {
                 sessionManager: sessionManager
             )
                 ),
+            RPCMethod.deviceRestoreOwnership.rawValue: .validatedGUI(
+                DeviceMethods.restoreOwnership(
+                coordinator: deviceCoordinator,
+                sessionManager: sessionManager
+            )
+                ),
             RPCMethod.physicalDeviceList.rawValue: .daemonWide(
                 PhysicalDeviceMethods.list(coordinator: physicalDeviceCoordinator)
             ),

@@ -232,6 +232,17 @@ final class Router {
     /// transition inherit its target instead (no wait).
     private var inFlightCreates: [TabID: Set<Int>] = [:]
     private var nextCreateToken = 1
+    /// The owned-sim re-assertion currently converging, if any. Held because
+    /// it retries unanswered requests until one answers, its window closes, it
+    /// is cancelled, or a newer connection supersedes it, so unlike the
+    /// one-shot calls around it there is something for quit to stop.
+    private var ownershipRestoreTask: Task<Void, Never>?
+    /// Which sims deviceterm owns, mirrored from the discovery poll so the
+    /// answer outlives the helper that gave it. Recovery re-asserts it against
+    /// a replacement helper, which is the only way a sim with no pane comes
+    /// back: nothing else the GUI can act on automatically holds it. See
+    /// `OwnedSimRoster`.
+    private let ownedSims = OwnedSimRoster()
     /// How long an attach may run before its placeholder flips to failed with
     /// Retry. Generous because the work behind it genuinely is: acquiring a
     /// simulator's display and HID, or bringing up a device tunnel. The call
@@ -239,6 +250,15 @@ final class Router {
     /// is still reconciled (detached, or kept if something has since claimed
     /// its target) rather than stranded. Tests shorten it.
     var attachDeadlineNanos: UInt64 = 120_000_000_000
+    /// Backoff between owned-sim re-assertion attempts, from 200ms doubling to
+    /// a 2s cap, and the wall-clock window they run inside. Thirty seconds
+    /// bounds how long an UNANSWERED request may keep being retried; a request
+    /// the helper answers ends the loop whatever it took. See
+    /// `restoreSimOwnership` for why the bound is a safety property. Tests
+    /// shorten them.
+    var restoreRetryBaseNanos: UInt64 = 200_000_000
+    var restoreRetryCapNanos: UInt64 = 2_000_000_000
+    var restoreWindow: Duration = .seconds(30)
     /// Deadline for an awaited `applyTabPrivacy` to report `.pending` when
     /// the daemon is slow, so a stalled RPC can't wedge the serial command
     /// drain. Kept below the daemon's 5s back-channel timeout; tests
@@ -306,6 +326,8 @@ final class Router {
         privacyTransitions.removeAll()
         for task in privacyReconcileTasks.values { task.cancel() }
         privacyReconcileTasks.removeAll()
+        ownershipRestoreTask?.cancel()
+        ownershipRestoreTask = nil
         continuation?.finish()
         await drainTask?.value
     }
@@ -482,7 +504,9 @@ final class Router {
         }
     }
 
-    /// Re-attach every mounted device-backed pane after a helper restart.
+    /// Bring the workspace's device-backed panes back after a helper restart,
+    /// and re-assert the sims that no pane carries (see
+    /// `restoreSimOwnership`).
     ///
     /// Each pane becomes an ordinary attaching placeholder in the slot it
     /// already holds, and the normal attach path takes it from there: it
@@ -504,6 +528,7 @@ final class Router {
     /// owning session that same record back during the re-attach, so closing
     /// it would only retire the thing being recovered.
     private func recoverPanes() {
+        restoreSimOwnership()
         for window in workspace.windows {
             for tab in window.tabs.tabs {
                 // One numbering covering every sim in the tab, mounted or
@@ -546,6 +571,145 @@ final class Router {
                 }
             }
         }
+    }
+
+    /// Tell the helper behind a new connection which sims deviceterm still
+    /// owns. It may be a replacement or the one that answered before; the
+    /// re-assertion is idempotent either way.
+    ///
+    /// Panes carry their own sims back: re-attaching one records ownership on
+    /// its way through. This is for the sims nothing carries, the ones the
+    /// user detached and left running, which a fresh helper would otherwise
+    /// treat as somebody else's and drop from the running-sim count and the
+    /// shut-down prompts.
+    ///
+    /// Off the drain, like every other daemon call recovery makes. Ordering
+    /// against the pane re-attaches doesn't matter: a sim reached by both gets
+    /// the same owner either way, and the helper keeps whichever attribution
+    /// landed first rather than letting the second overwrite it.
+    ///
+    /// Tracked, so `shutdown` or a superseding recovery can cancel it.
+    ///
+    /// The claims are re-read each pass, so a sim owned since the last attempt
+    /// joins the batch, and a newer connection taking over ends this loop
+    /// rather than racing its own.
+    ///
+    /// Retries only calls the helper never answered, and never a claim it
+    /// answered and declined.
+    ///
+    /// The helper judges a claim on current boot state, and refuses one that
+    /// conflicts with attribution it already holds. It reports no reason, so
+    /// "declined" covers a sim that shut down as well as one still Booting.
+    /// Re-asserting either is asserting a claim against whatever holds that
+    /// udid at some later moment, which is how another
+    /// tool's boot of the same udid gets claimed as deviceterm's. A declined
+    /// claim is therefore dropped, not retried: a sim still Booting when the
+    /// helper EVALUATES the claim loses it, and a pane-backed one still comes
+    /// back through recovery's Retry. Telling the two apart needs a per-udid reason
+    /// on the wire, which this doesn't have.
+    ///
+    /// An unanswered call is different: the helper evaluated nothing, so
+    /// nothing was learned about any sim and re-sending asserts no more than
+    /// the first attempt did. Those retry, inside a wall-clock window that
+    /// opens when re-assertion begins and bounds how long after that a claim
+    /// can still land. Wall clock rather than an attempt count because each
+    /// attempt carries the client's own request deadline, so a fixed number of
+    /// attempts spans an unpredictable stretch of real time.
+    private func restoreSimOwnership() {
+        guard let pending = ownedSims.beginRestore() else { return }
+        let generation = pending.generation
+        let base = restoreRetryBaseNanos
+        let cap = restoreRetryCapNanos
+        let deadline = ContinuousClock.now.advanced(by: restoreWindow)
+        ownershipRestoreTask?.cancel()
+        ownershipRestoreTask = Task { @MainActor [weak self] in
+            var backoff = base
+            while true {
+                // Re-acquired each pass, so the loop can't keep the Router
+                // alive, and so a sim owned since the last attempt joins the
+                // batch. The deadline is checked HERE rather than only before
+                // sleeping, so no attempt is sent once the window has closed.
+                guard let self,
+                    ContinuousClock.now < deadline,
+                    self.ownedSims.isRestorePending(generation),
+                    let restore = self.ownedSims.beginRestore()
+                else { break }
+                if await self.answered(restore.claims) {
+                    self.ownedSims.settle(generation: generation)
+                    return
+                }
+                guard (try? await Task.sleep(nanoseconds: backoff)) != nil else { break }
+                backoff = min(backoff * 2, cap)
+            }
+            self?.ownedSims.settle(generation: generation)
+        }
+    }
+
+    /// Send one batch; true when the helper answered at all, whatever it took.
+    ///
+    /// An answer settles the matter even when some claims were declined,
+    /// because the helper looked and said no and re-asking can only put the
+    /// question to a different simulator later. Only silence is worth
+    /// repeating.
+    private func answered(_ claims: [RestoredSimOwnership]) async -> Bool {
+        guard !claims.isEmpty else { return true }
+        do {
+            _ = try await daemon.restoreOwnership(devices: claims)
+            return true
+        } catch {
+            logError("device.restoreOwnership failed: \(error)")
+            return false
+        }
+    }
+
+    /// Claim the roster-read slot for a poll about to run, or nil when another
+    /// tab's read holds it. Only one roster read runs at a time, because
+    /// neither the order requests go out in nor the order answers come back in
+    /// says which snapshot the daemon took later.
+    ///
+    /// Release it with `endOwnedSimsRead` on every path out, including failure
+    /// and cancellation.
+    func beginOwnedSimsRead() -> Int? { ownedSims.beginRead() }
+
+    func endOwnedSimsRead(_ token: Int) { ownedSims.endRead(token) }
+
+    /// One successful `device.list({scope: "owned"})` read from a tab's
+    /// discovery poll, carrying the connection that answered it and the token
+    /// it was issued under. The poll pays for the read either way; the mirror
+    /// is what makes the answer outlive the helper.
+    ///
+    /// A failed read must not arrive here as an empty roster: "the helper
+    /// didn't answer" and "the helper owns nothing" are opposite facts.
+    func noteOwnedSims(_ entries: [DeviceListEntry], generation: Int, read: Int) {
+        ownedSims.record(entries, generation: generation, read: read)
+    }
+
+    /// A shutdown the GUI just made succeed. The daemon has dropped the sim,
+    /// and a claim left standing until the next poll is one recovery would
+    /// re-assert against a sim something else may since have booted.
+    func noteSimShutdown(udid: String) {
+        ownedSims.noteShutdown(udid: udid)
+    }
+
+    /// A call that recorded sim ownership daemon-side just succeeded. Tells
+    /// the mirror now rather than leaving it to a poll up to two seconds away,
+    /// the window in which a sim can be owned and then detached with nothing
+    /// left for recovery to act on.
+    ///
+    /// `generation` is the connection the call itself reported, captured with
+    /// its answer. Sampling the current one here instead would name a
+    /// replacement installed in between, and the mirror would go on to believe
+    /// that helper's empty roster and drop the claim it just made.
+    func noteSimOwned(udid: String, sessionId: String, generation: Int) {
+        ownedSims.noteOwned(udid: udid, sessionId: sessionId, generation: generation)
+    }
+
+    /// A new connection is live. Treat it as potentially backed by a
+    /// replacement helper until recovery has re-asserted the claims: a
+    /// reconnect installs a new connection, which may or may not reach the
+    /// daemon that answered the last one.
+    func noteConnectionReplaced(generation: Int) {
+        ownedSims.connectionReplaced(generation: generation)
     }
 
     /// Where each of a tab's sims belongs in the typed array once recovery
@@ -1381,12 +1545,20 @@ final class Router {
             atIndex: atIndex,
             anchor: anchor,
             method: .deviceAttach,
-            attach: { [daemon] primary in
-                try await daemon.attachDevice(
+            attach: { [weak self, daemon] primary in
+                let answer = try await daemon.attachDeviceWithGeneration(
                     sessionId: primary.sessionId,
                     capability: primary.capability,
                     udid: udid
                 )
+                // `device.attach` records ownership daemon-side, so the mirror
+                // is out of date the moment this returns.
+                self?.noteSimOwned(
+                    udid: udid,
+                    sessionId: primary.sessionId,
+                    generation: answer.generation
+                )
+                return answer.response
             },
             resolveName: { [weak self] _ in
                 if let displayName { return displayName }
@@ -1767,11 +1939,20 @@ final class Router {
         guard let window = workspace.windowContaining(tab: tabID),
             let pane = window.tabs.tab(id: tabID)?.simPanes
                 .first(where: { $0.udid == udid }) else { return }
-        try? await daemon.closePane(
-            paneId: pane.paneId,
-            mode: mode,
-            expecting: pane.attachment
-        )
+        do {
+            try await daemon.closePane(
+                paneId: pane.paneId,
+                mode: mode,
+                expecting: pane.attachment
+            )
+            // Same reason as the tab-close fan-out: a `.shutdown` close stops
+            // the sim and disowns it daemon-side, so the claim has to go with
+            // it. This is the path `deviceterm pane close --mode shutdown` and
+            // the in-pane action take.
+            if mode == .shutdown { noteSimShutdown(udid: udid) }
+        } catch {
+            logError("pane.closeById failed for \(udid): \(error)")
+        }
         window.tabs.removeSimPane(udid: udid, fromTab: tabID)
     }
 
@@ -1890,11 +2071,21 @@ final class Router {
         privacyReconcileTasks[tab.id]?.cancel()
         privacyReconcileTasks[tab.id] = nil
         for pane in tab.simPanes {
-            try? await daemon.closePane(
-                paneId: pane.paneId,
-                mode: mode,
-                expecting: pane.attachment
-            )
+            do {
+                try await daemon.closePane(
+                    paneId: pane.paneId,
+                    mode: mode,
+                    expecting: pane.attachment
+                )
+                // A `.shutdown` close stops the sim daemon-side and disowns it,
+                // so the mirror is wrong from here. This is where production
+                // retires a pane-backed sim; the `device.shutdown` sweep below
+                // only ever sees ones no pane was carrying, because this close
+                // has already taken the rest out of the owned roster.
+                if mode == .shutdown { noteSimShutdown(udid: pane.udid) }
+            } catch {
+                logError("pane.closeById failed for \(pane.udid): \(error)")
+            }
         }
         // Device panes tear down the daemon pane + IOSurface stream the
         // same way; `mode` is moot for the physical device itself (we
@@ -1912,7 +2103,12 @@ final class Router {
             for device in owned
             where tabSessionIds.contains(device.ownedBySession ?? "")
                 && device.state == "Booted" {
-                try? await daemon.shutdownDevice(udid: device.udid)
+                do {
+                    try await daemon.shutdownDevice(udid: device.udid)
+                    noteSimShutdown(udid: device.udid)
+                } catch {
+                    logError("device.shutdown failed for \(device.udid): \(error)")
+                }
             }
         }
         for terminal in tab.terminals {

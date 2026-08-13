@@ -8,6 +8,8 @@
 //        → [{udid, name, state, ownedBySession?, family, deviceType?}]
 //   device.boot({udid, sessionId?, cap?})  → {ok: true}
 //   device.shutdown({udid})                → {ok: true}
+//   device.restoreOwnership({devices: [{udid, sessionId?}]})
+//        → {restoredCount, udids}
 //
 // `device.attach({udid, sessionId, cap, revision?}) → {paneId, scale?, family,
 // …}` transfers ownership of an already-Booted udid to
@@ -288,6 +290,114 @@ public enum DeviceMethods {
                 target: result.target
             )
             return try JSONEncoder().encode(response)
+        }
+    }
+
+    /// `device.restoreOwnership`: restore deviceterm's owned-sim claims to a
+    /// daemon that restarted, preserving live session attribution where there
+    /// is any. `.validatedGUI`-scoped, so the scope check has already
+    /// refused every caller but a signature-validated GUI peer, and no
+    /// capability rides on the wire.
+    ///
+    /// Every entry is parsed before anything is touched, so a malformed or
+    /// duplicated udid rejects the whole batch with nothing mutated. After
+    /// that the resemblance to `session.restoreBatch` ends: claims are handled
+    /// independently rather than committed all-or-none, so one entry the
+    /// daemon can't take doesn't cost the caller the rest.
+    ///
+    /// A null `sessionId` claims ownership with no attribution and takes no
+    /// session check: it is the sim a tab closed with Detach left running,
+    /// ours with nothing left to attribute it to, listed under "Unlinked" in
+    /// the status item and still offered at quit.
+    ///
+    /// For a sim the daemon holds no conflicting claim on, a NAMED session it
+    /// cannot confirm live is dropped while the ownership is admitted, landing
+    /// in that same unattributed state. `isAlive` rather than `contains`,
+    /// because the question is whether the attribution can be confirmed.
+    /// Refusing instead would leave a running sim nothing claims, which is
+    /// exactly what this method exists to prevent.
+    public static func restoreOwnership(
+        coordinator: DeviceCoordinator,
+        sessionManager: SessionManager
+    ) -> MethodRegistry.Handler {
+        { paramsJSON in
+            let params: DeviceRestoreOwnershipParams
+            do {
+                params = try JSONDecoder().decode(
+                    DeviceRestoreOwnershipParams.self,
+                    from: paramsJSON
+                )
+            } catch {
+                throw RPCMethodError.invalidParams(
+                    "malformed device.restoreOwnership params"
+                )
+            }
+            var claims: [String: UUID?] = [:]
+            for wire in params.devices {
+                guard let udid = UUID(uuidString: wire.udid) else {
+                    throw RPCMethodError.invalidParams("udid must be a UUID string")
+                }
+                var sessionId: UUID?
+                if let named = wire.sessionId {
+                    guard let parsed = UUID(uuidString: named) else {
+                        throw RPCMethodError.invalidParams("sessionId must be a UUID string")
+                    }
+                    sessionId = parsed
+                }
+                let normalized = udid.uuidString.lowercased()
+                // Membership, not the value: an unattributed claim stores nil,
+                // which a plain `== nil` subscript test would read as absent
+                // and let a duplicate through.
+                guard claims.index(forKey: normalized) == nil else {
+                    throw RPCMethodError.invalidParams(
+                        "duplicate udid in device.restoreOwnership batch"
+                    )
+                }
+                claims[normalized] = sessionId
+            }
+            var admitted: [String: UUID?] = [:]
+            for (udid, sessionId) in claims {
+                guard let sessionId else {
+                    admitted[udid] = UUID?.none
+                    continue
+                }
+                // A named session that isn't live is demoted, not refused. The
+                // caller is asserting deviceterm owns the sim; whether the
+                // attribution still resolves is a separate question, and the
+                // answer to it can change under a caller that read it a moment
+                // ago. Refusing would leave a running sim nothing claims.
+                admitted[udid] = await sessionManager.isAlive(sessionId) ? sessionId : nil
+            }
+            let result = await coordinator.restoreOwnership(admitted)
+            // The check above is a preflight. Crossing to the coordinator is a
+            // suspension, and a session that closes inside it would leave a sim
+            // attributed to one that is gone. Re-check what this call wrote and
+            // demote those entries the same way.
+            //
+            // Re-checking liveness is the whole fence, with no incarnation to
+            // compare: a close tombstones the id, so a session id is dead for
+            // good and cannot return under a new incarnation. A session alive
+            // on this side of the commit was therefore alive on the other side
+            // of it too.
+            //
+            // An entry written unattributed names no session and so has
+            // nothing to outlive it.
+            var demote: [String: UUID] = [:]
+            for (udid, sessionId) in result.written {
+                guard let sessionId else { continue }
+                if await !sessionManager.isAlive(sessionId) { demote[udid] = sessionId }
+            }
+            if !demote.isEmpty {
+                await coordinator.demoteOwnership(demote)
+            }
+            // Demoted sims stay restored: ownership is what the caller asserted
+            // and what it gets back, attributed or not.
+            return try JSONEncoder().encode(
+                DeviceRestoreOwnershipResult(
+                    restoredCount: result.attributed.count,
+                    udids: result.attributed.sorted()
+                )
+            )
         }
     }
 

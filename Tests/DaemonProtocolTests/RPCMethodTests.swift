@@ -11,8 +11,8 @@ import Testing
 // see both modules.
 
 @Test
-func rpcMethodCaseCountIs68() {
-    #expect(RPCMethod.allCases.count == 68)
+func rpcMethodCaseCountIs69() {
+    #expect(RPCMethod.allCases.count == 69)
 }
 
 @Test
@@ -37,6 +37,7 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.deviceBoot, "device.boot"),
     (RPCMethod.deviceShutdown, "device.shutdown"),
     (RPCMethod.deviceAttach, "device.attach"),
+    (RPCMethod.deviceRestoreOwnership, "device.restoreOwnership"),
     (RPCMethod.paneCreate, "pane.create"),
     (RPCMethod.paneCloseById, "pane.closeById"),
     (RPCMethod.paneInputTap, "pane.input.tap"),

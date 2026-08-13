@@ -346,7 +346,12 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// unresponsive signal can name a connection synchronously: the transport
     /// is an actor, so reading it is a hop, and a hop is exactly long enough
     /// for the connection being diagnosed to be replaced by another.
-    private var connectionGeneration = 0
+    ///
+    /// Readable so a caller with no call to hang a generation off can still
+    /// name the live connection. Anything reporting a call's outcome takes the
+    /// generation from that call's own `…WithGeneration` form instead, which
+    /// captures it with the answer rather than after it.
+    private(set) var connectionGeneration = 0
     /// Latches once a definite version mismatch has been handled, so the XPC
     /// invalidation caused by the `daemon.shutdown` we send (which re-fires the
     /// reconnect handler → re-detects the mismatch) cannot drive a second
@@ -1086,6 +1091,19 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         return try decode([DeviceListEntry].self, data)
     }
 
+    /// `device.list`, plus the connection that answered it. The owned-roster
+    /// mirror is the caller that needs it: its whole job is to tell a
+    /// replacement helper's "nothing is owned" from the roster it is holding
+    /// to restore, and misattributing one helper's answer to another is the
+    /// error it cannot survive.
+    func deviceListWithGeneration(
+        scope: DeviceListScope
+    ) async throws -> (entries: [DeviceListEntry], generation: Int) {
+        let params = try JSONSerialization.data(withJSONObject: ["scope": scope.rawValue])
+        let answer = try await requestWithGeneration(method: .deviceList, params: params)
+        return (try decode([DeviceListEntry].self, answer.data), answer.generation)
+    }
+
     /// `device.boot`: boot a simulator. When `(sessionId, cap)` is
     /// provided the daemon records ownership for that session; the
     /// GUI uses this from the .shutdown pane's Reboot button so the
@@ -1095,13 +1113,28 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         sessionId: String? = nil,
         capability: String? = nil
     ) async throws {
+        _ = try await bootDeviceWithGeneration(
+            udid: udid,
+            sessionId: sessionId,
+            capability: capability
+        )
+    }
+
+    /// `device.boot`, plus the connection that recorded the ownership. A
+    /// credentialed boot attributes the sim, and the owned-sim mirror has to
+    /// file that against the helper it actually happened on.
+    func bootDeviceWithGeneration(
+        udid: String,
+        sessionId: String?,
+        capability: String?
+    ) async throws -> Int {
         var body: [String: Any] = ["udid": udid]
         if let sessionId, let capability {
             body["sessionId"] = sessionId
             body["cap"] = capability
         }
         let params = try JSONSerialization.data(withJSONObject: body)
-        _ = try await request(method: .deviceBoot, params: params)
+        return try await requestWithGeneration(method: .deviceBoot, params: params).generation
     }
 
     /// `device.shutdown`: stop a booted simulator. Existing daemon
@@ -1122,6 +1155,20 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         capability: String,
         udid: String
     ) async throws -> PaneCreateResponse {
+        try await attachDeviceWithGeneration(
+            sessionId: sessionId,
+            capability: capability,
+            udid: udid
+        ).response
+    }
+
+    /// `device.attach`, plus the connection that recorded the ownership, for
+    /// the same reason `bootDeviceWithGeneration` carries one.
+    func attachDeviceWithGeneration(
+        sessionId: String,
+        capability: String,
+        udid: String
+    ) async throws -> (response: PaneCreateResponse, generation: Int) {
         attachRevision &+= 1
         let params = try JSONSerialization.data(
             withJSONObject: [
@@ -1131,8 +1178,23 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             "revision": attachRevision
             ]
             )
-        let data = try await request(method: .deviceAttach, params: params)
-        return try decode(PaneCreateResponse.self, data)
+        let answer = try await requestWithGeneration(method: .deviceAttach, params: params)
+        return (try decode(PaneCreateResponse.self, answer.data), answer.generation)
+    }
+
+    /// `device.restoreOwnership`: restore deviceterm's owned-sim claims to a
+    /// helper that restarted, preserving a live session attribution where one
+    /// exists. `.validatedGUI`-scoped, so no cap rides on
+    /// the wire; over the `--smoke` UDS fallback the daemon refuses it with
+    /// `roleViolation`, the same transport limit `restoreBatch` has.
+    func restoreOwnership(
+        devices: [RestoredSimOwnership]
+    ) async throws -> DeviceRestoreOwnershipResult {
+        let params = try JSONEncoder().encode(
+            DeviceRestoreOwnershipParams(devices: devices)
+        )
+        let data = try await request(method: .deviceRestoreOwnership, params: params)
+        return try decode(DeviceRestoreOwnershipResult.self, data)
     }
 
     /// `physicalDevice.list`: connected physical devices for the picker.
@@ -1539,6 +1601,15 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     }
 
     private func request(method: RPCMethod, params: Data?) async throws -> Data {
+        try await requestWithGeneration(method: method, params: params).data
+    }
+
+    /// `request`, carrying the connection that answered out with the data.
+    /// For a caller that has to say which helper a state change landed on.
+    private func requestWithGeneration(
+        method: RPCMethod,
+        params: Data?
+    ) async throws -> (data: Data, generation: Int) {
         var notReadyAttempts = 0
         while true {
             // Check cancellation at the TOP of every iteration, before sending.
@@ -1564,7 +1635,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
     }
 
-    private func requestOnce(method: RPCMethod, params: Data?) async throws -> Data {
+    private func requestOnce(
+        method: RPCMethod,
+        params: Data?
+    ) async throws -> (data: Data, generation: Int) {
         do {
             return try await rawRequest(method: method, params: params)
         } catch let DaemonClientError.daemon(code, message)
@@ -1616,7 +1690,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
     }
 
-    private func rawRequest(method: RPCMethod, params: Data?) async throws -> Data {
+    private func rawRequest(
+        method: RPCMethod,
+        params: Data?
+    ) async throws -> (data: Data, generation: Int) {
         // The calls that mint daemon state are bounded by their own caller
         // instead, because bounding them HERE would cancel the transport and
         // discard the reply naming what was minted. `createSession` wraps
@@ -1629,9 +1706,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             // other call, whether it succeeded or was refused, and a streak
             // neither cleared would outlive the condition that started it.
             do {
-                let data = try await transportRequest(method: method, params: params)
+                let answer = try await transportRequest(method: method, params: params)
                 noteHelperAnswered()
-                return data
+                return answer
             } catch {
                 noteHelperFailure(error)
                 throw error
@@ -1699,19 +1776,37 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
     }
 
-    private func transportRequest(method: RPCMethod, params: Data?) async throws -> Data {
+    /// One transport call, carrying the connection that answered it out
+    /// alongside the data.
+    ///
+    /// The XPC path captures the generation with the send rather than sampling
+    /// it afterward, and a successful response implies no invalidation during
+    /// the request, so the send-time generation IS the one that answered. A
+    /// caller that has to attribute an answer to a particular helper needs
+    /// that; sampling after the await can name a replacement instead. The
+    /// injected and UDS paths have no live generation to race, so they report
+    /// the current value.
+    private func transportRequest(
+        method: RPCMethod,
+        params: Data?
+    ) async throws -> (data: Data, generation: Int) {
         if let injectedRequestTransport {
-            return try await injectedRequestTransport.request(
+            let data = try await injectedRequestTransport.request(
                 method: method.rawValue,
                 params: params
             )
+            return (data, await xpcConnection.currentGeneration)
         }
         switch transport {
         case let .xpc(connection):
-            return try await connection.request(method: method.rawValue, params: params)
+            return try await connection.requestReturningGeneration(
+                method: method.rawValue,
+                params: params
+            )
 
         case let .uds(connection):
-            return try await connection.request(method: method.rawValue, params: params)
+            let data = try await connection.request(method: method.rawValue, params: params)
+            return (data, await xpcConnection.currentGeneration)
         }
     }
 

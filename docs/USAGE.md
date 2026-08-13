@@ -910,11 +910,17 @@ because its Simulator shut down or its physical device disconnected while the
 helper was gone, shows the error in its own slot with **Retry** and
 **Close**.
 
-A pane is what brings a Simulator back, so a Simulator you detached earlier
-keeps running but the fresh helper no longer knows DeviceTerm owned it. It
-drops out of the status item and out of the tab-close and quit prompts.
-Reattach it by UDID, or leave it and DeviceTerm offers it again at the next
-cold start.
+A Simulator whose pane you closed keeps running and stays DeviceTerm's across
+the restart, so it still counts in the status item and still appears in its
+tab's close prompt and the quit prompt.
+
+Closing a whole tab with **Detach** also leaves its Simulators running and
+DeviceTerm's, listed as Unlinked because the session that booted them is gone.
+Those survive a restart too. They have no tab left to prompt for, but they
+still count in the status item and at quit.
+
+A Simulator that is still shut down when the helper processes the restore is
+not reclaimed: DeviceTerm won't claim one that isn't running.
 
 DeviceTerm reports a restart it could not perform rather than claiming one.
 

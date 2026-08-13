@@ -64,6 +64,54 @@ final class SimPaneActionCoordinator {
         self.tabListVM = tabListVM
     }
 
+    /// Shut down, and on success drop the owned-sim mirror's claim.
+    ///
+    /// The daemon disowns the sim as part of the shutdown, so a claim left
+    /// standing until the next poll is one recovery would re-assert. Whether
+    /// the sim is Booted is the daemon's only gate, so if something else boots
+    /// that udid in between, deviceterm would claim a device it no longer owns.
+    ///
+    /// The reboot legs shut down before booting, so they pass through here on
+    /// the way and record the sim again on the boot.
+    private func shutdownAndForget(udid: String) async {
+        do {
+            try await daemonClient.shutdownDevice(udid: udid)
+        } catch {
+            return
+        }
+        router.noteSimShutdown(udid: udid)
+    }
+
+    /// Boot with the tab's credentials, and on success tell the owned-sim
+    /// mirror what the daemon just recorded.
+    ///
+    /// All three boot legs here (Reboot, live reboot, post-erase) attribute
+    /// ownership, so all three have to report it. A poll would otherwise be
+    /// the mirror's only source, and each boot starts from a shut-down sim
+    /// whose claim a poll has already cleared: closing the pane before the
+    /// next poll leaves a booted sim deviceterm owns with nothing recovery can
+    /// act on.
+    ///
+    /// Module-internal rather than private so a test can drive it without a
+    /// live pane view controller, which is what the boot legs above wire it to.
+    func bootAndRecordOwnership(
+        udid: String,
+        sessionId: String,
+        capability: String
+    ) async {
+        let generation: Int
+        do {
+            generation = try await daemonClient.bootDeviceWithGeneration(
+                udid: udid,
+                sessionId: sessionId,
+                capability: capability
+            )
+        } catch {
+            return
+        }
+        router.noteSimOwned(udid: udid, sessionId: sessionId, generation: generation)
+    }
+
     func wire(paneVC: SimulatorPaneViewController, simPane: SimPaneState) {
         let tabID = self.tabID
         let udid = simPane.udid
@@ -81,7 +129,7 @@ final class SimPaneActionCoordinator {
             guard let self else { return }
             let (sessionId, capability) = self.credentials
             Task { @MainActor in
-                try? await self.daemonClient.bootDevice(
+                await self.bootAndRecordOwnership(
                     udid: udid,
                     sessionId: sessionId,
                     capability: capability
@@ -111,14 +159,14 @@ final class SimPaneActionCoordinator {
                 // existing Reboot button is the recovery path once
                 // the transition finally completes. Ownership is
                 // re-asserted on the boot leg.
-                try? await self.daemonClient.shutdownDevice(udid: udid)
+                await self.shutdownAndForget(udid: udid)
                 var attempts = 0
                 while paneVC.currentState != .shutdown, attempts < 200 {
                     try? await Task.sleep(nanoseconds: 25_000_000)
                     attempts += 1
                 }
                 guard paneVC.currentState == .shutdown else { return }
-                try? await self.daemonClient.bootDevice(
+                await self.bootAndRecordOwnership(
                     udid: udid,
                     sessionId: sessionId,
                     capability: capability
@@ -139,7 +187,7 @@ final class SimPaneActionCoordinator {
                 // transition completes. Ownership is re-asserted
                 // on the post-erase boot leg so the wiped sim
                 // re-mounts under this session.
-                try? await self.daemonClient.shutdownDevice(udid: udid)
+                await self.shutdownAndForget(udid: udid)
                 var attempts = 0
                 while paneVC.currentState != .shutdown, attempts < 200 {
                     try? await Task.sleep(nanoseconds: 25_000_000)
@@ -156,7 +204,7 @@ final class SimPaneActionCoordinator {
                     alert.runModal()
                     return
                 }
-                try? await self.daemonClient.bootDevice(
+                await self.bootAndRecordOwnership(
                     udid: udid,
                     sessionId: sessionId,
                     capability: capability
@@ -289,7 +337,7 @@ final class SimPaneActionCoordinator {
         paneVC.onShutDownSim = { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                try? await self.daemonClient.shutdownDevice(udid: udid)
+                await self.shutdownAndForget(udid: udid)
             }
         }
         paneVC.onRevealInFinder = {

@@ -119,6 +119,20 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     case deviceBoot = "device.boot"
     case deviceShutdown = "device.shutdown"
     case deviceAttach = "device.attach"
+    /// `device.restoreOwnership({devices: [{udid, sessionId?}]})
+    /// → {restoredCount, udids}`. The simulator counterpart to
+    /// `session.restoreBatch`: a validated GUI restores deviceterm's owned-sim
+    /// claims to a daemon that came back holding nothing, preserving a live
+    /// session attribution where one exists. A sim carried by a pane is
+    /// restored by re-attaching the pane; this is what brings back one the
+    /// user detached, which has no pane to carry it. `.validatedGUI`-scoped,
+    /// because ownership attribution on another session's behalf is exactly
+    /// what a UDS caller must not be able to assert. Additive and
+    /// fail-closed: it never reaps an omitted udid, never overwrites an
+    /// attribution the daemon already holds, and claims only a sim
+    /// CoreSimulator reports as Booted right now. Neither boots anything nor
+    /// mints a pane.
+    case deviceRestoreOwnership = "device.restoreOwnership"
 
     // physicalDevice.* / devices.*: physically-connected iPhone/iPad.
     /// `physicalDevice.list`: connected physical devices (daemon-wide;

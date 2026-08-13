@@ -4,8 +4,8 @@
 // provenance.
 //
 // CoreSimulator owns the actual simulator processes; we hold thin
-// `SimDeviceHandle` references transiently and track *which session
-// booted each sim we own*. The ownership map is the trust anchor for
+// `SimDeviceHandle` references transiently and track *which sims we own*
+// and, where there is one, the session attributed to each. The ownership map is the trust anchor for
 // `device.list({scope: "owned"})` and for the menu bar's
 // running-sim badge count, and is updated by:
 //
@@ -15,6 +15,10 @@
 //     runs inside a tab's shell and the shim posts a provenance-tagged
 //     event, and by `device.attach` when a caller claims an
 //     already-booted sim.
+//   - `restoreOwnership`, reached by `device.restoreOwnership` when a
+//     validated GUI restores its claims to a daemon that restarted under
+//     it. It changes bookkeeping without booting a sim or publishing
+//     `device.booted`.
 //
 // Entries are removed by daemon shutdowns, by shim-reported shutdown
 // events, and by CoreSimulator shutdown notifications.
@@ -67,10 +71,10 @@ public struct OwnedSim: Sendable, Equatable {
     public let udid: String
     public let name: String
     public let runtimeIdentifier: String
-    /// Session that owns this sim per `DeviceCoordinator.ownership`.
-    /// nil when the sim is owned by the daemon but its session record
-    /// has been dropped (cold-start orphan); the status-item menu
-    /// uses this to group sims under their owning session.
+    /// Session attributed to this sim per `DeviceCoordinator.ownership`.
+    /// nil when the owned sim has no recorded attribution. The status-item
+    /// menu groups a nil or unresolvable attribution under "Unlinked", and a
+    /// live one under its session.
     public let sessionId: UUID?
 
     public init(
@@ -83,6 +87,27 @@ public struct OwnedSim: Sendable, Equatable {
         self.name = name
         self.runtimeIdentifier = runtimeIdentifier
         self.sessionId = sessionId
+    }
+}
+
+/// What `DeviceCoordinator.restoreOwnership` did: what to report, and which
+/// entries it wrote, whose attribution may still need demoting after the
+/// commit. Split so a caller revisits only what it added.
+public struct OwnershipRestoreResult: Sendable, Equatable {
+    /// Every normalized udid whose requested ownership and attribution now
+    /// match, including ones that already matched before the call and ones
+    /// claimed with no attribution. This is what the caller reports back: it
+    /// answers "did the claim take", not "did you write it".
+    public let attributed: Set<String>
+    /// Only the entries this call wrote, keyed by normalized udid, with the
+    /// attribution it wrote (nil for an unattributed one). It identifies
+    /// exactly which newly written attributions may still need demoting; the
+    /// ownership itself stands either way.
+    public let written: [String: UUID?]
+
+    public init(attributed: Set<String>, written: [String: UUID?]) {
+        self.attributed = attributed
+        self.written = written
     }
 }
 
@@ -100,11 +125,20 @@ struct NotifierArrival: Sendable {
 }
 
 public actor DeviceCoordinator {
-    /// UDID (lowercased) → sessionId of the session that booted it.
-    /// Populated by `boot(udid:owningSession:)` and (in a future
-    /// chunk) by shim-event handling. Cleared when the sim shuts
-    /// down or its owning session closes.
-    private var ownership: [String: UUID] = [:]
+    /// UDID (lowercased) → the session attributed to it, or nil for one
+    /// explicitly claimed without an attribution. Cleared when the sim shuts
+    /// down.
+    ///
+    /// A present key means deviceterm owns the sim; the value is only its
+    /// attribution. Those are separate facts: a tab closed with Detach ends
+    /// its session while the sim keeps running and stays ours, which the
+    /// status item lists under "Unlinked". A stored UUID naming a session
+    /// that has since closed resolves the same way there.
+    ///
+    /// Reach it through `owns(_:)` and `owner(of:)` rather than subscripting,
+    /// so the two levels never get confused: a bare subscript yields a double
+    /// optional, the outer being ownership and the inner attribution.
+    private var ownership: [String: UUID?] = [:]
     /// Optional event broker. Publishes `device.booted` + `device.shutdown`
     /// to every session's `deviceterm events` subscribers (device events
     /// are `.everyone`).
@@ -163,6 +197,17 @@ public actor DeviceCoordinator {
     /// successor event. Injectable so tests covering "work slower than
     /// the window" can shrink it instead of sleeping half a second each.
     private let debounceWindow: TimeInterval
+    /// The udids CoreSimulator currently reports as `Booted`, lowercased, or
+    /// nil when the bridge couldn't enumerate at all. The one place the two
+    /// questions that need live boot state but not the rest of a device
+    /// record read it from.
+    ///
+    /// Injected because those questions are pure decisions over the answer,
+    /// and pinning them otherwise takes a booted simulator: the live track
+    /// covers the bridge, and a hermetic test covers what the daemon does
+    /// with what the bridge said. The `listOwned…` readers keep their own
+    /// enumeration; they need each device's name and runtime too.
+    private let readBootedUDIDs: @Sendable () -> Set<String>?
 
     /// Diagnostic accessor: raw size of the ownership map, i.e. how
     /// many sims deviceterm considers itself the owner of. Tests only;
@@ -177,10 +222,20 @@ public actor DeviceCoordinator {
 
     public init(
         eventBroker: EventBroker? = nil,
-        debounceWindow: TimeInterval = 0.5
+        debounceWindow: TimeInterval = 0.5,
+        readBootedUDIDs: @escaping @Sendable () -> Set<String>? = bootedUDIDsFromCoreSimulator
     ) {
         self.eventBroker = eventBroker
         self.debounceWindow = debounceWindow
+        self.readBootedUDIDs = readBootedUDIDs
+    }
+
+    /// Production's `readBootedUDIDs`: one CoreSimulator enumeration reduced
+    /// to lowercased udids. Nil on a bridge failure, which every caller reads
+    /// as "can't confirm" rather than "nothing is booted".
+    public static func bootedUDIDsFromCoreSimulator() -> Set<String>? {
+        guard let devices = try? SimDeviceHandle.allDevices() else { return nil }
+        return Set(devices.filter { $0.state == .booted }.map { $0.udid.lowercased() })
     }
 
     // MARK: - Listing
@@ -203,7 +258,7 @@ public actor DeviceCoordinator {
     /// stale records.
     public func listOwned() throws -> [CSBDeviceInfo] {
         let all = try listAll()
-        return all.filter { ownership[$0.udid.lowercased()] != nil }
+        return all.filter { owns($0.udid.lowercased()) }
     }
 
     /// Number of owned sims currently in the `Booted` state.
@@ -245,7 +300,7 @@ public actor DeviceCoordinator {
                 udid: $0.udid,
                 name: $0.name,
                 runtimeIdentifier: $0.runtimeIdentifier,
-                sessionId: ownership[$0.udid.lowercased()]
+                sessionId: owner(of: $0.udid.lowercased())
             )
             }
     }
@@ -254,7 +309,7 @@ public actor DeviceCoordinator {
     /// `ownedBySession` field on the wire when a caller asks for the
     /// "all" scope.
     public func ownerSession(forUDID udid: String) -> UUID? {
-        ownership[udid.lowercased()]
+        owner(of: udid.lowercased())
     }
 
     /// Whether `udid` is currently `Booted` per a live CoreSimulator
@@ -265,11 +320,7 @@ public actor DeviceCoordinator {
     /// if the bridge can't enumerate: a degraded CoreSimulator can't
     /// confirm liveness, so we don't assert the sim is still running.
     public func isBooted(udid: String) -> Bool {
-        guard let devices = try? listAll() else { return false }
-        let needle = udid.lowercased()
-        return devices.contains {
-            $0.udid.lowercased() == needle && $0.state == .booted
-        }
+        readBootedUDIDs()?.contains(udid.lowercased()) ?? false
     }
 
     // MARK: - Lifecycle
@@ -363,10 +414,84 @@ public actor DeviceCoordinator {
         await publishBoot(udid: normalized)
     }
 
+    /// Restore ownership claims for already-booted sims, for a daemon that
+    /// came back holding nothing. Returns the normalized udids whose requested
+    /// ownership and attribution now match, a subset of what was asked for.
+    ///
+    /// Nothing is booted and no `device.booted` event is published: no sim
+    /// changed state, and a subscriber told otherwise would see a boot that
+    /// never happened. This is bookkeeping catching up with reality, not a
+    /// transition.
+    ///
+    /// Two refusals, both silent, because neither is the caller's fault:
+    ///
+    ///   - A udid this daemon ALREADY owns keeps its existing attribution,
+    ///     including an unattributed one. The live map is newer than any mirror
+    ///     a caller can hold, so a re-assertion fills gaps rather than arguing;
+    ///     asking for the attribution it already has still counts as restored,
+    ///     so a retry is idempotent.
+    ///   - A udid CoreSimulator does not currently report as Booted is not
+    ///     claimed at all. A sim that shut down while nobody was watching is
+    ///     gone, and claiming it would put a device deviceterm no longer owns
+    ///     back into the shut-down prompts.
+    ///
+    /// The booted set is read ONCE for the whole batch rather than per udid,
+    /// and gates what is REPORTED as well as what is written. An attribution
+    /// this daemon already holds can be stale (nothing disowns a sim that shut
+    /// down until the notifier says so), so reporting it without checking
+    /// would answer "restored" for a sim that is gone.
+    ///
+    /// A bridge that can't answer reports nothing, matching the rest of this
+    /// actor's "a degraded CoreSimulator asserts nothing" posture: it can't
+    /// confirm any sim is up, including the ones already attributed.
+    public func restoreOwnership(_ claims: [String: UUID?]) -> OwnershipRestoreResult {
+        guard !claims.isEmpty, let booted = readBootedUDIDs() else {
+            return OwnershipRestoreResult(attributed: [], written: [:])
+        }
+        var attributed: Set<String> = []
+        var written: [String: UUID?] = [:]
+        for (udid, sessionId) in claims {
+            let normalized = udid.lowercased()
+            guard booted.contains(normalized) else { continue }
+            if owns(normalized) {
+                // Ownership already recorded. Report it only when the
+                // attribution agrees, including nil against nil, so a retry is
+                // idempotent while a disagreement loses to what is already here.
+                if owner(of: normalized) == sessionId { attributed.insert(normalized) }
+                continue
+            }
+            ownership[normalized] = sessionId
+            attributed.insert(normalized)
+            written[normalized] = sessionId
+        }
+        return OwnershipRestoreResult(attributed: attributed, written: written)
+    }
+
+    /// Drop the attribution from ownership entries whose session has since
+    /// gone, keeping the ownership itself.
+    ///
+    /// Demoting rather than removing, because a session ending is not a sim
+    /// ending: that is the state closing a tab with Detach leaves behind, and
+    /// the status item lists it under "Unlinked". Removing the entry would
+    /// instead leave a running sim nothing claims, so nothing offers to shut
+    /// it down.
+    ///
+    /// The one caller is `device.restoreOwnership`, for a claim whose named
+    /// session it could not confirm live.
+    ///
+    /// Compare-and-set: an entry moves only while the recorded owner is still
+    /// the session named, so an attribution something else has made for the
+    /// same sim since survives. Publishes nothing; no sim changed state.
+    public func demoteOwnership(_ entries: [String: UUID]) {
+        for (udid, sessionId) in entries {
+            let normalized = udid.lowercased()
+            guard owns(normalized), owner(of: normalized) == sessionId else { continue }
+            ownership[normalized] = UUID?.none
+        }
+    }
+
     /// Drop the ownership record for `udid` without affecting the
-    /// sim itself. Called when a session closes (its sims are
-    /// disowned but stay running per the "Detach" semantics) and
-    /// when shim shutdown events come in.
+    /// sim itself. Reached by the shim's shutdown event.
     ///
     /// Publishes `device.shutdown` here for the shim-shutdown path.
     /// Symmetric with `recordOwnership` and covers the in-tab
@@ -381,12 +506,13 @@ public actor DeviceCoordinator {
         await publishShutdown(udid: normalized)
     }
 
-    /// Drop every ownership record for sessions in `sessionIds`.
-    /// Used by future session-close handling: closing a session
-    /// disowns its sims (they keep running; just no longer
-    /// attributed to a live session).
+    /// Remove every ownership record attributed to a session in `sessionIds`,
+    /// leaving unattributed entries alone.
     public func releaseOwnership(for sessionIds: Set<UUID>) {
-        ownership = ownership.filter { !sessionIds.contains($0.value) }
+        ownership = ownership.filter { entry in
+            guard let attributed = entry.value else { return true }
+            return !sessionIds.contains(attributed)
+        }
     }
 
     // MARK: - CoreSimulator notification subscription
@@ -636,6 +762,22 @@ public actor DeviceCoordinator {
     }
 
     // MARK: - Internal helpers
+
+    /// Whether deviceterm owns this (normalized) udid at all, attributed or
+    /// not.
+    private func owns(_ normalized: String) -> Bool {
+        ownership.index(forKey: normalized) != nil
+    }
+
+    /// The session attributed to this (normalized) udid. Nil both for a sim
+    /// deviceterm owns unattributed and for one it doesn't own; callers that
+    /// need to tell those apart ask `owns(_:)` too.
+    private func owner(of normalized: String) -> UUID? {
+        // The outer level answers "owned"; the inner one is the attribution,
+        // and returning it unchanged is the point.
+        guard let attribution = ownership[normalized] else { return nil }
+        return attribution
+    }
 
     /// Canonicalize a UDID for use as an ownership-map key.
     ///

@@ -14,8 +14,10 @@
 public enum DaemonProtocolInfo {
     /// The RPC wire-version string. Must equal the daemon's
     /// `DaemonInfo.version` (`Sources/Daemon/DaemonMethods.swift`).
-    /// Bumped to 0.2.0 by the `attachment` admission id: `pane.create` /
+    /// 0.2.0 covers the `attachment` admission id (`pane.create` /
     /// `device.attach` / `physicalDevice.attach` return it, and
-    /// `pane.closeById` accepts it as `expectedAttachment`.
+    /// `pane.closeById` accepts it as `expectedAttachment`) and
+    /// `device.restoreOwnership`. Every process speaking this version ships
+    /// and updates in the same bundle.
     public static let wireVersion = "0.2.0"
 }

@@ -178,14 +178,39 @@ still-valid credential. There are two restart shapes:
   layout. A placeholder already sitting failed is retried on the same pass,
   which is what carries a recovery that a *second* restart interrupted: its
   attaches died with the helper, and the panes they were rebuilding are no
-  longer mounted for a sweep to find. A pane is what carries a sim through
-  this, so a sim DeviceTerm
-  booted but is *not* currently showing in one has no re-assertion path:
-  ownership lived only in the previous daemon's memory, and after a restart
-  that sim is indistinguishable from a borrowed one. It keeps running, and a
-  cold start still offers it through the orphan prompt, but until then it is
-  absent from the owned roster, the status item, and the shut-down prompts.
-  Owned sims are never auto-shut-down on a manifest's say-so.
+  longer mounted for a sweep to find. A pane is one carrier, not the only
+  one: a sim DeviceTerm booted and the user then detached keeps running with
+  nothing on screen to re-attach. Those come back through
+  `device.restoreOwnership` (below), from the GUI's in-memory mirror of the
+  owned roster. Nothing new is read for it, because every tab's discovery poll
+  already asks `device.list({scope: "owned"})` every couple of seconds and that
+  answer is daemon-wide; the mirror is what makes it outlive the daemon that
+  gave it. Each read is tagged with the connection that answered, because a
+  replacement daemon answers "nothing is owned" correctly and on that same poll
+  cadence, so the mirror accepts none of the new connection's reads until
+  re-assertion has run, holding the claims it already had. Re-assertion repeats
+  only while the helper doesn't answer, inside a bounded window, and never
+  re-asks about a claim it declined: the helper judges a claim on current boot
+  state, and refuses one that conflicts with attribution it already holds, so a
+  claim asked again and again is one that eventually lands on whatever holds
+  that udid later. A sim still Booting when the helper evaluates the claim
+  loses it for the same reason, and a pane-backed one comes back through
+  recovery's Retry instead. Only one read feeds
+  the mirror at a time: every tab polls on its own timer, same-connection
+  dispatch is not FIFO, and `device.list` vends no revision, so neither the
+  order the requests went out in nor the order the answers came back in says
+  which snapshot the daemon took later. One in flight does, because the next
+  request can't be sent until the previous answer is in hand. A call that
+  records ownership (`device.attach`, or a credentialed `device.boot`) tells
+  the mirror directly instead of waiting for a poll, which covers a sim owned
+  and detached inside one interval: no read ever saw it and the pane that
+  would have carried it is gone. A sim CoreSimulator
+  still reports as non-Booted when restoration is evaluated is refused rather
+  than re-claimed; the daemon knows only current boot state, so one that has
+  since been re-booted can be claimed.
+  A GUI that just launched has an empty mirror and nothing to re-assert, which
+  is the cold-start orphan path below. Owned sims are never auto-shut-down on
+  a manifest's say-so.
 - **GUI + daemon cold restart**: both gone. **No old session or pane is
   restored.** A fresh GUI creates new tabs through `session.create`. Old
   on-disk simulator files (the GUI's `owned-udids.json`) are an *untrusted
@@ -398,9 +423,10 @@ pid-based kill can rule out. The prompt fences its kill to the connection it
 was raised against, so a connection superseded while the prompt sat on screen
 reports that rather than the current peer being signalled in its place. SIGKILL, because a daemon stopped
 with `kill -STOP` never dequeues SIGTERM. A kill the system refuses is
-surfaced; the GUI does not claim a restart that did not happen. No new wire
-method is involved: launchd demand-launches the replacement on the next send,
-and recovery rides `session.restoreBatch` and the existing attach verbs.
+surfaced; the GUI does not claim a restart that did not happen. Nothing
+restarts the daemon directly: launchd demand-launches the replacement on the
+next send, and recovery rides `session.restoreBatch`, the existing attach
+verbs, and `device.restoreOwnership` for the sims no pane carries.
 
 **Two deliberate gaps.** The `app.commands` handshake is not bounded. The
 daemon keeps one subscriber and a new subscribe evicts the incumbent, XPC
@@ -949,6 +975,58 @@ the known exception; the newer `physicalDevice.attach` uses
 connection-auth instead. Orphan re-attach and most pane creation use this
 rather than `pane.create`, which only creates the pane and leaves daemon
 ownership pointed at any prior owner.
+
+#### `device.restoreOwnership`
+
+- Params: `{devices: [{udid, sessionId?}]}`
+- Result: `{restoredCount, udids}`
+- Scope: validated GUI
+
+The simulator counterpart to `session.restoreBatch`. A validated GUI restores
+DeviceTerm's owned-sim claims to a daemon that came back holding nothing,
+preserving live session attribution where there is any. A sim carried by a pane is restored by re-attaching the pane;
+this is what brings back one the user detached, which has no pane to carry it.
+The audit token is the authority, so no capability rides on the wire, and UDS
+can never reach it: asserting ownership on another session's behalf is exactly
+what a UDS caller must not do.
+
+Additive, not a complete inventory. It never reaps a udid the batch omits, and
+never overwrites an attribution the daemon already holds, because the live map
+is newer than any mirror a caller can hold. Re-asserting the owner a sim
+already has counts as restored, so a retry, or a race with the pane re-attach
+that recorded the same thing, is idempotent.
+
+Syntax is validated batch-wide (a malformed or duplicated udid rejects the
+whole thing), and the surviving claims are then handled independently: a
+non-booted or conflicting claim is omitted, while a dead-session claim is
+demoted before admission and accepted when nothing else conflicts.
+
+Ownership and attribution are separate answers, in the params and in the
+daemon's map. A null `sessionId` asserts ownership with no attribution, which
+is not the same as sending no claim: it is the sim a tab closed with Detach left
+running, still DeviceTerm's and listed under "Unlinked" in the status item, with
+the session that booted it gone.
+
+A *named* session the daemon doesn't hold live is demoted to that same
+unattributed state rather than refused, and a newly written attribution is
+re-checked after the commit and demoted if its session died in between (the
+check and the commit are separate actor hops). An attribution the daemon
+already held is not revisited. Refusing would leave a running Simulator nothing claims, so nothing
+offers to shut it down, and whether an attribution still resolves can change
+under a caller that read it a moment ago. Ownership is what the caller asserted,
+so a demoted claim still counts as restored.
+
+Fail-closed on the Simulator itself. A udid CoreSimulator does not report as
+`Booted` right now is neither claimed nor reported, including one the daemon
+already attributes, since nothing disowns a sim that shut down until the
+notifier says so. A CoreSimulator that can't enumerate reports nothing rather
+than guessing.
+
+Neither boots a sim nor mints a pane, and it publishes no `device.booted`
+event: no sim changed state, and a subscriber told otherwise would see a boot
+that never happened. Every entry is parsed before anything is touched, so a
+malformed or in-batch-duplicate udid rejects the whole batch `invalidParams`
+with nothing mutated. `udids` is what stuck, lowercased and sorted.
 
 #### `physicalDevice.list`
 

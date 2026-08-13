@@ -195,6 +195,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // recovery is an XPC-only feature there.
                     daemonClient.onReconnected = { [weak self] in
                         guard let self else { return }
+                        // Before the re-supply, so the owned-sim mirror stops
+                        // believing roster reads the moment a new connection is
+                        // live. It may or may not reach a fresh helper, and a
+                        // fresh one answers that it owns nothing, so the mirror
+                        // ignores those reads until the (idempotent)
+                        // re-assertion completes. Polls keep running and
+                        // discovery keeps using them; it is only the mirror
+                        // that holds off. The mirror is all recovery has for
+                        // the sims a pane isn't carrying. The transport's own counter, the
+                        // one `deviceListWithGeneration` returns; the handshake
+                        // counter beside it trails by a scheduling hop and
+                        // numbers connections differently.
+                        self.router.noteConnectionReplaced(
+                            generation: self.daemonClient.connectionGeneration
+                        )
                         self.inventorySync.reconnected(
                             generation: self.daemonClient.reconnectGeneration
                         )
@@ -457,6 +472,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         exit(1)
     }
 
+    /// Shut a sim down and drop the owned-sim mirror's claim on success. The
+    /// daemon disowns it as part of the shutdown, and a claim left standing is
+    /// one recovery would re-assert against a sim something else may have
+    /// booted since.
+    private func shutdownAndForget(udid: String) async {
+        guard (try? await daemonClient.shutdownDevice(udid: udid)) != nil else { return }
+        router.noteSimShutdown(udid: udid)
+    }
+
     private func recoverOrphansIfNeeded() async -> [OrphanRecord] {
         let devices = (try? await daemonClient.deviceList(scope: .all)) ?? []
         let (live, dead) = OrphanRecovery.collect(deviceList: devices)
@@ -467,10 +491,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return live
 
         case .shutdownAll:
-            for orphan in live {
-                for sim in orphan.liveSims {
-                    try? await daemonClient.shutdownDevice(udid: sim.udid)
-                }
+            for sim in live.flatMap(\.liveSims) {
+                await shutdownAndForget(udid: sim.udid)
             }
             OrphanRecovery.cleanup(live.map(\.sessionDir))
             return []

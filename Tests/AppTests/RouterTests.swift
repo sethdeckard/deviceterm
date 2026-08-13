@@ -3037,4 +3037,335 @@ struct RouterTests {
         #expect(simPanes(workspace, tab: TabID(value: 2)).map(\.udid) == ["B"])
         #expect(fake.attachDeviceCalls.map(\.udid) == ["A", "B", "A", "B"])
     }
+
+    // MARK: - Restoring ownership of sims no pane carries
+
+    /// One owned, booted sim as a tab's discovery poll would report it.
+    private func ownedEntry(_ udid: String, session: String?) -> DeviceListEntry {
+        DeviceListEntry(udid: udid, name: "iPhone", state: "Booted", ownedBySession: session)
+    }
+
+    /// One discovery poll: claim the ordering token first, as the poll does,
+    /// then hand the answer back under it.
+    private func pollOwned(
+        _ router: Router,
+        _ entries: [DeviceListEntry],
+        generation: Int
+    ) {
+        guard let token = router.beginOwnedSimsRead() else {
+            Issue.record("the roster read slot should be free between polls")
+            return
+        }
+        router.noteOwnedSims(entries, generation: generation, read: token)
+        router.endOwnedSimsRead(token)
+    }
+
+    @Test
+    func recoveryRestoresOwnershipOfASimNoPaneCarries() async {
+        // The sim the user detached: still running, still ours, and with no
+        // pane to bring it back through a re-attach. A replacement helper
+        // would otherwise treat it as somebody else's and drop it from the
+        // running-sim count and the shut-down prompts.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(
+            fake.restoreOwnershipCalls == [
+                [RestoredSimOwnership(udid: "u", sessionId: "S")]
+            ]
+        )
+    }
+
+    @Test
+    func recoveryRestoresOwnershipOfMountedAndDetachedSimsAlike() async {
+        // The mirror doesn't distinguish them, and shouldn't: re-asserting a
+        // sim whose pane is also being re-attached is an idempotent no-op the
+        // helper reports as restored, and leaving it out would depend on the
+        // pane recovery having already landed.
+        let fake = FakeDaemonClient()
+        let (router, _) = await makeRecoveryFixture(fake)
+        pollOwned(
+            router,
+            [ownedEntry("U", session: "S"), ownedEntry("detached", session: "S")],
+            generation: 0
+        )
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.first?.map(\.udid) == ["detached", "u"])
+    }
+
+    @Test
+    func anUnlinkedSimIsRestoredUnattributed() async {
+        // The already-demoted form of an Unlinked sim: the helper reports it
+        // in the owned roster with no session, and the status item lists it
+        // that way. It has to survive a restart the way a pane-detached sim
+        // does. (A closed session's UUID can also linger in the map and only
+        // resolve as Unlinked; nil is what an explicit demotion leaves.)
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: nil)], generation: 0)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(
+            fake.restoreOwnershipCalls == [
+                [RestoredSimOwnership(udid: "u", sessionId: nil)]
+            ]
+        )
+    }
+
+    @Test
+    func shuttingASimDownWithItsPaneDropsItsClaim() async {
+        // Production retires a pane-backed sim through the pane close, which
+        // stops it and disowns it daemon-side before anything reads the owned
+        // roster again. A mirror still holding the claim is one recovery would
+        // re-assert against a sim something else may have booted since.
+        let fake = FakeDaemonClient()
+        let (router, _) = await makeRecoveryFixture(fake)
+        fake.deviceListResult = [ownedEntry("U", session: "S")]
+
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .shutdown))
+        await settle()
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.closePaneCalls.map(\.mode) == [.shutdown])
+        // The pane close already took it out of the owned roster, so the sweep
+        // that follows finds nothing. That ordering is why the claim has to be
+        // dropped here rather than off the sweep.
+        #expect(fake.shutdownDeviceCalls.isEmpty)
+        #expect(fake.restoreOwnershipCalls.isEmpty)
+    }
+
+    @Test
+    func shuttingDownADetachedSimDropsItsClaim() async {
+        // The sweep's own case: a sim this tab's session owns with no pane
+        // carrying it, so no pane close retires it.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("detached", session: "S")], generation: 0)
+        fake.deviceListResult = [ownedEntry("detached", session: "S")]
+
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .shutdown))
+        await settle()
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.shutdownDeviceCalls == ["detached"])
+        #expect(fake.restoreOwnershipCalls.isEmpty)
+    }
+
+    @Test
+    func aRestoreStopsRetryingWhenItsWindowCloses() async {
+        // Silence is the only thing worth repeating, and even that is bounded:
+        // a helper that starts answering long after the restart would be
+        // answering about whatever holds those udids by then.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.restoreRetryBaseNanos = 1_000_000
+        router.restoreWindow = .milliseconds(20)
+        fake.restoreOwnershipError = FakeDaemonError.attachFailed
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+        let attempts = fake.restoreOwnershipCalls.count
+        #expect(attempts > 1)
+
+        await settle()
+        #expect(fake.restoreOwnershipCalls.count == attempts)
+    }
+
+    @Test
+    func aClaimSurvivesAHelperReplacedDuringTheAttach() async {
+        // The attach recorded ownership on the helper that answered it.
+        // Naming the current connection afterward would credit a replacement
+        // installed in between, and the mirror would go on to believe that
+        // helper's empty roster and drop the claim before recovery could
+        // re-assert it.
+        let fake = FakeDaemonClient()
+        fake.armAttachBarrier()
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+
+        fake.simulateReconnect()
+        fake.releaseAttach()
+        await settle()
+        // The replacement answers the next poll with nothing owned.
+        pollOwned(router, [], generation: 1)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.first?.map(\.udid) == ["u"])
+    }
+
+    @Test
+    func aSimAttachedAndDetachedBetweenPollsIsStillRestored() async {
+        // The window a two-second poll can't cover. The attach records
+        // ownership daemon-side, the detach takes the pane away, and if the
+        // mirror only ever learned from polls there would be nothing left
+        // anywhere that remembers the sim is DeviceTerm's.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeRecoveryFixture(fake)
+        router.dispatch(.detachSimPane(tab: TabID(value: 1), udid: "U", mode: .detach))
+        await settle()
+        #expect(simPanes(workspace).isEmpty)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.first?.map(\.udid) == ["u"])
+    }
+
+    @Test
+    func aHelperThatWasNeverReplacedIsToldNothing() async {
+        // Recovery dispatched with no connection-replacement notification
+        // behind it: nothing has told the mirror to hold its claims, so there
+        // is no window open and nothing to re-assert. Production notifies on
+        // every reconnect, so this is the shape of a recovery run for some
+        // other reason rather than of an ordinary reconnect.
+        let fake = FakeDaemonClient()
+        let (router, _) = await makeRecoveryFixture(fake)
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.isEmpty)
+        // Recovery ran; it just had nothing to re-assert. Without this the
+        // test would also pass if the whole route did nothing.
+        #expect(fake.attachDeviceCalls.count == 2)
+    }
+
+    @Test
+    func aReplacementHelpersEmptyRosterDoesNotEraseWhatItIsOwed() async {
+        // The poll runs every couple of seconds and the new helper answers it
+        // correctly with "nothing is owned". Believing that before recovery
+        // has run would erase the only claim recovery has for the detached
+        // sim.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+        router.noteConnectionReplaced(generation: 1)
+
+        pollOwned(router, [], generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.first?.map(\.udid) == ["u"])
+    }
+
+    @Test
+    func aRestoreThatKeepsFailingStaysOwedRatherThanDiscardingTheClaims() async {
+        // Settling on a failure hands the mirror to a helper that was never
+        // told what it owns, and the empty poll behind that discards the claims
+        // for good. Staying owed while the recovery window is open is what lets
+        // a helper that resumes answering inside it still be told.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.restoreRetryBaseNanos = 1_000_000
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+        router.noteConnectionReplaced(generation: 1)
+        fake.restoreOwnershipError = FakeDaemonError.attachFailed
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        // Still owed while the window is open, and the claim is intact, so a
+        // helper that resumes answering inside it still gets told.
+        #expect(fake.restoreOwnershipCalls.count > 1)
+        fake.restoreOwnershipError = nil
+        await settle()
+        #expect(fake.restoreOwnershipCalls.last?.map(\.udid) == ["u"])
+        await router.shutdown()
+    }
+
+    @Test
+    func aCliShutdownOfOneSimDropsItsClaim() async {
+        // `deviceterm pane close --mode shutdown` and the in-pane action reach
+        // detachPane, which shuts the sim down without going near the tab-close
+        // fan-out. Same stale-claim exposure, so it drops the claim too.
+        let fake = FakeDaemonClient()
+        let (router, _) = await makeRecoveryFixture(fake)
+
+        router.dispatch(.detachSimPane(tab: TabID(value: 1), udid: "U", mode: .shutdown))
+        await settle()
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.closePaneCalls.map(\.mode) == [.shutdown])
+        #expect(fake.restoreOwnershipCalls.isEmpty)
+    }
+
+    @Test
+    func aClaimTheHelperDeclinesIsNotRetried() async {
+        // The helper reports no reason, so "declined" covers a sim that shut
+        // down as well as one still Booting. Re-asking puts the same claim to
+        // whatever holds that udid later, which is how another tool's boot gets
+        // claimed as DeviceTerm's. Losing the claim is the lesser failure.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.restoreRetryBaseNanos = 1_000_000
+        fake.restoreOwnershipUnresolved = .max
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.map { $0.map(\.udid) } == [["u"]])
+    }
+
+    @Test
+    func aRestoreThatFailsOnceIsRetriedRatherThanSettled() async {
+        // Settling on a failed call starts the mirror believing a helper that
+        // was never told anything, and the next empty poll then discards the
+        // claims for good.
+        let fake = FakeDaemonClient()
+        let (router, _) = makeRouter(fake)
+        router.restoreRetryBaseNanos = 1_000_000
+        fake.restoreOwnershipFailures = [FakeDaemonError.attachFailed]
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("U", session: "S")], generation: 0)
+
+        router.noteConnectionReplaced(generation: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+
+        #expect(fake.restoreOwnershipCalls.map { $0.map(\.udid) } == [["u"], ["u"]])
+    }
 }

@@ -154,12 +154,32 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     var grantOrchestratorFailures: [Error?] = []
     var grantOrchestratorApplied: [Bool] = []
     private(set) var reconnectObservers: [ReconnectObserverToken: @MainActor () -> Void] = [:]
+    /// Synthetic connection generation, incremented before reconnect
+    /// observers run. The numbering is the fake's own: production's first
+    /// connection is already 1.
+    private(set) var connectionGeneration = 0
     private(set) var createSessionCalls: [CreateSessionCall] = []
     private(set) var closeSessionCalls: [CloseSessionCall] = []
     private(set) var deviceListCalls: [DeviceListCall] = []
     private(set) var bootDeviceCalls: [BootDeviceCall] = []
+    /// When set, `bootDevice` throws this after recording the call.
+    var bootDeviceError: Error?
     private(set) var shutdownDeviceCalls: [String] = []
     private(set) var attachDeviceCalls: [AttachDeviceCall] = []
+    /// Every `device.restoreOwnership` batch the client sent, in order.
+    private(set) var restoreOwnershipCalls: [[RestoredSimOwnership]] = []
+    /// UDID behind each sim pane id the fake has handed out, so a `.shutdown`
+    /// close can retire the right device from the owned roster.
+    private var simPaneUDIDs: [String: String] = [:]
+    /// When set, `restoreOwnership` throws this instead of returning.
+    var restoreOwnershipError: Error?
+    /// Errors to throw from `restoreOwnership`, consumed one per call from the
+    /// front, so a test can script "fail, then succeed" for the retry.
+    var restoreOwnershipFailures: [Error?] = []
+    /// How many leading `restoreOwnership` calls answer successfully having
+    /// taken nothing, the shape a still-Booting sim produces. Decremented per
+    /// call; later calls take everything.
+    var restoreOwnershipUnresolved = 0
     private(set) var closePaneCalls: [ClosePaneCall] = []
     private(set) var subscribePaneCalls: [String] = []
     /// Errors to throw from `subscribePane`, consumed one per call from the
@@ -610,14 +630,37 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         return deviceListResult
     }
 
+    /// The fake has one connection at a time, so the generation it answers with
+    /// is whatever `simulateReconnect()` has advanced to. Recorded as an
+    /// ordinary `deviceList` call: callers assert on the scope either way.
+    func deviceListWithGeneration(
+        scope: DeviceListScope
+    ) -> (entries: [DeviceListEntry], generation: Int) {
+        (deviceList(scope: scope), connectionGeneration)
+    }
+
     func bootDevice(
         udid: String,
         sessionId: String?,
         capability: String?
-    ) {
+    ) throws {
+        _ = try bootDeviceWithGeneration(
+            udid: udid,
+            sessionId: sessionId,
+            capability: capability
+        )
+    }
+
+    func bootDeviceWithGeneration(
+        udid: String,
+        sessionId: String?,
+        capability: String?
+    ) throws -> Int {
         bootDeviceCalls.append(
             .init(udid: udid, sessionId: sessionId, capability: capability)
         )
+        if let bootDeviceError { throw bootDeviceError }
+        return connectionGeneration
     }
 
     func shutdownDevice(udid: String) {
@@ -629,15 +672,52 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         capability: String,
         udid: String
     ) async throws -> PaneCreateResponse {
+        try await attachDeviceWithGeneration(
+            sessionId: sessionId,
+            capability: capability,
+            udid: udid
+        ).response
+    }
+
+    func attachDeviceWithGeneration(
+        sessionId: String,
+        capability: String,
+        udid: String
+    ) async throws -> (response: PaneCreateResponse, generation: Int) {
         attachDeviceCalls.append(
             .init(sessionId: sessionId, capability: capability, udid: udid)
         )
+        // Captured before the barrier, as the real transport captures it with
+        // the send: a reconnect while the call is in flight must not rewrite
+        // which connection answered it.
+        let answeringGeneration = connectionGeneration
         let index = attachCallCount
         attachCallCount += 1
         await awaitAttachGate()
         if let error = attachFailure?(udid, index) { throw error }
         if let attachError { throw attachError }
-        return attachResponse?(udid, index) ?? attachResult
+        let response = attachResponse?(udid, index) ?? attachResult
+        simPaneUDIDs[response.paneId] = udid
+        return (response, answeringGeneration)
+    }
+
+    func restoreOwnership(
+        devices: [RestoredSimOwnership]
+    ) throws -> DeviceRestoreOwnershipResult {
+        restoreOwnershipCalls.append(devices)
+        if !restoreOwnershipFailures.isEmpty,
+            let scripted = restoreOwnershipFailures.removeFirst() {
+            throw scripted
+        }
+        if let restoreOwnershipError { throw restoreOwnershipError }
+        if restoreOwnershipUnresolved > 0 {
+            restoreOwnershipUnresolved -= 1
+            return DeviceRestoreOwnershipResult(restoredCount: 0, udids: [])
+        }
+        return DeviceRestoreOwnershipResult(
+            restoredCount: devices.count,
+            udids: devices.map(\.udid)
+        )
     }
 
     // MARK: - PhysicalDeviceControlling
@@ -667,6 +747,14 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
 
     func closePane(paneId: String, mode: PaneCloseMode, expecting attachment: UInt64?) async {
         closePaneCalls.append(.init(paneId: paneId, mode: mode, attachment: attachment))
+        // A `.shutdown` close stops the sim and disowns it daemon-side, so it
+        // leaves the owned roster before any later `device.list` sees it. The
+        // fake models that, because a caller reading the roster afterward to
+        // decide what still needs shutting down would otherwise be handed a
+        // device production has already retired.
+        if mode == .shutdown, let paneUDID = simPaneUDIDs[paneId] {
+            deviceListResult.removeAll { $0.udid == paneUDID }
+        }
         guard closePaneGateArmed else { return }
         closePanesWaiting += 1
         await withCheckedContinuation { closePaneContinuations.append($0) }
@@ -909,8 +997,12 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         reconnectObservers[token] = nil
     }
 
-    /// Test hook: fire every registered reconnect observer.
+    /// Test hook: advance the connection and fire every registered reconnect
+    /// observer, in that order, matching the real client (which bumps the
+    /// counter in the transport's reconnect handler, before anything the GUI
+    /// installed runs).
     func simulateReconnect() {
+        connectionGeneration += 1
         for observer in reconnectObservers.values { observer() }
     }
 }
