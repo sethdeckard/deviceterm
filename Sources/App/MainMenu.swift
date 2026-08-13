@@ -70,6 +70,21 @@ func makeMainMenu() -> NSMenu {
             )
     }
     appMenu.addItem(.separator())
+    // Restart Helper… offers to stop the background helper so launchd starts
+    // a fresh one; if stopping it leaves recovery able to continue, that
+    // reconnects and reattaches device panes. It sits
+    // in the app menu because the helper is app-scoped infrastructure, not
+    // anything a window or pane owns. Permanent, rather than only offered by
+    // the prompt that appears when the helper stops answering: recovery must
+    // not depend on that prompt being up at the right moment.
+    appMenu.addItem(
+        NSMenuItem(
+        title: "Restart Helper…",
+        action: #selector(AppDelegate.restartHelper(_:)),
+        keyEquivalent: ""
+    )
+        )
+    appMenu.addItem(.separator())
     // Settings… opens the config in a new terminal tab running $EDITOR.
     // nil target routes through the responder chain to the AppDelegate,
     // reachable even with no key window, like New Window.

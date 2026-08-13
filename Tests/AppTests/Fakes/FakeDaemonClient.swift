@@ -218,10 +218,16 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     var attachError: Error?
     /// Per-call failure hook for both attach verbs, consulted before
     /// `attachError` with the target (udid / device id) and how many attaches
-    /// preceded this one. One knob covers both shapes a batch test needs:
-    /// failing a particular sim of a record, and failing only the first
-    /// attempt at one so the retry converges.
+    /// preceded this one. One hook covers both failure shapes a batch test
+    /// needs: fail a particular target, or fail only its first attempt so a
+    /// retry can converge.
     var attachFailure: (@MainActor (String, Int) -> Error?)?
+    /// Per-call response hook for both attach verbs, taking the same
+    /// (target, preceding attaches) pair as `attachFailure`. Returning nil
+    /// falls through to `attachResult`. Lets a test give a second attach of
+    /// the same target a different pane id, which is what a helper restart
+    /// does and what proves the pane was rebuilt rather than left alone.
+    var attachResponse: (@MainActor (String, Int) -> PaneCreateResponse?)?
     /// Attaches begun, across both verbs. Counts invocations, not
     /// completions, so a suspended attach is already numbered.
     private(set) var attachCallCount = 0
@@ -631,7 +637,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         await awaitAttachGate()
         if let error = attachFailure?(udid, index) { throw error }
         if let attachError { throw attachError }
-        return attachResult
+        return attachResponse?(udid, index) ?? attachResult
     }
 
     // MARK: - PhysicalDeviceControlling
@@ -654,7 +660,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         await awaitAttachGate()
         if let error = attachFailure?(deviceId, index) { throw error }
         if let attachError { throw attachError }
-        return attachResult
+        return attachResponse?(deviceId, index) ?? attachResult
     }
 
     // MARK: - PaneControlling

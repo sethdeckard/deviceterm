@@ -149,8 +149,11 @@ enum RouteIntent: Sendable, Equatable {
 
     /// Mount a physically-connected device: the `.device` arm of
     /// `device attach <ref>`, and the shim's contextual auto-attach.
-    /// `deviceId` is the device's stable CoreDevice UDID. Always
-    /// explicit; never auto-resurrected. `relinkExisting`
+    /// `deviceId` is the device's stable CoreDevice UDID. Mounting one is
+    /// always explicit and there is no resurrect watch; the one thing that
+    /// re-attaches a device by itself is helper-restart recovery, which
+    /// works from panes the workspace already holds and never comes through
+    /// here. `relinkExisting`
     /// moves the mirror here when the device is already shown in another
     /// tab (set by the shim's contextual trigger); when false, an attach
     /// against a device mirrored elsewhere is rejected.

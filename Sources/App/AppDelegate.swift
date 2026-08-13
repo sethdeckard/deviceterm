@@ -63,11 +63,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // then fire the terminal-rebind observers.
                 await self.closeGhostSessions(restored: inventory)
                 self.daemonClient.notifyReconnect()
+                // Pane records live only in the helper's memory. This
+                // connection may have reached a replacement holding none of
+                // the ones the workspace is showing, or the same helper with
+                // them intact; re-attaching is right either way, because a
+                // surviving record comes back to its owning session rather
+                // than being duplicated, and neither attach verb fails a
+                // re-attach over machinery only a fresh create needs. Sessions
+                // are restored by now, which is what lets the attaches
+                // authenticate; the terminal rebinds have been scheduled
+                // alongside them.
+                self.router.dispatch(.recoverPanes)
             },
             reportContractViolation: { [weak self] in self?.reportRestoreContractViolation() },
             sleep: { nanos in
                 do { try await Task.sleep(nanoseconds: nanos); return true } catch { return false }
             }
+        )
+    )
+
+    /// Decides when to propose restarting the helper, and runs the restart.
+    /// Both the automatic prompt (a streak of unanswered calls) and the menu
+    /// item land here, so the two paths can't drift.
+    private lazy var helperRecovery = HelperRecoveryCoordinator(
+        HelperRecoveryCoordinator.Dependencies(
+            prompt: { [weak self] reason in
+                self?.promptForHelperRestart(reason) ?? .cancel
+            },
+            terminate: { [weak self] generation in
+                await self?.daemonClient.terminateHelper(expectedGeneration: generation)
+                    ?? .alreadyGone
+            },
+            reconnect: { [weak self] in await self?.daemonClient.reconnect() },
+            report: { [weak self] outcome in self?.reportHelperRestartFailure(outcome) }
         )
     )
 
@@ -170,6 +198,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         self.inventorySync.reconnected(
                             generation: self.daemonClient.reconnectGeneration
                         )
+                    }
+                    // A helper that has stopped answering leaves tabs,
+                    // windows, and panes stuck with no in-app way out. Offer
+                    // the restart that fixes it. Skipped under `--smoke`,
+                    // where a modal would stall the gate and there is no XPC
+                    // peer to stop anyway.
+                    daemonClient.onUnresponsive = { [weak self] connection in
+                        self?.helperRecovery.helperStoppedAnswering(connection: connection)
                     }
                     // A definite wire-version mismatch (startup or auto-reconnect,
                     // the daemon was replaced by an incompatible build) routes
@@ -449,6 +485,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
+        // Stop proposing a restart: quit is itself the escape from a wedged
+        // helper, and this path is where the calls that would diagnose one
+        // pile up (the owned-device check, then every window's pane and
+        // session teardown, each carrying its own bound). A modal raised now
+        // would sit in front of the quit the user already asked for, while
+        // `.terminateLater` waits behind it. Cleared rather than gated on a
+        // flag so there is nothing left to fire; no path here declines the
+        // termination.
+        daemonClient.onUnresponsive = nil
         let liveIDs = workspace.windows.map(\.id)
         if liveIDs.isEmpty { return .terminateNow }
         Task { @MainActor in
@@ -737,6 +782,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func dismissDevicePicker() {
         devicePickerWC?.close()
         devicePickerWC = nil
+    }
+
+    /// App menu > Restart Helper…: the same restart the unresponsive prompt
+    /// offers, reachable deliberately. Recovery must not depend on the
+    /// automatic prompt being up at the right moment, or on the user having
+    /// left it up.
+    @objc
+    func restartHelper(_ sender: Any?) {
+        helperRecovery.restartRequested()
+    }
+
+    /// Ask whether to restart the helper. Runs modally, so the choice is back
+    /// before this returns.
+    ///
+    /// The message text is the question rather than the app name, because
+    /// NSAlert renders it as the headline and this alert asks for a decision:
+    /// a user glancing at it needs to read what they are being asked.
+    ///
+    /// The copy promises only what a restart actually recovers. Terminal
+    /// panes are libghostty surfaces in this process and are not touched by
+    /// any of this; simulators keep running because nothing here shuts one
+    /// down; device panes reattach because the reconnect drives it. Panes
+    /// that can't reattach are named too, since that is the outcome the user
+    /// would otherwise read as the feature not working.
+    private func promptForHelperRestart(
+        _ reason: HelperRestartReason
+    ) -> HelperRestartChoice {
+        let alert = NSAlert()
+        let recovery = "Simulators keep running and terminals are untouched. "
+            + "Device panes reattach on their own; one that fails shows the "
+            + "error in its own slot with a Retry button."
+        switch reason {
+        case .unresponsive:
+            alert.messageText = "Several deviceterm helper requests timed out"
+            alert.informativeText = "Tabs, windows, and device panes may be "
+                + "stuck. " + recovery
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Restart Helper")
+            alert.addButton(withTitle: "Keep Waiting")
+            return alert.runModal() == .alertFirstButtonReturn ? .restart : .keepWaiting
+
+        case .requested:
+            alert.messageText = "Restart the deviceterm helper?"
+            alert.informativeText = recovery
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Restart Helper")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn ? .restart : .cancel
+        }
+    }
+
+    /// Report an outcome that didn't confirm a stop: the signal was refused,
+    /// or XPC exposed no peer process to send one to. The rest don't reach
+    /// here, because they leave recovery free to carry on.
+    ///
+    /// The two that do reach here need different remedies, which is why the
+    /// copy isn't shared. A refused signal means the helper is still running
+    /// and this GUI can't stop it: quitting wouldn't help, because the helper
+    /// is a launchd agent that outlives the GUI on purpose (it holds booted
+    /// Simulators and the status item) and a wedged one isn't running its own
+    /// idle-exit check either, so logging out is the honest remedy and the one
+    /// the incompatible-helper alert already gives. An unreported peer is the
+    /// opposite situation: the connection is open but names no process, so
+    /// there may be nothing running to clear, and telling the user to log out
+    /// over it would be advice about a problem they may not have.
+    private func reportHelperRestartFailure(_ outcome: HelperTerminationOutcome) {
+        let detail: String
+        switch outcome {
+        case let .failed(reason):
+            detail = "The system refused to stop it (\(reason)). Logging out "
+                + "and back in clears it."
+
+        case .unknownPeer:
+            detail = "macOS didn't report a process ID for the connection, "
+                + "so deviceterm couldn't send it a signal. Try again in a "
+                + "moment; if it keeps happening, quit and reopen deviceterm."
+
+        case .terminated, .alreadyGone, .alreadyRestarted:
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Couldn't restart the deviceterm helper"
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// Help > Third-Party Notices: show (or re-front) the notices window.

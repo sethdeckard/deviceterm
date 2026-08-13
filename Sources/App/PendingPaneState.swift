@@ -32,12 +32,33 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
     /// leaf with the same metrics the real pane will take so the success
     /// swap doesn't resize. nil → `.unknown` → phone-default.
     let family: String?
-    /// Original typed-array index to restore on the post-attach insert
-    /// (resurrect fidelity; mirrors `Route.attachSimPane`'s `atIndex`).
-    /// nil appends.
-    let atIndex: Int?
+    /// The typed-array position to take when the pane mounts, recorded from
+    /// where it came from (resurrect fidelity; mirrors `Route.attachSimPane`'s
+    /// `atIndex`). nil appends.
+    ///
+    /// Mutable because recovery renumbers a tab's placeholders together: a
+    /// placeholder that outlived an earlier recovery still carries the index
+    /// it was minted with, which no longer lines up with the ones being
+    /// handed to the panes recovering alongside it.
+    var atIndex: Int?
+    /// Whether `displayName` is a label only, and the attach resolves the
+    /// name for itself.
+    ///
+    /// False on every ordinary attach, where the caller's requested label is
+    /// also the name to attach with, and one field serves both. True for a
+    /// pane being re-attached after a helper restart: the label it is already
+    /// showing is the resolved, composed "Name · Type" form, which the
+    /// placeholder keeps so the slot doesn't rename itself to a UDID stub
+    /// mid-recovery, but handing that back as the bare name would compose the
+    /// type onto it a second time. Retry reads this for the same reason the
+    /// first attach does.
+    let resolvesName: Bool
     /// Attach lifecycle: in-flight, or failed-with-message (Retry shown).
     var phase: PendingPanePhase
+
+    /// The name to hand an attach, which is the requested label unless the
+    /// attach is resolving it (see `resolvesName`).
+    var attachName: String? { resolvesName ? nil : displayName }
 
     init(
         id: PendingPaneID,
@@ -45,6 +66,7 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
         displayName: String?,
         family: String? = nil,
         atIndex: Int? = nil,
+        resolvesName: Bool = false,
         phase: PendingPanePhase = .attaching
     ) {
         self.id = id
@@ -52,6 +74,7 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
         self.displayName = displayName
         self.family = family
         self.atIndex = atIndex
+        self.resolvesName = resolvesName
         self.phase = phase
     }
 }

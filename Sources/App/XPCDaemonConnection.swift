@@ -182,7 +182,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// always-running `.validatedGUI` `app.commands` subscription, otherwise a
     /// terminal-only tab (which makes no session-scoped calls, so never sees a
     /// `-32001`) would never re-bind its anchor after a daemon restart.
-    private var onReconnect: (@Sendable () -> Void)?
+    private var onReconnect: (@Sendable (Int) -> Void)?
     private var connectionGeneration = 0
     /// Set once a definite daemon wire-version mismatch is being remediated.
     /// From then, every entry point EXCEPT the bootstrap `daemon.shutdown`
@@ -207,7 +207,12 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         self.machServiceName = machServiceName
     }
 
-    func setReconnectHandler(_ handler: @escaping @Sendable () -> Void) {
+    /// The handler receives the generation of the connection just installed,
+    /// captured here rather than read back later. A caller that reads it
+    /// afterwards gets whatever is current at read time, which is a different
+    /// value from the one it is reacting to as soon as anything reconnects in
+    /// between.
+    func setReconnectHandler(_ handler: @escaping @Sendable (Int) -> Void) {
         onReconnect = handler
     }
 
@@ -239,6 +244,58 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         subscriptions.removeAll()
         for (_, record) in subs { finishSubscription(record) }
         return pinned
+    }
+
+    /// Stop the helper process on the other end of this connection.
+    ///
+    /// The pid comes from `xpc_connection_get_pid` on the live peer, never
+    /// from an RPC reply: the case this exists for is a helper that has
+    /// stopped answering, so there is no reply to read, and a pid a caller
+    /// supplied names whatever it chose to. Reading the peer and signalling it
+    /// happen in this one actor turn with nothing awaited in between, so this
+    /// connection can't be swapped underneath the lookup.
+    ///
+    /// What that does not buy is the pid itself. The process is free to exit
+    /// between the two calls, and the kernel is free to reuse its number.
+    /// `ESRCH` catches the ordinary form of that; a number reused inside the
+    /// same instant is not something a pid-based kill can rule out.
+    ///
+    /// `expectedGeneration` fences the kill to one connection. The
+    /// unresponsive prompt captures the generation it was raised against, so
+    /// a newer connection installed while the prompt sat on screen returns
+    /// `.alreadyRestarted` rather than the current peer being signalled in
+    /// its place. Pass nil to signal the connected peer with no fence, which
+    /// is what asking for a restart outright means.
+    ///
+    /// SIGKILL, not SIGTERM: a helper blocked inside a synchronous
+    /// CoreSimulator call, or stopped outright, runs no handler, and a stopped
+    /// process never even dequeues SIGTERM. SIGKILL terminates both without
+    /// needing the process to run anything.
+    func terminateCurrentPeer(expectedGeneration: Int?) -> HelperTerminationOutcome {
+        if let expectedGeneration, connectionGeneration != expectedGeneration {
+            return .alreadyRestarted
+        }
+        guard let peer = connection else { return .alreadyGone }
+        let pid = xpc_connection_get_pid(peer)
+        // A mach-service connection that has never been messaged has no
+        // remote process yet, and reports pid 0 rather than failing.
+        guard pid > 0 else { return .unknownPeer }
+        guard kill(pid, SIGKILL) == 0 else {
+            // Reading a pid says which process was connected, never that it
+            // is still running: a helper that exits on its own in that
+            // instant leaves nothing to signal. That is the outcome the
+            // caller wanted, reached without us, so it must not be reported
+            // as a refusal or skip the reconnect that drives recovery.
+            if errno == ESRCH { return .alreadyGone }
+            return .failed(String(cString: strerror(errno)))
+        }
+        connectionLog.notice(
+            """
+            terminated helper pid=\(pid, privacy: .public) \
+            generation=\(self.connectionGeneration, privacy: .public)
+            """
+        )
+        return .terminated(pid: pid)
     }
 
     /// Test seam: install a pre-made peer as the live connection, bypassing the
@@ -329,7 +386,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         // Generation 1 is the initial connect; every later one is a
         // reconnection after an invalidation, so the daemon is fresh (its
         // in-memory anchor store is empty) and terminals must re-bind.
-        if connectionGeneration > 1 { onReconnect?() }
+        if connectionGeneration > 1 { onReconnect?(connectionGeneration) }
     }
 
     /// Tear down the connection, used by tests and quit. Drops

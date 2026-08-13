@@ -2697,4 +2697,344 @@ struct RouterTests {
         #expect(pendingPanes(workspace).isEmpty)
         #expect(fake.closePaneCalls.isEmpty)
     }
+
+    // MARK: - Recovering panes after a helper restart
+
+    /// A workspace with one tab holding a mounted sim pane, which is the
+    /// starting state every recovery test needs. The second attach of the
+    /// same target returns a different pane id, because a restarted helper
+    /// mints a new record rather than handing back the one it lost.
+    private func makeRecoveryFixture(
+        _ fake: FakeDaemonClient
+    ) async -> (Router, WorkspaceViewModel) {
+        fake.attachResponse = { _, index in
+            PaneCreateResponse(paneId: index == 0 ? "P1" : "P2", scale: nil, family: "phone")
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        return (router, workspace)
+    }
+
+    @Test
+    func recoverPanesReattachesAMountedSimUnderAFreshPaneId() async {
+        // Pane records live only in the helper's memory, so a helper that
+        // restarted holds none of them. Nothing else re-creates them: the
+        // restore batch covers sessions and terminal anchors, and the pane
+        // subscription's own retry loop can only rejoin a record that still
+        // exists. Without this the pane stays on screen bound to an id the
+        // helper never had.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeRecoveryFixture(fake)
+        #expect(simPanes(workspace).map(\.paneId) == ["P1"])
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(simPanes(workspace).map(\.paneId) == ["P2"])
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(fake.attachDeviceCalls.count == 2)
+    }
+
+    @Test
+    func recoverPanesKeepsThePaneInItsSlot() async {
+        // Recovery goes through a placeholder, so the leaf is rewritten
+        // twice. Both rewrites are in-place replacements, which is what keeps
+        // the pane where the user left it and (because divider proportions
+        // are keyed by tree position, not by slot) keeps the split where they
+        // left it too.
+        let (router, workspace) = await makeRecoveryFixture(FakeDaemonClient())
+        router.dispatch(
+            .openTerminalPane(tab: TabID(value: 1), anchor: .sim(udid: "U"), side: .after)
+        )
+        await settle()
+        let before = leaves(workspace)
+        #expect(before.firstIndex(of: .sim(udid: "U")) == 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+        // The pane id proves the round trip happened, so an unchanged leaf
+        // order means the slot survived it rather than that nothing ran.
+        #expect(simPanes(workspace).map(\.paneId) == ["P2"])
+        #expect(leaves(workspace) == before)
+    }
+
+    @Test
+    func recoverPanesDoesNotCloseTheRecordItIsReplacing() async {
+        // The old pane id names a record that died with the helper that held
+        // it, so a close would be addressed to a helper that never had it.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeRecoveryFixture(fake)
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(fake.closePaneCalls.isEmpty)
+        #expect(simPanes(workspace).count == 1)
+    }
+
+    @Test
+    func recoverPanesLeavesAnUnreachableSimAsAFailedPlaceholder() async {
+        // A sim shut down while the helper was dead can't come back, and the
+        // honest outcome is the pane saying so where it was, with Retry and
+        // Close, rather than disappearing out of the layout.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeRecoveryFixture(fake)
+        fake.attachError = FakeDaemonError.attachFailed
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(simPanes(workspace).isEmpty)
+        #expect(pendingPanes(workspace).count == 1)
+        guard case .failed = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected the unreachable sim to fail in place")
+            return
+        }
+        #expect(leaves(workspace).contains { if case .pending = $0 { true } else { false } })
+    }
+
+    @Test
+    func aRecoveredPlaceholderKeepsTheLabelThePaneWasShowing() async {
+        // The placeholder is on screen for as long as the attach takes, and
+        // falling back to a UDID stub would rename the slot mid-recovery for
+        // a pane the user can already see is theirs.
+        let fake = FakeDaemonClient()
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        fake.releaseAttach()
+        await settle()
+        fake.armAttachBarrier()
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(pendingPanes(workspace).first?.displayName == "iPhone")
+        fake.releaseAttach()
+        await settle()
+    }
+
+    @Test
+    func aRecoveredSimResolvesItsNameRatherThanReusingTheComposedOne() async {
+        // The mounted label is already the composed "Name · Type" form.
+        // Handing it back as the bare name would compose the type onto it
+        // again on every restart, so recovery resolves the name from scratch
+        // the way the first mount did.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(
+            paneId: "P1",
+            scale: nil,
+            family: "phone",
+            deviceType: "iPhone 17 Pro"
+        )
+        fake.deviceListResult = [
+            DeviceListEntry(udid: "U", name: "Blue", state: "Booted", ownedBySession: nil)
+        ]
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: nil))
+        await settle()
+        #expect(simPanes(workspace).first?.displayName == "Blue · iPhone 17 Pro")
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(simPanes(workspace).first?.displayName == "Blue · iPhone 17 Pro")
+    }
+
+    @Test
+    func retryingAFailedRecoveryDoesNotComposeTheDeviceTypeTwice() async {
+        // The placeholder shows the composed label the pane already had, and
+        // a Retry that handed that back as the bare name would compose the
+        // type onto it again, once more per restart.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(
+            paneId: "P1",
+            scale: nil,
+            family: "phone",
+            deviceType: "iPhone 17 Pro"
+        )
+        fake.deviceListResult = [
+            DeviceListEntry(udid: "U", name: "Blue", state: "Booted", ownedBySession: nil)
+        ]
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: nil))
+        await settle()
+        #expect(simPanes(workspace).first?.displayName == "Blue · iPhone 17 Pro")
+        fake.attachError = FakeDaemonError.attachFailed
+        router.dispatch(.recoverPanes)
+        await settle()
+        guard let pendingId = pendingPanes(workspace).first?.id else {
+            Issue.record("expected the failed recovery to leave a placeholder")
+            return
+        }
+        #expect(pendingPanes(workspace).first?.displayName == "Blue · iPhone 17 Pro")
+        fake.attachError = nil
+        router.dispatch(.retryPendingPane(tab: TabID(value: 1), pendingId: pendingId))
+        await settle()
+        #expect(simPanes(workspace).first?.displayName == "Blue · iPhone 17 Pro")
+    }
+
+    @Test
+    func aRecoveredDevicePaneKeepsThePickersName() async {
+        // The device path has no name to resolve from: the response's `name`
+        // is a human-set pane name the daemon leaves nil, so passing nil back
+        // would rename the pane to a deviceId stub on every restart. Nothing
+        // composes a device type onto a physical pane's label either, so the
+        // picker's name is both the right thing to show and safe to reuse.
+        let fake = FakeDaemonClient()
+        fake.attachResponse = { _, index in
+            PaneCreateResponse(paneId: index == 0 ? "P1" : "P2", scale: nil)
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(
+            .attachDevicePane(tab: TabID(value: 1), deviceId: "D1", displayName: "Test iPhone")
+        )
+        await settle()
+        let tab = { workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 1)) }
+        #expect(tab()?.devicePanes.first?.displayName == "Test iPhone")
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(tab()?.devicePanes.map(\.paneId) == ["P2"])
+        #expect(tab()?.devicePanes.first?.displayName == "Test iPhone")
+    }
+
+    @Test
+    func recoveringSeveralPanesRecordsEachOriginalIndex() async {
+        // The index is what the typed array's order is rebuilt from, and it
+        // has to be each pane's own. `TabListViewModelTests` covers what
+        // happens when the attaches then finish out of order, which this
+        // can't drive: the fake's barrier releases in dispatch order.
+        let fake = FakeDaemonClient()
+        fake.attachResponse = { udid, _ in
+            PaneCreateResponse(paneId: "pane-\(udid)", scale: nil, family: "phone")
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        for udid in ["A", "B", "C"] {
+            router.dispatch(
+                .attachSimPane(tab: TabID(value: 1), udid: udid, displayName: "iPhone \(udid)")
+            )
+            await settle()
+        }
+        #expect(simPanes(workspace).map(\.udid) == ["A", "B", "C"])
+        fake.armAttachBarrier()
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(pendingPanes(workspace).map(\.atIndex) == [0, 1, 2])
+        fake.releaseAttach()
+        await settle()
+        #expect(simPanes(workspace).map(\.udid) == ["A", "B", "C"])
+    }
+
+    @Test
+    func recoverPanesRetriesAPlaceholderAnInterruptedRecoveryLeftFailed() async {
+        // A second restart while recovery is running fails the attaches it
+        // started, and those panes are no longer mounted, so a sweep over
+        // mounted panes alone can't see them. They would sit as failed
+        // placeholders waiting for a click, which is the promise holding for
+        // the first restart and not the second.
+        let fake = FakeDaemonClient()
+        fake.attachResponse = { udid, _ in
+            PaneCreateResponse(paneId: "pane-\(udid)", scale: nil, family: "phone")
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        // First recovery, onto a helper that is already gone again.
+        fake.attachError = FakeDaemonError.attachFailed
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(simPanes(workspace).isEmpty)
+        guard case .failed = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected the interrupted recovery to fail the placeholder")
+            return
+        }
+        // The next reconnect reaches a healthy helper.
+        fake.attachError = nil
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(simPanes(workspace).map(\.udid) == ["U"])
+    }
+
+    @Test
+    func aSecondRecoveryRenumbersAroundAPlaceholderTheFirstLeftFailed() async {
+        // The mixed state: one pane recovered, one didn't. The typed array has
+        // compacted around the survivor, so enumerating it would hand the
+        // survivor index 0 while the failed placeholder still carries the 0 it
+        // was minted with, and the two would land on top of each other.
+        // Keeping the failed placeholder's claimed position and filling what
+        // is left from the mounted panes is what keeps them distinct.
+        let fake = FakeDaemonClient()
+        fake.attachResponse = { udid, _ in
+            PaneCreateResponse(paneId: "pane-\(udid)", scale: nil, family: "phone")
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        for udid in ["A", "B"] {
+            router.dispatch(
+                .attachSimPane(tab: TabID(value: 1), udid: udid, displayName: "iPhone \(udid)")
+            )
+            await settle()
+        }
+        #expect(simPanes(workspace).map(\.udid) == ["A", "B"])
+        let treeBefore = leaves(workspace)
+        // First recovery: A can't come back, B can.
+        fake.attachFailure = { udid, _ in
+            udid == "A" ? FakeDaemonError.attachFailed : nil
+        }
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(simPanes(workspace).map(\.udid) == ["B"])
+        #expect(pendingPanes(workspace).count == 1)
+        // Second recovery, everything reachable. A is retried and B is
+        // re-enumerated. Hold both attaches so the recorded positions can be
+        // read while they're still placeholders: those are what the array's
+        // order is rebuilt from, and asserting the finished array instead
+        // would prove nothing, because the fake completes in spawn order,
+        // which is the order that comes out right either way.
+        fake.attachFailure = nil
+        fake.armAttachBarrier()
+        router.dispatch(.recoverPanes)
+        await settle()
+        let recorded = pendingPanes(workspace).reduce(into: [String: Int?]()) { acc, pending in
+            if case let .sim(udid) = pending.target { acc[udid] = pending.atIndex }
+        }
+        #expect(recorded == ["A": 0, "B": 1])
+        fake.releaseAttach()
+        await settle()
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(simPanes(workspace).map(\.udid) == ["A", "B"])
+        // The tree is the other ordering, and it never moved: every
+        // placeholder replaced its own leaf in place, twice over.
+        #expect(leaves(workspace) == treeBefore)
+    }
+
+    @Test
+    func recoverPanesRecoversEveryTabsPanes() async {
+        // Recovery is per connection, not per tab: a helper restart takes out
+        // every pane in the workspace, so anything that walked only the
+        // selected tab would leave the rest dead.
+        let fake = FakeDaemonClient()
+        fake.attachResponse = { udid, _ in
+            PaneCreateResponse(paneId: "pane-\(udid)", scale: nil, family: "phone")
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.newTab(WindowID(value: 1)))
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "A", displayName: "iPhone A"))
+        router.dispatch(.attachSimPane(tab: TabID(value: 2), udid: "B", displayName: "iPhone B"))
+        await settle()
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(simPanes(workspace, tab: TabID(value: 1)).map(\.udid) == ["A"])
+        #expect(simPanes(workspace, tab: TabID(value: 2)).map(\.udid) == ["B"])
+        #expect(fake.attachDeviceCalls.map(\.udid) == ["A", "B", "A", "B"])
+    }
 }

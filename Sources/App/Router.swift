@@ -25,9 +25,9 @@ import Foundation
 private struct PendingAttachSpec {
     let target: PaneTarget
     let displayName: String?
-    /// Resurrect metadata: sim-only. Device panes are never persisted or
-    /// auto-resurrected, so these are nil for a device attach. Read only at
-    /// placeholder-insert time.
+    /// Placement metadata: sim-only, and read only at placeholder-insert
+    /// time. Nil for a device attach, whose recovery keeps the existing leaf
+    /// rather than restoring a recorded position.
     let family: String?
     let atIndex: Int?
     let anchor: ResurrectAnchor?
@@ -476,7 +476,174 @@ final class Router {
         case let .flipSplitAxis(tabID, slot):
             guard let window = workspace.windowContaining(tab: tabID) else { return }
             window.tabs.flipSplitAxis(containing: slot, inTab: tabID)
+
+        case .recoverPanes:
+            recoverPanes()
         }
+    }
+
+    /// Re-attach every mounted device-backed pane after a helper restart.
+    ///
+    /// Each pane becomes an ordinary attaching placeholder in the slot it
+    /// already holds, and the normal attach path takes it from there: it
+    /// mounts with whatever pane id and admission the attach returns, or fails
+    /// in place with Retry and Close. A replacement helper returns fresh
+    /// values; one that survived the reconnect returns its existing record.
+    ///
+    /// Nothing here is special-cased for recovery, so a sim that was shut down
+    /// while the helper was dead surfaces the same failed placeholder any
+    /// other unreachable attach would, rather than vanishing.
+    ///
+    /// The workspace is the snapshot. Everything the re-attach needs (the
+    /// target, the tab, the slot, the placeholder's size hint) is already
+    /// nav state, and taking it now rather than before the restart means a
+    /// pane the user closed in between is simply not recovered.
+    ///
+    /// The old pane id is dropped without being closed. A replacement daemon
+    /// cannot know it, and a daemon that survived the reconnect hands the
+    /// owning session that same record back during the re-attach, so closing
+    /// it would only retire the thing being recovered.
+    private func recoverPanes() {
+        for window in workspace.windows {
+            for tab in window.tabs.tabs {
+                // One numbering covering every sim in the tab, mounted or
+                // still coming back from an earlier recovery, so the two can't
+                // be handed the same position. See `simRecoveryOrder`.
+                let order = simRecoveryOrder(in: tab)
+                for pane in tab.simPanes {
+                    recoverSimPane(
+                        pane,
+                        atIndex: order[pane.udid.lowercased()],
+                        tab: tab.id,
+                        window: window
+                    )
+                }
+                for pane in tab.devicePanes {
+                    recoverDevicePane(pane, tab: tab.id, window: window)
+                }
+                // An already-failed placeholder is the other thing a restart
+                // leaves behind. A recovery interrupted by a second restart
+                // loses its attaches to the dying connection, and those panes
+                // are no longer mounted, so the loops above cannot see them:
+                // the promise that panes come back by themselves would hold
+                // for the first restart and not the second. Retrying is also
+                // right for a placeholder that failed for its own reasons,
+                // since the outcome lands in the same slot with the same
+                // affordances either way.
+                //
+                // `retryPendingPane` guards on the `.failed` phase, which is
+                // what keeps this off the placeholders inserted just above
+                // (they are `.attaching`) and off any attach still running.
+                for pending in tab.pendingPanes {
+                    if case let .sim(udid) = pending.target {
+                        window.tabs.setPendingIndex(
+                            order[udid.lowercased()],
+                            id: pending.id,
+                            inTab: tab.id
+                        )
+                    }
+                    retryPendingPane(tab: tab.id, pendingId: pending.id)
+                }
+            }
+        }
+    }
+
+    /// Where each of a tab's sims belongs in the typed array once recovery
+    /// settles, keyed by lowercased UDID.
+    ///
+    /// This rebuilds the *array's* order, which is not the tree's: a sim
+    /// mounts adjacent to its terminal, so the tree shows the newest first,
+    /// while the array is mount order. Only the array's order is being
+    /// restored here; the tree keeps every pane's slot on its own, because
+    /// each placeholder replaces its leaf in place.
+    ///
+    /// The numbering has to agree between panes that are still mounted and
+    /// placeholders that have already left the array. A placeholder an earlier
+    /// recovery left failed still knows the position it held, so it keeps it;
+    /// the mounted panes then fill the positions nothing has claimed, in the
+    /// order they sit in the array. Numbering the array alone would hand its
+    /// first entry position 0 while a failed placeholder still held 0, and the
+    /// two would land on top of each other.
+    private func simRecoveryOrder(in tab: TabState) -> [String: Int] {
+        var order: [String: Int] = [:]
+        var claimed: Set<Int> = []
+        for pending in tab.pendingPanes {
+            guard case let .sim(udid) = pending.target,
+                let position = pending.atIndex,
+                !claimed.contains(position) else { continue }
+            claimed.insert(position)
+            order[udid.lowercased()] = position
+        }
+        var free = (0..<(tab.simPanes.count + claimed.count)).filter { !claimed.contains($0) }
+        for pane in tab.simPanes {
+            guard !free.isEmpty else { break }
+            order[pane.udid.lowercased()] = free.removeFirst()
+        }
+        return order
+    }
+
+    /// A pane with no entry in the recovery order appends rather than being
+    /// given a guessed position.
+    private func recoverSimPane(
+        _ pane: SimPaneState,
+        atIndex index: Int?,
+        tab tabID: TabID,
+        window: WindowState
+    ) {
+        let pendingId = allocatePendingPaneID()
+        window.tabs.replaceSimPaneWithPending(
+            udid: pane.udid,
+            pending: PendingPaneState(
+                id: pendingId,
+                target: pane.target,
+                // The placeholder keeps the label the pane was already
+                // showing, so the slot doesn't rename itself to a UDID stub
+                // while the attach runs, but marks it label-only: that label
+                // is the composed "Name · Type" form, and the attach resolves
+                // the bare name itself. See `PendingPaneState.resolvesName`.
+                displayName: pane.displayName,
+                family: pane.family,
+                atIndex: index,
+                resolvesName: true
+            ),
+            inTab: tabID
+        )
+        spawnAttach(
+            tab: tabID,
+            pendingId: pendingId,
+            spec: simAttachSpec(tab: tabID, udid: pane.udid, displayName: nil)
+        )
+    }
+
+    private func recoverDevicePane(
+        _ pane: DevicePaneState,
+        tab tabID: TabID,
+        window: WindowState
+    ) {
+        let pendingId = allocatePendingPaneID()
+        window.tabs.replaceDevicePaneWithPending(
+            deviceId: pane.deviceId,
+            pending: PendingPaneState(
+                id: pendingId,
+                target: pane.target,
+                displayName: pane.displayName,
+                family: pane.family
+            ),
+            inTab: tabID
+        )
+        // Unlike a sim, the label is handed straight back as the name. There
+        // is nothing to resolve it from on this path (see `deviceAttachSpec`),
+        // and nothing composes a device type onto it, so the picker's name
+        // survives the restart instead of decaying to a deviceId stub.
+        spawnAttach(
+            tab: tabID,
+            pendingId: pendingId,
+            spec: deviceAttachSpec(
+                tab: tabID,
+                deviceId: pane.deviceId,
+                displayName: pane.displayName
+            )
+        )
     }
 
     private func addTab(
@@ -1249,8 +1416,14 @@ final class Router {
     /// differences: `physicalDevice.attach` (deviceId + an explicit
     /// attribution session the daemon honors only for the
     /// signature-validated GUI peer, no cap), and no resurrect metadata
-    /// (device panes are never persisted). The response carries the
-    /// marketing name, so there's no `device.list` lookup.
+    /// (device panes are never persisted).
+    ///
+    /// There is no name lookup on this path, and the response's `name` is a
+    /// human-set pane name the daemon leaves nil at create, so a caller
+    /// passing nil gets a deviceId stub. The caller's name is the only real
+    /// source, which is why recovery hands the pane's own label back rather
+    /// than resolving. Nothing composes a device type onto it either (a
+    /// physical attach reports none), so that label round-trips unchanged.
     private func deviceAttachSpec(
         tab tabID: TabID,
         deviceId: String,
@@ -1621,10 +1794,10 @@ final class Router {
         let spec: PendingAttachSpec
         switch pending.target {
         case let .sim(udid):
-            spec = simAttachSpec(tab: tabID, udid: udid, displayName: pending.displayName)
+            spec = simAttachSpec(tab: tabID, udid: udid, displayName: pending.attachName)
 
         case let .device(deviceId):
-            spec = deviceAttachSpec(tab: tabID, deviceId: deviceId, displayName: pending.displayName)
+            spec = deviceAttachSpec(tab: tabID, deviceId: deviceId, displayName: pending.attachName)
         }
         // A retry can overlap the attempt that failed: the first one abandoned
         // its *wait*, not its work, so the daemon may still be finishing it.

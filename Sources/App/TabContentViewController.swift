@@ -670,6 +670,26 @@ final class TabContentViewController: NSViewController {
     /// placement is handled by the unified layout-tree reconcile.
     private func reconcileSimPanes() {
         guard !isTornDown, let tabState = tabListVM.tab(id: tabID) else { return }
+        // A VC is bound to one daemon pane id for its lifetime: its view model
+        // subscribes to that id at construction and drives every input at it.
+        // The dictionary is keyed by udid, so on its own it cannot see a pane
+        // whose record was replaced behind the same device, which is what
+        // re-attaching after a helper restart does. Compare the id, so this
+        // reconcile is right on its own terms rather than only in combination
+        // with how the Router happens to sequence a re-attach.
+        for simPane in tabState.simPanes {
+            guard let paneVC = simPaneVCByUDID[simPane.udid],
+                paneVC.paneId != simPane.paneId else { continue }
+            simPaneActions.stopRecordingForCleanup(paneVC)
+            // Same cleanup the removal below does, because this drops a VC
+            // just as finally. A resurrect watch outliving its pane would fire
+            // against whatever now holds the udid and detach it; and a watch
+            // is only ever armed by a pane that went `.shutdown`, so a
+            // replacement arriving under that udid means the sim is booted
+            // again, which is the transition the watch was waiting for.
+            simResurrect.unwatch(udid: simPane.udid)
+            simPaneVCByUDID.removeValue(forKey: simPane.udid)
+        }
         let current = Set(simPaneVCByUDID.keys)
         let target = Set(tabState.simPanes.map(\.udid))
 
@@ -715,6 +735,14 @@ final class TabContentViewController: NSViewController {
     /// `stopRecordingForCleanup` / `simResurrect.unwatch`.
     private func reconcileDevicePanes() {
         guard !isTornDown, let tabState = tabListVM.tab(id: tabID) else { return }
+        // Same one-VC-per-pane-id rule as the sim reconcile above, keyed by
+        // deviceId here, so the pane id is likewise the only thing that says
+        // the record behind a device changed.
+        for devicePane in tabState.devicePanes {
+            guard let paneVC = devicePaneVCByID[devicePane.deviceId],
+                paneVC.paneId != devicePane.paneId else { continue }
+            devicePaneVCByID.removeValue(forKey: devicePane.deviceId)
+        }
         let current = Set(devicePaneVCByID.keys)
         let target = Set(tabState.devicePanes.map(\.deviceId))
 

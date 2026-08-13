@@ -399,6 +399,9 @@ final class TabListViewModel {
 
     func removeSimPane(udid: String, fromTab id: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if let claim = restorePosition(ofSim: udid, in: tabs[index]) {
+            releaseRestorePosition(claim, in: &tabs[index])
+        }
         tabs[index].simPanes.removeAll { $0.udid == udid }
         tabs[index].paneTree = PaneTreeOps.remove(
             slot: .sim(udid: udid),
@@ -410,9 +413,10 @@ final class TabListViewModel {
     /// has already done `physicalDevice.attach` and built the
     /// `DevicePaneState`; this records it so the reconcile in
     /// `TabContentViewController` builds a pane VC for it. Parallels
-    /// `addSimPane` but without the resurrect `atIndex` / `anchor`
-    /// machinery, since device panes are never persisted or auto-resurrected,
-    /// so there's no original-slot restoration to honor.
+    /// `addSimPane` but without the sim-only `atIndex` / `anchor` placement
+    /// metadata: helper recovery keeps a device pane's slot through
+    /// `replaceDevicePaneWithPending`, so there's no recorded position to
+    /// restore.
     ///
     /// Idempotent by `deviceId`: the picker / CLI / shim attach paths
     /// can all target the same connected device, and a duplicate attach
@@ -514,6 +518,17 @@ final class TabListViewModel {
         )
     }
 
+    /// Renumber where a placeholder will land in the typed array when it
+    /// mounts. Recovery calls this as it re-enumerates a tab, because a
+    /// placeholder left over from an earlier recovery carries the index it was
+    /// minted with and the array has compacted since. No-op if it's gone.
+    func setPendingIndex(_ atIndex: Int?, id pendingId: PendingPaneID, inTab id: TabID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }),
+            let paneIndex = tabs[index].pendingPanes.firstIndex(where: { $0.id == pendingId })
+        else { return }
+        tabs[index].pendingPanes[paneIndex].atIndex = atIndex
+    }
+
     /// Flip a failed pending pane back to `.attaching` (user hit Retry).
     /// The Router spawns a fresh attach Task after this. No-op if gone.
     func retryPendingPane(id pendingId: PendingPaneID, inTab id: TabID) {
@@ -549,8 +564,10 @@ final class TabListViewModel {
             return
         }
         if let atIndex = pending.atIndex {
-            let clamped = max(0, min(atIndex, tabs[index].simPanes.count))
-            tabs[index].simPanes.insert(pane, at: clamped)
+            tabs[index].simPanes.insert(
+                pane,
+                at: restoredIndex(atIndex, amongPendingIn: tabs[index])
+            )
         } else {
             tabs[index].simPanes.append(pane)
         }
@@ -561,7 +578,26 @@ final class TabListViewModel {
         )
     }
 
-    /// Sim sibling of `replacePendingWithSim` for a physical-device pane.
+    /// Where a pane recorded at original index `atIndex` belongs in the typed
+    /// array right now, given which of its siblings are still attaching.
+    ///
+    /// Clamping the recorded index to the array's length is only right when
+    /// one pane is coming back. Several at once arrive in whatever order their
+    /// attaches finish, and clamping then places an early-arriving later pane
+    /// too far left, which a later arrival can't correct: three panes restored
+    /// in reverse land as A, C, B. Counting instead makes the position
+    /// independent of arrival order, because every sibling originally ahead of
+    /// this one is either already in the array or still pending, and the
+    /// pending ones are exactly the slots not yet filled.
+    ///
+    /// With no other pending pane ahead of it, this is the recorded index,
+    /// clamped by `min`, which is the single-pane resurrect case.
+    private func restoredIndex(_ atIndex: Int, amongPendingIn tab: TabState) -> Int {
+        let stillComing = tab.pendingPanes.filter { ($0.atIndex ?? Int.max) < atIndex }.count
+        return max(0, min(atIndex - stillComing, tab.simPanes.count))
+    }
+
+    /// Physical-device counterpart to `replacePendingWithSim`.
     func replacePendingWithDevice(id pendingId: PendingPaneID, pane: DevicePaneState, inTab id: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }),
             tabs[index].pendingPanes.contains(where: { $0.id == pendingId })
@@ -582,11 +618,101 @@ final class TabListViewModel {
         )
     }
 
+    /// Swap a mounted sim pane for an attaching placeholder in the slot it
+    /// already occupies: the inverse of `replacePendingWithSim`, for a pane
+    /// whose daemon side is gone and has to be attached again.
+    ///
+    /// The `.sim(udid)` leaf becomes `.pending(id)` at the same tree position
+    /// via `PaneTreeOps.replace`, and the swap back lands there too, so the
+    /// pane keeps its place in the layout and its divider proportions (which
+    /// are keyed by tree position, not by slot) across the round trip. Passing
+    /// the pane's own stored `udid` matters: casing varies across the attach
+    /// paths, and the leaf key carries whichever spelling the pane was mounted
+    /// with. No-op if the pane is gone.
+    func replaceSimPaneWithPending(
+        udid: String,
+        pending: PendingPaneState,
+        inTab id: TabID
+    ) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }),
+            tabs[index].simPanes.contains(where: { $0.udid == udid })
+        else { return }
+        tabs[index].simPanes.removeAll { $0.udid == udid }
+        tabs[index].pendingPanes.append(pending)
+        tabs[index].paneTree = PaneTreeOps.replace(
+            slot: .sim(udid: udid),
+            with: .pending(pending.id),
+            in: tabs[index].paneTree
+        )
+    }
+
+    /// The position a mounted sim holds in the numbering recovery hands out,
+    /// or nil if it isn't in the tab.
+    ///
+    /// That numbering spans every sim the tab will hold once recovery settles,
+    /// so it is not the array's index: a placeholder still coming back holds a
+    /// position the array no longer has an entry for. `restoredIndex` maps a
+    /// position to an array index by discounting the placeholders ahead of it;
+    /// this walks the same sequence the other way, stepping over each position
+    /// a placeholder has claimed and handing the rest to the mounted panes in
+    /// array order.
+    private func restorePosition(ofSim udid: String, in tab: TabState) -> Int? {
+        let claimed = Set(tab.pendingPanes.compactMap { pending -> Int? in
+            guard case .sim = pending.target else { return nil }
+            return pending.atIndex
+        })
+        var position = 0
+        for pane in tab.simPanes {
+            while claimed.contains(position) { position += 1 }
+            if pane.udid == udid { return position }
+            position += 1
+        }
+        return nil
+    }
+
+    /// Close the gap a departing pane leaves in that numbering, so the
+    /// placeholders behind it don't keep positions that no longer exist.
+    ///
+    /// Without this a placeholder outlives the pane it was numbered against: a
+    /// pane closed while another is still coming back leaves the survivor
+    /// claiming a position past the end, and the next recovery rebuilds the
+    /// array around a claim that was never vacated. Only placeholders are
+    /// renumbered, because a mounted pane's position is implied by where it
+    /// sits in the array rather than stored.
+    private func releaseRestorePosition(_ position: Int, in tab: inout TabState) {
+        for index in tab.pendingPanes.indices {
+            guard case .sim = tab.pendingPanes[index].target,
+                let claim = tab.pendingPanes[index].atIndex,
+                claim > position else { continue }
+            tab.pendingPanes[index].atIndex = claim - 1
+        }
+    }
+
+    /// Physical-device counterpart to `replaceSimPaneWithPending`.
+    func replaceDevicePaneWithPending(
+        deviceId: String,
+        pending: PendingPaneState,
+        inTab id: TabID
+    ) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }),
+            tabs[index].devicePanes.contains(where: { $0.deviceId == deviceId })
+        else { return }
+        tabs[index].devicePanes.removeAll { $0.deviceId == deviceId }
+        tabs[index].pendingPanes.append(pending)
+        tabs[index].paneTree = PaneTreeOps.replace(
+            slot: .device(deviceId: deviceId),
+            with: .pending(pending.id),
+            in: tabs[index].paneTree
+        )
+    }
+
     /// Drop a pending pane and its leaf (user hit Cancel/Close on the
     /// placeholder, or the tab is tearing down). No-op if gone.
     func removePendingPane(id pendingId: PendingPaneID, fromTab id: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let claim = tabs[index].pendingPanes.first { $0.id == pendingId }?.atIndex
         tabs[index].pendingPanes.removeAll { $0.id == pendingId }
+        if let claim { releaseRestorePosition(claim, in: &tabs[index]) }
         tabs[index].paneTree = PaneTreeOps.remove(
             slot: .pending(pendingId),
             from: tabs[index].paneTree

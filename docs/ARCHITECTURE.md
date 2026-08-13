@@ -166,26 +166,53 @@ still-valid credential. There are two restart shapes:
   complete live session inventory via `session.restoreBatch` (below) and
   re-binds each terminal (`session.bindTerminal`). Sessions come back because
   a live, signature-validated GUI asserts them, not because a file did.
-  Only sessions and terminal provenance are restored. Existing mirror panes
-  are not reattached automatically; stale pane IDs must be recreated through
-  normal attach. Physical-device panes come back only through a fresh
-  attach (explicit or shim-contextual). Owned sims are never
-  auto-shut-down on a manifest's say-so.
+  Mirror panes come back too, but only after that: the re-attaches are
+  session-scoped, so they wait for the restore batch to verify. Once it does,
+  the GUI re-attaches every device-backed pane the workspace is still showing,
+  sims and physical devices alike. Each one re-attaches into the slot it
+  already occupies; a replacement daemon returns a fresh pane id and
+  admission, while one that survived the reconnect returns its existing
+  record. A target that is no
+  longer reachable, a sim shut down while the daemon was gone, becomes a
+  failed placeholder with Retry and Close rather than vanishing from the
+  layout. A placeholder already sitting failed is retried on the same pass,
+  which is what carries a recovery that a *second* restart interrupted: its
+  attaches died with the helper, and the panes they were rebuilding are no
+  longer mounted for a sweep to find. A pane is what carries a sim through
+  this, so a sim DeviceTerm
+  booted but is *not* currently showing in one has no re-assertion path:
+  ownership lived only in the previous daemon's memory, and after a restart
+  that sim is indistinguishable from a borrowed one. It keeps running, and a
+  cold start still offers it through the orphan prompt, but until then it is
+  absent from the owned roster, the status item, and the shut-down prompts.
+  Owned sims are never auto-shut-down on a manifest's say-so.
 - **GUI + daemon cold restart**: both gone. **No old session or pane is
   restored.** A fresh GUI creates new tabs through `session.create`. Old
   on-disk simulator files (the GUI's `owned-udids.json`) are an *untrusted
   recovery hint* that can only feed an explicit, human-confirmed orphan
   prompt: never automatic attribution, attach, or shutdown.
 
-Pane re-attach always flows through the normal `pane.create` path: bridge
+Pane re-attach always flows through the normal attach verbs and the shared
+pane-creation core they reach: bridge
 clients (display/HID/AX/Purple) can't survive a restart, so a fresh record
-with live clients is rebuilt rather than resurrected. The sim resurrect
-path (detach + re-attach in place, gated on the sim still being booted)
-covers a sim that
-shut down under a live daemon and later re-booted; after a daemon restart
-a stale sim pane fails and is re-created only by explicit action.
-Physical-device panes attach through explicit action or the shim's
-contextual auto-attach; they are never auto-resurrected.
+with live clients is rebuilt rather than resurrected. Post-restart recovery is
+that same path run again rather than a second mechanism: the pane becomes an
+ordinary attaching placeholder in the slot it already holds, and whatever
+mounted it the first time mounts it again, error rendering and Retry included.
+Re-attaching a record that did survive is harmless, because the daemon hands
+the owning session its existing pane back rather than minting a second, and
+the GUI adopts the admission that comes with it. That holds for a physical
+device only because its attach carries a resolution failure forward instead of
+throwing it: bringing up a tunnel has to happen before `createPane` can say
+whether a backend is needed, so an attach that fails there would otherwise
+fail a re-attach that never needed one. The failure is raised from `acquire`,
+which runs only on a genuine fresh create.
+
+The sim resurrect path (detach + re-attach in place, gated on the sim still
+being booted) covers a different case: a sim that shut down under a live daemon
+and later re-booted. Physical-device panes have no equivalent watch, so outside
+restart recovery they mount only through explicit action or the shim's
+contextual auto-attach.
 
 ### Crash recovery
 
@@ -211,10 +238,11 @@ stopped. On a successful (same-version)
 reconnect the GUI instead runs the session-restore transaction (durably
 retried until the daemon echoes the exact inventory) before its terminals
 rebind, so terminals recover. Restoration is not a full transport barrier, so
-ordinary calls may race it. After a daemon restart, live panes do not
-recover automatically: the pane record is gone and the subscription fails
-until the pane is recreated. A connection-only drop recovers by itself
-through each pane's resubscribe loop.
+ordinary calls may race it. Pane recovery is dispatched once per reconnect,
+after that restore verifies. A pane's own resubscribe loop can only rejoin a
+record that still exists, so it covers a connection that dropped and came back
+to the same daemon but not a daemon that was replaced; re-attaching is what
+covers the second case, and is idempotent in the first.
 
 ### IOSurface delivery
 
@@ -336,6 +364,43 @@ to hand it the record being closed. That fence covers the GUI's wait on the
 close. Past it the outcome is unknown, so every close the GUI issues also
 carries `expectedAttachment`: a close whose admission has been superseded is
 refused daemon-side, which is what makes a late one harmless.
+
+**Expiries are also the detection signal.** `DaemonClient` counts consecutive
+ones and reports the daemon unresponsive from the second in a row onward, with
+any reply (including a refusal, which is still a reply) resetting the count.
+One expiry is not evidence: a call can legitimately outlast its bound, and the
+bounds are not uniform, so two in a row is the heuristic rather than a proof of
+a wedge. The Router's attach deadline is not one of the two: it is raised in
+the Router and never reaches the client, so an attach that expires doesn't
+lengthen the streak, though its eventual reply still clears it. What is counted
+reports a condition rather than an edge, on every unanswered call past the
+threshold: a
+daemon that never answers again produces nothing else, so signalling only the
+first would give the GUI one chance to act on something still true minutes
+later. The count changes nothing about what the client does; it keeps issuing
+and bounding calls either way.
+
+The GUI decides when to act on the repeats, because only it knows what is
+already on screen. It raises a prompt offering **Restart Helper** or **Keep
+Waiting**, and carries a permanent **Restart Helper…** item in its app menu so
+recovery never depends on the prompt being up at the right moment. Answering
+the prompt either way quiets the detector for two minutes: long enough that a
+user who chose to wait isn't asked again while they wait, or that a replacement
+gets a chance to come up, and short enough that either of them being wrong
+doesn't strand the user. Restarting takes the
+pid from `xpc_connection_get_pid` on the live peer, never from an RPC reply (a
+daemon that has stopped answering sends none), and reads the peer and signals
+it in one actor turn, so the GUI can't swap its own connection underneath the
+lookup. The pid is still a pid: the process may exit between the two calls and
+the kernel may reuse its number, so `ESRCH` is treated as "already gone" rather
+than a failure, and a number reused in that same instant isn't something a
+pid-based kill can rule out. The prompt fences its kill to the connection it
+was raised against, so a connection superseded while the prompt sat on screen
+reports that rather than the current peer being signalled in its place. SIGKILL, because a daemon stopped
+with `kill -STOP` never dequeues SIGTERM. A kill the system refuses is
+surfaced; the GUI does not claim a restart that did not happen. No new wire
+method is involved: launchd demand-launches the replacement on the next send,
+and recovery rides `session.restoreBatch` and the existing attach verbs.
 
 **Two deliberate gaps.** The `app.commands` handshake is not bounded. The
 daemon keeps one subscriber and a new subscribe evicts the incumbent, XPC
@@ -918,8 +983,10 @@ optional `sessionId` is attribution, not a credential: it is honored only
 for the signature-validated GUI peer, which spans sessions, and ignored
 for UDS callers.
 
-Attached through explicit action or the shim's contextual auto-attach,
-never auto-resurrected. A device whose iOS is too old to
+Attached through explicit action or the shim's contextual auto-attach, plus
+restart recovery re-attaching a pane the workspace is still showing. No
+resurrect watch: there is no physical equivalent of the sim's
+detach-and-re-attach-in-place path. A device whose iOS is too old to
 mirror (the catalog vends no displayservice) returns `invalidParams` with
 a "needs a newer iOS" reason; an absent or locked device returns a clear
 `invalidParams`/`serverError`. `family` reads `unknown` for device panes;
@@ -2097,10 +2164,11 @@ Three properties hold for physical panes:
   CoreDevice **UDID** (from `devicectl list devices`), stable across
   reconnects and the same id `devicectl --device` accepts. The tunnel
   address is no longer the handle; it's resolved on demand at attach.
-  Physical attach is **explicit or shim-contextual, never
-  auto-resurrected**: the GUI picker, `deviceterm device attach`, or the
-  shim's `devicectl` interception mount it; nothing re-attaches on
-  restart.
+  Physical attach is **explicit or shim-contextual**: the GUI picker,
+  `deviceterm device attach`, or the shim's `devicectl` interception
+  mount it. There is no resurrect watch, so outside restart recovery,
+  which re-attaches a pane the workspace is still showing, nothing
+  mounts one by itself.
 - **Connection-auth, not cred params.** `physicalDevice.attach` carries
   no `cap`: the originating session comes from the connection's
   authenticated context, plus an optional `sessionId` attribution field

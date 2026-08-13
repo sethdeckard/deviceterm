@@ -530,4 +530,138 @@ struct TabListViewModelTests {
             extents: [1, 1]
         ))
     }
+
+    // MARK: - Restoring several panes at once
+
+    /// A tab holding three sim panes, each swapped for an attaching
+    /// placeholder that remembers where it came from. The state a helper
+    /// restart leaves behind while every pane re-attaches.
+    private func modelRecoveringThreeSims() -> TabListViewModel {
+        let model = TabListViewModel()
+        model.append(tab(1))
+        for (index, udid) in ["A", "B", "C"].enumerated() {
+            model.addSimPane(
+                SimPaneState(
+                    paneId: "old-\(udid)",
+                    udid: udid,
+                    displayName: "iPhone \(udid)",
+                    family: "phone"
+                ),
+                toTab: TabID(value: 1)
+            )
+            _ = index
+        }
+        for (index, udid) in ["A", "B", "C"].enumerated() {
+            model.replaceSimPaneWithPending(
+                udid: udid,
+                pending: PendingPaneState(
+                    id: PendingPaneID(value: index + 1),
+                    target: .sim(udid: udid),
+                    displayName: "iPhone \(udid)",
+                    family: "phone",
+                    atIndex: index,
+                    resolvesName: true
+                ),
+                inTab: TabID(value: 1)
+            )
+        }
+        return model
+    }
+
+    private func mountRecovered(_ model: TabListViewModel, _ udid: String, _ pendingValue: Int) {
+        model.replacePendingWithSim(
+            id: PendingPaneID(value: pendingValue),
+            pane: SimPaneState(
+                paneId: "new-\(udid)",
+                udid: udid,
+                displayName: "iPhone \(udid)",
+                family: "phone"
+            ),
+            inTab: TabID(value: 1)
+        )
+    }
+
+    @Test(arguments: [
+        [("C", 3), ("B", 2), ("A", 1)],
+        [("A", 1), ("C", 3), ("B", 2)],
+        [("B", 2), ("C", 3), ("A", 1)],
+        [("C", 3), ("A", 1), ("B", 2)],
+        [("B", 2), ("A", 1), ("C", 3)]
+    ])
+    func panesRestoredOutOfOrderStillLandInTheirOriginalOrder(
+        arrivals: [(String, Int)]
+    ) {
+        // Attaches finish in whatever order the daemon and the network of
+        // suspensions produce, so every permutation has to rebuild the same
+        // array. Clamping each recorded index to the current length does not:
+        // reverse arrival puts an early-arriving later pane too far left, and
+        // nothing afterwards moves it, which is how C, B, A became A, C, B.
+        let model = modelRecoveringThreeSims()
+        for (udid, pendingValue) in arrivals {
+            mountRecovered(model, udid, pendingValue)
+        }
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["A", "B", "C"])
+    }
+
+    @Test
+    func aLoneRestoredPaneStillLandsAtItsRecordedIndex() {
+        // The single-pane resurrect path: with no other pending pane ahead of
+        // it, the pane returns to the position it recorded.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        for udid in ["A", "B"] {
+            model.addSimPane(
+                SimPaneState(paneId: "p-\(udid)", udid: udid, displayName: udid, family: "phone"),
+                toTab: TabID(value: 1)
+            )
+        }
+        model.replaceSimPaneWithPending(
+            udid: "A",
+            pending: PendingPaneState(
+                id: PendingPaneID(value: 9),
+                target: .sim(udid: "A"),
+                displayName: "A",
+                family: "phone",
+                atIndex: 0
+            ),
+            inTab: TabID(value: 1)
+        )
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["B"])
+        mountRecovered(model, "A", 9)
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["A", "B"])
+    }
+
+    @Test
+    func closingAPaneRenumbersAPlaceholderBehindIt() {
+        // The numbering recovery hands out spans every sim the tab will hold,
+        // so closing one leaves a gap the placeholders behind it are still
+        // numbered against. Here B fails and keeps position 1 while A and C
+        // mount; closing A has to pull B down to 0, or the next recovery
+        // rebuilds the array around a position nothing vacated and lands
+        // [C, B] instead of [B, C].
+        let model = modelRecoveringThreeSims()
+        mountRecovered(model, "A", 1)
+        mountRecovered(model, "C", 3)
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["A", "C"])
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.map(\.atIndex) == [1])
+
+        model.removeSimPane(udid: "A", fromTab: TabID(value: 1))
+        #expect(
+            model.tab(id: TabID(value: 1))?.pendingPanes.map(\.atIndex) == [0],
+            "B held position 1 behind A, so A leaving moves it to 0"
+        )
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["C"])
+    }
+
+    @Test
+    func closingAPlaceholderRenumbersThePlaceholdersBehindIt() {
+        // Same gap, opened from the other side: a placeholder the user closes
+        // never mounts, so the positions behind it have to close up too.
+        let model = modelRecoveringThreeSims()
+        model.removePendingPane(id: PendingPaneID(value: 1), fromTab: TabID(value: 1))
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.map(\.atIndex) == [0, 1])
+        mountRecovered(model, "C", 3)
+        mountRecovered(model, "B", 2)
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["B", "C"])
+    }
 }

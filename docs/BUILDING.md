@@ -315,8 +315,8 @@ on a unique observe notification name) the next time the daemon launches.
 Captured personal-device frames stay in-process (IOSurface streamed to the
 GUI for rendering) and are **never persisted**. The daemon persists no
 session/ownership/pane state at all: a restart drops every pane and
-ownership record, and mirrors recreate through the normal attach path (device
-panes are explicit-attach-only and never auto-resurrected).
+ownership record, and mirrors recreate through the normal attach path, which
+the GUI runs itself for any pane still on screen when the daemon comes back.
 
 ## UI-test harness (dev/test only)
 

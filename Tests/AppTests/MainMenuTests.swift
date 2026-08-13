@@ -32,6 +32,33 @@ struct MainMenuTests {
         #expect(titles == ["", "Shell", "Edit", "View", "Device", "Window", "Help"])
     }
 
+    /// Restart Helper… is the recovery path that does not depend on the
+    /// prompt being on screen at the right moment, so it has to be a
+    /// permanent item and it has to reach the AppDelegate. Pinning the app
+    /// menu's shape is what stops it being quietly reshuffled away.
+    @Test
+    func appMenuOffersRestartHelperAndRoutesItToTheAppDelegate() throws {
+        let app = try #require(
+            makeMainMenu().items.first?.submenu,
+            "application menu missing"
+        )
+        let titles = app.items.map(\.title)
+        #expect(titles.contains("Restart Helper…"))
+        let restart = try #require(
+            app.items.first { $0.title == "Restart Helper…" },
+            "Restart Helper… missing"
+        )
+        #expect(restart.action == #selector(AppDelegate.restartHelper(_:)))
+        // Above Settings…, below Check for Updates…: both of those are
+        // app-scoped too, and grouping the helper with them keeps it out of
+        // the window- and pane-scoped menus, where it doesn't belong.
+        let updates = try #require(titles.firstIndex(of: "Check for Updates…"))
+        let settings = try #require(titles.firstIndex(of: "Settings…"))
+        let index = try #require(titles.firstIndex(of: "Restart Helper…"))
+        #expect(updates < index)
+        #expect(index < settings)
+    }
+
     @Test
     func shellMenuHasExpectedItemsInOrder() throws {
         let shell = try #require(shellMenu(), "Shell submenu missing")

@@ -556,8 +556,10 @@ These operations do not have physical-device implementations:
 Closing the pane ends the mirror. It does not shut down, reboot, erase, or
 claim ownership of the physical device.
 
-Physical mirror panes do not survive a daemon restart. Attach the device again
-after the daemon reconnects.
+A mirror pane does not survive a daemon restart, but you do not have to
+re-attach it. Once the daemon reconnects, DeviceTerm mirrors the device again
+in the same pane. A device that is no longer reachable leaves that pane showing
+the attachment error with **Retry** and **Close**.
 
 DeviceTerm does not claim one blanket iOS or iPadOS compatibility range.
 Support depends on the services advertised by the connected device and is
@@ -889,6 +891,33 @@ Use the JSON form in a script:
 deviceterm doctor --json
 ```
 
+### Restart the Background Helper
+
+DeviceTerm's Simulator and device work runs in a background daemon, which its
+menus and alerts call the helper. When it stops answering, tabs, windows, and
+device panes can all stop responding at once.
+
+DeviceTerm notices on its own and offers **Restart Helper**. Choose **Keep
+Waiting** to leave it alone; after two minutes, another unanswered request can
+bring the offer back.
+
+You can also restart it deliberately with **DeviceTerm ▸ Restart Helper…**.
+
+A restart leaves your Simulators booted and your terminal panes untouched,
+including their scrollback and anything running in them. Device panes
+re-attach themselves once the helper is back. A pane that cannot re-attach,
+because its Simulator shut down or its physical device disconnected while the
+helper was gone, shows the error in its own slot with **Retry** and
+**Close**.
+
+A pane is what brings a Simulator back, so a Simulator you detached earlier
+keeps running but the fresh helper no longer knows DeviceTerm owned it. It
+drops out of the status item and out of the tab-close and quit prompts.
+Reattach it by UDID, or leave it and DeviceTerm offers it again at the next
+cold start.
+
+DeviceTerm reports a restart it could not perform rather than claiming one.
+
 | Symptom | Likely Cause | Next Action |
 |---|---|---|
 | `no device pane in this session` | Your session owns no attached device pane, or the command is running outside the owning terminal pane. | Boot a Simulator from this terminal, mirror a physical device, or attach one explicitly. |
@@ -899,6 +928,7 @@ deviceterm doctor --json
 | No physical devices appear in the picker | The device is disconnected, locked, untrusted, or was connected after the picker opened. | Connect and unlock it, trust the Mac, then choose **Refresh**. |
 | A physical device appears but attachment fails | Enumeration succeeded, but a required tunnel, display, or input service did not. | Read the attachment error, unlock and trust the device, then retry. A device with unsupported services cannot be mirrored by this build. |
 | The GUI and CLI disagree after an upgrade | The live daemon wire version differs from the bundled RPC wire version, or the version probe failed. | Run `deviceterm version --json` and compare `daemon` with `rpcWire`; see [the version report](INTEGRATION.md#version-report). Quit and reopen DeviceTerm. |
+| Tabs, windows, and device panes all stop responding | The background helper stopped answering. | Wait for DeviceTerm's restart prompt, or choose **DeviceTerm ▸ Restart Helper…**; see [Restart the Background Helper](#restart-the-background-helper). |
 | `ax tree` is empty on watchOS | The watch accessibility bridge returned no children. | Use `ax sweep` to sample the display or `ax point` for a known coordinate. |
 | A Digital Crown command does not move a tight SwiftUI binding | Positively paced events are below the recognizer's transition in that environment. | Remove `--duration` first. For fine placement, try a single value from 1 through 8. |
 | A Simulator pane shows a shutdown overlay | The Simulator shut down outside DeviceTerm while its pane remained open. | Choose **Reboot**, boot the same UDID from the owning tab, or close the pane. |

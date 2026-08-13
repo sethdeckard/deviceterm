@@ -170,9 +170,10 @@ enum Route: Sendable {
     /// tab's primary-terminal session (the GUI threads the target
     /// session explicitly because its one shared connection can't pick
     /// the tab via connection-auth). `displayName == nil` falls back to
-    /// the attach response's `name` / `deviceType`. Unlike sims, there
-    /// is no `atIndex` / `anchor` resurrect machinery, since device panes are
-    /// never persisted or auto-resurrected.
+    /// the attach response's `name` / `deviceType`. Unlike sims, there is no
+    /// `atIndex` / `anchor` placement metadata: helper-restart recovery keeps
+    /// a device pane's slot by replacing its leaf in place, so there is no
+    /// original position to record.
     case attachDevicePane(
         tab: TabID,
         deviceId: String,
@@ -227,4 +228,18 @@ enum Route: Sendable {
     /// tab (no split to flip). The recursive layout picks up the change
     /// on the next reconcile.
     case flipSplitAxis(tab: TabID, slot: PaneSlot)
+    /// Re-attach every mounted sim and device pane onto a freshly-connected
+    /// helper.
+    ///
+    /// Pane records live in the helper's memory and nothing persists them, so
+    /// a reconnect that reached a replacement holds none of the ones the
+    /// workspace is showing. It may instead have reached the same helper,
+    /// which can drop a connection without exiting, leaving its records
+    /// intact. Re-attaching covers both, because a surviving record is handed
+    /// back to its owning session rather than duplicated. Sessions return
+    /// through the restore batch and terminal anchors are rebound separately;
+    /// this is what brings the mirrors back alongside them. Dispatched once per reconnect, after
+    /// that restore is verified, since the attaches are session-scoped and
+    /// would be refused before it.
+    case recoverPanes
 }
