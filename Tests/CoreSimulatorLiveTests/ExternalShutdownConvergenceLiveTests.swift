@@ -25,24 +25,6 @@ private let coreSimulatorAvailable: Bool = {
     CoreSimulatorLoader.probe().ok
 }()
 
-/// Poll `handle` until it reports `target` or the timeout expires.
-/// Returns whether it got there. Mirrors the wait in
-/// `SimDeviceNotifierLiveTests`, which restores the shared sim the same
-/// way after driving a transition through it.
-@discardableResult
-private func waitForState(
-    _ handle: SimDeviceHandle,
-    target: CSBSimState,
-    timeout: TimeInterval = 60
-) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-        if handle.state == target { return true }
-        Thread.sleep(forTimeInterval: 0.25)
-    }
-    return handle.state == target
-}
-
 /// Poll `coordinator` until the pane reports `.shutdown` or the timeout
 /// expires. Returns the last state observed so a failure can say what
 /// the pane was actually stuck on.
@@ -93,18 +75,23 @@ func externalShutdownDrivesAnAttachedPaneToShutdown() async throws {
     // afterwards: any boot-dependent test that runs later needs it.
     try handle.shutdown()
     defer {
-        // Best-effort restore. Failures are ignored here and may cause
-        // later boot-dependent tests to report "no booted sim"; test order
-        // isn't guaranteed, so a failure can also go unnoticed. `boot()`
-        // returns once CoreSimulator accepts the intent, so wait for the
-        // state to land or the next test races it.
-        // Weaker than the track's `simctl bootstatus` clean-slate boot,
-        // which also waits for the system app: a device can read `.booted`
-        // while SpringBoard is still starting, so a following test driving
-        // HID or AX may see a sluggish device for a moment.
-        if (try? handle.boot()) != nil {
-            waitForState(handle, target: .booted)
-        }
+        // Restore before the next serialized test. `restoreSharedSim`
+        // uses the track's `bootstatus` gate rather than stopping at
+        // `.booted`, because a device in between fails the next HID test on
+        // an unconnected mach port. Subsystem-specific readiness checks
+        // still apply on top of it.
+        //
+        // Failing here fails *this* test, rather than leaving it green on a
+        // device it broke. Later tests can't be relied on to report it: a
+        // half-booted device still satisfies `singleBootedDevice()`, and
+        // this one may run last.
+        #expect(
+            restoreSharedSim(handle),
+            """
+            failed to restore the shared sim to a usable state after \
+            shutting it down.
+            """
+        )
     }
 
     let observed = await waitForPaneShutdown(

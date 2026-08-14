@@ -78,23 +78,6 @@ private func waitForMatchingEvent(
     return (observed.first(where: predicate), observed)
 }
 
-/// Wait for the device to reach a target state, polling
-/// `handle.state`. Used after the destructive shutdown test to
-/// restore the live track's "single booted sim" invariant before
-/// any later test in the run reads `singleBootedDevice()`.
-private func waitForState(
-    _ handle: SimDeviceHandle,
-    target: CSBSimState,
-    timeoutSeconds: Double = 60
-) -> Bool {
-    let deadline = Date(timeIntervalSinceNow: timeoutSeconds)
-    while Date() < deadline {
-        if handle.state == target { return true }
-        Thread.sleep(forTimeInterval: 0.5)
-    }
-    return false
-}
-
 @Test
 func shutdownTransitionPublishesNotificationForBootedDevice() throws {
     try #require(
@@ -123,16 +106,18 @@ func shutdownTransitionPublishesNotificationForBootedDevice() throws {
     let handle = try SimDeviceHandle.handle(forUDID: booted.udid)
     try handle.shutdown()
     defer {
-        // Best-effort restore. If reboot or wait fails, the
-        // remaining live tests will fail with a clear
-        // singleBootedDevice() error, surfaced rather than
-        // silenced, which matches the "stop, don't silently
-        // settle" rule for the live track. `try?` keeps the
-        // catch implicit because `return` isn't allowed from a
-        // `defer`.
-        if (try? handle.boot()) != nil {
-            _ = waitForState(handle, target: .booted)
-        }
+        // Restore before the next serialized test, and fail *this* test
+        // if restoration fails rather than leaving it green on a device it
+        // broke. Later tests can't be relied on to report it: a half-booted
+        // device still satisfies `singleBootedDevice()`, and this one may
+        // run last.
+        #expect(
+            restoreSharedSim(handle),
+            """
+            failed to restore the shared sim to a usable state after \
+            shutting it down.
+            """
+        )
     }
 
     let (matching, observed) = waitForMatchingEvent(inbox) { event in
