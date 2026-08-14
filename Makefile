@@ -28,8 +28,9 @@ help:
 	@echo ""
 	@echo "Common:"
 	@echo "  make build       Build in debug"
-	@echo "  make run         Build + stop old app/daemon + open DeviceTerm.app"
-	@echo "  make kill-daemon Stop the running deviceterm app + daemon"
+	@echo "  make run         Build + relaunch this checkout's DeviceTerm.app"
+	@echo "                   (refuses if another checkout's instance runs)"
+	@echo "  make kill-daemon Stop this checkout's app + daemon"
 	@echo "  make test        Unit tests"
 	@echo "  make lint        SwiftLint --strict"
 	@echo "  make verify      Single-command gate (body grows as code lands)"
@@ -75,41 +76,30 @@ bundle: build
 	    echo "make bundle: Sources/App/ does not exist — skipping"; \
 	fi
 
-# Stop a running deviceterm app + its embedded daemon. The daemon is
-# demand-launched by launchd and a killed instance keeps the *old* inode,
+# Stop THIS checkout's running deviceterm app + embedded daemon. The daemon
+# is demand-launched by launchd and a killed instance keeps the *old* inode,
 # so without this a rebuilt `make run` can keep serving stale code (e.g.
-# "method not found" for a freshly-added RPC). Scoped to deviceterm's own
-# app/daemon bundle paths so unrelated processes are left alone.
+# "method not found" for a freshly-added RPC). The guard classifies each
+# process by its executable's physical path and signals only pids running
+# from this checkout's .build — another worktree's instance and an
+# installed /Applications/DeviceTerm.app are never touched.
 kill-daemon:
-	@osascript -e 'tell application "deviceterm" to quit' >/dev/null 2>&1 || true
-	@pkill -f '[D]eviceTerm.app/Contents/MacOS/deviceterm' >/dev/null 2>&1 || true
-	@pkill -f '[L]oginItems/deviceterm-daemon.app/Contents/MacOS/deviceterm-daemon' >/dev/null 2>&1 || true
-	@sleep 1
-	@# The daemon handles SIGTERM cooperatively so it can log the exit and
-	@# unlink its socket, which makes `pkill` a request rather than a
-	@# guarantee. Wait briefly, then send SIGKILL if it is still running, so a
-	@# wedged main queue can't leave a stale daemon behind for `run` to use.
-	@#
-	@# The bracketed first letter matches the daemon's real path but not
-	@# recipe command lines, including concurrent invocations of this target:
-	@# `pgrep -f` matches any process whose arguments contain the pattern, and
-	@# these patterns appear verbatim in the recipe's own argv.
-	@for _ in 1 2 3 4; do \
-	    pgrep -f '[L]oginItems/deviceterm-daemon.app/Contents/MacOS/deviceterm-daemon' >/dev/null 2>&1 || break; \
-	    sleep 0.5; \
-	done
-	@if pgrep -f '[L]oginItems/deviceterm-daemon.app/Contents/MacOS/deviceterm-daemon' >/dev/null 2>&1; then \
-	    echo "daemon still running after SIGTERM; escalating to SIGKILL"; \
-	    pkill -9 -f '[L]oginItems/deviceterm-daemon.app/Contents/MacOS/deviceterm-daemon' >/dev/null 2>&1 || true; \
+	@if [ -x scripts/instance-guard.sh ]; then \
+	    ./scripts/instance-guard.sh kill-own; \
+	else \
+	    echo "make kill-daemon: scripts/instance-guard.sh absent — skipping"; \
 	fi
-	@echo "stopped deviceterm app + daemon (if running)"
 
-# `kill-daemon` runs after `bundle` (so the binary is already rebuilt) and
-# before `open` (so the next demand-launch execs the fresh daemon).
-run: bundle kill-daemon
+# The guard runs after `bundle` (so the binary is already rebuilt) and
+# before `open` (so the next demand-launch execs the fresh daemon). A
+# foreign instance — another worktree's build or /Applications — makes the
+# guard refuse with a BUSY block instead of killing it: quit that instance
+# from its own checkout; there is no force flag.
+run: bundle
 	@if [ -d Sources/App ]; then \
 	    test -x .build/debug/DeviceTerm.app/Contents/MacOS/deviceterm \
 	      || { echo "make run: bundle missing or incomplete" >&2; exit 1; }; \
+	    ./scripts/instance-guard.sh ensure-clear; \
 	    open .build/debug/DeviceTerm.app; \
 	else \
 	    echo "make run: Sources/App/ does not exist — skipping"; \

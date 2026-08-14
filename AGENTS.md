@@ -162,8 +162,8 @@ filesystem is the truth.
 |---|---|
 | `make build` | `swift build` (debug) |
 | `make bundle` | build the debug `DeviceTerm.app` bundle |
-| `make run` | build, stop stale app/daemon processes, and open `DeviceTerm.app` |
-| `make kill-daemon` | stop the running app and embedded daemon |
+| `make run` | build + relaunch this checkout's `DeviceTerm.app`; refuses (BUSY) if another checkout's instance is running |
+| `make kill-daemon` | stop this checkout's app and embedded daemon; never touches another worktree's |
 | `make daemon` | build the `deviceterm-daemon` target |
 | `make cli` | build `deviceterm-cli` |
 | `make shim` | build `deviceterm-shim` |
