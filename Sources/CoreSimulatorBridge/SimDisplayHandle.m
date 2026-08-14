@@ -22,7 +22,80 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
     CSBDisplayHandleErrorNoIOPorts        = 23,
     CSBDisplayHandleErrorNoRenderable     = 24,
     CSBDisplayHandleErrorCallbackRegister = 25,
+    CSBDisplayHandleErrorNoOrientation    = 26,
+    CSBDisplayHandleErrorNotStarted       = 27,
 };
+
+// The display proxy's orientation surface. Declared here rather than in
+// `PrivateHeaders/SimulatorKit/` because those are a wholesale snapshot of
+// idb's vendored headers (see `PrivateHeaders/UPSTREAM.md`, which says not
+// to hand-patch them); `SimScreen` is not in that snapshot, so a file added
+// there would be silently dropped by the next refresh.
+//
+// Found by runtime introspection on macOS 26.5.2 / Xcode 26.6 against a
+// booted iOS 26.5 device. The live `com.apple.framebuffer.display`
+// descriptor conforms to `SimScreen` alongside the
+// `SimDisplayIOSurfaceRenderable` the picker already selects on, so this is
+// the same object, not a second lookup.
+//
+// `SimDisplayRotationAngleDelegate` / `didChangeDisplayAngle:` looks like
+// the natural source and is **not** usable: it is declared in SimulatorKit
+// but no port or descriptor vends it, and no proxy answers `displayAngle`.
+@protocol CSBSimScreenProperties <NSObject>
+@property (nonatomic, readonly) unsigned int uiOrientation;
+@end
+
+@protocol CSBSimScreen <NSObject>
+@property (nonatomic, readonly) id screenProperties;
+- (void)registerScreenCallbacksWithUUID:(NSUUID *)uuid
+                          callbackQueue:(dispatch_queue_t)queue
+                          frameCallback:(void (^)(void))frameCallback
+                surfacesChangedCallback:(void (^)(void))surfacesCallback
+              propertiesChangedCallback:(void (^)(void))propertiesCallback;
+- (void)unregisterScreenCallbacksWithUUID:(NSUUID *)uuid;
+@end
+
+/// Map the display proxy's `uiOrientation` into the bridge's vocabulary.
+///
+/// `uiOrientation` is a `UIInterfaceOrientation`; `CSBDisplayOrientation`
+/// (like `CSBDeviceOrientation`) is a `UIDeviceOrientation`. **The
+/// landscape pair is swapped between the two**, because rotating the
+/// device one way turns the interface the other way to compensate.
+///
+/// Pinned live, by rotating a device running an app that follows it:
+///
+///     device landscapeLeft  -> uiOrientation 4
+///     device landscapeRight -> uiOrientation 3
+///     device portrait       -> uiOrientation 1
+///
+/// The direction was confirmed against what the renderer already draws
+/// correctly, not derived from the UIKit convention, since this swap is
+/// exactly where a hand-derivation inverts without anything failing loudly.
+static CSBDisplayOrientation CSBDisplayOrientationFromUIOrientation(unsigned int uiOrientation) {
+    switch (uiOrientation) {
+        case 1: return CSBDisplayOrientationPortrait;
+        case 2: return CSBDisplayOrientationPortraitUpsideDown;
+        case 3: return CSBDisplayOrientationLandscapeRight;
+        case 4: return CSBDisplayOrientationLandscapeLeft;
+        default: return CSBDisplayOrientationUnknown;
+    }
+}
+
+/// Read the orientation a screen proxy is presenting.
+///
+/// Takes the proxy as an argument rather than reaching through the handle,
+/// so the change callback can hold the one it registered against instead of
+/// re-reading `self.renderable` on a queue that races `stop` clearing it.
+static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
+    if (!screen) return CSBDisplayOrientationUnknown;
+    @try {
+        id<CSBSimScreenProperties> props = screen.screenProperties;
+        if (!props) return CSBDisplayOrientationUnknown;
+        return CSBDisplayOrientationFromUIOrientation(props.uiOrientation);
+    } @catch (NSException *e) {
+        return CSBDisplayOrientationUnknown;
+    }
+}
 
 @interface SimDisplayHandle ()
 @property (nonatomic, copy, readwrite) NSString *udid;
@@ -31,6 +104,15 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
 @property (nonatomic, strong, nullable) id<SimDisplayIOSurfaceRenderable> renderable;
 @property (nonatomic, copy, nullable) CSBDisplaySurfaceCallback callback;
 @property (nonatomic, assign) BOOL running;
+@property (nonatomic, strong, nullable) NSUUID *screenCallbackUUID;
+// Atomic, unlike the rest of these. The callback queue reads it while
+// `stopOrientation` clears it from the coordinator's thread, and a
+// `nonatomic` getter hands back the block without retaining it, so the two
+// can overlap and the block be released between the load and the call. The
+// atomic getter retains and autoreleases, which keeps it alive for the
+// duration of the call. Delivery *after* `stopOrientation` returns is fine
+// and expected; the coordinator's observer epoch discards the value.
+@property (atomic, copy, nullable) CSBDisplayOrientationCallback orientationCallback;
 @end
 
 @implementation SimDisplayHandle
@@ -323,8 +405,138 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
     return CGSizeZero;
 }
 
+#pragma mark Orientation
+
+/// The live display proxy as a `SimScreen`, or nil when it doesn't vend
+/// one. `respondsToSelector:` is the test rather than `conformsToProtocol:`
+/// because the ROCK proxies answer for selectors they forward even when the
+/// protocol isn't in their impersonated list.
+- (nullable id<CSBSimScreen>)_screen {
+    id renderable = self.renderable;
+    if (!renderable) return nil;
+    @try {
+        if ([renderable respondsToSelector:@selector(screenProperties)]) {
+            return (id<CSBSimScreen>)renderable;
+        }
+    } @catch (NSException *e) {}
+    return nil;
+}
+
+/// Reads `renderable`, so it is for the owning (coordinator) thread only,
+/// the same one that calls `start` / `stop`. The change callback must not
+/// use it; it holds its own proxy reference instead.
+- (CSBDisplayOrientation)currentDisplayOrientation {
+    return CSBOrientationFromScreen([self _screen]);
+}
+
+- (BOOL)startOrientationWithCallback:(CSBDisplayOrientationCallback)callback
+                               queue:(dispatch_queue_t)queue
+                               error:(NSError **)error {
+    if (!self.running) {
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain
+                                         code:CSBDisplayHandleErrorNotStarted
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"start(callback:) must succeed before observing orientation",
+            }];
+        }
+        return NO;
+    }
+    id<CSBSimScreen> screen = [self _screen];
+    if (!screen) {
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain
+                                         code:CSBDisplayHandleErrorNoOrientation
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Display proxy vends no orientation source",
+            }];
+        }
+        return NO;
+    }
+    if (self.screenCallbackUUID) {
+        // Replace the callback in place, as `start` does for surfaces.
+        self.orientationCallback = callback;
+        return YES;
+    }
+
+    self.orientationCallback = callback;
+    NSUUID *uuid = [NSUUID UUID];
+
+    __weak SimDisplayHandle *weakSelf = self;
+    // Re-read the properties rather than trusting a block argument: the
+    // callback's parameter list isn't declared anywhere we can verify, and
+    // re-reading makes the observation level-triggered, so a coalesced pair
+    // of changes still settles on the right value.
+    //
+    // Read them through the captured `screen`, never `self.renderable`.
+    // Deliveries after `stopOrientation` are expected, and `stop` clears
+    // `renderable` from the owning thread, so reaching back through the
+    // handle would be a use-after-free waiting for the right interleaving.
+    // The block owns a strong reference for exactly as long as it is
+    // registered, which is what makes the access safe.
+    //
+    // No dedupe here on purpose. `propertiesChanged` covers every screen
+    // property, so most deliveries aren't rotations and the consumer sees
+    // repeats. Keeping a baseline in the bridge would have to be seeded, and
+    // any seed races the callbacks it is meant to be compared against: seed
+    // late and the first real rotation reads as "no change" and is swallowed
+    // for good. The consumer already holds the authoritative previous value,
+    // so it dedupes without a race.
+    void (^propertiesChanged)(void) = ^{
+        CSBDisplayOrientation now = CSBOrientationFromScreen(screen);
+        // Unknown means the source went away or reported something with no
+        // pane meaning; the consumer's last good value stands rather than
+        // the pane flipping to a guess.
+        if (now == CSBDisplayOrientationUnknown) return;
+        SimDisplayHandle *strong = weakSelf;
+        if (!strong) return;
+        CSBDisplayOrientationCallback cb = strong.orientationCallback;
+        if (cb) cb(now);
+    };
+
+    // All three blocks must be non-nil. Passing nil for the ones we don't
+    // want **kills the simulator**: CoreSimulator invokes them
+    // unconditionally, so the first frame after registration dereferences
+    // NULL and takes the device down with it. See the display-orientation
+    // section of `as-tested.md`.
+    @try {
+        [screen registerScreenCallbacksWithUUID:uuid
+                                  callbackQueue:queue
+                                  frameCallback:^{}
+                        surfacesChangedCallback:^{}
+                      propertiesChangedCallback:propertiesChanged];
+    } @catch (NSException *e) {
+        self.orientationCallback = nil;
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain
+                                         code:CSBDisplayHandleErrorNoOrientation
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: [NSString stringWithFormat:
+                    @"Registering screen callbacks failed: %@", e.reason ?: @"(no reason)"],
+            }];
+        }
+        return NO;
+    }
+    self.screenCallbackUUID = uuid;
+    return YES;
+}
+
+- (void)stopOrientation {
+    self.orientationCallback = nil;
+    NSUUID *uuid = self.screenCallbackUUID;
+    if (!uuid) return;
+    self.screenCallbackUUID = nil;
+    id<CSBSimScreen> screen = [self _screen];
+    @try {
+        [screen unregisterScreenCallbacksWithUUID:uuid];
+    } @catch (NSException *e) {}
+}
+
+#pragma mark Stop
+
 - (void)stop {
     self.callback = nil;
+    [self stopOrientation];
     if (!self.running) return;
     self.running = NO;
     id<SimDisplayIOSurfaceRenderable> renderable = self.renderable;

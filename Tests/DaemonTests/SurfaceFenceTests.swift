@@ -61,6 +61,11 @@ private final class DrainParkingBackend: DeviceBackend, @unchecked Sendable {
     ) throws {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
     func tapDown(at point: CGPoint, generation: UInt64) throws {}
     func tapUp(at point: CGPoint, generation: UInt64) throws {}
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}

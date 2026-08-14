@@ -172,9 +172,16 @@ public enum PaneEvent: Sendable {
         UUID,
         state: PaneLifecycle
         )
-    /// The device rotated. Broadcast on every successful `rotate` so
-    /// subscribers (the GUI) re-render and re-map input to the new
-    /// orientation, regardless of which client triggered the rotation.
+    /// The pane's presentation orientation changed, so subscribers
+    /// re-render, re-fit the bezel, and re-map input against it.
+    ///
+    /// A presentation event, not a command receipt. Where it comes from
+    /// depends on the pane. One observing its display emits for any cause,
+    /// including a rotation from outside deviceterm, and stays silent when
+    /// an orientation-locked app answers a rotate without moving the
+    /// framebuffer. One with no display source emits from a performed
+    /// rotate instead, so external rotations are invisible to it and a
+    /// locked app turns it when it shouldn't.
     case orientationChanged(
         paneId:
         UUID,
@@ -519,25 +526,81 @@ public actor PaneCoordinator {
         /// half-transferred state). Resumed by `clearTransferring`.
         var transferCompletionWaiters: [CheckedContinuation<Void, Never>] = []
         /// Tail of this pane's rotation chain. Rotations serialize
-        /// end-to-end through it so their `orientationChanged` broadcasts
-        /// publish in request order: the backend completes rotations
-        /// serially, but each `rotate` awaits its completion on an
-        /// independent task, and independent continuations aren't
+        /// end-to-end through it so they reach the backend, and commit
+        /// their control base, in request order: the backend completes
+        /// rotations serially, but each `rotate` awaits its completion on
+        /// an independent task, and independent continuations aren't
         /// guaranteed to resume in order. Each `rotate` awaits the prior
         /// tail before running and signals its own when done (success,
-        /// skip, or throw), so B never broadcasts before A.
+        /// skip, or throw), so B never reaches the backend or commits its
+        /// base before A finishes.
         var rotationTail: SerialChainLink?
         /// The orientation **deviceterm last successfully commanded** on
         /// this pane's device, which a relative rotate advances from. It
         /// starts at `.portrait` because that is where an iOS device
-        /// boots, not because anything read the device: no backend vends
-        /// an orientation getter, so the daemon can only track its own
-        /// confirmed writes. An app that forces its own orientation, or a
-        /// rotation from any other tool, leaves this stale and nothing
-        /// detects that. Written only after the backend reports it
-        /// performed the rotation, so a fenced or failed one doesn't
-        /// compound into the next relative request.
+        /// boots, not because anything read the device.
+        ///
+        /// Written only after the backend reports it performed the
+        /// rotation, so a fenced or failed one doesn't compound into the
+        /// next relative request. **A backend-reported performed command is
+        /// its only writer**, and `displayOrientation` deliberately does not
+        /// correct it: display state is the foreground app's interface
+        /// orientation, so a portrait device running a landscape-locked
+        /// app would drive this to landscape and mis-target the next
+        /// relative rotate.
+        ///
+        /// Nothing observes it because for a simulator there is nothing to
+        /// observe. A simulator has no physical attitude, no sensor, no
+        /// ground truth; its device orientation is just whatever rotate
+        /// command was last sent, and nothing in CoreSimulator accumulates
+        /// that. So a rotation from any other tool leaves this stale and
+        /// nothing detects it. A later absolute rotate names its target
+        /// directly, so it doesn't depend on this base and records a fresh
+        /// one.
         var controlOrientation: Orientation = .portrait
+        /// The pane's **presentation** orientation, which is what the
+        /// render, the bezel, and the hit-test mapping follow. It describes
+        /// the framebuffer where the backend has a display source, and the
+        /// last performed command where it hasn't.
+        ///
+        /// Written by observation where the backend has a display source,
+        /// and by a performed rotate where it hasn't. Under observation it
+        /// diverges from `controlOrientation` permanently and legitimately:
+        /// an orientation-locked app keeps a portrait framebuffer while the
+        /// device is turned to landscape. Under the fallback it can only
+        /// mirror the command, so an external rotation never reaches it and
+        /// a locked app moves it when the framebuffer didn't.
+        ///
+        /// Starts at `.portrait` for the same reason `controlOrientation`
+        /// does, and is corrected by the first seed or observation.
+        var displayOrientation: Orientation = .portrait
+        /// Whether display-orientation observation is running for this
+        /// pane, so teardown only unregisters what was registered.
+        var observingDisplayOrientation = false
+        /// Bumped when display observation is torn down, and by nothing
+        /// else. The observer's callback captures the value it started
+        /// with, so a delivery already in flight past teardown is dropped.
+        ///
+        /// Deliberately **not** `epoch`. That one also advances on owner
+        /// revocation and on both halves of an ownership transfer, none of
+        /// which stop the observer or change what the display is doing.
+        /// Fencing on it would leave a live observer whose every callback
+        /// is rejected, and since the command fallback stands down while
+        /// observation is running, the pane's orientation would freeze for
+        /// good the first time it changed hands.
+        var displayObserverEpoch: UInt64 = 0
+        /// Ordered delivery for observed display orientations. The bridge
+        /// callback only yields; the drain task funnels them onto the actor
+        /// in receive order, the same shape the surface pump uses.
+        ///
+        /// An unstructured `Task` per callback would not do: independent
+        /// tasks have no ordering guarantee, so two quick rotations could
+        /// land reversed and leave the pane on the older value for good.
+        /// Latest-only buffering is right here because the value is
+        /// level-triggered: a skipped intermediate costs nothing, and only
+        /// the newest orientation is worth drawing.
+        var orientationContinuation: AsyncStream<Orientation>.Continuation?
+        var orientationPump: Task<Void, Never>?
         /// Tail of this pane's location chain, serializing location
         /// commands end-to-end for the same reason rotations are chained:
         /// each one suspends on a backend call, and independent
@@ -658,6 +721,20 @@ public actor PaneCoordinator {
         /// blank the pane.
         func displayPixelDimensions() -> (Int?, Int?) {
             backend?.pixelDimensions() ?? (nil, nil)
+        }
+
+        /// Stop display-orientation observation and finish its pump.
+        /// Idempotent.
+        func teardownOrientationPump(backend: DeviceBackend?) {
+            if observingDisplayOrientation {
+                backend?.stopDisplayOrientation()
+                observingDisplayOrientation = false
+            }
+            displayObserverEpoch &+= 1
+            orientationContinuation?.finish()
+            orientationContinuation = nil
+            orientationPump?.cancel()
+            orientationPump = nil
         }
 
         /// Finish the ordered surface pump and stop its drain task.
@@ -1091,6 +1168,8 @@ public actor PaneCoordinator {
             )
         }
 
+        startDisplayOrientationObserver(record: record, paneId: paneId, backend: acquired.backend)
+
         // The backend may fire the callback synchronously inside
         // `startFrames` when a surface is already bound. By the time we
         // get here, `record.currentSurface` may already reflect that.
@@ -1318,14 +1397,16 @@ public actor PaneCoordinator {
             await subscriptionRegistry?.activate(subscriptionId: context.subscriptionToken)
         }
         continuation.yield(.stateChanged(paneId: paneId, state: record.state))
-        // Replay the tracked orientation too, before any frame: a subscriber
-        // that wasn't listening when the rotation happened (a reconnect gap, a
-        // GUI that relaunched onto a pane the daemon kept) would otherwise
-        // never learn of it, and would render and hit-test a landscape device
-        // as portrait until the next rotation. Before the first rotation this
-        // is the `.portrait` assumption rather than an observation.
+        // Replay the pane's presentation orientation too, before any frame:
+        // a subscriber that wasn't listening when it last changed (a
+        // reconnect gap, a GUI that relaunched onto a pane the daemon kept)
+        // would otherwise never learn of it, and would render and hit-test a
+        // landscape pane as portrait until the next change. It matches the
+        // framebuffer where the backend is observed, and reflects the last
+        // performed command where it isn't. Before the first seed,
+        // observation, or command it is the `.portrait` assumption.
         continuation.yield(
-            .orientationChanged(paneId: paneId, orientation: record.controlOrientation)
+            .orientationChanged(paneId: paneId, orientation: record.displayOrientation)
         )
 
         if record.lastSequence > 0, let published = record.currentSurface {
@@ -1795,6 +1876,7 @@ public actor PaneCoordinator {
     /// `.failed` pane; a fault leaves either terminal state alone).
     private func retire(record: Record, to state: PaneLifecycle) async {
         record.teardownSurfacePump()
+        record.teardownOrientationPump(backend: record.backend)
         record.backend?.shutdownBackend()
         record.backend = nil
         record.currentSurface = nil
@@ -1885,6 +1967,7 @@ public actor PaneCoordinator {
             await revokeSubscriber(record: record, subscriptionId: subscriptionId)
         }
         record.teardownSurfacePump()
+        record.teardownOrientationPump(backend: record.backend)
         record.backend?.shutdownBackend()
         record.backend = nil
         record.currentSurface = nil
@@ -1903,12 +1986,92 @@ public actor PaneCoordinator {
         )
     }
 
+    // MARK: - Display orientation
+
+    /// Begin observing what this pane's display is presenting, and seed the
+    /// record from it.
+    ///
+    /// Registers before seeding, so a rotation landing between the two
+    /// arrives as a callback rather than disappearing into the gap between
+    /// a snapshot and a subscription.
+    ///
+    /// A backend with no source (a physical device, the stub, or a display
+    /// proxy that vends no orientation) leaves the record on its last known
+    /// orientation and the pane keeps rendering. That is a degraded mode,
+    /// not a failure: frames are untouched, and the pane still turns for
+    /// rotations deviceterm commands itself.
+    private func startDisplayOrientationObserver(
+        record: Record,
+        paneId: UUID,
+        backend: DeviceBackend
+    ) {
+        // Stand the ordered pump up before starting observation: the
+        // backend can deliver its first callback synchronously, so the
+        // continuation has to exist first.
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: Orientation.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        // Fenced on the observer's own epoch so a delivery still in flight
+        // past teardown can't resurrect orientation state on a pane it no
+        // longer describes.
+        let observerEpoch = record.displayObserverEpoch
+        let started = backend.startDisplayOrientation { orientation in
+            continuation.yield(orientation)
+        }
+        guard started else {
+            continuation.finish()
+            return
+        }
+        record.observingDisplayOrientation = true
+        record.orientationContinuation = continuation
+        record.orientationPump = Task { [weak self, paneId] in
+            for await orientation in stream {
+                await self?.emitDisplayOrientation(
+                    paneId: paneId,
+                    observerEpoch: observerEpoch,
+                    orientation: orientation
+                )
+            }
+        }
+        if let seed = backend.currentDisplayOrientation() {
+            record.displayOrientation = seed
+        }
+    }
+
+    /// Publish an observed display orientation to this pane's subscribers.
+    ///
+    /// The bridge repeats values (it reports the current orientation after
+    /// any screen-properties notification, not only a rotation), so most
+    /// deliveries land on the dedupe below and publish nothing.
+    private func emitDisplayOrientation(paneId: UUID, observerEpoch: UInt64, orientation: Orientation) {
+        guard let record = panes[paneId],
+            record.displayObserverEpoch == observerEpoch else { return }
+        publishDisplayOrientation(record: record, paneId: paneId, orientation: orientation)
+    }
+
+    /// Commit a new presentation orientation and tell this pane's
+    /// subscribers. Both writers land here: an observed display value, and
+    /// the command-derived fallback for a backend with no display source.
+    ///
+    /// Deduplicates either kind, so a commanded rotation that does move an
+    /// observed display emits once rather than twice, and an observation
+    /// that wasn't a rotation emits nothing.
+    private func publishDisplayOrientation(record: Record, paneId: UUID, orientation: Orientation) {
+        guard record.displayOrientation != orientation else { return }
+        record.displayOrientation = orientation
+        for subscriber in record.subscribers.values {
+            subscriber.continuation.yield(.orientationChanged(paneId: paneId, orientation: orientation))
+        }
+    }
+
     // MARK: - Input
     //
     // Backend resolution (`inputBackend`) is the actor's one stateful step;
     // the gesture coordinate/timing math and HID sends are pure and live in
-    // `SimInputSynthesis`. Only `rotate` has a state side effect (the
-    // `.orientationChanged` fanout), kept here on the actor.
+    // `SimInputSynthesis`. `rotate` updates the pane's control orientation,
+    // and publishes a presentation event only for a pane whose backend has
+    // no display source to publish one instead.
     //
     // `inputBackend` also hands back the operation's input generation, which
     // then rides through the synthesis into every primitive. Its ordering
@@ -2177,11 +2340,6 @@ public actor PaneCoordinator {
         case let .relative(direction):
             orientation = direction.applied(to: record.controlOrientation)
         }
-        // Broadcast only for a rotation the backend reports it actually
-        // performed: the device reached the target and no transfer fenced it.
-        // A sim rotates synchronously; a physical device awaits its pump's
-        // per-command outcome. Skipping the broadcast on `false` stops the GUI
-        // rotating its presentation for a rotation the device never made.
         let performed = try await SimInputSynthesis.rotate(
             backend: input.backend,
             paneId: paneId,
@@ -2189,19 +2347,24 @@ public actor PaneCoordinator {
             orientation: orientation
         )
         guard performed else { return }
-        // Commit the new base for the next relative request. Same gate as the
-        // broadcast below, and the chain link this rotation holds is signalled
-        // after it (on scope exit), so the successor resolves against it.
+        // Commit the new base for the next relative request. The chain link
+        // this rotation holds is signalled after it (on scope exit), so the
+        // successor resolves against it.
+        //
         record.controlOrientation = orientation
-        // Tell subscribers the device's orientation changed so the GUI
-        // re-renders and re-maps input. Without this, a rotation from
-        // outside the owning GUI (e.g. `deviceterm rotate`) leaves the GUI
-        // drawing and hit-testing against the stale orientation.
-        if let record = panes[paneId] {
-            for subscriber in record.subscribers.values {
-                subscriber.continuation.yield(.orientationChanged(paneId: paneId, orientation: orientation))
-            }
-        }
+        // For a pane that is observing its display, the command stops here
+        // and publishes nothing: it says where the device was told to point,
+        // never what the display did, and an orientation-locked app answers
+        // a rotate by leaving the framebuffer where it was. Observation
+        // publishes instead, so the pane turns when the pixels turn.
+        //
+        // A pane with no display-orientation source has no such observation
+        // coming, so the command is the only evidence available and it
+        // publishes. That preserves command-driven rotation for
+        // non-observing backends; an orientation-locked interface stays
+        // unobservable to them.
+        guard !record.observingDisplayOrientation else { return }
+        publishDisplayOrientation(record: record, paneId: paneId, orientation: orientation)
     }
 
     /// Suspend until `link` is signalled (returns immediately if it already

@@ -1308,16 +1308,47 @@ orientation the daemon last successfully commanded on that pane. Exactly one
 of the two is required; both or neither is `invalidParams`, because a request
 carrying both gives no way to tell which the daemon would honor.
 
-That base is tracked, not observed: no backend vends an orientation getter, so
-the daemon knows only the rotations it performed. A pane starts assuming
-`portrait`, where an iOS device boots. Attach to a device that is already
-turned and the first relative rotate steps from the wrong place, then lands on
-the orientation it assumed, which makes the base true again. Anything that
-rotates the device afterwards without going through DeviceTerm, an app forcing
-its own orientation included, makes it stale again, and nothing detects that.
+The daemon keeps two orientations per pane, and they are not the same value.
 
-A successful rotate broadcasts `orientation.changed` to every `pane.subscribe`
-subscriber.
+**Control orientation** is the base a relative rotate steps from. It is
+tracked, not observed: written only when the backend reports it performed the
+rotation, and never from an observed display value. A pane starts assuming
+`portrait`, where an iOS device boots.
+
+Nothing observes it because on a simulator there is nothing to observe. A
+simulator has no physical attitude and no sensor, so its device orientation is
+whichever rotate command reached it last, and nothing in CoreSimulator
+accumulates that. The bridge's own rotate is a one-way GSEvent with no reply
+and no getter.
+
+Do not close that gap by adopting the display orientation. Display is the
+foreground app's interface orientation, so a portrait device running a
+landscape-locked app presents landscape, and taking that as the base would
+mis-target the next relative rotate.
+
+Attach to a device that is already turned, or let anything rotate it without
+going through DeviceTerm, and the first relative rotate steps from the wrong
+place. A successful send records its target as the next base, so a following
+relative rotate steps from that instead. An absolute rotate names its target
+directly and doesn't consult the base at all. Simulator delivery is not
+acknowledged, so none of this is confirmation the device moved.
+
+**Presentation orientation** is the value `orientation.changed` carries, and
+what drives the render, the bezel, and the hit-test mapping. It is the
+framebuffer's observed orientation where a backend has a display source, and
+the last performed command where it hasn't.
+
+A simulator pane observes it: read from the display port at attach, then a
+callback whenever it changes, so a rotation reaches the pane whatever caused
+it. For an observing pane a rotate publishes nothing by itself, because an
+orientation-locked app answers one without moving its framebuffer and a pane
+that turned on the command alone would counter-rotate a portrait image.
+
+The physical-device backend has no display source. There a performed
+DeviceTerm rotate supplies the pane's orientation instead, so the pane follows
+the orientation that was commanded rather than the framebuffer. Nothing
+reports a rotation it didn't command, so a device turned by hand keeps its
+pane's previous shape and presents the app's new layout rotated inside it.
 
 #### `pane.input.pinch`
 
@@ -1544,9 +1575,12 @@ subscription's request-envelope id:
   `rendering`, `shutdown`, or `failed`.
 - `surface.changed`: `{paneId, sequence}`, paired with a side-band
   surface payload for the same `(paneId, sequence)`.
-- `orientation.changed`: `{paneId, orientation}`, replayed once at subscribe
-  with the pane's tracked orientation (assumed `portrait` until DeviceTerm
-  rotates it), and broadcast again whenever a rotate lands.
+- `orientation.changed`: `{paneId, orientation}`, carrying the pane's
+  presentation orientation. That is what the framebuffer is presenting for a
+  pane whose backend has a display source, and the last performed command for
+  one that hasn't. Replayed once at subscribe, so a subscriber arriving after
+  it last changed starts correct, and sent again whenever it changes. A pane
+  that has neither been read nor rotated replays `portrait`.
 
 The initial ack returns a `subscriptionToken` on every XPC subscription:
 the correlation key for the connection's side-band lane and, for a

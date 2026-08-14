@@ -85,14 +85,20 @@ final class SimulatorPaneViewModel {
     private(set) var currentSurfaceSequence: UInt64?
     var supportsLiveTouchInput: Bool { daemonClient.supportsLiveTouchInput }
     var supportsMultitouchInput: Bool { daemonClient.supportsMultitouchInput }
-    /// Device orientation as last reported by the daemon's
-    /// `orientation.changed` pane event (`pane.subscribe`), never written
-    /// by this VM's own rotate calls. The daemon assumes `.portrait` for a
-    /// pane it hasn't rotated (where an iOS device boots) and updates it
-    /// after a rotation it commanded, so anything else rotating the device
-    /// leaves this stale. Drives the render counter-rotation and input
-    /// mapping. The base a relative Rotate Left/Right advances from is the
-    /// daemon's, not this.
+    /// The pane's presentation orientation, as last reported by the
+    /// daemon's `orientation.changed` pane event (`pane.subscribe`), never
+    /// written by this VM's own rotate calls.
+    ///
+    /// Observed from the simulator's display where the daemon has a source
+    /// for it, and inferred from a performed rotation where it doesn't. An
+    /// observed value describes the framebuffer rather than the device's
+    /// attitude, so a rotate can succeed while this correctly stays put
+    /// under an orientation-locked app; an inferred one can't distinguish
+    /// that case. Drives the render counter-rotation, the bezel, and input
+    /// mapping.
+    ///
+    /// The base a relative Rotate Left/Right advances from is the daemon's
+    /// separate control orientation, not this.
     private(set) var currentOrientation: Orientation = .portrait
 
     // Infrastructure, not observable state. Kept out of the registrar so
@@ -261,10 +267,13 @@ final class SimulatorPaneViewModel {
             state = SimPaneReducer.reduce(state, .lifecycle(change.state))
 
         case let .orientationChanged(change):
-            // Adopt the orientation the daemon reports, the only writer of
-            // this value: a rotate this VM sent arrives back here like anyone
-            // else's, and a fresh subscription replays the daemon's current
-            // value. An unknown value is ignored.
+            // Adopt the presentation orientation the daemon reports, the
+            // only writer of this value. Where the daemon observes the
+            // display it arrives when the framebuffer turned, whatever
+            // turned it, so a rotate this VM sent shows up only if the
+            // display followed; where it can't observe, it arrives from a
+            // performed rotation instead. A fresh subscription replays the
+            // daemon's current value. An unknown value is ignored.
             if let orientation = Orientation(rawValue: change.orientation) {
                 currentOrientation = orientation
             }
@@ -653,13 +662,14 @@ final class SimulatorPaneViewModel {
     func rotateRight() { sendRotation(.relative(.right)) }
 
     /// Ask the daemon to rotate, and don't touch `currentOrientation`:
-    /// the daemon holds the orientation a relative step advances from,
-    /// and the `orientationChanged` event is what moves this VM. Writing
-    /// it here optimistically would advance on a rotation the backend
-    /// reported it didn't perform (fenced by an ownership transfer, or
-    /// failed), which broadcasts nothing, leaving this VM turned and the
-    /// device not. The RPC is fire-and-forget; a failure leaves the pane
-    /// where it is.
+    /// the daemon holds the base a relative step advances from, and the
+    /// `orientationChanged` event is what moves this VM.
+    ///
+    /// Writing it here optimistically would turn the pane on intent rather
+    /// than on the daemon's answer. The daemon is the side that decides
+    /// whether to update from an observed display or from a performed
+    /// command, and whether the rotation was performed at all. The RPC is
+    /// fire-and-forget; a failure leaves the pane where it is.
     private func sendRotation(_ target: RotationTarget) {
         guard capabilities.rotate else { return }
         let id = paneId

@@ -66,6 +66,12 @@ compile DeviceTerm. Source-build toolchains are tracked in `docs/BUILDING.md`.
 | protocol method    | `-<SimDisplayIOSurfaceRenderable> registerCallbackWithUUID:ioSurfacesChangeCallback:` | `SimDisplayHandle` | The other callback shape; co-registered with the singular variant. |
 | protocol method    | `-<SimDisplayIOSurfaceRenderable> unregisterIOSurfaceChangeCallbackWithUUID:`  | `SimDisplayHandle` | Teardown counterpart for the singular callback.                |
 | protocol method    | `-<SimDisplayIOSurfaceRenderable> unregisterIOSurfacesChangeCallbackWithUUID:` | `SimDisplayHandle` | Teardown counterpart for the plural callback.                  |
+| protocol           | `SimScreen`                                                          | `SimDisplayHandle`    | Carried by the same display descriptor the picker selects; source of the presented orientation. |
+| protocol           | `SimScreenProperties`                                                | `SimDisplayHandle`    | Snapshot vended by `screenProperties`; carries `uiOrientation`. |
+| protocol method    | `-<SimScreen> screenProperties`                                      | `SimDisplayHandle`    | Bounded one-shot read; seeds a pane's display orientation and is re-read inside every change callback. |
+| protocol method    | `-<SimScreen> registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:` | `SimDisplayHandle` | Push channel for orientation. **All three blocks must be non-nil**: CoreSimulator invokes them unconditionally, so a nil frame callback dereferences NULL and takes the simulator down. |
+| protocol method    | `-<SimScreen> unregisterScreenCallbacksWithUUID:`                    | `SimDisplayHandle`    | Teardown counterpart; called on `stopOrientation` and `stop`.  |
+| protocol method    | `-<SimScreenProperties> uiOrientation`                               | `SimDisplayHandle`    | The presented orientation, as a `UIInterfaceOrientation`. Mapped to device-orientation vocabulary in the bridge, **swapping the landscape pair** (see the orientation findings below). |
 | framework          | `SimulatorKit.framework`                                             | `SimHIDClient`        | Hosts `SimDeviceLegacyHIDClient` and the Indigo wire-format helpers; loaded by `CoreSimulatorLoader.loadSimulatorKit()`. |
 | class              | `SimulatorKit.SimDeviceLegacyHIDClient`                              | `SimHIDClient`        | Swift-bridged subclass instantiated by the bridge; carries the `initWithDevice:error:` and `sendWithMessage:…` selectors inherited from `SimDeviceLegacyClient`. |
 | instance selector  | `-[SimulatorKit.SimDeviceLegacyHIDClient initWithDevice:error:]`     | `SimHIDClient`        | Construct a HID client bound to a specific `SimDevice`.        |
@@ -106,6 +112,59 @@ compile DeviceTerm. Source-build toolchains are tracked in `docs/BUILDING.md`.
 | protocol method    | `-<AXPTranslationTokenDelegateHelper> accessibilityTranslationDelegateBridgeCallbackWithToken:` | `SimAccessibility` | Returns the per-token sync-over-async callback block. |
 | protocol method    | `-<AXPTranslationTokenDelegateHelper> accessibilityTranslationConvertPlatformFrameToSystem:withToken:` | `SimAccessibility` | Coordinate-space conversion hook; the bridge uses identity (sim-space = render-space). |
 | protocol method    | `-<AXPTranslationTokenDelegateHelper> accessibilityTranslationRootParentWithToken:` | `SimAccessibility` | Host-parent lookup; the bridge returns nil (the iOS-side tree is the whole world). |
+
+## Display orientation
+
+This section records the presented-orientation source, its mapping, and the
+approaches ruled out.
+
+- **When / where:** 2026-08-13 · macOS 26.5.2 · Xcode 26.6 · iOS 26.5 ·
+  iPhone 17 Pro (simulator).
+- **Mechanism — `SimScreen` on the display descriptor.** The live
+  `com.apple.framebuffer.display` descriptor conforms to `SimScreen`
+  alongside the `SimDisplayIOSurfaceRenderable` the picker already selects
+  on, so orientation rides the object the surface subscription resolved. No
+  second lookup and no new framework.
+- **Ruled out: `SimDisplayRotationAngleDelegate`.** It declares
+  `didChangeDisplayAngle:(double)` and looks like the obvious source. No
+  `device.io` port or descriptor vends it, and no proxy answers
+  `displayAngle`.
+- **`uiOrientation` is a `UIInterfaceOrientation`**, while
+  `CSBDeviceOrientation` / `CSBDisplayOrientation` are `UIDeviceOrientation`.
+  **The landscape pair is swapped.** Pinned by rotating a device running an
+  app that follows it:
+
+  | device orientation | `uiOrientation` |
+  |---|---|
+  | portrait | 1 |
+  | landscapeLeft | 4 |
+  | landscapeRight | 3 |
+
+  The direction was confirmed against what the renderer already draws
+  correctly rather than derived from the UIKit convention, because a
+  hand-derivation of this swap inverts without anything failing loudly.
+- **Cadence: no debounce needed.** Exactly one `propertiesChangedCallback`
+  per rotation, ~50 ms after the command returns. No animated or
+  non-cardinal intermediates were observed, but the bridge re-reads
+  `screenProperties` inside the callback rather than trusting the block's
+  arguments, so a runtime that did animate would still settle correctly.
+- **All three callback blocks must be non-nil.** Passing nil for the frame
+  and surfaces callbacks to observe properties only **kills the simulator**:
+  CoreSimulator invokes them unconditionally, so the first frame after
+  registration dereferences NULL and takes the device down. Reproduced twice
+  in the environment above.
+- **Display orientation is not device attitude, and diverges in ordinary
+  use.** The iPhone Home Screen never rotates at all; Safari tracked one
+  rotation and then refused upside-down, leaving the display in landscape
+  while the device continued to `portraitUpsideDown`. This is why the
+  daemon keeps control and display as two values.
+- **There is no control-orientation (attitude) source for a simulator, and
+  this is not a gap in the search.** A simulator has no physical attitude,
+  no sensor, and no ground truth; its device orientation is whatever rotate
+  command was last sent, and nothing in CoreSimulator or SimulatorKit
+  accumulates that. The bridge's own rotate is a one-way GSEvent with no
+  reply and no getter. So `controlOrientation` is command-sourced by
+  construction, not by preference.
 
 ## Digital Crown (watchOS)
 

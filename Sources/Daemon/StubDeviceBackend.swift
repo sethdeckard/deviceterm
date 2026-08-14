@@ -60,6 +60,16 @@ final class StubDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func pixelDimensions() -> (Int?, Int?) { (pixelWidth, pixelHeight) }
 
+    // No display to observe, so the pane keeps its last commanded
+    // orientation.
+    func startDisplayOrientation(
+        onChange: @escaping @Sendable (Orientation) -> Void
+    ) -> Bool { false }
+
+    func stopDisplayOrientation() {}
+
+    func currentDisplayOrientation() -> Orientation? { nil }
+
     // Supported input verbs no-op: the stub has no device to drive, but
     // the capability gate lets touch / button / rotate / keyboard reach
     // here, so they must succeed rather than fault.

@@ -178,6 +178,37 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// (pre-first-frame, or post-shutdown).
     func pixelDimensions() -> (Int?, Int?)
 
+    // MARK: Display orientation
+    //
+    // What the display is *presenting*, which is a different value from
+    // the device's attitude and the only one that describes the
+    // framebuffer. An orientation-locked app keeps a portrait display
+    // while the device is turned to landscape.
+    //
+    // Every conformer implements these explicitly, with no protocol
+    // default, so a new backend has to decide rather than inherit a
+    // silent no-op and lose rotations without anyone noticing.
+
+    /// Begin observing the display's orientation. `onChange` delivers the
+    /// current orientation on a producer queue; values may repeat, since a
+    /// backend needn't deduplicate. Call `currentDisplayOrientation()`
+    /// *after* this to seed, so a rotation in between arrives as a delivery
+    /// instead of falling into the gap.
+    ///
+    /// Returns whether observation started. `false` means this backend has
+    /// no display-orientation source, which is a degraded but workable
+    /// state: frames still flow and the pane keeps its last known
+    /// orientation. It is never a reason to fail the pane.
+    func startDisplayOrientation(
+        onChange: @escaping @Sendable (Orientation) -> Void
+    ) -> Bool
+    /// Stop observing. Idempotent.
+    func stopDisplayOrientation()
+    /// The orientation the display presents right now, or nil when this
+    /// backend has no source or the source reports a value with no pane
+    /// meaning.
+    func currentDisplayOrientation() -> Orientation?
+
     // MARK: Touch (points are normalized 0…1, origin top-left)
     //
     // Every input primitive carries the operation's `generation`: the
@@ -225,14 +256,22 @@ protocol DeviceBackend: AnyObject, Sendable {
     // MARK: Buttons / rotation / crown
 
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws
-    /// Rotate to `orientation`, returning whether the device **actually
-    /// performed** it: `true` only when the rotation ran (not fenced by a
-    /// transfer that bumped the generation) *and* the device settled on the
-    /// requested orientation. `false` for a fenced or failed-to-reach
-    /// rotation. The coordinator broadcasts `orientationChanged` only on
-    /// `true`, so the GUI never rotates its presentation for a rotation the
-    /// device did not make. A synchronous backend performs it inline and
-    /// reports its own send outcome.
+    /// Rotate to `orientation`, returning whether the rotation was
+    /// **performed** rather than fenced by a transfer that bumped the
+    /// generation.
+    ///
+    /// How much `true` proves differs by backend, and it is weaker than it
+    /// looks for simulators. The physical-device backend awaits a
+    /// per-command reply and reports whether the device reached the target.
+    /// The CoreSimulator backend rotates with a one-way GSEvent that has no
+    /// reply, so `true` means only that the send cleared the generation
+    /// fence; nothing confirms the device moved, and nothing there can.
+    ///
+    /// It never says the display turned either way: an orientation-locked
+    /// app leaves the framebuffer where it was. Presentation follows
+    /// `startDisplayOrientation` where a backend has one; where it doesn't,
+    /// the coordinator falls back to this return value, and external
+    /// rotations are then invisible to that pane.
     func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool
     func rotateCrown(delta: Double, generation: UInt64) throws
 

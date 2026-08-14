@@ -773,6 +773,28 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// front; the GUI sizes from the surface it receives.
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
 
+    // MARK: Display orientation
+    //
+    // Not observed on this backend, so the pane keeps the orientation from
+    // its last DeviceTerm command and a device rotated by hand leaves it
+    // showing the previous one.
+    //
+    // The nearest reachable source is the device-control orientation
+    // channel this backend already speaks: `HIDReports.orientationRequest`
+    // sends a `rotate` and the relay parses `currentDeviceOrientation` out
+    // of the reply (`InteractionRelay.sendRotation`). That reports attitude
+    // rather than the framebuffer, and a read-only form of the request has
+    // not been confirmed against a device, so neither is recorded here as
+    // fact.
+
+    func startDisplayOrientation(
+        onChange: @escaping @Sendable (Orientation) -> Void
+    ) -> Bool { false }
+
+    func stopDisplayOrientation() {}
+
+    func currentDisplayOrientation() -> Orientation? { nil }
+
     // MARK: Touch (normalized 0…1; scaled to device coordinates by the relay)
 
     func tapDown(at point: CGPoint, generation: UInt64) throws {

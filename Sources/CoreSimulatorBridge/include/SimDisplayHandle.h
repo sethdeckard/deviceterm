@@ -43,6 +43,36 @@ NS_ASSUME_NONNULL_BEGIN
 typedef void (^CSBDisplaySurfaceCallback)(IOSurfaceRef _Nullable surface);
 
 
+/// What the display is currently *presenting*, which is not the device's
+/// attitude. An orientation-locked app keeps a portrait display while the
+/// device is turned to landscape, so these are two different values and
+/// only this one describes the framebuffer.
+///
+/// Cases 1…4 match `CSBDeviceOrientation`, but this is a separate enum
+/// because an observation can be absent and a command target cannot:
+/// `Unknown` covers a display that vends no orientation source and a
+/// source value with no pane meaning.
+typedef NS_ENUM(NSInteger, CSBDisplayOrientation) {
+    CSBDisplayOrientationUnknown            = 0,
+    CSBDisplayOrientationPortrait           = 1,
+    CSBDisplayOrientationPortraitUpsideDown = 2,
+    CSBDisplayOrientationLandscapeLeft      = 3,
+    CSBDisplayOrientationLandscapeRight     = 4,
+};
+
+/// Block delivering the display's current orientation after a
+/// screen-properties notification. Runs on the queue supplied at
+/// registration.
+///
+/// **Values repeat.** The notification covers every screen property, not
+/// just rotation, and the bridge does not deduplicate. Changes may also
+/// coalesce. The value is read at delivery time, so it always describes
+/// the display's state now rather than a delta, and a consumer that
+/// compares against its own previous value gets a correct result either
+/// way.
+typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation);
+
+
 /// Display handle for one simulator. Manages the picker + callback
 /// registration + lifecycle on a single renderable proxy.
 ///
@@ -104,8 +134,38 @@ typedef void (^CSBDisplaySurfaceCallback)(IOSurfaceRef _Nullable surface);
 /// display yet (treat that as "ask again after the first callback").
 @property (nonatomic, readonly) CGSize displaySize;
 
+/// Begin observing the display's presented orientation. Requires a prior
+/// successful `start(callback:)`: both ride the same display proxy, which
+/// the surface subscription is what resolves.
+///
+/// **Call this before reading `currentDisplayOrientation`.** Registration
+/// happens first so a rotation landing between the two is delivered as a
+/// callback rather than lost in the gap between a snapshot and a
+/// subscription.
+///
+/// Fails when the display proxy vends no orientation source, which leaves
+/// the caller with no way to observe rotations. That is a degraded but
+/// workable state, not a reason to drop the pane: frames are unaffected.
+- (BOOL)startOrientationWithCallback:(CSBDisplayOrientationCallback)callback
+                               queue:(dispatch_queue_t)queue
+                               error:(NSError * _Nullable * _Nullable)error
+    NS_SWIFT_NAME(startOrientation(callback:queue:));
+
+/// The orientation the display is presenting right now, or
+/// `CSBDisplayOrientationUnknown` if the proxy vends no orientation
+/// source or reports a value with no pane meaning.
+///
+/// A bounded one-shot read, safe to call before
+/// `startOrientationWithCallback:queue:error:`, though seeding after
+/// registering is what avoids the gap.
+@property (nonatomic, readonly) CSBDisplayOrientation currentDisplayOrientation;
+
+/// Stop observing orientation. Idempotent, and called by `stop`.
+- (void)stopOrientation;
+
 /// Stop the subscription. Idempotent. After `stop`, the callback is no
-/// longer invoked; another `start(callback:)` reattaches.
+/// longer invoked; another `start(callback:)` reattaches. Also stops
+/// orientation observation.
 - (void)stop;
 
 @end

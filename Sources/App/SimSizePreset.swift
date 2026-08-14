@@ -164,7 +164,18 @@ enum SimSizeMath {
         bezelReserve: CGFloat = 0
     ) -> CGFloat? {
         guard device.pixelWidth > 0, device.pixelHeight > 0 else { return nil }
-        let pixelExtent = axisIsVertical ? device.pixelWidth : device.pixelHeight
+        // The IOSurface is fixed at the device's portrait dimensions; a
+        // landscape orientation swaps W/H in the rendered quad. Every preset
+        // sizes what the user sees, so each one measures the *displayed*
+        // extent rather than the buffer's, or a rotated pane keeps its
+        // portrait shape while the picture inside it is landscape.
+        let isLandscape = orientation == .landscapeLeft
+            || orientation == .landscapeRight
+        let displayWidth = isLandscape
+            ? CGFloat(device.pixelHeight) : CGFloat(device.pixelWidth)
+        let displayHeight = isLandscape
+            ? CGFloat(device.pixelWidth) : CGFloat(device.pixelHeight)
+        let pixelExtent = axisIsVertical ? displayWidth : displayHeight
         switch preset {
         case .fitScreen:
             // Fit-screen needs the perpendicular extent to compute
@@ -177,15 +188,6 @@ enum SimSizeMath {
             // screen + bezel together fit; one inset on each
             // perpendicular edge.
             let perpendicularForScreen = max(0, perpendicularExtent - 2 * bezelReserve)
-            // Displayed aspect (W / H of what the user sees). The
-            // IOSurface is fixed at portrait dimensions; landscape
-            // orientations swap W/H in the rendered quad.
-            let isLandscape = orientation == .landscapeLeft
-                || orientation == .landscapeRight
-            let displayWidth = isLandscape
-                ? CGFloat(device.pixelHeight) : CGFloat(device.pixelWidth)
-            let displayHeight = isLandscape
-                ? CGFloat(device.pixelWidth) : CGFloat(device.pixelHeight)
             let widthOverHeight = displayWidth / displayHeight
             // `axisIsVertical` true → divider runs vertically →
             // we're sizing the pane's WIDTH against a fixed HEIGHT.
@@ -206,14 +208,14 @@ enum SimSizeMath {
             // rendered screen + the device-frame bezel (the renderer
             // subtracts `displayInset` on both sides before drawing).
             let backing = max(screen.backingScaleFactor, 1.0)
-            return CGFloat(pixelExtent) / backing + 2 * bezelReserve
+            return pixelExtent / backing + 2 * bezelReserve
 
         case .pointAccurate:
             // Device pixels → device points → Mac points (1:1 at the
             // point level). Scale-0 would mean an unclassified family;
             // fall back to 1.0 so we still produce a finite answer.
             let scale = max(deviceScale(family: device.family), 1.0)
-            return CGFloat(pixelExtent) / scale + 2 * bezelReserve
+            return pixelExtent / scale + 2 * bezelReserve
 
         case .physical:
             // Physical inches = device pixels / device PPI. Mac points
@@ -221,7 +223,7 @@ enum SimSizeMath {
             // PPI-110 baseline so the math still produces a sane value
             // even though "physical TV" isn't meaningful.
             let devicePPI = devicePixelsPerInch(family: device.family)
-            let inches = CGFloat(pixelExtent) / devicePPI
+            let inches = pixelExtent / devicePPI
             return inches * screen.pointsPerInch + 2 * bezelReserve
         }
     }

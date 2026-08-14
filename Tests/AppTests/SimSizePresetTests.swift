@@ -48,6 +48,36 @@ struct SimSizePresetTests {
         #expect(result == 640)
     }
 
+    @Test(
+        "landscape sizes every preset to the displayed extent",
+        arguments: [SimSizePreset.pixelAccurate, .pointAccurate, .physical]
+    )
+    func landscapeSizesToTheDisplayedExtent(preset: SimSizePreset) {
+        // The IOSurface stays at the device's portrait dimensions however
+        // the device is turned, so a preset that measures the buffer keeps
+        // the pane portrait-shaped while the picture inside it is
+        // landscape. Each preset sizes what the user sees, so rotating
+        // swaps which pixel dimension it measures: a landscape pane's width
+        // comes from `pixelHeight`.
+        func width(_ orientation: Orientation) -> CGFloat? {
+            SimSizeMath.targetWidth(
+                preset: preset,
+                device: iPhone,
+                screen: mac,
+                availableWidth: 4_000,
+                orientation: orientation
+            )
+        }
+        let portrait = try? #require(width(.portrait))
+        let landscape = try? #require(width(.landscapeLeft))
+        #expect(portrait != landscape)
+        // 2622/1206 wider, and the same either way round.
+        let ratio = (landscape ?? 0) / (portrait ?? 1)
+        #expect(abs(ratio - (2_622.0 / 1_206.0)) < 0.01)
+        #expect(width(.landscapeRight) == landscape)
+        #expect(width(.portraitUpsideDown) == portrait)
+    }
+
     @Test
     func fitScreenWidthIsHeightTimesDeviceAspectInVerticalSplit() {
         // Side-by-side split: divider runs vertically, sizing the

@@ -164,7 +164,7 @@ func surfaceDrainNotificationTearsDownTheSubscription() async throws {
     let registry = PaneSubscriptionRegistry()
     let coordinator = PaneCoordinator(subscriptionRegistry: registry)
     let session = UUID()
-    let paneId = try await makeSimPane(coordinator: coordinator, session: session)
+    let (paneId, _) = try await makeSimPane(coordinator: coordinator, session: session)
 
     let methods = MethodRegistry(subscriptions: [
         RPCMethod.paneSubscribe.rawValue: .daemonWide(
@@ -338,8 +338,7 @@ func subscriptionEventsFlowWhileAnotherRequestIsParked() async throws {
     let registry = PaneSubscriptionRegistry()
     let coordinator = PaneCoordinator(subscriptionRegistry: registry)
     let session = UUID()
-    let paneId = try await makeSimPane(coordinator: coordinator, session: session)
-    let principal = PaneAccessPrincipal.session(session)
+    let (paneId, backend) = try await makeSimPane(coordinator: coordinator, session: session)
     let gate = DrainGate()
     let parkedHandler: MethodRegistry.Handler = { _ in
         await gate.wait()
@@ -369,13 +368,18 @@ func subscriptionEventsFlowWhileAnotherRequestIsParked() async throws {
     #expect(try await poll { await inbound.responseCount == 1 })
 
     // Subscribing replays the pane's orientation. Let that settle before
-    // rotating: these counts are exact, and a replay still in flight when the
-    // first rotation's event lands would skip the count being polled for.
+    // turning the display: these counts are exact, and a replay still in
+    // flight when the first turn's event lands would skip the count being
+    // polled for.
+    //
+    // Each turn is to a *different* orientation, because the coordinator
+    // publishes only on a change; repeating one would emit nothing and the
+    // count would stall.
     let orientationEvent = PaneEventName.orientationChanged.rawValue
     #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 1 })
 
-    // Before: a rotation reaches the client as an `evt`.
-    try await coordinator.rotate(paneId: paneId, as: principal, target: .absolute(.landscapeLeft))
+    // Before: a display turn reaches the client as an `evt`.
+    backend.turnDisplay(to: .landscapeLeft)
     #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 2 })
 
     // Park a second request on the same connection, waiting for positive
@@ -384,14 +388,14 @@ func subscriptionEventsFlowWhileAnotherRequestIsParked() async throws {
     #expect(try await poll { await gate.isWaiting })
 
     // During: the parked handler has not stalled the subscription.
-    try await coordinator.rotate(paneId: paneId, as: principal, target: .absolute(.portrait))
+    backend.turnDisplay(to: .portrait)
     #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 3 })
 
     await gate.open()
     #expect(try await poll { await inbound.responseCount == 2 })
 
     // After: still streaming on a connection that was never torn down.
-    try await coordinator.rotate(paneId: paneId, as: principal, target: .absolute(.landscapeRight))
+    backend.turnDisplay(to: .landscapeRight)
     #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 4 })
     #expect(await server.connectionCount == 1)
     #expect(await coordinator.subscriberCount(paneId: paneId) == 1)
@@ -486,6 +490,11 @@ private final class DrainTestBackend: DeviceBackend, @unchecked Sendable {
     ) throws {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
     func tapDown(at point: CGPoint, generation: UInt64) throws {}
     func tapUp(at point: CGPoint, generation: UInt64) throws {}
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
@@ -531,40 +540,65 @@ private func expectCoordinatorSubscriberCount(
     #expect(count == expected)
 }
 
-/// Create a hermetic sim-backed pane whose backend is a no-op mock, so a
-/// subscribe reaches a real record without a live CoreSimulator.
-private func makeSimPane(coordinator: PaneCoordinator, session: UUID) async throws -> UUID {
-    // swiftlint:disable unneeded_throws_rethrows
-    // `@unchecked Sendable`: holds no mutable state (every method is a no-op).
-    final class NoopBackend: DeviceBackend, @unchecked Sendable {
-        let capabilities = DeviceBackendCapabilities.simulator.withoutLocation
-        func startFrames(
+// swiftlint:disable unneeded_throws_rethrows
+/// A no-op backend, so a subscribe reaches a real record without a live
+/// CoreSimulator.
+///
+/// `@unchecked Sendable`: the only mutable state is the orientation
+/// observation hook, which has no synchronization of its own. These tests
+/// keep it safe by ordering rather than locking: the coordinator installs
+/// it during `createPane`, the test drives `turnDisplay` afterwards from
+/// one thread, and nothing here tears the pane down while a turn is in
+/// flight.
+private final class NoopBackend: DeviceBackend, @unchecked Sendable {
+    let capabilities = DeviceBackendCapabilities.simulator.withoutLocation
+    /// Observation hook, so a test can turn the display the way the
+    /// bridge's callback does. Orientation events are the only pane events
+    /// these transport tests can drive on demand.
+    private(set) var onDisplayOrientation: (@Sendable (Orientation) -> Void)?
+
+    func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
         onFatal: @escaping @Sendable (String) -> Void
     ) throws {}
-        func stopFrames() {}
-        func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
-        func tapDown(at point: CGPoint, generation: UInt64) throws {}
-        func tapUp(at point: CGPoint, generation: UInt64) throws {}
-        func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
-        func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
-        func keyDown(hidUsage: UInt32, generation: UInt64) throws {}
-        func keyUp(hidUsage: UInt32, generation: UInt64) throws {}
-        func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {}
-        // swiftlint:disable:next async_without_await
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool { true }
-        func rotateCrown(delta: Double, generation: UInt64) throws {}
-        func accessibilityFrontmostTree() throws -> [String: Any] { [:] }
-        func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }
-        func shutdownBackend() {}
+    func stopFrames() {}
+    func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool {
+        onDisplayOrientation = onChange
+        return true
     }
-    // swiftlint:enable unneeded_throws_rethrows
+    func stopDisplayOrientation() { onDisplayOrientation = nil }
+    func currentDisplayOrientation() -> Orientation? { nil }
+    func turnDisplay(to orientation: Orientation) { onDisplayOrientation?(orientation) }
+    func tapDown(at point: CGPoint, generation: UInt64) throws {}
+    func tapUp(at point: CGPoint, generation: UInt64) throws {}
+    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
+    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
+    func keyDown(hidUsage: UInt32, generation: UInt64) throws {}
+    func keyUp(hidUsage: UInt32, generation: UInt64) throws {}
+    func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {}
+    // swiftlint:disable:next async_without_await
+    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool { true }
+    func rotateCrown(delta: Double, generation: UInt64) throws {}
+    func accessibilityFrontmostTree() throws -> [String: Any] { [:] }
+    func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }
+    func shutdownBackend() {}
+}
+// swiftlint:enable unneeded_throws_rethrows
+
+/// Create a hermetic sim-backed pane whose backend is a no-op mock.
+
+private func makeSimPane(
+    coordinator: PaneCoordinator,
+    session: UUID
+) async throws -> (paneId: UUID, backend: NoopBackend) {
+    let backend = NoopBackend()
     let result = try await coordinator.createPane(
         target: .sim(udid: "udid-drain"),
         sessionId: session,
-        acquire: { PaneCoordinator.AcquiredBackend(backend: NoopBackend(), family: "phone", deviceType: "iPhone") }
+        acquire: { PaneCoordinator.AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone") }
     )
-    return result.paneId
+    return (result.paneId, backend)
 }
 
 /// Poll the registry's subscriber count until it matches (the XPC teardown

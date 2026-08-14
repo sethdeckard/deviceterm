@@ -41,6 +41,24 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     private(set) var openAppSwitcherEdges: [Int] = []
     private(set) var startFramesCalled = false
     private(set) var shutdownCalled = false
+    /// What `currentDisplayOrientation()` reports, which is what the
+    /// coordinator seeds a pane from. Nil models a backend with a source
+    /// that has nothing to say yet.
+    var displayOrientation: Orientation?
+    /// When false, `startDisplayOrientation` refuses, modelling a display
+    /// that vends no orientation source (a physical device, or a proxy
+    /// missing `SimScreen`). The pane must still render.
+    var displayOrientationAvailable = true
+    private(set) var startDisplayOrientationCalls = 0
+    private(set) var stopDisplayOrientationCalls = 0
+    /// The observation callback the coordinator installed, so a test can
+    /// deliver a display rotation the way the bridge would.
+    private(set) var onDisplayOrientation: (@Sendable (Orientation) -> Void)?
+    /// The same callback, deliberately **kept past teardown**, so a test can
+    /// model a delivery already in flight when the pane was retired. The
+    /// real bridge can do this: unregistering doesn't recall a block already
+    /// dispatched on the callback queue.
+    private(set) var installedCallback: (@Sendable (Orientation) -> Void)?
     /// The frame callback the coordinator installed. Captured (not
     /// dropped) so a test can drive surfaces through the pane's ordered
     /// publish pump.
@@ -116,6 +134,29 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     func stopFrames() {}
 
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+
+    // MARK: Display orientation
+
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool {
+        startDisplayOrientationCalls += 1
+        guard displayOrientationAvailable else { return false }
+        onDisplayOrientation = onChange
+        installedCallback = onChange
+        return true
+    }
+
+    func stopDisplayOrientation() {
+        stopDisplayOrientationCalls += 1
+        onDisplayOrientation = nil
+    }
+
+    func currentDisplayOrientation() -> Orientation? { displayOrientation }
+
+    /// Deliver a display rotation, as the bridge's callback does.
+    func emitDisplayOrientation(_ orientation: Orientation) {
+        displayOrientation = orientation
+        onDisplayOrientation?(orientation)
+    }
 
     /// Release a parked `tapDown`.
     func releaseTapDown() { tapDownGate.signal() }
@@ -333,16 +374,18 @@ func inputRoutesToThePanesBackend() async throws {
 }
 
 @Test
-func rotateBroadcastsOrientationChangedOnlyWhenTheDevicePerformedIt() async throws {
-    // The coordinator broadcasts orientationChanged for a rotation the backend
-    // reports it performed, and suppresses it for one it didn't (fenced or
-    // failed to reach the target), so the GUI never rotates its presentation
-    // for a rotation the device never made. Draining each stream to completion
-    // after unsubscribe makes the assertion deterministic: a wrongly-broadcast
-    // event would sit buffered ahead of the finish. Subscribing replays the
-    // pane's orientation, so the broadcast under test is whatever follows that
-    // first event.
-    func broadcastsAfterReplay(reaches: Bool, udid: String) async throws -> [Orientation] {
+func aCommandedRotationPublishesNothingByItself() async throws {
+    // A command says where the device was told to point; it never says the
+    // display turned. An orientation-locked app answers a rotate by leaving
+    // the framebuffer exactly where it was, and a pane that turned on the
+    // command alone would counter-rotate a portrait framebuffer forever.
+    // So a rotate publishes nothing however well it went, and the only
+    // event a subscriber sees here is the subscribe-time replay.
+    //
+    // Draining the stream to completion after unsubscribe makes this
+    // deterministic: a wrongly-published event would sit buffered ahead of
+    // the finish.
+    func published(reaches: Bool, udid: String) async throws -> [Orientation] {
         let coordinator = PaneCoordinator()
         let backend = MockDeviceBackend(rotateReaches: reaches)
         let pane = try await coordinator.createMockPane(udid: udid, sessionId: UUID(), backend: backend)
@@ -354,25 +397,144 @@ func rotateBroadcastsOrientationChangedOnlyWhenTheDevicePerformedIt() async thro
         for await event in stream {
             if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
         }
-        #expect(orientations.first == .portrait) // the replay, before any broadcast
+        #expect(orientations.first == .portrait) // the replay
         return Array(orientations.dropFirst())
     }
-    #expect(try await broadcastsAfterReplay(reaches: true, udid: "rot-yes") == [.landscapeLeft])
-    #expect(try await broadcastsAfterReplay(reaches: false, udid: "rot-no").isEmpty)
+    #expect(try await published(reaches: true, udid: "rot-yes").isEmpty)
+    #expect(try await published(reaches: false, udid: "rot-no").isEmpty)
 }
 
 @Test
-func concurrentRotationsBroadcastInRequestOrder() async throws {
+func anObservedDisplayRotationPublishesOrientationChanged() async throws {
+    // The other half of the split: presentation is published by observing
+    // the display, whatever moved it. This is the path that makes a
+    // rotation from outside deviceterm reach the pane at all.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "disp-obs", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    // Drained between emissions. The pump buffers newest-only, so emitting
+    // back to back would let it coalesce and this would be asserting
+    // lossless delivery the design doesn't offer (see
+    // `rapidDisplayRotationsSettleOnTheNewestValue` for that contract).
+    backend.emitDisplayOrientation(.landscapeLeft)
+    try await Task.sleep(for: .milliseconds(50))
+    // Same value again: the display didn't move, so nothing is published.
+    backend.emitDisplayOrientation(.landscapeLeft)
+    try await Task.sleep(for: .milliseconds(50))
+    backend.emitDisplayOrientation(.portraitUpsideDown)
+    try await Task.sleep(for: .milliseconds(50))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations == [.portrait, .landscapeLeft, .portraitUpsideDown])
+}
+
+@Test
+func aCommandedRotationThatMovesTheDisplayPublishesOnce() async throws {
+    // A rotation deviceterm commands that *does* move the display arrives
+    // back as an observation. Only the observation publishes, so the pane
+    // gets one event rather than a command echo plus an observation.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "disp-echo", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
+    backend.emitDisplayOrientation(.landscapeLeft)
+    try await Task.sleep(for: .milliseconds(50))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations == [.portrait, .landscapeLeft])
+}
+
+@Test
+func aDisplayWithNoOrientationSourceStillRenders() async throws {
+    // A backend that vends no orientation source (a physical device, or a
+    // display proxy missing the screen protocol) degrades to the
+    // command-sourced fallback: the pane mounts, frames are untouched,
+    // and it keeps its assumed orientation. Refusing to observe must never
+    // fail the pane.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.displayOrientationAvailable = false
+    let pane = try await coordinator.createMockPane(udid: "disp-none", sessionId: UUID(), backend: backend)
+    #expect(backend.startDisplayOrientationCalls == 1)
+    #expect(backend.startFramesCalled)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var replayed: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+    }
+    #expect(replayed == [.portrait])
+}
+
+@Test
+func aPaneWithNoDisplaySourceStillTurnsOnACommand() async throws {
+    // The fallback that keeps an unobservable pane working. With no
+    // observation coming, the command is the only evidence the pane will
+    // ever get, so it publishes and the pane turns. Without this fallback
+    // a physical-device pane cannot respond to DeviceTerm rotations; the
+    // locked-interface mismatch stays unavoidable without observation.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.displayOrientationAvailable = false
+    let pane = try await coordinator.createMockPane(udid: "cmd-fallback", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations == [.portrait, .landscapeLeft])
+}
+
+@Test
+func aPaneWithNoDisplaySourceStaysPutForAnUnperformedRotation() async throws {
+    // The fallback is still gated on the backend performing the rotation.
+    // A fenced or failed one publishes nothing, so the pane never turns for
+    // a rotation the device didn't make.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(rotateReaches: false)
+    backend.displayOrientationAvailable = false
+    let pane = try await coordinator.createMockPane(udid: "cmd-fenced", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations == [.portrait])
+}
+
+@Test
+func concurrentRotationsCommitTheirBaseInRequestOrder() async throws {
     // Ordering guard: the backend completes rotations serially, but each
     // `rotate` awaits its completion on an independent task. Without
     // coordinator-side serialization a later rotation's continuation could
-    // resume first and publish B before A while the device ended at B. The
-    // rotation chain keeps broadcasts in request order.
+    // resume first and commit B's base before A's, leaving the tracked base
+    // at A while the device ended at B. The rotation chain keeps the
+    // commits in request order.
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()
     backend.blockFirstRotate = true
     let pane = try await coordinator.createMockPane(udid: "rot-order", sessionId: UUID(), backend: backend)
-    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
 
     // A: its backend rotate blocks on the gate, holding the rotation chain.
     let first = Task {
@@ -387,25 +549,23 @@ func concurrentRotationsBroadcastInRequestOrder() async throws {
     #expect(backend.firstRotateStarted)
 
     // B: issued after A holds the chain, so it must await A. Its ungated
-    // backend rotate would otherwise complete and broadcast immediately.
+    // backend rotate would otherwise complete and commit immediately.
     let second = Task {
         try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
     }
     // Give B time to (wrongly) overtake if serialization were broken.
     try await Task.sleep(for: .milliseconds(50))
 
-    // Release A → A broadcasts and signals the chain, then B proceeds.
     backend.releaseFirstRotate()
     try await first.value
     try await second.value
-    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    #expect(backend.rotations == [.landscapeLeft, .landscapeRight])
 
-    var order: [Orientation] = []
-    for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { order.append(orientation) }
-    }
-    // The subscribe-time replay leads; the two broadcasts follow it in order.
-    #expect(order == [.portrait, .landscapeLeft, .landscapeRight])
+    // The base the next relative rotate resolves from must be B's target,
+    // not A's: one step left of landscapeRight is portrait, where left of
+    // landscapeLeft would be portraitUpsideDown.
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    #expect(backend.rotations.last == .portrait)
 }
 
 @Test
@@ -488,15 +648,19 @@ func concurrentRelativeRotationsEachAdvanceOneStep() async throws {
 }
 
 @Test
-func subscribeReplaysTheCurrentOrientation() async throws {
-    // A subscriber that arrives after the rotation has to be told where the
-    // device is. Without the replay it renders and hit-tests a landscape
-    // device as portrait until something rotates again, which is what a GUI
-    // relaunching onto a still-running pane would do.
+func subscribeReplaysTheDisplaysOrientation() async throws {
+    // A subscriber that arrives after the display turned has to be told
+    // what it is showing. Without the replay it renders and hit-tests a
+    // landscape display as portrait until something turns it again, which
+    // is what a GUI relaunching onto a still-running pane would do.
+    //
+    // It replays what the display is presenting, not what was last
+    // commanded, so it matches the pixels in the next frame.
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()
     let pane = try await coordinator.createMockPane(udid: "rot-replay", sessionId: UUID(), backend: backend)
-    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    backend.emitDisplayOrientation(.landscapeRight)
+    try await Task.sleep(for: .milliseconds(50))
 
     let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
@@ -505,6 +669,151 @@ func subscribeReplaysTheCurrentOrientation() async throws {
         if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
     }
     #expect(replayed == [.landscapeRight])
+}
+
+@Test
+func attachSeedsTheDisplayOrientationBeforeAnySubscriber() async throws {
+    // Mounting a pane onto a device whose display is already landscape has
+    // to start correct: the seed is read at attach, so the first subscriber
+    // is replayed landscape without waiting for a change that may never
+    // come.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.displayOrientation = .landscapeLeft
+    let pane = try await coordinator.createMockPane(udid: "rot-seed", sessionId: UUID(), backend: backend)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var replayed: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+    }
+    #expect(replayed == [.landscapeLeft])
+}
+
+@Test
+func anExternalRotationLeavesTheCommandBaseAlone() async throws {
+    // Display state is the foreground app's interface
+    // orientation, so it must not correct the command base: a portrait
+    // device running a landscape-locked app would otherwise drive the base
+    // to landscape and mis-target the next relative rotate.
+    //
+    // The cost of that choice is this: after an out-of-band rotation the
+    // base is stale, so exactly one relative rotate goes to the wrong
+    // place. It self-corrects immediately, because rotate is absolute at
+    // every layer.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-external", sessionId: UUID(), backend: backend)
+
+    // Something outside deviceterm turns the device to landscapeLeft.
+    backend.emitDisplayOrientation(.landscapeLeft)
+    try await Task.sleep(for: .milliseconds(50))
+
+    // The base is still the assumed portrait, so this resolves from there.
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    #expect(backend.rotations == [.landscapeLeft])
+    // And now the base is true again: the command made it so.
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    #expect(backend.rotations.last == .portraitUpsideDown)
+}
+
+@Test
+func aDisplayCallbackInFlightPastTeardownIsDropped() async throws {
+    // Unregistering can't recall a block already dispatched on the
+    // callback queue, so a late delivery is expected rather than
+    // hypothetical. Fenced on `displayObserverEpoch`, so a delivery
+    // arriving after orientation teardown can't update a retired record
+    // that is still present.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-late", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    let late = try #require(backend.installedCallback)
+
+    // Retire the pane, which bumps the epoch the observer captured.
+    await coordinator.markPaneFailed(paneId: pane.paneId, reason: "test")
+    // Now deliver the observation that was already in flight.
+    late(.landscapeRight)
+    try await Task.sleep(for: .milliseconds(50))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    // Only the subscribe-time replay; the late delivery published nothing.
+    #expect(orientations == [.portrait])
+}
+
+@Test
+func orientationObservationSurvivesAnOwnershipEpochBump() async throws {
+    // The pane's `epoch` also advances on owner revocation and on both
+    // halves of an ownership transfer, none of which stop the observer or
+    // change what the display is doing. Fencing observation on it would
+    // leave a live observer whose every delivery is rejected, and because
+    // the command fallback stands down while observation is running, the
+    // pane's orientation would freeze permanently the first time it changed
+    // hands. The observer has its own epoch for exactly this reason.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let sessionId = UUID()
+    let pane = try await coordinator.createMockPane(udid: "rot-epoch", sessionId: sessionId, backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    // Revoke the owning session, which bumps the pane's `epoch`. The
+    // `.guiPeer` subscription is spared, so the stream stays open.
+    await coordinator.revokeSubscriptions(forSession: sessionId)
+
+    backend.emitDisplayOrientation(.landscapeRight)
+    try await Task.sleep(for: .milliseconds(50))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations == [.portrait, .landscapeRight])
+}
+
+@Test
+func rapidDisplayRotationsSettleOnTheNewestValue() async throws {
+    // Deliveries ride an ordered pump rather than one unstructured task
+    // each, because independent tasks have no ordering guarantee and a
+    // reversed pair would leave the pane on the older orientation for good.
+    // Whatever intermediates get coalesced, the value the pane ends on is
+    // the one the display last reported.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-burst", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    backend.emitDisplayOrientation(.landscapeLeft)
+    backend.emitDisplayOrientation(.portraitUpsideDown)
+    backend.emitDisplayOrientation(.landscapeRight)
+    try await Task.sleep(for: .milliseconds(100))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations.last == .landscapeRight)
+}
+
+@Test
+func retiringAPaneStopsObservingTheDisplay() async throws {
+    // The observer is owned by the pane record, so it stops when the pane
+    // does. A callback that outlived teardown would resurrect orientation
+    // state on a pane that no longer exists.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let sessionId = UUID()
+    let pane = try await coordinator.createMockPane(udid: "rot-teardown", sessionId: sessionId, backend: backend)
+    #expect(backend.startDisplayOrientationCalls == 1)
+
+    _ = await coordinator.close(paneId: pane.paneId, as: .session(sessionId), mode: .detach)
+    #expect(backend.stopDisplayOrientationCalls == 1)
 }
 
 @Test
@@ -994,8 +1303,13 @@ func edgeTouchMapsPhasesToEdgePrimitives() async throws {
     #expect(backend.tapUpPoints.isEmpty)
 }
 
-@Test("rotate broadcasts orientation.changed to subscribers")
-func rotateBroadcastsOrientationChange() async throws {
+@Test("a locked interface takes the rotate but the pane does not turn")
+func lockedInterfaceTakesRotateWithoutTurningThePane() async throws {
+    // The rotate reaches the
+    // device, so the command is real; the display never moves, because the
+    // foreground app holds its interface orientation. The pane must stay
+    // where it is: it is still showing a portrait framebuffer, and turning
+    // it would counter-rotate that framebuffer on screen.
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()
     let result = try await coordinator.createMockPane(
@@ -1015,8 +1329,8 @@ func rotateBroadcastsOrientationChange() async throws {
             orientations.append(orientation)
         }
     }
-    // Subscribe replays `.portrait`; the broadcast under test follows it.
-    #expect(orientations == [.portrait, .landscapeLeft])
+    // Only the subscribe-time replay. The rotate published nothing.
+    #expect(orientations == [.portrait])
     #expect(backend.rotations == [.landscapeLeft])
 }
 

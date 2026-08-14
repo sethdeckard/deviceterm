@@ -64,6 +64,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     // documented DispatchQueue) serialises the counter across the gesture's
     // off-actor task and the coordinator's quiesce. Witnesses live below,
     // after `init`.
+    /// Delivery queue for display-orientation callbacks. Serial, so
+    /// deliveries reach the coordinator in queue order.
+    private let orientationQueue = DispatchQueue(label: "com.deviceterm.sim.display-orientation")
+
     private let inputGate = DispatchQueue(label: "com.deviceterm.sim.input-gate")
     private var inputGeneration: UInt64 = 1
     /// The contact currently held down, if any (see `HeldTouch`).
@@ -214,6 +218,38 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         return (Int(size.width), Int(size.height))
     }
 
+    // MARK: Display orientation
+
+    func startDisplayOrientation(
+        onChange: @escaping @Sendable (Orientation) -> Void
+    ) -> Bool {
+        guard let displayHandle else { return false }
+        do {
+            try displayHandle.startOrientation(
+                callback: { raw in
+                    guard let orientation = Orientation(displayValue: raw) else { return }
+                    onChange(orientation)
+                },
+                queue: orientationQueue
+            )
+            return true
+        } catch {
+            // A display that vends no orientation source leaves the pane
+            // on its last known orientation. Frames are unaffected, so
+            // this degrades rather than failing the pane.
+            return false
+        }
+    }
+
+    func stopDisplayOrientation() {
+        displayHandle?.stopOrientation()
+    }
+
+    func currentDisplayOrientation() -> Orientation? {
+        guard let displayHandle else { return nil }
+        return Orientation(displayValue: displayHandle.currentDisplayOrientation)
+    }
+
     // MARK: Touch / keyboard / buttons / crown
 
     private func requireHID() throws -> SimHIDClient {
@@ -308,9 +344,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         try gatedSend(generation) { try requireHID().rotateCrown(delta: delta) }
     }
 
-    // Synchronous: the sim rotates authoritatively through the bridge, so
-    // `gatedSend`'s result (did it send, or was it dropped as stale) is the
-    // per-command outcome. No async work: see the protocol's async signature.
+    // Reports only that the send cleared the generation fence. The bridge
+    // rotates with a one-way GSEvent that carries no reply, so nothing here
+    // can confirm the device moved, let alone that the display followed;
+    // `true` means "sent, not dropped as stale" and no more. Presentation
+    // comes from `startDisplayOrientation` instead, which does observe.
+    // No async work: see the protocol's async signature.
     // swiftlint:disable:next async_without_await
     func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool {
         try gatedSend(generation) {

@@ -406,11 +406,24 @@ DeviceTerm last put it:
 left | right
 ```
 
-DeviceTerm tracks only the rotations it performed. Attach to a device that is
-already turned and the first `left` or `right` steps from the wrong place, then
-lands on the orientation it assumed, which puts the two back in step. Anything
-that rotates the device without going through DeviceTerm, an app forcing its
-own orientation included, puts them out of step again.
+`left` and `right` step from the orientation DeviceTerm last commanded, which
+is not always where the device is. Attach to a device that is already turned,
+or rotate it with something else, and the first `left` or `right` steps from
+the wrong place. DeviceTerm records the target it sent as the next base, so a
+following `left` or `right` steps from that. An absolute rotate names its
+target directly and doesn't use the base at all.
+
+A simulator pane's picture is a separate matter, and follows the simulator's
+display rather than the command. Rotate a sim from outside DeviceTerm and the
+pane turns with it, upright and correctly shaped. An app that locks its own
+orientation keeps the picture where it is, because that is what the device is
+still showing, even though DeviceTerm sent the rotation command.
+
+A physical-device pane doesn't follow its display. Rotate the hardware by hand
+and the mirror shows the app's new landscape layout lying on its side in a
+portrait-shaped pane, because nothing told DeviceTerm the device turned. Rotate
+through DeviceTerm and the pane follows the orientation you commanded; with no
+display to read, it can't tell when a locked interface disagrees.
 
 ### Turn the Digital Crown
 

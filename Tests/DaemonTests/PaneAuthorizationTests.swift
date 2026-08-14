@@ -209,6 +209,11 @@ private final class GatingMockBackend: DeviceBackend, @unchecked Sendable {
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
 
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
+
     func currentInputGeneration() -> UInt64 { gate.sync { generation } }
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { gate.sync { generation == self.generation } }
     // swiftlint:disable:next async_without_await
@@ -298,6 +303,11 @@ private final class UnquiescableBackend: DeviceBackend, @unchecked Sendable {
     ) throws {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
     // swiftlint:disable:next async_without_await
     func quiesceInputForTransfer() async -> Bool { false }
     func tapDown(at point: CGPoint, generation: UInt64) throws {}
@@ -361,6 +371,11 @@ private final class RecoveringBackend: DeviceBackend, @unchecked Sendable {
     ) throws {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
     // swiftlint:disable:next async_without_await
     func quiesceInputForTransfer() async -> Bool {
         gate.sync {

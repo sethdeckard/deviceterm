@@ -43,6 +43,11 @@ private final class LocationMockBackend: DeviceBackend, @unchecked Sendable {
     ) {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (390, 844) }
+
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
     func tapDown(at point: CGPoint, generation: UInt64) {}
     func tapUp(at point: CGPoint, generation: UInt64) {}
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) {}
@@ -516,6 +521,11 @@ private final class ParkingLocationBackend: DeviceBackend, @unchecked Sendable {
     ) {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (390, 844) }
+
+    // No display to observe; the pane keeps its last commanded orientation.
+    func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
+    func stopDisplayOrientation() {}
+    func currentDisplayOrientation() -> Orientation? { nil }
     func tapDown(at point: CGPoint, generation: UInt64) {}
     func tapUp(at point: CGPoint, generation: UInt64) {}
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) {}

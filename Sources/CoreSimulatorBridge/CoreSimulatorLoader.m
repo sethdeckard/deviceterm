@@ -397,6 +397,11 @@ static NSString *const kAXPFrameworkPath =
         // SimDisplayRenderable.
         @"SimDisplayRenderable",
         @"SimDisplayIOSurfaceRenderable",
+        // SimDisplayHandle's orientation observation. The same display
+        // descriptor also conforms to SimScreen, which is where the
+        // presented orientation and its change callback live.
+        @"SimScreen",
+        @"SimScreenProperties",
         // SimAccessibility: three-method delegate protocol that AXP
         // calls back into. Missing any of these methods crashes the
         // first translation request.
@@ -425,6 +430,21 @@ static NSString *const kAXPFrameworkPath =
             @"registerCallbackWithUUID:ioSurfacesChangeCallback:",
             @"unregisterIOSurfaceChangeCallbackWithUUID:",
             @"unregisterIOSurfacesChangeCallbackWithUUID:",
+        ],
+        // SimScreen carries the presented orientation: `screenProperties`
+        // reads it, and the screen-callback registration is how a change
+        // is pushed. Losing these costs the pane every rotation it didn't
+        // command itself, silently, so they are probed rather than left to
+        // a runtime `respondsToSelector:` that just answers NO.
+        @"SimScreen": @[
+            @"screenProperties",
+            @"registerScreenCallbacksWithUUID:callbackQueue:frameCallback:"
+            @"surfacesChangedCallback:propertiesChangedCallback:",
+            @"unregisterScreenCallbacksWithUUID:",
+        ],
+        // The property the orientation is actually read from.
+        @"SimScreenProperties": @[
+            @"uiOrientation",
         ],
         // SimAccessibility: AXP calls back through these on every
         // translation request. Skip any and the first call crashes.
