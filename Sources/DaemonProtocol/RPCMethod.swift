@@ -179,6 +179,9 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     case paneInputLongPress = "pane.input.longPress"
     case paneInputKey = "pane.input.key"
     case paneInputButton = "pane.input.button"
+    /// `pane.input.rotate`: an absolute `orientation`, or a `direction`
+    /// the daemon resolves against the orientation it last successfully
+    /// commanded on that pane. Exactly one of the two.
     case paneInputRotate = "pane.input.rotate"
     case paneInputPinch = "pane.input.pinch"
     /// `pane.input.multitouch`: live two-finger streaming

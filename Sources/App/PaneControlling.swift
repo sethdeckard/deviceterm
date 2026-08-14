@@ -96,7 +96,11 @@ protocol PaneControlling: AnyObject {
         finger2: CGPoint
     ) async throws
     func paneInputText(paneId: String, text: String) async throws
-    func paneInputRotate(paneId: String, orientation: Orientation) async throws
+    /// `pane.input.rotate`: rotate to an absolute orientation, or one
+    /// 90° step from wherever the daemon believes the device is. The
+    /// daemon resolves a direction, so Rotate Left/Right advances from
+    /// the same value a `deviceterm rotate left` would.
+    func paneInputRotate(paneId: String, target: RotationTarget) async throws
     /// `pane.input.crown`: watchOS Digital Crown rotation. `delta` is
     /// in the bridge's raw crown unit (~1 unit per detent); positive
     /// is forward/down. `durationMs == 0` sends the whole rotation

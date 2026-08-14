@@ -213,10 +213,27 @@ func rotateReceiptJSONShape() throws {
         udid: "U",
         paneId: "P",
         shortId: "rt1234",
-        orientation: "landscapeLeft"
+        orientation: "landscapeLeft",
+        direction: nil
     )
     let json = try encode(receipt)
     #expect(json == #"{"ok":true,"orientation":"landscapeLeft","paneId":"P","shortId":"rt1234","udid":"U"}"#)
+}
+
+@Test
+func relativeRotateReceiptReportsTheDirection() throws {
+    // A relative rotate resolves against an orientation only the daemon
+    // holds, so the receipt echoes the direction and omits `orientation`
+    // rather than reporting a landing spot it would have to guess at.
+    let receipt = Receipt.Rotate(
+        udid: "U",
+        paneId: "P",
+        shortId: "rt1234",
+        orientation: nil,
+        direction: "left"
+    )
+    let json = try encode(receipt)
+    #expect(json == #"{"direction":"left","ok":true,"paneId":"P","shortId":"rt1234","udid":"U"}"#)
 }
 
 // MARK: - Crown

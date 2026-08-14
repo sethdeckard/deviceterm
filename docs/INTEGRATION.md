@@ -669,8 +669,13 @@ The command adds these fields:
 | `button` | `button` |
 | `key` | `keyCode`, `down` |
 | `text` | `bytes` |
-| `rotate` | `orientation` |
+| `rotate` | `orientation?`, `direction?` (exactly one) |
 | `crown` | `delta`, `velocity?`, `durationMs?` |
+
+A `rotate` receipt carries `orientation` when the command named one, and
+`direction` when it named `left` or `right`. The daemon's acknowledgment
+doesn't report where the device ended up, so a relative receipt echoes the
+direction asked for rather than a resulting orientation.
 
 Example tap receipt:
 

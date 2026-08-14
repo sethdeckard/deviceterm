@@ -1298,13 +1298,26 @@ the daemon translates it to the USB HID usage code Indigo expects (see
 
 #### `pane.input.rotate`
 
-- Params: `{paneId, orientation}`
+- Params: `{paneId, orientation}` or `{paneId, direction}`
 - Result: `{ok}`
 - Scope: session
 
 `orientation` is `portrait`, `portraitUpsideDown`, `landscapeLeft`, or
-`landscapeRight`. A successful rotate also broadcasts
-`orientation.changed` to every `pane.subscribe` subscriber.
+`landscapeRight`. `direction` is `left` or `right`, one 90° step from the
+orientation the daemon last successfully commanded on that pane. Exactly one
+of the two is required; both or neither is `invalidParams`, because a request
+carrying both gives no way to tell which the daemon would honor.
+
+That base is tracked, not observed: no backend vends an orientation getter, so
+the daemon knows only the rotations it performed. A pane starts assuming
+`portrait`, where an iOS device boots. Attach to a device that is already
+turned and the first relative rotate steps from the wrong place, then lands on
+the orientation it assumed, which makes the base true again. Anything that
+rotates the device afterwards without going through DeviceTerm, an app forcing
+its own orientation included, makes it stale again, and nothing detects that.
+
+A successful rotate broadcasts `orientation.changed` to every `pane.subscribe`
+subscriber.
 
 #### `pane.input.pinch`
 
@@ -1531,8 +1544,9 @@ subscription's request-envelope id:
   `rendering`, `shutdown`, or `failed`.
 - `surface.changed`: `{paneId, sequence}`, paired with a side-band
   surface payload for the same `(paneId, sequence)`.
-- `orientation.changed`: `{paneId, orientation}`, broadcast when a
-  rotate lands.
+- `orientation.changed`: `{paneId, orientation}`, replayed once at subscribe
+  with the pane's tracked orientation (assumed `portrait` until DeviceTerm
+  rotates it), and broadcast again whenever a rotate lands.
 
 The initial ack returns a `subscriptionToken` on every XPC subscription:
 the correlation key for the connection's side-band lane and, for a

@@ -283,21 +283,33 @@ func run(
                 build: { try CLICommands.textRequest(paneId: $0, text: text) }
             )
 
-        case let .rotate(pane, orientation):
+        case let .rotate(pane, target):
+            // The receipt echoes what was asked for. A relative rotate
+            // resolves against an orientation only the daemon holds, and the
+            // ack doesn't carry the result, so reporting a resulting
+            // orientation here would be a guess.
+            let requested: [(String, String)] = switch target {
+            case let .absolute(orientation):
+                [("orientation", orientation.rawValue)]
+
+            case let .relative(direction):
+                [("direction", direction.rawValue)]
+            }
             return try sendResolved(
                 ref: pane,
                 output: output,
                 transport: transport,
-                humanFields: { _ in [("orientation", orientation.rawValue)] },
+                humanFields: { _ in requested },
                 jsonReceipt: { resolved in
                     Receipt.Rotate(
                         udid: resolved.udid,
                         paneId: resolved.paneId,
                         shortId: resolved.shortId,
-                        orientation: orientation.rawValue
+                        orientation: target.orientation?.rawValue,
+                        direction: target.direction?.rawValue
                     )
                 },
-                build: { try CLICommands.rotateRequest(paneId: $0, orientation: orientation) }
+                build: { try CLICommands.rotateRequest(paneId: $0, target: target) }
             )
 
         case let .crown(pane, delta, velocity, durationMs):

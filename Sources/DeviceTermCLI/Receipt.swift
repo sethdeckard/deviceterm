@@ -110,7 +110,13 @@ public enum Receipt {
         public let udid: String
         public let paneId: String
         public let shortId: String?
-        public let orientation: String
+        /// Exactly one of `orientation` / `direction` is present,
+        /// echoing the form the command was given. A relative rotate
+        /// resolves against an orientation only the daemon holds, so the
+        /// receipt reports the direction asked for rather than a
+        /// resulting orientation it would have to guess at.
+        public let orientation: String?
+        public let direction: String?
     }
 
     public struct Crown: Encodable, Sendable {

@@ -1540,11 +1540,11 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         try await paneInput(.paneInputText, body: TextParams(paneId: paneId, text: text))
     }
 
-    /// Set device orientation.
-    func paneInputRotate(paneId: String, orientation: Orientation) async throws {
+    /// Set device orientation, absolutely or by one relative step.
+    func paneInputRotate(paneId: String, target: RotationTarget) async throws {
         try await paneInput(
             .paneInputRotate,
-            body: RotateParams(paneId: paneId, orientation: orientation.rawValue)
+            body: RotateParams(paneId: paneId, target: target)
         )
     }
 

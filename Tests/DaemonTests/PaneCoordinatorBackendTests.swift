@@ -324,7 +324,7 @@ func inputRoutesToThePanesBackend() async throws {
     let backend = MockDeviceBackend()
     let result = try await coordinator.createMockPane(udid: "udid-b", sessionId: UUID(), backend: backend)
     try await coordinator.tap(paneId: result.paneId, as: .guiPeer, x: 0.25, y: 0.75)
-    try await coordinator.rotate(paneId: result.paneId, as: .guiPeer, orientation: .landscapeLeft)
+    try await coordinator.rotate(paneId: result.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
     try await coordinator.pressButton(paneId: result.paneId, as: .guiPeer, button: .home)
     #expect(backend.tapDownPoints == [CGPoint(x: 0.25, y: 0.75)])
     #expect(backend.tapUpPoints == [CGPoint(x: 0.25, y: 0.75)])
@@ -339,23 +339,26 @@ func rotateBroadcastsOrientationChangedOnlyWhenTheDevicePerformedIt() async thro
     // failed to reach the target), so the GUI never rotates its presentation
     // for a rotation the device never made. Draining each stream to completion
     // after unsubscribe makes the assertion deterministic: a wrongly-broadcast
-    // event would sit buffered ahead of the finish.
-    func sawOrientationChanged(reaches: Bool, udid: String) async throws -> Bool {
+    // event would sit buffered ahead of the finish. Subscribing replays the
+    // pane's orientation, so the broadcast under test is whatever follows that
+    // first event.
+    func broadcastsAfterReplay(reaches: Bool, udid: String) async throws -> [Orientation] {
         let coordinator = PaneCoordinator()
         let backend = MockDeviceBackend(rotateReaches: reaches)
         let pane = try await coordinator.createMockPane(udid: udid, sessionId: UUID(), backend: backend)
         let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
-        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, orientation: .landscapeLeft)
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
         #expect(backend.rotations == [.landscapeLeft]) // the rotate was attempted either way
         await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
-        var saw = false
+        var orientations: [Orientation] = []
         for await event in stream {
-            if case .orientationChanged = event { saw = true }
+            if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
         }
-        return saw
+        #expect(orientations.first == .portrait) // the replay, before any broadcast
+        return Array(orientations.dropFirst())
     }
-    #expect(try await sawOrientationChanged(reaches: true, udid: "rot-yes"))
-    #expect(try await sawOrientationChanged(reaches: false, udid: "rot-no") == false)
+    #expect(try await broadcastsAfterReplay(reaches: true, udid: "rot-yes") == [.landscapeLeft])
+    #expect(try await broadcastsAfterReplay(reaches: false, udid: "rot-no").isEmpty)
 }
 
 @Test
@@ -373,7 +376,7 @@ func concurrentRotationsBroadcastInRequestOrder() async throws {
 
     // A: its backend rotate blocks on the gate, holding the rotation chain.
     let first = Task {
-        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, orientation: .landscapeLeft)
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
     }
     // Wait until A is parked mid-rotation (A owns the chain tail).
     var waited = 0
@@ -386,7 +389,7 @@ func concurrentRotationsBroadcastInRequestOrder() async throws {
     // B: issued after A holds the chain, so it must await A. Its ungated
     // backend rotate would otherwise complete and broadcast immediately.
     let second = Task {
-        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, orientation: .landscapeRight)
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
     }
     // Give B time to (wrongly) overtake if serialization were broken.
     try await Task.sleep(for: .milliseconds(50))
@@ -401,7 +404,124 @@ func concurrentRotationsBroadcastInRequestOrder() async throws {
     for await event in stream {
         if case let .orientationChanged(_, orientation) = event { order.append(orientation) }
     }
-    #expect(order == [.landscapeLeft, .landscapeRight])
+    // The subscribe-time replay leads; the two broadcasts follow it in order.
+    #expect(order == [.portrait, .landscapeLeft, .landscapeRight])
+}
+
+@Test
+func relativeRotationsWalkTheCycleFromTheTrackedOrientation() async throws {
+    // A pane starts tracking `.portrait`, so four Rotate Lefts must reach
+    // four distinct orientations and wrap, rather than re-sending the same
+    // target because the base never advanced.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-rel", sessionId: UUID(), backend: backend)
+    for _ in 0..<4 {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    }
+    #expect(backend.rotations == [
+        .landscapeLeft,
+        .portraitUpsideDown,
+        .landscapeRight,
+        .portrait
+    ])
+}
+
+@Test
+func relativeRotationResolvesFromThePrecedingAbsoluteOne() async throws {
+    // Absolute and relative write and read the same tracked value, so a
+    // direction after an absolute rotate steps from where that rotate put
+    // the device, not from the pane's boot orientation.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-mix", sessionId: UUID(), backend: backend)
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.right))
+    #expect(backend.rotations == [.landscapeRight, .portraitUpsideDown])
+}
+
+@Test
+func aRotationTheDeviceDidNotMakeLeavesTheBaseUnchanged() async throws {
+    // `rotateReaches: false` is a fenced or failed rotation. The tracked
+    // orientation must not move for one, or the error compounds: every
+    // later relative request resolves from a place the device never
+    // reached.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(rotateReaches: false)
+    let pane = try await coordinator.createMockPane(udid: "rot-miss", sessionId: UUID(), backend: backend)
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    #expect(backend.rotations == [.landscapeLeft, .landscapeLeft])
+}
+
+@Test
+func concurrentRelativeRotationsEachAdvanceOneStep() async throws {
+    // The reason a direction resolves *inside* the rotation chain rather
+    // than before it. Both requests are in flight at once; if the second
+    // read the tracked orientation before awaiting the first, both would
+    // pick `landscapeLeft` and one 90° step would silently vanish.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.blockFirstRotate = true
+    let pane = try await coordinator.createMockPane(udid: "rot-race", sessionId: UUID(), backend: backend)
+
+    let first = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    }
+    var waited = 0
+    while !backend.firstRotateStarted, waited < 400 {
+        try await Task.sleep(for: .milliseconds(5))
+        waited += 1
+    }
+    #expect(backend.firstRotateStarted)
+
+    let second = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    }
+    // Give the second request time to (wrongly) resolve off the stale base.
+    try await Task.sleep(for: .milliseconds(50))
+    backend.releaseFirstRotate()
+    try await first.value
+    try await second.value
+
+    #expect(backend.rotations == [.landscapeLeft, .portraitUpsideDown])
+}
+
+@Test
+func subscribeReplaysTheCurrentOrientation() async throws {
+    // A subscriber that arrives after the rotation has to be told where the
+    // device is. Without the replay it renders and hit-tests a landscape
+    // device as portrait until something rotates again, which is what a GUI
+    // relaunching onto a still-running pane would do.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-replay", sessionId: UUID(), backend: backend)
+    try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var replayed: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+    }
+    #expect(replayed == [.landscapeRight])
+}
+
+@Test
+func subscribeReplaysPortraitForAPaneNothingHasRotated() async throws {
+    // The replay is unconditional so a subscriber always has an orientation
+    // to start from, rather than inferring one from the event's absence.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(udid: "rot-fresh", sessionId: UUID(), backend: backend)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var replayed: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+    }
+    #expect(replayed == [.portrait])
 }
 
 @Test
@@ -884,7 +1004,7 @@ func rotateBroadcastsOrientationChange() async throws {
         backend: backend
     )
     let (subscriptionId, stream) = try await coordinator.subscribe(paneId: result.paneId, as: .guiPeer)
-    try await coordinator.rotate(paneId: result.paneId, as: .guiPeer, orientation: .landscapeLeft)
+    try await coordinator.rotate(paneId: result.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
     // Unsubscribe finishes the stream so the drain terminates instead of
     // blocking on an open subscription (and so a regression fails as a
     // missing event, not a hang).
@@ -895,7 +1015,8 @@ func rotateBroadcastsOrientationChange() async throws {
             orientations.append(orientation)
         }
     }
-    #expect(orientations == [.landscapeLeft])
+    // Subscribe replays `.portrait`; the broadcast under test follows it.
+    #expect(orientations == [.portrait, .landscapeLeft])
     #expect(backend.rotations == [.landscapeLeft])
 }
 
@@ -1227,8 +1348,9 @@ func terminalStateReachesSubscribers(state: PaneLifecycle, udid: String) async t
     )
     let (_, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
     var iterator = stream.makeAsyncIterator()
-    // Subscribing replays the pane's current state; drain it so the next
-    // event is the terminal transition.
+    // Subscribing replays the pane's current state and orientation; drain
+    // both so the next event is the terminal transition.
+    _ = await iterator.next()
     _ = await iterator.next()
 
     if state == .shutdown {

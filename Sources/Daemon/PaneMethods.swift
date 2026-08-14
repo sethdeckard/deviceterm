@@ -803,15 +803,10 @@ public enum PaneMethods {
         { paramsJSON in
             let params = try JSONDecoder().decode(RotateParams.self, from: paramsJSON)
             let paneId = try requirePaneId(params.paneId)
-            guard let orientation = Orientation(rawValue: params.orientation) else {
-                throw RPCMethodError.invalidParams(
-                    "orientation must be one of: "
-                    + Orientation.allCases.map(\.rawValue).joined(separator: ", ")
-                )
-            }
+            let target = try rotationTarget(params)
             let principal = try requirePrincipal()
             return try await paneAck {
-                try await paneCoordinator.rotate(paneId: paneId, as: principal, orientation: orientation)
+                try await paneCoordinator.rotate(paneId: paneId, as: principal, target: target)
             }
         }
     }
@@ -880,6 +875,38 @@ public enum PaneMethods {
     }
 
     // MARK: - Helpers
+
+    /// Resolve a `pane.input.rotate` request's two mutually exclusive
+    /// fields into the one value the coordinator takes. The wire can
+    /// carry both or neither; those are `invalidParams`, named as such
+    /// rather than silently preferring one, since a client sending both
+    /// has no idea which the daemon would honor.
+    static func rotationTarget(_ params: RotateParams) throws -> RotationTarget {
+        switch (params.orientation, params.direction) {
+        case let (rawOrientation?, nil):
+            guard let orientation = Orientation(rawValue: rawOrientation) else {
+                throw RPCMethodError.invalidParams(
+                    "orientation must be one of: "
+                    + Orientation.allCases.map(\.rawValue).joined(separator: ", ")
+                )
+            }
+            return .absolute(orientation)
+
+        case let (nil, rawDirection?):
+            guard let direction = RotationDirection(rawValue: rawDirection) else {
+                throw RPCMethodError.invalidParams(
+                    "direction must be one of: "
+                    + RotationDirection.allCases.map(\.rawValue).joined(separator: ", ")
+                )
+            }
+            return .relative(direction)
+
+        default:
+            throw RPCMethodError.invalidParams(
+                "exactly one of orientation or direction is required"
+            )
+        }
+    }
 
     /// Run a pure pane-input coordinator call and encode the standard
     /// `RPCAck(success: true)`, mapping a thrown `PaneError` to its RPC

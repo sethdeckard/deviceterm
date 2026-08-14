@@ -476,12 +476,30 @@ func parsePinchWrongArityIsUsage() {
 func parseRotateHappyPath() {
     #expect(
         CLICommands.parse(["deviceterm", "rotate", "landscapeLeft"])
-        == .rotate(pane: nil, orientation: .landscapeLeft)
+        == .rotate(pane: nil, target: .absolute(.landscapeLeft))
         )
     #expect(
         CLICommands.parse(["deviceterm", "rotate", "portrait"])
-        == .rotate(pane: nil, orientation: .portrait)
+        == .rotate(pane: nil, target: .absolute(.portrait))
         )
+}
+
+/// `rotate` takes a direction on the same positional as an orientation.
+/// The two vocabularies don't overlap, so neither shadows the other.
+@Test(
+    "rotate accepts a relative direction",
+    arguments: [
+        ("left", RotationDirection.left),
+        ("right", .right),
+        ("LEFT", .left),
+        ("Right", .right)
+    ]
+)
+func parseRotateAcceptsADirection(_ spelling: String, expected: RotationDirection) {
+    #expect(
+        CLICommands.parse(["deviceterm", "rotate", spelling])
+        == .rotate(pane: nil, target: .relative(expected))
+    )
 }
 
 @Test
@@ -492,6 +510,19 @@ func parseRotateUnknownOrientationIsUsage() {
         Issue.record("unknown orientation should be .usage")
         return
     }
+}
+
+@Test
+func parseRotateUsageListsBothVocabularies() throws {
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "rotate", "widdershins"]
+    ) else {
+        Issue.record("unknown rotate argument should be .usage")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("portrait"))
+    #expect(text.contains("|left|right>"))
 }
 
 /// `rotate` accepts kebab-case (canonical), snake_case, all-lowercase,
@@ -509,7 +540,7 @@ func parseRotateUnknownOrientationIsUsage() {
 func parseRotateAcceptsAlternateSpellings(_ spelling: String) {
     #expect(
         CLICommands.parse(["deviceterm", "rotate", spelling])
-        == .rotate(pane: nil, orientation: .landscapeRight)
+        == .rotate(pane: nil, target: .absolute(.landscapeRight))
     )
 }
 

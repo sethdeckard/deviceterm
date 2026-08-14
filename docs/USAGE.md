@@ -375,6 +375,7 @@ deviceterm key 0x30 down
 deviceterm key 0x30 up
 deviceterm text "hello world"
 deviceterm rotate landscape-left
+deviceterm rotate left
 ```
 
 `button` accepts:
@@ -392,11 +393,24 @@ key-down with its corresponding key-up.
 `text` supports ASCII and sends one keypress per character. It reports an
 unsupported character instead of silently dropping it.
 
-`rotate` accepts:
+`rotate` accepts an absolute orientation:
 
 ```text
 portrait | portrait-upside-down | landscape-left | landscape-right
 ```
+
+or a relative direction, which turns the device 90 degrees from wherever
+DeviceTerm last put it:
+
+```text
+left | right
+```
+
+DeviceTerm tracks only the rotations it performed. Attach to a device that is
+already turned and the first `left` or `right` steps from the wrong place, then
+lands on the orientation it assumed, which puts the two back in step. Anything
+that rotates the device without going through DeviceTerm, an app forcing its
+own orientation included, puts them out of step again.
 
 ### Turn the Digital Crown
 

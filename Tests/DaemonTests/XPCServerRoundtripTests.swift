@@ -368,10 +368,15 @@ func subscriptionEventsFlowWhileAnotherRequestIsParked() async throws {
     )
     #expect(try await poll { await inbound.responseCount == 1 })
 
-    // Before: a rotation reaches the client as an `evt`.
+    // Subscribing replays the pane's orientation. Let that settle before
+    // rotating: these counts are exact, and a replay still in flight when the
+    // first rotation's event lands would skip the count being polled for.
     let orientationEvent = PaneEventName.orientationChanged.rawValue
-    try await coordinator.rotate(paneId: paneId, as: principal, orientation: .landscapeLeft)
     #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 1 })
+
+    // Before: a rotation reaches the client as an `evt`.
+    try await coordinator.rotate(paneId: paneId, as: principal, target: .absolute(.landscapeLeft))
+    #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 2 })
 
     // Park a second request on the same connection, waiting for positive
     // evidence it is suspended inside its handler rather than a timed guess.
@@ -379,15 +384,15 @@ func subscriptionEventsFlowWhileAnotherRequestIsParked() async throws {
     #expect(try await poll { await gate.isWaiting })
 
     // During: the parked handler has not stalled the subscription.
-    try await coordinator.rotate(paneId: paneId, as: principal, orientation: .portrait)
-    #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 2 })
+    try await coordinator.rotate(paneId: paneId, as: principal, target: .absolute(.portrait))
+    #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 3 })
 
     await gate.open()
     #expect(try await poll { await inbound.responseCount == 2 })
 
     // After: still streaming on a connection that was never torn down.
-    try await coordinator.rotate(paneId: paneId, as: principal, orientation: .landscapeRight)
-    #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 3 })
+    try await coordinator.rotate(paneId: paneId, as: principal, target: .absolute(.landscapeRight))
+    #expect(try await poll { await inbound.eventCount(method: orientationEvent) == 4 })
     #expect(await server.connectionCount == 1)
     #expect(await coordinator.subscriberCount(paneId: paneId) == 1)
 }

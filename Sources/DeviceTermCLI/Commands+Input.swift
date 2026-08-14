@@ -134,16 +134,20 @@ extension CLICommands {
             return .text(pane: pane, text: pos.joined(separator: " "))
 
         case "rotate":
-            guard pos.count == 1,
-                let orientation = parseEnumArg(pos[0], as: Orientation.self) else {
+            // A direction and an orientation share one positional. Matching
+            // is on the whole argument rather than a prefix, so no
+            // orientation spelling resolves to `left` or `right` and the two
+            // vocabularies can't shadow each other.
+            guard pos.count == 1, let target = parseRotationTarget(pos[0]) else {
                 return .usage(
                     message:
                     "usage: deviceterm rotate "
-                    + "<portrait|portrait-upside-down|landscape-left|landscape-right> "
+                    + "<portrait|portrait-upside-down|landscape-left|landscape-right"
+                    + "|left|right> "
                     + "[--pane <ref>]"
                     )
             }
-            return .rotate(pane: pane, orientation: orientation)
+            return .rotate(pane: pane, target: target)
 
         case "crown":
             guard pos.count == 1, let delta = Double(pos[0]) else {
@@ -173,6 +177,20 @@ extension CLICommands {
         default:
             return nil
         }
+    }
+
+    /// Resolve `rotate`'s single positional to a direction or an
+    /// absolute orientation, nil when it is neither. Both go through the
+    /// shared enum-argument normalization, which for the single-word
+    /// directions amounts to accepting any capitalization.
+    static func parseRotationTarget(_ raw: String) -> RotationTarget? {
+        if let direction = parseEnumArg(raw, as: RotationDirection.self) {
+            return .relative(direction)
+        }
+        if let orientation = parseEnumArg(raw, as: Orientation.self) {
+            return .absolute(orientation)
+        }
+        return nil
     }
 
     // MARK: - Input & listing request builders
@@ -306,12 +324,12 @@ extension CLICommands {
         try request(method: .paneInputText, body: TextParams(paneId: paneId, text: text))
     }
 
-    public static func rotateRequest(paneId: String, orientation: Orientation) throws -> RPCEnvelope {
+    public static func rotateRequest(paneId: String, target: RotationTarget) throws -> RPCEnvelope {
         try request(
             method: .paneInputRotate,
             body: RotateParams(
             paneId: paneId,
-            orientation: orientation.rawValue
+            target: target
         )
             )
     }

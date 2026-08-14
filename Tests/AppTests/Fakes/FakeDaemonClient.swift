@@ -87,7 +87,9 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     }
     struct RotateCall: Equatable {
         let paneId: String
-        let orientation: Orientation
+        /// What the VM asked for. A relative request stays relative all
+        /// the way to the daemon, so there is no orientation to record.
+        let target: RotationTarget
     }
     struct PaneAxPointCall: Equatable {
         let paneId: String
@@ -884,9 +886,9 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         paneInputCalls.append((.paneInputText, paneId))
     }
 
-    func paneInputRotate(paneId: String, orientation: Orientation) {
+    func paneInputRotate(paneId: String, target: RotationTarget) {
         paneInputCalls.append((.paneInputRotate, paneId))
-        rotateCalls.append(RotateCall(paneId: paneId, orientation: orientation))
+        rotateCalls.append(RotateCall(paneId: paneId, target: target))
     }
 
     func paneInputCrown(paneId: String, delta: Double, durationMs: Int) {

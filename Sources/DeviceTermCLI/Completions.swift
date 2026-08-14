@@ -13,8 +13,9 @@
 //   - every `VerbCatalog` verb and its `subVerbs`
 //   - `help` topic names, from `HelpCatalog`
 //   - the common flags, not the full per-verb grammar
-//   - enum-valued: `button` (HardwareButton), `rotate` (Orientation),
-//     and the shell argument to `completions install`
+//   - enum-valued: `button` (HardwareButton), `rotate` (Orientation
+//     plus RotationDirection), and the shell argument to
+//     `completions install`
 //
 // The emitted scripts cover the happy-path shape: completion
 // candidates as the user types; the verb list is the source of
@@ -82,11 +83,15 @@ public enum Completions {
         "digital-crown"
     ]
 
+    /// Both vocabularies `rotate` takes on its one positional: the four
+    /// absolute orientations, then the two relative directions.
     public static let rotateValues: [String] = [
         "portrait",
         "portrait-upside-down",
         "landscape-left",
-        "landscape-right"
+        "landscape-right",
+        "left",
+        "right"
     ]
 
     /// `defaultInstallPath(for:homeDir:)` honors the XDG vars when
@@ -240,7 +245,7 @@ public enum Completions {
                     _values 'button' \(buttons)
                     ;;
                 rotate)
-                    _values 'orientation' \(rotations)
+                    _values 'orientation or direction' \(rotations)
                     ;;
                 *)
                     _arguments \\

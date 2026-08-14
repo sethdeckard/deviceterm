@@ -85,15 +85,14 @@ final class SimulatorPaneViewModel {
     private(set) var currentSurfaceSequence: UInt64?
     var supportsLiveTouchInput: Bool { daemonClient.supportsLiveTouchInput }
     var supportsMultitouchInput: Bool { daemonClient.supportsMultitouchInput }
-    /// Tracked device orientation. Advanced optimistically by
-    /// `rotate(to:)` / the relative `rotateLeft/Right` helpers, and
-    /// authoritatively by the daemon's `orientation.changed` pane event
-    /// (`pane.subscribe`), so a rotation from outside this VM (e.g.
-    /// `deviceterm rotate <orientation>`) keeps this in sync instead of
-    /// drifting from the device. Defaults to `.portrait` (iOS sims boot
-    /// portrait). Drives the render counter-rotation and input mapping,
-    /// and derives the next orientation for the relative Rotate Left/Right
-    /// menu items.
+    /// Device orientation as last reported by the daemon's
+    /// `orientation.changed` pane event (`pane.subscribe`), never written
+    /// by this VM's own rotate calls. The daemon assumes `.portrait` for a
+    /// pane it hasn't rotated (where an iOS device boots) and updates it
+    /// after a rotation it commanded, so anything else rotating the device
+    /// leaves this stale. Drives the render counter-rotation and input
+    /// mapping. The base a relative Rotate Left/Right advances from is the
+    /// daemon's, not this.
     private(set) var currentOrientation: Orientation = .portrait
 
     // Infrastructure, not observable state. Kept out of the registrar so
@@ -247,7 +246,7 @@ final class SimulatorPaneViewModel {
 
     /// Apply one subscription event: coalesce a surface, drive the state
     /// machine on a lifecycle change (clearing pending surfaces on a
-    /// terminal state), or adopt the device's true orientation.
+    /// terminal state), or adopt the orientation the daemon reports.
     private func handleSubscriptionEvent(_ event: PaneEvent) {
         switch event {
         case let .surfaceChanged(change, lease):
@@ -262,10 +261,10 @@ final class SimulatorPaneViewModel {
             state = SimPaneReducer.reduce(state, .lifecycle(change.state))
 
         case let .orientationChanged(change):
-            // Adopt the device's true orientation (the rotate may have come
-            // from `deviceterm rotate`, not this VM's own `rotate(to:)`).
-            // Drives render counter-rotation + input mapping; idempotent
-            // when this VM initiated it. An unknown value is ignored.
+            // Adopt the orientation the daemon reports, the only writer of
+            // this value: a rotate this VM sent arrives back here like anyone
+            // else's, and a fresh subscription replays the daemon's current
+            // value. An unknown value is ignored.
             if let orientation = Orientation(rawValue: change.orientation) {
                 currentOrientation = orientation
             }
@@ -643,31 +642,32 @@ final class SimulatorPaneViewModel {
         }
     }
 
-    /// Rotate the device to an absolute orientation. The daemon's
-    /// `pane.input.rotate` takes the target orientation, not a
-    /// delta; relative menu actions go through `rotateLeft` /
-    /// `rotateRight` which call this with the computed next step.
-    /// Updates `currentOrientation` optimistically; the RPC is
-    /// fire-and-forget so a failure leaves a drift the next
-    /// rotation absorbs.
-    func rotate(to orientation: Orientation) {
+    /// Rotate the device to an absolute orientation.
+    func rotate(to orientation: Orientation) { sendRotation(.absolute(orientation)) }
+
+    /// Rotate 90° counterclockwise, matching Apple's Device > Rotate
+    /// Left UX. Cycles through every orientation under repeated calls.
+    func rotateLeft() { sendRotation(.relative(.left)) }
+
+    /// Rotate 90° clockwise, matching Apple's Device > Rotate Right.
+    func rotateRight() { sendRotation(.relative(.right)) }
+
+    /// Ask the daemon to rotate, and don't touch `currentOrientation`:
+    /// the daemon holds the orientation a relative step advances from,
+    /// and the `orientationChanged` event is what moves this VM. Writing
+    /// it here optimistically would advance on a rotation the backend
+    /// reported it didn't perform (fenced by an ownership transfer, or
+    /// failed), which broadcasts nothing, leaving this VM turned and the
+    /// device not. The RPC is fire-and-forget; a failure leaves the pane
+    /// where it is.
+    private func sendRotation(_ target: RotationTarget) {
         guard capabilities.rotate else { return }
-        currentOrientation = orientation
         let id = paneId
         let client = daemonClient
         Task { @MainActor in
-            try? await client.paneInputRotate(paneId: id, orientation: orientation)
+            try? await client.paneInputRotate(paneId: id, target: target)
         }
     }
-
-    /// Rotate 90° counterclockwise from the current orientation,
-    /// matching Apple's Device > Rotate Left UX. Cycles through every
-    /// orientation under repeated calls.
-    func rotateLeft() { rotate(to: currentOrientation.rotatedLeft) }
-
-    /// Rotate 90° clockwise from the current orientation, matching
-    /// Apple's Device > Rotate Right UX. Symmetric to `rotateLeft`.
-    func rotateRight() { rotate(to: currentOrientation.rotatedRight) }
 
     /// Drive the watchOS Digital Crown. Delta units match the
     /// daemon's `pane.input.crown` contract (~1 unit per detent;

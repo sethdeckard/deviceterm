@@ -122,6 +122,14 @@ extension HelpCatalog {
                   UIDeviceOrientation; kebab-case (canonical), snake_case,
                   camelCase, and all lowercase are all accepted.
                   Example: deviceterm rotate landscape-left
+
+              rotate <left|right>
+                  Rotate 90 degrees from where DeviceTerm last put the
+                  device, the same step the Device menu's Rotate Left and
+                  Rotate Right take. DeviceTerm tracks only rotations it
+                  performed, so an app that forces its own orientation
+                  leaves that base stale.
+                  Example: deviceterm rotate left
             """
         ),
         HelpTopic(

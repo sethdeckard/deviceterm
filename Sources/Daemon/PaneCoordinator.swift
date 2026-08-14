@@ -527,6 +527,17 @@ public actor PaneCoordinator {
         /// tail before running and signals its own when done (success,
         /// skip, or throw), so B never broadcasts before A.
         var rotationTail: SerialChainLink?
+        /// The orientation **deviceterm last successfully commanded** on
+        /// this pane's device, which a relative rotate advances from. It
+        /// starts at `.portrait` because that is where an iOS device
+        /// boots, not because anything read the device: no backend vends
+        /// an orientation getter, so the daemon can only track its own
+        /// confirmed writes. An app that forces its own orientation, or a
+        /// rotation from any other tool, leaves this stale and nothing
+        /// detects that. Written only after the backend reports it
+        /// performed the rotation, so a fenced or failed one doesn't
+        /// compound into the next relative request.
+        var controlOrientation: Orientation = .portrait
         /// Tail of this pane's location chain, serializing location
         /// commands end-to-end for the same reason rotations are chained:
         /// each one suspends on a backend call, and independent
@@ -1307,6 +1318,15 @@ public actor PaneCoordinator {
             await subscriptionRegistry?.activate(subscriptionId: context.subscriptionToken)
         }
         continuation.yield(.stateChanged(paneId: paneId, state: record.state))
+        // Replay the tracked orientation too, before any frame: a subscriber
+        // that wasn't listening when the rotation happened (a reconnect gap, a
+        // GUI that relaunched onto a pane the daemon kept) would otherwise
+        // never learn of it, and would render and hit-test a landscape device
+        // as portrait until the next rotation. Before the first rotation this
+        // is the `.portrait` assumption rather than an observation.
+        continuation.yield(
+            .orientationChanged(paneId: paneId, orientation: record.controlOrientation)
+        )
 
         if record.lastSequence > 0, let published = record.currentSurface {
             continuation.yield(
@@ -2126,7 +2146,7 @@ public actor PaneCoordinator {
         try SimInputSynthesis.text(backend: input.backend, paneId: paneId, generation: input.generation, text: text)
     }
 
-    func rotate(paneId: UUID, as principal: PaneAccessPrincipal, orientation: Orientation) async throws {
+    func rotate(paneId: UUID, as principal: PaneAccessPrincipal, target: RotationTarget) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
@@ -2145,6 +2165,18 @@ public actor PaneCoordinator {
         record.rotationTail = thisRotation
         defer { signalChainLink(thisRotation) }
         if let priorRotation { await awaitChainLink(priorRotation) }
+        // Resolve a direction only now that the predecessor has finished and
+        // committed its own orientation. Reading the tracked value before the
+        // await would give two concurrent `left` requests the same base, so
+        // both would pick the same destination and one 90° step would vanish.
+        let orientation: Orientation
+        switch target {
+        case let .absolute(value):
+            orientation = value
+
+        case let .relative(direction):
+            orientation = direction.applied(to: record.controlOrientation)
+        }
         // Broadcast only for a rotation the backend reports it actually
         // performed: the device reached the target and no transfer fenced it.
         // A sim rotates synchronously; a physical device awaits its pump's
@@ -2157,6 +2189,10 @@ public actor PaneCoordinator {
             orientation: orientation
         )
         guard performed else { return }
+        // Commit the new base for the next relative request. Same gate as the
+        // broadcast below, and the chain link this rotation holds is signalled
+        // after it (on scope exit), so the successor resolves against it.
+        record.controlOrientation = orientation
         // Tell subscribers the device's orientation changed so the GUI
         // re-renders and re-maps input. Without this, a rotation from
         // outside the owning GUI (e.g. `deviceterm rotate`) leaves the GUI

@@ -92,7 +92,7 @@ public enum CLICommand: Equatable, Sendable {
     case rotate(
         pane:
         String?,
-        orientation: Orientation
+        target: RotationTarget
         )
     case crown(
         pane:

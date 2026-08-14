@@ -111,7 +111,8 @@ func paneRotateRejectsUnknownOrientation() async throws {
             try paramsBytes(
             RotateParams(
             paneId: UUID().uuidString,
-            orientation: "sideways"
+            orientation: "sideways",
+            direction: nil
         )
             )
             )
@@ -124,6 +125,56 @@ func paneRotateRejectsUnknownOrientation() async throws {
     }
     #expect(rpcError.code == RPCMethodError.invalidParamsCode)
     #expect(rpcError.message.contains("portrait"))
+}
+
+// `pane.input.rotate`'s two fields are mutually exclusive, which the
+// wire shape can't express. These cover the resolver directly rather
+// than through a socket: the four branches are the whole contract, and
+// the round-trip above already proves the handler calls it.
+
+@Test(
+    "each form resolves to its target",
+    arguments: [
+        (
+            RotateParams(paneId: "p1", orientation: "landscapeLeft", direction: nil),
+            RotationTarget.absolute(.landscapeLeft)
+        ),
+        (
+            RotateParams(paneId: "p1", orientation: nil, direction: "left"),
+            RotationTarget.relative(.left)
+        ),
+        (
+            RotateParams(paneId: "p1", orientation: nil, direction: "right"),
+            RotationTarget.relative(.right)
+        )
+    ]
+)
+func rotationTargetResolvesEachForm(params: RotateParams, expected: RotationTarget) throws {
+    #expect(try PaneMethods.rotationTarget(params) == expected)
+}
+
+@Test
+func rotationTargetRejectsAnUnknownDirection() {
+    let params = RotateParams(paneId: "p1", orientation: nil, direction: "widdershins")
+    #expect(throws: RPCMethodError.invalidParams("direction must be one of: left, right")) {
+        try PaneMethods.rotationTarget(params)
+    }
+}
+
+@Test(
+    "neither field and both fields are refused, not silently preferred",
+    arguments: [
+        (nil, nil),
+        ("portrait", "left")
+    ] as [(String?, String?)]
+)
+func rotationTargetRejectsAmbiguousRequests(orientation: String?, direction: String?) {
+    // A client sending both has no idea which the daemon would honor, so
+    // honoring either would rotate the device somewhere it didn't ask for.
+    let params = RotateParams(paneId: "p1", orientation: orientation, direction: direction)
+    #expect(throws: RPCMethodError.self) {
+        try PaneMethods.rotationTarget(params)
+    }
 }
 
 @Test

@@ -334,12 +334,18 @@ struct SimulatorPaneViewModelTests {
     func appSwitcherRotatesTheSwipeIntoTheCurrentOrientation() async throws {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
-        // Rotate to landscape, then invoke the App Switcher. The gesture
-        // constants are in displayed (oriented) space; the swipe sent to the
-        // daemon must be mapped into the portrait-native surface frame and
-        // carry the landscape home-indicator edge, or the daemon
+        // Take the device to landscape, then invoke the App Switcher. The
+        // gesture constants are in displayed (oriented) space; the swipe sent
+        // to the daemon must be mapped into the portrait-native surface frame
+        // and carry the landscape home-indicator edge, or the daemon
         // plays a portrait-bottom swipe that just pans the foreground app.
-        viewModel.rotate(to: .landscapeLeft)
+        viewModel.start()
+        await settle()
+        fake.lastPaneEventContinuation?.yield(
+            .orientationChanged(
+                OrientationChangedEvent(paneId: "p1", orientation: Orientation.landscapeLeft.rawValue)
+            )
+        )
         await settle()
         viewModel.appSwitcher()
         await settle()
@@ -369,7 +375,13 @@ struct SimulatorPaneViewModelTests {
         // fallback must be portrait *wholesale*: the edge tag AND the
         // coordinates fall back together, so a top-origin swipe is never tagged
         // as a bottom-edge gesture. The result is byte-identical to portrait.
-        viewModel.rotate(to: .portraitUpsideDown)
+        viewModel.start()
+        await settle()
+        fake.lastPaneEventContinuation?.yield(
+            .orientationChanged(
+                OrientationChangedEvent(paneId: "p1", orientation: Orientation.portraitUpsideDown.rawValue)
+            )
+        )
         await settle()
         viewModel.appSwitcher()
         await settle()
@@ -478,7 +490,7 @@ struct SimulatorPaneViewModelTests {
     }
 
     @Test(
-        "rotate forwards the orientation and tracks it locally",
+        "rotate forwards the orientation without moving the pane",
         arguments: Orientation.allCases
     )
     func rotateForwardsToDaemon(_ orientation: Orientation) async {
@@ -486,34 +498,62 @@ struct SimulatorPaneViewModelTests {
         let viewModel = makeViewModel(fake)
         viewModel.rotate(to: orientation)
         await settle()
-        #expect(fake.rotateCalls == [.init(paneId: "p1", orientation: orientation)])
+        #expect(fake.rotateCalls == [.init(paneId: "p1", target: .absolute(orientation))])
+        // The command is a request, not an observation: the VM stays where it
+        // is until the daemon emits `orientationChanged`.
+        #expect(viewModel.currentOrientation == .portrait)
+    }
+
+    @Test
+    func rotateLeftAndRightForwardTheDirectionUnresolved() async {
+        // The daemon holds the orientation a relative step advances from, so
+        // repeated Rotate Lefts send four identical `left` requests rather
+        // than four locally-derived orientations. Deriving them here would
+        // resolve against a base that stops matching the device the moment
+        // anything else rotates it.
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.rotateLeft()
+        viewModel.rotateLeft()
+        viewModel.rotateRight()
+        await settle()
+        #expect(fake.rotateCalls.map(\.target) == [
+            .relative(.left),
+            .relative(.left),
+            .relative(.right)
+        ])
+        #expect(viewModel.currentOrientation == .portrait)
+    }
+
+    @Test(
+        "the orientation event is the only writer of tracked orientation",
+        arguments: Orientation.allCases
+    )
+    func orientationChangedEventDrivesTrackedOrientation(_ orientation: Orientation) async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.start()
+        await settle()
+        fake.lastPaneEventContinuation?.yield(
+            .orientationChanged(
+                OrientationChangedEvent(paneId: "p1", orientation: orientation.rawValue)
+            )
+        )
+        await settle()
         #expect(viewModel.currentOrientation == orientation)
     }
 
     @Test
-    func rotateLeftAndRightCycleRelativeToCurrentOrientation() async {
-        // Boots `.portrait`; four left rotations wrap; switching to
-        // right rotates inverse-of-left from wherever we are.
+    func anUnknownOrientationEventIsIgnored() async {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
-        viewModel.rotateLeft()  // portrait → landscapeLeft
-        viewModel.rotateLeft()  // landscapeLeft → portraitUpsideDown
-        viewModel.rotateLeft()  // portraitUpsideDown → landscapeRight
-        viewModel.rotateLeft()  // landscapeRight → portrait
+        viewModel.start()
         await settle()
-        let sentOrientations = fake.rotateCalls.map(\.orientation)
-        #expect(sentOrientations == [
-            .landscapeLeft,
-            .portraitUpsideDown,
-            .landscapeRight,
-            .portrait
-        ])
+        fake.lastPaneEventContinuation?.yield(
+            .orientationChanged(OrientationChangedEvent(paneId: "p1", orientation: "sideways"))
+        )
+        await settle()
         #expect(viewModel.currentOrientation == .portrait)
-
-        viewModel.rotateRight()  // portrait → landscapeRight
-        await settle()
-        #expect(viewModel.currentOrientation == .landscapeRight)
-        #expect(fake.rotateCalls.last?.orientation == .landscapeRight)
     }
 
     @Test
@@ -557,15 +597,14 @@ struct SimulatorPaneViewModelTests {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake, capabilities: caps)
         viewModel.rotate(to: .landscapeLeft)
+        viewModel.rotateLeft()
         viewModel.crown(delta: 1)
         viewModel.keyDown(keyCode: 0)
         await settle()
+        // The relative form goes through the same gate as the absolute one.
         #expect(fake.rotateCalls.isEmpty)
         #expect(fake.crownCalls.isEmpty)
         #expect(!fake.paneInputCalls.contains { $0.0 == .paneInputKey })
-        // The orientation state is also left untouched when rotate is
-        // suppressed (no optimistic advance).
-        #expect(viewModel.currentOrientation == .portrait)
     }
 
     @Test

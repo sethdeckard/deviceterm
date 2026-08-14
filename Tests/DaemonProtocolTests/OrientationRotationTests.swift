@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Pure unit tests for the relative-rotation extension on
-// `Orientation`. The Device menu's Rotate Left/Right derive their
-// next-step from these accessors, so the cycle must close cleanly
-// under both directions and be the inverse of each other at every
-// orientation.
+// Pure unit tests for the relative-rotation cycle: the internal 90°
+// steps on `Orientation` and the `RotationDirection.applied(to:)` the
+// daemon resolves a `pane.input.rotate` direction with. The cycle must
+// close cleanly, and the two directions must be inverses of each other at
+// every orientation, or a repeated Rotate Left walks somewhere the device
+// isn't.
 
-@testable import App
-import DaemonProtocol
+@testable import DaemonProtocol
 import Testing
 
 struct OrientationRotationTests {
@@ -42,5 +42,21 @@ struct OrientationRotationTests {
         let right = orientation.rotatedRight.rotatedRight.rotatedRight.rotatedRight
         #expect(left == orientation)
         #expect(right == orientation)
+    }
+
+    @Test(
+        "each direction applies its own step",
+        arguments: Orientation.allCases
+    )
+    func directionAppliesTheMatchingStep(_ orientation: Orientation) {
+        #expect(RotationDirection.left.applied(to: orientation) == orientation.rotatedLeft)
+        #expect(RotationDirection.right.applied(to: orientation) == orientation.rotatedRight)
+    }
+
+    @Test("wire values are the words a client sends")
+    func directionRawValuesArePinned() {
+        #expect(RotationDirection.left.rawValue == "left")
+        #expect(RotationDirection.right.rawValue == "right")
+        #expect(RotationDirection.allCases.count == 2)
     }
 }
