@@ -55,7 +55,7 @@ help:
 	@echo "  make release     Signed, notarized DMG"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make hooks       Install .githooks (one-time after clone)"
+	@echo "  make hooks       Install + check .githooks (one-time after clone)"
 	@echo "  make clean       rm -rf .build"
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -315,9 +315,15 @@ publish:
 # Setup
 # ──────────────────────────────────────────────────────────────────────────
 
+# Install the hooks path and reject hooks that are not executable or do
+# not parse with Bash.
 hooks:
 	@git config core.hooksPath .githooks
-	@echo "git hooks path set to .githooks/"
+	@for hook in .githooks/*; do \
+	    [ -x "$$hook" ] || { echo "make hooks: $$hook is not executable" >&2; exit 1; }; \
+	    bash -n "$$hook" || { echo "make hooks: $$hook has a syntax error" >&2; exit 1; }; \
+	done
+	@echo "git hooks installed (.githooks/) — all hooks executable and parse"
 
 clean:
 	@rm -rf .build

@@ -47,7 +47,7 @@ make lint       # swiftlint --strict
 Before pushing, run the gate:
 
 ```sh
-make verify     # lint + commit-hook smoke + every test layer that has landed
+make verify     # lint + every test layer that has landed
 ```
 
 `verify` self-skips any check whose backing code is absent. Run `make help` for
@@ -182,14 +182,13 @@ filesystem is the truth.
 | `make clean` | `rm -rf .build` |
 | `make release` | signed, notarized DMG |
 | `make publish` | publish an existing notarized release, cask, and Sparkle appcast |
-| `make hooks` | install `.githooks/` (one-time after clone) |
+| `make hooks` | install + check `.githooks/` (one-time after clone) |
 
 ### `make verify` shape
 
 `make verify` runs SwiftLint first, refuses to wait behind another SwiftPM
 process using this checkout, and then checks:
 
-- the commit-message hook against known-good and known-bad messages;
 - every target documented by `make help` is declared;
 - `swift test`, excluding `CoreSimulatorLiveTests` and `DeviceLiveTests`;
 - daemon integration tests when their target exists;

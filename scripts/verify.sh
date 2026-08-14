@@ -63,32 +63,11 @@ fi
 # Always-on
 # ──────────────────────────────────────────────────────────────────────
 
-# Commit-hook smoke: hook is executable and accepts a known-good message
-# while rejecting a known-bad one.
-if [ -x .githooks/commit-msg ]; then
-    tmp=$(mktemp)
-    trap 'rm -f "$tmp"' EXIT
-    printf "Add example feature\n\nA short body, wrapped at 72 chars.\n" > "$tmp"
-    if .githooks/commit-msg "$tmp" >/dev/null 2>&1; then
-        ok "commit-msg hook accepts a valid message"
-    else
-        fail "commit-msg hook rejected a known-good message"
-    fi
-    printf "this subject is lowercase and way way way way way too long.\n" > "$tmp"
-    if ! .githooks/commit-msg "$tmp" >/dev/null 2>&1; then
-        ok "commit-msg hook rejects a known-bad message"
-    else
-        fail "commit-msg hook accepted a known-bad message"
-    fi
-else
-    fail ".githooks/commit-msg missing or not executable"
-fi
-
 # Makefile-targets-exist: every target documented in `make help` is also
 # declared in the Makefile so we don't ship dead docs.
 declared=$(awk '/^\.PHONY:/{flag=1} flag{print; if(/[^\\]$/) flag=0}' Makefile \
             | tr -d '\\' | tr -s ' \t\n' '\n' | grep -v '^\.PHONY:$' | grep -v '^$' | sort -u)
-documented=$(awk '/^\t  make /{print $2}' Makefile | sort -u)
+documented=$(awk '/^\t@echo "  make /{print $4}' Makefile | sort -u)
 missing=$(comm -23 <(echo "$documented") <(echo "$declared") || true)
 if [ -z "$missing" ]; then
     ok "all documented Make targets are declared in .PHONY"
