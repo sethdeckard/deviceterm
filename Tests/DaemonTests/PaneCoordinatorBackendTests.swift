@@ -374,6 +374,29 @@ func inputRoutesToThePanesBackend() async throws {
 }
 
 @Test
+func aTapHoldsContactForTheDwell() async throws {
+    // A contact sent down and up back to back reaches the view and draws no
+    // reaction from the controls it was measured against, so a dwell between
+    // the two calls is what a tap needs to register. This measures the call,
+    // not the interval the backend saw: the mock records points, not
+    // timestamps.
+    //
+    // For an uncancelled tap the elapsed time is at least the dwell, and
+    // scheduling can only lengthen it, so a lower bound is the stable
+    // assertion.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let result = try await coordinator.createMockPane(udid: "udid-dwell", sessionId: UUID(), backend: backend)
+    let start = ContinuousClock().now
+    try await coordinator.tap(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.5)
+    #expect(ContinuousClock().now - start >= .milliseconds(SimInputSynthesis.tapDwellMs))
+    // Exactly one down and one up: a passive dwell, where `activeDwell` emits
+    // repeated downs.
+    #expect(backend.tapDownPoints == [CGPoint(x: 0.5, y: 0.5)])
+    #expect(backend.tapUpPoints == [CGPoint(x: 0.5, y: 0.5)])
+}
+
+@Test
 func aCommandedRotationPublishesNothingByItself() async throws {
     // A command says where the device was told to point; it never says the
     // display turned. An orientation-locked app answers a rotate by leaving

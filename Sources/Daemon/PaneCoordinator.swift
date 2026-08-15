@@ -2084,14 +2084,20 @@ public actor PaneCoordinator {
     // guarantee, and why the helper has the shape it does, is documented on
     // the helper itself.
 
-    func tap(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double) throws {
+    func tap(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.touch,
             operation: .tap
         )
-        try SimInputSynthesis.tap(backend: input.backend, paneId: paneId, generation: input.generation, x: x, y: y)
+        try await SimInputSynthesis.tap(
+            backend: input.backend,
+            paneId: paneId,
+            generation: input.generation,
+            x: x,
+            y: y
+        )
     }
 
     func touch(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double, phase: TouchPhase) throws {

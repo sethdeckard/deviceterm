@@ -1195,7 +1195,16 @@ physical hardware. Coordinates are normalized display coordinates.
 - Result: `{ok}`
 - Scope: session
 
-A replayed single tap at normalized coordinates.
+A discrete tap at normalized coordinates. The daemon waits 32 ms, two nominal
+16 ms frames, between the down and the up.
+
+Back-to-back sends produce a contact UIKit delivers and controls ignore,
+measured across both gesture recognition and `UIControl` tracking. The dwell is
+what lets a tap on a `UISwitch` register without dragging its thumb.
+
+One tap emits one backend down and one up, and the handler acknowledges after
+the release. An uncancelled request therefore takes at least the dwell to
+return; cancellation cuts the hold short and releases early.
 
 #### `pane.input.touch`
 

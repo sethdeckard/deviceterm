@@ -34,10 +34,45 @@ enum SimInputSynthesis {
     /// fallback, inside iOS's double-press window.
     static let appSwitcherDoublePressGapNs: UInt64 = 200_000_000
 
-    static func tap(backend: any DeviceBackend, paneId: UUID, generation: UInt64, x: Double, y: Double) throws {
+    /// Contact time held between a discrete tap's down and up.
+    ///
+    /// Sending both back to back gives the guest a contact of a few
+    /// milliseconds at most. UIKit delivers that as a clean began/ended pair
+    /// on the right view, and then nothing acts on it. Measured against a
+    /// `UISwitch`, a `UIButton`, a bare `UIControl`, and a bare
+    /// `UITapGestureRecognizer`, so it covers both gesture recognition and
+    /// `UIControl` tracking. A `UISwitch` is where it shows first, because
+    /// dragging its thumb is a discoverable workaround.
+    ///
+    /// Two nominal frames, from measurement against a booted sim. The value is
+    /// a request rather than a guarantee, because the send path's own latency
+    /// dominates it. Contacts in the low tens of milliseconds register
+    /// unreliably, and a request large enough to overshoot into a press puts
+    /// `UISwitch` into drag tracking, where the thumb takes the contact and
+    /// the release commits it, instead of recognizing a tap.
+    ///
+    /// Procedure and recorded figures live in
+    /// `Tests/Manual/tap-registration.md` under "Measuring contact duration".
+    static let tapDwellMs: Int = GestureTiming.frameMs * 2
+
+    /// A discrete tap: contact down, held for `tapDwellMs`, released.
+    static func tap(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        generation: UInt64,
+        x: Double,
+        y: Double
+    ) async throws {
         let point = CGPoint(x: x, y: y)
         do {
             try backend.tapDown(at: point, generation: generation)
+            // After a successful down, always attempt the release.
+            // Cancellation shortens the dwell rather than skipping the up. A
+            // transfer bumps the generation, so the release is dropped by the
+            // backend and its quiesce frees the contact instead. `longPress`
+            // polls its hold in chunks so a transfer stops it promptly, which
+            // matters over its 60s cap and not over two frames.
+            try? await Task.sleep(nanoseconds: UInt64(Self.tapDwellMs) * 1_000_000)
             try backend.tapUp(at: point, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
