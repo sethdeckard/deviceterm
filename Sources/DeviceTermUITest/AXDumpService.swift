@@ -22,6 +22,9 @@ enum AXDumpError: Error, Equatable {
     /// because the fix is a checkbox, not a code change.
     case notTrusted
     case unreadableRoot(bundleID: String)
+    /// Several running applications share this bundle identifier, so
+    /// choosing an AX root would be arbitrary.
+    case ambiguousTarget(bundleID: String, pids: [pid_t])
 }
 
 enum AXDumpService {
@@ -66,18 +69,23 @@ enum AXDumpService {
         // inherit the global default.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), messagingTimeout)
 
-        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        guard let app = running.first else {
+        let pids = TargetOwners.live(bundleID: bundleID)
+        guard let pid = pids.first else {
             throw AXDumpError.appNotRunning(bundleID: bundleID)
         }
+        // Multiple matches are unordered. Refuse rather than return a
+        // plausible AX tree from the wrong process.
+        guard pids.count == 1 else {
+            throw AXDumpError.ambiguousTarget(bundleID: bundleID, pids: pids)
+        }
 
-        let root = AXUIElementCreateApplication(app.processIdentifier)
+        let root = AXUIElementCreateApplication(pid)
         // A trusted process can always create the element; failing to read
         // even a role means the target isn't answering.
         guard AXElementReader.copyAttribute(root, AXAttribute.role) != nil else {
             throw AXDumpError.unreadableRoot(bundleID: bundleID)
         }
-        return (root, app.processIdentifier)
+        return (root, pid)
     }
 
     static func dump(

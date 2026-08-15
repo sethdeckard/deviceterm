@@ -99,6 +99,100 @@ XCTest UI target: by project tenet (no `.xcodeproj`) this script is the
 only GUI gate; modal prompts, real-sim flows, the status item, and ⌘Q live
 in `Tests/Manual`.
 
+## Working in multiple worktrees
+
+Add one the ordinary way:
+
+```sh
+git worktree add ../deviceterm.my-topic -b topic/my-topic
+```
+
+With `make hooks` run once in the main checkout, `post-checkout` fires on
+the new tree. If the main checkout contains `.env.release`, the hook
+symlinks it in and prints the link, so both worktrees read the same
+release configuration; if it doesn't, the hook says so. Signing itself
+follows `CODESIGN_IDENTITY`, which that file or your environment can
+supply. Without it, development bundles are left unsigned and the
+embedded daemon cannot launch.
+
+The hook is versioned in the repo, so a worktree added from a branch that
+predates it gets nothing, and the script isn't there to run either. Update
+that worktree to a revision containing the hook, then from inside it:
+
+```sh
+.githooks/post-checkout '' HEAD 1
+```
+
+Building, testing, and linting are per-checkout. `.build/` belongs to the
+tree it sits in, the daemon tests bind sockets keyed by pid and a UUID
+fragment, the GUI smoke redirects `HOME` and the daemon socket to a temp
+dir, and `verify`'s stale-SwiftPM check counts only tooling belonging to
+this checkout. Run `make build`, `make test`, `make lint`, and
+`make verify` in as many trees as you like.
+
+**The app and the daemon are machine singletons.** One bundle id, one
+launchd label, one mach service, so a second checkout's app would talk to
+whichever daemon is already registered. `make run` relaunches its own
+checkout's app and refuses when it sees another checkout's, or
+`/Applications/DeviceTerm.app`, already running, naming the owner in the
+refusal. Quit it from there; there is no force flag. `make kill-daemon`
+signals only pids running from this checkout's `.build`, and says nothing
+about a foreign instance.
+
+That refusal depends on `pgrep`, which a sandboxed shell can be denied. A
+guard that cannot enumerate proceeds rather than claiming BUSY without
+evidence, so `make run` from a blind shell can launch alongside another
+checkout's app.
+
+**The three deliberate test tracks take a lock**, because each drives
+state the whole login session shares:
+
+| Track | Lock | What it would otherwise clobber |
+|---|---|---|
+| `make test-live` | `sim` | the simulator fleet, which the track shuts down for a clean slate |
+| `make test-device-live` | `device` | the connected device and its CoreDevice tunnel |
+| `make test-uitest` | `uitest` | the shared harness bundle in `~/Applications` and the GUI it drives |
+
+A lock is a directory at `/tmp/deviceterm.<uid>.<track>.lock`, so it is
+per-user, not machine-wide. A second run refuses immediately with a
+`deviceterm-make: BUSY:` block naming the holder, and there is no wait
+mode. The lock helper exits 75 (`EX_TEMPFAIL`); run through a make target
+that reads as `Error 75` with make itself exiting 2, so the
+`deviceterm-make: BUSY:` prefix is the stable signal rather than the exit
+code. `make uitest-run`, `make uitest-bundle`, and `make uitest-stop` take
+the `uitest` lock too, since they rewrite or stop the shared harness.
+
+The harness track has one overlap a lock doesn't cover. `make verify` and
+`make test-gui` launch a real `com.deviceterm` GUI for about two seconds,
+from whichever checkout runs them, and it spawns its own daemon. Rather
+than serialize the gate that every commit runs, the harness checks its
+target per request: if that request's snapshot is ambiguous, it fails with
+the matching pids instead of dumping or screenshotting the wrong instance.
+Rerun the track once the smoke is done.
+
+Inspect a lock:
+
+```sh
+./scripts/exclusive-lock.sh status sim
+```
+
+A lock whose owner has exited is reclaimed by the next run, so an
+inherited one normally needs nothing from you. Reclaiming demands positive
+evidence that the recorded owner is gone, either `kill -0` reporting ESRCH
+or the pid's start time no longer matching what was recorded, plus nothing
+left alive in the owner's process group. Anything ambiguous, an EPERM
+under a sandbox for instance, counts as live, so a blind shell never
+steals a lock from a running track. The one state that cannot clear
+itself is a dead owner whose process group could not be recorded at
+acquire time, and its BUSY block carries a `fix:` line naming the
+directory to remove. Confirm no track is running in any checkout before
+you remove it.
+
+`make release` writes into its own checkout's `release/`. `make publish`
+pushes to the shared tap checkout (`$DEVICETERM_TAP_DIR`, default
+`../homebrew-tap`) and creates the GitHub release. Nothing guards those,
+so coordinate them yourself.
+
 ## Configuration
 
 DeviceTerm preferences live in `~/.config/deviceterm/config` (or

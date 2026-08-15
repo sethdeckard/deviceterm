@@ -201,6 +201,69 @@ The two live tracks and the TCC-dependent UI-harness track remain deliberate,
 separate commands. `make verify` prints their exclusion so they cannot be
 mistaken for covered tests.
 
+## Worktrees and machine-shared resources
+
+Several checkouts of this repo run at once, a main clone plus
+`git worktree add` trees, humans and agents together. Most of the command
+surface is per-checkout; a few targets drive resources the whole login
+session shares.
+
+Parallel-safe across checkouts: `build`, `bundle`, `test`, `test-int`,
+`test-shim`, `test-gui`, `lint`, `verify`, `probe`, `clean`. `.build/`
+belongs to the tree it sits in, daemon tests bind sockets keyed by pid and
+a UUID fragment, the GUI smoke redirects `HOME` and
+`DEVICETERM_DAEMON_SOCK` to a temp dir, and `verify`'s stale-SwiftPM check
+counts only tooling belonging to this checkout.
+
+`test-gui` and `verify` do launch a real `com.deviceterm` GUI for the
+smoke, about two seconds, and it spawns its own daemon. They stay
+parallel-safe anyway: each target-sensitive request samples candidate
+processes before acting, and fails with the matching pids when that
+snapshot is ambiguous, rather than driving the wrong instance. The sample
+is point-in-time, so an instance that arrives after a given check goes
+unseen by it. Rerun the harness track once the smoke has finished.
+
+| Target | Shared resource | Guard |
+|---|---|---|
+| `run`, `kill-daemon` | the singleton app + daemon: one bundle id, one launchd label, one mach service | `scripts/instance-guard.sh` signals only pids running from this checkout's `.build`; `run` also refuses with BUSY when it can see a foreign instance, while `kill-daemon` leaves one alone without comment |
+| `test-live` | the simulator fleet, which the track shuts down for a clean slate | `lock:sim` |
+| `test-device-live` | the one connected device and its CoreDevice tunnel | `lock:device` |
+| `test-uitest`, `uitest-run`, `uitest-bundle`, `uitest-stop` | the TCC-granted harness at `~/Applications/DeviceTermUITestHarness.app` and the GUI it drives | `lock:uitest`, held across every mutation; `test-uitest` also refuses a foreign app at startup, and the harness fails any single request whose target snapshot is ambiguous |
+| `publish` | the shared tap checkout (`DEVICETERM_TAP_DIR`, default `../homebrew-tap`) and the GitHub release; `release` itself writes only this checkout's `release/` | none; coordinate by hand |
+
+Locks are directories at `/tmp/deviceterm.<uid>.<track>.lock`, per-user and
+cross-checkout rather than machine-wide. Contention fails fast; there is no
+wait mode. Inspect one with `./scripts/exclusive-lock.sh status <track>`.
+
+When the main checkout contains `.env.release`, new worktrees inherit it
+through `post-checkout`, once `make hooks` has been run there. See
+`docs/BUILDING.md`.
+
+### The BUSY protocol
+
+A guard that refuses prints a block whose every line starts
+`deviceterm-make: BUSY:` and exits 75 (`EX_TEMPFAIL`). Through a make
+target that surfaces as `make: *** [<target>] Error 75` with make itself
+exiting 2, so the prefix is the stable signal, not the exit code.
+
+BUSY means something else holds the resource right now: another
+checkout's app or track run, an installed `/Applications/DeviceTerm.app`,
+or a second run from this same checkout. A reclaimable lock is reclaimed
+automatically, so a refusal is not a leftover you can ignore.
+
+**Seeing a BUSY line means stop and report it.** Do not kill the named
+pid, do not `pkill`, do not delete the lock directory, and do not go
+looking for a force flag; none exists. The one exception is a block
+carrying a `fix:` line, which reports a dead owner whose process group
+could not be verified, the single state that cannot clear itself. Even
+then, acting on it is the operator's call.
+
+The instance guard reads process state through `pgrep`, which a sandboxed
+shell can be denied. It treats an empty enumeration as "cannot see" rather
+than "nothing there" and proceeds, so `make run` in a blind shell can
+launch alongside another checkout's app. The lock layer is immune: it asks
+the kernel with `kill -0` and never enumerates.
+
 ## Testing
 
 - **Swift Testing is the default** for unit and integration tests.
@@ -233,7 +296,7 @@ Parameterized inputs via the table-style argument list.
 | Layer | Lives in | Examples |
 |---|---|---|
 | **Unit** | `Tests/<Module>Tests/` | Config parser, RPC framing/decoding, device-spec resolution, session state machine, session restore batching, kVK→HID translation table |
-| **Daemon integration** | `Tests/DaemonIntegrationTests/` | Socket bind + accept, request/response round-trip, multi-client multiplexing, lifetime predicate, idle exit, orphan recovery, provenance rejection |
+| **Daemon integration** | `Tests/DaemonTests/` | Socket bind + accept, request/response round-trip, multi-client multiplexing, lifetime predicate, idle exit, orphan recovery, provenance rejection |
 | **Shim + CLI** | `Tests/ShimTests/`, `Tests/CLITests/` | argv parsing, stdio inheritance preservation, exit code passthrough, signal propagation, snapshot diff, JSON wire emission |
 | **GUI smoke** | `scripts/gui-smoke.sh` | App launch plus dispatch and reconciliation checks in the default gate |
 | **Live simulator** | `Tests/CoreSimulatorLiveTests/` (deliberate track) | HID/AX/display I/O against a *booted* sim; the daemon booted-owned `device.list` contract. Non-hermetic: needs a real sim. |
@@ -244,7 +307,9 @@ Parameterized inputs via the table-style argument list.
 `make verify` and `make test` exclude the simulator and physical-device live
 tracks. The UI-harness track also stays separate because it depends on TCC
 grants and an unlocked display. The hermetic client-construction and error-path
-tests in `CoreSimulatorBridgeTests` remain in the default gate.
+tests in `CoreSimulatorBridgeTests` remain in the default gate. There is no
+separate `DaemonIntegrationTests` target, so `make test-int` self-skips; those
+tests run inside `make test` with the rest of `DaemonTests`.
 
 The live track is a **deliberate, separate command**: `make test-live`
 shuts down all sims (clean slate), boots one, waits via `simctl

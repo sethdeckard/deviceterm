@@ -152,9 +152,22 @@ struct Responder: Sendable {
         case let AXDumpError.unreadableRoot(bundleID):
             return "\(bundleID) is running but its accessibility tree is unreadable"
 
+        case let AXDumpError.ambiguousTarget(bundleID, pids):
+            return ambiguousTargetMessage(bundleID: bundleID, pids: pids)
+
         default:
             return "ax dump failed: \(error)"
         }
+    }
+
+    /// Names the pids so the caller can tell the instances apart. Stays
+    /// generic: `bundleId` is a request parameter, so the target is not
+    /// necessarily deviceterm's own app or daemon.
+    private func ambiguousTargetMessage(bundleID: String, pids: [pid_t]) -> String {
+        let list = pids.map(String.init).joined(separator: ", ")
+        return "\(bundleID) is running \(pids.count) times (pids \(list)); "
+            + "the harness will not guess which target you meant. Stop the "
+            + "extra instance and retry."
     }
 
     // MARK: - Doctor
@@ -236,6 +249,9 @@ struct Responder: Sendable {
         switch error {
         case let CaptureError.noMatchingWindow(bundleID):
             return "no on-screen window owned by \(bundleID)"
+
+        case let CaptureError.ambiguousTarget(bundleID, pids):
+            return ambiguousTargetMessage(bundleID: bundleID, pids: pids)
 
         case let CaptureError.outputNotAFile(path):
             return "--out \(path) exists and is not a regular file; give a file path"

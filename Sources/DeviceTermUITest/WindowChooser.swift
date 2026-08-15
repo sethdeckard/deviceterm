@@ -18,6 +18,10 @@ struct CandidateWindow: Equatable, Sendable {
     let area: Double
     let bundleID: String?
     let isOnScreen: Bool
+    /// Owning process, when the window server reports an owner. Production
+    /// candidates read this and `bundleID` from the same optional
+    /// `owningApplication`, so they are present or absent together.
+    let pid: pid_t?
 }
 
 enum WindowChooser {
@@ -45,9 +49,7 @@ enum WindowChooser {
         bundleID: String,
         frontToBack: [UInt32]
     ) -> CandidateWindow? {
-        let owned = candidates.filter {
-            $0.bundleID == bundleID && $0.isOnScreen && $0.layer < overlayLayer
-        }
+        let owned = ownedContent(candidates, bundleID: bundleID)
         guard !owned.isEmpty else { return nil }
         // Frontmost by window-server order; larger area breaks depth ties.
         return owned.min { lhs, rhs in
@@ -71,13 +73,53 @@ enum WindowChooser {
         bundleID: String,
         frontToBack: [UInt32]
     ) -> CandidateWindow? {
-        let owned = candidates.filter {
-            $0.bundleID == bundleID && $0.isOnScreen && $0.layer >= overlayLayer
-        }
+        let owned = ownedStatusItem(candidates, bundleID: bundleID)
         guard !owned.isEmpty else { return nil }
         return owned.min { lhs, rhs in
             if lhs.area != rhs.area { return lhs.area < rhs.area }
             return depth(of: lhs.windowID, in: frontToBack) < depth(of: rhs.windowID, in: frontToBack)
+        }
+    }
+
+    /// Reported pids for processes owning content windows `choose` would
+    /// consider. Candidates without a pid do not contribute to the set.
+    ///
+    /// More than one owner means the bundle id names two live instances,
+    /// and no rule here can tell which the caller meant: front-most picks
+    /// whichever happens to be on top. Callers refuse rather than choose.
+    /// Scoped to the windows the selector sees, so an instance showing only
+    /// a status item doesn't make a content capture look ambiguous. This
+    /// is one of two inputs to that decision; see `TargetOwners`, since an
+    /// instance showing nothing owns no window to be counted here.
+    static func contentOwners(from candidates: [CandidateWindow], bundleID: String) -> Set<pid_t> {
+        Set(ownedContent(candidates, bundleID: bundleID).compactMap(\.pid))
+    }
+
+    /// Reported pids for processes owning overlay windows
+    /// `chooseStatusItem` would consider. Two live daemons each showing a
+    /// badge is the case this catches.
+    static func statusItemOwners(from candidates: [CandidateWindow], bundleID: String) -> Set<pid_t> {
+        Set(ownedStatusItem(candidates, bundleID: bundleID).compactMap(\.pid))
+    }
+
+    // The two selectors and their ambiguity checks share these filters, so
+    // a check can never disagree with the selector it guards about which
+    // windows are in scope.
+    private static func ownedContent(
+        _ candidates: [CandidateWindow],
+        bundleID: String
+    ) -> [CandidateWindow] {
+        candidates.filter {
+            $0.bundleID == bundleID && $0.isOnScreen && $0.layer < overlayLayer
+        }
+    }
+
+    private static func ownedStatusItem(
+        _ candidates: [CandidateWindow],
+        bundleID: String
+    ) -> [CandidateWindow] {
+        candidates.filter {
+            $0.bundleID == bundleID && $0.isOnScreen && $0.layer >= overlayLayer
         }
     }
 

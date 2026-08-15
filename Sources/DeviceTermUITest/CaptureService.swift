@@ -33,6 +33,12 @@ enum StatusItemCapture: Sendable {
 
 enum CaptureError: Error {
     case noMatchingWindow(bundleID: String)
+    /// More than one running application or eligible window owner can be
+    /// the target, so capture selection is ambiguous: front-most (or
+    /// smallest, for the status item) would pick between instances rather
+    /// than between windows. A PNG of the wrong instance is worse than no
+    /// PNG, because nothing about it looks wrong.
+    case ambiguousTarget(bundleID: String, pids: [pid_t])
     /// `--out` names an existing path that isn't a regular file (a
     /// directory, socket, FIFO, symlink, device). Refused rather than
     /// treated as a PNG path: the hidden-badge path clears a stale file
@@ -60,6 +66,10 @@ enum CaptureService {
         let content = try await shareableContent(onScreenWindowsOnly: true)
 
         let candidates = content.windows.map(candidate(from:))
+        try requireOneTarget(
+            bundleID: bundleID,
+            windowOwners: WindowChooser.contentOwners(from: candidates, bundleID: bundleID)
+        )
         guard
             let chosen = WindowChooser.choose(
                 from: candidates,
@@ -100,6 +110,17 @@ enum CaptureService {
         try requireWritablePath(path)
         let content = try await shareableContent(onScreenWindowsOnly: true)
         let candidates = content.windows.map(candidate(from:))
+        // Only once a badge is on screen does ambiguity change the answer.
+        // Two daemons with no badge between them still means absent, and
+        // that holds whichever one the caller meant; refusing there would
+        // turn the ordinary hidden-at-zero-sims state into an error.
+        let badgeOwners = WindowChooser.statusItemOwners(
+            from: candidates,
+            bundleID: DeviceTermBundleID.daemon
+        )
+        if !badgeOwners.isEmpty {
+            try requireOneTarget(bundleID: DeviceTermBundleID.daemon, windowOwners: badgeOwners)
+        }
         guard
             let chosen = WindowChooser.chooseStatusItem(
                 from: candidates,
@@ -206,6 +227,22 @@ enum CaptureService {
         }
     }
 
+    /// Refuse when more than one process can be the target.
+    ///
+    /// Window owners alone would miss an instance showing nothing, and a
+    /// hidden instance can be the one the caller meant, so the process
+    /// list is consulted too. Point-in-time by nature: this describes the
+    /// moment the request ran, not the whole track.
+    private static func requireOneTarget(bundleID: String, windowOwners: Set<pid_t>) throws {
+        let owners = TargetOwners.combined(
+            processes: TargetOwners.live(bundleID: bundleID),
+            windowOwners: windowOwners
+        )
+        guard owners.count <= 1 else {
+            throw CaptureError.ambiguousTarget(bundleID: bundleID, pids: owners.sorted())
+        }
+    }
+
     // MARK: - Ordering + scale
 
     /// Project an `SCWindow` onto the pure `CandidateWindow` the chooser
@@ -216,7 +253,8 @@ enum CaptureService {
             layer: window.windowLayer,
             area: Double(window.frame.width * window.frame.height),
             bundleID: window.owningApplication?.bundleIdentifier,
-            isOnScreen: window.isOnScreen
+            isOnScreen: window.isOnScreen,
+            pid: window.owningApplication?.processID
         )
     }
 

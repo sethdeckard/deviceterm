@@ -16,14 +16,16 @@ struct WindowChooserTests {
         bundleID: String,
         layer: Int = 0,
         area: Double = 1_000,
-        onScreen: Bool = true
+        onScreen: Bool = true,
+        pid: pid_t? = 100
     ) -> CandidateWindow {
         CandidateWindow(
             windowID: id,
             layer: layer,
             area: area,
             bundleID: bundleID,
-            isOnScreen: onScreen
+            isOnScreen: onScreen,
+            pid: pid
         )
     }
 
@@ -128,5 +130,75 @@ struct WindowChooserTests {
     func statusItemIgnoresOtherAppsMenuBarItems() {
         let otherItem = window(1, bundleID: other, layer: WindowChooser.overlayLayer)
         #expect(WindowChooser.chooseStatusItem(from: [otherItem], bundleID: daemon, frontToBack: [1]) == nil)
+    }
+
+    // MARK: - Ambiguous targets
+
+    /// The GUI smoke launches a second `com.deviceterm` while a harness run
+    /// may be in flight, and the chooser has no way to prefer either one.
+    /// Callers refuse on more than one owner rather than capture a coin flip.
+    @Test
+    func reportsBothOwnersWhenTwoInstancesShowContentWindows() {
+        let windows = [window(1, bundleID: app, pid: 100), window(2, bundleID: app, pid: 200)]
+        #expect(WindowChooser.contentOwners(from: windows, bundleID: app) == [100, 200])
+    }
+
+    @Test
+    func reportsOneOwnerForSeveralWindowsOfOneInstance() {
+        let windows = [window(1, bundleID: app, pid: 100), window(2, bundleID: app, pid: 100)]
+        #expect(WindowChooser.contentOwners(from: windows, bundleID: app) == [100])
+    }
+
+    @Test
+    func contentOwnersIgnoresOtherAppsAndOffScreenWindows() {
+        let windows = [
+            window(1, bundleID: other, pid: 200),
+            window(2, bundleID: app, onScreen: false, pid: 300),
+            window(3, bundleID: app, pid: 100)
+        ]
+        #expect(WindowChooser.contentOwners(from: windows, bundleID: app) == [100])
+    }
+
+    /// `contentOwners` ignores overlay-only instances, staying scoped to
+    /// the windows `choose` itself considers. Process-level ambiguity is
+    /// supplied separately by `TargetOwners.live`.
+    @Test
+    func contentOwnersIgnoresOverlayOnlyInstances() {
+        let windows = [
+            window(1, bundleID: app, pid: 100),
+            window(2, bundleID: app, layer: WindowChooser.overlayLayer, pid: 200)
+        ]
+        #expect(WindowChooser.contentOwners(from: windows, bundleID: app) == [100])
+    }
+
+    /// Owner counting drops a target candidate whose pid is unavailable.
+    /// Production mapping cannot create this pairing; this test pins the
+    /// helper's behavior for manually constructed candidates.
+    @Test
+    func contentOwnersSkipsWindowsWithNoReportedOwner() {
+        let windows = [window(1, bundleID: app, pid: 100), window(2, bundleID: app, pid: nil)]
+        #expect(WindowChooser.contentOwners(from: windows, bundleID: app) == [100])
+    }
+
+    /// Two daemons each showing a badge: the smoke spawns its own from the
+    /// bundle's LoginItems, so this is the status-item form of the same race.
+    @Test
+    func statusItemOwnersReportsBothDaemonsShowingABadge() {
+        let windows = [
+            window(1, bundleID: daemon, layer: WindowChooser.overlayLayer, pid: 100),
+            window(2, bundleID: daemon, layer: WindowChooser.overlayLayer, pid: 200)
+        ]
+        #expect(WindowChooser.statusItemOwners(from: windows, bundleID: daemon) == [100, 200])
+    }
+
+    /// Two daemons showing *no* badge is still just "absent", so the caller
+    /// reaches its hidden-item path rather than an ambiguity error.
+    @Test
+    func statusItemOwnersIsEmptyWhenNeitherDaemonShowsABadge() {
+        let windows = [
+            window(1, bundleID: daemon, layer: 0, pid: 100),
+            window(2, bundleID: daemon, layer: 0, pid: 200)
+        ]
+        #expect(WindowChooser.statusItemOwners(from: windows, bundleID: daemon).isEmpty)
     }
 }
