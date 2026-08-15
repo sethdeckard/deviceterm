@@ -168,7 +168,8 @@ final class TabContentViewController: NSViewController {
             router: router,
             daemonClient: daemonClient,
             simResurrect: simResurrect,
-            tabListVM: tabListVM
+            tabListVM: tabListVM,
+            windowID: windowID
         )
         self.daemonSocketPath = daemonSocketPath
         let primaryEnv = SessionEnvironment(
@@ -317,7 +318,7 @@ final class TabContentViewController: NSViewController {
     func rebind(to newVM: TabListViewModel, windowID newWindowID: WindowID) {
         tabListVM = newVM
         windowID = newWindowID
-        simPaneActions.rebind(tabListVM: newVM)
+        simPaneActions.rebind(tabListVM: newVM, windowID: newWindowID)
         observation?.cancel()
         observation = App.observe { [weak self] in self?.reconcileAll() }
         titleObservation?.cancel()
@@ -878,9 +879,7 @@ final class TabContentViewController: NSViewController {
         } else {
             tabSessionIds = []
         }
-        let ownedBooted = owned.filter {
-            $0.state == "Booted" && tabSessionIds.contains($0.ownedBySession ?? "")
-        }
+        let ownedBooted = OwnedSimDecision.booted(ownedBy: tabSessionIds, in: owned)
         let mounted = tabListVM.tab(id: tabID)?.simPanes.map(\.udid) ?? []
         // Sims with an in-flight / failed pending pane count as
         // "attaching" so a racing poll doesn't insert a second

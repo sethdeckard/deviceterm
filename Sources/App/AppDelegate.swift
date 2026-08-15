@@ -624,7 +624,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .filter { !$0.isEmpty } ?? []
         Task { @MainActor [weak self, weak sender] in
             guard let self else { return }
-            let affected = await self.hasOwnedBootedSims(forSessions: sessionIDs)
+            let affected = await self.daemonClient.hasOwnedBootedSims(
+                forSessions: sessionIDs
+            )
             let mode: PaneCloseMode
             if !affected {
                 mode = .detach
@@ -652,26 +654,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             sender?.close()
         }
         return false
-    }
-
-    /// Async predicate: does any session in `sessions` own a
-    /// currently-booted simulator? Mirrors the close-prompt skip
-    /// path used by `TabStripViewController` so a detached-pane
-    /// tab still triggers the prompt when its session owns a sim.
-    /// A daemon-list failure returns true (fail-open) so a transient
-    /// RPC blip can't silently force-detach when the user would
-    /// otherwise see a prompt or a stored `shutdown` default.
-    private func hasOwnedBootedSims(forSessions sessions: [String]) async -> Bool {
-        let owned: [DeviceListEntry]
-        do {
-            owned = try await daemonClient.deviceList(scope: .owned)
-        } catch {
-            return true
-        }
-        let sessionSet = Set(sessions)
-        return owned.contains {
-            $0.state == "Booted" && sessionSet.contains($0.ownedBySession ?? "")
-        }
     }
 
     /// Window is definitely closing now. Drop the WC from the map

@@ -156,11 +156,20 @@ enum Route: Sendable {
         atIndex: Int? = nil,
         anchor: ResurrectAnchor? = nil
     )
+    /// `expecting` fences the close to one admission. `dispatch` only
+    /// enqueues onto the serial drain, so before the handler runs a
+    /// resurrect can replace the tab's pane for this udid, or a re-attach
+    /// can re-admit the same paneId under a new attachment. Either way the
+    /// handler would otherwise resolve the udid to something the user was
+    /// never asked about and close that, `.shutdown` included. Nil resolves
+    /// by udid alone, which is what the CLI and the internal cleanup paths
+    /// want.
     case detachSimPane(
         tab:
         TabID,
         udid: String,
-        mode: PaneCloseMode
+        mode: PaneCloseMode,
+        expecting: PaneAdmission? = nil
         )
     /// Mount a physically-connected device pane on a tab
     /// (`physicalDevice.attach`). The picker, the CLI `device attach`

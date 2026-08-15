@@ -561,6 +561,108 @@ struct RouterTests {
     }
 
     @Test
+    func detachSimPaneRefusesWhenThePaneWasReplaced() async {
+        // `dispatch` enqueues, so a resurrect can swap the tab's pane for
+        // this udid before the close drains. The close carries the paneId
+        // the user was asked about; resolving the udid to the replacement
+        // and closing that instead would apply their answer, `.shutdown`
+        // included, to a pane they never saw.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        let tabID = TabID(value: 1)
+        router.dispatch(.attachSimPane(tab: tabID, udid: "U", displayName: "iPhone"))
+        await settle()
+        // Stand in for the resurrect: the same udid now carries a new pane.
+        router.dispatch(.detachSimPane(tab: tabID, udid: "U", mode: .detach))
+        await settle()
+        fake.attachResult = PaneCreateResponse(paneId: "P2", scale: nil, family: "phone")
+        router.dispatch(.attachSimPane(tab: tabID, udid: "U", displayName: "iPhone"))
+        await settle()
+        // The detach above is the only close so far; the fenced one must add
+        // nothing to it.
+        let closesBefore = fake.closePaneCalls
+
+        router.dispatch(
+            .detachSimPane(
+                tab: tabID,
+                udid: "U",
+                mode: .shutdown,
+                expecting: PaneAdmission(paneId: "P1", attachment: nil)
+            )
+        )
+        await settle()
+
+        #expect(fake.closePaneCalls == closesBefore)
+        let survivors = workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tabID)?.simPanes
+        #expect(survivors?.map(\.paneId) == ["P2"])
+    }
+
+    @Test
+    func detachSimPaneRefusesWhenOnlyTheAttachmentMoved() async {
+        // A re-attach keeps the daemon's record and its id, bumping only
+        // `attachment`. The paneId therefore still matches while naming a
+        // different admission, so a paneId-only fence would let the old
+        // decision through onto the new one.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(
+            paneId: "P1",
+            scale: nil,
+            attachment: 7,
+            family: "phone"
+        )
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        let tabID = TabID(value: 1)
+        router.dispatch(.attachSimPane(tab: tabID, udid: "U", displayName: "iPhone"))
+        await settle()
+        let closesBefore = fake.closePaneCalls
+
+        router.dispatch(
+            .detachSimPane(
+                tab: tabID,
+                udid: "U",
+                mode: .shutdown,
+                expecting: PaneAdmission(paneId: "P1", attachment: 6)
+            )
+        )
+        await settle()
+
+        #expect(fake.closePaneCalls == closesBefore)
+    }
+
+    @Test
+    func detachSimPaneClosesWhenThePaneIdStillMatches() async {
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        let tabID = TabID(value: 1)
+        router.dispatch(.attachSimPane(tab: tabID, udid: "U", displayName: "iPhone"))
+        await settle()
+
+        router.dispatch(
+            .detachSimPane(
+                tab: tabID,
+                udid: "U",
+                mode: .shutdown,
+                expecting: PaneAdmission(paneId: "P1", attachment: nil)
+            )
+        )
+        await settle()
+
+        #expect(fake.closePaneCalls == [.init(paneId: "P1", mode: .shutdown)])
+        #expect(
+            workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tabID)?
+            .simPanes.isEmpty == true
+            )
+    }
+
+    @Test
     func attachDevicePaneAttachesOnceIdempotently() async {
         // physicalDevice.attach is threaded the tab's primary-terminal
         // session (the GUI-trusted attribution path) and is idempotent

@@ -83,15 +83,20 @@ means that item.
 | 6.2 | From **tab A's** shell, `xcrun simctl boot <udid>` (same udid) | The **existing** shutdown-state pane resurrects in place — no duplicate pane. |
 | 6.3 | Boot the same udid from **tab B** instead (after shutting down) | A new pane appears in **tab B** (provenance is per-session); tab A does not resurrect. |
 
-## 7. Tab-close prompt + don't-ask-again
+## 7. Close prompts + don't-ask-again
 
 | # | Action | Expected |
 |---|--------|----------|
-| 7.1 | Boot a sim into a tab. Close it (⌥⌘W or the `✕`) | Prompt: *Close this tab?* with `Detach (Keep Sims Running)` / `Shut Down Sims` / `Cancel` + a "Don't ask again" checkbox. **⌥⌘W, not ⌘W:** ⌘W closes the focused pane, so with the sim pane focused it detaches the mirror and raises no prompt. |
+| 7.1 | Boot a sim into a tab. Close it (⌥⌘W or the `✕`) | Prompt: *Close this tab?* with `Detach (Keep Sims Running)` / `Shut Down Sims` / `Cancel` + a "Don't ask again" checkbox. **⌥⌘W, not ⌘W:** ⌘W closes the focused pane, which has its own prompt (§7.6). |
 | 7.2 | Choose **Detach** | Tab closes; the sim keeps running; badge still shows it. |
 | 7.3 | Re-attach (boot/open) a sim in a tab; close again, choose **Shut Down Sims** | Tab closes; the sim shuts down; badge decrements. |
 | 7.4 | Tick "Don't ask again" + Detach on a later close | Subsequent closes skip the prompt and detach. Verify `~/.config/deviceterm/config` gained `tab-close-default = detach`. Remove the line to restore prompting. |
 | 7.5 | Cancel on the prompt | The tab stays open, unchanged. |
+| 7.6 | Boot a sim into a tab, focus the sim pane, press ⌘W (or right-click the pane ▸ **Close Pane**) | Prompt: *Close this pane?* naming the sim, with `Detach (Keep Sim Running)` / `Shut Down Sim` / `Cancel`. |
+| 7.7 | Choose **Detach (Keep Sim Running)** | Pane goes; the sim keeps running; badge still shows it. |
+| 7.8 | Re-attach the sim, close the pane again, choose **Shut Down Sim** | Pane goes; the sim shuts down; badge decrements. |
+| 7.9 | `xcrun simctl shutdown <udid>` to reach the pane's shutdown overlay, then click **Close Pane** | No prompt; the pane closes. Nothing is left running to ask about. |
+| 7.10 | Boot a udid into tab A, shut it down with `xcrun simctl shutdown` so A shows the overlay, boot the same udid from tab B, then close A's stale pane | No prompt, and tab B's Simulator keeps running. |
 
 ## 8. ⌘Q quit prompt
 

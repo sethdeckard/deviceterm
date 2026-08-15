@@ -1,11 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// CloseDecisions: the tab-close, window-close, and quit prompts.
+// CloseDecisions: the pane-close, tab-close, window-close, and quit
+// prompts.
 //
-// Three call sites converge on `askBootedSimDisposition`:
-//   - tab close (single + bulk variants)
+// Four call sites converge on `askBootedSimDisposition`, all asking whether
+// the sim keeps running once its surface goes away, all resolved through the
+// same `CloseSuppressionState` lookup (per-window tier, then per-session,
+// then the persistent `tab-close-default`):
+//   - sim pane close (Close Pane, the pane's context menu, ⌘W)
+//   - single tab close
+//   - bulk tab close (Close Other Tabs / Close Tabs to the Right)
 //   - window close (red X / ⌘W on the last tab)
-//   - app quit (separate prompt, separate decision type)
+//
+// Pane close adds singular wording, always offers the window scope, and can
+// bypass a stored answer outright when its roster lookup failed.
+//
+// Quit is the fifth prompt and is not one of them: `quitWithSims` builds its
+// own alert, returns its own decision type, and reads
+// `quit-with-sims-default`. Only the `.always` scope writes across the two
+// keys.
 //
 // The "Don't ask again" affordance is a scoped checkbox + popup, not
 // a single permanent toggle. Per-window and per-app-session tiers live
@@ -53,6 +66,40 @@ struct CloseContext: Sendable {
 enum CloseDecisions {
     static let tabCloseKey = "tab-close-default"
     static let quitWithSimsKey = "quit-with-sims-default"
+
+    /// Closing one sim pane, where exactly one sim is at stake and it has
+    /// a name to use. The buttons go singular for the same reason.
+    ///
+    /// Callers pass `hasOtherTabsInWindow: true` unconditionally, because
+    /// the tab survives a pane close: "For this window" is a meaningful
+    /// scope even when it is the window's only tab. `windowClose` forces
+    /// the opposite for the same reason reversed.
+    /// `alwaysAsk` ignores the stored answer for this one call. The caller
+    /// passes it when it could not confirm what the sim is doing: a stored
+    /// `shutdown` would then stop a simulator on an unverified premise,
+    /// which is the one outcome here that destroys state. Asking is the
+    /// only honest thing to do with an unknown.
+    static func paneClose(
+        config: ConfigFile,
+        state: CloseSuppressionState,
+        context: CloseContext,
+        deviceName: String,
+        alwaysAsk: Bool = false
+    ) -> TabCloseDecision {
+        askBootedSimDisposition(
+            config: config,
+            state: state,
+            context: context,
+            messageText: "Close this pane?",
+            informativeText: alwaysAsk
+                ? "DeviceTerm could not reach the daemon to check whether "
+                    + "\(deviceName) is still running."
+                : "Detach keeps \(deviceName) running. Shut Down stops it.",
+            detachTitle: "Detach (Keep Sim Running)",
+            shutdownTitle: "Shut Down Sim",
+            alwaysAsk: alwaysAsk
+        )
+    }
 
     static func tabClose(
         config: ConfigFile,
@@ -140,22 +187,29 @@ enum CloseDecisions {
         return decision
     }
 
+    /// The button titles default to the plural wording every multi-sim
+    /// caller wants; only `paneClose`, which speaks about one sim,
+    /// overrides them.
     private static func askBootedSimDisposition(
         config: ConfigFile,
         state: CloseSuppressionState,
         context: CloseContext,
         messageText: String,
-        informativeText: String
+        informativeText: String,
+        detachTitle: String = "Detach (Keep Sims Running)",
+        shutdownTitle: String = "Shut Down Sims",
+        alwaysAsk: Bool = false
     ) -> TabCloseDecision {
-        if let pinned = state.lookupClose(windowID: context.windowID, config: config) {
+        if !alwaysAsk,
+            let pinned = state.lookupClose(windowID: context.windowID, config: config) {
             return pinned
         }
         let alert = NSAlert()
         alert.messageText = messageText
         alert.informativeText = informativeText
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Detach (Keep Sims Running)")
-        alert.addButton(withTitle: "Shut Down Sims")
+        alert.addButton(withTitle: detachTitle)
+        alert.addButton(withTitle: shutdownTitle)
         alert.addButton(withTitle: "Cancel")
         let scopes: [SuppressionScope] = context.hasOtherTabsInWindow
             ? [.window, .session, .always]

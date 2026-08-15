@@ -97,6 +97,39 @@ func quitWithSimsHonorsPersistentShutdownDefault() throws {
     )
 }
 
+@MainActor
+@Test
+func paneCloseHonorsPersistentDetachDefault() throws {
+    // Pane close reuses `tab-close-default` too: one question, one stored
+    // answer across every surface that asks it. Same regression guard as
+    // the window-close pair above, against a `pane-close-default` split.
+    let fixture = try makeFixture(contents: "tab-close-default = detach\n")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.paneClose(
+            config: fixture.config,
+            state: fixture.state,
+            context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
+            deviceName: "iPhone 17 Pro"
+        ) == .detach
+    )
+}
+
+@MainActor
+@Test
+func paneCloseHonorsPersistentShutdownDefault() throws {
+    let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.paneClose(
+            config: fixture.config,
+            state: fixture.state,
+            context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
+            deviceName: "iPhone 17 Pro"
+        ) == .shutdown
+    )
+}
+
 // MARK: - Lookup precedence (window > session > persistent)
 
 @MainActor
@@ -128,6 +161,40 @@ func perWindowOverrideBeatsPersistent() throws {
                 windowID: WindowID(value: 8),
                 hasOtherTabsInWindow: true
             )
+        ) == .shutdown
+    )
+}
+
+@MainActor
+@Test
+func paneCloseSharesTheWindowSuppressionTier() throws {
+    // The in-memory tiers are shared too, not only the config file. A
+    // "For this window" pick made on a tab close silences the pane prompt
+    // in that window. That sharing is the point of reusing the key.
+    let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
+    defer { cleanup(fixture.path) }
+    let windowID = WindowID(value: 4)
+    fixture.state.recordClose(
+        decision: .detach,
+        scope: .window,
+        windowID: windowID,
+        config: fixture.config
+    )
+    #expect(
+        CloseDecisions.paneClose(
+            config: fixture.config,
+            state: fixture.state,
+            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true),
+            deviceName: "iPhone 17 Pro"
+        ) == .detach
+    )
+    // A pane in a different window falls through to the persistent tier.
+    #expect(
+        CloseDecisions.paneClose(
+            config: fixture.config,
+            state: fixture.state,
+            context: CloseContext(windowID: WindowID(value: 5), hasOtherTabsInWindow: true),
+            deviceName: "iPhone 17 Pro"
         ) == .shutdown
     )
 }

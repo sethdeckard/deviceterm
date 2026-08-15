@@ -23,11 +23,13 @@ public enum DeviceTermConfigDefaults {
             key: "tab-close-default",
             defaultValue: "detach",
             allowedValues: ["detach", "shutdown"],
-            summary: "Action taken when closing a tab, which suppresses the Close Tab "
-                + "prompt. detach closes the tab but keeps any sims it booted running; "
-                + "shutdown also stops them.",
-            absentBehavior: "the Close Tab prompt is shown; set detach or "
-                + "shutdown to suppress it"
+            summary: "Action taken when closing a tab, window, or Simulator pane, "
+                + "which suppresses the matching prompt. Close Pane still asks when "
+                + "the daemon cannot be reached to check the sim. detach closes the "
+                + "surface but keeps any sims it booted running; shutdown also stops "
+                + "them.",
+            absentBehavior: "the Close Tab, Close Window, and Close Pane prompts "
+                + "are shown; set detach or shutdown to suppress them"
         ),
         ConfigKeySpec(
             key: "quit-with-sims-default",

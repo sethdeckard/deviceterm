@@ -146,8 +146,9 @@ func appendingKnownKeyWritesDocComment() throws {
     for line in spec.documentationLines {
         #expect(written.contains(line))
     }
-    let docLine = "# Allowed: detach, shutdown. Unset: the Close Tab "
-        + "prompt is shown; set detach or shutdown to suppress it."
+    let docLine = "# Allowed: detach, shutdown. Unset: the Close Tab, Close "
+        + "Window, and Close Pane prompts are shown; set detach or shutdown "
+        + "to suppress them."
     #expect(written.contains(docLine))
     #expect(written.contains("tab-close-default = shutdown"))
     // The doc comment sits directly above the active line.

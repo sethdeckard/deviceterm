@@ -153,7 +153,7 @@ func reportEmitsAnEntryForEveryKnownKey() {
 }
 
 @Test("absent prompt keys report unset with a note", arguments: [
-    ("tab-close-default", "Close Tab prompt"),
+    ("tab-close-default", "Close Pane prompts"),
     ("quit-with-sims-default", "Quit prompt")
 ])
 func reportMarksAbsentPromptKeyUnset(key: String, fragment: String) throws {

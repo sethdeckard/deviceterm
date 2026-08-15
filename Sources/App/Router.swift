@@ -465,8 +465,13 @@ final class Router {
                 )
             )
 
-        case let .detachSimPane(tabID, udid, mode):
-            await detachPane(tab: tabID, udid: udid, mode: mode)
+        case let .detachSimPane(tabID, udid, mode, expecting):
+            await detachPane(
+                tab: tabID,
+                udid: udid,
+                mode: mode,
+                expecting: expecting
+            )
 
         case let .attachDevicePane(tabID, deviceId, displayName):
             attachPaneOptimistically(
@@ -1935,10 +1940,21 @@ final class Router {
         }?.name
     }
 
-    private func detachPane(tab tabID: TabID, udid: String, mode: PaneCloseMode) async {
+    private func detachPane(
+        tab tabID: TabID,
+        udid: String,
+        mode: PaneCloseMode,
+        expecting: PaneAdmission? = nil
+    ) async {
         guard let window = workspace.windowContaining(tab: tabID),
             let pane = window.tabs.tab(id: tabID)?.simPanes
                 .first(where: { $0.udid == udid }) else { return }
+        // The pane moved between accepting this route and draining it: it
+        // was replaced, or the same record was re-admitted under a new
+        // attachment. Either way this close names something that is no
+        // longer here, and applying it would carry an answer the user gave
+        // about a different admission.
+        if let expecting, pane.admission != expecting { return }
         do {
             try await daemon.closePane(
                 paneId: pane.paneId,

@@ -226,6 +226,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// minted by `openTerminalPane`.
     var sessionSequence: [SessionCreateResponse] = []
     var deviceListResult: [DeviceListEntry] = []
+    /// When set, `deviceList` throws this instead of returning. Pane-close
+    /// tests use it for the unknown-result prompt path; tab and window
+    /// tests for the treat-as-affected path.
+    var deviceListError: Error?
     private(set) var physicalDeviceListCallCount = 0
     private(set) var attachPhysicalDeviceCalls: [AttachPhysicalDeviceCall] = []
     var physicalDeviceListResult: [PhysicalDeviceListEntry] = []
@@ -289,6 +293,8 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private var fakeSessionKey: [String: Int] = [:]
     private var privacySnapshotGateArmed = false
     private var privacySnapshotContinuations: [CheckedContinuation<Void, Never>] = []
+    private var deviceListGateArmed = false
+    private var deviceListContinuations: [CheckedContinuation<Void, Never>] = []
     /// Scripted return value for `paneAxPoint` calls. Default
     /// `"role · label"` so chrome AX-inspector tests have something to
     /// render in the common happy-case path.
@@ -611,6 +617,23 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         )
     }
 
+    /// Hold `deviceList` mid-flight. Callers that suspend on the roster read
+    /// are what let a second request in behind the first, so a test that
+    /// wants that interleaving has to be able to stop the read.
+    func armDeviceListBarrier() { deviceListGateArmed = true }
+
+    func releaseDeviceList() {
+        deviceListGateArmed = false
+        let continuations = deviceListContinuations
+        deviceListContinuations.removeAll()
+        for continuation in continuations { continuation.resume() }
+    }
+
+    private func awaitDeviceListGate() async {
+        guard deviceListGateArmed else { return }
+        await withCheckedContinuation { deviceListContinuations.append($0) }
+    }
+
     func armPrivacySnapshotBarrier() { privacySnapshotGateArmed = true }
 
     func releasePrivacySnapshot() {
@@ -627,8 +650,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
 
     // MARK: - DeviceControlling
 
-    func deviceList(scope: DeviceListScope) -> [DeviceListEntry] {
+    func deviceList(scope: DeviceListScope) async throws -> [DeviceListEntry] {
         deviceListCalls.append(.init(scope: scope))
+        await awaitDeviceListGate()
+        if let deviceListError { throw deviceListError }
         return deviceListResult
     }
 
@@ -637,8 +662,8 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// ordinary `deviceList` call: callers assert on the scope either way.
     func deviceListWithGeneration(
         scope: DeviceListScope
-    ) -> (entries: [DeviceListEntry], generation: Int) {
-        (deviceList(scope: scope), connectionGeneration)
+    ) async throws -> (entries: [DeviceListEntry], generation: Int) {
+        (try await deviceList(scope: scope), connectionGeneration)
     }
 
     func bootDevice(

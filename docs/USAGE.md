@@ -187,9 +187,27 @@ ownership of the device or permission to shut it down.
 
 ### Close a Device Pane
 
-Close a Simulator pane to remove its DeviceTerm surface while leaving the
-Simulator booted and owned. Closing a physical-device pane ends the mirror and
-releases its tunnel when nothing else needs it.
+Closing a Simulator pane asks what to do with the Simulator, whenever it is
+still running and no other tab has claimed it:
+
+- **Detach (Keep Sim Running)** removes the pane and leaves the Simulator
+  booted and owned.
+- **Shut Down Sim** stops it as the pane closes.
+- **Cancel** leaves the pane open.
+
+Closing without asking covers the cases where nothing of yours is left
+running: a Simulator DeviceTerm never claimed, one that has already stopped,
+and one another tab is now using. The last happens after you boot the same
+UDID from a second tab, which leaves the first tab holding a stale pane.
+
+A physical-device pane never asks. Closing it ends the mirror and releases its
+tunnel when nothing else needs it, and never powers the device off.
+
+This prompt shares its **Don't ask again** controls and its `tab-close-default`
+setting with the Close Tab prompt, so an answer stored from either applies to
+both. The exception is a Simulator DeviceTerm can't reach the daemon to check
+on: that always asks, because a stored **Shut Down Sim** would otherwise stop a
+Simulator nothing confirmed was running.
 
 Closing a device pane does not close the tab. Closing the last terminal pane
 does close the tab.
@@ -301,8 +319,9 @@ selection stops when no pane exists in that direction.
 
 Use ⇧⌘← and ⇧⌘→ to move the focused pane past its neighbor.
 
-Press ⌘W to close the focused pane. If the focused pane is the tab's final
-terminal, DeviceTerm closes the tab and applies its Simulator close decision.
+Press ⌘W to close the focused pane. Closing a Simulator pane raises the Close
+a Device Pane prompt. If the focused pane is the tab's final terminal,
+DeviceTerm closes the tab and applies its Simulator close decision instead.
 
 Press ⌥⌘W to close the tab directly. Press ⇧⌘W to close the window.
 
@@ -765,7 +784,7 @@ prompt.
 
 | Key | Default | Values | Effect |
 |---|---|---|---|
-| `tab-close-default` | `detach` | `detach`, `shutdown` | Chooses what closing a tab does with its owned Simulators. Setting it suppresses the Close Tab prompt. |
+| `tab-close-default` | `detach` | `detach`, `shutdown` | Chooses what closing a tab, window, or Simulator pane does with the owned Simulators involved. Setting it suppresses those prompts, except that Close Pane still asks when DeviceTerm cannot reach the daemon. |
 | `quit-with-sims-default` | `keep` | `keep`, `shutdown` | Chooses what quitting does while owned Simulators remain booted. Setting it suppresses the Quit prompt. |
 | `simulator-app-advisory` | `show` | `show`, `suppress` | Controls the warning shown when Simulator.app is running while a Simulator is attached. |
 | `auto-update` | `check` | `off`, `check`, `download` | Controls automatic update checks and downloads. `off` leaves manual update checks available. |

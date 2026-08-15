@@ -30,6 +30,27 @@ final class SimPaneActionCoordinator {
     /// lookups keep resolving against the tab's new home. Every closure
     /// here reads it live through `self`, so repointing is enough.
     private var tabListVM: TabListViewModel
+    /// The window the tab currently lives in, for scoping the close
+    /// prompt's "For this window" suppression. A `var` and repointed by
+    /// `rebind` for the same reason `tabListVM` is: a cross-window move
+    /// puts the tab under a different window id.
+    private var windowID: WindowID
+    /// Pane admissions with a close in flight. The roster lookup suspends,
+    /// so a second ⌘W (or a double-click on Close Pane) arrives before the
+    /// first request reaches its prompt and would ask again.
+    ///
+    /// A marker outlives the dispatch that ends the request. `dispatch`
+    /// only enqueues, so clearing it on the way out would reopen the window
+    /// it exists to close while the route waits behind the drain. Markers
+    /// are instead pruned against current admissions at the start of the
+    /// next close request, which suppresses the duplicate without blocking
+    /// a pane that has since been replaced or re-admitted.
+    private var closingPanes: Set<PaneAdmission> = []
+    /// Raises the pane-close prompt. Injected so a test can drive the
+    /// decision without a modal, the same seam the Router uses for
+    /// `detectWorktreeName`. Production reads the config fresh on each ask
+    /// so an edit made while the app runs takes effect.
+    private let askPaneClose: @MainActor (CloseContext, String, Bool) -> TabCloseDecision
     /// Active simctl recordVideo destinations, keyed by sim UDID. Populated
     /// by `onRecordStart`; consumed (and removed) by `onRecordStop` so the
     /// stop closure can reveal the finalized file in Finder, and by
@@ -50,18 +71,31 @@ final class SimPaneActionCoordinator {
         router: Router,
         daemonClient: any DeviceControlling,
         simResurrect: SimResurrect,
-        tabListVM: TabListViewModel
+        tabListVM: TabListViewModel,
+        windowID: WindowID,
+        askPaneClose: @escaping @MainActor (CloseContext, String, Bool) -> TabCloseDecision = {
+            CloseDecisions.paneClose(
+                config: ConfigFile(),
+                state: .shared,
+                context: $0,
+                deviceName: $1,
+                alwaysAsk: $2
+            )
+        }
     ) {
         self.tabID = tabID
         self.router = router
         self.daemonClient = daemonClient
         self.simResurrect = simResurrect
         self.tabListVM = tabListVM
+        self.windowID = windowID
+        self.askPaneClose = askPaneClose
     }
 
     /// Repoint at the tab's new-home nav state after a cross-window move.
-    func rebind(tabListVM: TabListViewModel) {
+    func rebind(tabListVM: TabListViewModel, windowID: WindowID) {
         self.tabListVM = tabListVM
+        self.windowID = windowID
     }
 
     /// Shut down, and on success drop the owned-sim mirror's claim.
@@ -112,6 +146,115 @@ final class SimPaneActionCoordinator {
         router.noteSimOwned(udid: udid, sessionId: sessionId, generation: generation)
     }
 
+    /// Close a sim pane, prompting when its sim is one deviceterm owns, is
+    /// still Booted, and is claimed by no live session in another tab. An
+    /// owner that is a dead session, or no owner at all, still prompts.
+    ///
+    /// Detaching is the pane-only close: the surface goes and the sim keeps
+    /// running, owned and counted by the status item, which is easy to do by
+    /// accident and hard to notice afterwards. Pane, tab, and window close
+    /// therefore ask the same question against the same suppression state.
+    /// Quit asks its own and stores it separately.
+    ///
+    /// A sim that is stopped, borrowed, or another tab's raises nothing and
+    /// closes straight through. One the daemon could not be asked about
+    /// raises the prompt with the stored answer ignored, because a stored
+    /// `shutdown` would otherwise stop a simulator nothing verified.
+    ///
+    /// Not reached by the resurrect re-mount, which dispatches the route
+    /// itself: that detach is an internal step of a re-attach, and the sim
+    /// it names is deliberately left running.
+    ///
+    /// Module-internal rather than private, like `bootAndRecordOwnership`
+    /// above, so a test can drive it without a live pane view controller.
+    func requestClosePane(udid: String, displayName: String) async {
+        // Neither the paneId nor the udid identifies what the user is
+        // closing. A resurrect replaces the pane under the same udid, and a
+        // re-attach re-admits the same paneId under a new attachment, so the
+        // admission is the thing to hold and to fence on.
+        guard let admission = simPane(udid: udid)?.admission else { return }
+        closingPanes.formIntersection(liveAdmissions())
+        guard closingPanes.insert(admission).inserted else { return }
+        var dispatched = false
+        defer { if !dispatched { closingPanes.remove(admission) } }
+
+        let lookup = await daemonClient.lookUpOwnedSim(udid: udid)
+        // The tab can close, the pane can be dropped, or it can be
+        // re-admitted while the read is outstanding. Re-check before either
+        // acting or asking: prompting about a pane that is already gone is
+        // as wrong as closing whatever took its place. The second check
+        // after the prompt covers the time the user spent in it.
+        guard simPane(udid: udid)?.admission == admission else { return }
+
+        let shouldAsk: Bool
+        switch lookup {
+        case .notRunning:
+            shouldAsk = false
+
+        case .unknown:
+            shouldAsk = true
+
+        case let .running(owner):
+            // Sampled here, not before the read: a tab opened while the
+            // read was in flight still counts, and its simulator is not
+            // this pane's to stop.
+            shouldAsk = OwnedSimDecision.isOursToStop(
+                ownedBySession: owner,
+                claimedElsewhere: sessionsLiveInOtherTabs()
+            )
+        }
+
+        var mode = PaneCloseMode.detach
+        if shouldAsk {
+            // The tab outlives a pane close, so "For this window" is always
+            // an available scope here.
+            let context = CloseContext(windowID: windowID, hasOtherTabsInWindow: true)
+            switch askPaneClose(context, displayName, lookup == .unknown) {
+            case .detach:
+                break
+
+            case .shutdown:
+                mode = .shutdown
+
+            case .cancel:
+                return
+            }
+            guard simPane(udid: udid)?.admission == admission else { return }
+        }
+        dispatched = true
+        router.dispatch(
+            .detachSimPane(tab: tabID, udid: udid, mode: mode, expecting: admission)
+        )
+    }
+
+    /// Current admissions, for pruning stale close markers before another
+    /// request is accepted.
+    private func liveAdmissions() -> Set<PaneAdmission> {
+        Set((tabListVM.tab(id: tabID)?.simPanes ?? []).map(\.admission))
+    }
+
+    /// Resolves current pane state for the admission checks either side of
+    /// a suspension.
+    private func simPane(udid: String) -> SimPaneState? {
+        tabListVM.tab(id: tabID)?.simPanes.first { $0.udid == udid }
+    }
+
+    /// Session ids belonging to tabs other than this one, anywhere in the
+    /// workspace. A sim attributed to one of these is that tab's to stop,
+    /// not this pane's, even though both name the same udid.
+    ///
+    /// Spans windows rather than just this one: booting the same udid from
+    /// a tab in another window leaves the same stale pane behind here.
+    private func sessionsLiveInOtherTabs() -> Set<String> {
+        var sessions: Set<String> = []
+        for window in router.workspace.windows {
+            for tab in window.tabs.tabs where tab.id != tabID {
+                sessions.formUnion(tab.terminals.map(\.sessionId))
+            }
+        }
+        return sessions
+    }
+
     func wire(paneVC: SimulatorPaneViewController, simPane: SimPaneState) {
         let tabID = self.tabID
         let udid = simPane.udid
@@ -123,7 +266,9 @@ final class SimPaneActionCoordinator {
         // the drag would be silently dropped.
         paneVC.tabID = tabID
         paneVC.onClose = { [weak self] in
-            self?.router.dispatch(.detachSimPane(tab: tabID, udid: udid, mode: .detach))
+            Task { @MainActor in
+                await self?.requestClosePane(udid: udid, displayName: displayName)
+            }
         }
         paneVC.onReboot = { [weak self] in
             guard let self else { return }
@@ -416,6 +561,11 @@ final class SimPaneActionCoordinator {
         } else {
             anchor = nil
         }
+        // Straight to the route, deliberately not through
+        // `requestClosePane`: this detach is the first half of a re-attach,
+        // not a close the user asked for, and routing it through the prompt
+        // would interrupt a resurrect to ask about a sim that is already
+        // shut down.
         router.dispatch(.detachSimPane(tab: tabID, udid: udid, mode: .detach))
         router.dispatch(
             .attachSimPane(

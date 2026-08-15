@@ -625,7 +625,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // route back to the main actor for the prompt itself.
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let affected = await self.hasOwnedBootedSims(forSessions: allSessionIDs)
+            let affected = await self.daemonClient.hasOwnedBootedSims(
+                forSessions: allSessionIDs
+            )
             if !affected {
                 self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
                 return
@@ -672,7 +674,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         let capturedWindowID = windowID
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let affected = await self.hasOwnedBootedSims(forSessions: allSessionIDs)
+            let affected = await self.daemonClient.hasOwnedBootedSims(
+                forSessions: allSessionIDs
+            )
             if !affected {
                 for sessionId in sessionIDs {
                     self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
@@ -708,27 +712,6 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             for sessionId in sessionIDs {
                 self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
             }
-        }
-    }
-
-    /// Async predicate: does any of `sessions` own a currently-booted
-    /// simulator? Used by the close-prompt skip paths so a tab whose
-    /// sim pane was detached (visual close, sim still owned + booted)
-    /// still gets the prompt.
-    ///
-    /// A daemon-list failure returns true (fail-open to the prompt) so
-    /// a transient RPC blip can't silently force-detach a close that
-    /// would otherwise honor the user's stored `shutdown` default.
-    private func hasOwnedBootedSims(forSessions sessions: [String]) async -> Bool {
-        let owned: [DeviceListEntry]
-        do {
-            owned = try await daemonClient.deviceList(scope: .owned)
-        } catch {
-            return true
-        }
-        let sessionSet = Set(sessions)
-        return owned.contains {
-            $0.state == "Booted" && sessionSet.contains($0.ownedBySession ?? "")
         }
     }
 

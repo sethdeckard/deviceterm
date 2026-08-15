@@ -139,6 +139,10 @@ should not be able to touch it.
 `pane close` and `pane info` resolve Simulator panes only. Close a
 physical-device pane in the GUI.
 
+`pane close` takes the same `--mode <detach|shutdown>`, defaulting to
+`detach`. The CLI never prompts, so `--mode` is how a script answers the
+question the GUI asks.
+
 `pane rename` and `pane move` are not implemented; see
 [unsupported workspace verbs](INTEGRATION.md#unsupported-workspace-verbs).
 
