@@ -30,8 +30,21 @@ CLI="$BUILD/deviceterm-cli"
 # uitest-bundle.sh) so its TCC grant survives rebuilds and `make clean`.
 HARNESS_APP="${DEVICETERM_UITEST_APP:-$HOME/Applications/DeviceTermUITestHarness.app}"
 DEVICETERM_APP="$BUILD/DeviceTerm.app"
+# The harness bundle, its TCC grants, and the singleton GUI it drives
+# are shared across this user's checkouts, and the uitest-bundle.sh call
+# below replaces the one shared bundle. Every harness writer takes the uitest
+# lock: this track holds it, uitest-bundle.sh acquires it unless told a
+# caller already holds it, and the uitest-stop / uitest-run targets hold
+# it across their own harness mutations. A concurrent run from another
+# checkout refuses instead of corrupting the harness. The
+# INT/TERM traps exit so a caught signal cannot release the lock and
+# then keep driving the GUI; cleanup happens on EXIT only.
+./scripts/exclusive-lock.sh acquire uitest $$
+export DEVICETERM_UITEST_LOCK_HELD=1
 SCRATCH="$(mktemp -d -t deviceterm-uitest.XXXXXX)"
-trap 'rm -rf "$SCRATCH"' EXIT
+trap 'rm -rf "$SCRATCH"; ./scripts/exclusive-lock.sh release uitest $$' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 info() { printf "  · %s\n" "$1"; }
@@ -175,27 +188,23 @@ else
 fi
 
 # ── deviceterm running with a window ───────────────────────────────────
-# This script rebuilds the app but reuses whatever deviceterm is already
-# running, so a process started before the build under test silently
-# validates the *old* binary and every row below passes for the wrong
-# reason. Compare the running process's age against the freshly built
-# executable's and stop when the process is older. Reported rather than
-# killed: the running app holds the user's tabs, which are not this
-# script's to close.
-# Matched on the bundle-relative path, not `$DEVICETERM_APP`: the process
-# runs from `.build/arm64-apple-macosx/debug/…` while that variable names
-# the `.build/debug` symlink, so the two argv strings never compare equal.
-# `|| true` because `pgrep` exits 1 when nothing matches, which under
-# `set -euo pipefail` would abort the script on the ordinary path where
-# deviceterm simply isn't running yet.
+# Refuse a DeviceTerm process from another checkout before the first
+# daemon call; otherwise the CLI could validate the wrong build.
+# If process enumeration is unavailable, the guard proceeds without BUSY.
+./scripts/instance-guard.sh refuse-foreign
+
+# Reject this checkout's visible processes when they predate the rebuilt
+# app. Do not kill them because the app may hold user tabs. If process
+# enumeration is unavailable, skip this freshness check.
 dt_bin="$DEVICETERM_APP/Contents/MacOS/deviceterm"
-dt_pid="$(pgrep -f 'DeviceTerm\.app/Contents/MacOS/deviceterm' 2>/dev/null | head -1 || true)"
-if [ -n "$dt_pid" ] && [ -x "$dt_bin" ]; then
-    proc_age="$(ps -o etimes= -p "$dt_pid" 2>/dev/null | tr -d ' ' || true)"
+if [ -x "$dt_bin" ]; then
     bin_age="$(( $(date +%s) - $(stat -f %m "$dt_bin") ))"
-    if [[ "$proc_age" =~ ^[0-9]+$ ]] && [ "$proc_age" -gt "$bin_age" ]; then
-        fail "deviceterm (pid $dt_pid) started ${proc_age}s ago, before this build (${bin_age}s old) — quit it and re-run, or every row below describes the old binary"
-    fi
+    for dt_pid in $(./scripts/instance-guard.sh list-mine); do
+        proc_age="$(ps -o etimes= -p "$dt_pid" 2>/dev/null | tr -d ' ' || true)"
+        if [[ "$proc_age" =~ ^[0-9]+$ ]] && [ "$proc_age" -gt "$bin_age" ]; then
+            fail "deviceterm (pid $dt_pid) started ${proc_age}s ago, before this build (${bin_age}s old) — quit it and re-run, or every row below describes the old binary"
+        fi
+    done
 fi
 
 if ! "$CLI" windows list --all --json >"$SCRATCH/windows.json" 2>/dev/null \
@@ -208,6 +217,10 @@ if ! "$CLI" windows list --all --json >"$SCRATCH/windows.json" 2>/dev/null \
         sleep 0.5
     done
 fi
+# The ±1 arithmetic assumes no other actor mutates the workspace tab
+# total mid-run. The uitest lock plus the refusal above hold that for
+# every cooperating checkout; a sandbox denied process enumeration could
+# still miss a foreign instance.
 baseline="$(total_tabs "$SCRATCH/windows.json")"
 [ "$baseline" -ge 0 ] || fail "deviceterm has no window (a locked/asleep display launches it window-less) — unlock the screen and retry"
 ok "deviceterm is up with a window (total tabs=$baseline)"

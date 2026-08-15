@@ -75,6 +75,95 @@ else
     fail "documented but undeclared: $missing"
 fi
 
+# Exclusive-lock self-test: needs no hardware, and uses host process
+# state to construct live, dead, and absent process-group cases. Pins the
+# mkdir-lock semantics (contended acquire refuses with exit 75; release
+# permits re-acquire; a dead holder is reclaimed only when nothing
+# survives in its group) and the BUSY line-1 key order against drift. A
+# throwaway track name keeps a real test-live or test-uitest lock
+# untouched.
+if [ -x scripts/exclusive-lock.sh ]; then
+    lk_track="verify-selftest.$$"
+    lk_dir="/tmp/deviceterm.$(id -u).${lk_track}.lock"
+    trap 'rm -rf "$lk_dir" "$lk_dir.recover"' EXIT
+    ./scripts/exclusive-lock.sh acquire "$lk_track" $$ \
+        || fail "exclusive-lock: fresh acquire failed"
+    set +e
+    lk_out=$(./scripts/exclusive-lock.sh acquire "$lk_track" $$ 2>&1)
+    lk_rc=$?
+    set -e
+    [ "$lk_rc" -eq 75 ] \
+        || fail "exclusive-lock: contended acquire exited $lk_rc, want 75"
+    echo "$lk_out" | grep -qE '^deviceterm-make: BUSY: resource=lock:[^ ]+ pid=[0-9]+ holder=.' \
+        || fail "exclusive-lock: BUSY line 1 missing or its key order drifted"
+    ./scripts/exclusive-lock.sh release "$lk_track" $$
+    ./scripts/exclusive-lock.sh acquire "$lk_track" $$ \
+        || fail "exclusive-lock: re-acquire after release failed"
+    ./scripts/exclusive-lock.sh release "$lk_track" $$
+    # Staleness. The holder identity is written by hand so the verdict
+    # does not depend on this shell's job control: a real track's group
+    # dies with its job, but a wrapper spawned inside a non-interactive
+    # script shares that script's group and would look alive.
+    lk_dead=$(sh -c 'echo $$')      # exited before the assignment returns
+    lk_stamp() {
+        printf '%s\nGone\n%s\n%s\n%s\n' "$1" "$(pwd -P)" "$lk_track" "$2" \
+            > "$lk_dir/holder"
+    }
+    # Find a process group that is genuinely absent here; a live group
+    # owning the number would make the reclaim case below assert the
+    # opposite of what it means to.
+    lk_absent=""
+    for lk_cand in 99999 99997 99993 99991 99989; do
+        lk_err=$(kill -0 -- -"$lk_cand" 2>&1) && continue
+        case "$(printf '%s' "$lk_err" | tr 'A-Z' 'a-z')" in
+            *"no such process"*) lk_absent="$lk_cand"; break ;;
+        esac
+    done
+    [ -n "$lk_absent" ] \
+        || fail "exclusive-lock: no absent process group to test against"
+    # Dead holder, no survivors in its group: reclaimable.
+    ./scripts/exclusive-lock.sh acquire "$lk_track" $$ >/dev/null
+    lk_stamp "$lk_dead" "$lk_absent"
+    ./scripts/exclusive-lock.sh acquire "$lk_track" $$ \
+        || fail "exclusive-lock: stale-holder reclaim failed"
+    # Dead holder whose group still has survivors: a SIGKILLed wrapper
+    # can leave a swift test child driving the resource, so refuse. The
+    # unknown-group case refuses for the same reason, and is asserted
+    # with the sentinel so it holds where process info is denied too.
+    for lk_group in "unknown" "$(ps -p $$ -o pgid= 2>/dev/null | tr -d ' ' || true)"; do
+        [ -n "$lk_group" ] || continue
+        lk_stamp "$lk_dead" "$lk_group"
+        set +e
+        ./scripts/exclusive-lock.sh acquire "$lk_track" $$ >/dev/null 2>&1
+        lk_rc=$?
+        set -e
+        [ "$lk_rc" -eq 75 ] \
+            || fail "exclusive-lock: reclaimed past group '$lk_group' (exit $lk_rc, want 75)"
+    done
+    # A recovery mutex owned by a live process blocks reclaiming, however
+    # old it is; age alone must not clear it, or a stalled reclaimer's
+    # peer could delete the lock the reclaimer went on to grant.
+    lk_stamp "$lk_dead" "$lk_absent"
+    mkdir -p "$lk_dir.recover"
+    printf '%s\n%s\n%s\n%s\n%s\n' \
+        $$ "$(ps -p $$ -o lstart= | sed 's/^ *//;s/ *$//')" "$(pwd -P)" \
+        "$lk_track" "$(ps -p $$ -o pgid= | tr -d ' ')" > "$lk_dir.recover/holder"
+    touch -t 202001010000 "$lk_dir.recover"
+    set +e
+    ./scripts/exclusive-lock.sh acquire "$lk_track" $$ >/dev/null 2>&1
+    lk_rc=$?
+    set -e
+    [ "$lk_rc" -eq 75 ] \
+        || fail "exclusive-lock: live recovery mutex ignored (exit $lk_rc, want 75)"
+    rm -rf "$lk_dir.recover"
+    ./scripts/exclusive-lock.sh acquire "$lk_track" $$ \
+        || fail "exclusive-lock: reclaim after clearing recovery mutex failed"
+    ./scripts/exclusive-lock.sh release "$lk_track" $$
+    ok "exclusive-lock self-test (BUSY format + staleness)"
+else
+    skip "exclusive-lock self-test (no scripts/exclusive-lock.sh)"
+fi
+
 # ──────────────────────────────────────────────────────────────────────
 # Filesystem-gated
 # ──────────────────────────────────────────────────────────────────────

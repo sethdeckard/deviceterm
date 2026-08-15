@@ -32,10 +32,10 @@ cd "$(dirname "$0")/.."
 
 ROOT_PHYS="$(pwd -P)"
 
-# Same patterns the Makefile used: bundle-relative fragments that match the
-# app and daemon regardless of where the bundle lives. The bracketed first
-# letter keeps pgrep from matching argv that merely *mentions* the pattern
-# (recipe command lines, this script's own invocation).
+# Bundle-relative patterns match the app and daemon wherever their
+# bundles live. The bracketed first letter prevents pgrep's own argv
+# from matching; classify_all filters other argument-only matches by
+# executable basename.
 APP_PATTERN='[D]eviceTerm.app/Contents/MacOS/deviceterm'
 DAEMON_PATTERN='[L]oginItems/deviceterm-daemon.app/Contents/MacOS/deviceterm-daemon'
 

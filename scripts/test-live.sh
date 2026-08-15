@@ -23,6 +23,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The simulator fleet is shared by this user's checkouts: the
+# clean-slate shutdown below would kill another checkout's live run
+# mid-track. One sim lock across them; a concurrent run fails fast
+# with a BUSY block instead. The
+# INT/TERM traps exit so a caught signal cannot release the lock and
+# then keep driving the track; cleanup happens on EXIT only.
+./scripts/exclusive-lock.sh acquire sim $$
+trap './scripts/exclusive-lock.sh release sim $$' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 echo "test-live: shutting down all simulators (clean slate)…"
 xcrun simctl shutdown all 2>/dev/null || true
 
@@ -70,16 +81,28 @@ else
 fi
 
 cleanup() {
+    # A signal during the boot wait exits through this trap instead of
+    # the inline cancellation below, so reap both helpers here: an
+    # orphaned watchdog would outlive the script and later signal
+    # whatever pid the kernel reused for bootstatus.
+    for helper in "${wd_pid:-}" "${bs_pid:-}"; do
+        [ -n "${helper}" ] || continue
+        kill "${helper}" 2>/dev/null || true
+        wait "${helper}" 2>/dev/null || true
+    done
     echo "test-live: shutting down ${udid}…"
     xcrun simctl shutdown "${udid}" 2>/dev/null || true
+    ./scripts/exclusive-lock.sh release sim $$
 }
 
 echo "test-live: booting ${udid}…"
 xcrun simctl boot "${udid}"
 # Arrange cleanup the instant the boot succeeds, on every exit path
-# (normal, error under `set -e`, or Ctrl-C / kill) — otherwise a
-# bootstatus timeout or a test failure would strand the device.
-trap cleanup EXIT INT TERM
+# (normal, error under `set -e`, or Ctrl-C / kill via the exiting
+# signal traps); otherwise a bootstatus timeout or test failure
+# would strand the device. This replaces the release-only EXIT trap
+# armed at acquire time, so it must also drop the sim lock.
+trap cleanup EXIT
 
 # Wait until the device is fully booted (AX server up) so the tree-walk
 # tests don't race a half-booted SpringBoard — but bound it with a
@@ -92,8 +115,12 @@ bs_pid=$!
 wd_pid=$!
 boot_ok=0
 if wait "${bs_pid}"; then boot_ok=1; fi
+bs_pid=""
 kill "${wd_pid}" 2>/dev/null || true
 wait "${wd_pid}" 2>/dev/null || true
+# Both helpers are reaped; blank the pids so the EXIT trap cannot signal
+# whatever the kernel gives those numbers next.
+wd_pid=""
 if [ "${boot_ok}" -ne 1 ]; then
     echo "test-live: ${udid} did not finish booting within ${timeout_secs}s" >&2
     echo "           (a cold runtime's first boot is slow; retry, or raise" >&2

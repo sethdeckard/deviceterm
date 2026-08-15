@@ -22,12 +22,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The physical device and its CoreDevice tunnel are shared hardware:
+# two concurrent tracks would fight over the single video stream. One
+# device lock across this user's checkouts; a concurrent run fails fast
+# with a BUSY block. The
+# precheck also runs while holding the lock so the whole track has one
+# owner. The INT/TERM traps exit so a caught signal cannot release the
+# lock and then keep driving the track; cleanup happens on EXIT only.
+./scripts/exclusive-lock.sh acquire device $$
+trap './scripts/exclusive-lock.sh release device $$' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # Precheck: is a physical device connected? `devicectl list devices` reaches
 # the device over usbmux/lockdown with NO tunnel up, so this works with Device
 # Hub closed — exactly the state the track runs in. Fail fast if none is
 # listed; the track's first test is the authoritative check.
 tmp_json="$(mktemp -t deviceterm-devicectl-precheck)"
-trap 'rm -f "${tmp_json}"' EXIT
+trap 'rm -f "${tmp_json}"; ./scripts/exclusive-lock.sh release device $$' EXIT
 xcrun devicectl list devices --json-output "${tmp_json}" >/dev/null 2>&1 || true
 if ! grep -q '"reality"[[:space:]]*:[[:space:]]*"physical"' "${tmp_json}" 2>/dev/null; then
     echo "test-device-live: no connected physical device found." >&2

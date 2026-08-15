@@ -47,6 +47,17 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
+# Replacing the shared bundle while another checkout's test-uitest track
+# runs corrupts that run, so every harness writer takes the uitest lock.
+# test-uitest.sh already holds it when it calls this script and says so
+# via the env flag; locking again here would refuse against ourselves.
+if [ -z "${DEVICETERM_UITEST_LOCK_HELD:-}" ]; then
+    "$ROOT/scripts/exclusive-lock.sh" acquire uitest $$
+    trap '"$ROOT/scripts/exclusive-lock.sh" release uitest $$' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+fi
+
 mkdir -p "$(dirname "$APP")"
 
 # Remove any stale copy at the historical .build location. Two bundles with

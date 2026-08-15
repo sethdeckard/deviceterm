@@ -7,6 +7,12 @@
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
+# Apple ships GNU Make 3.81, which predates .SHELLFLAGS and ignores it,
+# so a recipe cannot rely on `set -e` being active: a command that fails
+# mid-recipe does not stop the commands after it. Anything whose failure
+# must abort the recipe says so explicitly, with `|| exit $$?` or an
+# `|| { ...; exit 1; }` block. Newer make honors the flags, and the
+# explicit form is correct under both.
 
 .PHONY: help \
         build run kill-daemon daemon cli shim probe \
@@ -99,7 +105,7 @@ run: bundle
 	@if [ -d Sources/App ]; then \
 	    test -x .build/debug/DeviceTerm.app/Contents/MacOS/deviceterm \
 	      || { echo "make run: bundle missing or incomplete" >&2; exit 1; }; \
-	    ./scripts/instance-guard.sh ensure-clear; \
+	    ./scripts/instance-guard.sh ensure-clear || exit $$?; \
 	    open .build/debug/DeviceTerm.app; \
 	else \
 	    echo "make run: Sources/App/ does not exist — skipping"; \
@@ -142,19 +148,40 @@ uitest-bundle: uitest
 	    echo "make uitest-bundle: scripts/uitest-bundle.sh does not exist — skipping"; \
 	fi
 
+# Stopping the resident mid-track would corrupt another checkout's
+# running test-uitest, so the pkill happens while holding the uitest
+# lock; a held lock turns this into a BUSY refusal. The lock is taken in
+# the same shell as the pkill, since a separate check could go stale
+# before the kill lands.
+uitest-stop:
+	@if [ -x scripts/exclusive-lock.sh ]; then \
+	    ./scripts/exclusive-lock.sh acquire uitest $$$$ || exit $$?; \
+	    trap "./scripts/exclusive-lock.sh release uitest $$$$" EXIT; \
+	fi; \
+	pkill -f 'DeviceTermUITestHarness.app/Contents/MacOS/deviceterm-uitest' >/dev/null 2>&1 || true; \
+	echo "stopped deviceterm-uitest resident (if running)"
+
 # Launch the harness through LaunchServices (`open`), never as a child of
 # this shell: TCC resolves a process's grants through its responsible
 # process, so a shell-spawned harness would attribute to your terminal.
 # `open` hands the launch to launchd, giving the .app its own identity.
-uitest-stop:
-	@pkill -f 'DeviceTermUITestHarness.app/Contents/MacOS/deviceterm-uitest' >/dev/null 2>&1 || true
-	@echo "stopped deviceterm-uitest resident (if running)"
-
-uitest-run: uitest-bundle uitest-stop
-	@APP="$${DEVICETERM_UITEST_APP:-$$HOME/Applications/DeviceTermUITestHarness.app}"; \
+# Assembling the bundle, stopping the resident, and relaunching all run
+# inside one lock span. Assembling under a separate lock would leave a
+# gap for another checkout to swap the shared bundle, and this target
+# would then launch that checkout's harness.
+uitest-run: uitest
+	@if [ ! -x scripts/uitest-bundle.sh ]; then \
+	    echo "make uitest-run: scripts/uitest-bundle.sh does not exist — skipping"; \
+	    exit 0; \
+	fi; \
+	./scripts/exclusive-lock.sh acquire uitest $$$$ || exit $$?; \
+	trap "./scripts/exclusive-lock.sh release uitest $$$$" EXIT; \
+	DEVICETERM_UITEST_LOCK_HELD=1 ./scripts/uitest-bundle.sh || exit $$?; \
+	APP="$${DEVICETERM_UITEST_APP:-$$HOME/Applications/DeviceTermUITestHarness.app}"; \
 	if [ ! -d "$$APP" ]; then \
 	    echo "make uitest-run: harness bundle missing — skipping"; \
 	else \
+	    pkill -f 'DeviceTermUITestHarness.app/Contents/MacOS/deviceterm-uitest' >/dev/null 2>&1 || true; \
 	    open "$$APP" --args serve; \
 	    for _ in 1 2 3 4 5 6 7 8; do .build/debug/deviceterm-uitest ping >/dev/null 2>&1 && break; sleep 0.25; done; \
 	    if ! .build/debug/deviceterm-uitest ping >/dev/null 2>&1; then \
