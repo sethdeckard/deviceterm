@@ -32,6 +32,16 @@ public enum DeviceTermConfigDefaults {
                 + "are shown; set detach or shutdown to suppress them"
         ),
         ConfigKeySpec(
+            key: "tab-close-multi-pane",
+            defaultValue: "ask",
+            allowedValues: ["ask", "close"],
+            summary: "Whether closing a tab that contains more than one pane from the "
+                + "GUI asks for confirmation first; closing a window asks when any of "
+                + "its tabs does. ask shows the confirmation; close skips it. Not "
+                + "consulted when a sim disposition prompt already covers the close; "
+                + "shell-exit and CLI closes never prompt."
+        ),
+        ConfigKeySpec(
             key: "quit-with-sims-default",
             defaultValue: "keep",
             allowedValues: ["keep", "shutdown"],

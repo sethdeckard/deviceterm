@@ -306,13 +306,12 @@ Shape:
 | `source` | string | `"default"`, `"file"`, or `"unset"` |
 | `note` | string, optional | Present only on `"unset"` entries; what the app does while the key is absent |
 
-The two prompt-suppression keys (`tab-close-default`,
-`quit-with-sims-default`) apply no default when absent: the app shows the
-prompt. Their absent entries report `source: "unset"` with an empty
-`value` and an explanatory `note` rather than claiming the documented
-default is effective. Keys whose default genuinely applies on absence
-(`simulator-app-advisory`, `auto-update`) keep reporting
-`source: "default"`.
+`tab-close-default` and `quit-with-sims-default` apply no default when
+absent: the app shows the prompt. Their absent entries report
+`source: "unset"` with an empty `value` and an explanatory `note` rather
+than claiming the documented default is effective. Keys whose default
+genuinely applies on absence (`simulator-app-advisory`, `auto-update`,
+`tab-close-multi-pane`) keep reporting `source: "default"`.
 
 Entries are sorted by key. Warning text is diagnostic prose and best-effort.
 

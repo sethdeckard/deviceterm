@@ -4,16 +4,21 @@
 import Foundation
 import Testing
 
-// CloseDecisions has two surfaces: `tabClose` (single + bulk) /
-// `windowClose` for the close prompt, and `quitWithSims` for the
-// quit prompt. Both prompt through `NSAlert.runModal` when no stored
-// disposition exists (that path can't run in a non-UI test process),
-// but both also short-circuit when a stored disposition exists in
-// `CloseSuppressionState` or `~/.config/deviceterm/config`. The
-// short-circuit paths are what these tests pin: it's the regression
-// class that lets a user's "Don't ask again" stick, and the path that
-// makes the scope tiers (window / session / appExit / always) behave
-// as advertised.
+// CloseDecisions has three tracks: the sim-disposition prompts
+// (`paneClose` / `tabClose` single + bulk / `windowClose`), the quit
+// prompt (`quitWithSims`), and the multi-pane confirm
+// (`multiPaneTabClose` single + bulk, `multiPaneWindowClose`). Each
+// prompts through `NSAlert.runModal` when no stored answer exists
+// (that path can't run in a non-UI test process), and short-circuits
+// when one does exist in `CloseSuppressionState` or
+// `~/.config/deviceterm/config`. `paneClose` is the exception: its
+// `alwaysAsk` flag forces the prompt regardless of a stored answer,
+// so that call can't be reached headlessly.
+//
+// The short-circuit paths are what these tests pin: it's the
+// regression class that lets a user's "Don't ask again" stick, and
+// the path that makes the scope tiers (window / session / appExit /
+// always) behave as advertised.
 
 // MARK: - Persistent file lookup (forever tier)
 
@@ -442,6 +447,194 @@ func alwaysOnQuitPromptEvictsPriorCloseTiers() throws {
             context: CloseContext(windowID: nil, hasOtherTabsInWindow: false)
         ) == .shutdown
     )
+}
+
+// MARK: - Multi-pane confirm: suppression short-circuit + tiers
+
+// The multi-pane confirm prompts through `NSAlert.runModal` like the
+// sim prompts, so only its suppressed (no-prompt) paths run headlessly:
+// the entry points when a tier says "don't ask", and the record/lookup
+// tier behavior itself.
+
+@MainActor
+@Test
+func multiPaneTabCloseHonorsPersistentCloseValue() throws {
+    let fixture = try makeFixture(contents: "tab-close-multi-pane = close\n")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.multiPaneTabClose(
+            config: fixture.config,
+            state: fixture.state,
+            context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
+            paneCount: 3
+        )
+    )
+}
+
+@MainActor
+@Test
+func bulkMultiPaneTabCloseHonorsPersistentCloseValue() throws {
+    let fixture = try makeFixture(contents: "tab-close-multi-pane = close\n")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.bulkMultiPaneTabClose(
+            config: fixture.config,
+            state: fixture.state,
+            context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
+            tabCount: 3,
+            multiPaneTabCount: 2
+        )
+    )
+}
+
+@MainActor
+@Test
+func multiPaneWindowCloseHonorsPersistentCloseValue() throws {
+    // Window close reuses the same `tab-close-multi-pane` key, mirroring
+    // how `windowClose` reuses `tab-close-default`: one stored answer
+    // covers every surface that asks the multi-pane question.
+    let fixture = try makeFixture(contents: "tab-close-multi-pane = close\n")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.multiPaneWindowClose(
+            config: fixture.config,
+            state: fixture.state,
+            windowID: WindowID(value: 1),
+            tabCount: 1,
+            multiPaneTabCount: 1
+        )
+    )
+}
+
+@MainActor
+@Test
+func paneConfirmWindowScopeSuppressesOnlyThatWindow() throws {
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    let windowID = WindowID(value: 6)
+    fixture.state.recordPaneConfirmSuppression(
+        scope: .window,
+        windowID: windowID,
+        config: fixture.config
+    )
+    #expect(
+        fixture.state.lookupPaneConfirmSuppressed(windowID: windowID, config: fixture.config)
+    )
+    #expect(
+        !fixture.state.lookupPaneConfirmSuppressed(
+            windowID: WindowID(value: 7),
+            config: fixture.config
+        )
+    )
+    // Nothing persisted.
+    #expect(
+        ConfigFile(path: fixture.path).value(forKey: CloseDecisions.tabClosePanesKey) == nil
+    )
+}
+
+@MainActor
+@Test
+func paneConfirmSessionScopeSuppressesEveryWindow() throws {
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    fixture.state.recordPaneConfirmSuppression(
+        scope: .session,
+        windowID: nil,
+        config: fixture.config
+    )
+    #expect(
+        fixture.state.lookupPaneConfirmSuppressed(
+            windowID: WindowID(value: 2),
+            config: fixture.config
+        )
+    )
+    #expect(fixture.state.lookupPaneConfirmSuppressed(windowID: nil, config: fixture.config))
+    #expect(
+        ConfigFile(path: fixture.path).value(forKey: CloseDecisions.tabClosePanesKey) == nil
+    )
+}
+
+@MainActor
+@Test
+func paneConfirmAlwaysScopePersistsCloseValue() throws {
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    fixture.state.recordPaneConfirmSuppression(
+        scope: .always,
+        windowID: nil,
+        config: fixture.config
+    )
+    #expect(
+        ConfigFile(path: fixture.path).value(forKey: CloseDecisions.tabClosePanesKey) == "close"
+    )
+    // A fresh state (new app launch) still short-circuits off the file.
+    #expect(
+        CloseDecisions.multiPaneTabClose(
+            config: ConfigFile(path: fixture.path),
+            state: CloseSuppressionState(),
+            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false),
+            paneCount: 2
+        )
+    )
+}
+
+@MainActor
+@Test
+func paneConfirmAppExitScopeIsNoOp() throws {
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    fixture.state.recordPaneConfirmSuppression(
+        scope: .appExit,
+        windowID: nil,
+        config: fixture.config
+    )
+    #expect(!fixture.state.lookupPaneConfirmSuppressed(windowID: nil, config: fixture.config))
+    #expect(
+        ConfigFile(path: fixture.path).value(forKey: CloseDecisions.tabClosePanesKey) == nil
+    )
+}
+
+@MainActor
+@Test
+func paneConfirmExplicitAskIsNotSuppressed() throws {
+    let fixture = try makeFixture(contents: "tab-close-multi-pane = ask\n")
+    defer { cleanup(fixture.path) }
+    #expect(!fixture.state.lookupPaneConfirmSuppressed(windowID: nil, config: fixture.config))
+}
+
+// MARK: - The two tracks never cross-write
+
+@MainActor
+@Test
+func paneConfirmAlwaysDoesNotTouchSimKeys() throws {
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    fixture.state.recordPaneConfirmSuppression(
+        scope: .always,
+        windowID: nil,
+        config: fixture.config
+    )
+    let written = ConfigFile(path: fixture.path)
+    #expect(written.value(forKey: CloseDecisions.tabCloseKey) == nil)
+    #expect(written.value(forKey: CloseDecisions.quitWithSimsKey) == nil)
+}
+
+@MainActor
+@Test
+func simTrackAlwaysDoesNotTouchPaneConfirmKey() throws {
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    fixture.state.recordClose(
+        decision: .shutdown,
+        scope: .always,
+        windowID: nil,
+        config: fixture.config
+    )
+    fixture.state.recordQuit(decision: .keepSims, scope: .always, config: fixture.config)
+    #expect(
+        ConfigFile(path: fixture.path).value(forKey: CloseDecisions.tabClosePanesKey) == nil
+    )
+    #expect(!fixture.state.lookupPaneConfirmSuppressed(windowID: nil, config: fixture.config))
 }
 
 // MARK: - Fixture helpers

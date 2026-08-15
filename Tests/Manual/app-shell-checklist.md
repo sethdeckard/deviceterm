@@ -97,6 +97,12 @@ means that item.
 | 7.8 | Re-attach the sim, close the pane again, choose **Shut Down Sim** | Pane goes; the sim shuts down; badge decrements. |
 | 7.9 | `xcrun simctl shutdown <udid>` to reach the pane's shutdown overlay, then click **Close Pane** | No prompt; the pane closes. Nothing is left running to ask about. |
 | 7.10 | Boot a udid into tab A, shut it down with `xcrun simctl shutdown` so A shows the overlay, boot the same udid from tab B, then close A's stale pane | No prompt, and tab B's Simulator keeps running. |
+| 7.11 | With two tabs open, split one (⌘D), no sims booted, then close the split tab (⌥⌘W or the `✕`) | Prompt: *Close this tab?* naming the pane count, with `Close` / `Cancel` + "Don't ask again" offering For this window / Until DeviceTerm restarts / Always. Cancel keeps the tab and both panes. |
+| 7.12 | Repeat 7.11, tick "Don't ask again" ▸ **Always**, choose **Close** | Later multi-pane closes are silent. Verify `~/.config/deviceterm/config` gained `tab-close-multi-pane = close`. Remove the line to restore the confirmation. |
+| 7.13 | Boot a sim into a tab (two panes now), then close the tab (⌥⌘W) | Only the sim prompt (§7.1) appears; a close never asks two questions. Cancel still keeps everything. |
+| 7.14 | With one tab split (no sims), right-click another tab ▸ **Close Other Tabs** | One bulk confirm reports how many of the closing tabs hold multiple panes; Cancel aborts the whole batch. |
+| 7.15 | One window, one split tab, no sims booted: close the window (red `✕` or ⇧⌘W) | Prompt: *Close this window?* with `Close` / `Cancel` + "Don't ask again" offering Until DeviceTerm restarts / Always. Cancel keeps the window and both panes. |
+| 7.16 | Boot a sim into a tab, right-click the **terminal** pane ▸ **Close Pane** (the tab's last terminal) | The tab-close sim prompt (§7.1) appears, not a silent close; Cancel keeps the tab. With the sim shut down (overlay showing), the multi-pane confirm (§7.11) appears instead. |
 
 ## 8. ⌘Q quit prompt
 

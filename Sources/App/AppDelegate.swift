@@ -108,13 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// flight. Reconcile skips them so a still-present WindowState
     /// doesn't get a recreated WC before the Router removes it.
     private var closingWindowIDs: Set<WindowID> = []
-    /// The Detach/Shut-Down disposition the user chose in
-    /// `windowShouldClose` for an in-flight close. `windowWillClose`
+    /// The close mode `windowShouldClose` resolved for an in-flight
+    /// user-initiated close (prompted or not). `windowWillClose`
     /// reads (and consumes) it on the matching window; absent means
-    /// the close was initiated by something other than the user
-    /// clicking close on a window with booted sims (a Router-driven
-    /// close, ⌘Q quit, a sim-less window's red X), so `.detach` is
-    /// the safe default.
+    /// the close never went through `windowShouldClose`'s async path
+    /// (a Router-driven close, ⌘Q quit), so `.detach` is the safe
+    /// default.
     private var pendingCloseModeByID: [WindowID: PaneCloseMode] = [:]
     private var observation: ObservationToken?
     /// Observation that re-supplies the daemon's inventory when the live session
@@ -582,12 +581,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// User clicked the window's close affordance (red X / ⌘W on the
-    /// last tab). Mirrors the tab-close prompt for the window scope:
+    /// last tab). Mirrors the tab-close prompts for the window scope:
     /// ask whether to detach (keep sims running) or shut them down
-    /// when any of this window's tabs own a booted sim. Cancel aborts
-    /// the close; chosen mode is stashed in `pendingCloseModeByID`
+    /// when any of this window's tabs own a booted sim, and confirm
+    /// the close when any tab holds more than one pane and the sim
+    /// prompt isn't about to run (`TabCloseGateDecision`, the same
+    /// gate as `requestCloseTab`). Cancel in either prompt aborts the
+    /// close; chosen mode is stashed in `pendingCloseModeByID`
     /// and consumed by `windowWillClose`. Router-driven closes (the
-    /// `closingWindowIDs` guard) skip the prompt; the upstream caller
+    /// `closingWindowIDs` guard) skip the prompts; the upstream caller
     /// already chose the mode.
     ///
     /// Returns `false` synchronously and re-issues `window.close()`
@@ -627,12 +629,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let affected = await self.daemonClient.hasOwnedBootedSims(
                 forSessions: sessionIDs
             )
+            // Re-read the window's tabs after the await: the main
+            // actor yielded while the daemon answered, so the
+            // multi-pane gate uses the current layout. The
+            // sim-ownership answer still reflects the sessions
+            // captured at the gesture.
+            let tabs = self.workspace.window(id: windowID)?.tabs.tabs ?? []
+            let multiPaneTabCount = tabs
+                .filter { PaneTreeOps.leavesInOrder($0.paneTree).count > 1 }
+                .count
+            let tabCount = tabs.count
+            let config = ConfigFile()
+            let pinned = affected
+                ? CloseSuppressionState.shared.lookupClose(
+                    windowID: windowID,
+                    config: config
+                )
+                : nil
             let mode: PaneCloseMode
-            if !affected {
-                mode = .detach
-            } else {
+            switch TabCloseGateDecision.gate(
+                simsAffected: affected,
+                pinnedSimDecision: pinned,
+                multiPane: multiPaneTabCount > 0
+            ) {
+            case .simDisposition:
                 let decision = CloseDecisions.windowClose(
-                    config: ConfigFile(),
+                    config: config,
                     state: CloseSuppressionState.shared,
                     windowID: windowID
                 )
@@ -646,6 +668,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 case .cancel:
                     return
                 }
+
+            case let .multiPaneConfirm(gateMode):
+                guard CloseDecisions.multiPaneWindowClose(
+                    config: config,
+                    state: CloseSuppressionState.shared,
+                    windowID: windowID,
+                    tabCount: tabCount,
+                    multiPaneTabCount: multiPaneTabCount
+                ) else { return }
+                mode = gateMode
+
+            case let .close(gateMode):
+                mode = gateMode
             }
             self.pendingCloseModeByID[windowID] = mode
             // Re-trigger close after the deferred decision. The
@@ -675,10 +710,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         else { return }
         let windowID = entry.key
         let windowCtl = entry.value
-        // `windowShouldClose` stashed the user-chosen mode; if it
-        // didn't run (sim-less window, Router-driven close), default
-        // to `.detach`, a no-op when nothing's running, and the
-        // safer choice if a sim slipped through the predicate.
+        // `windowShouldClose` stashed the mode it resolved for a
+        // user-initiated close; if it didn't run (Router-driven
+        // teardown), default to `.detach`, a no-op when nothing's
+        // running, and the safer choice if a sim slipped through the
+        // predicate.
         let mode = pendingCloseModeByID.removeValue(forKey: windowID) ?? .detach
         // Tear down before dropping the WC so the per-tab cleanup runs
         // (observation, discovery poll, terminal.requestClose, SimResurrect

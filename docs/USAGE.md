@@ -224,6 +224,16 @@ When a tab owns booted Simulators, DeviceTerm offers these choices:
 Closing a window applies the same decision to the owned Simulators associated
 with its tabs.
 
+A tab that holds more than one pane also confirms before closing, so one stray
+shortcut can't tear down a whole layout. Closing a window asks the same
+question when any of its tabs holds more than one pane. The confirmation
+appears only when the Simulator prompt above doesn't; one close asks at most
+one question. It covers closes made in the app; a shell exiting or
+`deviceterm tab close` never prompts.
+
+This confirmation has its own **Don't ask again** controls and its own
+`tab-close-multi-pane` setting, separate from `tab-close-default`.
+
 Use the prompt's **Don't ask again** controls when you want a default for a
 particular scope. Persistent defaults can also be set in the configuration
 file.
@@ -777,14 +787,17 @@ Inspect every active value and its source with:
 deviceterm dump-config
 ```
 
-The command also warns about unrecognized keys. The two prompt keys
-report `unset` while you haven't set them: their Default column below is
-the choice a present key selects, and leaving the key out keeps the
-prompt.
+The command also warns about unrecognized keys. `tab-close-default` and
+`quit-with-sims-default` report `unset` while you haven't set them: their
+Default column below is the choice a present key selects, and leaving the
+key out keeps the prompt. `tab-close-multi-pane` differs: its `ask`
+default genuinely applies while the key is absent, so it reports
+`default`.
 
 | Key | Default | Values | Effect |
 |---|---|---|---|
 | `tab-close-default` | `detach` | `detach`, `shutdown` | Chooses what closing a tab, window, or Simulator pane does with the owned Simulators involved. Setting it suppresses those prompts, except that Close Pane still asks when DeviceTerm cannot reach the daemon. |
+| `tab-close-multi-pane` | `ask` | `ask`, `close` | Confirms before a GUI close of a tab that holds more than one pane, and of a window when any of its tabs does. `close` skips the confirmation. Never stacks with the Simulator prompt on the same close. |
 | `quit-with-sims-default` | `keep` | `keep`, `shutdown` | Chooses what quitting does while owned Simulators remain booted. Setting it suppresses the Quit prompt. |
 | `simulator-app-advisory` | `show` | `show`, `suppress` | Controls the warning shown when Simulator.app is running while a Simulator is attached. |
 | `auto-update` | `check` | `off`, `check`, `download` | Controls automatic update checks and downloads. `off` leaves manual update checks available. |

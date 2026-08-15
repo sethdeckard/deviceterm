@@ -11,6 +11,7 @@ import Testing
 func canonicalDefaultsCoverCloseKeys() {
     #expect(Config.defaultValue(for: "tab-close-default") == "detach")
     #expect(Config.defaultValue(for: "quit-with-sims-default") == "keep")
+    #expect(Config.defaultValue(for: "tab-close-multi-pane") == "ask")
 }
 
 @Test

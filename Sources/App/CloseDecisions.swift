@@ -20,11 +20,20 @@
 // `quit-with-sims-default`. Only the `.always` scope writes across the two
 // keys.
 //
+// The multi-pane confirm is a second, independent track: closing a tab,
+// a batch of tabs, or a window whose tabs hold more than one pane asks
+// a plain Close/Cancel question, but only when the sim-disposition
+// prompt is not about to run, because that prompt has Cancel and so
+// already confirms the close. One gesture never stacks two prompts
+// (`TabCloseGateDecision` picks the arm). Its "Don't ask again" reuses
+// the same scope dropdown but stores a boolean under
+// `tab-close-multi-pane`, and never cross-writes the sim keys.
+//
 // The "Don't ask again" affordance is a scoped checkbox + popup, not
 // a single permanent toggle. Per-window and per-app-session tiers live
-// in `CloseSuppressionState` (in-memory, cleared on quit); the two
-// long-lived tiers (`When quitting DeviceTerm` and `Always`) write
-// `quit-with-sims-default` / `tab-close-default` in
+// in `CloseSuppressionState` (in-memory, cleared on quit); the
+// long-lived tiers write `quit-with-sims-default` / `tab-close-default`
+// (sim track) or `tab-close-multi-pane` (multi-pane track) in
 // `~/.config/deviceterm/config`. The dropdown's available options and
 // default selection are derived from `CloseContext`.
 
@@ -50,8 +59,9 @@ enum SuppressionScope: Sendable {
     case session
     /// Permanent, quit-prompt only. Persisted to file.
     case appExit
-    /// Permanent across every close + quit prompt. Persisted to file;
-    /// cross-writes both keys.
+    /// Permanent across every prompt of the same track. Persisted to
+    /// file; on the sim track it cross-writes both sim keys, on the
+    /// multi-pane track it writes only `tab-close-multi-pane`.
     case always
 }
 
@@ -66,6 +76,7 @@ struct CloseContext: Sendable {
 enum CloseDecisions {
     static let tabCloseKey = "tab-close-default"
     static let quitWithSimsKey = "quit-with-sims-default"
+    static let tabClosePanesKey = "tab-close-multi-pane"
 
     /// Closing one sim pane, where exactly one sim is at stake and it has
     /// a name to use. The buttons go singular for the same reason.
@@ -187,6 +198,89 @@ enum CloseDecisions {
         return decision
     }
 
+    /// Confirm closing one tab that holds more than one pane. Returns
+    /// true to proceed. Runs only when the sim-disposition prompt won't
+    /// (see `TabCloseGateDecision`). The caller resolves the dispatch
+    /// mode separately; this function only gates the close.
+    static func multiPaneTabClose(
+        config: ConfigFile,
+        state: CloseSuppressionState,
+        context: CloseContext,
+        paneCount: Int
+    ) -> Bool {
+        askMultiPaneConfirmation(
+            config: config,
+            state: state,
+            context: context,
+            messageText: "Close this tab?",
+            informativeText:
+                "This tab contains \(paneCount) panes. "
+                + "Closing the tab closes all of them."
+        )
+    }
+
+    /// Bulk variant for "Close Other Tabs" / "Close Tabs to the Right":
+    /// one confirmation for the whole batch, so Cancel aborts every
+    /// close. Same `count == 1` bulk-wording rule as `bulkTabClose`.
+    static func bulkMultiPaneTabClose(
+        config: ConfigFile,
+        state: CloseSuppressionState,
+        context: CloseContext,
+        tabCount: Int,
+        multiPaneTabCount: Int
+    ) -> Bool {
+        let noun = tabCount == 1 ? "tab" : "tabs"
+        let detail: String
+        if tabCount == 1 {
+            detail = "That tab contains multiple panes. "
+                + "Closing it closes all of them."
+        } else if multiPaneTabCount == 1 {
+            detail = "One of these tabs contains multiple panes. "
+                + "Closing it closes all of them."
+        } else {
+            detail = "\(multiPaneTabCount) of these tabs contain multiple panes. "
+                + "Closing them closes every pane."
+        }
+        return askMultiPaneConfirmation(
+            config: config,
+            state: state,
+            context: context,
+            messageText: "Close \(tabCount) \(noun)?",
+            informativeText: detail
+        )
+    }
+
+    /// Window flavor of the multi-pane confirm: the whole window is
+    /// going away, so the wording counts tabs rather than naming one.
+    /// Same `hasOtherTabsInWindow: false` reasoning as `windowClose`:
+    /// the window scope is meaningless on a window about to close.
+    static func multiPaneWindowClose(
+        config: ConfigFile,
+        state: CloseSuppressionState,
+        windowID: WindowID,
+        tabCount: Int,
+        multiPaneTabCount: Int
+    ) -> Bool {
+        let detail: String
+        if tabCount == 1 {
+            detail = "Its tab contains multiple panes. "
+                + "Closing the window closes all of them."
+        } else if multiPaneTabCount == 1 {
+            detail = "One of its tabs contains multiple panes. "
+                + "Closing the window closes every pane."
+        } else {
+            detail = "\(multiPaneTabCount) of its tabs contain multiple panes. "
+                + "Closing the window closes every pane."
+        }
+        return askMultiPaneConfirmation(
+            config: config,
+            state: state,
+            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: false),
+            messageText: "Close this window?",
+            informativeText: detail
+        )
+    }
+
     /// The button titles default to the plural wording every multi-sim
     /// caller wants; only `paneClose`, which speaks about one sim,
     /// overrides them.
@@ -240,6 +334,44 @@ enum CloseDecisions {
             )
         }
         return decision
+    }
+
+    /// The multi-pane confirm shared by the single-tab, bulk-tab, and
+    /// window closes. Suppression short-circuits to proceed; Cancel
+    /// records nothing, matching `askBootedSimDisposition`.
+    private static func askMultiPaneConfirmation(
+        config: ConfigFile,
+        state: CloseSuppressionState,
+        context: CloseContext,
+        messageText: String,
+        informativeText: String
+    ) -> Bool {
+        if state.lookupPaneConfirmSuppressed(windowID: context.windowID, config: config) {
+            return true
+        }
+        let alert = NSAlert()
+        alert.messageText = messageText
+        alert.informativeText = informativeText
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close")
+        alert.addButton(withTitle: "Cancel")
+        let scopes: [SuppressionScope] = context.hasOtherTabsInWindow
+            ? [.window, .session, .always]
+            : [.session, .always]
+        let accessory = SuppressionAccessory(scopes: scopes)
+        alert.accessoryView = accessory.view
+
+        let proceed = alert.runModal() == .alertFirstButtonReturn
+        if proceed,
+            accessory.suppressionEnabled,
+            let scope = accessory.selectedScope {
+            state.recordPaneConfirmSuppression(
+                scope: scope,
+                windowID: context.windowID,
+                config: config
+            )
+        }
+        return proceed
     }
 }
 

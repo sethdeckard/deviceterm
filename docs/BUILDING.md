@@ -212,6 +212,7 @@ their recognized keys are disjoint. The app ignores unknown DeviceTerm keys;
 | Key | Values | Default | Behavior |
 |---|---|---|---|
 | `tab-close-default` | `detach`, `shutdown` | `detach` | Suppresses the Close Tab, Close Window, and Close Pane prompts and picks this action. `detach` closes the surface but keeps any sims it booted running; `shutdown` also stops them. Close Pane still asks when DeviceTerm cannot reach the daemon to check the Simulator. |
+| `tab-close-multi-pane` | `ask`, `close` | `ask` | Confirms before a GUI close of a tab that holds more than one pane, and of a window when any of its tabs does; shell-exit and `deviceterm` CLI closes never prompt. `close` skips the confirmation. When the same close would also raise the sim prompt above, only the sim prompt shows. |
 | `quit-with-sims-default` | `keep`, `shutdown` | `keep` | Suppresses the Quit prompt when DeviceTerm-owned sims are booted. `keep` quits leaving them running; `shutdown` stops every owned booted sim first. Has no effect when no owned sims are booted. |
 | `simulator-app-advisory` | `show`, `suppress` | `show` | Whether to show the Simulator.app coexistence advisory when a sim is attached while Apple's Simulator.app is also running. `suppress` hides it. |
 | `auto-update` | `off`, `check`, `download` | `check` | How the app handles updates via Sparkle. `check` checks automatically and notifies when an update is available; `download` also installs it on relaunch; `off` disables automatic checks (the Check for Updates… menu item still works). |

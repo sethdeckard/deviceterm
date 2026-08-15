@@ -638,11 +638,11 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         surface?.clearScreen()
     }
 
-    /// Right-click "Close Pane": same effect as the shell exiting
-    /// on a multi-terminal tab (drop just this terminal), and as
-    /// closing the tab on a single-terminal tab. Routing decision
-    /// lives in the container so this VC stays unaware of tab
-    /// arithmetic.
+    /// Right-click "Close Pane": drops just this terminal on a
+    /// multi-terminal tab; on the tab's last terminal it requests a
+    /// tab close, which applies the tab-close prompt policy (a shell
+    /// exit closes silently). Routing decision lives in the container
+    /// so this VC stays unaware of tab arithmetic.
     @objc
     func closeTerminalPaneViaMenu(_ sender: Any?) {
         onClosePaneRequested?()

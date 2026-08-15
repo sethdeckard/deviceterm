@@ -18,10 +18,10 @@
 // kind rather than a keyboard-only variant that can drift from it.
 //
 // The tab case re-enters the responder chain rather than calling
-// through, because closing a tab runs the detach-or-shut-down prompt
-// that `TabStripViewController` owns. Routing a last-terminal close
-// through the terminal's own path instead would reach the shell-exited
-// handler, which force-detaches without asking.
+// through, because closing a tab is `TabStripViewController`'s
+// decision: it owns the close prompts and the dispatch. The terminal's
+// own explicit-close path lands in the same prompts for a last
+// terminal (`onTerminalCloseRequested`), so the two routes agree.
 
 import AppKit
 

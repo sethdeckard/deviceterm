@@ -2892,9 +2892,9 @@ built-in defaults cover only DeviceTerm's own domain, where a value from
 1. **Built-in defaults**: compiled into `DeviceTermConfigDefaults`
    (`Sources/DaemonProtocol/`), for DeviceTerm's own keys only;
    `Sources/App/Config/Config.swift` is a thin re-export of that table.
-   For the two prompt-suppression keys the tabled value is the choice a
-   *present* key selects, not a value applied on absence: with the key
-   absent the app shows the prompt.
+   For `tab-close-default` and `quit-with-sims-default` the tabled value
+   is the choice a *present* key selects, not a value applied on
+   absence: with the key absent the app shows the prompt.
 2. **The Ghostty config**: loaded **whole**, by
    `ghostty_config_load_default_files`. DeviceTerm uses that entry point
    and the C API exposes no keybind mutator, so the file governs
@@ -2969,9 +2969,10 @@ both domains or applies precedence between them.
   recognized-key specifications and the missing-key defaults that
   actually apply. `deviceterm dump-config` reports the effective value
   and source for every recognized key and warns about unrecognized keys;
-  the two prompt-suppression keys report `unset` with an explanatory note
-  when absent, because no default applies then (the app shows the
-  prompt). It does not parse or report Ghostty's semantic configuration.
+  `tab-close-default` and `quit-with-sims-default` report `unset` with
+  an explanatory note when absent, because no default applies then (the
+  app shows the prompt). It does not parse or report Ghostty's semantic
+  configuration.
 
 The app itself ignores unrecognized DeviceTerm keys. Malformed lines without
 `=` are also ignored by both the app parser and `dump-config`. A future unified

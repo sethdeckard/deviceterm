@@ -607,14 +607,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     private func requestCloseTab(id tabID: TabID) {
         guard let tab = tabListVM.tab(id: tabID) else { return }
-        let sessionId = tab.primaryTerminal.sessionId
-        guard !sessionId.isEmpty else { return }
+        guard !tab.primaryTerminal.sessionId.isEmpty else { return }
         // Router.closeTabRecords shuts down devices owned by ANY of
         // the tab's terminal sessions, not just the primary. Check
         // every one so a sim booted from a secondary terminal pane
         // doesn't skip the prompt and force-detach.
         let allSessionIDs = tab.terminals.map(\.sessionId).filter { !$0.isEmpty }
-        let hasOtherTabs = tabListVM.tabs.count > 1
         let capturedWindowID = windowID
         // The skip-prompt decision can't trust `tab.simPanes`
         // (visible sim panes only) because a user can detach a pane
@@ -628,48 +626,84 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             let affected = await self.daemonClient.hasOwnedBootedSims(
                 forSessions: allSessionIDs
             )
-            if !affected {
-                self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
-                return
-            }
+            // Re-read the tab after the await: the main actor yielded
+            // while the daemon answered, so panes may have been added
+            // or removed, or the tab closed outright. The multi-pane
+            // gate and the prompt use the current layout; the
+            // sim-ownership answer still reflects the sessions
+            // captured at the gesture.
+            guard let tab = self.tabListVM.tab(id: tabID) else { return }
+            let sessionId = tab.primaryTerminal.sessionId
+            guard !sessionId.isEmpty else { return }
+            let paneCount = PaneTreeOps.leavesInOrder(tab.paneTree).count
+            let config = ConfigFile()
+            let pinned = affected
+                ? CloseSuppressionState.shared.lookupClose(
+                    windowID: capturedWindowID,
+                    config: config
+                )
+                : nil
             let context = CloseContext(
                 windowID: capturedWindowID,
-                hasOtherTabsInWindow: hasOtherTabs
+                hasOtherTabsInWindow: self.tabListVM.tabs.count > 1
             )
-            let decision = CloseDecisions.tabClose(
-                config: ConfigFile(),
-                state: CloseSuppressionState.shared,
-                context: context
-            )
-            switch decision {
-            case .detach:
-                self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
+            switch TabCloseGateDecision.gate(
+                simsAffected: affected,
+                pinnedSimDecision: pinned,
+                multiPane: paneCount > 1
+            ) {
+            case .simDisposition:
+                // `tabClose` re-runs the lookup that just returned nil;
+                // both reads happen in this same main-actor turn, so it
+                // still misses and the prompt shows.
+                let decision = CloseDecisions.tabClose(
+                    config: config,
+                    state: CloseSuppressionState.shared,
+                    context: context
+                )
+                switch decision {
+                case .detach:
+                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
 
-            case .shutdown:
-                self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .shutdown))
+                case .shutdown:
+                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .shutdown))
 
-            case .cancel:
-                return
+                case .cancel:
+                    return
+                }
+
+            case let .multiPaneConfirm(mode):
+                if CloseDecisions.multiPaneTabClose(
+                    config: config,
+                    state: CloseSuppressionState.shared,
+                    context: context,
+                    paneCount: paneCount
+                ) {
+                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
+                }
+
+            case let .close(mode):
+                self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
             }
         }
     }
 
     /// Bulk-close path for "Close Other Tabs" / "Close Tabs to the
-    /// Right". Resolves the sim-disposition decision ONCE before
-    /// dispatching: pressing Cancel aborts the whole operation, and
-    /// the chosen Detach/Shutdown mode applies uniformly to every
-    /// tab in `ids`. Sessions are snapshot up front so a mid-loop
-    /// dispatch can't shift indices under us.
+    /// Right". Resolves the close decision ONCE before dispatching:
+    /// pressing Cancel in whichever prompt runs aborts the whole
+    /// operation, and the resolved Detach/Shutdown mode applies
+    /// uniformly to every tab in `ids`. Sessions are snapshot before
+    /// the dispatch loop so a mid-loop dispatch can't shift indices
+    /// under us.
     private func requestBulkCloseTabs(ids: [TabID]) {
-        let targets = ids.compactMap { tabListVM.tab(id: $0) }
+        let initialTargets = ids.compactMap { tabListVM.tab(id: $0) }
             .filter { !$0.primaryTerminal.sessionId.isEmpty }
-        guard !targets.isEmpty else { return }
+        guard !initialTargets.isEmpty else { return }
         // Per-tab dispatch keys off the primary session (the existing
         // close-tab intent shape), but the affected-check sweeps every
         // terminal pane's session across every targeted tab, the same
         // correctness rule as `requestCloseTab`.
-        let sessionIDs = targets.map(\.primaryTerminal.sessionId)
-        let allSessionIDs = targets.flatMap { $0.terminals.map(\.sessionId) }
+        let allSessionIDs = initialTargets.flatMap { $0.terminals.map(\.sessionId) }
             .filter { !$0.isEmpty }
         let capturedWindowID = windowID
         Task { @MainActor [weak self] in
@@ -677,12 +711,23 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             let affected = await self.daemonClient.hasOwnedBootedSims(
                 forSessions: allSessionIDs
             )
-            if !affected {
-                for sessionId in sessionIDs {
-                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
-                }
-                return
-            }
+            // Re-resolve the targets after the await (same reason as
+            // `requestCloseTab`): tabs may have closed and panes moved
+            // while the daemon answered.
+            let targets = ids.compactMap { self.tabListVM.tab(id: $0) }
+                .filter { !$0.primaryTerminal.sessionId.isEmpty }
+            guard !targets.isEmpty else { return }
+            let sessionIDs = targets.map(\.primaryTerminal.sessionId)
+            let multiPaneTabCount = targets
+                .filter { PaneTreeOps.leavesInOrder($0.paneTree).count > 1 }
+                .count
+            let config = ConfigFile()
+            let pinned = affected
+                ? CloseSuppressionState.shared.lookupClose(
+                    windowID: capturedWindowID,
+                    config: config
+                )
+                : nil
             // Bulk close keeps at least one tab open (the user
             // right-clicked a tab and chose "Close Others" / "Close
             // Tabs to the Right"), so by definition other tabs remain
@@ -693,21 +738,41 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 hasOtherTabsInWindow: true
             )
             let mode: PaneCloseMode
-            let decision = CloseDecisions.bulkTabClose(
-                config: ConfigFile(),
-                state: CloseSuppressionState.shared,
-                context: context,
-                count: sessionIDs.count
-            )
-            switch decision {
-            case .detach:
-                mode = .detach
+            switch TabCloseGateDecision.gate(
+                simsAffected: affected,
+                pinnedSimDecision: pinned,
+                multiPane: multiPaneTabCount > 0
+            ) {
+            case .simDisposition:
+                let decision = CloseDecisions.bulkTabClose(
+                    config: config,
+                    state: CloseSuppressionState.shared,
+                    context: context,
+                    count: sessionIDs.count
+                )
+                switch decision {
+                case .detach:
+                    mode = .detach
 
-            case .shutdown:
-                mode = .shutdown
+                case .shutdown:
+                    mode = .shutdown
 
-            case .cancel:
-                return
+                case .cancel:
+                    return
+                }
+
+            case let .multiPaneConfirm(gateMode):
+                guard CloseDecisions.bulkMultiPaneTabClose(
+                    config: config,
+                    state: CloseSuppressionState.shared,
+                    context: context,
+                    tabCount: sessionIDs.count,
+                    multiPaneTabCount: multiPaneTabCount
+                ) else { return }
+                mode = gateMode
+
+            case let .close(gateMode):
+                mode = gateMode
             }
             for sessionId in sessionIDs {
                 self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
@@ -905,13 +970,24 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         applySelection(for: tabs)
     }
 
-    /// Install the per-terminal exit handler on `tabContent` so a
-    /// shell exit dispatches the right route: when the closing
+    /// Install the per-terminal close handlers on `tabContent`.
+    ///
+    /// `onTerminalExit` (the shell died on its own): when the closing
     /// terminal is the last one in the tab, close the whole tab
-    /// (preserving the "last-shell-exits-closes-tab" behavior);
-    /// when N > 1, close only that terminal pane. Title / CWD wiring
-    /// for each terminal lives inside the content VC's reconciler
-    /// because it must run per-terminal at creation time.
+    /// silently, preserving the "last-shell-exits-closes-tab"
+    /// behavior. A shell exit is not an explicit close gesture, so no
+    /// prompt applies even when other panes go down with the tab.
+    /// When N > 1, close only that terminal pane.
+    ///
+    /// `onTerminalCloseRequested` (the user's explicit Close Pane):
+    /// same pane-vs-tab arithmetic, but the last-terminal case routes
+    /// through `requestCloseTab` so the tab-close prompt policy
+    /// applies. An explicit close of the tab's last terminal is a tab
+    /// close, not a shell death.
+    ///
+    /// Title / CWD wiring for each terminal lives inside the content
+    /// VC's reconciler because it must run per-terminal at creation
+    /// time.
     private func wireTerminalExit(of tabContent: TabContentViewController) {
         let tabListVM = self.tabListVM
         let router = self.router
@@ -931,9 +1007,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 return
             }
             // Last terminal in this tab: close the whole tab through
-            // the dispatcher so the close-with-sims modal path stays
-            // unified. Use the primary terminal's sessionId since
-            // that's the only one remaining at this point.
+            // the dispatcher. Use the primary terminal's sessionId
+            // since that's the only one remaining at this point.
             let sessionId = tabContent.sessionId
             Task {
                 _ = await dispatcher.dispatch(
@@ -941,6 +1016,21 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     origin: .inProcess
                 )
             }
+        }
+        tabContent.onTerminalCloseRequested = { [weak self] terminalID in
+            guard let self else { return }
+            let tab = tabListVM.tab(id: tabID)
+            if let tab, tab.terminals.count > 1 {
+                router.dispatch(
+                    .closeTerminalPane(
+                    tab: tabID,
+                    terminal: terminalID,
+                    mode: .detach
+                )
+                    )
+                return
+            }
+            self.requestCloseTab(id: tabID)
         }
     }
 

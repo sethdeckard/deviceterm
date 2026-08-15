@@ -23,6 +23,12 @@ final class CloseSuppressionState {
     private(set) var perWindow: [WindowID: TabCloseDecision] = [:]
     private(set) var perSession: TabCloseDecision?
 
+    // In-memory tiers for the multi-pane tab-close confirm. Boolean
+    // rather than decision-valued: the confirm has no disposition to
+    // store, only "stop asking".
+    private(set) var paneConfirmPerWindow: Set<WindowID> = []
+    private(set) var paneConfirmPerSession = false
+
     func recordClose(
         decision: TabCloseDecision,
         scope: SuppressionScope,
@@ -88,6 +94,57 @@ final class CloseSuppressionState {
             let close: TabCloseDecision = decision == .shutdownSims ? .shutdown : .detach
             persistClose(decision: close, config: config)
         }
+    }
+
+    /// Record "don't ask again" for the multi-pane tab-close confirm.
+    /// A separate track from `recordClose`: the confirm stores no
+    /// disposition, only the fact that it should stop appearing, so the
+    /// tiers are a window set and a flag rather than decisions.
+    ///
+    /// Unlike `recordClose`, `.always` evicts nothing: every tier
+    /// stores the same fact and `lookupPaneConfirmSuppressed` ORs them,
+    /// so no softer tier can contradict the just-written persistent
+    /// value. It also cross-writes nothing; whether to confirm a
+    /// multi-pane close is orthogonal to what happens to sims.
+    func recordPaneConfirmSuppression(
+        scope: SuppressionScope,
+        windowID: WindowID?,
+        config: ConfigFile
+    ) {
+        switch scope {
+        case .window:
+            if let windowID {
+                paneConfirmPerWindow.insert(windowID)
+            }
+
+        case .session:
+            paneConfirmPerSession = true
+
+        case .appExit:
+            // Not a valid scope for close prompts; the dropdown only
+            // offers `.appExit` in the quit prompt. If a caller reaches
+            // here, treat it as a no-op rather than mis-persisting.
+            break
+
+        case .always:
+            config.setValue("close", forKey: CloseDecisions.tabClosePanesKey)
+            config.seedDocumentedExamples()
+            try? config.save()
+        }
+    }
+
+    /// Whether the multi-pane tab-close confirm is suppressed for
+    /// `windowID`. Any tier suffices: window set, session flag, or a
+    /// persistent `tab-close-multi-pane = close`. An explicit `ask` (or
+    /// an absent key) keeps the confirm.
+    func lookupPaneConfirmSuppressed(windowID: WindowID?, config: ConfigFile) -> Bool {
+        if let windowID, paneConfirmPerWindow.contains(windowID) {
+            return true
+        }
+        if paneConfirmPerSession {
+            return true
+        }
+        return config.value(forKey: CloseDecisions.tabClosePanesKey) == "close"
     }
 
     /// Resolve the close prompt's pre-stored decision. Returns nil

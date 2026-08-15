@@ -41,6 +41,12 @@ final class TabContentViewController: NSViewController {
     /// `closeTerminalPane` for non-primary panes and `closeTab` for
     /// the last surviving terminal. Set by the strip after init.
     var onTerminalExit: ((TerminalPaneID) -> Void)?
+    /// Forwarder for the user's explicit Close Pane on a terminal.
+    /// Separate from `onTerminalExit` so the last-terminal case can
+    /// apply the tab-close prompt policy; a shell exit closes
+    /// silently, an explicit close of the last terminal is a tab
+    /// close. Set by the strip after init.
+    var onTerminalCloseRequested: ((TerminalPaneID) -> Void)?
 
     private let role: SessionRole
     private let daemonClient:
@@ -602,14 +608,16 @@ final class TabContentViewController: NSViewController {
             self.titleModel.updateWorkingDirectory(path: path)
             self.latestWorkingDirectory = path
         }
-        // Right-click "Close Pane" routes through the same path as
-        // `onExit` so the strip handler can pick between "drop just
-        // this terminal" (multi-terminal tab) and "close the whole
-        // tab" (last terminal). Reading `onTerminalExit` live mirrors
-        // the rationale documented above the `onExit` wiring.
+        // Right-click "Close Pane" is an explicit user action, so it
+        // routes through `onTerminalCloseRequested`: the strip drops
+        // just this terminal on a multi-terminal tab and applies the
+        // tab-close prompt policy for the last one. The shell-exit
+        // path (`onExit` above) stays separate because a shell exit
+        // is not a close gesture. Read live for the same reason as
+        // the `onExit` wiring.
         terminalVC.onClosePaneRequested = { [weak self] in
             guard let self else { return }
-            if let handler = self.onTerminalExit {
+            if let handler = self.onTerminalCloseRequested {
                 handler(id)
                 return
             }

@@ -75,12 +75,11 @@ func appendsMissingKeyWithoutDisturbingOtherLines() throws {
 
 @Test
 func closeDefaultsFixtureRoundTrips() throws {
-    // The architecture-checks gate (AGENTS.md) requires
-    // a fixture test per new config key. This loads a hand-edited
-    // sample via Bundle.module and asserts both tab-close-default
-    // and quit-with-sims-default keys read with their fixture
-    // values, then proves a write preserves the surrounding
-    // comments and unknown keys verbatim.
+    // Loads a hand-edited sample via Bundle.module, asserts the
+    // tab-close-default, quit-with-sims-default, and
+    // tab-close-multi-pane keys read with their fixture values, then
+    // proves a write preserves the surrounding comments and unknown
+    // keys verbatim.
     let url = try #require(
         Bundle.module.url(
         forResource: "close-defaults",
@@ -94,6 +93,7 @@ func closeDefaultsFixtureRoundTrips() throws {
     let config = ConfigFile(path: copy)
     #expect(config.value(forKey: "tab-close-default") == "shutdown")
     #expect(config.value(forKey: "quit-with-sims-default") == "keep")
+    #expect(config.value(forKey: "tab-close-multi-pane") == "close")
     #expect(config.value(forKey: "theme") == "nord")
 
     config.setValue("detach", forKey: "tab-close-default")
@@ -101,10 +101,12 @@ func closeDefaultsFixtureRoundTrips() throws {
     let written = try String(contentsOfFile: copy, encoding: .utf8)
     #expect(written.contains("# tab close prompt suppressed to shut down"))
     #expect(written.contains("# leave sims alone on quit"))
+    #expect(written.contains("# stop confirming multi-pane tab closes"))
     #expect(written.contains("theme = nord"))
     #expect(written.contains("font-size = 14"))
     #expect(written.contains("tab-close-default = detach"))
     #expect(written.contains("quit-with-sims-default = keep"))
+    #expect(written.contains("tab-close-multi-pane = close"))
 }
 
 @Test
