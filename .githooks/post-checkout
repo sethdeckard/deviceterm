@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# .githooks/post-checkout: bootstrap linked worktrees.
+#
+# `git worktree add` supplies an all-zero old HEAD. Link the new
+# worktree's ignored .env.release to the main checkout so both use the
+# same signing identity. Branch switches exit without spawning a
+# subprocess. Bootstrap never fails checkout: missing source files and
+# link failures warn, and git-discovery failures skip silently.
+#
+# Retry manually with: .githooks/post-checkout '' HEAD 1
+
+# $3 = 0 denotes a file checkout (git checkout -- <path>); skip it.
+[ "${3:-0}" = "1" ] || exit 0
+# A non-zero character in the old HEAD means an ordinary branch switch,
+# not a fresh worktree (or clone). Empty $1 = manual invocation: proceed.
+case "${1:-}" in *[!0]*) exit 0 ;; esac
+# Already wired (file, live symlink, or deliberately dangling symlink).
+if [ -e .env.release ] || [ -L .env.release ]; then exit 0; fi
+# Only linked worktrees bootstrap; a fresh clone has nothing to link from.
+case "$(git rev-parse --git-dir 2>/dev/null)" in
+    */worktrees/*) ;;
+    *) exit 0 ;;
+esac
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+main_root=$(dirname "$common")
+if [ -f "$main_root/.env.release" ]; then
+    if ln -s "$main_root/.env.release" .env.release 2>/dev/null; then
+        echo "post-checkout: linked .env.release -> $main_root/.env.release"
+    else
+        echo "post-checkout: warning: could not link .env.release from $main_root" >&2
+    fi
+else
+    # Branch switches exit above, so tell an unwired worktree how to retry.
+    echo "post-checkout: note: no .env.release in $main_root, so this worktree did not inherit signing or notarization settings" >&2
+    echo "post-checkout:       without CODESIGN_IDENTITY, development bundles ad-hoc sign and the daemon cannot demand-launch (see docs/BUILDING.md)" >&2
+    echo "post-checkout:       once that file exists, wire this worktree: .githooks/post-checkout '' HEAD 1" >&2
+fi
+exit 0

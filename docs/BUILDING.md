@@ -57,9 +57,22 @@ compatibility boundaries are documented in [`USAGE.md`](USAGE.md#runtime-compati
 ```sh
 git clone <…>
 cd deviceterm
-make hooks            # one-time: activate .githooks/commit-msg
+make hooks            # one-time: activate + check .githooks/
 make verify           # confirm the tree is green
 ```
+
+`make hooks` points `core.hooksPath` at `.githooks/` and rejects any hook
+there that isn't executable or doesn't parse. Git skips a non-executable
+hook with only a hint that's easy to miss mid-checkout, so this fails at
+install time instead.
+
+That activates `post-checkout` alongside `commit-msg`. It links
+`.env.release` from this checkout into worktrees you create later, so both
+sign with the same identity (when this checkout has no `.env.release` yet,
+the hook prints the command to wire it up afterward). The file may hold
+inline notarization credentials, so every worktree linked this way can read
+them; the recommended `NOTARY_PROFILE` setup keeps the app-specific
+password in the Keychain instead.
 
 ## Day-to-day
 
