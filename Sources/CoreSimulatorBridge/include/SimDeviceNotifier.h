@@ -91,9 +91,15 @@ NS_SWIFT_SENDABLE
                                           error:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(defaultNotifier(queue:handler:));
 
-/// Stop receiving further events. Safe to call multiple times;
-/// after the first call no handler invocations will fire even if
-/// CoreSimulator has notifications queued on `queue`.
+/// Stop receiving further events. Safe to call multiple times. After the
+/// first call, notifications CoreSimulator already has queued on `queue`
+/// are dropped rather than delivered.
+///
+/// **Not a barrier.** Handlers already past the cancellation check run to
+/// completion, so events can still reach the block after `cancel` returns,
+/// and more than one of them when `queue` is concurrent. Consumers must
+/// tolerate a late delivery rather than treat the return as proof that
+/// nothing more will arrive.
 - (void)cancel;
 
 @end

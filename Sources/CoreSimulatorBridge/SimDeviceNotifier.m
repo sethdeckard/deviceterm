@@ -230,7 +230,13 @@ static SimDeviceSet * _Nullable CSBNResolveDeviceSet(NSError **error) {
 @interface CSBDeviceNotifier ()
 @property (nonatomic, strong) SimDeviceSet *deviceSet;
 @property (nonatomic) unsigned long long registrationID;
-@property (nonatomic, getter=isCancelled) BOOL cancelled;
+// Atomic: `cancel` writes it from the caller's thread while the registered
+// handler reads it on CoreSimulator's delivery queue, and a nonatomic read can
+// miss the write entirely. That makes this a reliable gate for a handler that
+// has not reached the check yet, not a barrier: handlers already past it run
+// to completion, so events can reach the client after `cancel` returned, and
+// consumers must tolerate that.
+@property (atomic, getter=isCancelled) BOOL cancelled;
 @end
 
 @implementation CSBDeviceNotifier
@@ -300,11 +306,10 @@ static SimDeviceSet * _Nullable CSBNResolveDeviceSet(NSError **error) {
     NSError *unregisterError = nil;
     id<SimDeviceNotifier> notifier = (id<SimDeviceNotifier>)self.deviceSet;
     [notifier unregisterNotificationHandler:self.registrationID error:&unregisterError];
-    // We intentionally drop the unregister error: by the time it
-    // fails the handle is already in cancelled state and no further
-    // events will be dispatched (the `wrappedHandler`'s cancelled
-    // check is the load-bearing barrier). Logging is the daemon's
-    // job if it cares.
+    // We intentionally drop the unregister error: by the time it fails the
+    // handle is already cancelled, so `wrappedHandler` returns early for
+    // every delivery that has not started yet. That covers a failed
+    // unregister; it is not a barrier against a handler already running.
     self.registrationID = 0;
     self.deviceSet = nil;
 }

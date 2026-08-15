@@ -101,17 +101,18 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
 @property (nonatomic, copy, readwrite) NSString *udid;
 @property (nonatomic, strong, nullable) SimDevice *device;
 @property (nonatomic, strong, nullable) NSUUID *callbackUUID;
-@property (nonatomic, strong, nullable) id<SimDisplayIOSurfaceRenderable> renderable;
-@property (nonatomic, copy, nullable) CSBDisplaySurfaceCallback callback;
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, strong, nullable) NSUUID *screenCallbackUUID;
-// Atomic, unlike the rest of these. The callback queue reads it while
-// `stopOrientation` clears it from the coordinator's thread, and a
-// `nonatomic` getter hands back the block without retaining it, so the two
-// can overlap and the block be released between the load and the call. The
-// atomic getter retains and autoreleases, which keeps it alive for the
-// duration of the call. Delivery *after* `stopOrientation` returns is fine
-// and expected; the coordinator's observer epoch discards the value.
+
+// Atomic, unlike the rest of these. CoreSimulator's delivery queues read all
+// three while `stop` clears them from the owning thread, and a `nonatomic`
+// getter hands back the value without retaining it, so the owner can release
+// it between the load and the use. The atomic getter retains and autoreleases,
+// which keeps it alive for that use. Delivery *after* `stop` returns is fine
+// and expected: the pane's surface stream is already finished, and the
+// coordinator's observer epoch discards a late orientation.
+@property (atomic, strong, nullable) id<SimDisplayIOSurfaceRenderable> renderable;
+@property (atomic, copy, nullable) CSBDisplaySurfaceCallback callback;
 @property (atomic, copy, nullable) CSBDisplayOrientationCallback orientationCallback;
 @end
 

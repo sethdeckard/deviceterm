@@ -78,7 +78,10 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 ///
 /// **Not `Sendable` by design.** Methods touch the renderable proxy and
 /// the held `SimDevice *` without internal serialization; callers
-/// serialize via the daemon's `DeviceCoordinator` actor. Acquire
+/// serialize via the daemon's `DeviceCoordinator` actor. Registered
+/// callbacks are the exception: they run outside that actor, so the
+/// properties they read are atomic, and an in-flight delivery can
+/// finish after `stop` returns. Acquire
 /// transiently: handle, subscribe, hold a `Task` on the surface stream,
 /// drop the handle on stop. For long-lived references, keep the `udid`
 /// string and reacquire.
@@ -163,9 +166,11 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// Stop observing orientation. Idempotent, and called by `stop`.
 - (void)stopOrientation;
 
-/// Stop the subscription. Idempotent. After `stop`, the callback is no
-/// longer invoked; another `start(callback:)` reattaches. Also stops
-/// orientation observation.
+/// Stop the subscription. Idempotent. After `stop`, CoreSimulator
+/// dispatches no new surface callbacks and another `start(callback:)`
+/// reattaches. A delivery already in flight can still run to completion,
+/// which is why the callback state is atomic. Also stops orientation
+/// observation.
 - (void)stop;
 
 @end
