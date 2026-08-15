@@ -6,17 +6,18 @@
 # Modes:
 #   - default (no extra args): production-style bundle. Auto-detects
 #     CODESIGN_IDENTITY from .env.release. When present, signs
-#     Developer-ID-style (hardened runtime + entitlements + secure
-#     timestamp). When absent, ad-hoc signs with a visible note —
-#     the bundle is launchable but the SMAppService helper will
-#     hit Launch Constraints and the orchestrator gate will treat
-#     the peer as ad-hoc-from-same-build. This is the path the GUI
-#     smoke gate (`make verify`'s gui-smoke check) takes on
-#     machines without release credentials.
-#   - --ephemeral: hermetic Tier 1 BundleCodesignTests entry point.
-#     Builds into a per-run temp dir, ad-hoc-signs. No credentials
-#     needed. Distinct from default-mode ad-hoc because the test
-#     harness wants its own scratch directory.
+#     Developer-ID-style (hardened runtime + entitlements, but no
+#     secure timestamp; scripts/build-release.sh adds that, and the
+#     DO_SIGN case below says why). When absent, leaves the bundle
+#     unsigned with a visible note: the GUI still starts, but
+#     SMAppService cannot demand-launch the unsigned helper. Ad-hoc
+#     is not the fallback because libghostty and Gatekeeper interact
+#     badly with a bare ad-hoc host bundle. This is the path the GUI
+#     smoke gate (`make verify`'s gui-smoke check) takes on machines
+#     without release credentials.
+#   - --ephemeral: builds into a per-run temp dir and ad-hoc signs,
+#     needing no credentials. The only mode that ad-hoc signs, and
+#     the only one that writes outside .build.
 #
 # Production release builds go through scripts/build-release.sh,
 # which requires CODESIGN_IDENTITY + the full notarize/staple
@@ -46,8 +47,7 @@ BUILD="$ROOT/.build/$CONFIG"
 
 if [ "$MODE" = "ephemeral" ]; then
     # Per-run temp dir; never collides with a developer's normal
-    # output bundle. Caller (BundleCodesignTests) is responsible
-    # for teardown.
+    # output bundle. Teardown is the caller's responsibility.
     OUTPUT_DIR="$(mktemp -d -t deviceterm-ephemeral-bundle.XXXXXX)"
     APP="$OUTPUT_DIR/DeviceTerm.app"
 else
@@ -64,10 +64,11 @@ if [ ! -x "$BUILD/deviceterm" ]; then
 fi
 
 # Resolve signing identity. Default mode prefers Developer-ID via
-# .env.release; falls back to ad-hoc (with a note) when no
-# credentials are configured so the GUI smoke gate runs on
-# machines without paid Apple Developer Program memberships.
-# Ephemeral mode always ad-hoc signs.
+# .env.release; with no credentials it leaves the bundle unsigned (with
+# a note) so the GUI smoke gate runs on machines without paid Apple
+# Developer Program memberships. It stays unsigned rather than ad-hoc
+# because libghostty and Gatekeeper interact badly with a bare ad-hoc
+# host bundle. Ephemeral mode always ad-hoc signs.
 SIGN_IDENTITY=""
 SIGN_KIND="adhoc"
 if [ "$MODE" = "default" ]; then
@@ -79,11 +80,10 @@ if [ "$MODE" = "default" ]; then
         SIGN_IDENTITY="$CODESIGN_IDENTITY"
         SIGN_KIND="developer-id"
     else
-        SIGN_IDENTITY="-"
-        SIGN_KIND="adhoc"
-        echo "make-app-bundle: note: CODESIGN_IDENTITY not set — ad-hoc signing." >&2
-        echo "  Launch Constraints will reject the embedded SMAppService" >&2
-        echo "  helper. For a launchable dev bundle, configure" >&2
+        SIGN_KIND="unsigned"
+        echo "make-app-bundle: note: CODESIGN_IDENTITY not set; the bundle" >&2
+        echo "  will be unsigned and the embedded daemon helper cannot be" >&2
+        echo "  demand-launched. For a launchable dev bundle, configure" >&2
         echo "  .env.release per .env.release.example." >&2
     fi
 else
@@ -223,16 +223,13 @@ fi
 rm -rf "$APP/Contents/Resources/ghostty"
 cp -R "$GHOSTTY_TREE" "$APP/Contents/Resources/ghostty"
 
-# Sign the bundle when we have credentials. The hermetic ephemeral
-# path always ad-hoc signs (BundleCodesignTests uses
-# codesign --verify on the result). Default mode with no
-# credentials leaves the bundle unsigned — matches the
-# pre-Phase-2b behavior so dev iteration without Apple Developer
-# Program membership keeps working, including the GUI smoke gate
-# (libghostty + macOS Gatekeeper interact badly when the host
-# bundle is bare ad-hoc signed). When the user has Developer ID
-# configured, the full inside-out sign + hardened-runtime path
-# runs.
+# Sign the bundle when we have credentials. The ephemeral path always
+# ad-hoc signs, so its output can be codesign --verify'd. Default mode
+# with no credentials remains unsigned so development and the GUI smoke
+# gate work without paid Developer Program membership (libghostty and
+# macOS Gatekeeper interact badly when the host bundle is bare ad-hoc
+# signed). When the user has Developer ID configured, the full
+# inside-out sign + hardened-runtime path runs.
 SIGN_FLAGS=""
 ENTITLEMENT_FLAG=""
 DO_SIGN="no"

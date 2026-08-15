@@ -33,7 +33,7 @@ if [ -f "$main_root/.env.release" ]; then
 else
     # Branch switches exit above, so tell an unwired worktree how to retry.
     echo "post-checkout: note: no .env.release in $main_root, so this worktree did not inherit signing or notarization settings" >&2
-    echo "post-checkout:       without CODESIGN_IDENTITY, development bundles ad-hoc sign and the daemon cannot demand-launch (see docs/BUILDING.md)" >&2
+    echo "post-checkout:       without CODESIGN_IDENTITY, development bundles are left unsigned and the daemon cannot demand-launch (see docs/BUILDING.md)" >&2
     echo "post-checkout:       once that file exists, wire this worktree: .githooks/post-checkout '' HEAD 1" >&2
 fi
 exit 0

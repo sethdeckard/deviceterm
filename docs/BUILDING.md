@@ -11,17 +11,17 @@
 - **SwiftLint**: `brew install swiftlint`. Required for `make lint`/`make verify`.
 - **Apple Developer ID Application certificate**: required for a
   fully-launchable bundle. The daemon registers via
-  `SMAppService.agent(...)` and launchd's Launch Constraints reject
-  ad-hoc-signed agents on macOS 26, so without Developer ID the GUI
-  starts but the daemon can't demand-launch. Configure via
+  `SMAppService.agent(...)`, and launchd's Launch Constraints reject
+  ad-hoc-signed agents on macOS 26, so `make bundle` doesn't fall back
+  to ad-hoc. Without Developer ID it leaves the bundle unsigned: the
+  GUI starts, the daemon can't demand-launch. Configure via
   `.env.release`'s `CODESIGN_IDENTITY`. A free Apple Account tier
   is insufficient: the Developer ID cert family ships only with
   paid Developer Program membership ($99/year). Without credentials,
-  `make bundle` and `make verify` still complete (ad-hoc-signed
-  bundles assemble + pass smoke checks) but the bundle isn't
-  launchable end-to-end. The hermetic `BundleCodesignTests`
-  exercises a separate `--ephemeral` ad-hoc path into a per-run
-  temp dir.
+  `make bundle` and `make verify` still complete (unsigned bundles
+  assemble and pass smoke checks) but the bundle isn't launchable
+  end-to-end. The separate `--ephemeral` mode creates a per-run
+  temporary bundle and ad-hoc signs it.
 
 ### Select the active Xcode
 
