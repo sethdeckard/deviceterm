@@ -52,7 +52,7 @@ struct SimSizePresetTests {
         "landscape sizes every preset to the displayed extent",
         arguments: [SimSizePreset.pixelAccurate, .pointAccurate, .physical]
     )
-    func landscapeSizesToTheDisplayedExtent(preset: SimSizePreset) {
+    func landscapeSizesToTheDisplayedExtent(preset: SimSizePreset) throws {
         // The IOSurface stays at the device's portrait dimensions however
         // the device is turned, so a preset that measures the buffer keeps
         // the pane portrait-shaped while the picture inside it is
@@ -68,11 +68,11 @@ struct SimSizePresetTests {
                 orientation: orientation
             )
         }
-        let portrait = try? #require(width(.portrait))
-        let landscape = try? #require(width(.landscapeLeft))
+        let portrait: CGFloat = try #require(width(.portrait))
+        let landscape: CGFloat = try #require(width(.landscapeLeft))
         #expect(portrait != landscape)
         // 2622/1206 wider, and the same either way round.
-        let ratio = (landscape ?? 0) / (portrait ?? 1)
+        let ratio = landscape / portrait
         #expect(abs(ratio - (2_622.0 / 1_206.0)) < 0.01)
         #expect(width(.landscapeRight) == landscape)
         #expect(width(.portraitUpsideDown) == portrait)

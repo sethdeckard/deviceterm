@@ -1,10 +1,22 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // deviceterm — macOS-native terminal with first-class iOS Simulator panes.
 // See docs/PHILOSOPHY.md, docs/ARCHITECTURE.md, docs/BUILDING.md for design context.
 
 import PackageDescription
+
+// First-party targets treat compiler warnings as errors in debug and release
+// builds through SwiftPM and Xcode. Per-target settings leave GhosttyKit and
+// Sparkle unchanged. If an SDK deprecation blocks a release, add
+// `.treatWarning("DeprecatedDeclaration", as: .warning)` to the affected
+// warning settings.
+let strictWarnings: [SwiftSetting] = [
+    .treatAllWarnings(as: .error),
+]
+let strictCWarnings: [CSetting] = [
+    .treatAllWarnings(as: .error),
+]
 
 let package = Package(
     name: "deviceterm",
@@ -60,7 +72,7 @@ let package = Package(
                 // SimDisplayHandle's renderable picker will need. Set here
                 // so the whole bridge compiles uniformly.
                 .define("OBJC_OLD_DISPATCH_PROTOTYPES", to: "1"),
-            ]
+            ] + strictCWarnings
         ),
 
         // Unit + integration tests for CoreSimulatorBridge. Integration
@@ -69,7 +81,8 @@ let package = Package(
         .testTarget(
             name: "CoreSimulatorBridgeTests",
             dependencies: ["CoreSimulatorBridge"],
-            path: "Tests/CoreSimulatorBridgeTests"
+            path: "Tests/CoreSimulatorBridgeTests",
+            swiftSettings: strictWarnings
         ),
 
         // Compatibility probe — dlopens CoreSimulator, enumerates required
@@ -79,7 +92,8 @@ let package = Package(
         .executableTarget(
             name: "CompatProbe",
             dependencies: ["CoreSimulatorBridge"],
-            path: "Sources/CompatProbe"
+            path: "Sources/CompatProbe",
+            swiftSettings: strictWarnings
         ),
 
         // Tiny C shim over the system zlib so the media negotiator offer can
@@ -89,6 +103,7 @@ let package = Package(
             name: "CZlibShim",
             path: "Sources/CZlibShim",
             publicHeadersPath: "include",
+            cSettings: strictCWarnings,
             linkerSettings: [
                 .linkedLibrary("z"),
             ]
@@ -100,13 +115,15 @@ let package = Package(
         // source, so this target owns no subprocess or device enumeration.
         .target(
             name: "DeviceReachability",
-            path: "Sources/DeviceReachability"
+            path: "Sources/DeviceReachability",
+            swiftSettings: strictWarnings
         ),
 
         .testTarget(
             name: "DeviceReachabilityTests",
             dependencies: ["DeviceReachability"],
-            path: "Tests/DeviceReachabilityTests"
+            path: "Tests/DeviceReachabilityTests",
+            swiftSettings: strictWarnings
         ),
 
         // Byte transport, HTTP/2 framing subset, binary object coding, session
@@ -121,14 +138,16 @@ let package = Package(
         .target(
             name: "ChannelBootstrap",
             dependencies: ["DeviceReachability"],
-            path: "Sources/ChannelBootstrap"
+            path: "Sources/ChannelBootstrap",
+            swiftSettings: strictWarnings
         ),
 
         .testTarget(
             name: "ChannelBootstrapTests",
             dependencies: ["ChannelBootstrap"],
             path: "Tests/ChannelBootstrapTests",
-            resources: [.process("Fixtures")]
+            resources: [.process("Fixtures")],
+            swiftSettings: strictWarnings
         ),
 
         // Typed interaction intents (touch, keyboard, buttons, orientation) over
@@ -138,13 +157,15 @@ let package = Package(
         .target(
             name: "InteractionRelay",
             dependencies: ["ChannelBootstrap"],
-            path: "Sources/InteractionRelay"
+            path: "Sources/InteractionRelay",
+            swiftSettings: strictWarnings
         ),
 
         .testTarget(
             name: "InteractionRelayTests",
             dependencies: ["InteractionRelay"],
-            path: "Tests/InteractionRelayTests"
+            path: "Tests/InteractionRelayTests",
+            swiftSettings: strictWarnings
         ),
 
         // Mirror negotiation, UDP ingress, loss recovery, HEVC assembly, and
@@ -154,6 +175,7 @@ let package = Package(
             name: "MirrorPipeline",
             dependencies: ["ChannelBootstrap", "DeviceReachability", "CZlibShim"],
             path: "Sources/MirrorPipeline",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("VideoToolbox"),
                 .linkedFramework("CoreMedia"),
@@ -166,7 +188,8 @@ let package = Package(
             name: "MirrorPipelineTests",
             dependencies: ["MirrorPipeline"],
             path: "Tests/MirrorPipelineTests",
-            resources: [.process("Fixtures")]
+            resources: [.process("Fixtures")],
+            swiftSettings: strictWarnings
         ),
 
         // Off-by-default surface instrumentation shared by the daemon
@@ -176,6 +199,7 @@ let package = Package(
             name: "SurfaceTrace",
             dependencies: [],
             path: "Sources/SurfaceTrace",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("IOSurface"),
             ]
@@ -184,7 +208,8 @@ let package = Package(
         .testTarget(
             name: "SurfaceTraceTests",
             dependencies: ["SurfaceTrace"],
-            path: "Tests/SurfaceTraceTests"
+            path: "Tests/SurfaceTraceTests",
+            swiftSettings: strictWarnings
         ),
 
         // The shared RPC wire contract: length-prefixed framing, the
@@ -196,7 +221,8 @@ let package = Package(
         // the relocation is source-transparent to existing consumers.
         .target(
             name: "DaemonProtocol",
-            path: "Sources/DaemonProtocol"
+            path: "Sources/DaemonProtocol",
+            swiftSettings: strictWarnings
         ),
 
         // Unit tests for the shared wire contract — pure, Foundation-only.
@@ -207,7 +233,8 @@ let package = Package(
         .testTarget(
             name: "DaemonProtocolTests",
             dependencies: ["DaemonProtocol"],
-            path: "Tests/DaemonProtocolTests"
+            path: "Tests/DaemonProtocolTests",
+            swiftSettings: strictWarnings
         ),
 
         // deviceterm-daemon's library substance. Hosts the device
@@ -237,6 +264,7 @@ let package = Package(
                 "SurfaceTrace",
             ],
             path: "Sources/Daemon",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("Security"),
                 // libbsm vends the documented audit_token_to_pid /
@@ -256,7 +284,8 @@ let package = Package(
         .target(
             name: "DaemonTestSupport",
             dependencies: ["Daemon"],
-            path: "Tests/DaemonTestSupport"
+            path: "Tests/DaemonTestSupport",
+            swiftSettings: strictWarnings
         ),
 
         .testTarget(
@@ -269,7 +298,8 @@ let package = Package(
                 "MirrorPipeline",
             ],
             path: "Tests/DaemonTests",
-            resources: [.process("Fixtures")]
+            resources: [.process("Fixtures")],
+            swiftSettings: strictWarnings
         ),
 
         // Deliberate live-simulator track. Holds every test that needs a
@@ -285,7 +315,8 @@ let package = Package(
                 "Daemon",
                 "DaemonTestSupport",
             ],
-            path: "Tests/CoreSimulatorLiveTests"
+            path: "Tests/CoreSimulatorLiveTests",
+            swiftSettings: strictWarnings
         ),
 
         // Deliberate live-physical-device track. Drives RealDeviceBackend
@@ -303,7 +334,8 @@ let package = Package(
                 "InteractionRelay",
                 "MirrorPipeline",
             ],
-            path: "Tests/DeviceLiveTests"
+            path: "Tests/DeviceLiveTests",
+            swiftSettings: strictWarnings
         ),
 
         // deviceterm-daemon's executable wrapper. Thin: builds the four
@@ -313,7 +345,8 @@ let package = Package(
         .executableTarget(
             name: "DeviceTermDaemon",
             dependencies: ["Daemon"],
-            path: "Sources/DeviceTermDaemon"
+            path: "Sources/DeviceTermDaemon",
+            swiftSettings: strictWarnings
         ),
 
         // Engine-agnostic terminal-pane contract. libghostty-free so
@@ -323,7 +356,8 @@ let package = Package(
         // surface (not the daemon) owns the terminal PTY.
         .target(
             name: "TerminalSurface",
-            path: "Sources/TerminalSurface"
+            path: "Sources/TerminalSurface",
+            swiftSettings: strictWarnings
         ),
 
         // Concrete TerminalSurface conformance against libghostty's C
@@ -340,6 +374,7 @@ let package = Package(
                 .product(name: "GhosttyKit", package: "libghostty-spm"),
             ],
             path: "Sources/LibghosttyBridge",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("Metal"),
@@ -363,6 +398,7 @@ let package = Package(
                 .product(name: "GhosttyKit", package: "libghostty-spm"),
             ],
             path: "Tests/LibghosttyBridgeTests",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("Metal"),
@@ -390,6 +426,7 @@ let package = Package(
                 ),
             ],
             path: "Sources/LibghosttyHarness",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("Metal"),
@@ -411,7 +448,8 @@ let package = Package(
         .executableTarget(
             name: "Shim",
             dependencies: ["DaemonProtocol"],
-            path: "Sources/Shim"
+            path: "Sources/Shim",
+            swiftSettings: strictWarnings
         ),
 
         // Unit tests for the shim's pure argv-detection layer
@@ -420,7 +458,8 @@ let package = Package(
         .testTarget(
             name: "ShimTests",
             dependencies: ["Shim", "DaemonProtocol"],
-            path: "Tests/ShimTests"
+            path: "Tests/ShimTests",
+            swiftSettings: strictWarnings
         ),
 
         // DeviceTerm.app — the AppKit GUI shell. Hosts the libghostty
@@ -443,6 +482,7 @@ let package = Package(
             ],
             path: "Sources/App",
             exclude: ["Resources"],
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("Metal"),
@@ -469,7 +509,8 @@ let package = Package(
             name: "AppTests",
             dependencies: ["App", "DaemonProtocol"],
             path: "Tests/AppTests",
-            resources: [.process("Fixtures")]
+            resources: [.process("Fixtures")],
+            swiftSettings: strictWarnings
         ),
 
         // deviceterm-cli — short-lived RPC client symlinked into each
@@ -478,7 +519,8 @@ let package = Package(
         .executableTarget(
             name: "DeviceTermCLI",
             dependencies: ["DaemonProtocol"],
-            path: "Sources/DeviceTermCLI"
+            path: "Sources/DeviceTermCLI",
+            swiftSettings: strictWarnings
         ),
 
         // Unit tests for the CLI's pure layer (argv parsing, wire
@@ -487,7 +529,8 @@ let package = Package(
         .testTarget(
             name: "CLITests",
             dependencies: ["DeviceTermCLI", "DaemonProtocol"],
-            path: "Tests/CLITests"
+            path: "Tests/CLITests",
+            swiftSettings: strictWarnings
         ),
 
         // deviceterm-uitest — out-of-process UI-test instrument. Runs
@@ -501,6 +544,7 @@ let package = Package(
             name: "DeviceTermUITest",
             dependencies: ["DaemonProtocol"],
             path: "Sources/DeviceTermUITest",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 // ScreenCaptureKit captures the composited window-server
                 // output (so Metal panes appear); ImageIO encodes the PNG;
@@ -525,6 +569,7 @@ let package = Package(
             name: "DeviceTermUITestTests",
             dependencies: ["DeviceTermUITest", "DaemonProtocol"],
             path: "Tests/DeviceTermUITestTests",
+            swiftSettings: strictWarnings,
             linkerSettings: [
                 // The test bundle links the target's objects, which
                 // reference these frameworks; a target's linkage doesn't

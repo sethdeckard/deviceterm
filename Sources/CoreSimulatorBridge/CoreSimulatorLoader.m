@@ -438,8 +438,7 @@ static NSString *const kAXPFrameworkPath =
         // a runtime `respondsToSelector:` that just answers NO.
         @"SimScreen": @[
             @"screenProperties",
-            @"registerScreenCallbacksWithUUID:callbackQueue:frameCallback:"
-            @"surfacesChangedCallback:propertiesChangedCallback:",
+            @"registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:",
             @"unregisterScreenCallbacksWithUUID:",
         ],
         // The property the orientation is actually read from.

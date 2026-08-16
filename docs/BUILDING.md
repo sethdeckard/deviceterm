@@ -7,7 +7,9 @@
 - **Xcode 26.4 or 26.6.** These are the toolchains currently verified to build
   DeviceTerm. Other Xcode releases are unverified; Xcode 27 beta does not
   currently build the project.
-- **Swift 6 toolchain**, included with supported Xcode releases.
+- **Swift 6.2 or later**, included with supported Xcode releases. The
+  manifest declares `swift-tools-version: 6.2`, so an older toolchain
+  refuses to load the package.
 - **SwiftLint**: `brew install swiftlint`. Required for `make lint`/`make verify`.
 - **Apple Developer ID Application certificate**: required for a
   fully-launchable bundle. The daemon registers via
@@ -88,6 +90,15 @@ make verify           # the single-command gate
 `verify` self-skips checks whose backing source/script doesn't exist yet
 and runs the rest. Green tree always exits 0. See the verify shape note in
 `../AGENTS.md`.
+
+**Warnings are errors.** Every first-party target sets
+`.treatAllWarnings(as: .error)`, so an unused variable or a deprecated
+call fails the build instead of scrolling past in the log. This applies
+to debug and release alike, and to `swift build`, `swift test`, and an
+IDE, because it lives in `Package.swift` rather than a build flag. The
+dependencies keep their own settings. If an SDK deprecation ever blocks a
+release you can't wait out, `.treatWarning("DeprecatedDeclaration", as:
+.warning)` next to the rule is the exemption.
 
 **GUI smoke.** `make test-gui` runs `scripts/gui-smoke.sh`, which launches
 the bundled `DeviceTerm.app --smoke`. The `--smoke` handler drives Router
