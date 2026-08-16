@@ -34,7 +34,8 @@ struct DevicePaneAffordanceGateTests {
                 family: DeviceFamily.unknown.rawValue,
                 capabilities: deviceCaps
             ),
-            daemonClient: FakeDaemonClient()
+            daemonClient: FakeDaemonClient(),
+            advisory: .silent()
         )
     }
 
@@ -46,7 +47,8 @@ struct DevicePaneAffordanceGateTests {
                 displayName: "iPhone 17 Pro",
                 family: "phone"
             ),
-            daemonClient: FakeDaemonClient()
+            daemonClient: FakeDaemonClient(),
+            advisory: .silent()
         )
     }
 

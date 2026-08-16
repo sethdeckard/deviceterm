@@ -34,7 +34,8 @@ struct SimulatorPaneCrownGateTests {
         let fake = FakeDaemonClient()
         let viewController = SimulatorPaneViewController(
             simPane: pane,
-            daemonClient: fake
+            daemonClient: fake,
+            advisory: .silent()
         )
         return (viewController, fake)
     }

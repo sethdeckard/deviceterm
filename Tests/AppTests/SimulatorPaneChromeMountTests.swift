@@ -55,7 +55,11 @@ struct SimulatorPaneChromeMountTests {
             family: "phone"
         )
         let fake = FakeDaemonClient()
-        return SimulatorPaneViewController(simPane: pane, daemonClient: fake)
+        return SimulatorPaneViewController(
+            simPane: pane,
+            daemonClient: fake,
+            advisory: .silent()
+        )
     }
 
     @Test

@@ -231,6 +231,13 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Removed on toggle-off.
     private var axTrackingArea: NSTrackingArea?
 
+    /// Advisory state for the task `viewDidLoad` schedules. Injected
+    /// rather than taken from `HeadlessAdvisoryViewModel.shared` so a
+    /// pane built by a test reads neither the live config nor running
+    /// application state, and so cannot raise the modal that would
+    /// block the suite.
+    private let advisory: HeadlessAdvisoryViewModel
+
     /// Build a sim pane view from already-attached daemon state. The
     /// Router does device.attach (in its attachSimPane handler) and
     /// records the SimPaneState; the glue then creates this VC for it.
@@ -238,9 +245,15 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         simPane: SimPaneState,
         daemonClient: any PaneControlling & PaneSubscribing & PaneAccessibilityControlling
             & PaneLocationControlling,
-        locations: any LocationsStoring = LocationsFileStore()
+        locations: any LocationsStoring = LocationsFileStore(),
+        advisory: HeadlessAdvisoryViewModel = .shared
     ) {
-        self.init(mirroredPane: simPane, daemonClient: daemonClient, locations: locations)
+        self.init(
+            mirroredPane: simPane,
+            daemonClient: daemonClient,
+            locations: locations,
+            advisory: advisory
+        )
     }
 
     /// Shared construction for any device-mirroring pane: a
@@ -259,8 +272,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         mirroredPane: any MirroredPaneState,
         daemonClient: any PaneControlling & PaneSubscribing & PaneAccessibilityControlling
             & PaneLocationControlling,
-        locations: any LocationsStoring = LocationsFileStore()
+        locations: any LocationsStoring = LocationsFileStore(),
+        advisory: HeadlessAdvisoryViewModel = .shared
     ) {
+        self.advisory = advisory
         self.viewModel = SimulatorPaneViewModel(
             paneId: mirroredPane.paneId,
             daemonClient: daemonClient,
@@ -455,8 +470,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // before the modal appears. This is Apple's Simulator.app
         // coexistence advisory, gated to fire at most once per launch (and once
         // ever if the user checks "Don't show again").
-        Task { @MainActor in
-            HeadlessAdvisory.presentIfNeeded()
+        Task { @MainActor [advisory] in
+            HeadlessAdvisory.presentIfNeeded(viewModel: advisory)
         }
     }
 
