@@ -44,7 +44,7 @@ make test       # unit tests (Swift Testing)
 make lint       # swiftlint --strict
 ```
 
-Before pushing, run the gate:
+Before committing, run the gate:
 
 ```sh
 make verify     # lint + every test layer that has landed
@@ -171,7 +171,7 @@ filesystem is the truth.
 | `make uitest-run` | bundle and launch the harness, then report its TCC grants |
 | `make probe` | build + run `deviceterm-probe` (logs to git-ignored `probe-runs.log`) |
 | `make test` | unit tests (Swift Testing) |
-| `make test-int` | integration tests (daemon socket, lifecycle, provenance) |
+| `make test-int` | runs `Tests/DaemonIntegrationTests/` when present; self-skips otherwise, since the daemon integration tests live in `DaemonTests` and run under `make test` |
 | `make test-shim` | shim+CLI argv/stdio/exit tests |
 | `make test-gui` | script-driven GUI smoke test; included in `make verify` |
 | `make test-live` | live-sim track (`CoreSimulatorLiveTests`): clean-slate boot + HID/AX/display/booted-owned checks; **shuts down your sims** |
@@ -306,10 +306,15 @@ Parameterized inputs via the table-style argument list.
 
 `make verify` and `make test` exclude the simulator and physical-device live
 tracks. The UI-harness track also stays separate because it depends on TCC
-grants and an unlocked display. The hermetic client-construction and error-path
-tests in `CoreSimulatorBridgeTests` remain in the default gate. There is no
-separate `DaemonIntegrationTests` target, so `make test-int` self-skips; those
-tests run inside `make test` with the rest of `DaemonTests`.
+grants and an unlocked display. `CoreSimulatorBridgeTests` stays in the default
+gate and is not hermetic: its pure tests run anywhere, but several load the
+real CoreSimulator framework and some of those reach the live service to
+enumerate the device set, so they need a working Xcode and installed simulator
+profiles. None needs a booted sim. Gating runs both ways off
+`CoreSimulatorLoader.probe()`: the live checks skip on a degraded host, and a
+few failure-path tests carry the inverted gate and run only there.
+`make test-int` self-skips unless `Tests/DaemonIntegrationTests/` exists; the
+daemon integration tests live in `DaemonTests` and run inside `make test`.
 
 The live track is a **deliberate, separate command**: `make test-live`
 shuts down all sims (clean slate), boots one, waits via `simctl
@@ -370,9 +375,9 @@ New code follows these project-wide defaults.
   model holds presentation/daemon state; pure transitions go through a
   reducer (`SimPaneReducer`) and pure geometry through a math namespace
   (`SimGestureMath`), both unit-tested. `render()` must read every observed
-  property it cares
-  about on each pass: Observation only tracks what was accessed, so an
-  early return (or a `??` short-circuit) stops observing the skipped fields.
+  property it cares about on each pass: Observation only tracks what was
+  accessed, so an early return (or a `??` short-circuit) stops observing the
+  skipped fields.
   The same VM backs a future SwiftUI surface unchanged; `observe()` is the
   AppKit-only adapter. `TabTitleViewModel` is the reference example.
 - **Combine is allowed only as an adapter layer**: bridging APIs that
@@ -432,6 +437,13 @@ Code-review checklist (not a static analyzer). Reviewers explicitly look for:
   doc in `docs/ARCHITECTURE.md`. The `DaemonTests` registry-drift guard fails if a
   registry key has no `RPCMethod` case; PRs that skip the schema update fail
   review.
+- **Wire-version bumps:** `DaemonProtocolInfo.wireVersion` is not bumped
+  without explicit approval. It gates the GUI's version-mismatch handshake,
+  so a bump forces the app, daemon, CLI, and shim to move in lockstep. After
+  a Sparkle update the GUI attempts to shut the incompatible helper down and
+  tells the user to quit and reopen, so a bump costs a visible interruption.
+  If a change looks like it needs one, say so and ask rather than raising
+  the constant.
 - **Config key changes:** any new `~/.config/deviceterm/config` key needs a
   default value in `Config.swift`, a docs entry in `docs/BUILDING.md` (or wherever
   the user-facing config reference lives), and a fixture test.
@@ -450,10 +462,11 @@ authority is the grant plus that provenance, never a role. What UDS can never do
 is *escalate*: it cannot mint an orchestrator role and cannot issue itself a
 grant: both `orchestrator.grant`/`.revoke` and the orchestrator-role mint at
 `session.create` are refused for anything but a validated-GUI XPC peer, so a UDS
-caller can only exercise a grant the GUI already handed its session. XPC (the GUI path) validates the peer's audit token against the
-daemon's own signature: the team identifier plus a host bundle id derived from
-the daemon's own bundle id, so forks rebrand by swapping the bundle id with
-nothing hardcoded. Full explanation and code: `docs/ARCHITECTURE.md` and
+caller can only exercise a grant the GUI already handed its session. XPC (the
+GUI path) validates the peer's audit token against the daemon's own signature:
+the team identifier plus a host bundle id derived from the daemon's own bundle
+id, so forks rebrand by swapping the bundle id with nothing hardcoded. Full
+explanation and code: `docs/ARCHITECTURE.md` and
 `Sources/Daemon/PeerIdentity.swift`.
 
 **A capability is one authentication factor, not proof of provenance.** A
