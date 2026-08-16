@@ -12,7 +12,12 @@
 import AppKit
 import DaemonProtocol
 import Metal
+import os
 import ServiceManagement
+
+/// Logs launch-time helper-registration repair offers and outcomes for later
+/// diagnosis.
+private let registrationLog = Logger(subsystem: "com.deviceterm", category: "registration")
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -309,9 +314,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if smokeMode { smokeFail("daemon wire-version mismatch: \(error)") }
             } catch {
                 if smokeMode { smokeFail("could not start deviceterm: \(error)") }
+                // An enabled registration plus an unreachable helper may be
+                // repairable by re-registration, and a dead app gives the user
+                // no route to it, so offer that option before quitting.
+                if let clientError = error as? DaemonClientError,
+                    RegistrationRepairDecision.evaluate(
+                        failure: clientError,
+                        status: DaemonRegistration.status,
+                        isSmokeMode: smokeMode
+                    ) == .offerRepair {
+                    await offerRegistrationRepair(after: clientError)
+                    return
+                }
                 fail("Could not start deviceterm: \(error)")
             }
         }
+    }
+
+    /// Offer to re-register the helper agent, then quit either way.
+    ///
+    /// Quitting is the design, not a shortfall. A fresh process IS the
+    /// connection reset, so nothing here has to coordinate with the machinery a
+    /// second in-process attempt would wake: no reconnect callback fires on a
+    /// replacement peer, no second bounded ping lands on the unresponsive
+    /// streak and races `HelperRecoveryCoordinator`'s own restart prompt, and no
+    /// peer left installed by a timed-out handshake can be silently reused. It
+    /// also matches the remediation the version-mismatch path already gives.
+    ///
+    /// No daemon call follows a successful repair; the next launch creates a
+    /// fresh connection.
+    private func offerRegistrationRepair(after failure: DaemonClientError) async {
+        registrationLog.notice(
+            """
+            helper unreachable at launch (\(failure.description, privacy: .public)) \
+            while its registration reads enabled; offering to re-register
+            """
+        )
+        let alert = NSAlert()
+        alert.messageText = "Repair the deviceterm helper's registration?"
+        alert.informativeText = """
+            The helper is registered, but DeviceTerm could not reach it. \
+            Re-registering may clear a stale registration. If the helper is \
+            running but slow to answer, repairing stops it: simulators keep \
+            running, DeviceTerm forgets which ones it booted, and \
+            physical-device mirroring stops. DeviceTerm quits either way, \
+            because it could not reach the helper. (\(failure.description))
+            """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Repair and Quit")
+        alert.addButton(withTitle: "Quit Without Repair")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            registrationLog.notice("re-registering declined; quitting")
+            NSApp.terminate(nil)
+            return
+        }
+        // Re-read the status because the repair should remain available only
+        // while the registration is enabled: the user could have enabled or
+        // disabled the login item in System Settings while the alert was open.
+        guard RegistrationRepairDecision.evaluate(
+            failure: failure,
+            status: DaemonRegistration.status,
+            isSmokeMode: smokeMode
+        ) == .offerRepair else {
+            fail("""
+                The helper's registration changed while the prompt was open, so \
+                DeviceTerm left it alone. Reopen DeviceTerm to try again. \
+                (\(failure.description))
+                """)
+            return
+        }
+        do {
+            try await DaemonRegistration.repair()
+        } catch {
+            // The repair error, not the connection failure that prompted it:
+            // the user asked for this action specifically, so what they need is
+            // why it did not happen.
+            registrationLog.error(
+                """
+                re-registering the agent failed: \
+                \(String(describing: error), privacy: .public)
+                """
+            )
+            fail("Could not repair the deviceterm helper's registration: \(error)")
+            return
+        }
+        registrationLog.notice("re-registered the agent; quitting for a fresh launch")
+        let done = NSAlert()
+        done.messageText = "The deviceterm helper's registration was repaired"
+        done.informativeText = "Reopen DeviceTerm to connect to the helper."
+        done.alertStyle = .informational
+        done.addButton(withTitle: "Quit")
+        done.runModal()
+        NSApp.terminate(nil)
     }
 
     /// Mark the daemon's session inventory dirty when the live session SET

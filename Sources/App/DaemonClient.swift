@@ -135,6 +135,25 @@ enum DaemonClientError: Error, CustomStringConvertible {
         if case .versionMismatch = self { return true }
         return false
     }
+
+    /// True for startup failures that can occur before any helper reply has
+    /// established reachability.
+    ///
+    /// A reply of any kind, including an error reply or a version mismatch,
+    /// proves a helper process is running and therefore that its launchd
+    /// registration resolves. The shutdown errors follow a successful ping, so
+    /// reachability is already established; only `shutdownTimedOut` represents
+    /// an unanswered shutdown call. Enumerated rather than defaulted so a new
+    /// case has to declare which side it falls on.
+    var isHelperUnreachable: Bool {
+        switch self {
+        case .transport, .timedOut:
+            return true
+
+        case .daemon, .versionMismatch, .decode, .shutdownNotAcknowledged, .shutdownTimedOut:
+            return false
+        }
+    }
 }
 
 /// The result of handling a definite daemon wire-version mismatch: the GUI tries
