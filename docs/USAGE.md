@@ -168,6 +168,54 @@ from `deviceterm devices list` until DeviceTerm claims them, so a name has
 nothing to resolve against; see
 [device roster rows](INTEGRATION.md#device-roster-rows).
 
+### Coexist With Simulator.app
+
+Booting a Simulator while Apple's Simulator.app is already running gets you the
+same Simulator in two windows. Simulator.app watches for boots and attaches its
+own window to any Simulator that starts, including one DeviceTerm booted. No
+preference turns that off.
+
+That costs more than a duplicate window. By default, closing Simulator.app's
+device window or quitting it shuts the Simulator down, and the DeviceTerm pane
+closes with it.
+
+Quit Simulator.app before booting, and the Simulator runs headless in DeviceTerm
+alone.
+
+Closing a device window isn't the same as quitting. With other device windows
+open, the app keeps running and keeps attaching to new boots. Closing the last
+one does quit it, but that also shuts down the Simulator in that window. Press
+⌘Q while Simulator.app is frontmost, or right-click its Dock icon and choose
+Quit.
+
+To keep both open instead, tell Simulator.app to detach rather than shut down:
+
+```sh
+defaults write com.apple.iphonesimulator DetachOnAppQuit -bool YES
+defaults write com.apple.iphonesimulator DetachOnWindowClose -bool YES
+```
+
+`DetachOnAppQuit` is the one that matters in practice, because closing
+Simulator.app's last device window quits the app. It takes effect immediately:
+Simulator.app reads it at quit time rather than caching it at launch, so it
+doesn't need restarting, and it doesn't overwrite the value when it quits.
+
+`DetachOnWindowClose` covers closing one device window while others stay open.
+That hasn't been verified independently, because every trial routed through
+quit, so treat both its effect and its timing as expected rather than confirmed.
+
+Neither key has a UI on a normal install, because their menu items sit under an
+Apple-internal menu.
+
+These keys stop the shutdown, not the attach. You still get two windows.
+
+DeviceTerm explains this at startup the first time, which on an existing
+install means the first launch after upgrading. It also warns when an attached
+Simulator is still exposed to a Simulator.app shutdown. The warning names only
+the routes still open, and doesn't appear at all once both keys above are set,
+or once you've told it not to. Reopen the explanation any time from
+**Help ▸ Working with Apple's Simulator.app**.
+
 ## Understand Simulator Ownership
 
 DeviceTerm distinguishes Simulators it controls from devices that remain under
@@ -799,7 +847,8 @@ default genuinely applies while the key is absent, so it reports
 | `tab-close-default` | `detach` | `detach`, `shutdown` | Chooses what closing a tab, window, or Simulator pane does with the owned Simulators involved. Setting it suppresses those prompts, except that Close Pane still asks when DeviceTerm cannot reach the daemon. |
 | `tab-close-multi-pane` | `ask` | `ask`, `close` | Confirms before a GUI close of a tab that holds more than one pane, and of a window when any of its tabs does. `close` skips the confirmation. Never stacks with the Simulator prompt on the same close. |
 | `quit-with-sims-default` | `keep` | `keep`, `shutdown` | Chooses what quitting does while owned Simulators remain booted. Setting it suppresses the Quit prompt. |
-| `simulator-app-advisory` | `show` | `show`, `suppress` | Controls the warning shown when Simulator.app is running while a Simulator is attached. |
+| `simulator-app-advisory` | `show` | `show`, `suppress` | Controls the warning shown when a Simulator is attached while Simulator.app is running. The warning names only the routes that can still shut the Simulator down, and stays silent when Simulator.app is set to detach on both. |
+| `welcome-messages` | `show` | `show`, `suppress` | Controls first-run welcome windows. `suppress` hides all of them, including ones not yet shown. Each stays available from the **Help** menu. |
 | `auto-update` | `check` | `off`, `check`, `download` | Controls automatic update checks and downloads. `off` leaves manual update checks available. |
 
 Terminal appearance and terminal-local key bindings remain in the Ghostty

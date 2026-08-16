@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // HeadlessAdvisory: presenter for the Simulator.app coexistence
-// modal. Reads gates from `HeadlessAdvisoryViewModel.shouldPresent`,
-// builds the NSAlert with a "Don't show again" checkbox, runs it
-// modally, and reports the dismiss result back to the VM so a
+// modal. Reads `HeadlessAdvisoryViewModel.decision` to gate the NSAlert
+// and pick its copy, builds it with a "Don't show again" checkbox, runs
+// it modally, and reports the dismiss result back to the VM so a
 // future launch can skip the prompt.
 //
 // `xcrun simctl boot` does not launch Simulator.app; sims booted
 // while Simulator.app is closed run headless. The advisory exists
 // because if Apple's app is *already* running for unrelated work,
 // it observes the CoreSimulator boot event and attaches a window
-// to the new sim, producing a dual-display. There is no public
-// per-boot suppression on macOS 26, so the user owns the choice:
-// the advisory describes the condition and points at Quit
-// Simulator.app as the remedy.
+// to the new sim, producing a dual-display. No preference stops that
+// attach, so the remedy is ordering: quit Simulator.app before booting.
+//
+// The alert's job is the hazard, not the explanation. It names what can
+// still take this sim down from outside and offers Learn More…; the
+// coexistence welcome carries the whole model. The skip conditions are:
+// already shown this launch, suppressed by the user, Simulator.app not
+// running, a welcome already ran this session (stacking a modal on an
+// explanation the user is still reading gets both dismissed unread), or
+// Simulator.app is already configured to detach on both routes, leaving
+// no hazard to name.
 //
 // Triggered from `SimulatorPaneViewController.viewDidLoad` after
 // the pane finishes layout. The VM's per-launch + persistent
@@ -33,18 +40,15 @@ enum HeadlessAdvisory {
     /// Show the modal if the VM says we should. Test target uses
     /// this overload to inject a fake VM.
     static func presentIfNeeded(viewModel: HeadlessAdvisoryViewModel) {
-        guard viewModel.shouldPresent else { return }
+        guard case let .warn(hazard) = viewModel.decision else { return }
         viewModel.markPresented()
 
         let alert = NSAlert()
         alert.messageText = "Apple's Simulator.app is running."
-        alert.informativeText = """
-            Sims you boot from DeviceTerm will appear in both DeviceTerm and \
-            Apple's Simulator.app. To keep DeviceTerm-booted sims headless, \
-            quit Simulator.app.
-            """
+        alert.informativeText = informativeText(for: hazard)
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Learn More…")
 
         let suppress = NSButton(
             checkboxWithTitle: "Don't show again",
@@ -60,7 +64,38 @@ enum HeadlessAdvisory {
         stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
         alert.accessoryView = stack
 
-        alert.runModal()
+        let response = alert.runModal()
+        // Record the checkbox before acting on the button, so ticking
+        // "Don't show again" and then opening the welcome still
+        // suppresses future alerts.
         viewModel.recordDismiss(suppressForever: suppress.state == .on)
+        if response == .alertSecondButtonReturn {
+            WelcomeCoordinator.shared.present(id: WelcomeCatalog.simulatorCoexistenceID)
+        }
+    }
+
+    /// Name only the route that is still live. A user who already set
+    /// one of the two preferences shouldn't be warned about the hazard
+    /// they closed.
+    static func informativeText(for hazard: SimulatorShutdownHazard) -> String {
+        let cause: String
+        switch hazard {
+        case .both:
+            cause = "Closing Simulator.app's device window, or quitting Simulator.app,"
+
+        case .appQuit:
+            // Closing the last device window quits the app outright, so
+            // this wording has to cover both gestures.
+            cause = "Quitting Simulator.app, which includes closing its last device window,"
+
+        case .windowClose:
+            cause = "Closing this sim's Simulator.app window while other device windows stay open"
+        }
+        return """
+            This sim is now open in both DeviceTerm and Apple's Simulator.app. \
+            \(cause) will shut it down and end the DeviceTerm pane.
+
+            Quit Simulator.app before booting a sim to keep it in DeviceTerm only.
+            """
     }
 }

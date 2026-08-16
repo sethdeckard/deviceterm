@@ -214,17 +214,28 @@ their recognized keys are disjoint. The app ignores unknown DeviceTerm keys;
 | `tab-close-default` | `detach`, `shutdown` | `detach` | Suppresses the Close Tab, Close Window, and Close Pane prompts and picks this action. `detach` closes the surface but keeps any sims it booted running; `shutdown` also stops them. Close Pane still asks when DeviceTerm cannot reach the daemon to check the Simulator. |
 | `tab-close-multi-pane` | `ask`, `close` | `ask` | Confirms before a GUI close of a tab that holds more than one pane, and of a window when any of its tabs does; shell-exit and `deviceterm` CLI closes never prompt. `close` skips the confirmation. When the same close would also raise the sim prompt above, only the sim prompt shows. |
 | `quit-with-sims-default` | `keep`, `shutdown` | `keep` | Suppresses the Quit prompt when DeviceTerm-owned sims are booted. `keep` quits leaving them running; `shutdown` stops every owned booted sim first. Has no effect when no owned sims are booted. |
-| `simulator-app-advisory` | `show`, `suppress` | `show` | Whether to show the Simulator.app coexistence advisory when a sim is attached while Apple's Simulator.app is also running. `suppress` hides it. |
+| `simulator-app-advisory` | `show`, `suppress` | `show` | Whether to show the Simulator.app coexistence advisory when a sim is attached while Apple's Simulator.app is also running. The advisory names only the shutdown routes still open and stays silent when Simulator.app is configured to detach on both. `suppress` hides it. |
+| `welcome-messages` | `show`, `suppress` | `show` | Whether to show first-run welcome windows, which explain a DeviceTerm behavior once. `suppress` hides every welcome, including ones not yet seen; each stays reachable from the Help menu. |
 | `auto-update` | `off`, `check`, `download` | `check` | How the app handles updates via Sparkle. `check` checks automatically and notifies when an update is available; `download` also installs it on relaunch; `off` disables automatic checks (the Check for Updates… menu item still works). |
 
-These keys are written when the user ticks "Don't ask again" / "Don't
-show again" on the matching prompt; deleting one from the file
-restores the prompt. When DeviceTerm writes the file it makes it
+Most of these keys are written when the user ticks "Don't ask again" /
+"Don't show again" on the matching prompt; deleting one from the file
+restores the prompt. `welcome-messages` is the exception: a welcome
+appears automatically only until its id is recorded, so a checkbox would
+have nothing to suppress, and you set the key by hand. When DeviceTerm
+writes the file it makes it
 self-documenting: each key the app sets is preceded by a doc comment
 (summary, allowed values, default), and every recognized key the user
 hasn't set is appended as a commented-out example, so the file lists
 every available option. Hand-edited lines, comments, and unknown keys
 are preserved verbatim.
+
+Which welcomes have already appeared is not a preference and is not kept
+here. It lives in `$XDG_CACHE_HOME/deviceterm/welcome-seen` (or
+`~/.cache/deviceterm/welcome-seen`), one id per line. Delete a line to
+show that welcome again on the next launch. Losing that file re-shows
+each welcome once, which is the cost of keeping app-written bookkeeping
+out of a file you hand-edit.
 
 ### Saved locations
 

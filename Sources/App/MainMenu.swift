@@ -468,20 +468,33 @@ func makeMainMenu() -> NSMenu {
     )
     windowMenuItem.submenu = windowMenu
 
-    // Help menu: the last top-level menu, holding a single Third-Party
-    // Notices item. Deliberately not set as `NSApp.helpMenu`, because
-    // that adds the Spotlight-style Help search field, which makes no
-    // sense for one static item.
+    // Help menu: the last top-level menu. Deliberately not set as
+    // `NSApp.helpMenu`, because that adds the Spotlight-style Help
+    // search field, which makes no sense for a couple of static items.
+    //
+    // The welcome item is the permanent entry point to the coexistence
+    // explanation, which appears automatically only until its id is
+    // recorded. The advisory's Learn More… button also reopens it, but
+    // that appears only while a sim is attached and Simulator.app is
+    // running.
     let helpMenuItem = NSMenuItem()
     mainMenu.addItem(helpMenuItem)
     let helpMenu = NSMenu(title: "Help")
     helpMenu.addItem(
         NSMenuItem(
-        title: "Third-Party Notices",
-        action: #selector(AppDelegate.openThirdPartyNotices(_:)),
-        keyEquivalent: ""
-    )
+            title: WelcomeCatalog.simulatorCoexistenceTitle,
+            action: #selector(AppDelegate.openSimulatorCoexistenceWelcome(_:)),
+            keyEquivalent: ""
         )
+    )
+    helpMenu.addItem(NSMenuItem.separator())
+    helpMenu.addItem(
+        NSMenuItem(
+            title: "Third-Party Notices",
+            action: #selector(AppDelegate.openThirdPartyNotices(_:)),
+            keyEquivalent: ""
+        )
+    )
     helpMenuItem.submenu = helpMenu
 
     return mainMenu

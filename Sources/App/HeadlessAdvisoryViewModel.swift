@@ -2,13 +2,17 @@
 //
 // HeadlessAdvisoryViewModel: observable state behind the
 // Simulator.app coexistence advisory. The presenter
-// (`HeadlessAdvisory.presentIfNeeded`) reads `shouldPresent` to gate
-// the NSAlert and calls `markPresented` / `recordDismiss` after.
+// (`HeadlessAdvisory.presentIfNeeded`) reads `decision` to gate the
+// NSAlert and pick its copy, then calls `markPresented` /
+// `recordDismiss`.
 //
-// Owns three pieces of state:
+// Supplies the state `HeadlessAdvisoryDecision` resolves:
 //
 //   - `shownThisLaunch`: in-process latch so a burst of sim-pane
 //     attaches doesn't fire the modal more than once per launch.
+//   - whether a welcome already ran this launch. A session where the
+//     coexistence welcome already explained this gets no alert stacked
+//     on top of it.
 //   - persistent suppression: the `simulator-app-advisory` key in
 //     `~/.config/deviceterm/config`, set to `suppress` if the user ticks
 //     "Don't show again". Survives quits. deviceterm keeps every
@@ -16,10 +20,12 @@
 //   - whether `Simulator.app` is running, queried via
 //     `NSRunningApplication` at decision time so the answer is
 //     fresh per attach.
+//   - Simulator.app's own detach preferences, which decide whether a
+//     hazard remains at all and which one to name.
 //
-// All three reads/writes are injected as closures so the test
-// target can substitute fakes; the production `init()` wires the
-// real defaults / running-application lookup.
+// Every read/write is injected as a closure so the test target can
+// substitute fakes; the production `init()` wires the real config file,
+// welcome coordinator, running-application lookup, and preferences read.
 
 import AppKit
 import Foundation
@@ -54,8 +60,16 @@ final class HeadlessAdvisoryViewModel {
 
     private static let defaultIsSimulatorAppRunning: @MainActor () -> Bool = {
         !NSRunningApplication
-            .runningApplications(withBundleIdentifier: "com.apple.iphonesimulator")
+            .runningApplications(withBundleIdentifier: SimulatorDetachPolicy.simulatorBundleID)
             .isEmpty
+    }
+
+    private static let defaultWelcomeShownThisLaunch: @MainActor () -> Bool = {
+        WelcomeCoordinator.shared.didShowThisLaunch
+    }
+
+    private static let defaultDetachPolicy: @MainActor () -> SimulatorDetachPolicy = {
+        SimulatorDetachPolicy.current()
     }
 
     /// True once the presenter has shown the modal in this launch.
@@ -65,26 +79,39 @@ final class HeadlessAdvisoryViewModel {
     private let isSuppressedReader: @MainActor () -> Bool
     private let suppressedWriter: @MainActor (Bool) -> Void
     private let isSimulatorAppRunningReader: @MainActor () -> Bool
+    private let welcomeShownReader: @MainActor () -> Bool
+    private let detachPolicyReader: @MainActor () -> SimulatorDetachPolicy
 
-    /// Compose all three gates: not-yet-shown-this-launch, not
-    /// persistently suppressed, and Simulator.app is running now.
-    /// `isSimulatorAppRunningReader` is queried last so we don't pay
-    /// the NSRunningApplication scan when the cheaper latches
-    /// already say "skip".
-    var shouldPresent: Bool {
-        guard !shownThisLaunch else { return false }
-        guard !isSuppressedReader() else { return false }
-        return isSimulatorAppRunningReader()
+    /// Whether to present, and which hazard to name. The readers are
+    /// passed through as closures rather than called here, so
+    /// `HeadlessAdvisoryDecision` keeps the cheap-gates-first order: no
+    /// `NSRunningApplication` scan or cross-process preferences read
+    /// happens when a latch already says skip.
+    var decision: HeadlessAdvisoryDecision {
+        HeadlessAdvisoryDecision.resolve(
+            shownThisLaunch: shownThisLaunch,
+            welcomeShownThisLaunch: welcomeShownReader(),
+            isSuppressed: isSuppressedReader,
+            isSimulatorAppRunning: isSimulatorAppRunningReader,
+            policy: detachPolicyReader
+        )
     }
 
     init(
         isSuppressed: @escaping @MainActor () -> Bool = HeadlessAdvisoryViewModel.defaultIsSuppressed,
         recordSuppressed: @escaping @MainActor (Bool) -> Void = HeadlessAdvisoryViewModel.defaultRecordSuppressed,
-        isSimulatorAppRunning: @escaping @MainActor () -> Bool = HeadlessAdvisoryViewModel.defaultIsSimulatorAppRunning
+        isSimulatorAppRunning: @escaping @MainActor () -> Bool
+            = HeadlessAdvisoryViewModel.defaultIsSimulatorAppRunning,
+        welcomeShownThisLaunch: @escaping @MainActor () -> Bool
+            = HeadlessAdvisoryViewModel.defaultWelcomeShownThisLaunch,
+        detachPolicy: @escaping @MainActor () -> SimulatorDetachPolicy
+            = HeadlessAdvisoryViewModel.defaultDetachPolicy
     ) {
         self.isSuppressedReader = isSuppressed
         self.suppressedWriter = recordSuppressed
         self.isSimulatorAppRunningReader = isSimulatorAppRunning
+        self.welcomeShownReader = welcomeShownThisLaunch
+        self.detachPolicyReader = detachPolicy
     }
 
     /// Latch in-process so a burst of sim attaches doesn't reopen

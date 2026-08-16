@@ -284,8 +284,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Keep this Router-direct; user-input @objc paths
                 // (`newWindow`, dock-reopen) go through the
                 // dispatcher.
-                router.dispatch(.openWindow(reattach: orphansToReattach))
-                if smokeMode { runSmokeCheck() }
+                // A first-run welcome is a launch gate: it comes up
+                // before the first DeviceTerm window, so it can't be
+                // buried by the app it is explaining, and the window
+                // opens when it's dismissed. The completion runs
+                // immediately when no welcome is due, so the window
+                // opens exactly once on every path.
+                //
+                // Skipped under `--smoke`: the hermetic gate asserts on
+                // a known window set, and it must not wait on a click.
+                if smokeMode {
+                    router.dispatch(.openWindow(reattach: orphansToReattach))
+                    runSmokeCheck()
+                } else {
+                    WelcomeCoordinator.shared.presentIfNeeded { [weak self] in
+                        self?.router.dispatch(.openWindow(reattach: orphansToReattach))
+                    }
+                }
             } catch let error as DaemonClientError where error.isVersionMismatch {
                 // A definite startup wire-version mismatch was already handled
                 // by `connect()` (which attempted the incompatible-daemon
@@ -573,6 +588,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         _ sender: NSApplication,
         hasVisibleWindows: Bool
     ) -> Bool {
+        // A first-run welcome is a launch gate: the first window opens
+        // when it is dismissed. While it's up there are no window
+        // controllers yet, so without this the Dock click below would
+        // open a window behind it and the gate's completion would then
+        // open a second one.
+        if WelcomeCoordinator.shared.isGatingLaunch {
+            WelcomeCoordinator.shared.bringToFront()
+            return false
+        }
         if windowControllerByID.isEmpty, connected {
             dispatchIntent(.openWindow)
             return false
@@ -727,15 +751,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc
     func newWindow(_ sender: Any?) {
-        guard connected else { return }
+        guard connected, !welcomeIsGatingLaunch() else { return }
         dispatchIntent(.openWindow)
     }
 
     /// Responder-chain fallback: ⌘T with no key window.
     @objc
     func newTab(_ sender: Any?) {
-        guard connected else { return }
+        guard connected, !welcomeIsGatingLaunch() else { return }
         dispatchIntent(.openWindow)
+    }
+
+    /// Whether a first-run welcome is holding the launch sequence. The
+    /// gate opens the first window itself when the welcome closes, so
+    /// any other route to `.openWindow` has to stand down or the app
+    /// ends up with two. Surfaces the welcome rather than doing nothing
+    /// silently, so a ⌘N that appears ignored still explains itself.
+    private func welcomeIsGatingLaunch() -> Bool {
+        guard WelcomeCoordinator.shared.isGatingLaunch else { return false }
+        WelcomeCoordinator.shared.bringToFront()
+        return true
     }
 
     /// Fire-and-forget dispatcher shape for the AppKit @objc menu /
@@ -754,6 +789,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// up a SwiftUI create-confirmation first.
     @objc
     func openSettings(_ sender: Any?) {
+        // With no window open, `openConfigEditorTab` dispatches
+        // `.openWindow` directly, which during the first-run gate would
+        // put a window up behind the welcome and leave a second one to
+        // arrive when it closes.
+        guard !welcomeIsGatingLaunch() else { return }
         let configPath = ConfigFile.defaultPath
         let viewModel = ConfigSettingsViewModel(
             configPath: configPath,
@@ -919,6 +959,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         thirdPartyNoticesWC?.showWindow(nil)
         thirdPartyNoticesWC?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Help > Working with Apple's Simulator: show (or re-front) the
+    /// coexistence welcome. Deliberately ungated, unlike the launch
+    /// path: it opens whether or not the welcome has been seen and
+    /// whether or not `welcome-messages` is suppressed, because the user
+    /// asked for it by name. It still records the id and sets the
+    /// per-launch latch.
+    @objc
+    func openSimulatorCoexistenceWelcome(_ sender: Any?) {
+        WelcomeCoordinator.shared.present(id: WelcomeCatalog.simulatorCoexistenceID)
     }
 
     /// App menu > Check for Updates…: forward to the Sparkle updater.

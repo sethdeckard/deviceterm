@@ -60,6 +60,14 @@ public enum DeviceTermConfigDefaults {
                 + "hides it."
         ),
         ConfigKeySpec(
+            key: "welcome-messages",
+            defaultValue: "show",
+            allowedValues: ["show", "suppress"],
+            summary: "Whether to show first-run welcome windows, which explain a "
+                + "DeviceTerm behavior once. suppress hides every welcome, including "
+                + "ones not yet seen; each stays reachable from the Help menu."
+        ),
+        ConfigKeySpec(
             key: "auto-update",
             defaultValue: "check",
             allowedValues: ["off", "check", "download"],
