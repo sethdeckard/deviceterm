@@ -215,8 +215,7 @@ test:
 # `--no-parallel`: daemon RPC tests spin up UDS servers and PTY tests
 # fork real child processes. Running them in parallel saturates fds /
 # the process table on busy machines and produces flaky receive
-# timeouts. The whole suite finishes in seconds either way — parallel
-# isn't worth the contention.
+# timeouts.
 
 test-int:
 	@if [ -d Tests/DaemonIntegrationTests ]; then \
