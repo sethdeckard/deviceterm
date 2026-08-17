@@ -133,6 +133,12 @@ actor RPCConnection {
     /// or bound terminal (`ProvenanceMatcher`) before installing a principal.
     /// `nil` fails closed.
     private let peerProcess: PeerProcessIdentity?
+    /// Resolves the caller's provenance fresh for each scoped request: hop zero
+    /// re-read from the socket's audit token, plus the verified ancestor prefix
+    /// above it. Deliberately NOT cached alongside `peerProcess`, because the
+    /// ancestry arm's authority is the *live* chain: a harness can be orphaned
+    /// while this connection stays open, and the next request has to see that.
+    nonisolated private let provenanceSnapshotResolver: ProvenanceSnapshotResolver
     /// The live orchestration-grant store the `.orchestratorTab` scope check
     /// reads on every request (the same instance the validated GUI grants into
     /// and the session close revokes from). `nil` disables the check; a
@@ -162,7 +168,8 @@ actor RPCConnection {
         sessionProvenanceLookup: SessionProvenanceLookup? = nil,
         restorationGate: RestorationGate? = nil,
         orchestratorGrantStore: OrchestratorGrantStore? = nil,
-        peerIdentityResolver: PeerIdentityResolver = defaultPeerIdentityResolver
+        peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
+        provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil
     ) {
         self.id = id
         self.fd = fd
@@ -178,6 +185,13 @@ actor RPCConnection {
         // audit-token `(pid, pidVersion)` generation, so a later pid reuse
         // can't retroactively change what this connection authenticated as.
         self.peerProcess = peerIdentityResolver(fd)
+        // Default the request-time resolver by COMPOSING it over the same peer
+        // resolver, so whatever governs hop zero at accept still governs it per
+        // request. A second, independent seam defaulting to the real
+        // `LOCAL_PEERTOKEN` read would leave every synthetic-peer harness
+        // resolving a loopback fd for real.
+        self.provenanceSnapshotResolver = provenanceSnapshotResolver
+            ?? composedProvenanceSnapshotResolver(peer: peerIdentityResolver)
         self.server = server
         self.ioQueue = DispatchQueue(label: "deviceterm.daemon.conn.\(id)")
     }
@@ -621,9 +635,8 @@ actor RPCConnection {
         }
         let incarnation: UInt64?
         if case let .ready(value) = snapshot.admission { incarnation = value } else { incarnation = nil }
-        let peer: ProvenancePeer = peerProcess.map(ProvenancePeer.uds) ?? .missing
         switch ProvenanceMatcher.verdict(
-            peer: peer,
+            peer: currentProvenancePeer(),
             sessionOwner: snapshot.owner,
             anchor: snapshot.anchor
         ) {
@@ -639,6 +652,28 @@ actor RPCConnection {
         case .unauthorized:
             return (RPCError(code: RPCMethodError.unauthorizedCode, message: "invalid sessionId or cap"), nil)
         }
+    }
+
+    /// This connection's provenance as of right now: hop zero re-resolved from
+    /// the socket, plus the ancestor prefix above it. Resolved per call rather
+    /// than read from `peerProcess`, because the ancestry arm's authority is
+    /// the live chain and a cached one would let an orphaned harness keep
+    /// authority for the life of its connection.
+    ///
+    /// The fresh peer must still be the process this connection was accepted
+    /// from. A `(pid, pidVersion)` that moved means the fd no longer names the
+    /// process we authenticated, so it fails closed rather than authorizing a
+    /// stranger. An unresolvable peer is `.missing` for the same reason; only a
+    /// failed *walk* is survivable, and that arrives as an empty prefix.
+    private func currentProvenancePeer() -> ProvenancePeer {
+        guard let accepted = peerProcess else { return .missing }
+        guard let snapshot = provenanceSnapshotResolver(fd) else { return .missing }
+        guard snapshot.peer.pid == accepted.pid,
+            snapshot.peer.pidVersion == accepted.pidVersion
+        else {
+            return .missing
+        }
+        return .uds(snapshot.peer, ancestors: snapshot.ancestors)
     }
 
     /// Handle a `session.authenticate` request. Decodes the

@@ -23,7 +23,48 @@ import Darwin
 /// because XPC has no terminal arm; a non-validated XPC peer authorizes only
 /// as the exact owner. `resolveSelf` reads the current process' owner triple,
 /// which matches the audit token of an in-process anonymous XPC peer.
+///
+/// `detachedStub` + `AncestorChain` are the opt-in pair for the ancestry arm: a
+/// peer that matches no anchor on its own facts, plus a prefix a test can
+/// change between requests. The default `stub` authenticates through the
+/// terminal arm.
 public enum TestPeerIdentity {
+    /// A verified ancestor prefix a test can change between requests, so one
+    /// connection can authorize and then be orphaned without reconnecting.
+    /// The whole point of the request-time resolver seam is that this varies;
+    /// a fixed resolver cannot express it.
+    ///
+    /// `@unchecked Sendable`: `value` is guarded by `lock`. The resolver seam
+    /// is synchronous (it runs inside the connection actor), so an actor can't
+    /// serve it and this follows the same locked-box shape the daemon tests
+    /// already use for synchronous readers.
+    public final class AncestorChain: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: [AncestorProcessIdentity]
+
+        public var current: [AncestorProcessIdentity] {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        /// Snapshot resolver over this chain. Hop zero is always
+        /// `detachedStub`, so the prefix alone decides the verdict.
+        public var resolver: ProvenanceSnapshotResolver {
+            { [self] _ in ProvenanceSnapshot(peer: detachedStub, ancestors: current) }
+        }
+
+        public init(_ value: [AncestorProcessIdentity]) {
+            self.value = value
+        }
+
+        public func set(_ ancestors: [AncestorProcessIdentity]) {
+            lock.lock()
+            value = ancestors
+            lock.unlock()
+        }
+    }
+
     /// Arbitrary terminal facts the resolver and anchor agree on.
     public static let sessionId: pid_t = 4_242
     public static let ttyDevice: dev_t = 42
@@ -50,6 +91,40 @@ public enum TestPeerIdentity {
     /// Peer resolver the harness injects into `RPCServer`: every accepted
     /// connection resolves to `stub` regardless of the real fd.
     public static let udsResolver: @Sendable (Int32) -> PeerProcessIdentity? = { _ in stub }
+
+    /// A UDS peer that matches no anchor on its own facts: its own POSIX
+    /// session, no controlling tty. This is the shape an agent harness has when
+    /// it runs each command under `setsid`, so authorizing it depends entirely
+    /// on the anchored-ancestry arm. Its owner triple is deliberately the same
+    /// as `stub`'s, which the UDS provenance lookup never supplies as a session
+    /// owner, so the owner arm cannot rescue it either.
+    public static let detachedStub: PeerProcessIdentity = {
+        let owner = OwnerProcessIdentity.resolveSelf()
+        let pid = owner?.pid ?? getpid()
+        return PeerProcessIdentity(
+            pid: pid,
+            pidVersion: owner?.pidVersion ?? 0,
+            euid: owner?.euid ?? geteuid(),
+            posixSessionId: pid,
+            controllingTTYDev: dev_t(-1),
+            posixSessionLeaderStartTime: 0
+        )
+    }()
+
+    /// Peer resolver for a detached caller. Pair it with an `AncestorChain` so
+    /// the connection's verdict is decided by the prefix alone.
+    public static let detachedResolver: @Sendable (Int32) -> PeerProcessIdentity? = { _ in detachedStub }
+
+    /// An ancestor whose terminal facts match `anchor(for:)`, so a detached
+    /// peer carrying it authorizes through the anchored-ancestry arm.
+    public static let anchoredAncestor = AncestorProcessIdentity(
+        pid: 4_244,
+        euid: detachedStub.euid,
+        startMicros: 1,
+        posixSessionId: sessionId,
+        controllingTTYDev: ttyDevice,
+        posixSessionLeaderStartTime: leaderStart
+    )
 
     /// Anchor lookup the harness injects into `RPCServer`: every session id
     /// maps to an anchor whose facts match `stub`, so the terminal arm

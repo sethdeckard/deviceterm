@@ -306,16 +306,18 @@ public enum AgentsText {
         same-uid process. The daemon also checks your process's kernel
         provenance: your POSIX session, controlling tty, and
         session-leader start time have to match the terminal the
-        session is bound to. So a process elsewhere that scraped the
-        cap is refused. What earns trust is sitting in that terminal,
-        not descending from the shell. Anything you run there shares
-        the controlling terminal and may drive the session's pane(s),
-        which is why the cap is intentionally not a secret from those
-        children; but something that detaches from the terminal
-        (`setsid`, a daemonized helper) stops matching even though the
-        shell is its ancestor. Sibling terminal panes are separate
-        sessions with their own caps and anchors. A stale/foreign cap
-        or a wrong terminal is a hard reject.
+        session is bound to, or a live ancestor's have to. So a
+        process elsewhere that scraped the cap is refused: it has no
+        ancestor in the tab. Processes started normally in the tab
+        inherit its controlling terminal and may drive the session's
+        pane(s), which is why the cap is intentionally not a secret
+        from those children. A detached process (`setsid`, a
+        daemonized helper) stays authorized only while its parent
+        chain reaches the tab, which is what lets an agent harness
+        drive the session it runs inside; orphan it and the next call
+        is refused. Sibling terminal panes are separate sessions with
+        their own caps and anchors. A stale/foreign cap or a wrong
+        terminal is a hard reject.
 
       Roles
         Two roles exist: `agent` (default) and `orchestrator`. The

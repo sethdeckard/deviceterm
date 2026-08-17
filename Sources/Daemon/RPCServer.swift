@@ -37,6 +37,9 @@ public actor RPCServer {
     /// the orchestrator surface over UDS: fail closed).
     private let orchestratorGrantStore: OrchestratorGrantStore?
     private let peerIdentityResolver: PeerIdentityResolver
+    /// Nil makes each connection compose a resolver over `peerIdentityResolver`;
+    /// inject one when a test must vary the ancestor prefix between requests.
+    private let provenanceSnapshotResolver: ProvenanceSnapshotResolver?
     nonisolated private let acceptQueue: DispatchQueue
     private var listenerFd: Int32 = -1
     private var acceptSource: DispatchSourceRead?
@@ -62,11 +65,17 @@ public actor RPCServer {
     /// accepted UDS peer (production: `LOCAL_PEERTOKEN`). Tests inject a
     /// synthetic resolver so provenance can be exercised without real
     /// sockets; the default is the real one.
+    /// `provenanceSnapshotResolver` is the per-request seam that re-reads that
+    /// identity and walks the caller's parent chain. Leave it nil and each
+    /// connection composes one over `peerIdentityResolver`, so a synthetic peer
+    /// keeps governing hop zero; inject one only to vary the ancestor prefix
+    /// between requests.
     public init(
         socketPath: String,
         methods: MethodRegistry,
         authValidator: AuthValidator? = nil,
-        peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver
+        peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
+        provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil
     ) {
         // Provenance is read OFF the registry (`methods.provenance`), never a
         // separate parameter, so the per-request lookup reads the same store
@@ -81,6 +90,7 @@ public actor RPCServer {
         self.provenance = methods.provenance
         self.orchestratorGrantStore = methods.orchestratorGrant
         self.peerIdentityResolver = peerIdentityResolver
+        self.provenanceSnapshotResolver = provenanceSnapshotResolver
         self.acceptQueue = DispatchQueue(label: "deviceterm.daemon.accept")
     }
 
@@ -172,7 +182,8 @@ public actor RPCServer {
                     sessionProvenanceLookup: provenance?.lookup,
                     restorationGate: provenance?.restorationComplete,
                     orchestratorGrantStore: orchestratorGrantStore,
-                    peerIdentityResolver: peerIdentityResolver
+                    peerIdentityResolver: peerIdentityResolver,
+                    provenanceSnapshotResolver: provenanceSnapshotResolver
                 )
                 connections[connectionId] = connection
                 await connection.start()

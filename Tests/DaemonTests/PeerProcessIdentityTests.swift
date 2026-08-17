@@ -243,6 +243,152 @@ func leaderStartReadsARootProcessCrossUid() {
     #expect(ProcInfo.leaderStartMicros(Int32.max) == nil)
 }
 
+// MARK: - The ancestry walk
+
+/// A synthetic peer identity for `pid`, carrying this process' euid so the
+/// walk's uid guard admits the chain above it. Only `pid` and `euid` matter to
+/// the walk; the terminal facts belong to the matcher.
+private func peerIdentity(for pid: pid_t) -> PeerProcessIdentity {
+    PeerProcessIdentity(
+        pid: pid,
+        pidVersion: 0,
+        euid: geteuid(),
+        posixSessionId: getsid(pid),
+        controllingTTYDev: dev_t(-1),
+        posixSessionLeaderStartTime: 0
+    )
+}
+
+@Test
+func theWalkClimbsTheRealParentChain() {
+    // The nearest entry is this process' actual parent, which is what makes the
+    // prefix a chain rather than an unordered set. Everything above it is the
+    // test runner's own ancestry, whatever the harness happens to be.
+    let prefix = AncestorProcessIdentity.verifiedPrefix(above: peerIdentity(for: getpid()))
+    #expect(!prefix.isEmpty)
+    #expect(prefix.first?.pid == getppid())
+}
+
+@Test
+func theWalkPrefixExcludesPidOneAndCrossUidEntries() {
+    // The returned prefix excludes pid 1, contains only same-euid entries, and
+    // stays within the depth bound. Which stop path a given run takes depends
+    // on the runner's process tree, so this checks the prefix rather than
+    // claiming to drive a particular truncation.
+    let prefix = AncestorProcessIdentity.verifiedPrefix(above: peerIdentity(for: getpid()))
+    #expect(prefix.allSatisfy { $0.pid != 1 })
+    #expect(prefix.allSatisfy { $0.euid == geteuid() })
+    #expect(prefix.count <= AncestorProcessIdentity.maxWalkDepth)
+}
+
+@Test
+func theWalkFindsNothingAboveAProcessThatCannotExist() {
+    // An unreadable hop zero truncates immediately. The empty prefix is the
+    // fail-closed shape: it denies the ancestry arm and nothing else.
+    #expect(AncestorProcessIdentity.verifiedPrefix(above: peerIdentity(for: Int32.max)).isEmpty)
+}
+
+@Test
+func aDetachedChildStillReachesItsParentThroughTheWalk() throws {
+    // The child leads its own POSIX session and has no controlling tty,
+    // modeling a harness that runs commands under `setsid`. It matches no
+    // anchor on its own facts, while its parent chain still reaches this
+    // process, which is what the ancestry arm scans.
+    var stdinPipe: [Int32] = [-1, -1]
+    try #require(pipe(&stdinPipe) == 0)
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    posix_spawn_file_actions_adddup2(&actions, stdinPipe[0], 0)
+    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
+    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+    var attr: posix_spawnattr_t?
+    posix_spawnattr_init(&attr)
+    posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
+    var child: pid_t = 0
+    // `cat` with the pipe on stdin blocks until the parent closes the write
+    // end, which keeps the child alive for the duration of the walk.
+    let argv: [UnsafeMutablePointer<CChar>?] = [strdup("cat"), nil]
+    let rc = posix_spawn(&child, "/bin/cat", &actions, &attr, argv, environ)
+    for arg in argv where arg != nil { free(arg) }
+    posix_spawn_file_actions_destroy(&actions)
+    posix_spawnattr_destroy(&attr)
+    Darwin.close(stdinPipe[0])
+    defer {
+        Darwin.close(stdinPipe[1])
+        kill(child, SIGKILL)
+        var status: Int32 = 0
+        waitpid(child, &status, 0)
+    }
+    try #require(rc == 0)
+
+    // Detached: its own session leader, no controlling tty.
+    #expect(getsid(child) == child)
+    let prefix = AncestorProcessIdentity.verifiedPrefix(above: peerIdentity(for: child))
+    #expect(prefix.first?.pid == getpid())
+    // And the walk keeps climbing past this process, so a harness nested
+    // several levels below the tab's shell still reaches it.
+    #expect(prefix.count > 1)
+}
+
+@Test("hop admission rejects a graft and a uid boundary", arguments: [
+    // (hop start, hop euid, child start, peer euid, admitted)
+    (UInt64(100), uid_t(501), UInt64(200), uid_t(501), true),
+    (UInt64(200), uid_t(501), UInt64(200), uid_t(501), true),   // same instant is fine
+    (UInt64(201), uid_t(501), UInt64(200), uid_t(501), false),  // started after its child
+    (UInt64(100), uid_t(0), UInt64(200), uid_t(501), false),    // root-owned ancestor
+    (UInt64(201), uid_t(0), UInt64(200), uid_t(501), false)     // both guards fail
+])
+func hopAdmissionGuards(
+    hopStart: UInt64,
+    hopEUID: uid_t,
+    childStart: UInt64,
+    peerEUID: uid_t,
+    admitted: Bool
+) {
+    // Neither guard can be staged against real processes: recycling a pid needs
+    // the kernel to hand one back, and crossing the uid boundary needs a
+    // root-owned ancestor the walk is designed never to traverse. So they are
+    // checked here as the pure predicate the walk consults.
+    #expect(
+        AncestorProcessIdentity.admitsHop(
+            startMicros: hopStart,
+            euid: hopEUID,
+            childStart: childStart,
+            peerEUID: peerEUID
+        ) == admitted
+    )
+}
+
+@Test("linkage confirmation rejects a reparented or replaced child", arguments: [
+    // (child ppid, child start, expected parent, expected child start, holds)
+    (pid_t(700), UInt64(200), pid_t(700), UInt64(200), true),
+    (pid_t(1), UInt64(200), pid_t(700), UInt64(200), false),    // parent died, child reparented
+    (pid_t(701), UInt64(200), pid_t(700), UInt64(200), false),  // child now names someone else
+    (pid_t(700), UInt64(999), pid_t(700), UInt64(200), false),  // the child itself was replaced
+    (nil, nil, pid_t(700), UInt64(200), false)                  // child gone; not a confirmation
+])
+func linkageConfirmationGuards(
+    childPPID: pid_t?,
+    childStart: UInt64?,
+    expectedParent: pid_t,
+    expectedChildStart: UInt64,
+    holds: Bool
+) {
+    // The exact half of the graft guard. `admitsHop`'s start-time comparison is
+    // wall-clock at microsecond resolution and cannot separate a replacement
+    // created inside the same tick; this one can, because a parent's death
+    // reparents its children and that is observable regardless of timing. Not
+    // stageable against real processes for the same reason `admitsHop` isn't.
+    #expect(
+        AncestorProcessIdentity.linkageHolds(
+            childPPID: childPPID,
+            childStart: childStart,
+            expectedParent: expectedParent,
+            expectedChildStart: expectedChildStart
+        ) == holds
+    )
+}
+
 @Test
 func resolverReturnsNilForNonSocketDescriptor() throws {
     // A pipe read-end is not a socket, so `LOCAL_PEERTOKEN` must fail and the

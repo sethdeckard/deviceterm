@@ -65,16 +65,18 @@ The capability in `DEVICETERM_SESSION_CAP` is one authentication factor, not
 proof of origin. It is inherited environment, readable by any process running
 under your uid, so possession alone establishes nothing. On every scoped
 request the daemon also checks the caller's kernel provenance: its POSIX
-session, controlling terminal, and session-leader start time must match the
-terminal the session is bound to.
+session, controlling terminal, and session-leader start time, or those of a
+live ancestor, must match the terminal the session is bound to.
 
-What earns trust is running in the session's terminal, not descending from
-its shell. Everything you start in the tab shares that terminal and may
-control the session, which is why the cap is deliberately visible to child
-processes; don't strip it from a subprocess environment. A helper that
-detaches from the terminal (`setsid`, a daemonized process) stops
-authenticating even though the shell is its ancestor, and a process elsewhere
-that copied the cap is refused.
+What earns trust is reaching the session's terminal, either by running in it
+or by descending from something that does. Child processes normally inherit
+the tab's terminal and may control the session, which is why the cap is
+deliberately visible to them; don't strip it from a subprocess environment. A
+detached child (`setsid`, a daemonized process) remains authorized only while
+its live parent chain reaches the tab, which is what lets an agent harness
+drive the session it is running inside. Orphan it, so no live ancestor is left
+in the terminal, and it is refused. So is a process elsewhere that copied the
+cap: it has no ancestor in the tab at all.
 
 ### Escalate Only Through the GUI
 

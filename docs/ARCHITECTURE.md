@@ -639,10 +639,11 @@ and session-leader start time, re-derived from the kernel. The raw pid is
 verified then discarded, never retained.
 
 A later in-tab UDS caller's `session.authenticate` matches its own kernel
-identity against this anchor. That is the "terminal" provenance arm: it
-lets a non-owner in-tab process (the CLI, the shim) authenticate as the
-session, while an out-of-tab cap thief on a different POSIX session or tty
-cannot.
+identity against this anchor, or failing that, one of its live ancestors'.
+That is the "terminal" provenance arm: it lets a non-owner in-tab process
+(the CLI, the shim) authenticate as the session, and lets an agent harness
+that detached its own process do the same, while an out-of-tab cap thief on
+a different POSIX session or tty cannot.
 
 The GUI re-binds after a reconnect or daemon restart; the anchor store is
 in-memory and lost on restart, and a connection teardown revokes the
@@ -2668,6 +2669,18 @@ PLUS the caller's kernel identity matching one provenance arm
   pid + tty; the daemon re-derives it from the kernel. This is what lets a
   non-owner in-tab process (the CLI, the shim) authenticate while an
   out-of-tab cap thief, on a different POSIX session and tty, cannot.
+- **Anchored ancestry** (UDS): the caller does not match the anchor itself,
+  but a live ancestor does, by the same three-field test. The daemon walks the
+  caller's parent chain per request, stopping at pid 1, at a uid boundary, at
+  32 hops, or at a hop it cannot read. Each parent must start no later than its
+  child, and the daemon re-reads the child to confirm that it still names that
+  parent. The re-read is what rejects a pid recycled mid-walk: a parent's death
+  reparents its children to launchd, so a child that still names the pid proves
+  it was not reallocated. This is what lets an agent harness authenticate: a
+  harness that
+  runs each command in a fresh POSIX session with no controlling tty (Claude
+  Code's shell tool does) matches nothing on its own facts, while its parent
+  chain still leads back into the tab.
 
 `session.authenticate` installs the connection's session principal only after
 an arm matches, and the check is **re-run on every scoped request**, so closing
@@ -2677,9 +2690,32 @@ confirms the target equals the connection's own provenance-checked session;
 only the validated GUI spans sessions. Anything running in a terminal pane's
 shell is trusted to control that session, because it shares the controlling
 terminal the anchor names; the cap is deliberately visible to it and must not
-be filtered out before launching subprocesses. The arm matches on terminal
-membership, not ancestry, so a descendant that detaches from that terminal
-(`setsid`, a daemonized helper) no longer authenticates.
+be filtered out before launching subprocesses.
+
+Authority follows the live parent chain from the bound terminal, and orphaning
+is what severs it. A descendant that detaches (`setsid`, a daemonized helper)
+keeps authenticating while its chain is intact, and is refused once no live
+ancestor reaches the terminal.
+
+That refusal linearizes like everything else in the next section: the **next
+scoped request** is refused, a request that already passed the check may
+finish, and an already-open stream keeps flowing. Losing the chain is not a
+hard revocation in the stream-teardown sense; only session removal tears
+subscriptions down. What is hard about it is the code, `unauthorized` rather
+than the retryable not-ready an unbound anchor gives, because a severed chain
+is permanent for that process rather than something to wait out.
+
+Two consequences worth naming. Detaching a child does not renounce its trust,
+which would require a separate quarantine mechanism. And a **broker-shaped**
+harness stays outside the model: a persistent detached server that spawns
+commands is rooted at launchd rather than at the tab, so nothing it spawns has
+an in-tab ancestor. tmux uses that shape, so its panes have no in-tab ancestor
+and sit outside the trust model.
+
+What the chain does not widen is the boundary the anchor exists to draw. An
+out-of-tab cap thief has no ancestor in the tab and cannot acquire one without
+already executing inside the tab's subtree, at which point it holds the cap and
+full trust regardless.
 
 ### Revocation linearization
 

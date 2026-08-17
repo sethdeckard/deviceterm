@@ -217,7 +217,8 @@ func bindTerminalHandlerAnchorsSessionForMatchingTerminalPeer() async throws {
         posixSessionLeaderStartTime: 7
     )
     #expect(
-        ProvenanceMatcher.verdict(peer: .uds(peer), sessionOwner: nil, anchor: anchor) == .authorized
+        ProvenanceMatcher.verdict(peer: .uds(peer, ancestors: []), sessionOwner: nil, anchor: anchor)
+            == .authorized
     )
     // A DIFFERENT terminal (wrong tty) is rejected even with the anchor present.
     let stranger = PeerProcessIdentity(
@@ -229,8 +230,117 @@ func bindTerminalHandlerAnchorsSessionForMatchingTerminalPeer() async throws {
         posixSessionLeaderStartTime: 7
     )
     #expect(
-        ProvenanceMatcher.verdict(peer: .uds(stranger), sessionOwner: nil, anchor: anchor) == .unauthorized
+        ProvenanceMatcher.verdict(peer: .uds(stranger, ancestors: []), sessionOwner: nil, anchor: anchor)
+            == .unauthorized
     )
+}
+
+// MARK: - Anchored ancestry, re-walked per request
+
+@Test
+func anchoredAncestryAuthorizesUntilTheChainIsSevered() async throws {
+    // The invariant, through the real dispatcher: a detached caller can start
+    // scoped requests while an ancestor remains in the bound terminal, and
+    // subsequent scoped requests are refused after the chain is severed. Hop
+    // zero here has its own POSIX session and no controlling tty, so nothing
+    // but the ancestry arm can authorize any of this.
+    let manager = SessionManager()
+    let broker = EventBroker()
+    let chain = TestPeerIdentity.AncestorChain([TestPeerIdentity.anchoredAncestor])
+    let path = tempSocketPath(prefix: "deviceterm-ancestry")
+    let server = RPCServer(
+        socketPath: path,
+        methods: DaemonMethods.defaultRegistry(
+            sessionManager: manager,
+            deviceCoordinator: DeviceCoordinator(),
+            paneCoordinator: PaneCoordinator(),
+            eventBroker: broker,
+            provenance: TestPeerIdentity.udsProvenance(manager)
+        ),
+        authValidator: { try await manager.validate(sessionId: $0, capability: $1) },
+        peerIdentityResolver: TestPeerIdentity.detachedResolver,
+        // The chain is re-read on every scoped request, which is the only
+        // reason severing it mid-connection is observable at all.
+        provenanceSnapshotResolver: chain.resolver
+    )
+    try await server.start()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    defer { Task { await server.stop() } }
+
+    let created = try await manager.createSession(label: nil)
+    // `connectAuthenticated` throws if `session.authenticate` is refused, so
+    // reaching the next line already proves the ancestry arm carried the
+    // handshake for a peer that matches no anchor itself.
+    let client = try TestClient.connectAuthenticated(to: path, as: created)
+    defer { client.close() }
+
+    // A scoped request over the intact chain.
+    try client.send(
+        RPCEnvelope(
+            id: 1,
+            type: .request,
+            method: RPCMethod.panesList.rawValue,
+            body: .params(try panesListParams(created.state.id.uuidString, created.capability.token))
+        )
+    )
+    guard case .result = try client.receive().body else {
+        Issue.record("an anchored ancestor should authorize a scoped request")
+        return
+    }
+
+    // Open a stream while the chain is still intact.
+    try client.send(
+        RPCEnvelope(id: 2, type: .request, method: RPCMethod.daemonEvents.rawValue, body: .empty)
+    )
+    guard case .result = try client.receive().body else {
+        Issue.record("daemon.events subscribe should be acked over the intact chain")
+        return
+    }
+
+    // Orphan the caller: no live ancestor reaches the terminal any more.
+    chain.set([])
+
+    try client.send(
+        RPCEnvelope(
+            id: 3,
+            type: .request,
+            method: RPCMethod.panesList.rawValue,
+            body: .params(try panesListParams(created.state.id.uuidString, created.capability.token))
+        )
+    )
+    guard case let .error(err) = try client.receive().body else {
+        Issue.record("a severed chain should refuse the next scoped request")
+        return
+    }
+    // A severed chain is permanent for that process, so it lands on the hard
+    // code rather than the retryable one an unbound anchor would give.
+    #expect(err.code == RPCMethodError.unauthorizedCode)
+
+    // The already-open stream is untouched: losing the chain blocks new calls,
+    // it does not revoke a subscription. Only a hard session close does that.
+    let event = DaemonEvent.sessionCreated(
+        sessionId: created.state.id.uuidString, shortId: "AA", name: nil
+    )
+    await broker.publish(event, to: .session(created.state.id))
+    let streamed = try client.receive()
+    #expect(streamed.type == .event)
+    #expect(streamed.id == 2)
+
+    // Restoring the chain restores authority, which pins the refusal to the
+    // chain rather than to some latched connection state.
+    chain.set([TestPeerIdentity.anchoredAncestor])
+    try client.send(
+        RPCEnvelope(
+            id: 4,
+            type: .request,
+            method: RPCMethod.panesList.rawValue,
+            body: .params(try panesListParams(created.state.id.uuidString, created.capability.token))
+        )
+    )
+    guard case .result = try client.receive().body else {
+        Issue.record("a restored chain should authorize again")
+        return
+    }
 }
 
 // MARK: - Missing provenance wiring fails closed

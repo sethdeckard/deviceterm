@@ -167,8 +167,8 @@ The CLI reads session credentials from the DeviceTerm tab environment. Do not
 add credential flags or pass `DEVICETERM_SESSION_CAP` as a command operand.
 
 The capability is only one authentication factor. The daemon also checks that
-the caller belongs to the terminal bound to that session and repeats the
-provenance check for scoped requests.
+the caller, or one of its live ancestors, belongs to the terminal bound to that
+session, and repeats the provenance check for scoped requests.
 
 This guide uses four scope labels:
 

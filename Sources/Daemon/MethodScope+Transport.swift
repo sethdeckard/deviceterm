@@ -31,11 +31,13 @@ extension MethodScope {
     /// Reachable over **both** transports for a granted session, because the
     /// grant is only meaningful on top of a real, provenance-checked identity:
     /// - **UDS**: `session.authenticate` already proved the caller's kernel
-    ///   terminal-process provenance (it shares the orchestrator tab's
-    ///   controlling terminal), and the grant was minted by the validated GUI
-    ///   for this exact session. Cap + provenance + live grant together are the
-    ///   authority. A same-uid process that merely stole the cap can't
-    ///   authenticate (it fails the terminal arm), so it never reaches here.
+    ///   terminal-process provenance, and the grant was minted by the validated
+    ///   GUI for this exact session. Cap + provenance + live grant together are
+    ///   the authority. What provenance proves is that the caller's live parent
+    ///   chain reaches the orchestrator tab's controlling terminal, which is
+    ///   either the caller itself sitting in that terminal or a descendant that
+    ///   detached from it. A same-uid process that merely stole the cap has no
+    ///   such chain and can't authenticate, so it never reaches here.
     /// - **XPC**: the peer's audit token must validate against the daemon's
     ///   own signature; `validatedGUI` is the already-resolved verdict, never a
     ///   fresh signature walk.
@@ -47,7 +49,7 @@ extension MethodScope {
         guard hasGrant else { return false }
         switch transport {
         case .uds:
-            // A granted UDS session is inside the orchestrator tab by
+            // A granted UDS session reaches the orchestrator tab by
             // construction: the grant guard above required a live grant, and a
             // UDS session only authenticates after passing terminal-process
             // provenance. No audit token is involved (UDS carries none); the

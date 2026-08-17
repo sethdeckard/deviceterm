@@ -478,11 +478,15 @@ kernel-identity provenance arm: the validated GUI peer (XPC), the exact process
 that created the session (owner, captured server-side at `session.create`,
 never a wire-supplied pid), or the session's bound terminal (UDS: the caller's
 POSIX session id, controlling tty, and session-leader start time must match the
-anchor the GUI bound via `session.bindTerminal`). That terminal match, not the
-cap, is what separates a caller sitting in the session's own terminal from a
-cap thief elsewhere on the machine. The test is terminal membership, not
-process ancestry: a descendant that detaches from the controlling terminal
-stops matching the anchor.
+anchor the GUI bound via `session.bindTerminal`, either directly or through one
+of the caller's live ancestors). That terminal match, not the cap, is what
+separates a caller sitting in the session's own terminal from a cap thief
+elsewhere on the machine. Authority follows the live parent chain: a descendant
+that detaches from the controlling terminal (an agent harness that runs each
+command under `setsid`) still authenticates while its chain reaches the
+terminal, and is refused once orphaning severs it: refused on the next scoped
+request, without tearing down an already-open stream. The trade is that
+detaching a child does not renounce its trust.
 Provenance is re-checked on every scoped request, so closing a session or
 revoking its terminal anchor invalidates an already-authenticated socket; a
 handler that takes a payload `(sessionId, cap)` also confirms the target equals
