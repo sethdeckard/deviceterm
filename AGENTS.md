@@ -180,8 +180,6 @@ filesystem is the truth.
 | `make lint` | `swiftlint lint --strict` (no-ops with no Swift sources) |
 | `make verify` | single-command gate; sub-checks self-skip per filesystem |
 | `make clean` | `rm -rf .build` |
-| `make release` | signed, notarized DMG |
-| `make publish` | publish an existing notarized release, cask, and Sparkle appcast |
 | `make hooks` | install + check `.githooks/` (one-time after clone) |
 
 ### `make verify` shape

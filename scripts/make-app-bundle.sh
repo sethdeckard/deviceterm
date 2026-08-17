@@ -45,6 +45,10 @@ esac
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/.build/$CONFIG"
 
+# shellcheck source=lib/version.sh
+. "$ROOT/scripts/lib/version.sh"
+VERSION="$(dt_release_version "$ROOT")"
+
 if [ "$MODE" = "ephemeral" ]; then
     # Per-run temp dir; never collides with a developer's normal
     # output bundle. Teardown is the caller's responsibility.
@@ -111,6 +115,14 @@ COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     || /usr/libexec/PlistBuddy -c "Set :DTSourceCommit $COMMIT" \
         "$APP/Contents/Info.plist"
 
+# Stamp the release version over the source plist's placeholders. The
+# committed plist carries 0.0.0 so the truth lives only in
+# DeviceTermVersion.swift.
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
+    "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
+    "$APP/Contents/Info.plist"
+
 # App icon (CFBundleIconFile=AppIcon → Contents/Resources/AppIcon.icns).
 cp "$ROOT/Sources/App/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
@@ -165,7 +177,8 @@ fi
 # LaunchAgentPlistTests guard catches drift.
 cp "$SRC_LAUNCH_AGENT" "$APP/Contents/Library/LaunchAgents/com.deviceterm.daemon.plist"
 
-# Embedded daemon helper bundle (LSUIElement, no Dock icon).
+# Embedded daemon helper bundle (LSUIElement, no Dock icon). The version
+# strings are placeholders stamped from DeviceTermVersion.swift below.
 DAEMON_APP="$APP/Contents/Library/LoginItems/deviceterm-daemon.app"
 mkdir -p "$DAEMON_APP/Contents/MacOS"
 cp "$BUILD/deviceterm-daemon" "$DAEMON_APP/Contents/MacOS/deviceterm-daemon"
@@ -178,8 +191,8 @@ cat > "$DAEMON_APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key><string>com.deviceterm.daemon</string>
     <key>CFBundleExecutable</key><string>deviceterm-daemon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.0</string>
-    <key>CFBundleVersion</key><string>0.2.0</string>
+    <key>CFBundleShortVersionString</key><string>0.0.0</string>
+    <key>CFBundleVersion</key><string>0.0.0</string>
     <key>NSHumanReadableCopyright</key><string>© 2026 Seth Deckard</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
@@ -187,6 +200,10 @@ cat > "$DAEMON_APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
+    "$DAEMON_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
+    "$DAEMON_APP/Contents/Info.plist"
 
 # Helper executables.
 for helper in deviceterm-cli deviceterm-shim deviceterm-probe; do

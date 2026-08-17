@@ -19,7 +19,7 @@ SHELL := /usr/bin/env bash
         uitest uitest-bundle uitest-run uitest-stop \
         test test-int test-shim test-gui test-live test-device-live test-uitest \
         lint verify clean \
-        release publish \
+        bump release publish \
         hooks
 
 # Default goal: print help so a bare `make` is friendly.
@@ -58,6 +58,7 @@ help:
 	@echo "                   connected, unlocked iPhone/iPad + OS tunnel)"
 	@echo "  make test-uitest UI-harness GUI smoke (needs TCC grants +"
 	@echo "                   an unlocked display; sim-free; deliberate)"
+	@echo "  make bump        Set the release version (VERSION=x.y.z)"
 	@echo "  make release     Signed, notarized DMG"
 	@echo ""
 	@echo "Setup:"
@@ -319,6 +320,15 @@ run-libghostty-harness:
 # ──────────────────────────────────────────────────────────────────────────
 # Release
 # ──────────────────────────────────────────────────────────────────────────
+
+# Set a new release version: rewrites DeviceTermVersion.swift (the
+# source of truth) and README.md's DMG download line.
+bump:
+	@if [ -x scripts/bump-version.sh ]; then \
+	    ./scripts/bump-version.sh "$(VERSION)"; \
+	else \
+	    echo "make bump: scripts/bump-version.sh not present — skipping"; \
+	fi
 
 release:
 	@if [ -x scripts/build-release.sh ]; then \

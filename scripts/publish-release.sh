@@ -8,7 +8,8 @@
 # by `make verify`) stays untouched and free of publish tooling.
 #
 # Steps:
-#   1. Read VERSION from Info.plist; compute the DMG's sha256.
+#   1. Read VERSION from DeviceTermVersion.swift; compute the DMG's
+#      sha256.
 #   2. Generate the EdDSA-signed Sparkle appcast over the release DMG.
 #   3. Create the GitHub release, uploading the DMG + appcast.xml so the
 #      `releases/latest/download/appcast.xml` feed permalink serves it.
@@ -36,7 +37,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/release"
-PLIST="$ROOT/Sources/App/Resources/Info.plist"
 CASK_TEMPLATE="$ROOT/packaging/homebrew/deviceterm.rb"
 
 if [ -f "$ROOT/.env.release" ]; then
@@ -60,12 +60,9 @@ done
 note() { printf '  → %s\n' "$1"; }
 die()  { printf 'publish-release: %s\n' "$1" >&2; exit 1; }
 
-version() {
-    /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" \
-        2>/dev/null || echo "0.0.0"
-}
-
-VERSION="$(version)"
+# shellcheck source=lib/version.sh
+. "$ROOT/scripts/lib/version.sh"
+VERSION="$(dt_release_version "$ROOT")"
 DMG="$OUT/deviceterm-$VERSION.dmg"
 CASK_DEST="$TAP_DIR/Casks/deviceterm.rb"
 

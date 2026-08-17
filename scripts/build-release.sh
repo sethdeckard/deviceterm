@@ -65,10 +65,9 @@ done
 note() { printf '  → %s\n' "$1"; }
 die()  { printf 'build-release: %s\n' "$1" >&2; exit 1; }
 
-version() {
-    /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" \
-        2>/dev/null || echo "0.0.0"
-}
+# shellcheck source=lib/version.sh
+. "$ROOT/scripts/lib/version.sh"
+VERSION="$(dt_release_version "$ROOT")"
 
 # ── Dry run: offline preflight only ───────────────────────────────────
 # Hermetic — no credentials, no build, no network — so `make verify`
@@ -87,7 +86,15 @@ if [ "$DRY_RUN" -eq 1 ]; then
     # it's a required release input, not a nicety. Caught here rather than
     # after signing and notarizing an artifact that can't be shipped.
     [ -f "$ROOT/LICENSE" ] || die "LICENSE not found: $ROOT/LICENSE"
-    echo "build-release: dry-run OK (preflight passed; v$(version))"
+    # README names the release DMG; it and DeviceTermVersion.swift are
+    # the only two files that carry the real version, so drift between
+    # them fails the gate here. Every DMG reference must match. A mere
+    # substring hit would pass with a stale download line elsewhere.
+    readme_dmgs="$(grep -oE 'deviceterm-[0-9][0-9.]*\.dmg' "$ROOT/README.md" | sort -u || true)"
+    [ "$readme_dmgs" = "deviceterm-$VERSION.dmg" ] \
+        || die "README.md DMG references [$(printf '%s' "${readme_dmgs:-none}" | tr '\n' ' ')] != deviceterm-$VERSION.dmg
+  (run 'make bump VERSION=…' or fix README.md by hand)"
+    echo "build-release: dry-run OK (preflight passed; v$VERSION)"
     exit 0
 fi
 
@@ -124,7 +131,6 @@ case "$ED_KEY" in
   (see docs/RELEASING.md)." ;;
 esac
 
-VERSION="$(version)"
 echo "build-release: deviceterm v$VERSION → $OUT"
 
 # The bundle stamps HEAD into Info.plist as DTSourceCommit, and

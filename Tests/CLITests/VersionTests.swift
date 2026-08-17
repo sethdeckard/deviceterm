@@ -21,8 +21,8 @@ private func encode<T: Encodable>(_ value: T) throws -> String {
 // MARK: - Parser
 
 @Test
-func cliVersionMatchesCurrentRelease() {
-    #expect(VersionReportFormat.deviceTermCLIVersion == "0.2.0")
+func cliVersionIsSemverShaped() {
+    #expect(VersionReportFormat.deviceTermCLIVersion.wholeMatch(of: /\d+\.\d+\.\d+/) != nil)
 }
 
 @Test

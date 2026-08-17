@@ -100,11 +100,14 @@ xattr <file>                                                        # expect emp
   compatible. Starting with `1.0`, breaking public changes require a new major
   version.
 
-- [ ] Set the same release version in:
-
-  - `Sources/App/Resources/Info.plist`
-  - `scripts/make-app-bundle.sh`
-  - `Sources/DaemonProtocol/DeviceTermVersion.swift`
+- [ ] Set the release version with `make bump VERSION=x.y.z`, or edit
+  `DeviceTermVersion.current` in
+  `Sources/DaemonProtocol/DeviceTermVersion.swift` and the README download
+  line by hand; `make verify` fails if those two disagree. Everything else
+  derives from the constant at build and publish time: the bundled app and
+  daemon Info.plists, the DMG name, the `v<version>` tag, and the Homebrew
+  cask. The committed plists and cask template hold `0.0.0` placeholders.
+  Editing those placeholder fields does not set the release version.
 
 - [ ] Review `DaemonProtocolInfo.wireVersion` separately. It identifies the
   internal app, daemon, CLI, and shim RPC contract during an update. Change it
