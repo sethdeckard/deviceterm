@@ -38,11 +38,12 @@
 
 import Foundation
 
-/// The kind of gesture the daemon's HID dispatch actually produced
-/// for an interpolated input. `tap` means the gesture collapsed to a
-/// single down/up pair (the user's `durationMs` was below the one-
-/// frame floor of `~32ms`); `drag` means multi-step interpolation
-/// went out the door.
+/// How the daemon's interpolation loop dispatched the gesture. `tap` means
+/// zero or one interpolated sample was submitted; `drag` means more than one.
+///
+/// A gesture reaches `tap` three ways: the caller's `durationMs` was below
+/// the one-frame floor of `~32ms`, the gesture ended before its samples
+/// could be sent, or it ran late enough that skipping left only one.
 public enum SwipeDispatch: String, Codable, Sendable, Equatable {
     case tap
     case drag
@@ -68,17 +69,28 @@ public struct SwipeAck: Codable, Sendable, Equatable {
     // into a CLI failure.
 
     public let dispatched: SwipeDispatch?
+
+    /// Interpolated samples the synthesis loop submitted to the backend,
+    /// which is not always the number the duration planned for: a gesture
+    /// running behind its schedule skips samples rather than replaying them
+    /// in a burst, and one that ends early submits fewer still. A device
+    /// backend acknowledges a submission on enqueue, ahead of delivery.
     public let steps: Int?
 
-    /// The duration in milliseconds the daemon actually used, after
-    /// clamping the caller's request to `[0, maxGestureDurationMs]`.
-    /// Differs from the caller's `durationMs` when out-of-range.
+    /// The duration in milliseconds the daemon **scheduled**, after clamping
+    /// the caller's request to `[0, maxGestureDurationMs]`. Differs from the
+    /// caller's `durationMs` when out-of-range. This is the plan, not the
+    /// elapsed time: a gesture that ended early still reports what it was
+    /// scheduled for.
     public let durationMs: Int?
 
     public init(steps: Int, durationMs: Int) {
         self.success = true
         self.steps = steps
         self.durationMs = durationMs
-        self.dispatched = steps == 1 ? .tap : .drag
+        // `<=` rather than `==`: a gesture preempted before its first
+        // interpolated sample submitted zero, and no interpolation reached the
+        // backend. Reporting `drag` there would name motion nothing sent.
+        self.dispatched = steps <= 1 ? .tap : .drag
     }
 }

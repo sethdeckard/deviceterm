@@ -20,6 +20,25 @@ func dispatchedDerivesFromStepCount() {
 }
 
 @Test
+func aGestureThatSubmittedNoSamplesReportsATap() {
+    // Zero interpolated samples classify as tap; drag is reserved for two or
+    // more, so a gesture that ended before its first sample can't be reported
+    // as motion.
+    #expect(SwipeAck(steps: 0, durationMs: 200).dispatched == .tap)
+}
+
+@Test
+func encodesZeroSampleShape() throws {
+    let ack = SwipeAck(steps: 0, durationMs: 200)
+    let data = try JSONEncoder().encode(ack)
+    let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(json["dispatched"] as? String == "tap")
+    #expect(json["steps"] as? Int == 0)
+    // The scheduled duration survives: it reports the plan, not elapsed time.
+    #expect(json["durationMs"] as? Int == 200)
+}
+
+@Test
 func encodesOkKeyForBackwardCompatibility() throws {
     let ack = SwipeAck(steps: 1, durationMs: 16)
     let data = try JSONEncoder().encode(ack)

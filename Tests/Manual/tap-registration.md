@@ -11,7 +11,7 @@ a working tap. A `UISwitch` is the case to watch: dragging its thumb works
 either way, so the pane keeps feeling half functional.
 
 Run before any release that touches `Sources/Daemon/SimInputSynthesis.swift`,
-`Sources/Daemon/PaneCoordinator.swift`,
+`Sources/Daemon/GesturePacer.swift`, `Sources/Daemon/PaneCoordinator.swift`,
 `Sources/App/SimulatorContentView.swift`, or
 `Sources/CoreSimulatorBridge/SimHIDClient.m`.
 
@@ -103,7 +103,8 @@ Drive it three ways:
   monotonic in the request, so sample several rather than looking for one
   crossover.
 
-Recorded on an iPhone 17 Pro, iOS 27, 2026-08-15:
+Recorded on an iPhone 17 Pro, iOS 27, 2026-08-15. Timing mode: per-interval
+sleeps.
 
 | Input | Observed contact | Result |
 |---|---|---|
@@ -113,8 +114,16 @@ Recorded on an iPhone 17 Pro, iOS 27, 2026-08-15:
 | `--duration 50` | 154 to 194 ms | Registered, and the switch entered drag tracking |
 
 The first row was collected from the tap path with `tapDwellMs` set to zero.
-Observed contact could run several times the requested hold, so treat a single
-sample as indicative rather than exact.
+
+Observed contact ran several times the requested hold in that sweep. At least
+two mechanisms can contribute. The daemon added each sleep's scheduler lateness
+to a running nominal total, so a longer hold compounded more of it; the paced
+loops sleep to absolute deadlines instead, which removes that one. The other is
+the synchronous HID send, one on the down and one on the up, whose latency has
+never been measured.
+
+These figures characterize the per-interval-sleep implementation. Rerun the
+procedure to characterize absolute-deadline pacing.
 
 ---
 

@@ -164,34 +164,45 @@ package actor InteractionRelay: InteractionRelaying {
         grabFrames: Int = 3,
         rampFrames: Int = 8,
         holdFrames: Int = 4,
-        frameNanos: UInt64 = 10_000_000
+        frameNanos: UInt64 = 10_000_000,
+        pacer: any RelayPacing = SystemRelayPacer()
     ) async throws {
         let grab = edge.grabPoint
         let dwell = edge.dwellPoint
+        let trajectory = AppSwitcherTrajectory.points(
+            grab: grab,
+            dwell: dwell,
+            grabFrames: grabFrames,
+            rampFrames: rampFrames,
+            holdFrames: holdFrames
+        )
         // The App Switcher is a self-contained trajectory that ends in its
         // own lift, and the daemon tracks it as *self-releasing* (never
-        // held). So a mid-trajectory failure must still lift the contact.
-        // Otherwise a partial gesture strands a held touch nothing can
-        // release. Guarantee the release on the error path too.
+        // held). So a mid-trajectory failure must still try to lift the
+        // contact, because a partial gesture strands a held touch nothing can
+        // release. The error path attempts the release best-effort: if that
+        // attempt also fails, the contact stays stranded and quiesce can't
+        // recover it.
         do {
             try await sendGestureContact(state: HIDReports.contactState, x: grab.x, y: grab.y, edge: edge)
-            for _ in 0..<max(0, grabFrames) {
-                try? await Task.sleep(nanoseconds: frameNanos)
-                try await sendGestureContact(state: HIDReports.contactState, x: grab.x, y: grab.y, edge: edge)
-            }
-            for frame in 1...max(1, rampFrames) {
-                try? await Task.sleep(nanoseconds: frameNanos)
-                let fraction = Double(frame) / Double(max(1, rampFrames))
+            // Anchor after the grab lands, so the trajectory's frames are
+            // scheduled from established contact rather than from the send.
+            let anchor = pacer.now()
+            // Every frame is sent, even when a wake runs late. The paced
+            // `pane.input.*` gestures skip late samples because their points
+            // are absolute, so a dropped one costs only report density. Here
+            // the counts carry the meaning: drop the dwell frames and the
+            // switcher never fans out, which is the flick-to-Home this
+            // trajectory was tuned to avoid. Deadlines are still absolute, so
+            // lateness doesn't compound across frames.
+            for (index, point) in trajectory.enumerated() {
+                await pacer.sleep(until: anchor + .nanoseconds(frameNanos * UInt64(index + 1)))
                 try await sendGestureContact(
                     state: HIDReports.contactState,
-                    x: lerp(grab.x, dwell.x, fraction),
-                    y: lerp(grab.y, dwell.y, fraction),
+                    x: point.x,
+                    y: point.y,
                     edge: edge
                 )
-            }
-            for _ in 0..<max(0, holdFrames) {
-                try? await Task.sleep(nanoseconds: frameNanos)
-                try await sendGestureContact(state: HIDReports.contactState, x: dwell.x, y: dwell.y, edge: edge)
             }
             // The final lift is inside the guarded block too, so if *it*
             // fails the catch still retries a release. Otherwise a failed
@@ -202,10 +213,6 @@ package actor InteractionRelay: InteractionRelaying {
             try? await sendGestureContact(state: HIDReports.releaseState, x: dwell.x, y: dwell.y, edge: edge)
             throw error
         }
-    }
-
-    nonisolated private func lerp(_ start: UInt16, _ end: UInt16, _ fraction: Double) -> UInt16 {
-        UInt16((Double(start) + (Double(end) - Double(start)) * fraction).rounded())
     }
 
     // MARK: Buttons

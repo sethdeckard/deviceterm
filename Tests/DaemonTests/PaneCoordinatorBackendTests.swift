@@ -111,6 +111,12 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the button realization of the App Switcher.
     var supportsSystemEdgeGesture: Bool { !edgeUnsupported }
 
+    /// When false every generation reads as stale, modelling a pane a transfer
+    /// has fenced. The protocol default answers true, which is what the
+    /// routing tests want, so this only matters to a test that wants a paced
+    /// gesture to stop mid-flight.
+    var inputGenerationCurrent = true
+
     init(
         capabilities: DeviceBackendCapabilities = .simulator.withoutLocation,
         edgeUnsupported: Bool = false,
@@ -122,6 +128,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.appSwitcherUnsupported = appSwitcherUnsupported
         self.rotateReaches = rotateReaches
     }
+
+    func isInputGenerationCurrent(_ generation: UInt64) -> Bool { inputGenerationCurrent }
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,

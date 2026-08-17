@@ -1189,6 +1189,52 @@ it to watch families is a client affordance concern
 simulator's edge tags on a sim and enriched system-gesture reports on
 physical hardware. Coordinates are normalized display coordinates.
 
+The paced gestures (`tap`, `swipe`, `edgeSwipe`, `longPress`, `pinch`,
+`crown`) sleep to absolute deadlines rather than for per-step intervals,
+so one late step doesn't shift the ones after it.
+
+Each phase anchors its own schedule. `tap` and `longPress` measure from
+the moment contact-down returns; a swipe's motion anchors after any start
+dwell, and each active dwell anchors where it begins; `crown` anchors
+before its first step, having no contact to wait on. Lateness is bounded
+within a phase, not across the gesture.
+
+That is bounded drift, not exact-duration delivery. On a sim each send
+blocks until CoreSimulator completes it, so scheduler lateness and that
+send's latency both land on top of the schedule, and the send's latency has
+never been measured. A device backend enqueues instead, so a hold is
+measured from submission and the guest sees it later still. Absent
+cancellation, transfer, or a failed send, a requested hold is a floor on
+submitted contact rather than a promise about delivery.
+
+A paced `pane.input.*` gesture running behind its schedule skips the
+samples it missed rather than replaying them back to back. Positions are
+absolute, so a dropped sample costs a swipe or a pinch nothing; a crown
+delta is relative, so a skipped sample's share folds into the next send and
+the total rotation stays what was asked for. Lateness never skips the final
+sample, so synthesis still submits the end point.
+
+The physical-device App Switcher is the exception: it is a fixed relay-side
+macro whose frames carry meaning by count, so it sends every one. Its
+frames share one absolute schedule, so a late frame can be absorbed by the
+shorter waits after it. If the relay stays behind, the final lift runs late
+rather than dropping frames.
+
+Two things end a synthesis-side contact gesture early, and they differ in
+what they send. A cancelled request releases the contact, because nothing
+else will. A gesture whose pane transferred sends nothing: the release
+would be dropped as stale, and the backend's quiesce owns freeing that
+contact. Both stop at the same checkpoint, one per paced loop.
+
+That checkpoint is the synthesis-side rule for loops holding contact, and
+it covers device panes too: they share the same gesture synthesis,
+differing only in the backend underneath. `crown` and the Home double-press
+fallback hold none, so they only stop. The physical-device App Switcher is
+a relay-side macro outside this path: every exit attempts a lift, including
+the failure path, but that attempt is best-effort. If it fails too, the
+contact is stranded, and the daemon never tracks the macro as held so
+quiesce can't recover it.
+
 #### `pane.input.tap`
 
 - Params: `{paneId, x, y}`
@@ -1203,8 +1249,11 @@ measured across both gesture recognition and `UIControl` tracking. The dwell is
 what lets a tap on a `UISwitch` register without dragging its thumb.
 
 One tap emits one backend down and one up, and the handler acknowledges after
-the release. An uncancelled request therefore takes at least the dwell to
-return; cancellation cuts the hold short and releases early.
+submitting the release. An uncancelled request therefore takes at least the
+dwell to return; cancellation cuts the hold short and still releases. A tap
+whose pane transferred mid-dwell sends no up, because the backend's quiesce
+frees that contact instead. On a device the submission is an enqueue, so the
+ack can precede the guest seeing either report.
 
 #### `pane.input.touch`
 
@@ -1232,9 +1281,17 @@ which a plain swipe-and-lift can't express. `startHoldMs` (default 0) is
 the same active dwell at the start point, before the motion begins.
 
 The ack reports how the daemon dispatched the gesture (`tap` or `drag`),
-the interpolation step count, and the effective duration. A current
-daemon always sends all three; they are optional only for old-daemon
-skew.
+the number of interpolated samples submitted to the backend, and the
+scheduled duration. `steps` counts what was submitted rather than what the
+duration planned for, so a gesture that ran behind its schedule reports
+fewer. On a physical device a submission is acknowledged when the pump
+accepts it, ahead of delivery. `durationMs` is the clamped request, not
+elapsed time.
+
+A gesture that ended before its first sample reports `steps: 0` and
+`dispatched: "tap"`; the classification comes from the submitted sample
+count alone. A current daemon always sends all three fields; they are
+optional only for old-daemon skew.
 
 #### `pane.input.edgeSwipe`
 
