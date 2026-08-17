@@ -117,16 +117,35 @@ note "generating Sparkle appcast"
 APPCAST_STAGE="$(mktemp -d -t deviceterm-appcast.XXXXXX)"
 trap 'rm -rf "$APPCAST_STAGE"' EXIT
 cp "$DMG" "$APPCAST_STAGE/"
-# In-app release notes for the update pill's popover: generate_appcast
-# embeds an HTML file named like the archive (deviceterm-<version>.html)
-# as the appcast <description>. Provide it at release/release-notes-<v>.html.
+# In-app release notes for the update pill's popover. generate_appcast
+# picks up an HTML file named like the archive (deviceterm-<version>.html);
+# provide it at release/release-notes-<v>.html. Left to itself it embeds
+# that file as the item's <description> only when the file is a fragment:
+# one carrying a DOCTYPE or <body> becomes a <sparkle:releaseNotesLink>
+# pointing at a URL nothing here uploads. --embed-release-notes takes the
+# shape question off the table.
 NOTES_HTML="$OUT/release-notes-$VERSION.html"
 if [ -f "$NOTES_HTML" ]; then
     cp "$NOTES_HTML" "$APPCAST_STAGE/deviceterm-$VERSION.html"
 else
     note "no $NOTES_HTML; appcast will omit in-app release notes"
 fi
-"$GEN_APPCAST" --download-url-prefix "$DL_PREFIX/" -o "$APPCAST" "$APPCAST_STAGE"
+"$GEN_APPCAST" --embed-release-notes --download-url-prefix "$DL_PREFIX/" \
+    -o "$APPCAST" "$APPCAST_STAGE"
+
+# Notes that never reached the feed are invisible until a user opens an
+# empty popover, by which point the release is public. Refuse here instead,
+# while the only artifacts are local.
+# Here-strings rather than pipes: grep -q exits at its first match, and
+# under `pipefail` the pipeline would then report the writer's SIGPIPE,
+# inverting both checks once the notes outgrow the pipe buffer.
+if [ -f "$NOTES_HTML" ]; then
+    ITEM="$(sed -n "/<sparkle:version>$VERSION</,/<\/item>/p" "$APPCAST")"
+    grep -q '<sparkle:releaseNotesLink>' <<<"$ITEM" \
+        && die "appcast links the notes rather than embedding them; nothing uploads that file"
+    grep -q '<description>' <<<"$ITEM" \
+        || die "appcast carries no notes for $VERSION (source: $NOTES_HTML)"
+fi
 
 # Create the GitHub release (with the DMG + appcast assets) BEFORE pushing
 # the cask: its `url` points at the release-download path, so a

@@ -119,9 +119,11 @@ xattr <file>                                                        # expect emp
   `make publish` asks GitHub to generate the notes.
 
 - [ ] Write the in-app update notes at
-  `release/release-notes-<version>.html`. `make publish` embeds this file in
-  the Sparkle appcast. If it is absent, the update popover reports that no
-  release notes are available.
+  `release/release-notes-<version>.html`. Use an HTML fragment: no DOCTYPE,
+  `<html>`, `<head>`, or `<body>`. A `<style>` element is fine.
+  `make publish` embeds the file in the Sparkle appcast, and refuses to
+  create the release when the notes do not reach it. If the file is absent,
+  the update popover reports that no release notes are available.
 
 - [ ] Scrub any new public assets as described above.
 
