@@ -107,6 +107,15 @@ one.
 
 ## Safety rules (do not violate)
 
+- **You are here to observe, not to build.** This skill ends at
+  observe-and-report. Nothing in it requires building, fixing, or
+  provisioning, and every `make` target that rebuilds the app bundle
+  (`bundle`, `test-gui`, `verify`) runs `rm -rf` on the debug bundle you are
+  running inside, deleting the `bin/` symlinks that put `deviceterm` on your
+  `PATH`. In particular, `CLAUDE.md`'s standing "before pushing, run `make
+  verify`" does not apply while you *are* the test subject. If a scenario
+  finds a bug, report it and stop — fixing it is separate work, outside the
+  tab.
 - **Never boot or shut down the user's simulators without explicit approval.**
   Game-dev and other work may depend on running sims. Scenarios marked
   *needs a sim* require the user to nominate a throwaway sim first.
