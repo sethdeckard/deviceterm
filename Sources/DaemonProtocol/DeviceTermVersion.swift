@@ -3,5 +3,5 @@
 // DeviceTermVersion: public release version shared by bundled clients.
 
 public enum DeviceTermVersion {
-    public static let current = "0.1.0"
+    public static let current = "0.2.0"
 }

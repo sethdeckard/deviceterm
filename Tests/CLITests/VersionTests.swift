@@ -22,7 +22,7 @@ private func encode<T: Encodable>(_ value: T) throws -> String {
 
 @Test
 func cliVersionMatchesCurrentRelease() {
-    #expect(VersionReportFormat.deviceTermCLIVersion == "0.1.0")
+    #expect(VersionReportFormat.deviceTermCLIVersion == "0.2.0")
 }
 
 @Test
