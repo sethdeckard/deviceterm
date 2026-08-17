@@ -47,6 +47,7 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     public weak var delegate: TerminalSurfaceDelegate?
 
     private let resourcesDirectory: URL?
+    private let loadUserConfig: Bool
     private let surfaceView = GhosttySurfaceView(frame: .zero)
     private var surface: ghostty_surface_t?
     private var didNotifyExit = false
@@ -76,10 +77,14 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     }
 
     /// `resourcesDirectory` is the libghostty resource root, holding
-    /// `terminfo/` and `ghostty/` side by side. Passed through to the
-    /// process runtime on first surface; ignored thereafter.
-    public init(resourcesDirectory: URL?) {
+    /// `terminfo/` and `ghostty/` side by side. `loadUserConfig: false`
+    /// keeps libghostty's built-in defaults instead of the user's
+    /// ghostty config. The first surface to attach supplies both
+    /// values to the process-wide runtime; later surfaces cannot
+    /// change them.
+    public init(resourcesDirectory: URL?, loadUserConfig: Bool = true) {
         self.resourcesDirectory = resourcesDirectory
+        self.loadUserConfig = loadUserConfig
     }
 
     // Isolated so we can read `surface` and free it on the main actor
@@ -147,7 +152,8 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         let runtime: GhosttyRuntime
         do {
             runtime = try GhosttyRuntime.bootstrap(
-                resourcesDirectory: resourcesDirectory
+                resourcesDirectory: resourcesDirectory,
+                loadUserConfig: loadUserConfig
             )
         } catch {
             throw TerminalSurfaceError.surfaceCreationFailed(

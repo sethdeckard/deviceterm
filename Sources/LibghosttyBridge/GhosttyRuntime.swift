@@ -49,7 +49,8 @@ public final class GhosttyRuntime {
 
     /// Idempotent process bootstrap. The first call performs
     /// `ghostty_init` + app creation; later calls return the same
-    /// instance (`resourcesDirectory` is honoured only on the first).
+    /// instance (`resourcesDirectory` and `loadUserConfig` are
+    /// honoured only on the first).
     ///
     /// `resourcesDirectory` must be the resource root, which holds
     /// `terminfo/` and `ghostty/` side by side, so that both
@@ -58,8 +59,13 @@ public final class GhosttyRuntime {
     /// `GHOSTTY_RESOURCES_DIR`, which must be set before
     /// `ghostty_init`; without it shell integration and
     /// `TERM=xterm-ghostty` won't resolve.
+    ///
+    /// `loadUserConfig: false` skips the user's ghostty config files
+    /// entirely: the runtime keeps libghostty's built-in defaults and
+    /// reads (and writes) no config on disk.
     public static func bootstrap(
-        resourcesDirectory: URL?
+        resourcesDirectory: URL?,
+        loadUserConfig: Bool = true
     ) throws -> GhosttyRuntime {
         if let instance { return instance }
 
@@ -77,7 +83,11 @@ public final class GhosttyRuntime {
         }
         // Honour ~/.config/ghostty/config so the user's font/theme is
         // picked up automatically (PHILOSOPHY: config minimal/optional).
-        ghostty_config_load_default_files(config)
+        // The opt-out keeps built-in defaults and also skips ghostty's
+        // template-config write when no config file exists.
+        if loadUserConfig {
+            ghostty_config_load_default_files(config)
+        }
         ghostty_config_finalize(config)
 
         let runtime = GhosttyRuntime(config: config)

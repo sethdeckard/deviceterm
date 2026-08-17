@@ -103,8 +103,11 @@ enum GhosttyThemeColors {
     /// `cachedSelectionBackground()`: read once, reuse, clear via
     /// `invalidateCache()`. Chrome surfaces consume this to tint
     /// themselves with the terminal palette so a dark-green theme
-    /// stains the chrome above the terminal subtly.
+    /// stains the chrome above the terminal subtly. Returns nil
+    /// without reading when `GhosttyConfigOverride` ignores the
+    /// user's config, so the chrome stays on system colors.
     static func cachedBackground() -> NSColor? {
+        if GhosttyConfigOverride.ignoresUserConfig() { return nil }
         if cachedBgReady {
             return cachedBg
         }
@@ -145,8 +148,11 @@ enum GhosttyThemeColors {
     /// `defaultConfigPath`. First call reads + parses; subsequent
     /// calls return the same value without touching disk. Both the
     /// drop overlay and the focused-pane border consume this, so the
-    /// parse cost is paid once per process launch.
+    /// parse cost is paid once per process launch. Returns nil
+    /// without reading when `GhosttyConfigOverride` ignores the
+    /// user's config, so both cues fall back to the system accent.
     static func cachedSelectionBackground() -> NSColor? {
+        if GhosttyConfigOverride.ignoresUserConfig() { return nil }
         if cacheReady {
             return cachedColor
         }

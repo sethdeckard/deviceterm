@@ -199,7 +199,8 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     override func viewDidLoad() {
         super.viewDidLoad()
         let surface = GhosttyTerminalSurface(
-            resourcesDirectory: Self.resourcesDirectory()
+            resourcesDirectory: Self.resourcesDirectory(),
+            loadUserConfig: !GhosttyConfigOverride.ignoresUserConfig()
         )
         surface.delegate = self
         self.surface = surface

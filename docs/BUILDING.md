@@ -310,6 +310,16 @@ toolchain, no Ghostty source, no `Vendor/` tree), so a fresh clone just builds.
 `GhosttyKitResources.directoryURL` (overridable for local Ghostty
 checkouts via `DEVICETERM_LIBGHOSTTY_RESOURCES`).
 
+DeviceTerm reads your Ghostty config in two places: libghostty loads it
+wholesale when the first terminal pane bootstraps the runtime, and the
+app chrome side-reads `background` / `selection-background` to tint
+itself.
+
+Set `DEVICETERM_IGNORE_GHOSTTY_CONFIG=1` to skip both for a launch and
+see the app in its default theme, without touching your dotfiles. Only
+the exact value `1` enables it. `make run-default` sets the variable and
+delegates to `make run`.
+
 ### Bumping libghostty
 
 The libghostty C API is not versioned by upstream, so treat every bump

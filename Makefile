@@ -15,7 +15,7 @@ SHELL := /usr/bin/env bash
 # explicit form is correct under both.
 
 .PHONY: help \
-        build run kill-daemon daemon cli shim probe \
+        build run run-default kill-daemon daemon cli shim probe \
         uitest uitest-bundle uitest-run uitest-stop \
         test test-int test-shim test-gui test-live test-device-live test-uitest \
         lint verify clean \
@@ -36,6 +36,8 @@ help:
 	@echo "  make build       Build in debug"
 	@echo "  make run         Build + relaunch this checkout's DeviceTerm.app"
 	@echo "                   (refuses if another checkout's instance runs)"
+	@echo "  make run-default Like run, ignoring your Ghostty config"
+	@echo "                   (sets DEVICETERM_IGNORE_GHOSTTY_CONFIG=1)"
 	@echo "  make kill-daemon Stop this checkout's app + daemon"
 	@echo "  make test        Unit tests"
 	@echo "  make lint        SwiftLint --strict"
@@ -111,6 +113,12 @@ run: bundle
 	else \
 	    echo "make run: Sources/App/ does not exist — skipping"; \
 	fi
+
+# `run`, but the app ignores the user's Ghostty config and renders the
+# default theme. Delegates so the bundle build and instance guard stay
+# in one place; `open` passes the environment through to the app.
+run-default:
+	@DEVICETERM_IGNORE_GHOSTTY_CONFIG=1 $(MAKE) run
 
 daemon:
 	@if [ -d Sources/DeviceTermDaemon ]; then \
