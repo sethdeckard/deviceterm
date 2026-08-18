@@ -24,6 +24,9 @@
 #                   escalation); never /Applications, never another worktree
 #   list-mine       print this checkout's pids, one per line
 #   ensure-clear    refuse-foreign, then kill-own (the `make run` pre-flight)
+#   resolve-exe PID print a pid's absolute executable path, which answers
+#                   "which checkout is this daemon from?" for a launchd-
+#                   spawned helper, whose own `comm` is bundle-relative
 
 set -euo pipefail
 
@@ -39,6 +42,20 @@ ROOT_PHYS="$(pwd -P)"
 APP_PATTERN='[D]eviceTerm.app/Contents/MacOS/deviceterm'
 DAEMON_PATTERN='[L]oginItems/deviceterm-daemon.app/Contents/MacOS/deviceterm-daemon'
 
+# pid → absolute executable path, read from the process's mapped program
+# text. Used when `comm` is relative, which path arithmetic cannot resolve
+# without guessing a cwd. lsof reports the mapping itself, so the answer is
+# absolute however the process was started.
+#
+# Takes the first `txt` entry, which is the program text; the rest are
+# dylibs and resources. Should a lead entry ever not be the executable,
+# `classify_all` rejects it on basename and the process goes unclassified,
+# which is the same no-identification outcome as reading nothing at all.
+# Empty when lsof is missing or denied, for the same reason.
+exe_abs_via_lsof() {
+    lsof -a -p "$1" -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -1 || true
+}
+
 # pid → physical executable path; empty output if the pid died between
 # enumeration and inspection. `ps -o comm=` is the kernel-recorded
 # executable path on macOS (not argv, which processes can rewrite). The
@@ -50,10 +67,19 @@ exe_phys_for() {
     exe=$(ps -p "$pid" -o comm= 2>/dev/null || true)
     [ -n "$exe" ] || return 0
     # comm is the literal execve path and is RELATIVE when the process was
-    # launched by a relative path; resolving that against this script's
-    # own cwd would misattribute another checkout's process. No positive
-    # identification → no classification (the blind-pgrep rule again).
-    case "$exe" in /*) ;; *) return 0 ;; esac
+    # launched by a relative path, which is how launchd starts the daemon:
+    # the LaunchAgent's `BundleProgram` is bundle-relative, so every
+    # demand-launched helper arrives here relative. Resolving that against
+    # this script's own cwd would misattribute another checkout's process,
+    # so read the mapped executable instead. No positive identification →
+    # no classification (the blind-pgrep rule again).
+    case "$exe" in
+        /*) ;;
+        *)
+            exe=$(exe_abs_via_lsof "$pid")
+            [ -n "$exe" ] || return 0
+            ;;
+    esac
     dir=$(dirname "$exe")
     phys=$(cd "$dir" 2>/dev/null && pwd -P || true)
     printf '%s/%s\n' "${phys:-$dir}" "$(basename "$exe")"
@@ -162,8 +188,13 @@ case "${1:-}" in
     kill-own)       kill_own ;;
     list-mine)      list_mine ;;
     ensure-clear)   refuse_foreign; kill_own ;;
+    resolve-exe)
+        [ $# -eq 2 ] || { echo "usage: instance-guard.sh resolve-exe PID" >&2; exit 64; }
+        exe_phys_for "$2"
+        ;;
     *)
-        echo "usage: instance-guard.sh status|refuse-foreign|kill-own|list-mine|ensure-clear" >&2
+        echo "usage: instance-guard.sh" \
+            "status|refuse-foreign|kill-own|list-mine|ensure-clear|resolve-exe PID" >&2
         exit 64
         ;;
 esac

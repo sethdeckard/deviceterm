@@ -164,6 +164,67 @@ else
     skip "exclusive-lock self-test (no scripts/exclusive-lock.sh)"
 fi
 
+# Instance-guard self-test: a process whose `comm` is RELATIVE must still
+# resolve to an absolute executable path. launchd starts the daemon through
+# the LaunchAgent's bundle-relative `BundleProgram`, so every demand-launched
+# helper looks exactly like this. A guard that cannot resolve one classifies
+# nothing, and `make run` then walks straight into another checkout's daemon
+# with no BUSY.
+if [ -x scripts/instance-guard.sh ]; then
+    ig_tmp=$(mktemp -d "/tmp/deviceterm-guard-selftest.XXXXXX")
+    ig_pid=""
+    # `lk_dir` is unset when the block above skipped, and `set -u` would make
+    # the trap itself fail; `${lk_dir:+…}` drops those words entirely then.
+    trap 'rm -rf ${lk_dir:+"$lk_dir" "$lk_dir.recover"} "$ig_tmp"; \
+          [ -n "$ig_pid" ] && kill "$ig_pid" 2>/dev/null; true' EXIT
+    # Name the fixture per-run. A parallel checkout's verify spawns its own,
+    # and a shared name would let each match the other's pid.
+    ig_exe="relexe.$$"
+    cp /bin/sleep "$ig_tmp/$ig_exe"
+    # Re-sign the copied fixture ad hoc before launch so AMFI accepts it.
+    codesign -f -s - "$ig_tmp/$ig_exe" >/dev/null 2>&1 \
+        || fail "instance-guard: could not ad-hoc sign the fixture"
+    ( cd "$ig_tmp" && exec "./$ig_exe" 60 >/dev/null 2>&1 & )
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        ig_pid=$(pgrep -f "\./$ig_exe 60" 2>/dev/null | head -1 || true)
+        [ -n "$ig_pid" ] && break
+        sleep 0.2
+    done
+    [ -n "$ig_pid" ] || fail "instance-guard: fixture process never appeared"
+    # Precondition: without a relative comm this proves nothing, since the
+    # absolute path would resolve through plain path arithmetic.
+    ig_comm=$(ps -p "$ig_pid" -o comm= 2>/dev/null || true)
+    case "$ig_comm" in
+        /*) fail "instance-guard: fixture comm '$ig_comm' is absolute, not relative" ;;
+        "") fail "instance-guard: fixture comm unreadable" ;;
+    esac
+    ig_want="$(cd "$ig_tmp" && pwd -P)/$ig_exe"
+    ig_got=$(./scripts/instance-guard.sh resolve-exe "$ig_pid" || true)
+    if [ -z "$ig_got" ] && ! lsof -a -p $$ -d txt -Fn >/dev/null 2>&1; then
+        skip "instance-guard relative-comm resolution (lsof denied)"
+    elif [ "$ig_got" != "$ig_want" ]; then
+        fail "instance-guard: resolve-exe gave '$ig_got', want '$ig_want'"
+    else
+        # `make run` rebuilds the bundle (`rm -rf "$APP"`, then recreate)
+        # BEFORE `ensure-clear` classifies anything, so a still-running
+        # daemon's executable is routinely unlinked by the time it is
+        # inspected. macOS lsof keeps reporting the path, unlike Linux lsof
+        # which would append a " (deleted)" the basename check would reject.
+        # Pin that, because the failure is silent: kill-own would skip its
+        # own stale daemon and the new app would connect straight to it.
+        rm -f "$ig_tmp/$ig_exe"
+        ig_got=$(./scripts/instance-guard.sh resolve-exe "$ig_pid" || true)
+        [ "$ig_got" = "$ig_want" ] \
+            || fail "instance-guard: unlinked exe gave '$ig_got', want '$ig_want'"
+        ok "instance-guard self-test (relative comm resolves, linked or not)"
+    fi
+    kill "$ig_pid" 2>/dev/null || true
+    ig_pid=""
+    rm -rf "$ig_tmp"
+else
+    skip "instance-guard self-test (no scripts/instance-guard.sh)"
+fi
+
 # ──────────────────────────────────────────────────────────────────────
 # Filesystem-gated
 # ──────────────────────────────────────────────────────────────────────
