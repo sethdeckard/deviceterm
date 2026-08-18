@@ -270,9 +270,11 @@ fi
 # Post ⌘T (New Tab) and confirm the workspace's total tab count — read
 # back through the CLI — went up by one. This is the whole point: an
 # out-of-process GUI drive changed state the CLI can see. A key equivalent
-# (not a click on the "+" affordance, whose "New Tab" AX label lives on a
-# non-pressable image) because the harness activates deviceterm first, so
-# ⌘T resolves against the frontmost window exactly as a user's would.
+# rather than a click, because the harness activates deviceterm first, so ⌘T
+# resolves against the frontmost window exactly as a user's would. It also
+# sidesteps a naming collision: "New Tab" labels both the menu item and the
+# strip's "+", so a click by that label lands on whichever the tree walk
+# reaches first.
 "$UITEST" drive key cmd+t >"$SCRATCH/drive.json" 2>&1 \
     || { cat "$SCRATCH/drive.json" >&2; fail "drive key cmd+t failed"; }
 after=-1

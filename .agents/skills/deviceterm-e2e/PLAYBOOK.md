@@ -207,10 +207,11 @@ mismatch itself as a finding rather than papering over it.
   `windows list --all --json`'s `isKey:true` row *is* the window holding the newly
   selected tab, and its `selectedTabShortId` should equal `<shortId>`. Confirm it
   visually: the capture/AX show that pill as the active one.
-- **GUI-only open:** `deviceterm-uitest drive key cmd+t` (New Tab). Use the ⌘T
-  key equivalent, not a click on the strip's "+": that affordance's `New Tab` AX
-  label sits on a non-pressable image, so `drive click --ax "New Tab"` reports
-  success without opening anything. Re-assert the count grew.
+- **GUI-only open:** `deviceterm-uitest drive key cmd+t` (New Tab). Prefer the
+  ⌘T key equivalent. `drive click --ax "New Tab"` does open a tab, but "New Tab"
+  labels both the **Shell** menu item and the strip's "+", and the element
+  search walks the whole application, so the label alone doesn't say which one
+  you pressed. Re-assert the count grew.
 - **Close:** `deviceterm tab close --tab <shortId> --mode detach` (detach keeps
   any booted sims). Re-assert the count dropped. *If the tab booted a sim, a
   modal appears — see scenario 5.*

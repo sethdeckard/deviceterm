@@ -121,6 +121,28 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
+    /// Name a tab's pill and closer so a dump can tell one tab from another:
+    /// both carry display titles, which collide freely. A tab whose short id
+    /// is absent, which happens only against a pre-identifier-model daemon,
+    /// is cleared rather than given a fallback format; clearing is the part
+    /// that matters, since a leftover identifier still answers a lookup.
+    ///
+    /// Applied from the same-tabs path as well as the rebuild, because the
+    /// primary terminal can change while the tab-ID list does not: close the
+    /// first terminal of a split tab and the second becomes primary, carrying
+    /// a different short id. Stamping only on rebuild would leave the pill
+    /// naming a session that no longer backs the tab.
+    static func applyAccessibilityIdentifiers(
+        pill: NSButton,
+        close: NSButton?,
+        shortId: String?
+    ) {
+        pill.setAccessibilityIdentifier(shortId.map(TabAccessibilityIdentity.identifier(forTab:)))
+        close?.setAccessibilityIdentifier(
+            shortId.map(TabAccessibilityIdentity.closeIdentifier(forTab:))
+        )
+    }
+
     /// SF Symbol prepended to orchestrator-role tabs in the strip. The
     /// marker signals the orchestrator role was minted by a human menu
     /// action, so the affordance is visible without being loud. Returns
@@ -1122,6 +1144,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             close.setButtonType(.momentaryPushIn)
             close.toolTip = "Close Tab"
             close.setContentHuggingPriority(.required, for: .horizontal)
+            Self.applyAccessibilityIdentifiers(
+                pill: title, close: close, shortId: tab.primaryTerminal.shortId
+            )
             // Reserve space always but fade alpha 0 → 1 on hover so
             // entering the cell doesn't reflow the layout.
 
@@ -1229,6 +1254,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 let button = cell.titleButton,
                 let tabContent = tabContentByID[tab.id] else { continue }
             button.title = tabContent.displayTitle
+            Self.applyAccessibilityIdentifiers(
+                pill: button, close: cell.closeButton, shortId: tab.primaryTerminal.shortId
+            )
             // Rebuild the per-tab context menu so privacy toggle title
             // ("Set Private" ↔ "Set Public"), check state, and the
             // enable bits for Close Others / Close to the Right
@@ -1575,7 +1603,7 @@ private final class DraggableRootView: NSView {
 /// a bezelStyle (or even a default cell) impose their own minimum
 /// height regardless of `intrinsicContentSize` overrides or required
 /// width/height constraints, which forces a vertical-pill shape.
-private final class NewTabButton: NSControl {
+final class NewTabButton: NSControl {
     private var hovered = false {
         didSet { refreshFill() }
     }
@@ -1594,6 +1622,19 @@ private final class NewTabButton: NSControl {
         wantsLayer = true
         layer?.masksToBounds = true
         toolTip = "New Tab"
+        // An NSControl carrying no cell publishes nothing to the
+        // accessibility tree, and AppKit prunes a view that is not an
+        // accessibility element, so the plus image below never surfaces
+        // either. Sidestepping NSButtonCell for layout costs the role and
+        // label a button would have supplied; declare them here instead, or
+        // this affordance is reachable by mouse only.
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("New Tab")
+        // The label is also the New Tab menu item's exact title, so a search
+        // by label matches two real elements. The identifier is what names
+        // this one.
+        setAccessibilityIdentifier(TabAccessibilityIdentity.newTabButton)
 
         plusImageView.translatesAutoresizingMaskIntoConstraints = false
         plusImageView.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
@@ -1650,6 +1691,15 @@ private final class NewTabButton: NSControl {
 
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
+
+    /// Route an accessibility press through the same dispatch the mouse path
+    /// uses. With no cell there is nothing to turn a press into target/action
+    /// on its own, so publishing the button role without this would leave the
+    /// affordance visible to assistive technology and inert.
+    override func accessibilityPerformPress() -> Bool {
+        guard let action else { return false }
+        return sendAction(action, to: target)
+    }
 
     /// Track press / release manually since there's no NSButtonCell
     /// driving the click cycle. mouseUp inside bounds fires the
