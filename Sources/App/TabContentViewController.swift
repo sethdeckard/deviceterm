@@ -111,7 +111,9 @@ final class TabContentViewController: NSViewController {
     /// the primary terminal's startup `cwd` (the explicit `deviceterm tab
     /// open --cwd <path>` value) so Duplicate Tab honors that even
     /// before any OSC 7 lands; updated thereafter by each OSC 7 hop.
-    /// `TabTitleViewModel` only retains the basename for labelling.
+    /// `TabTitleViewModel` retains the OSC-7 basename for labelling and the
+    /// full path for the proxy icon; only this property carries the startup
+    /// seed.
     /// Duplicate Tab needs the absolute path to thread through
     /// `Route.newTab(cwd:)`. nil only when both the startup cwd was
     /// nil and no OSC 7 has fired (falls back to libghostty's GUI-cwd
@@ -128,6 +130,16 @@ final class TabContentViewController: NSViewController {
     var capability: String { primaryTerminalCapability }
     var displayTitle: String { titleModel.displayTitle }
     var manualTitle: String? { titleModel.manualTitle }
+    /// Directory backing the titlebar proxy icon: the primary terminal's OSC-7
+    /// path, and nothing else.
+    ///
+    /// Deliberately without a startup-cwd fallback. OSC 7 is the only source
+    /// that tracks `cd`, so a startup path would give a tab with no shell
+    /// integration a folder button that silently goes stale. Such a button
+    /// drags and opens at a directory the shell has left, which is worse than
+    /// showing no button at all. An empty OSC 7 is a shell reporting that it
+    /// does not know where it is, and clears this for the same reason.
+    var proxyIconPath: String? { titleModel.lastCWDPath }
     private var primaryTerminalSessionId: String {
         tabListVM.tab(id: tabID)?.primaryTerminal.sessionId ?? ""
     }

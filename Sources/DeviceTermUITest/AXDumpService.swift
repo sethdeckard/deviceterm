@@ -53,7 +53,11 @@ enum AXDumpService {
         // Carried for the pane wrappers, which publish it so a focus
         // shortcut can be asserted from outside the app. Most elements
         // do not answer it and are simply omitted.
-        (AXAttribute.focused, "focused")
+        (AXAttribute.focused, "focused"),
+        // Carried for the window, which answers it whenever a represented file
+        // is set; that is the titlebar proxy icon's directory. Like `focused`,
+        // most elements do not answer it and are simply omitted.
+        (AXAttribute.document, "document")
     ]
 
     /// The application-level AX element for `bundleID`, with the process-wide

@@ -556,7 +556,6 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         _ surface: any TerminalSurface,
         didChangeWorkingDirectory path: String
     ) {
-        view.window?.representedFilename = path
         lastWorkingDirectory = path.isEmpty ? nil : path
         onWorkingDirectoryChange?(path)
     }

@@ -2,7 +2,9 @@
 //
 // TabTitleViewModel precedence (pure-logic tests). The chain is:
 // manual rename > OSC title > session name > CWD basename > "shell";
-// each source clears independently.
+// each source clears independently. The full OSC-7 path is tracked
+// alongside the chain, backing the titlebar proxy icon rather than
+// the label.
 
 @testable import App
 import Testing
@@ -169,5 +171,66 @@ struct TabTitleViewModelTests {
         #expect(model.displayTitle == "vim foo")
         model.updateOSCTitle("")
         #expect(model.displayTitle == "branch")     // back to session name
+    }
+
+    @Test
+    func retainsTheFullCWDPathAlongsideTheBasename() {
+        // The label takes the basename; the proxy icon needs the whole path to
+        // resolve a folder Finder can open.
+        let model = TabTitleViewModel()
+        model.updateWorkingDirectory(path: "/Users/jane/projects/foo")
+        #expect(model.lastCWDBasename == "foo")
+        #expect(model.lastCWDPath == "/Users/jane/projects/foo")
+    }
+
+    @Test
+    func anEmptyCWDClearsBothTheBasenameAndThePath() {
+        // A cleared path has to leave no folder rather than a stale one: the
+        // icon is a control, so a leftover would open the wrong directory.
+        let model = TabTitleViewModel()
+        model.updateWorkingDirectory(path: "/tmp/foo")
+        model.updateWorkingDirectory(path: "")
+        #expect(model.lastCWDBasename == nil)
+        #expect(model.lastCWDPath == nil)
+        #expect(model.displayTitle == "shell")
+    }
+
+    @Test
+    func promotingANewPrimaryTerminalReseedsTheCWDPath() {
+        // The proxy icon follows the primary terminal, so a promotion has to
+        // re-point it, and clear it when the promoted terminal has no cwd.
+        let model = TabTitleViewModel()
+        model.adoptPrimaryTerminal(
+            id: TerminalPaneID(value: 1),
+            oscTitle: nil,
+            workingDirectory: "/tmp/first",
+            sessionName: nil
+        )
+        #expect(model.lastCWDPath == "/tmp/first")
+        model.adoptPrimaryTerminal(
+            id: TerminalPaneID(value: 2),
+            oscTitle: nil,
+            workingDirectory: "/tmp/second",
+            sessionName: nil
+        )
+        #expect(model.lastCWDPath == "/tmp/second")
+        model.adoptPrimaryTerminal(
+            id: TerminalPaneID(value: 3),
+            oscTitle: nil,
+            workingDirectory: nil,
+            sessionName: nil
+        )
+        #expect(model.lastCWDPath == nil)
+    }
+
+    @Test
+    func aManualRenameLeavesTheCWDPathIntact() {
+        // The proxy icon addresses the directory, not the label, so renaming
+        // the tab must not move where the folder points.
+        let model = TabTitleViewModel()
+        model.updateWorkingDirectory(path: "/tmp/foo")
+        model.renameManually(to: "Build")
+        #expect(model.displayTitle == "Build")
+        #expect(model.lastCWDPath == "/tmp/foo")
     }
 }

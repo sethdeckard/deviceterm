@@ -313,6 +313,19 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         applyChromeTint()
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        // observe() arms synchronously, so the first render() ran from
+        // viewDidLoad with no window attached and its title / proxy-icon writes
+        // went nowhere. Reapply now that the strip is in a window: an adopted
+        // tear-off tab carries its label and OSC-7 path across with it, so no
+        // further event is necessarily coming to trigger another pass.
+        guard let index = tabListVM.selectedIndex,
+            tabListVM.tabs.indices.contains(index),
+            let tabContent = tabContentByID[tabListVM.tabs[index].id] else { return }
+        applyWindowMetadata(for: tabContent)
+    }
+
     /// Sync the host window's `backgroundColor` to the ghostty
     /// `background` config color. With `titlebarAppearsTransparent =
     /// true` + `.fullSizeContentView` on (set in WindowController),
@@ -936,8 +949,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     /// Reflect TabListViewModel into the strip + content. Reads all
     /// observed fields each pass (the observe() tracking contract): the
-    /// tabs array (structure), selectedIndex, and each tab's displayTitle
-    /// (so OSC/CWD/rename updates redraw the label).
+    /// tabs array (structure), selectedIndex, each tab's displayTitle
+    /// (so OSC/CWD/rename updates redraw the label), and the selected tab's
+    /// proxyIconPath (so a `cd` re-points the titlebar folder even when a
+    /// higher-precedence label source keeps displayTitle unchanged).
     private func render() {
         let tabs = tabListVM.tabs
         let liveIDs = Set(tabs.map(\.id))
@@ -1177,6 +1192,19 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         }
     }
 
+    /// Push the selected tab's label and directory onto the window. Called from
+    /// every render pass and again from `viewDidAppear`, since the first pass
+    /// runs before the strip has a window and both writes silently no-op there.
+    private func applyWindowMetadata(for tabContent: TabContentViewController) {
+        view.window?.title = tabContent.displayTitle
+        // The proxy icon is a control, not a caption: it is dragged into Finder
+        // and right-clicked for the ancestor-path menu, so it has to resolve to
+        // the tab on screen rather than whichever terminal last emitted OSC 7.
+        // Empty string clears it, leaving no folder for a tab with no known
+        // directory instead of the last one set.
+        view.window?.representedFilename = tabContent.proxyIconPath ?? ""
+    }
+
     private func applySelection(for tabs: [TabState]) {
         guard let index = tabListVM.selectedIndex,
             tabs.indices.contains(index),
@@ -1199,7 +1227,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             cell.isSelected = isSelected
         }
         applySeparators()
-        view.window?.title = tabContent.displayTitle
+        applyWindowMetadata(for: tabContent)
 
         // Only swap the content view and refocus on a *real* selection
         // change: a title/CWD-driven re-render must not steal first

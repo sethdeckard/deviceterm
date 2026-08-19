@@ -17,6 +17,10 @@
 // Each source writes only its own field (via the mutators below), so a
 // later CWD or OSC update can't erase a manual rename. The fields live
 // on the tab, so they survive strip rebuilds and tab switches.
+//
+// The OSC-7 path is also retained in full, which is not a label input:
+// it backs the window's titlebar proxy icon, whose directory is
+// independent of whatever the label ends up saying.
 
 import DaemonProtocol
 import Foundation
@@ -34,6 +38,11 @@ final class TabTitleViewModel {
     /// real-time OSC title from the shell.
     private(set) var sessionName: String?
     private(set) var lastCWDBasename: String?
+    /// Full OSC-7 path, retained alongside the basename to back the titlebar
+    /// proxy icon. `lastCWDBasename` is the label input; this is the directory
+    /// the icon resolves to, so dragging it or opening it in Finder acts on the
+    /// tab being displayed.
+    private(set) var lastCWDPath: String?
     /// The terminal the automatic label sources currently describe. A tab
     /// shows one label and it belongs to the primary terminal, so all three
     /// automatic fields are bound to that terminal and have to be reseeded
@@ -108,10 +117,12 @@ final class TabTitleViewModel {
         lastOSCTitle = title.isEmpty ? nil : title
     }
 
-    /// Record the working-directory basename from an OSC 7 update.
+    /// Record the working directory from an OSC 7 update: the basename for the
+    /// label, the full path for the proxy icon. An empty path clears both.
     func updateWorkingDirectory(path: String) {
         let base = (path as NSString).lastPathComponent
         lastCWDBasename = base.isEmpty ? nil : base
+        lastCWDPath = path.isEmpty ? nil : path
     }
 
     /// Apply a manual rename. Empty input resets to automatic titling
