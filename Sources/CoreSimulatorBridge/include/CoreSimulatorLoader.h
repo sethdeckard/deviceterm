@@ -24,6 +24,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface CSBProbeReport : NSObject
 
 @property (nonatomic, copy, readonly) NSString *macOSVersion;
+/// `xcodebuild -version` from the process-lifetime `developerDir` snapshot.
 @property (nonatomic, copy, readonly) NSString *xcodeVersion;
 @property (nonatomic, copy, readonly) NSString *developerDir;
 
@@ -88,13 +89,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// `dlopen`'d, or `nil` if `loadFramework()` has not succeeded.
 @property (class, nullable, readonly) NSString *resolvedFrameworkPath;
 
-/// Active developer directory. Reads `DEVELOPER_DIR` from the process
-/// env if set; otherwise shells out to `xcode-select -p`. Returns an
-/// empty string if neither resolves. Synchronous; safe to call from
-/// any thread (env reads + process spawn are concurrency-clean).
+/// Process-lifetime snapshot of the active developer directory. On first
+/// access, reads `DEVELOPER_DIR` from the process env if set; otherwise
+/// shells out to `xcode-select -p`. The result, including an empty failure
+/// result, is cached for the life of the process. A later environment or
+/// `xcode-select` change takes effect after the host process restarts.
+/// Synchronous and safe to call from any thread.
 ///
 /// Bridge modules that need to locate SDK-relative resources call
-/// this so the resolution policy stays in one place.
+/// this so the resolution policy and the Xcode selection shared by their
+/// service contexts stay in one place.
 + (NSString *)resolveDeveloperDir
     NS_SWIFT_NAME(resolveDeveloperDir());
 

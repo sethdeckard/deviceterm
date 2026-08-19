@@ -9,6 +9,13 @@
 
 static NSString *const kCSBErrorDomain = @"CoreSimulatorBridge.Loader";
 
+// Set on the first `+resolveDeveloperDir` call. The loaded private
+// frameworks and their service contexts must agree on one Xcode selection
+// for the process lifetime; adopting a later `xcode-select` change requires
+// restarting the host process.
+static dispatch_once_t gDeveloperDirOnce;
+static NSString *gResolvedDeveloperDir = nil;
+
 // Set once by `+loadWithError:` under dispatch_once. Reads from any thread
 // thereafter are safe because the values are immutable after the once-block
 // runs (the dispatch_once memory barrier synchronizes the publication).
@@ -61,10 +68,18 @@ static NSString *const kAXPFrameworkPath =
 /// any failure (including launch errors and non-zero exits). Used for
 /// `xcode-select -p` and `xcodebuild -version`: no input piped in, no
 /// large output expected, no concurrency. Synchronous on purpose.
-+ (NSString *)_runCommand:(NSString *)command arguments:(NSArray<NSString *> *)args {
++ (NSString *)_runCommand:(NSString *)command
+                 arguments:(NSArray<NSString *> *)args
+               environment:(NSDictionary<NSString *, NSString *> *)environment {
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = command;
     task.arguments = args;
+    if (environment.count > 0) {
+        NSMutableDictionary<NSString *, NSString *> *taskEnvironment =
+            [NSProcessInfo.processInfo.environment mutableCopy];
+        [taskEnvironment addEntriesFromDictionary:environment];
+        task.environment = taskEnvironment;
+    }
     NSPipe *outPipe = [NSPipe pipe];
     task.standardOutput = outPipe;
     task.standardError = [NSPipe pipe];
@@ -82,9 +97,16 @@ static NSString *const kAXPFrameworkPath =
 #pragma mark Public API
 
 + (NSString *)resolveDeveloperDir {
-    NSString *envDir = NSProcessInfo.processInfo.environment[@"DEVELOPER_DIR"];
-    if (envDir.length > 0) return envDir;
-    return [self _runCommand:@"/usr/bin/xcode-select" arguments:@[@"-p"]];
+    dispatch_once(&gDeveloperDirOnce, ^{
+        NSString *envDir = NSProcessInfo.processInfo.environment[@"DEVELOPER_DIR"];
+        NSString *resolved = envDir.length > 0
+            ? envDir
+            : [self _runCommand:@"/usr/bin/xcode-select"
+                      arguments:@[@"-p"]
+                    environment:@{}];
+        gResolvedDeveloperDir = [resolved copy] ?: @"";
+    });
+    return gResolvedDeveloperDir;
 }
 
 + (NSArray<NSString *> *)candidateFrameworkPathsForDeveloperDir:(NSString *)developerDir {
@@ -244,8 +266,13 @@ static NSString *const kAXPFrameworkPath =
     NSOperatingSystemVersion v = NSProcessInfo.processInfo.operatingSystemVersion;
     report.macOSVersion = [NSString stringWithFormat:@"%ld.%ld.%ld",
                            (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion];
-    report.xcodeVersion = [self _runCommand:@"/usr/bin/xcodebuild" arguments:@[@"-version"]];
-    report.developerDir = [self resolveDeveloperDir];
+    NSString *developerDir = [self resolveDeveloperDir];
+    report.developerDir = developerDir;
+    report.xcodeVersion = developerDir.length > 0
+        ? [self _runCommand:@"/usr/bin/xcodebuild"
+                  arguments:@[@"-version"]
+                environment:@{ @"DEVELOPER_DIR": developerDir }]
+        : @"";
 
     NSError *loadError = nil;
     if (![self loadWithError:&loadError]) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import CoreSimulatorBridge
+import Darwin
 import Foundation
 import Testing
 
@@ -13,6 +14,10 @@ private let systemFrameworkPath =
 private let profilesFrameworkPath =
     "/Library/Developer/CoreSimulator/Profiles"
     + "/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
+private let developerDirectoryCacheChildKey =
+    "DEVICETERM_TEST_DEVELOPER_DIRECTORY_CACHE_CHILD"
+private let developerDirectoryCacheFilter =
+    "developerDirectoryResolutionIsStableForProcessLifetime"
 
 /// True iff the host is *fully* CoreSimulator-compatible per the probe:
 /// not just "framework loadable," but every required class/selector/
@@ -74,6 +79,56 @@ func candidatePathsWithEmptyDeveloperDirReturnsSystemFallbacks() {
     // are still present.
     #expect(!paths.isEmpty)
     #expect(paths.contains(systemFrameworkPath))
+}
+
+@Test
+func developerDirectoryResolutionIsStableForProcessLifetime() throws {
+    if ProcessInfo.processInfo.environment[developerDirectoryCacheChildKey] != "1" {
+        let arguments = CommandLine.arguments
+        let bundleFlagIndex = try #require(
+            arguments.firstIndex(of: "--test-bundle-path")
+        )
+        let testBinaryIndex = arguments.index(after: bundleFlagIndex)
+        let testBinary = try #require(
+            arguments.indices.contains(testBinaryIndex)
+                ? arguments[testBinaryIndex]
+                : nil
+        )
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: arguments[0])
+        child.arguments = [
+            "--test-bundle-path", testBinary,
+            "--filter", developerDirectoryCacheFilter,
+            testBinary,
+            "--testing-library", "swift-testing",
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment[developerDirectoryCacheChildKey] = "1"
+        child.environment = environment
+        try child.run()
+        child.waitUntilExit()
+        #expect(child.terminationReason == .exit)
+        #expect(child.terminationStatus == 0)
+        return
+    }
+
+    let resolved = CoreSimulatorLoader.resolveDeveloperDir()
+    let initialProbe = CoreSimulatorLoader.probe()
+    let original = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
+    let sentinel = "/tmp/deviceterm-developer-dir-\(UUID().uuidString)"
+    defer {
+        if let original {
+            setenv("DEVELOPER_DIR", original, 1)
+        } else {
+            unsetenv("DEVELOPER_DIR")
+        }
+    }
+
+    #expect(setenv("DEVELOPER_DIR", sentinel, 1) == 0)
+    #expect(CoreSimulatorLoader.resolveDeveloperDir() == resolved)
+    let mutatedProbe = CoreSimulatorLoader.probe()
+    #expect(mutatedProbe.developerDir == resolved)
+    #expect(mutatedProbe.xcodeVersion == initialProbe.xcodeVersion)
 }
 
 // MARK: - Integration: live framework load + probe
