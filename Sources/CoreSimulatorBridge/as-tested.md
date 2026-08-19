@@ -20,6 +20,7 @@ device, and rows explicitly marked optional.
 |---|---|---|---|---|
 | 2026-08-07 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 75 symbols present, 0 missing | `make probe`; symbol resolution only |
 | 2026-08-17 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only |
+| 2026-08-18 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only |
 
 Behavioral findings that require a booted device stay in their relevant
 sections below. A successful probe confirms that the active toolchain still
