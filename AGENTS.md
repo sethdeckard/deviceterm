@@ -446,11 +446,14 @@ Code-review checklist (not a static analyzer). Reviewers explicitly look for:
   review.
 - **Wire-version bumps:** `DaemonProtocolInfo.wireVersion` is not bumped
   without explicit approval. It gates the GUI's version-mismatch handshake,
-  so a bump forces the app, daemon, CLI, and shim to move in lockstep. After
-  a Sparkle update the GUI attempts to shut the incompatible helper down and
-  tells the user to quit and reopen, so a bump costs a visible interruption.
-  If a change looks like it needs one, say so and ask rather than raising
-  the constant.
+  so a bump forces the app, daemon, CLI, and shim to move in lockstep. At
+  startup the GUI attempts to replace the incompatible helper and carry on,
+  presenting recovery guidance only if no compatible one answers. A bump costs a
+  visible interruption when that attempt fails, and whenever the swap lands
+  mid-session, where live panes are at stake and the user is asked to restart
+  DeviceTerm. If
+  a change looks like it needs one, say so and ask rather than raising the
+  constant.
 - **Config key changes:** any new `~/.config/deviceterm/config` key needs a
   default value in `Config.swift`, a docs entry in `docs/BUILDING.md` (or wherever
   the user-facing config reference lives), and a fixture test.

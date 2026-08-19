@@ -19,8 +19,121 @@ import ServiceManagement
 /// diagnosis.
 private let registrationLog = Logger(subsystem: "com.deviceterm", category: "registration")
 
+/// How long a launch waits for another copy of DeviceTerm to release the repair
+/// lock before giving up. An allowance rather than an expected duration; the
+/// common holder is a launch that is merely connecting.
+private let startupRepairLockWaitSeconds: TimeInterval = 10
+
+/// Thrown when the startup recovery ladder could not get a matching helper
+/// answering, carrying what to tell the user.
+///
+/// An error rather than a return value so it unwinds the launch sequence the
+/// same way a connect failure does, leaving one place that decides what a
+/// failed launch shows.
+private struct StartupVersionSurrender: Error {
+    let situation: UpdateRestartSituation
+}
+
+/// Map the mid-session mismatch outcome onto the shared situation vocabulary.
+///
+/// `.confirmed` becomes "accepted", not "stopped": the daemon acknowledges the
+/// request a grace period before it exits, so acceptance is all it ever
+/// promised.
+private func versionMismatchSituation(
+    from outcome: VersionMismatchOutcome
+) -> UpdateRestartSituation {
+    switch outcome.shutdown {
+    case .confirmed:
+        return UpdateRestartSituation(
+            cause: .shutdownAcceptedWhileRunning,
+            detail: "\(outcome.mismatch)"
+        )
+
+    case let .indeterminate(reason):
+        return UpdateRestartSituation(
+            cause: .replacedWhileRunningUnconfirmed(reason),
+            detail: "\(outcome.mismatch)\n\(reason)"
+        )
+    }
+}
+
+/// What the alert says for each cause.
+///
+/// No mention of logging out anywhere: it names neither what it fixes nor how to
+/// do it. Restarting the Mac appears only where DeviceTerm has run out of
+/// remedies of its own.
+private func restartPlainText(for situation: UpdateRestartSituation) -> String {
+    let body: String
+    switch situation.cause {
+    case .shutdownAcceptedWhileRunning:
+        body = "DeviceTerm's background helper was updated. The old one accepted "
+            + "the request to close. Quit and reopen DeviceTerm to finish."
+
+    case .replacedWhileRunningUnconfirmed:
+        body = "DeviceTerm's background helper was updated, and DeviceTerm "
+            + "couldn't confirm the old one is closing. Quit and reopen "
+            + "DeviceTerm; if this comes back, restart your Mac."
+
+    case .helperCouldNotBeStopped:
+        body = "DeviceTerm couldn't get a matching background helper running "
+            + "after trying to replace the old one. Restart your Mac; if the "
+            + "problem comes back, check whether another copy of DeviceTerm is "
+            + "installed, and that DeviceTerm is allowed to run in the background "
+            + "under System Settings ▸ General ▸ Login Items & Extensions."
+
+    case let .replacementStillIncompatible(daemonVersion):
+        body = "The background helper is a different version of DeviceTerm "
+            + "(\(daemonVersion)). If another copy of DeviceTerm is installed or "
+            + "running, that one may own the helper."
+
+    case .replacementDidNotStart:
+        body = "DeviceTerm couldn't reach the replacement background helper. Open "
+            + "System Settings ▸ General ▸ Login Items & Extensions and check "
+            + "DeviceTerm is allowed to run in the background."
+
+    case .registrationNotRestored:
+        body = "The old background helper stopped, but DeviceTerm couldn't "
+            + "register the new one. Open System Settings ▸ General ▸ Login Items "
+            + "& Extensions and check DeviceTerm is allowed to run in the "
+            + "background."
+
+    case .registrationStateUnknown:
+        body = "DeviceTerm couldn't determine or complete its background helper's "
+            + "registration with macOS. Open "
+            + "System Settings ▸ General ▸ Login Items & Extensions and check "
+            + "DeviceTerm is allowed to run in the background; if this comes back, "
+            + "restart your Mac."
+
+    case .registrationRepairAbandoned:
+        body = "DeviceTerm is still rebuilding its background helper's "
+            + "registration with macOS. Reopening may take a moment longer than "
+            + "usual."
+
+    case .registrationRepairStalled:
+        body = "Another DeviceTerm launch may still be starting up or rebuilding "
+            + "the background helper's registration. Reopening won't speed it up. "
+            + "Check DeviceTerm is "
+            + "allowed to run in the background under System Settings ▸ General ▸ "
+            + "Login Items & Extensions; if it stays stuck, restart your Mac."
+    }
+    // The re-registration is a visible thing DeviceTerm did to the system, so
+    // the user gets told rather than being left to wonder what triggered the
+    // notification macOS is about to show them.
+    let aside = situation.reregistered
+        ? "\n\nDeviceTerm rebuilt the helper's registration, so macOS may show a "
+            + "Background Activity notification about it."
+        : ""
+    return "\(body)\(aside)\n\n\(situation.detail)"
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// Whether the startup repair lock was taken, and what to show if not.
+    private enum StartupLockAcquisition {
+        case acquired(RegistrationRepairLock.Handle)
+        case surrender(UpdateRestartSituation)
+    }
+
     /// Composition root holds the *concrete* `DaemonClient`: it owns
     /// the connection lifecycle (`connect()` + version handshake), which
     /// is deliberately not a role protocol. Children get injected role
@@ -179,6 +292,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             })
         }
         Task { @MainActor [self] in
+            // Held from the reconciliation through the version handshake; see
+            // the acquisition below. Released once a compatible helper is
+            // answering, after which any further disruption is mid-session and
+            // follows the reconnect path's own semantics.
+            var startupRepairLock: RegistrationRepairLock.Handle?
+            // Drop this reference. That releases the lock unless a repair that
+            // outran the wait is still running, which retains its own; the
+            // descriptor closes when the last owner lets go.
+            defer { startupRepairLock = nil }
             do {
                 // Register the helper agent with launchd before the
                 // first XPC send. Skipped under `--smoke` because
@@ -191,6 +313,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // call and let the disabled-helper sheet surface
                 // if the production connection fails.
                 if !smokeMode {
+                    // Finish an interrupted registration repair before anything
+                    // registers or connects. A previous process may have been
+                    // terminated between tearing the launchd job down and
+                    // standing it back up, which leaves no helper at all;
+                    // registering or connecting on top of that half-state would
+                    // race a teardown that is still in flight. Bounded, because
+                    // the replay is the same non-cancellable ServiceManagement
+                    // call the ladder had to abandon, and a launch that waited
+                    // on a stalled one would never reach a window.
+                    //
+                    // The lock is taken ONCE here and held through registration
+                    // and the version handshake, not just across the
+                    // reconciliation. Releasing it at the end of the
+                    // reconciliation would leave a gap in which another copy of
+                    // DeviceTerm could take it and begin a teardown, and this
+                    // launch would then register and connect over an active
+                    // repair, which is the state the lock exists to rule out.
+                    switch await acquireStartupRepairLock() {
+                    case let .acquired(held):
+                        startupRepairLock = held
+
+                    case let .surrender(situation):
+                        presentUpdateRestart(situation)
+                        return
+                    }
+                    if let stall = await reconcileInterruptedRepair(
+                        holding: startupRepairLock
+                    ) {
+                        presentUpdateRestart(stall)
+                        return
+                    }
                     try? DaemonRegistration.registerOnFirstLaunch()
                     // Drive inventory re-supply on every reconnect (a daemon-only
                     // restart while the GUI stays alive) through the coordinator.
@@ -226,31 +379,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     daemonClient.onUnresponsive = { [weak self] connection in
                         self?.helperRecovery.helperStoppedAnswering(connection: connection)
                     }
-                    // A definite wire-version mismatch (startup or auto-reconnect,
-                    // the daemon was replaced by an incompatible build) routes
-                    // here after the client has already tried to stop the
-                    // incompatible daemon. An acknowledgement proves only that
-                    // shutdown was accepted; a missing acknowledgement leaves
-                    // helper state unknown.
+                    // A MID-SESSION wire-version mismatch: an auto-reconnect
+                    // landed on a daemon replaced by an incompatible build. This
+                    // path deliberately does not recover, because live panes and
+                    // sessions are at stake and the user should choose when to
+                    // take the hit. An acknowledgement proves only that shutdown
+                    // was accepted; a missing one leaves helper state unknown.
                     daemonClient.onVersionMismatch = { [weak self] outcome in
-                        switch outcome.shutdown {
-                        case .confirmed:
-                            self?.fail("The deviceterm helper was updated to an "
-                                + "incompatible version. The old helper accepted a "
-                                + "shutdown request; quit and reopen deviceterm to "
-                                + "reconnect to the updated helper. "
-                                + "(\(outcome.mismatch))")
-
-                        case let .indeterminate(detail):
-                            self?.fail("The deviceterm helper is an incompatible "
-                                + "version and deviceterm couldn't confirm the old "
-                                + "one stopped. Quit deviceterm; if it reopens to "
-                                + "the same error, log out and back in to clear the "
-                                + "old helper. (\(detail))")
-                        }
+                        self?.presentUpdateRestart(versionMismatchSituation(from: outcome))
                     }
                 }
-                try await daemonClient.connect()
+                try await connectRecoveringFromVersionMismatch(holding: startupRepairLock)
+                // A compatible helper is answering, so the registration is
+                // evidently intact and the critical section is over. Dropping
+                // the reference is the release, unless a background repair still
+                // holds it.
+                startupRepairLock = nil
                 connected = true
                 // Release the daemon's restoration barrier on this first
                 // connect too: a fresh cold-start daemon holds no session, and
@@ -306,11 +450,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         self?.router.dispatch(.openWindow(reattach: orphansToReattach))
                     }
                 }
+            } catch let surrender as StartupVersionSurrender {
+                // Recovery ran and could not replace the helper. It has already
+                // fenced the transport; all that is left is to say so.
+                presentUpdateRestart(surrender.situation)
             } catch let error as DaemonClientError where error.isVersionMismatch {
-                // A definite startup wire-version mismatch was already handled
-                // by `connect()` (which attempted the incompatible-daemon
-                // shutdown and surfaced it through `onVersionMismatch`). Don't
-                // re-alert with the generic startup-failure sheet.
+                // Smoke mode only: it has no recovery ladder (UDS can't request
+                // a shutdown), so the raw mismatch reaches here. Production
+                // startup mismatches leave through the surrender above.
                 if smokeMode { smokeFail("daemon wire-version mismatch: \(error)") }
             } catch {
                 if smokeMode { smokeFail("could not start deviceterm: \(error)") }
@@ -384,7 +531,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         do {
-            try await DaemonRegistration.repair()
+            let store = try RegistrationRepairStore.standard()
+            guard let held = try RegistrationRepairLock.tryAcquire(at: store.lockPath) else {
+                throw RegistrationRepairLockError.cannotLock(
+                    "another copy of DeviceTerm is repairing the registration"
+                )
+            }
+            try await DaemonRegistration.repair(store: store, holding: held)
         } catch {
             // The repair error, not the connection failure that prompted it:
             // the user asked for this action specifically, so what they need is
@@ -406,6 +559,194 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         done.addButton(withTitle: "Quit")
         done.runModal()
         NSApp.terminate(nil)
+    }
+
+    /// Connect, recovering silently from a startup wire-version mismatch.
+    ///
+    /// After a Sparkle update the running helper is the old one while the bundle
+    /// on disk is new. At this point in launch the GUI holds no window, session,
+    /// pane, or subscription, so this GUI has no state at risk, though another
+    /// running checkout can lose its helper to the same swap. Only when the
+    /// ladder cannot get a matching helper answering does anything reach the
+    /// screen.
+    ///
+    /// Smoke mode is excluded deliberately: its UDS transport cannot carry a
+    /// `.validatedGUI` `daemon.shutdown`, so it has no first rung, and the
+    /// hermetic gate asserts on the raw mismatch instead.
+    private func connectRecoveringFromVersionMismatch(
+        holding lock: RegistrationRepairLock.Handle?
+    ) async throws {
+        do {
+            try await daemonClient.connect()
+        } catch let error as DaemonClientError where error.isVersionMismatch && !smokeMode {
+            let coordinator = WireVersionRecoveryCoordinator(
+                versionRecoveryDependencies(holding: lock)
+            )
+            switch await coordinator.recover(after: error) {
+            case .connected:
+                return
+
+            case let .surrender(situation):
+                throw StartupVersionSurrender(situation: situation)
+            }
+        }
+    }
+
+    /// Take the repair lock for the startup critical section.
+    ///
+    /// Polls rather than blocking, so another process's stuck repair cannot park
+    /// this launch indefinitely. Giving up surrenders rather than proceeding:
+    /// the whole point of the lock is that registering or connecting past an
+    /// active repair is the thing to avoid.
+    private func acquireStartupRepairLock() async -> StartupLockAcquisition {
+        let store: RegistrationRepairStore
+        do {
+            store = try RegistrationRepairStore.standard()
+        } catch {
+            let reason = "DeviceTerm could not reach the folder holding its helper state"
+            registrationLog.error(
+                "could not resolve the repair lock: \(ErrorText.describing(error), privacy: .public)"
+            )
+            return .surrender(
+                UpdateRestartSituation(
+                    cause: .registrationStateUnknown(reason),
+                    detail: "\(reason)\n\(ErrorText.describing(error))"
+                )
+            )
+        }
+        let deadline = Date().addingTimeInterval(startupRepairLockWaitSeconds)
+        while true {
+            do {
+                if let held = try RegistrationRepairLock.tryAcquire(at: store.lockPath) {
+                    return .acquired(held)
+                }
+            } catch {
+                // The lock file is unusable, which is a different problem from
+                // someone holding it and must not be reported as waiting one out.
+                let reason = ErrorText.describing(error)
+                return .surrender(
+                    UpdateRestartSituation(
+                        cause: .registrationStateUnknown(reason),
+                        detail: reason
+                    )
+                )
+            }
+            guard Date() < deadline else {
+                // Deliberately hedged: the holder may be repairing, or may just
+                // be another copy starting up and holding this across its own
+                // handshake. Claiming a repair outright would often be wrong.
+                let busy = "another copy of DeviceTerm is starting up and may be "
+                    + "rebuilding the helper's registration"
+                registrationLog.notice("startup repair lock is held elsewhere; giving up")
+                return .surrender(
+                    UpdateRestartSituation(
+                        cause: .registrationRepairStalled(busy),
+                        detail: busy
+                    )
+                )
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    /// Finish a registration repair an earlier process was terminated in the
+    /// middle of, returning a situation to surface if the replay stalls.
+    ///
+    /// Bounded for the same reason the ladder's own repair rung is: the replayed
+    /// `unregister()` is not cancellable, so a launch that awaited a stuck one
+    /// would never reach a window, and would repeat that on every relaunch with
+    /// nothing on screen to explain it. The replay keeps running either way and
+    /// clears the marker if it gets there.
+    private func reconcileInterruptedRepair(
+        holding lock: RegistrationRepairLock.Handle?
+    ) async -> UpdateRestartSituation? {
+        let store: RegistrationRepairStore
+        do {
+            store = try RegistrationRepairStore.standard()
+        } catch {
+            // Fail closed. Resolving this may have succeeded on the launch that
+            // wrote a marker and be failing only now, so "no location" is not
+            // evidence that no repair is pending. It also means a repair cannot
+            // be run, so there is no way to find out.
+            let reason = "DeviceTerm could not reach the folder holding its helper state"
+            registrationLog.error(
+                """
+                could not resolve the registration-repair marker: \
+                \(ErrorText.describing(error), privacy: .public)
+                """
+            )
+            return UpdateRestartSituation(
+                cause: .registrationStateUnknown(reason),
+                detail: "\(reason)\n\(ErrorText.describing(error))"
+            )
+        }
+        let reconciler = InterruptedRepairReconciler(
+            InterruptedRepairReconciler.Dependencies(
+                // The lock is already held by the launch, so the reconciler
+                // reuses it rather than taking a second one: `flock` is per open
+                // file description, so a second acquisition inside this process
+                // would fail against our own hold.
+                heldLock: lock,
+                isRepairUnderway: { try store.isRepairUnderway() },
+                repair: { held in
+                    try await DaemonRegistration.repair(store: store, holding: held)
+                },
+                sleep: { try? await Task.sleep(nanoseconds: $0) }
+            )
+        )
+        switch await reconciler.reconcile() {
+        case .nothingToDo:
+            return nil
+
+        case .reconciled:
+            registrationLog.notice("finished a registration repair left by an earlier launch")
+            return nil
+
+        case let .surrender(situation):
+            registrationLog.error("registration repair could not be completed")
+            return situation
+        }
+    }
+
+    /// Dependencies for the recovery ladder, all resolved against this
+    /// delegate's live client. Assembled here so the coordinator itself stays
+    /// free of AppKit, launchd, and a real clock.
+    private func versionRecoveryDependencies(
+        holding lock: RegistrationRepairLock.Handle?
+    ) -> WireVersionRecoveryCoordinator.Dependencies {
+        WireVersionRecoveryCoordinator.Dependencies(
+            pinnedToIncompatibleHelper: { [daemonClient] in daemonClient.isRecoveryPinned },
+            requestShutdown: { [daemonClient] in await daemonClient.requestIncompatibleShutdown() },
+            terminateHelper: { [daemonClient] in await daemonClient.terminateIncompatibleHelper() },
+            repairRegistration: {
+                // Reuses the lock the launch already holds. Acquiring a second
+                // one here would fail against our own hold, because `flock` is
+                // per open file description rather than per process.
+                let store = try RegistrationRepairStore.standard()
+                guard let held = lock else {
+                    throw RegistrationRepairFailure(
+                        unregistered: false,
+                        underlying: RegistrationRepairLockError.cannotLock(
+                            "the startup repair lock is not held"
+                        )
+                    )
+                }
+                try await DaemonRegistration.repair(store: store, holding: held)
+            },
+            handshake: { [daemonClient] in await daemonClient.recoveryHandshake() },
+            finishRecovery: { [daemonClient] in await daemonClient.leaveVersionRecovery() },
+            abandonRecovery: { [daemonClient] in await daemonClient.abandonVersionRecovery() },
+            sleep: { try? await Task.sleep(nanoseconds: $0) }
+        )
+    }
+
+    /// Surface a restart request.
+    ///
+    /// Routed through the Quit-only failure alert, which is honest for every
+    /// cause this can carry: none of them is improved by a button offering to
+    /// relaunch straight back into the same state.
+    private func presentUpdateRestart(_ situation: UpdateRestartSituation) {
+        fail(restartPlainText(for: situation))
     }
 
     /// Mark the daemon's session inventory dirty when the live session SET

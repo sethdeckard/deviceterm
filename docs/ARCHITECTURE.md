@@ -249,17 +249,85 @@ first (a Sparkle update may have swapped in a daemon with a different wire
 contract; **only a definite version mismatch** routes to remediation, while a
 *transient* handshake failure (the daemon still coming up after its respawn)
 is retried durably with capped backoff, never mistaken for an incompatible
-helper and never abandoned). Remediation for a definite mismatch **issues
-`daemon.shutdown` to the incompatible daemon and awaits the ack** (so a
-Sparkle-replaced bundle can't leave the old helper alive to be reconnected to),
-then surfaces the critical quit/reopen alert, the same startup and reconnect
-both take. It runs **at most once per client lifetime**: a latch drops any
-second remediation (a superseding reconnect handshake that re-detects the
-mismatch), and marking the client incompatible fences the transport so no
-new peer, hence no further handshake, can be installed. It can't loop,
-double-alert, or restore against the dying daemon. If the shutdown isn't
-acknowledged the alert says so honestly rather than claiming the helper
-stopped. On a successful (same-version)
+helper and never abandoned).
+
+What a definite mismatch does next depends on **when it was detected**. The two
+moments differ in what there is to lose.
+
+At **startup** the GUI holds no window, session, pane, or subscription, so this
+launching GUI has no state at risk. It attempts the replacement silently and
+presents recovery guidance only if no compatible helper answers. The helper is
+a per-user singleton, so another running checkout can still lose its own.
+
+The transport enters a *recovering* mode admitting only `daemon.ping` and
+`daemon.shutdown`. The ping may demand-connect, because launching the
+replacement is what it's for; the shutdown may not.
+
+A bounded ladder then runs: ask the helper to stop, SIGKILL it, rebuild its
+launchd registration. The rungs are **conditional, not sequential**. The job is
+`KeepAlive`/`SuccessfulExit false`, so signalling a *replacement* that merely
+disagrees makes launchd start another exactly like it. That state is a
+registration resolving to the wrong bundle, which is what the repair rung
+treats.
+
+After each rung the GUI re-handshakes under a **wall-clock bound** and reads
+the **pid before the version**. `daemon.shutdown` acknowledges
+`shutdownAckGraceMs` before the daemon exits, and SIGKILL is accepted before
+teardown finishes, so on the successful path the old helper may answer at least
+one more ping with the old version.
+
+A reply carrying the pinned pid is treated as the old helper still answering,
+though only the number is compared and a pid can be reused. A different pid
+that still disagrees is decisive. Reading the first as failure would abandon
+the happy path.
+
+The repair rung can't be bounded by cancellation, because
+`SMAppService.unregister()` is completion-handler-backed and honours none. It's
+**abandoned rather than timed out**: an independently owned task runs it to
+completion while startup stops waiting.
+
+A marker in Application Support is written *before* the teardown and cleared
+only once the registration is whole. A failed marker write aborts the rung.
+
+A launch that finds a marker replays the **whole** repair before it registers
+or connects, not only the register leg. The unregister tolerates job-not-found,
+so replaying converges whether the job is present, half torn down, or already
+gone.
+
+All of that runs under a `flock` held for the whole startup critical section,
+from the reconciliation through registration and the version handshake. Two
+copies of DeviceTerm can try to repair at once, and without it one could
+register while the other sits between its unregister and its register. The
+kernel releases the lock when its holder exits, so a process killed mid-repair
+leaves no stale lock to detect, only its marker.
+
+A launch that can't take the lock within its wait gives up and says so rather
+than registering past whatever holds it. Two copies starting at the same moment
+therefore serialize, and a slow one can push the other to that message.
+
+At a **reconnect** there are live panes and sessions, so the GUI doesn't
+recover. It fences the transport, sends `daemon.shutdown` only if the
+mismatched peer is still the connected one, and surfaces the restart request,
+letting the user pick the moment.
+
+That path runs **at most once per client lifetime**: a latch drops any second
+remediation (a superseding reconnect handshake that re-detects the mismatch),
+and marking the client incompatible fences the transport so no new peer, hence
+no further handshake, can be installed. It can't loop, double-alert, or restore
+against the dying daemon.
+
+An acknowledgement proves the daemon *accepted* the request, not that it
+exited, and the restart screen's wording keeps that distinction.
+
+Stopping the helper drops its in-memory ownership map, so the next launch's
+orphan sheet may appear.
+
+The helper is a **per-user singleton**. The ladder reaches whichever one is
+running, so another checkout's GUI loses its helper too. Being mid-session, it
+reconnects and restores if the replacement is wire-compatible, and shows its
+own restart request if it is not.
+
+On a successful (same-version)
 reconnect the GUI instead runs the session-restore transaction (durably
 retried until the daemon echoes the exact inventory) before its terminals
 rebind, so terminals recover. Restoration is not a full transport barrier, so
@@ -302,7 +370,8 @@ contract shared by the app, daemon, bundled CLI, and shim. The GUI uses it to
 detect an incompatible helper during an update and replace that helper
 cleanly. It is an internal coordination version, not a separate end-user
 compatibility promise. The public CLI and JSON contract follows the release
-version and is documented in `docs/INTEGRATION.md`.
+version and is documented in `docs/INTEGRATION.md`. "Crash recovery" covers how
+a mismatch is handled, and why startup and reconnect differ.
 
 **Envelope:**
 
@@ -528,13 +597,15 @@ Flushes the `{ok}` ack, then exits via `NSApp.terminate` so
 `applicationWillTerminate` unlinks the socket cleanly; the ack flushes
 first so the GUI can tell an accepted shutdown from a transport loss.
 
-Its sole production use is the GUI terminating an incompatible old helper
+Its sole production use is the GUI stopping an incompatible old helper
 after a definite update-related wire mismatch. Sparkle can replace
 `DeviceTerm.app` while a daemon holding an owned booted sim stays alive
 (quitting the GUI does not necessarily stop it); without this, a
 relaunched GUI could repeatedly reconnect to the same incompatible daemon.
-The GUI issues it, awaits the ack, then follows the quit/reopen
-remediation; the next launch demand-launches the updated helper.
+It is the first rung of the startup recovery ladder: the GUI awaits the ack,
+verifies the replacement, then continues the launch. At a reconnect it sends
+the same call only while the mismatched peer is still the connected one, then
+asks the user to restart. See "Crash recovery".
 
 No UDS caller, session credential, orchestration grant, or unvalidated XPC
 peer can reach it. That closes the unauthenticated confused-deputy

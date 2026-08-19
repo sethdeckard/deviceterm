@@ -29,12 +29,29 @@ struct DaemonClientVersionMismatchTests {
 
         private(set) var methods: [String] = []
         private var pingVersions: [String?]
+        /// Pids answered one per ping, the last one repeating once the script
+        /// runs out. Recovery classifies pid before version, so a test about
+        /// waiting out a stopping helper has to be able to replay the pinned pid,
+        /// which recovery treats as the old helper still answering.
+        private var pingPids: [Int32]
+        private var lastPid: Int32 = 1
         private let shutdownBehavior: ShutdownBehavior
         var shutdownCount: Int { methods.filter { $0 == RPCMethod.daemonShutdown.rawValue }.count }
+        var pingCount: Int { methods.filter { $0 == RPCMethod.daemonPing.rawValue }.count }
 
-        init(pingVersions: [String?], shutdown: ShutdownBehavior = .ack) {
+        init(
+            pingVersions: [String?],
+            pingPids: [Int32] = [],
+            shutdown: ShutdownBehavior = .ack
+        ) {
             self.pingVersions = pingVersions
+            self.pingPids = pingPids
             self.shutdownBehavior = shutdown
+        }
+
+        private func nextPid() -> Int32 {
+            if !pingPids.isEmpty { lastPid = pingPids.removeFirst() }
+            return lastPid
         }
 
         func request(method: String, params: Data?) async throws -> Data {
@@ -46,7 +63,9 @@ struct DaemonClientVersionMismatchTests {
                 guard let version else {
                     throw DaemonClientError.transport("daemon still coming up")
                 }
-                return try JSONEncoder().encode(DaemonPingResponse(version: version, pid: 1))
+                return try JSONEncoder().encode(
+                    DaemonPingResponse(version: version, pid: nextPid())
+                )
 
             case RPCMethod.daemonShutdown.rawValue:
                 switch shutdownBehavior {
@@ -286,6 +305,166 @@ struct DaemonClientVersionMismatchTests {
         await client.runReconnectHandshake(generation: client.reconnectGeneration)
 
         #expect(!reconnected)  // no restore against the replacement daemon
+    }
+
+    // MARK: - Startup recovery: detection fences without reporting
+
+    @Test
+    func startupMismatchFencesAndThrowsWithoutSurfacing() async {
+        // The startup path owns its own ladder, so detection must not spend the
+        // shutdown or put anything on screen: `onVersionMismatch` stays the
+        // mid-session vocabulary.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9"], shutdown: .ack)
+        let client = DaemonClient(injecting: transport)
+        var surfaced = 0
+        client.onVersionMismatch = { _ in surfaced += 1 }
+
+        do {
+            try await client.startupVersionHandshake()
+            Issue.record("expected the startup handshake to throw the mismatch")
+        } catch let error as DaemonClientError {
+            #expect(error.isVersionMismatch)
+        } catch {
+            Issue.record("expected a DaemonClientError, got \(error)")
+        }
+
+        #expect(surfaced == 0)
+        #expect(transport.shutdownCount == 0)
+    }
+
+    // MARK: - The recovery verdict reads pid before version
+
+    @Test
+    func recoveryHandshakeReadsTheSamePidAsNotYetReplaced() async {
+        // The grace-period regression guard. `daemon.shutdown` acks before the
+        // daemon exits, so on the SUCCESSFUL path the old helper may answer
+        // again with the old version. Reading that as a verdict would surrender on the
+        // happy path.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9", "9.9.9"], pingPids: [7, 7])
+        let client = DaemonClient(injecting: transport)
+
+        try? await client.startupVersionHandshake()
+        let outcome = await client.recoveryHandshake()
+
+        #expect(outcome == .sameHelperStillAnswering(pid: 7))
+    }
+
+    @Test
+    func recoveryHandshakeReportsCompatibleOnANewPid() async {
+        let transport = ScriptedTransport(
+            pingVersions: ["9.9.9", DaemonProtocolInfo.wireVersion],
+            pingPids: [7, 8]
+        )
+        let client = DaemonClient(injecting: transport)
+
+        try? await client.startupVersionHandshake()
+
+        #expect(await client.recoveryHandshake() == .compatible)
+    }
+
+    @Test
+    func recoveryHandshakeReportsIncompatibleOnANewPid() async {
+        // A different process answering with a different version is decisive:
+        // the registration resolves to a helper that does not match this build,
+        // and stopping it again would not converge.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9", "8.8.8"], pingPids: [7, 8])
+        let client = DaemonClient(injecting: transport)
+
+        try? await client.startupVersionHandshake()
+
+        #expect(await client.recoveryHandshake() == .incompatible(daemonVersion: "8.8.8", pid: 8))
+    }
+
+    @Test
+    func recoveryHandshakeReportsUnreachableWhenNothingAnswers() async {
+        let transport = ScriptedTransport(pingVersions: ["9.9.9", nil], pingPids: [7])
+        let client = DaemonClient(injecting: transport)
+
+        try? await client.startupVersionHandshake()
+
+        guard case .unreachable = await client.recoveryHandshake() else {
+            Issue.record("expected unreachable when the ping throws")
+            return
+        }
+    }
+
+    // MARK: - Recovery owns the version flow while it runs
+
+    @Test
+    func reconnectHandshakeStandsDownDuringRecovery() async {
+        // The shutdown invalidates the connection, which re-fires the reconnect
+        // handler. It must not handshake, restore, or demand-launch while the
+        // ladder is working the same transport.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9"], shutdown: .ack)
+        let client = DaemonClient(injecting: transport)
+        var reconnected = false
+        client.onReconnected = { reconnected = true }
+
+        try? await client.startupVersionHandshake()
+        let pingsAfterDetection = transport.pingCount
+        await client.runReconnectHandshake(generation: client.reconnectGeneration)
+
+        #expect(!reconnected)
+        #expect(transport.pingCount == pingsAfterDetection)  // never handshaked
+        #expect(transport.shutdownCount == 0)
+    }
+
+    @Test
+    func recoveryPingsDoNotRaiseTheUnresponsiveSignal() async {
+        // The ladder deliberately pings a helper it just asked to stop, several
+        // times. Those expiries reach the unresponsive threshold easily, and the
+        // prompt they would raise both interrupts a silent launch and races the
+        // ladder for the same helper.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9", nil, nil, nil, nil])
+        let client = DaemonClient(injecting: transport)
+        var unresponsive = 0
+        client.onUnresponsive = { _ in unresponsive += 1 }
+
+        try? await client.startupVersionHandshake()
+        for _ in 0..<4 {
+            _ = await client.recoveryHandshake()
+        }
+
+        #expect(unresponsive == 0)
+    }
+
+    // MARK: - Leaving and abandoning recovery
+
+    @Test
+    func successfulRecoveryLeavesTheMismatchLatchClear() async {
+        // Recovery is not a surrender: a later mid-session mismatch on the same
+        // client must still be able to report.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9"], shutdown: .ack)
+        let client = DaemonClient(injecting: transport)
+        var surfaced = 0
+        client.onVersionMismatch = { _ in surfaced += 1 }
+
+        try? await client.startupVersionHandshake()
+        await client.leaveVersionRecovery()
+
+        let gen = await client.currentXPCGeneration()
+        await client.surfaceVersionMismatch(mismatch, generation: gen)
+
+        #expect(surfaced == 1)
+    }
+
+    @Test
+    func abandonedRecoverySuppressesALaterMidSessionSurface() async {
+        // Abandoning IS the surrender, and the caller reports it with more
+        // detail than the mid-session path has, so a second report would be a
+        // duplicate.
+        let transport = ScriptedTransport(pingVersions: ["9.9.9"], shutdown: .ack)
+        let client = DaemonClient(injecting: transport)
+        var surfaced = 0
+        client.onVersionMismatch = { _ in surfaced += 1 }
+
+        try? await client.startupVersionHandshake()
+        await client.abandonVersionRecovery()
+
+        let gen = await client.currentXPCGeneration()
+        await client.surfaceVersionMismatch(mismatch, generation: gen)
+
+        #expect(surfaced == 0)
     }
 }
 

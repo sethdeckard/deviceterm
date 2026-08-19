@@ -197,6 +197,20 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     PaneAccessibilityControlling, PaneLocationControlling,
     AppCommandControlling, TerminalBinding,
     ReconnectObserving, DisplayTitlePublishing {
+    /// The helper instance a startup recovery is working against: the
+    /// connection generation that answered the mismatched ping, and the pid of
+    /// the process that answered it.
+    ///
+    /// Both are needed and they fence different things. The generation fences
+    /// the transport, so a shutdown reaches the daemon that was diagnosed rather
+    /// than whatever replaced it. The pid fences the verdict, so a ping carrying
+    /// it is treated as the old helper still answering rather than as a fresh,
+    /// contradictory one. Only the number is compared, and a pid can be reused.
+    private struct IncompatibleHelper {
+        let generation: Int
+        let pid: Int32
+    }
+
     /// `true` when the GUI was launched with `--smoke` *and* a UDS
     /// override path is in the environment. The smoke harness sets
     /// both; production never does.
@@ -379,6 +393,43 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// client's lifetime is the intended (and strictest) reading of
     /// "at most once per reconnect generation".
     private var versionMismatchHandled = false
+    /// The helper that answered the mismatched startup ping.
+    ///
+    /// The generation fences the transport; the pid is what lets a later ping be
+    /// treated as the old helper still answering rather than as a second,
+    /// contradictory verdict. Only the number is compared, and a pid can be
+    /// reused. `daemon.shutdown` acks
+    /// `DaemonMethods.shutdownAckGraceMs` before the daemon actually exits, and
+    /// SIGKILL is accepted before teardown completes, so on the happy path the
+    /// old helper may answer at least one more ping with the old version.
+    ///
+    /// Non-nil exactly while a startup recovery is in flight, so this doubles as
+    /// that latch. One field rather than two, because two could disagree.
+    private var recoveryTarget: IncompatibleHelper?
+    /// Whether the helper that answered the mismatched ping was still the
+    /// connected peer when the transport was fenced, i.e. whether the bootstrap
+    /// shutdown may be sent to it.
+    ///
+    /// Captured at detection rather than re-derived later. The generation moves
+    /// as the ladder works, so asking again would answer a different question
+    /// than the one the ladder needs.
+    private(set) var isRecoveryPinned = false
+    /// Whether some other path already owns the version flow, so the reconnect
+    /// handler must stand down.
+    ///
+    /// Covers both a surrender that has latched and a recovery that is running
+    /// its own sequence. A transport reconnect arriving mid-recovery is dropped
+    /// rather than deferred: the recovery owns the flow, and its own verify
+    /// covers whichever peer ends up installed.
+    private var versionFlowOwnedElsewhere: Bool {
+        versionMismatchHandled || recoveryTarget != nil
+    }
+
+    /// Upper bound on one recovery handshake ping. Much shorter than
+    /// `requestDeadlineNanos`: the ladder re-asks on a fixed cadence while it
+    /// waits out a stopping helper, so a long bound here only delays the next
+    /// rung without making any verdict more certain.
+    var recoveryPingDeadlineNanos: UInt64 = 2_000_000_000
     /// How long `shutdownIncompatibleDaemon()` waits for the `daemon.shutdown`
     /// ack before reporting the outcome as indeterminate. A daemon that answers
     /// `ping` but never replies to shutdown must not wedge startup/reconnect.
@@ -517,11 +568,12 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             // fence would refuse to stop the very peer it was raised about.
             connectionGeneration = await xpcConnection.currentGeneration
         }
-        // Startup handshake. A definite mismatch is surfaced INSIDE
-        // `versionHandshake` (which captures the generation and attempts the
-        // incompatible-daemon shutdown), then rethrown: AppDelegate's launch
-        // catch recognizes `versionMismatch` and skips the generic alert.
-        try await versionHandshake()
+        // Startup handshake. A definite mismatch fences the transport into
+        // recovery and records the answering instance INSIDE
+        // `startupVersionHandshake`, then rethrows. It reports nothing itself:
+        // AppDelegate catches the mismatch and runs the recovery ladder, which
+        // surfaces UI only if it cannot replace the helper.
+        try await startupVersionHandshake()
     }
 
     /// Re-run the wire-version handshake after a transport reconnect. An
@@ -536,19 +588,21 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// newer reconnect (which runs its own handshake + restore). Internal so a
     /// hermetic test can drive it directly with a scripted transport.
     func runReconnectHandshake(generation: Int) async {
-        // A definite mismatch has already been handled: the app is quitting and
-        // the `daemon.shutdown` we sent invalidated the connection, re-firing
-        // this handler. Do NOT handshake, restore, or (via demand-launch) revive
-        // the replaced daemon while the quit alert is up.
-        if versionMismatchHandled { return }
+        // The version flow is owned elsewhere: either a mismatch was already
+        // handled (the `daemon.shutdown` we sent invalidated the connection,
+        // re-firing this handler) or a startup recovery is running its own
+        // sequence against the same transport. Do NOT handshake, restore, or
+        // (via demand-launch) revive a daemon either of those is working on.
+        if versionFlowOwnedElsewhere { return }
         var handshakeBackoff: UInt64 = 200_000_000  // 200ms, capped 5s
         while true {
             if Task.isCancelled { return }
             // A newer reconnect superseded this cycle: let it drive.
             if reconnectGeneration != generation { return }
-            // A mismatch may have been handled by a concurrent path since the
-            // last suspension; stop before restoring against a dying daemon.
-            if versionMismatchHandled { return }
+            // A mismatch may have been handled, or a recovery begun, by a
+            // concurrent path since the last suspension; stop before restoring
+            // against a dying daemon.
+            if versionFlowOwnedElsewhere { return }
             do {
                 try await versionHandshake()
                 break
@@ -580,10 +634,11 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         // restoration and may race it: they may fail or observe pre-restoration
         // state, a deliberate fail-closed availability limitation.
         //
-        // Final guard: if a definite mismatch was handled while this handshake
-        // ran (e.g. it succeeded against a freshly demand-launched updated
-        // daemon), do NOT restore: the app is quitting for the user to relaunch.
-        if versionMismatchHandled { return }
+        // Final guard: if a definite mismatch was handled, or a recovery begun,
+        // while this handshake ran (e.g. it succeeded against a freshly
+        // demand-launched updated daemon), do NOT restore: that path owns what
+        // happens next.
+        if versionFlowOwnedElsewhere { return }
         onReconnected?()
     }
 
@@ -596,6 +651,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     func surfaceVersionMismatch(_ mismatch: DaemonClientError, generation: Int) async {
         guard !versionMismatchHandled else { return }
         versionMismatchHandled = true
+        // A recovery that reached this path is over; the latch above now owns
+        // the flow, and leaving the target set would keep the reconnect handler
+        // standing down for a sequence nobody is running.
+        recoveryTarget = nil
         // ALWAYS terminally quiesce the transport (refuse + fail in-flight +
         // finish subscriptions + drop notifications) so nothing keeps running
         // over the connection, even a replacement, which will never complete a
@@ -1755,7 +1814,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// choose to wait, and then never hear about it again. Suppressing the
     /// repeats is the observer's call, because only it knows whether it is
     /// already showing something or was recently told to leave it alone.
+    /// A startup recovery stands this signal down while it runs. Its ladder
+    /// deliberately pings a helper it just asked to stop, several times, on a
+    /// short bound; those expiries reach the threshold easily and would raise
+    /// the restart prompt in the middle of a launch that is supposed to be
+    /// silent. Worse, the prompt's own termination path would race the ladder
+    /// for the same helper. Recovery reports its own outcome when it finishes.
     private func noteHelperSilent() {
+        guard recoveryTarget == nil else { return }
         consecutiveTimeouts += 1
         guard consecutiveTimeouts >= Self.unresponsiveTimeoutThreshold else { return }
         onUnresponsive?(connectionGeneration)
@@ -1851,13 +1917,18 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// `operation` stays `@MainActor` so the raced call runs in the same
     /// isolation it would without the race, reaching `transport` and the
     /// injected test seams directly.
+    /// `deadline` overrides the method's usual bound. Only the recovery
+    /// handshake passes one: it re-asks on a cadence while it waits out a
+    /// stopping helper, so it wants a far shorter wait than an ordinary ping,
+    /// without changing what an ordinary ping gets.
     private func bounded<T: Sendable>(
         _ method: RPCMethod,
+        deadline overrideNanos: UInt64? = nil,
         _ operation: @escaping @Sendable @MainActor () async throws -> T
     ) async throws -> T {
-        let deadline = Self.slowMethods.contains(method)
+        let deadline = overrideNanos ?? (Self.slowMethods.contains(method)
             ? slowRequestDeadlineNanos
-            : requestDeadlineNanos
+            : requestDeadlineNanos)
         do {
             let value = try await withThrowingTaskGroup(of: T.self) { group in
                 group.addTask { try await operation() }
@@ -1907,18 +1978,129 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
     }
 
+    /// The STARTUP wire-version handshake.
+    ///
+    /// Split from `versionHandshake` (which stays the reconnect path's entry
+    /// point) because the two mismatches want opposite things. At startup the
+    /// GUI holds no window, session, pane, or subscription, so there is nothing
+    /// the fence is protecting and the helper can simply be replaced. On a
+    /// reconnect there is live state, so the user gets asked.
+    ///
+    /// This fences the transport into recovery and records the answering
+    /// instance, then throws. It deliberately does NOT report through
+    /// `onVersionMismatch`, which stays the mid-session vocabulary: the caller
+    /// owns the ladder and reports only if that ladder gives up.
+    func startupVersionHandshake() async throws {
+        let (pong, generation) = try await pingWithGeneration()
+        guard pong.version == DaemonProtocolInfo.wireVersion else {
+            let mismatch = DaemonClientError.versionMismatch(
+                client: DaemonProtocolInfo.wireVersion,
+                daemon: pong.version
+            )
+            await beginStartupRecovery(generation: generation, pid: pong.pid)
+            throw mismatch
+        }
+    }
+
+    /// Fence the transport into recovery and pin the helper being recovered
+    /// from. Returns whether that helper is still the connected peer, i.e.
+    /// whether the caller may send it the bootstrap shutdown.
+    @discardableResult
+    func beginStartupRecovery(generation: Int, pid: Int32) async -> Bool {
+        guard !versionFlowOwnedElsewhere else { return false }
+        recoveryTarget = IncompatibleHelper(generation: generation, pid: pid)
+        isRecoveryPinned = await xpcConnection.enterRecovery(expectedGeneration: generation)
+        return isRecoveryPinned
+    }
+
+    /// One bounded handshake against whatever answers now, classified pid-first.
+    ///
+    /// The pid check precedes the version check even when the version matches. A
+    /// reply carrying our own wire version *and* the pinned pid is
+    /// contradictory, so keep waiting until the verification deadline.
+    func recoveryHandshake() async -> RecoveryHandshakeOutcome {
+        do {
+            let (pong, _) = try await pingWithGeneration(deadline: recoveryPingDeadlineNanos)
+            if pong.pid == recoveryTarget?.pid {
+                return .sameHelperStillAnswering(pid: pong.pid)
+            }
+            if pong.version == DaemonProtocolInfo.wireVersion {
+                return .compatible
+            }
+            return .incompatible(daemonVersion: pong.version, pid: pong.pid)
+        } catch {
+            return .unreachable(ErrorText.describing(error))
+        }
+    }
+
+    /// Rung 1 of the ladder: ask the pinned helper to stop, and classify the
+    /// answer. Never throws, because the ladder wants the classification rather
+    /// than an error to unwind on.
+    func requestIncompatibleShutdown() async -> VersionMismatchOutcome.Shutdown {
+        guard let target = recoveryTarget else {
+            return .indeterminate("no incompatible helper is pinned")
+        }
+        guard await xpcConnection.currentGeneration == target.generation else {
+            return .indeterminate(
+                "the incompatible daemon was replaced before it could be stopped"
+            )
+        }
+        if Self.isSmokeMode {
+            return .indeterminate(
+                "the helper runs over the smoke UDS transport, which can't request shutdown"
+            )
+        }
+        do {
+            try await shutdownIncompatibleDaemon()
+            return .confirmed
+        } catch {
+            return .indeterminate("\(error)")
+        }
+    }
+
+    /// Rung 2 of the ladder: SIGKILL the pinned helper, fenced to its pid so a
+    /// legitimately launched replacement is never signalled.
+    func terminateIncompatibleHelper() async -> HelperTerminationOutcome {
+        guard let target = recoveryTarget else { return .alreadyGone }
+        return await xpcConnection.terminatePeer(expectedPid: target.pid)
+    }
+
+    /// Recovery succeeded: return the transport to full service, then clear the
+    /// latch. Transport first, so nothing can observe `.recovering` with the
+    /// latch already released.
+    func leaveVersionRecovery() async {
+        await xpcConnection.leaveRecovery()
+        recoveryTarget = nil
+    }
+
+    /// Recovery gave up. Terminal, and it reports nothing: the ladder already
+    /// knows what each rung did, so firing `onVersionMismatch` here would
+    /// duplicate a report the caller is about to make with more detail.
+    ///
+    /// Nothing is pinned for the shutdown: no further one is authorized once
+    /// recovery is terminal, whether rung 1 spent it or the ladder skipped that
+    /// rung because the peer was already replaced.
+    func abandonVersionRecovery() async {
+        guard !versionMismatchHandled else { return }
+        versionMismatchHandled = true
+        recoveryTarget = nil
+        await xpcConnection.markIncompatible(expectedGeneration: nil)
+    }
+
     /// Ping the daemon and return the connection generation the ping was
     /// answered on, captured ATOMICALLY with the request, not sampled
     /// afterward, where a replacement connecting between the two `await`s could
     /// be mistaken for the answering instance. Only the production XPC path has
     /// that reconnect race; injected (tests) and UDS (smoke) have no live
     /// generation to race, so they sample the current value.
-    private func pingWithGeneration() async throws -> (DaemonPingResponse, Int) {
+    private func pingWithGeneration(
+        deadline overrideNanos: UInt64? = nil
+    ) async throws -> (DaemonPingResponse, Int) {
         if injectedRequestTransport == nil, case let .xpc(connection) = transport {
             // Bounded here rather than inherited from `request`: this branch
             // reaches the transport directly, so an unanswered handshake ping
             // would otherwise park launch (and every reconnect) forever.
-            let (data, generation) = try await bounded(.daemonPing) {
+            let (data, generation) = try await bounded(.daemonPing, deadline: overrideNanos) {
                 try await connection.requestReturningGeneration(
                     method: RPCMethod.daemonPing.rawValue,
                     params: nil

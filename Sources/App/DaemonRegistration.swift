@@ -19,6 +19,25 @@
 import Foundation
 import ServiceManagement
 
+/// A repair that stopped part-way, carrying how far it got.
+///
+/// The stage matters because the two failures need opposite things said about
+/// them. Failing before the unregister completes leaves the registration in an
+/// unknown state, because the call may have mutated something before it threw.
+/// Failing after it leaves the helper stopped and unregistered, which is the state that must not be described as
+/// "couldn't stop the old helper": it stopped, and now nothing will start it.
+struct RegistrationRepairFailure: Error, CustomStringConvertible {
+    /// Whether the teardown leg completed before the failure.
+    let unregistered: Bool
+    let underlying: any Error
+
+    var description: String {
+        unregistered
+            ? "the helper was unregistered but could not be registered again: \(underlying)"
+            : "the unregister did not complete; the registration state is unknown: \(underlying)"
+    }
+}
+
 @MainActor
 enum DaemonRegistration {
     /// The LaunchAgent plist embedded at
@@ -91,21 +110,62 @@ enum DaemonRegistration {
     /// notification): the unregister STOPS a running helper, and a fresh one
     /// restores nothing from disk, so any live session, pane, and device state
     /// it held is gone. The symptom it treats has benign causes that cannot be
-    /// told apart from the wire, so the caller asks the user before calling
-    /// this rather than inferring consent; `RegistrationRepairDecision` gates
-    /// which failures are even worth asking about.
+    /// told apart from the wire, so a caller acting on a *symptom* asks the user
+    /// before calling this rather than inferring consent;
+    /// `RegistrationRepairDecision` gates which failures are even worth asking
+    /// about.
     ///
-    /// It leaves no connection behind either. The caller quits afterward and a
-    /// fresh launch does the connecting, so nothing here has to reconcile a
-    /// transport with the registration it just replaced.
-    static func repair() async throws {
-        let service = SMAppService.agent(plistName: plistName)
-        do {
-            try await service.unregister()
-        } catch let error as NSError {
-            guard Self.isJobNotFound(error) else { throw error }
-        }
-        try service.register()
+    /// The wire-version recovery ladder is the one caller that runs it
+    /// unattended, and it is a different situation rather than an exception to
+    /// that rule. It acts on a *definite* mismatch, not an ambiguous symptom,
+    /// and only after its ladder has conditionally asked the helper to stop,
+    /// signalled it, or found neither applicable, according to what each
+    /// verification returned. It runs at startup, where this GUI holds no session, pane, or
+    /// device state for the unregister to destroy. What it cannot avoid is the
+    /// "Background Activity" notification, and that the helper is a per-user
+    /// singleton: another checkout's GUI loses its helper too.
+    ///
+    /// It leaves no connection behind either. Callers either quit afterward or
+    /// re-handshake from scratch, so nothing here has to reconcile a transport
+    /// with the registration it just replaced.
+    ///
+    /// The marker is written first and a failure to write it aborts before
+    /// anything is torn down; see `RegistrationRepairStore` for why that
+    /// ordering is the whole guarantee.
+    /// `holding` is the repair lock. It is a parameter rather than something
+    /// this acquires, so a repair cannot be started without exclusion: the
+    /// signature carries the requirement instead of a comment asking callers to
+    /// remember. The helper is a per-user singleton, so two copies of DeviceTerm
+    /// repairing at once would have one register while the other is between its
+    /// unregister and its register.
+    static func repair(
+        store: RegistrationRepairStore,
+        holding lock: RegistrationRepairLock.Handle
+    ) async throws {
+        // Hold the lock for the whole transaction. Without this, ARC is free to
+        // release the handle after its last use, which is the top of the
+        // function, and the exclusion would end before the teardown began.
+        defer { withExtendedLifetime(lock) {} }
+        try await transaction(store: store).run()
+    }
+
+    /// The repair sequence bound to the real ServiceManagement calls.
+    ///
+    /// Exposed so a caller can hold the transaction rather than the effect, and
+    /// so the ordering can be exercised against injected legs; see
+    /// `RegistrationRepairTransaction` for why that separation exists.
+    static func transaction(store: RegistrationRepairStore) -> RegistrationRepairTransaction {
+        RegistrationRepairTransaction(
+            markUnderway: { try store.markRepairUnderway() },
+            unregister: { try await service().unregister() },
+            register: { try service().register() },
+            clearUnderway: { try store.clearRepairUnderway() },
+            isBenignUnregisterFailure: { isJobNotFound($0 as NSError) }
+        )
+    }
+
+    private static func service() -> SMAppService {
+        SMAppService.agent(plistName: plistName)
     }
 
     /// Whether an `unregister()` failure is the benign "no job by that label".

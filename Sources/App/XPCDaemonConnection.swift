@@ -151,6 +151,43 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         case raw(continuation: AsyncStream<(String, Data)>.Continuation)
     }
 
+    /// What the transport will carry once a definite wire-version mismatch is
+    /// being handled.
+    ///
+    /// In both non-normal modes every entry point except the bootstrap methods
+    /// refuses immediately, so no ordinary request or subscription can restore
+    /// state against a replacement daemon. This is the transport-level fence the
+    /// reconnect-callback guard alone can't be: `request`/`subscribe`/
+    /// `subscribeRaw` all demand-`connect()` before the callback could refuse
+    /// them.
+    ///
+    /// `.recovering` is not a weaker `.incompatible`. It admits the two
+    /// bootstrap methods a startup recovery needs, and it admits a
+    /// demand-connect for `daemon.ping` alone, because launching the replacement
+    /// is the whole point of that ping. `daemon.shutdown` never demand-connects
+    /// in either mode: the one send it is allowed must reach the peer that
+    /// answered the mismatched ping, and connecting would demand-launch (and
+    /// then stop) whatever replaced it.
+    ///
+    /// `.incompatible` is terminal and absorbing. `leaveRecovery` cannot revive
+    /// it, so a recovery that has already given up can't be walked back by a
+    /// later caller.
+    private enum Mode {
+        case normal
+        case recovering
+        case incompatible
+    }
+
+    /// Whether a method is allowed through, and whether it may demand-connect.
+    ///
+    /// The two are separate because they diverge in `.recovering`: `daemon.ping`
+    /// needs the connect and `daemon.shutdown` must not have it. A mode-level
+    /// "may connect" flag would have to pick one and would be wrong for the
+    /// other.
+    private struct Admission {
+        let connectIfNeeded: Bool
+    }
+
     private let machServiceName: String
     private var connection: xpc_connection_t?
     private var nextId: UInt32 = 1
@@ -184,14 +221,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// `-32001`) would never re-bind its anchor after a daemon restart.
     private var onReconnect: (@Sendable (Int) -> Void)?
     private var connectionGeneration = 0
-    /// Set once a definite daemon wire-version mismatch is being remediated.
-    /// From then, every entry point EXCEPT the bootstrap `daemon.shutdown`
-    /// refuses immediately: no demand-relaunch, no ordinary request/
-    /// subscription that could restore state against a replacement daemon. This
-    /// is the transport-level fence the reconnect-callback guard alone can't be:
-    /// `request`/`subscribe`/`subscribeRaw` all demand-`connect()` before the
-    /// callback could refuse them.
-    private var incompatible = false
+    private var mode: Mode = .normal
 
     /// The current connection generation, bumped on every (re)connect. The
     /// mismatch remediation captures this alongside the mismatched ping so it
@@ -229,10 +259,49 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// shutdown to it. A replacement is quiesced too, but must NOT receive
     /// shutdown (it's a different, possibly-updated daemon). The shutdown, when
     /// permitted, is sent AFTER this as a fresh request against the SAME peer.
+    /// Pass nil for `expectedGeneration` to go terminal with nothing pinned,
+    /// which answers that no bootstrap shutdown may be sent. That is the shape a
+    /// recovery uses when it gives up: no further shutdown is authorized once
+    /// recovery is terminal.
     @discardableResult
-    func markIncompatible(expectedGeneration: Int) -> Bool {
+    func markIncompatible(expectedGeneration: Int?) -> Bool {
+        let pinned = expectedGeneration.map { connectionGeneration == $0 } ?? false
+        mode = .incompatible
+        quiesce()
+        return pinned
+    }
+
+    /// Quiesce and pin for a startup recovery, which may still reach the peer
+    /// with the two bootstrap methods.
+    ///
+    /// Same one-actor-turn guarantee as `markIncompatible`: the generation
+    /// check, the mode change, and the quiesce cannot be interleaved, so a
+    /// replacement can't be installed between deciding and fencing.
+    ///
+    /// The quiesce is a no-op in practice here, because recovery is entered only
+    /// from the startup handshake, before any window, session, or subscription
+    /// exists. It runs anyway rather than being skipped on that reasoning: the
+    /// reasoning is about the caller, and this type shouldn't depend on it.
+    @discardableResult
+    func enterRecovery(expectedGeneration: Int) -> Bool {
         let pinned = connectionGeneration == expectedGeneration
-        incompatible = true
+        mode = .recovering
+        quiesce()
+        return pinned
+    }
+
+    /// Return to full service after a recovery re-established a compatible
+    /// helper. A no-op from `.incompatible`, which is absorbing: nothing revives
+    /// a transport that already surrendered.
+    func leaveRecovery() {
+        guard case .recovering = mode else { return }
+        mode = .normal
+    }
+
+    /// Fail every in-flight request and finish every subscription, so nothing
+    /// keeps running over a connection that is about to be replaced or
+    /// abandoned.
+    private func quiesce() {
         let pending = pendingRequests
         pendingRequests.removeAll()
         for (_, continuation) in pending {
@@ -243,7 +312,6 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         let subs = subscriptions
         subscriptions.removeAll()
         for (_, record) in subs { finishSubscription(record) }
-        return pinned
     }
 
     /// Stop the helper process on the other end of this connection.
@@ -275,6 +343,29 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         if let expectedGeneration, connectionGeneration != expectedGeneration {
             return .alreadyRestarted
         }
+        return signalConnectedPeer()
+    }
+
+    /// Stop the connected peer only when it is `expectedPid`.
+    ///
+    /// The pid is the right fence for a wire-version recovery, where the
+    /// generation is not. Recovery re-pings after asking the helper to stop, so
+    /// by the time it decides to signal, the connection may legitimately have
+    /// been replaced; what it needs to know is whether the process it asked to
+    /// go away is the one still answering. Signalling on generation alone would
+    /// kill a freshly launched replacement, and launchd would start another
+    /// exactly like it (`KeepAlive`/`SuccessfulExit false`), so the loop would
+    /// never converge.
+    func terminatePeer(expectedPid: pid_t) -> HelperTerminationOutcome {
+        guard let peer = connection else { return .alreadyGone }
+        guard xpc_connection_get_pid(peer) == expectedPid else { return .alreadyRestarted }
+        return signalConnectedPeer()
+    }
+
+    /// SIGKILL whatever process is on the far end of the live connection,
+    /// classifying what happened. Callers own the fence that decides whether
+    /// this peer is the right one to signal.
+    private func signalConnectedPeer() -> HelperTerminationOutcome {
         guard let peer = connection else { return .alreadyGone }
         let pid = xpc_connection_get_pid(peer)
         // A mach-service connection that has never been messaged has no
@@ -315,13 +406,34 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// one, so a test can change the generation mid-flight.
     func bumpGenerationForTesting() { connectionGeneration += 1 }
 
-    /// Refuse every method except `daemon.shutdown` once the connection is
-    /// terminally incompatible. Throws before any demand-`connect()`.
-    private func ensureUsable(for method: String) throws {
-        if incompatible, method != RPCMethod.daemonShutdown.rawValue {
+    /// Decide whether a method may be sent at all, and whether it may
+    /// demand-`connect()` on the way. Throws before any connect, so a refused
+    /// method never launches a daemon as a side effect.
+    private func admit(_ method: String) throws -> Admission {
+        switch mode {
+        case .normal:
+            return Admission(connectIfNeeded: true)
+
+        case .recovering:
+            // The ping is what launchd demand-launches the replacement for, so
+            // it is the one method here that gets a connect.
+            if method == RPCMethod.daemonPing.rawValue {
+                return Admission(connectIfNeeded: true)
+            }
+            if method == RPCMethod.daemonShutdown.rawValue {
+                return Admission(connectIfNeeded: false)
+            }
             throw DaemonClientError.transport(
-                "daemon wire version is incompatible; connection is terminal"
+                "daemon wire version is incompatible; connection is recovering"
             )
+
+        case .incompatible:
+            guard method == RPCMethod.daemonShutdown.rawValue else {
+                throw DaemonClientError.transport(
+                    "daemon wire version is incompatible; connection is terminal"
+                )
+            }
+            return Admission(connectIfNeeded: false)
         }
     }
 
@@ -467,18 +579,19 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         method: String,
         params: Data?
     ) async throws -> (data: Data, generation: Int) {
-        try ensureUsable(for: method)
-        // While incompatible, NEVER demand-connect: the only permitted request
-        // is the bootstrap `daemon.shutdown`, which must target the SAME daemon
-        // instance that returned the mismatched ping. If that peer already
-        // invalidated, connecting would demand-launch and terminate the UPDATED
-        // replacement daemon, so abort instead (the incompatible one is gone).
-        if !incompatible, connection == nil { connect() }
+        // `daemon.shutdown` must never demand-connect: it targets the SAME
+        // daemon instance that returned the mismatched ping, and if that peer
+        // already invalidated, connecting would demand-launch and then terminate
+        // the UPDATED replacement. `daemon.ping` during a recovery is the
+        // opposite case and does connect, because launching the replacement is
+        // what it is for. `admit` carries that distinction.
+        let admission = try admit(method)
+        if admission.connectIfNeeded, connection == nil { connect() }
         guard let peer = connection else {
             throw DaemonClientError.transport(
-                incompatible
-                    ? "incompatible daemon already disconnected; nothing to shut down"
-                    : "connection unavailable"
+                admission.connectIfNeeded
+                    ? "connection unavailable"
+                    : "incompatible daemon already disconnected; nothing to shut down"
             )
         }
         let generation = connectionGeneration
@@ -523,7 +636,15 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         params: Data?,
         paneId: String
     ) async throws -> (initial: Data, events: AsyncStream<PaneEvent>) {
-        try ensureUsable(for: method)
+        // No subscription is ever a bootstrap method, so neither non-normal mode
+        // admits one: a stream opened while the daemon is being replaced would
+        // never complete a reconnect handshake, and its events would be arriving
+        // from a peer nothing has verified.
+        guard case .normal = mode else {
+            throw DaemonClientError.transport(
+                "daemon wire version is incompatible; subscriptions are refused"
+            )
+        }
         if connection == nil { connect() }
         guard let peer = connection else {
             throw DaemonClientError.transport("connection unavailable")
@@ -679,7 +800,15 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         method: String,
         params: Data?
     ) async throws -> (initial: Data, events: AsyncStream<(String, Data)>) {
-        try ensureUsable(for: method)
+        // No subscription is ever a bootstrap method, so neither non-normal mode
+        // admits one: a stream opened while the daemon is being replaced would
+        // never complete a reconnect handshake, and its events would be arriving
+        // from a peer nothing has verified.
+        guard case .normal = mode else {
+            throw DaemonClientError.transport(
+                "daemon wire version is incompatible; subscriptions are refused"
+            )
+        }
         if connection == nil { connect() }
         guard let peer = connection else {
             throw DaemonClientError.transport("connection unavailable")
@@ -758,7 +887,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// notifications. Silently no-ops if the connection is gone or the transport
     /// is incompatible (no traffic to the incompatible/replacement daemon).
     private func sendNotification(method: String, params: Data) {
-        guard !incompatible, let peer = connection else { return }
+        guard case .normal = mode, let peer = connection else { return }
         let envelope = RPCEnvelope(id: nil, type: .request, method: method, body: .params(params))
         guard let payload = try? envelope.encode() else { return }
         sendRPC(peer: peer, payload: payload)

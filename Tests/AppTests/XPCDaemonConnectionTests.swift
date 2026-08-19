@@ -181,6 +181,172 @@ struct XPCDaemonConnectionTests {
         withExtendedLifetime(listener) {}
     }
 
+    // MARK: - Recovering: the two bootstrap methods pass, nothing else
+
+    @Test
+    func recoveringTransportAdmitsPing() async {
+        // Admission is proven by the request PARKING on the silent peer rather
+        // than by the absence of an error message: a refused method throws
+        // before it can reach a peer at all, so a parked request is positive
+        // evidence the ping was let through.
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        await conn.enterRecovery(expectedGeneration: 0)
+
+        let task = Task { try await conn.request(method: RPCMethod.daemonPing.rawValue, params: nil) }
+        #expect(await poll { await conn.pendingRequestCountForTesting == 1 })
+
+        task.cancel()
+        _ = try? await task.value
+        withExtendedLifetime(listener) {}
+    }
+
+    @Test
+    func recoveringTransportRefusesOrdinaryRequest() async {
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        await conn.enterRecovery(expectedGeneration: 0)
+        do {
+            _ = try await conn.request(method: RPCMethod.sessionCreate.rawValue, params: nil)
+            Issue.record("expected the recovering-transport refusal")
+        } catch let DaemonClientError.transport(message) {
+            #expect(message.contains("incompatible"))
+        } catch {
+            Issue.record("expected the transport gate error, got \(error)")
+        }
+        withExtendedLifetime(listener) {}
+    }
+
+    @Test
+    func recoveringTransportRefusesSubscribe() async {
+        // A subscription is never a bootstrap method: a stream opened against a
+        // daemon being replaced would never complete a reconnect handshake.
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        await conn.enterRecovery(expectedGeneration: 0)
+        do {
+            _ = try await conn.subscribeRaw(method: RPCMethod.appCommands.rawValue, params: nil)
+            Issue.record("expected the recovering-transport refusal")
+        } catch let DaemonClientError.transport(message) {
+            #expect(message.contains("incompatible"))
+        } catch {
+            Issue.record("expected the transport gate error, got \(error)")
+        }
+        withExtendedLifetime(listener) {}
+    }
+
+    @Test
+    func recoveringShutdownDoesNotDemandConnectAReplacement() async {
+        // The same hazard the terminal mode closes, closed in this mode too:
+        // with the pinned peer already gone, connecting would demand-launch the
+        // UPDATED replacement and then stop it.
+        let conn = XPCDaemonConnection(machServiceName: "com.example.deviceterm.test.nonexistent")
+        await conn.enterRecovery(expectedGeneration: 0)
+        do {
+            _ = try await conn.request(method: RPCMethod.daemonShutdown.rawValue, params: nil)
+            Issue.record("expected the shutdown to abort with no peer")
+        } catch let DaemonClientError.transport(message) {
+            #expect(message.contains("already disconnected") || message.contains("nothing to shut down"))
+        } catch {
+            Issue.record("expected the no-peer abort, got \(error)")
+        }
+    }
+
+    @Test
+    func enterRecoveryQuiescesInFlightRequest() async {
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        let task = Task { try await conn.request(method: RPCMethod.daemonPing.rawValue, params: nil) }
+        #expect(await poll { await conn.pendingRequestCountForTesting == 1 })
+
+        await conn.enterRecovery(expectedGeneration: 0)
+
+        do {
+            _ = try await task.value
+            Issue.record("expected the in-flight request to be quiesced")
+        } catch let DaemonClientError.transport(message) {
+            #expect(message.contains("incompatible"))
+        } catch {
+            Issue.record("expected the quiesce error, got \(error)")
+        }
+        #expect(await conn.pendingRequestCountForTesting == 0)
+        withExtendedLifetime(listener) {}
+    }
+
+    @Test
+    func enterRecoveryReportsWhetherThePeerIsPinned() async {
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        #expect(await conn.enterRecovery(expectedGeneration: 0))
+        #expect(!(await conn.enterRecovery(expectedGeneration: 999)))
+        withExtendedLifetime(listener) {}
+    }
+
+    // MARK: - Leaving recovery, and the terminal mode being absorbing
+
+    @Test
+    func leaveRecoveryRestoresOrdinaryTraffic() async {
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        await conn.enterRecovery(expectedGeneration: 0)
+        await conn.leaveRecovery()
+
+        // Parks rather than throwing: ordinary traffic is admitted again.
+        let task = Task { try await conn.request(method: RPCMethod.sessionCreate.rawValue, params: nil) }
+        #expect(await poll { await conn.pendingRequestCountForTesting == 1 })
+
+        task.cancel()
+        _ = try? await task.value
+        withExtendedLifetime(listener) {}
+    }
+
+    @Test
+    func leaveRecoveryCannotReviveATerminalTransport() async {
+        // Terminal is absorbing: a recovery that already surrendered must not be
+        // walked back by a later caller reaching for `leaveRecovery`.
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        await conn.markIncompatible(expectedGeneration: 0)
+        await conn.leaveRecovery()
+        do {
+            _ = try await conn.request(method: RPCMethod.sessionCreate.rawValue, params: nil)
+            Issue.record("expected the terminal transport to stay terminal")
+        } catch let DaemonClientError.transport(message) {
+            #expect(message.contains("incompatible"))
+        } catch {
+            Issue.record("expected the transport gate error, got \(error)")
+        }
+        withExtendedLifetime(listener) {}
+    }
+
+    // MARK: - The kill is fenced by pid, not by generation
+
+    @Test
+    func terminatePeerSparesADifferentPid() async {
+        // The ladder re-pings after asking the helper to stop, so by the time it
+        // decides to signal, the peer may legitimately have been replaced.
+        // Signalling one launchd just started would only make it start another.
+        let (peer, listener) = makeSilentPeer()
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        await conn.setTestConnection(peer)
+        let outcome = await conn.terminatePeer(expectedPid: 999_999)
+        #expect(outcome == .alreadyRestarted)
+        withExtendedLifetime(listener) {}
+    }
+
+    @Test
+    func terminatePeerReportsAlreadyGoneWithNoConnection() async {
+        let conn = XPCDaemonConnection(machServiceName: "unused")
+        #expect(await conn.terminatePeer(expectedPid: 1) == .alreadyGone)
+    }
+
     @Test
     func pendingRawSubscribeIsCancellableAndCleansUpPendingState() async {
         // The `app.commands` handshake parks on the same map. It's cancelled
