@@ -125,6 +125,19 @@ struct NotifierArrival: Sendable {
 }
 
 public actor DeviceCoordinator {
+    private struct CachedDeviceRead {
+        let result: CoreSimulatorDeviceReadResult
+        let completedAtNanoseconds: UInt64
+    }
+
+    private struct InFlightDeviceRead {
+        let token: UUID
+        let generation: UInt64
+        let task: Task<CoreSimulatorDeviceReadResult, Never>
+    }
+
+    private static let defaultDeviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000
+
     /// UDID (lowercased) → the session attributed to it, or nil for one
     /// explicitly claimed without an attribution. Cleared when the sim shuts
     /// down.
@@ -197,21 +210,25 @@ public actor DeviceCoordinator {
     /// successor event. Injectable so tests covering "work slower than
     /// the window" can shrink it instead of sleeping half a second each.
     private let debounceWindow: TimeInterval
-    /// CoreSimulator enumeration behind `listAll()` and everything built on it.
-    /// Production reads the bridge directly; tests inject a reader that fails
-    /// if called, pinning that empty ownership never enumerates at all.
-    private let readDevices: @Sendable () throws -> [CSBDeviceInfo]
-    /// The udids CoreSimulator currently reports as `Booted`, lowercased, or
-    /// nil when the bridge couldn't enumerate at all. The one place the two
-    /// questions that need live boot state but not the rest of a device
-    /// record read it from.
-    ///
-    /// Injected because those questions are pure decisions over the answer,
-    /// and pinning them otherwise takes a booted simulator: the live track
-    /// covers the bridge, and a hermetic test covers what the daemon does
-    /// with what the bridge said. The `listOwned…` readers keep their own
-    /// enumeration; they need each device's name and runtime too.
-    private let readBootedUDIDs: @Sendable () -> Set<String>?
+    /// Runs synchronous CoreSimulator enumeration on a serial DispatchQueue,
+    /// outside Swift's cooperative executor. Every production snapshot
+    /// enumeration reaches this source.
+    private let deviceReader: CoreSimulatorDeviceReader
+    /// Successful and failed reads share one short TTL. Caching failure avoids
+    /// hammering a degraded service, while callers still receive their existing
+    /// throw / "can't confirm" result rather than a stale successful snapshot.
+    private let deviceSnapshotTTLNanoseconds: UInt64
+    private let deviceSnapshotClock: @Sendable () -> UInt64
+    /// Hermetic restoration tests inject the booted set directly because
+    /// `CSBDeviceInfo` has no public fixture initializer. Nil in production;
+    /// every production boot-state read derives from `deviceReader`.
+    private let bootedUDIDsOverride: (@Sendable () -> Set<String>?)?
+    private var cachedDeviceRead: CachedDeviceRead?
+    private var inFlightDeviceRead: InFlightDeviceRead?
+    /// Incremented synchronously with every observed or commanded device-state
+    /// change. A read started under an older generation is discarded and
+    /// retried, so it can neither answer its caller nor repopulate the cache.
+    private var deviceSnapshotGeneration: UInt64 = 0
 
     /// Diagnostic accessor: raw size of the ownership map, i.e. how
     /// many sims deviceterm considers itself the owner of. Tests only;
@@ -226,35 +243,54 @@ public actor DeviceCoordinator {
 
     public init(
         eventBroker: EventBroker? = nil,
-        debounceWindow: TimeInterval = 0.5,
-        readBootedUDIDs: @escaping @Sendable () -> Set<String>? = bootedUDIDsFromCoreSimulator
+        debounceWindow: TimeInterval = 0.5
     ) {
         self.eventBroker = eventBroker
         self.debounceWindow = debounceWindow
-        self.readDevices = { try SimDeviceHandle.allDevices() }
-        self.readBootedUDIDs = readBootedUDIDs
+        self.deviceReader = CoreSimulatorDeviceReader()
+        self.deviceSnapshotTTLNanoseconds = Self.defaultDeviceSnapshotTTLNanoseconds
+        self.deviceSnapshotClock = { DispatchTime.now().uptimeNanoseconds }
+        self.bootedUDIDsOverride = nil
     }
 
-    /// Module-internal test seam for observing `listAll()` enumeration
-    /// without adding a public initializer parameter.
+    /// Module-internal restoration seam. Production never installs a separate
+    /// boot-state reader: it derives the set from the shared device snapshot.
     init(
         eventBroker: EventBroker? = nil,
         debounceWindow: TimeInterval = 0.5,
-        readBootedUDIDs: @escaping @Sendable () -> Set<String>? = bootedUDIDsFromCoreSimulator,
+        readBootedUDIDs: @escaping @Sendable () -> Set<String>?
+    ) {
+        self.eventBroker = eventBroker
+        self.debounceWindow = debounceWindow
+        self.deviceReader = CoreSimulatorDeviceReader()
+        self.deviceSnapshotTTLNanoseconds = Self.defaultDeviceSnapshotTTLNanoseconds
+        self.deviceSnapshotClock = { DispatchTime.now().uptimeNanoseconds }
+        self.bootedUDIDsOverride = readBootedUDIDs
+    }
+
+    /// Module-internal cache seam: tests control the reader, serial queue,
+    /// monotonic clock, and TTL without touching CoreSimulator.
+    init(
+        eventBroker: EventBroker? = nil,
+        debounceWindow: TimeInterval = 0.5,
+        deviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000,
+        deviceSnapshotClock: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        },
+        deviceReaderQueue: DispatchQueue = DispatchQueue(
+            label: "com.deviceterm.daemon.coresimulator-devices.test"
+        ),
         readDevices: @escaping @Sendable () throws -> [CSBDeviceInfo]
     ) {
         self.eventBroker = eventBroker
         self.debounceWindow = debounceWindow
-        self.readDevices = readDevices
-        self.readBootedUDIDs = readBootedUDIDs
-    }
-
-    /// Production's `readBootedUDIDs`: one CoreSimulator enumeration reduced
-    /// to lowercased udids. Nil on a bridge failure, which every caller reads
-    /// as "can't confirm" rather than "nothing is booted".
-    public static func bootedUDIDsFromCoreSimulator() -> Set<String>? {
-        guard let devices = try? SimDeviceHandle.allDevices() else { return nil }
-        return Set(devices.filter { $0.state == .booted }.map { $0.udid.lowercased() })
+        self.deviceReader = CoreSimulatorDeviceReader(
+            queue: deviceReaderQueue,
+            readDevices: readDevices
+        )
+        self.deviceSnapshotTTLNanoseconds = deviceSnapshotTTLNanoseconds
+        self.deviceSnapshotClock = deviceSnapshotClock
+        self.bootedUDIDsOverride = nil
     }
 
     // MARK: - Listing
@@ -262,21 +298,23 @@ public actor DeviceCoordinator {
     /// Every device CoreSimulator knows about. Throws if the bridge
     /// can't enumerate, e.g. CoreSimulator isn't loadable on the
     /// host. Used to back `device.list({scope: "all"})`.
-    public func listAll() throws -> [CSBDeviceInfo] {
-        do {
-            return try readDevices()
-        } catch {
-            throw DeviceError.listFailed(message: String(describing: error))
+    public func listAll() async throws -> [CSBDeviceInfo] {
+        switch await deviceRead() {
+        case let .success(devices):
+            return devices
+
+        case let .failure(failure):
+            throw DeviceError.listFailed(message: failure.message)
         }
     }
 
     /// Subset of `listAll()` filtered to the sims deviceterm currently
-    /// considers itself the owner of. The filter is intersection-
-    /// based: a UDID in the ownership map that's no longer in
-    /// CoreSimulator's device set drops out, so callers don't see
-    /// stale records.
-    public func listOwned() throws -> [CSBDeviceInfo] {
-        let all = try listAll()
+    /// considers itself the owner of. The filter intersects ownership with
+    /// the shared CoreSimulator snapshot, so ownership entries absent from
+    /// that snapshot drop out.
+    public func listOwned() async throws -> [CSBDeviceInfo] {
+        guard !ownership.isEmpty else { return [] }
+        let all = try await listAll()
         return all.filter { owns($0.udid.lowercased()) }
     }
 
@@ -291,11 +329,11 @@ public actor DeviceCoordinator {
     /// than asserting something we can't verify.
     /// When the ownership map is empty, returns 0 without consulting
     /// CoreSimulator: no live device can intersect an empty owned set.
-    public func ownedBootedCount() -> Int {
+    public func ownedBootedCount() async -> Int {
         guard !ownership.isEmpty else { return 0 }
         let devices: [CSBDeviceInfo]
         do {
-            devices = try listOwned()
+            devices = try await listOwned()
         } catch {
             return 0
         }
@@ -311,11 +349,11 @@ public actor DeviceCoordinator {
     /// same degraded-but-honest posture as `ownedBootedCount()`.
     /// When the ownership map is empty, returns `[]` without consulting
     /// CoreSimulator, since no live device can intersect an empty owned set.
-    public func listOwnedBooted() -> [OwnedSim] {
+    public func listOwnedBooted() async -> [OwnedSim] {
         guard !ownership.isEmpty else { return [] }
         let devices: [CSBDeviceInfo]
         do {
-            devices = try listOwned()
+            devices = try await listOwned()
         } catch {
             return []
         }
@@ -337,15 +375,80 @@ public actor DeviceCoordinator {
         owner(of: udid.lowercased())
     }
 
-    /// Whether `udid` is currently `Booted` per a live CoreSimulator
-    /// query, independent of ownership. The shutdown-convergence path
-    /// uses this to tell "shutdown failed because the sim is already
-    /// gone" (mark its panes shut down) from "shutdown genuinely failed
-    /// while the sim is still up" (leave the pane live). Returns `false`
-    /// if the bridge can't enumerate: a degraded CoreSimulator can't
-    /// confirm liveness, so we don't assert the sim is still running.
-    public func isBooted(udid: String) -> Bool {
-        readBootedUDIDs()?.contains(udid.lowercased()) ?? false
+    /// Whether `udid` is `Booted` in the shared CoreSimulator snapshot,
+    /// independent of ownership. The shutdown-convergence path invalidates the
+    /// snapshot before attempting shutdown, so its post-error check enumerates
+    /// again. That check distinguishes "already gone" (mark its panes shut
+    /// down) from "still up" (leave the pane live). Returns `false` if the
+    /// bridge can't enumerate: a degraded CoreSimulator can't confirm liveness,
+    /// so we don't assert the sim is still running.
+    public func isBooted(udid: String) async -> Bool {
+        (await bootedUDIDs())?.contains(udid.lowercased()) ?? false
+    }
+
+    /// One cached device-set answer. Cache state stays on this actor so a
+    /// commanded or observed transition can invalidate it synchronously with
+    /// the corresponding ownership mutation. Only the blocking bridge read is
+    /// handed to `CoreSimulatorDeviceReader`'s serial DispatchQueue.
+    private func deviceRead() async -> CoreSimulatorDeviceReadResult {
+        while true {
+            let now = deviceSnapshotClock()
+            if let cachedDeviceRead,
+                now >= cachedDeviceRead.completedAtNanoseconds,
+                now - cachedDeviceRead.completedAtNanoseconds < deviceSnapshotTTLNanoseconds {
+                return cachedDeviceRead.result
+            }
+            cachedDeviceRead = nil
+
+            let generation = deviceSnapshotGeneration
+            let token: UUID
+            let task: Task<CoreSimulatorDeviceReadResult, Never>
+            if let inFlightDeviceRead, inFlightDeviceRead.generation == generation {
+                token = inFlightDeviceRead.token
+                task = inFlightDeviceRead.task
+            } else {
+                token = UUID()
+                let reader = deviceReader
+                task = Task { await reader.read() }
+                inFlightDeviceRead = InFlightDeviceRead(
+                    token: token,
+                    generation: generation,
+                    task: task
+                )
+            }
+
+            // The unstructured read intentionally outlives a cancelled caller:
+            // CoreSimulator's synchronous operation cannot be cancelled. An
+            // invalidated result is discarded here so actor callers cannot use
+            // pre-transition state after their suspension resumes.
+            let result = await task.value
+            if inFlightDeviceRead?.token == token {
+                inFlightDeviceRead = nil
+            }
+            guard deviceSnapshotGeneration == generation else { continue }
+            cachedDeviceRead = CachedDeviceRead(
+                result: result,
+                completedAtNanoseconds: deviceSnapshotClock()
+            )
+            return result
+        }
+    }
+
+    /// Production derives boot state from the same snapshot as `listAll()`.
+    /// The override exists only for hermetic ownership-restoration fixtures.
+    private func bootedUDIDs() async -> Set<String>? {
+        if let bootedUDIDsOverride { return bootedUDIDsOverride() }
+        guard case let .success(devices) = await deviceRead() else { return nil }
+        return Set(
+            devices
+                .filter { $0.state == .booted }
+                .map { $0.udid.lowercased() }
+        )
+    }
+
+    private func invalidateDeviceSnapshot() {
+        deviceSnapshotGeneration &+= 1
+        cachedDeviceRead = nil
     }
 
     // MARK: - Lifecycle
@@ -375,6 +478,7 @@ public actor DeviceCoordinator {
                 message: String(describing: error)
             )
         }
+        invalidateDeviceSnapshot()
         if let owningSession {
             ownership[normalized] = owningSession
         }
@@ -392,6 +496,11 @@ public actor DeviceCoordinator {
     /// freely re-booted by a different session later).
     public func shutdown(udid: String) async throws {
         let normalized = try requireValidUDID(udid)
+        // Invalidate before either bridge operation can fail. The converged
+        // shutdown path checks `isBooted` after any error, and that correctness
+        // check must enumerate after the attempted shutdown rather than reuse a
+        // pre-attempt success or failure.
+        invalidateDeviceSnapshot()
         let handle: SimDeviceHandle
         do {
             handle = try SimDeviceHandle.handle(forUDID: normalized)
@@ -429,6 +538,7 @@ public actor DeviceCoordinator {
     /// every in-tab boot, the primary use case.
     public func recordOwnership(udid: String, sessionId: UUID) async throws {
         let normalized = try requireValidUDID(udid)
+        invalidateDeviceSnapshot()
         ownership[normalized] = sessionId
         // Shim sent us one boot event; publish regardless of prior
         // ownership state. A re-record (session B claiming session
@@ -469,8 +579,11 @@ public actor DeviceCoordinator {
     /// A bridge that can't answer reports nothing, matching the rest of this
     /// actor's "a degraded CoreSimulator asserts nothing" posture: it can't
     /// confirm any sim is up, including the ones already attributed.
-    public func restoreOwnership(_ claims: [String: UUID?]) -> OwnershipRestoreResult {
-        guard !claims.isEmpty, let booted = readBootedUDIDs() else {
+    public func restoreOwnership(_ claims: [String: UUID?]) async -> OwnershipRestoreResult {
+        guard !claims.isEmpty else {
+            return OwnershipRestoreResult(attributed: [], written: [:])
+        }
+        guard let booted = await bootedUDIDs() else {
             return OwnershipRestoreResult(attributed: [], written: [:])
         }
         var attributed: Set<String> = []
@@ -523,6 +636,7 @@ public actor DeviceCoordinator {
     /// `xcrun simctl shutdown <UDID>` workflow.
     public func releaseOwnership(udid: String) async {
         let normalized = udid.lowercased()
+        invalidateDeviceSnapshot()
         ownership.removeValue(forKey: normalized)
         // The shim told us this UDID has shut down. Publish even if
         // our ownership map didn't have a record (the shim's view
@@ -635,15 +749,15 @@ public actor DeviceCoordinator {
             await noteExternalShutdown(udid: event.udid, arrivedAt: arrival.arrivedAt)
 
         case .unknown, .creating, .booting, .shuttingDown:
+            invalidateDeviceSnapshot()
             // Intermediate states aren't actionable: the daemon's
             // wire model only emits `.booted` / `.shutdown`. A
             // sim that stalls in `.booting` is observed as
             // "still booting" via the discovery poll; no need
             // to invent a new event type for it.
-            break
 
         @unknown default:
-            break
+            invalidateDeviceSnapshot()
         }
     }
 
@@ -658,6 +772,7 @@ public actor DeviceCoordinator {
     /// would otherwise be timed from when it got a turn.
     func noteExternalBoot(udid: String, arrivedAt: Date = Date()) async {
         let normalized = udid.lowercased()
+        invalidateDeviceSnapshot()
         await publishBootDebounced(udid: normalized, arrivedAt: arrivedAt)
     }
 
@@ -680,6 +795,7 @@ public actor DeviceCoordinator {
     /// `NotifierArrival`. It defaults to now for direct callers.
     func noteExternalShutdown(udid: String, arrivedAt: Date = Date()) async {
         let normalized = udid.lowercased()
+        invalidateDeviceSnapshot()
         ownership.removeValue(forKey: normalized)
         // Settle the debounce against `arrivedAt` before converging: both
         // the window comparison and the recorded stamp. Backend teardown is
