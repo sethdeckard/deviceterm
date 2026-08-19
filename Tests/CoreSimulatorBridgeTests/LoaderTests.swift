@@ -100,7 +100,7 @@ func developerDirectoryResolutionIsStableForProcessLifetime() throws {
             "--test-bundle-path", testBinary,
             "--filter", developerDirectoryCacheFilter,
             testBinary,
-            "--testing-library", "swift-testing",
+            "--testing-library", "swift-testing"
         ]
         var environment = ProcessInfo.processInfo.environment
         environment[developerDirectoryCacheChildKey] = "1"
