@@ -16,13 +16,15 @@ struct AXTreeBuilderTests {
 
     private func build(
         _ root: FakeElement,
-        limits: AXTreeLimits
+        limits: AXTreeLimits,
+        shouldDescend: (FakeElement, Int) -> Bool = { _, _ in true }
     ) -> (root: [String: Any], truncated: Bool) {
         AXTreeBuilder.build(
             root: root,
             limits: limits,
             attributes: { ["role": $0.name] },
-            children: { $0.kids }
+            children: { $0.kids },
+            shouldDescend: shouldDescend
         )
     }
 
@@ -103,6 +105,107 @@ struct AXTreeBuilderTests {
             node = (current["children"] as? [[String: Any]])?.first
         }
         #expect(visited == 4)
+    }
+
+    @Test
+    func skipsASubtreeThePolicyDeclines() throws {
+        let tree = FakeElement(name: "root", kids: [
+            FakeElement(name: "closed", kids: [FakeElement(name: "beneath")]),
+            FakeElement(name: "open", kids: [FakeElement(name: "seen")])
+        ])
+        let result = build(
+            tree,
+            limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
+            shouldDescend: { element, _ in element.name != "closed" }
+        )
+
+        // A declined subtree is not truncation: nothing ran out.
+        #expect(result.truncated == false)
+        #expect(childRoles(result.root) == ["closed", "open"])
+
+        let kids = try #require(result.root["children"] as? [[String: Any]])
+        #expect(kids[0]["skipped"] as? Bool == true)
+        #expect(kids[0]["truncated"] == nil)
+        #expect(kids[0]["children"] == nil)
+        // Declining one child leaves its siblings walked as usual.
+        #expect(kids[1]["skipped"] == nil)
+        #expect(childRoles(kids[1]) == ["seen"])
+    }
+
+    /// On a real AX tree every child read is IPC into another process, so
+    /// the policy prunes a subtree before asking for its children rather
+    /// than filtering a tree that was already read.
+    @Test
+    func aDeclinedNodesChildrenAreNeverRead() {
+        var read: [String] = []
+        let tree = FakeElement(name: "root", kids: [
+            FakeElement(name: "closed", kids: [FakeElement(name: "beneath")])
+        ])
+        _ = AXTreeBuilder.build(
+            root: tree,
+            limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
+            attributes: { ["role": $0.name] },
+            children: {
+                read.append($0.name)
+                return $0.kids
+            },
+            shouldDescend: { element, _ in element.name != "closed" }
+        )
+        #expect(read == ["root"])
+    }
+
+    @Test
+    func thePolicySeesEachChildsSiblingIndex() {
+        let tree = FakeElement(
+            name: "root",
+            kids: (0..<3).map { FakeElement(name: "kid\($0)") }
+        )
+        var seen: [String: Int] = [:]
+        _ = build(
+            tree,
+            limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
+            shouldDescend: { element, index in
+                seen[element.name] = index
+                return true
+            }
+        )
+        #expect(seen == ["kid0": 0, "kid1": 1, "kid2": 2])
+    }
+
+    /// The root is always walked. A policy that refuses everything still
+    /// yields the root and its immediate children, each marked.
+    @Test
+    func theRootIsNeverOfferedToThePolicy() {
+        let tree = FakeElement(name: "root", kids: [
+            FakeElement(name: "kid", kids: [FakeElement(name: "grandkid")])
+        ])
+        let result = build(
+            tree,
+            limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
+            shouldDescend: { _, _ in false }
+        )
+
+        #expect(result.root["skipped"] == nil)
+        #expect(childRoles(result.root) == ["kid"])
+
+        let kid = (result.root["children"] as? [[String: Any]])?.first
+        #expect(kid?["skipped"] as? Bool == true)
+        #expect(kid?["children"] == nil)
+    }
+
+    /// The marker records what the walk did, not what exists. A childless
+    /// node still carries it, because declining means never finding out.
+    @Test
+    func aDeclinedLeafIsStillMarkedSkipped() {
+        let tree = FakeElement(name: "root", kids: [FakeElement(name: "leaf")])
+        let result = build(
+            tree,
+            limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
+            shouldDescend: { _, _ in false }
+        )
+
+        let leaf = (result.root["children"] as? [[String: Any]])?.first
+        #expect(leaf?["skipped"] as? Bool == true)
     }
 
     @Test

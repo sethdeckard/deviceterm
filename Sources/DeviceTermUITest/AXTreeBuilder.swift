@@ -3,9 +3,10 @@
 // AXTreeBuilder: pure recursive tree shaping with hard limits.
 //
 // Split from `AXDumpService` so the traversal, the depth/node ceilings,
-// and the truncation marker can be unit-tested against a fake tree, with
-// no live app and no Accessibility grant. The service supplies the two
-// closures that read a real `AXUIElement`.
+// and the truncation and skip markers can be unit-tested against a fake
+// tree, with no live app and no Accessibility grant. The service supplies
+// the closures that read a real `AXUIElement`, and the policy deciding
+// which subtrees are worth descending into.
 //
 // The limits are not cosmetic. An accessibility tree is a foreign process's
 // data structure: it can be enormous (a scrolled terminal), and a
@@ -31,18 +32,32 @@ enum AXTreeBuilder {
     /// the node budget was reached, is marked `"truncated": true`, and the
     /// overall result reports whether that happened anywhere. A caller can
     /// then tell "this app has no more children" from "we stopped looking."
+    ///
+    /// `shouldDescend` is consulted for each child before it is walked,
+    /// and never for the root, which is always walked. Declining emits the
+    /// node marked `"skipped": true` and never asks for its children, a
+    /// third state kept distinct from `truncated`: the walk stopped by
+    /// policy, so raising the limits reveals no more. The marker reports
+    /// what the walk did rather than what exists, so a declined node that
+    /// turns out to be childless is marked all the same.
     static func build<Element>(
         root: Element,
         limits: AXTreeLimits = .default,
         attributes: (Element) -> [String: Any],
-        children: (Element) -> [Element]
+        children: (Element) -> [Element],
+        shouldDescend: (_ element: Element, _ siblingIndex: Int) -> Bool = { _, _ in true }
     ) -> (root: [String: Any], truncated: Bool) {
         var budget = limits.maxNodes
         var truncated = false
 
-        func visit(_ element: Element, depth: Int) -> [String: Any] {
+        func visit(_ element: Element, depth: Int, descend: Bool) -> [String: Any] {
             var node = attributes(element)
             budget -= 1
+
+            guard descend else {
+                node["skipped"] = true
+                return node
+            }
 
             let kids = children(element)
             guard !kids.isEmpty else { return node }
@@ -55,13 +70,15 @@ enum AXTreeBuilder {
 
             var emitted: [[String: Any]] = []
             emitted.reserveCapacity(kids.count)
-            for kid in kids {
+            for (index, kid) in kids.enumerated() {
                 if budget <= 0 {
                     truncated = true
                     node["truncated"] = true
                     break
                 }
-                emitted.append(visit(kid, depth: depth + 1))
+                emitted.append(
+                    visit(kid, depth: depth + 1, descend: shouldDescend(kid, index))
+                )
             }
             if !emitted.isEmpty { node["children"] = emitted }
             return node
@@ -69,7 +86,7 @@ enum AXTreeBuilder {
 
         // The root always costs one node, even when `maxNodes` is 0: an
         // empty dictionary would be a less useful answer than a bare root.
-        let tree = visit(root, depth: 0)
+        let tree = visit(root, depth: 0, descend: true)
         return (tree, truncated)
     }
 }
