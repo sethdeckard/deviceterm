@@ -118,9 +118,22 @@ func ownedBootedCountIgnoresStaleOwnershipForUnknownUDIDs() async throws {
 
 @Test
 func ownedBootedCountReturnsZeroWhenNothingOwned() async {
-    let coordinator = DeviceCoordinator()
+    let coordinator = DeviceCoordinator(readDevices: {
+        Issue.record("empty ownership must not enumerate CoreSimulator")
+        return []
+    })
     let count = await coordinator.ownedBootedCount()
     #expect(count == 0)
+}
+
+@Test
+func listOwnedBootedReturnsEmptyWhenNothingOwned() async {
+    let coordinator = DeviceCoordinator(readDevices: {
+        Issue.record("empty ownership must not enumerate CoreSimulator")
+        return []
+    })
+    let sims = await coordinator.listOwnedBooted()
+    #expect(sims.isEmpty)
 }
 
 // MARK: - Live (CoreSimulator-gated)

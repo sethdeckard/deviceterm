@@ -197,6 +197,10 @@ public actor DeviceCoordinator {
     /// successor event. Injectable so tests covering "work slower than
     /// the window" can shrink it instead of sleeping half a second each.
     private let debounceWindow: TimeInterval
+    /// CoreSimulator enumeration behind `listAll()` and everything built on it.
+    /// Production reads the bridge directly; tests inject a reader that fails
+    /// if called, pinning that empty ownership never enumerates at all.
+    private let readDevices: @Sendable () throws -> [CSBDeviceInfo]
     /// The udids CoreSimulator currently reports as `Booted`, lowercased, or
     /// nil when the bridge couldn't enumerate at all. The one place the two
     /// questions that need live boot state but not the rest of a device
@@ -227,6 +231,21 @@ public actor DeviceCoordinator {
     ) {
         self.eventBroker = eventBroker
         self.debounceWindow = debounceWindow
+        self.readDevices = { try SimDeviceHandle.allDevices() }
+        self.readBootedUDIDs = readBootedUDIDs
+    }
+
+    /// Module-internal test seam for observing `listAll()` enumeration
+    /// without adding a public initializer parameter.
+    init(
+        eventBroker: EventBroker? = nil,
+        debounceWindow: TimeInterval = 0.5,
+        readBootedUDIDs: @escaping @Sendable () -> Set<String>? = bootedUDIDsFromCoreSimulator,
+        readDevices: @escaping @Sendable () throws -> [CSBDeviceInfo]
+    ) {
+        self.eventBroker = eventBroker
+        self.debounceWindow = debounceWindow
+        self.readDevices = readDevices
         self.readBootedUDIDs = readBootedUDIDs
     }
 
@@ -245,7 +264,7 @@ public actor DeviceCoordinator {
     /// host. Used to back `device.list({scope: "all"})`.
     public func listAll() throws -> [CSBDeviceInfo] {
         do {
-            return try SimDeviceHandle.allDevices()
+            return try readDevices()
         } catch {
             throw DeviceError.listFailed(message: String(describing: error))
         }
@@ -270,7 +289,10 @@ public actor DeviceCoordinator {
     /// a degraded CoreSimulator means we can't confirm liveness, so
     /// the daemon's "I'm alive holding sims" signal hides rather
     /// than asserting something we can't verify.
+    /// When the ownership map is empty, returns 0 without consulting
+    /// CoreSimulator: no live device can intersect an empty owned set.
     public func ownedBootedCount() -> Int {
+        guard !ownership.isEmpty else { return 0 }
         let devices: [CSBDeviceInfo]
         do {
             devices = try listOwned()
@@ -287,7 +309,10 @@ public actor DeviceCoordinator {
     /// snapshot, so the two can never disagree across separate
     /// CoreSimulator reads. Falls back to `[]` on bridge failure, the
     /// same degraded-but-honest posture as `ownedBootedCount()`.
+    /// When the ownership map is empty, returns `[]` without consulting
+    /// CoreSimulator, since no live device can intersect an empty owned set.
     public func listOwnedBooted() -> [OwnedSim] {
+        guard !ownership.isEmpty else { return [] }
         let devices: [CSBDeviceInfo]
         do {
             devices = try listOwned()
