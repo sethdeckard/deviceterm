@@ -15,7 +15,8 @@ SHELL := /usr/bin/env bash
 # explicit form is correct under both.
 
 .PHONY: help \
-        build run run-default kill-daemon daemon cli shim probe \
+        build bundle run run-default kill-daemon daemon cli shim probe \
+        run-libghostty-harness \
         uitest uitest-bundle uitest-run uitest-stop \
         test test-int test-shim test-gui test-live test-device-live test-uitest \
         lint verify clean \
@@ -34,6 +35,7 @@ help:
 	@echo ""
 	@echo "Common:"
 	@echo "  make build       Build in debug"
+	@echo "  make bundle      Build the debug DeviceTerm.app bundle"
 	@echo "  make run         Build + relaunch this checkout's DeviceTerm.app"
 	@echo "                   (refuses if another checkout's instance runs)"
 	@echo "  make run-default Like run, ignoring your Ghostty config"
@@ -49,7 +51,10 @@ help:
 	@echo "  make cli         Build deviceterm-cli"
 	@echo "  make shim        Build deviceterm-shim"
 	@echo "  make uitest      Build deviceterm-uitest (UI-test harness)"
+	@echo "  make uitest-bundle  Bundle the harness without launching it"
 	@echo "  make uitest-run  Bundle + launch the harness; report TCC grants"
+	@echo "  make uitest-stop Stop a running harness"
+	@echo "  make run-libghostty-harness  Run the LibghosttyHarness executable"
 	@echo "  make test-int    Daemon integration tests"
 	@echo "  make test-gui    GUI smoke (scripts/gui-smoke.sh; runs in verify)"
 	@echo "  make test-shim   Shim+CLI argv/stdio tests"
@@ -62,6 +67,7 @@ help:
 	@echo "                   an unlocked display; sim-free; deliberate)"
 	@echo "  make bump        Set the release version (VERSION=x.y.z)"
 	@echo "  make release     Signed, notarized DMG"
+	@echo "  make publish     Publish a notarized release, cask, and appcast"
 	@echo ""
 	@echo "Setup:"
 	@echo "  make hooks       Install + check .githooks (one-time after clone)"
