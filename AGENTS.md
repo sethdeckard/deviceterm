@@ -50,9 +50,8 @@ Before committing, run the gate:
 make verify     # lint + every test layer that has landed
 ```
 
-`verify` self-skips any check whose backing code is absent. Run `make help` for
-the full target list, or see `docs/BUILDING.md` for end-to-end build, signing,
-and release instructions.
+Run `make help` for the full target list, or see `docs/BUILDING.md` for
+end-to-end build, signing, and release instructions.
 
 ## Driving Philosophy
 
@@ -82,10 +81,12 @@ reviewers can decide whether the trade-off is worth it.
   fails `make lint`. Vendored third-party files keep their upstream notices
   instead and are excluded from the rule.
 - Idiomatic Swift; follow Swift API Design Guidelines.
-- Swift 6 strict concurrency is on package-wide. New code is `Sendable`-clean.
-- Format with SwiftLint's autocorrect-able rules (`swiftlint --fix`). No
-  `swift-format` dependency in v1; if needs outgrow SwiftLint's autocorrect,
-  revisit in v1.x.
+- Swift 6 strict concurrency is on package-wide, via
+  `swift-tools-version: 6.2` in `Package.swift` rather than a per-target
+  flag. New code is `Sendable`-clean.
+- Warnings are errors (`.treatAllWarnings(as: .error)`, `Package.swift`),
+  so a new warning fails the build, not just `make lint`.
+- Format with SwiftLint's autocorrect-able rules (`swiftlint --fix`).
 - Hard `line_length` limit of 120 (enforced by SwiftLint). Wrap long lines.
 - Owned types (defined in this codebase) declare protocol conformances on the
   **primary type definition**, not in same-file extensions. Extensions exist
@@ -129,7 +130,10 @@ reviewers can decide whether the trade-off is worth it.
   prefer typed errors at module boundaries.
 - No `fatalError` in library code. Daemon `main.swift` and the GUI's
   `AppDelegate` are the only places allowed to terminate the process
-  intentionally.
+  intentionally. The one exception is the AppKit unavailable-initializer
+  idiom, `required init?(coder:)` marked `@available(*, unavailable)`,
+  which traps a path the type never offers; use `precondition` when you
+  need to assert an invariant instead.
 
 ## Commit Messages
 
@@ -169,7 +173,10 @@ filesystem is the truth.
 | `make cli` | build `deviceterm-cli` |
 | `make shim` | build `deviceterm-shim` |
 | `make uitest` | build the out-of-process `deviceterm-uitest` harness |
+| `make uitest-bundle` | build + bundle the harness into `~/Applications/` without launching it |
 | `make uitest-run` | bundle and launch the harness, then report its TCC grants |
+| `make uitest-stop` | stop a running harness |
+| `make run-libghostty-harness` | run the standalone `LibghosttyHarness` executable |
 | `make probe` | build + run `deviceterm-probe` (logs to git-ignored `probe-runs.log`) |
 | `make test` | unit tests (Swift Testing) |
 | `make test-int` | runs `Tests/DaemonIntegrationTests/` when present; self-skips otherwise, since the daemon integration tests live in `DaemonTests` and run under `make test` |
@@ -179,7 +186,7 @@ filesystem is the truth.
 | `make test-device-live` | live physical-device track; never reboots or shuts down the device |
 | `make test-uitest` | sim-free GUI smoke through the signed UI-test harness |
 | `make lint` | `swiftlint lint --strict` (no-ops with no Swift sources) |
-| `make verify` | single-command gate; sub-checks self-skip per filesystem |
+| `make verify` | single-command gate; run before committing (shape below) |
 | `make clean` | `rm -rf .build` |
 | `make hooks` | install + check `.githooks/` (one-time after clone) |
 
@@ -194,7 +201,8 @@ process using this checkout, and then checks:
 - the CoreSimulator compatibility probe;
 - the script-driven GUI smoke test;
 - shim and CLI tests; and
-- an offline release dry-run.
+- `scripts/build-release.sh --dry-run`, which is offline and needs no
+  credentials.
 
 The two live tracks and the TCC-dependent UI-harness track remain deliberate,
 separate commands. `make verify` prints their exclusion so they cannot be
@@ -504,11 +512,8 @@ See `Sources/Daemon/ProvenanceMatcher.swift`.
 `session.create` returns a capability token, injected as `DEVICETERM_SESSION_CAP`
 into the terminal pane's shell env alongside `DEVICETERM_SESSION`,
 `DEVICETERM_DAEMON_SOCK`, `DEVICETERM_SHIM_DIR`, and the `ZDOTDIR`/`PATH`
-overrides. It is **one factor**, not proof of origin on its own: because it is
-inherited env, any same-uid process can read it (`ps -E`), so possession alone
-says nothing about where the caller runs. The daemon pairs it with the caller's
-kernel terminal provenance (see the Trust boundary section) to draw the
-cross-session boundary. Anything running in *this* shell's terminal (user CLIs,
+overrides. It is one factor, paired with kernel terminal provenance (see the
+Trust boundary above). Anything running in *this* shell's terminal (user CLIs,
 scripts, agent processes) shares its controlling terminal and is trusted to
 control the session, so the cap is deliberately visible to every child process.
 Don't treat it as a secret, and don't strip it before launching subprocesses.
@@ -539,21 +544,16 @@ core rules to keep in hand at PR time:
   `AppDelegate`; the `DaemonClienting` alias is for forwarding glue only.
 - **IPC framing** over UDS is length-prefixed JSON:
   `[uint32 BE length][JSON bytes]`; over XPC the same envelope rides in an
-  xpc dictionary. A future binary payload would ride as a base64 JSON
-  string, but none exist today (renders pass XPC-marshalled IOSurfaces on
-  a side-band, not inline bytes).
+  xpc dictionary. No method carries a binary payload: renders pass
+  XPC-marshalled IOSurfaces on a side-band, not inline bytes.
 - **CoreSimulatorBridge boundary.** No private selector or protocol is visible
   outside `Sources/CoreSimulatorBridge/`; it vends Swift wrappers
   (`SimDeviceHandle`, `SimDisplayHandle`, `SimHIDClient`, `SimAccessibility`,
   `SimPurpleHID`). A new selector lands with an `as-tested.md` row and a probe
   symbol.
 - **Provenance.** A valid `(sessionId, cap)` is **necessary but not
-  sufficient**: the cap is inherited env, readable by any same-uid process, so
-  possession alone doesn't prove tab membership. The daemon authenticates a
-  session only when the cap is joined by the caller's matching kernel identity
-  (validated GUI, exact owner, or bound terminal, see the Trust boundary
-  section), re-checked on every scoped request. Pane-targeted calls are
-  additionally authorized per-request against the caller's pane ownership
-  (`PaneCoordinator.authorize`): a session reaches only its own panes, the
-  validated GUI peer spans sessions, and a foreign paneId is a hard reject
-  indistinguishable from an unknown one. No cap logged either way.
+  sufficient**; see the Trust boundary above for what joins it. Pane-targeted
+  calls are additionally authorized per-request against the caller's pane
+  ownership (`PaneCoordinator.authorize`): a session reaches only its own
+  panes, the validated GUI peer spans sessions, and a foreign paneId is a hard
+  reject indistinguishable from an unknown one. No cap logged either way.
