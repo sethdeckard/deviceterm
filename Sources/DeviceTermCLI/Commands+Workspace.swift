@@ -38,9 +38,14 @@ extension CLICommands {
     // MARK: - Workspace sub-command parsers
 
     /// `deviceterm tab <open|close|rename|select|info> [flags] [name]`.
+    ///
+    /// `escapedCount` carries how much of the positional tail arrived
+    /// after a `--` terminator, which `rename` needs to tell a help
+    /// request from a literal name.
     static func parseTabSubcommand(
         positionals pos: [String],
-        flags: [String: String]
+        flags: [String: String],
+        escapedCount: Int
     ) -> CLICommand {
         guard let sub = pos.first else {
             return .usage(
@@ -130,8 +135,15 @@ extension CLICommands {
             // Positional tail (after the sub-verb) is the new name.
             // Joined with spaces so quoted args carrying spaces stay
             // intact, matching `text`'s convention.
-            let tail = Array(pos.dropFirst()).joined(separator: " ")
-            let trimmed = tail.trimmingCharacters(in: .whitespaces)
+            let tail = Array(pos.dropFirst())
+            if isHelpRequest(nameTail: tail, escapedCount: escapedCount) {
+                return .usage(
+                    message:
+                    "usage: deviceterm tab rename [--tab <ref>] [<name>]"
+                    )
+            }
+            let trimmed = tail.joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
             let name: String? = trimmed.isEmpty ? nil : trimmed
             return .tabRename(tab: ref, name: name)
 
@@ -219,9 +231,12 @@ extension CLICommands {
     /// `deviceterm pane <open|close|rename|info|move> [flags] [name]`.
     /// Note: the former `pane attach` subverb is retired;
     /// `deviceterm device attach <ref>` is the one explicit-attach story.
+    ///
+    /// `escapedCount` serves `rename`, as it does for `tab`.
     static func parsePaneSubcommand(
         positionals pos: [String],
-        flags: [String: String]
+        flags: [String: String],
+        escapedCount: Int
     ) -> CLICommand {
         guard let sub = pos.first else {
             return .usage(
@@ -259,8 +274,15 @@ extension CLICommands {
 
         case "rename":
             let ref = parsePaneRef(flags["pane"])
-            let tail = Array(pos.dropFirst()).joined(separator: " ")
-            let trimmed = tail.trimmingCharacters(in: .whitespaces)
+            let tail = Array(pos.dropFirst())
+            if isHelpRequest(nameTail: tail, escapedCount: escapedCount) {
+                return .usage(
+                    message:
+                    "usage: deviceterm pane rename [--pane <ref>] [<name>]"
+                    )
+            }
+            let trimmed = tail.joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
             let name: String? = trimmed.isEmpty ? nil : trimmed
             return .paneRename(pane: ref, name: name)
 

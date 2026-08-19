@@ -365,6 +365,11 @@ public enum CLICommands {
     struct ParsedArgs: Equatable {
         var positionals: [String]
         var flags: [String: String]
+        /// How many trailing positionals arrived after a `--` terminator
+        /// and are therefore literal. Zero when no terminator appeared.
+        /// The terminator itself is dropped, so this is the only record
+        /// that a positional was escaped rather than typed bare.
+        var escapedCount = 0
     }
 
     // Request bodies are the shared `DaemonProtocol` param types
@@ -381,6 +386,12 @@ public enum CLICommands {
     /// (`deviceterm text --help` typing the string "--help") stay
     /// untouched.
     static let helpTriggers: Set<String> = ["--help", "-h", "help"]
+
+    /// The flag-shaped help triggers: `helpTriggers` minus bare `help`,
+    /// which is excluded because a tab called that is ordinary. Derived
+    /// rather than restated so a new spelling reaches both.
+    /// See `isHelpRequest(nameTail:escapedCount:)`.
+    static let helpFlags: Set<String> = helpTriggers.filter { $0.hasPrefix("-") }
 
     /// Refusal text for `deviceterm help --all`. `--all` is not a help
     /// flag: the command list already names every verb, so there is
@@ -414,6 +425,23 @@ public enum CLICommands {
             return 128 &+ status
         }
         return status
+    }
+
+    /// Whether a sub-verb's free-text tail is asking for the verb's shape
+    /// rather than supplying a name. `splitFlags` leaves anything it
+    /// doesn't recognize as a flag in the positionals so `text` can type
+    /// it literally, which is what puts a help trigger in a name
+    /// position; without this check `tab rename --help` renames the tab
+    /// to "--help".
+    ///
+    /// True only for a lone `helpFlags` member that reached the tail
+    /// unescaped. `escapedCount` keeps `--` meaning what it means
+    /// everywhere else in the parser, and since the tail is the trailing
+    /// run of positionals, a lone token is escaped exactly when that
+    /// count is non-zero. Name-taking sub-verbs call this; the payload
+    /// verbs (`text`, `tab send-input`) deliberately don't.
+    static func isHelpRequest(nameTail tail: [String], escapedCount: Int) -> Bool {
+        tail.count == 1 && escapedCount == 0 && helpFlags.contains(tail[0])
     }
 
     /// Flag names that consume a value, **scoped to the command**. Only
@@ -618,6 +646,9 @@ public enum CLICommands {
         var flags: [String: String] = [:]
         var index = 0
         var literalOnly = false
+        // Where literal territory began, so a caller can still tell an
+        // escaped positional from a bare one once the terminator is gone.
+        var escapedFrom: Int?
         while index < args.count {
             let arg = args[index]
             if literalOnly {
@@ -627,6 +658,7 @@ public enum CLICommands {
             }
             if arg == "--" {  // terminator: everything after is literal
                 literalOnly = true
+                escapedFrom = positionals.count
                 index += 1
                 continue
             }
@@ -651,7 +683,11 @@ public enum CLICommands {
             positionals.append(arg)
             index += 1
         }
-        return ParsedArgs(positionals: positionals, flags: flags)
+        return ParsedArgs(
+            positionals: positionals,
+            flags: flags,
+            escapedCount: escapedFrom.map { positionals.count - $0 } ?? 0
+        )
     }
 
     /// Detect the requested output mode. `--json` anywhere in argv
@@ -919,10 +955,18 @@ public enum CLICommands {
             return parseDeviceSubcommand(positionals: pos)
 
         case "tab":
-            return parseTabSubcommand(positionals: pos, flags: parsed.flags)
+            return parseTabSubcommand(
+                positionals: pos,
+                flags: parsed.flags,
+                escapedCount: parsed.escapedCount
+            )
 
         case "pane":
-            return parsePaneSubcommand(positionals: pos, flags: parsed.flags)
+            return parsePaneSubcommand(
+                positionals: pos,
+                flags: parsed.flags,
+                escapedCount: parsed.escapedCount
+            )
 
         case "window":
             return parseWindowSubcommand(positionals: pos, flags: parsed.flags)

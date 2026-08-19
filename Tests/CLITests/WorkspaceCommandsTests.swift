@@ -322,6 +322,75 @@ struct WorkspaceCommandsTests {
         }
     }
 
+    @Test(arguments: ["--help", "-h"])
+    func tabRenameHelpFlagIsUsage(trigger: String) {
+        // The splitter leaves both triggers in the positional tail;
+        // without the name-position guard, either would become the new
+        // tab name.
+        let cmd = CLICommands.parse(["deviceterm", "tab", "rename", trigger])
+        if case .usage = cmd {
+            // expected: print the shape rather than rename
+        } else {
+            Issue.record("expected .usage for '\(trigger)'; got \(cmd)")
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func tabRenameHelpFlagIsUsageWithTabFlag(trigger: String) {
+        // The `--tab <ref>` selector consumes its value before the tail
+        // is read, so the guard sees the same lone trigger either way.
+        let cmd = CLICommands.parse(
+            ["deviceterm", "tab", "rename", "--tab", "auth", trigger]
+            )
+        if case .usage = cmd {
+            // expected: the selector doesn't change the tail's meaning
+        } else {
+            Issue.record("expected .usage for '\(trigger)'; got \(cmd)")
+        }
+    }
+
+    @Test
+    func tabRenameKeepsBareHelpAsName() {
+        // `help` is a plausible tab name, so only the flag-shaped
+        // triggers are treated as a request for the shape.
+        let cmd = CLICommands.parse(["deviceterm", "tab", "rename", "help"])
+        if case let .tabRename(_, name) = cmd {
+            #expect(name == "help")
+        } else {
+            Issue.record("expected .tabRename; got \(cmd)")
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func tabRenameTerminatorForcesHelpFlagAsName(trigger: String) {
+        // `--` means the same thing here as everywhere else in the
+        // parser: what follows is literal. The terminator itself is
+        // dropped, so the guard reads `escapedCount` to tell this apart
+        // from the bare form.
+        let cmd = CLICommands.parse(
+            ["deviceterm", "tab", "rename", "--", trigger]
+            )
+        if case let .tabRename(_, name) = cmd {
+            #expect(name == trigger)
+        } else {
+            Issue.record("expected .tabRename for '\(trigger)'; got \(cmd)")
+        }
+    }
+
+    @Test
+    func tabRenameKeepsHelpFlagInsideLongerName() {
+        // Only a lone trigger is a help request; a longer tail stays the
+        // literal multi-token name the join already produced.
+        let cmd = CLICommands.parse(
+            ["deviceterm", "tab", "rename", "sprint", "--help"]
+            )
+        if case let .tabRename(_, name) = cmd {
+            #expect(name == "sprint --help")
+        } else {
+            Issue.record("expected .tabRename; got \(cmd)")
+        }
+    }
+
     @Test
     func tabSetPrivateAcceptsTrueAndFalse() {
         // Both the positive and negative forms parse cleanly; the
@@ -553,6 +622,22 @@ struct WorkspaceCommandsTests {
             // expected: no text is a usage error
         } else {
             Issue.record("expected .usage; got \(cmd)")
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func tabSendInputKeepsHelpFlagAsText(trigger: String) {
+        // Typing an arbitrary string is what this verb is for, so its
+        // tail is a payload and a help trigger in it is literal, the
+        // same contract `text` keeps. The name-position guard that
+        // `tab rename` uses deliberately does not apply here.
+        let cmd = CLICommands.parse(
+            ["deviceterm", "tab", "send-input", trigger]
+            )
+        if case let .tabSendInput(_, text, _) = cmd {
+            #expect(text == trigger)
+        } else {
+            Issue.record("expected .tabSendInput for '\(trigger)'; got \(cmd)")
         }
     }
 
@@ -859,6 +944,50 @@ struct WorkspaceCommandsTests {
             #expect(name == "iphone-15")
         } else {
             Issue.record("expected .paneRename; got \(cmd)")
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func paneRenameHelpFlagIsUsage(trigger: String) {
+        let cmd = CLICommands.parse(["deviceterm", "pane", "rename", trigger])
+        if case .usage = cmd {
+            // expected: same name-position guard as `tab rename`
+        } else {
+            Issue.record("expected .usage for '\(trigger)'; got \(cmd)")
+        }
+    }
+
+    @Test
+    func paneRenameKeepsBareHelpAsName() {
+        let cmd = CLICommands.parse(["deviceterm", "pane", "rename", "help"])
+        if case let .paneRename(_, name) = cmd {
+            #expect(name == "help")
+        } else {
+            Issue.record("expected .paneRename; got \(cmd)")
+        }
+    }
+
+    @Test
+    func paneRenameKeepsHelpFlagInsideLongerName() {
+        let cmd = CLICommands.parse(
+            ["deviceterm", "pane", "rename", "sim", "--help"]
+            )
+        if case let .paneRename(_, name) = cmd {
+            #expect(name == "sim --help")
+        } else {
+            Issue.record("expected .paneRename; got \(cmd)")
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func paneRenameTerminatorForcesHelpFlagAsName(trigger: String) {
+        let cmd = CLICommands.parse(
+            ["deviceterm", "pane", "rename", "--", trigger]
+            )
+        if case let .paneRename(_, name) = cmd {
+            #expect(name == trigger)
+        } else {
+            Issue.record("expected .paneRename for '\(trigger)'; got \(cmd)")
         }
     }
 
