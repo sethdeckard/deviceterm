@@ -309,8 +309,9 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         statusItem.start()
 
         // Stay-alive predicate per docs/ARCHITECTURE.md: any connected RPC
-        // peer (GUI XPC / CLI UDS) OR a non-terminal pane whose owner GUI is
-        // still alive OR any deviceterm-owned booted sim. The pane clause uses
+        // peer (GUI XPC / CLI UDS) OR a pane retirement cleanup still in
+        // flight OR a non-terminal pane whose owner GUI is still alive OR any
+        // deviceterm-owned booted sim. The pane clause uses
         // owner liveness (not raw pane count) so an abandoned pane doesn't pin
         // the daemon; the sim clause uses `ownedBootedCount` (ownership map ∩
         // live CoreSimulator Booted state), not `ownedCount`. An external
@@ -334,6 +335,13 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
                 // NOT count (its owner fails the liveness check), so the daemon
                 // can still idle-exit and reap its tunnels; the idle grace
                 // window already covers a brief reconnect.
+                // A pane whose retirement cleanup is still running has already
+                // left `liveOwnerSessionIds`, and a physical-device pane has no
+                // owned-booted-sim fallback to hold the daemon up. Exiting
+                // there abandons a backend, a tunnel, and any final lift.
+                if await paneCoordinator.hasDeferredCleanup {
+                    return true
+                }
                 let liveOwners = await paneCoordinator.liveOwnerSessionIds
                 for owner in liveOwners where await sessionManager.isAlive(owner) {
                     return true

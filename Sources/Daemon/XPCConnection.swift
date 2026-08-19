@@ -171,6 +171,15 @@ public actor XPCConnection {
     /// creation applies it. Expired entries are pruned opportunistically on
     /// the next drain/subscribe; the hard count cap bounds residence.
     private var drainTombstones: [UInt32: Date] = [:]
+    /// Handler tasks for messages this connection is still processing, so
+    /// `close()` can cancel them.
+    ///
+    /// The closed flag alone can't do this: it drops a message before dispatch
+    /// but, as `handleEvent` notes, does nothing to a handler that already
+    /// entered and suspended. A contact-lane waiter parked behind a long
+    /// gesture is exactly that, and cancellation is what wakes it.
+    private var inFlightRequests: [UInt64: Task<Void, Never>] = [:]
+    private var nextRequestId: UInt64 = 1
     private var closed: Bool = false
 
     init(
@@ -238,10 +247,37 @@ public actor XPCConnection {
         xpc_connection_set_event_handler(peer) { [weak self] event in
             guard let self else { return }
             Task { [weak self] in
-                await self?.handleEvent(event)
+                await self?.admit(event)
             }
         }
         xpc_connection_resume(peer)
+    }
+
+    /// Register an inbound message's handler task, then run it.
+    ///
+    /// The closed check, the id, the spawn, and the store share one
+    /// non-suspending actor step. A task that spawned first and registered
+    /// itself second would leave a window for `close()` to run between the
+    /// two, clearing the registry and letting the late task dispatch against a
+    /// closed connection.
+    ///
+    /// The key is minted here rather than taken from the envelope: the
+    /// envelope's `id` is client-supplied and absent entirely on a
+    /// notification, so it is neither always present nor guaranteed unique.
+    private func admit(_ event: xpc_object_t) {
+        guard !closed else { return }
+        let id = nextRequestId
+        nextRequestId &+= 1
+        inFlightRequests[id] = Task { [weak self] in
+            await self?.handleEvent(event)
+            await self?.retireRequest(id)
+        }
+    }
+
+    /// Drop a finished handler. Idempotent, so a task completing as `close()`
+    /// clears the registry can't resurrect an entry.
+    private func retireRequest(_ id: UInt64) {
+        inFlightRequests.removeValue(forKey: id)
     }
 
     /// Close the connection: cancels every in-flight
@@ -292,6 +328,14 @@ public actor XPCConnection {
         if let registry = subscriptionRegistry {
             await registry.dropAllForConnection(connectionId: id)
         }
+        // Wake anything this connection left suspended mid-handler. A lane
+        // waiter observes the cancellation, leaves its queue, and resumes
+        // without touching the backend. The deferred-close supervisor is
+        // deliberately not tracked here: it is detached and has to finish.
+        for task in inFlightRequests.values {
+            task.cancel()
+        }
+        inFlightRequests.removeAll()
         xpc_connection_cancel(peer)
         if let server {
             await server.removeConnection(id: id)

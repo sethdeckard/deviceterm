@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import Foundation
+
 /// One thing to do to the device's human-interface surfaces, in deviceterm's own
 /// vocabulary. The relay privately turns each intent into the device's HID /
 /// button / orientation reports; nothing above it names a wire field.
@@ -62,6 +64,34 @@ package struct DevicePoint: Sendable, Equatable {
     }
 }
 
+/// A cancellation signal that reaches work already handed to a `ChannelPump`.
+///
+/// Cancelling the task that submitted a job does not cancel the job.
+/// `ChannelPump.run` parks a continuation and yields the work to a separate
+/// long-lived worker, so `Task.isCancelled` inside the job reads the worker's
+/// state rather than the submitter's, and a queued job runs even after its
+/// caller is gone. Per-job cancellation on the pump itself would put every
+/// channel's FIFO ordering at risk to serve one verb, so the signal rides the
+/// intent instead.
+///
+/// Isolated by a documented serial queue: it is read from the worker and
+/// written from whichever task abandons the request.
+package final class InteractionCancellation: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.deviceterm.relay.cancellation")
+    private var cancelled = false
+
+    package var isCancelled: Bool {
+        queue.sync { cancelled }
+    }
+
+    package init() {}
+
+    /// Ask the job to stop. Idempotent.
+    package func cancel() {
+        queue.sync { cancelled = true }
+    }
+}
+
 /// A touchscreen action.
 package struct TouchInput: Sendable, Equatable {
     /// Whether this is a contact/press sample or the final lift.
@@ -86,11 +116,26 @@ package struct TouchInput: Sendable, Equatable {
     package let point: DevicePoint
     package let phase: Phase
     package let kind: Kind
+    /// Set only for `.appSwitcher`, whose trajectory is long enough to be worth
+    /// abandoning partway. Excluded from `==`: it is control-plane state, so
+    /// two inputs describing the same touch are equal whichever token they
+    /// carry.
+    package let cancellation: InteractionCancellation?
 
-    package init(point: DevicePoint, phase: Phase, kind: Kind) {
+    package init(
+        point: DevicePoint,
+        phase: Phase,
+        kind: Kind,
+        cancellation: InteractionCancellation? = nil
+    ) {
         self.point = point
         self.phase = phase
         self.kind = kind
+        self.cancellation = cancellation
+    }
+
+    package static func == (lhs: TouchInput, rhs: TouchInput) -> Bool {
+        lhs.point == rhs.point && lhs.phase == rhs.phase && lhs.kind == rhs.kind
     }
 }
 

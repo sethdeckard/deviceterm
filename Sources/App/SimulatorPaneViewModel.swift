@@ -31,6 +31,34 @@ final class SimulatorPaneViewModel {
         case up(UInt16)
     }
 
+    /// A live-contact edge that must never be dropped. Moves ride a separate
+    /// replaceable slot instead: losing one costs a position, losing a `down`
+    /// or a `lift` costs the gesture or strands a finger.
+    ///
+    /// One stream for both single-touch and two-finger contacts, because they
+    /// share the pane's digitizer. On separate pumps an Option-drag's
+    /// two-finger `down` can be sent while the preceding single-touch `lift` is
+    /// still in flight, and the daemon then sees a plain lift for a two-finger
+    /// contact.
+    private enum LiveLifecycle: Sendable {
+        case touchDown(CGPoint, edge: Int?, gesture: UInt64)
+        case touchLift(CGPoint, gesture: UInt64)
+        case multiDown(CGPoint, CGPoint, gesture: UInt64)
+        case multiLift(CGPoint, CGPoint, gesture: UInt64)
+        /// A move is waiting in the matching slot. Carries no position: the
+        /// pump reads the newest one, so a nudge that arrives after the drain
+        /// already took it is a no-op.
+        case touchMoveAvailable
+        case multiMoveAvailable
+    }
+
+    /// A pending two-finger move, tagged with the gesture that produced it.
+    private struct PendingMultitouchMove {
+        let finger1: CGPoint
+        let finger2: CGPoint
+        let gesture: UInt64
+    }
+
     private static let surfaceCoalesceIntervalNs: UInt64 = 16_000_000
     /// Default backoff before resubscribing after the daemon connection
     /// drops mid-stream. Keeps a flapping connection from busy-looping.
@@ -110,8 +138,28 @@ final class SimulatorPaneViewModel {
         lease: SurfaceLease?
     )?
     @ObservationIgnored private var surfaceApplyTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingTouchMove: CGPoint?
-    @ObservationIgnored private var touchMoveInFlight = false
+    /// The pending move, tagged with the gesture that produced it.
+    ///
+    /// A slot shared across gestures is worse than no slot: a `down` for the
+    /// next drag can land while the previous `lift` is still in flight, and its
+    /// move would then be sent as part of the old gesture or cleared by the old
+    /// gesture's teardown.
+    @ObservationIgnored private var pendingTouchMove: (point: CGPoint, gesture: UInt64)?
+    /// Bumped by intake on every `.down`; the pump tracks the one it is
+    /// currently servicing.
+    @ObservationIgnored private var intakeGesture: UInt64 = 0
+    @ObservationIgnored private var pumpGesture: UInt64 = 0
+    @ObservationIgnored private var intakeMultitouchGesture: UInt64 = 0
+    @ObservationIgnored private var pumpMultitouchGesture: UInt64 = 0
+    /// At most one un-consumed move nudge is on the stream at a time, so a fast
+    /// drag can't queue one per event behind a slow send.
+    @ObservationIgnored private var touchMoveNudged = false
+    /// Whether the *pump* has an open contact, which is not the same as the
+    /// intake's `liveTouchHeld`: intake clears that the instant a lift is
+    /// queued, while the pump may still owe the moves that preceded it.
+    @ObservationIgnored private var pumpContactOpen = false
+    @ObservationIgnored private var pumpMultitouchOpen = false
+    @ObservationIgnored private var multitouchMoveNudged = false
     /// Live-touch keepalive: re-report a held-but-stationary finger so
     /// the OS sees continuous contact (the dwell the App Switcher /
     /// Control Center recognizers need), not a silent gap once
@@ -128,7 +176,7 @@ final class SimulatorPaneViewModel {
     /// Latched at `.down`, cleared at `.lift`. `nil` → the ordinary
     /// plain-touch path.
     @ObservationIgnored private var activeTouchEdge: Int?
-    @ObservationIgnored private var pendingMultitouchMove: (finger1: CGPoint, finger2: CGPoint)?
+    @ObservationIgnored private var pendingMultitouchMove: PendingMultitouchMove?
     @ObservationIgnored private var multitouchMoveInFlight = false
     /// AppKit gives key events in order, but dispatching every one in an
     /// independent Task can reverse a quick down/up pair once the RPCs suspend.
@@ -137,6 +185,16 @@ final class SimulatorPaneViewModel {
     @ObservationIgnored private let keyInputStream: AsyncStream<KeyInput>
     @ObservationIgnored private let keyInputContinuation: AsyncStream<KeyInput>.Continuation
     @ObservationIgnored private var keyInputTask: Task<Void, Never>?
+    /// The shared live-contact stream, ordered end to end.
+    ///
+    /// AppKit hands these over in order, but a `Task` per event lets a `move`
+    /// overtake its own `down` once the RPCs suspend, and XPC dispatch gives no
+    /// arrival-order guarantee either. One pump per stream is what makes the
+    /// daemon see the order the user produced. Same shape as the key pump
+    /// above, and for the same reason.
+    @ObservationIgnored private let liveStream: AsyncStream<LiveLifecycle>
+    @ObservationIgnored private let liveContinuation: AsyncStream<LiveLifecycle>.Continuation
+    @ObservationIgnored private var liveTask: Task<Void, Never>?
     /// Backoff before a resubscribe attempt after the connection drops.
     @ObservationIgnored private let reconnectBackoffNs: UInt64
 
@@ -159,6 +217,7 @@ final class SimulatorPaneViewModel {
         self.capabilities = capabilities ?? .missingBlockFallback
         self.reconnectBackoffNs = reconnectBackoffNs
         (keyInputStream, keyInputContinuation) = AsyncStream<KeyInput>.makeStream()
+        (liveStream, liveContinuation) = AsyncStream<LiveLifecycle>.makeStream()
     }
 
     deinit {
@@ -166,6 +225,8 @@ final class SimulatorPaneViewModel {
         touchKeepaliveTask?.cancel()
         keyInputTask?.cancel()
         keyInputContinuation.finish()
+        liveTask?.cancel()
+        liveContinuation.finish()
     }
 
     /// Start consuming the pane's event stream. Call once (from the
@@ -177,6 +238,7 @@ final class SimulatorPaneViewModel {
     /// arrives over this same stream.
     func start() {
         startKeyInputPump()
+        startTouchPumps()
         guard subscriptionTask == nil else { return }
         let id = paneId
         let client = daemonClient
@@ -354,28 +416,156 @@ final class SimulatorPaneViewModel {
     /// event (the view only supplies it on the first contact), so the
     /// keepalive (which fires with no view event) tags its resends too.
     func touch(at point: CGPoint, phase: TouchPhase, edge: Int?) {
+        // Idempotent, and here rather than only in `start()` so input is never
+        // silently swallowed by a view model that hasn't subscribed yet.
+        startTouchPumps()
         switch phase {
         case .down:
             pendingTouchMove = nil
             lastLiveTouchPoint = point
             liveTouchHeld = true
             liveTouchMovedSinceTick = true
-            activeTouchEdge = edge
+            intakeGesture &+= 1
             startTouchKeepalive()
-            sendTouch(point, phase: phase)
+            // The edge is latched by the pump when it sends the down, not here:
+            // the next drag's intake can run while this one's lift is still in
+            // flight, and an intake-side latch would retag that lift.
+            liveContinuation.yield(.touchDown(point, edge: edge, gesture: intakeGesture))
 
         case .lift:
-            pendingTouchMove = nil
             liveTouchHeld = false
             stopTouchKeepalive()
-            sendTouch(point, phase: phase)
-            activeTouchEdge = nil
+            liveContinuation.yield(.touchLift(point, gesture: intakeGesture))
 
         case .move:
             lastLiveTouchPoint = point
             liveTouchMovedSinceTick = true
-            pendingTouchMove = point
-            flushTouchMoveIfNeeded()
+            enqueueTouchMove(point)
+        }
+    }
+
+    /// Replace the pending move and wake the pump if it isn't already going to
+    /// look. Latest-wins: a position overwritten before the pump reads it was
+    /// stale anyway.
+    private func enqueueTouchMove(_ point: CGPoint) {
+        pendingTouchMove = (point, intakeGesture)
+        guard !touchMoveNudged else { return }
+        touchMoveNudged = true
+        liveContinuation.yield(.touchMoveAvailable)
+    }
+
+    /// Drain the shared live-contact stream in order.
+    ///
+    /// Lifecycle edges ride one FIFO the pump never skips; each touch kind
+    /// keeps one replaceable latest-wins move slot, drained after each edge and
+    /// between sends. One buffering policy gets it wrong either way: keeping
+    /// only the newest item could drop a `down` or a `lift`, while an unbounded
+    /// queue keeps them but stacks stale drag positions behind a slow send.
+    private func startTouchPumps() {
+        guard liveTask == nil else { return }
+        let stream = liveStream
+        liveTask = Task { @MainActor [weak self] in
+            for await event in stream {
+                guard let self, !Task.isCancelled else { return }
+                switch event {
+                case let .touchDown(point, edge, gesture):
+                    self.activeTouchEdge = edge
+                    self.pumpGesture = gesture
+                    self.pumpContactOpen = true
+                    await self.deliverTouch(point, phase: .down)
+
+                case let .touchLift(point, gesture):
+                    self.pumpGesture = gesture
+                    // Drain a move that arrived while the down was in flight,
+                    // so the lift never lands on a stale position.
+                    await self.drainPendingTouchMoves()
+                    await self.deliverTouch(point, phase: .lift)
+                    self.pumpContactOpen = false
+                    self.activeTouchEdge = nil
+                    // Only this gesture's leftovers: the next drag may already
+                    // have queued a move behind the lift.
+                    if self.pendingTouchMove?.gesture == gesture {
+                        self.pendingTouchMove = nil
+                    }
+
+                case .touchMoveAvailable:
+                    self.touchMoveNudged = false
+
+                case let .multiDown(finger1, finger2, gesture):
+                    self.pumpMultitouchGesture = gesture
+                    self.pumpMultitouchOpen = true
+                    await self.deliverMultitouch(finger1: finger1, finger2: finger2, phase: .down)
+
+                case let .multiLift(finger1, finger2, gesture):
+                    self.pumpMultitouchGesture = gesture
+                    await self.drainPendingMultitouchMoves()
+                    await self.deliverMultitouch(finger1: finger1, finger2: finger2, phase: .lift)
+                    self.pumpMultitouchOpen = false
+                    if self.pendingMultitouchMove?.gesture == gesture {
+                        self.pendingMultitouchMove = nil
+                    }
+
+                case .multiMoveAvailable:
+                    self.multitouchMoveNudged = false
+                }
+                await self.drainPendingTouchMoves()
+                await self.drainPendingMultitouchMoves()
+            }
+        }
+    }
+
+    /// Send whatever move is pending, repeatedly, until the slot is empty. A
+    /// fast drag replaces the slot while a send is in flight, so the newest
+    /// position goes out and the ones it overwrote are dropped rather than
+    /// queued.
+    private func drainPendingTouchMoves() async {
+        while pumpContactOpen, let pending = pendingTouchMove, pending.gesture == pumpGesture {
+            pendingTouchMove = nil
+            await deliverTouch(pending.point, phase: .move)
+        }
+    }
+
+    private func drainPendingMultitouchMoves() async {
+        while pumpMultitouchOpen,
+            let move = pendingMultitouchMove,
+            move.gesture == pumpMultitouchGesture {
+            pendingMultitouchMove = nil
+            await deliverMultitouch(finger1: move.finger1, finger2: move.finger2, phase: .move)
+        }
+    }
+
+    /// One contact event, awaited. A failed send is ignored so the pump can
+    /// continue: wedging the chain would strand the terminal lift.
+    private func deliverTouch(_ point: CGPoint, phase: TouchPhase) async {
+        do {
+            if let edge = activeTouchEdge {
+                try await daemonClient.paneInputEdgeTouch(
+                    paneId: paneId,
+                    x: point.x,
+                    y: point.y,
+                    phase: phase,
+                    edge: edge
+                )
+            } else {
+                try await daemonClient.paneInputTouch(paneId: paneId, x: point.x, y: point.y, phase: phase)
+            }
+        } catch {
+            // Ignored so the pump keeps going: the terminal lift still has to
+            // land, and a stranded contact is worse than a dropped position.
+            // Same rule as the keyboard pump above.
+        }
+    }
+
+    private func deliverMultitouch(finger1: CGPoint, finger2: CGPoint, phase: TouchPhase) async {
+        do {
+            try await daemonClient.paneInputMultitouch(
+                paneId: paneId,
+                phase: phase,
+                finger1: finger1,
+                finger2: finger2
+            )
+        } catch {
+            // See `deliverTouch`: the lift matters more than any one frame.
         }
     }
 
@@ -407,7 +597,9 @@ final class SimulatorPaneViewModel {
                         x: self.lastLiveTouchPoint.x + jitter,
                         y: self.lastLiveTouchPoint.y
                     )
-                    self.sendTouch(point, phase: .move)
+                    // Through the same slot the drag uses, so a resend can
+                    // never overtake the contact it is refreshing.
+                    self.enqueueTouchMove(point)
                 }
             }
         }
@@ -494,109 +686,31 @@ final class SimulatorPaneViewModel {
         }
     }
 
-    private func flushTouchMoveIfNeeded() {
-        guard !touchMoveInFlight, let point = pendingTouchMove else { return }
-        pendingTouchMove = nil
-        touchMoveInFlight = true
-        let id = paneId
-        let client = daemonClient
-        let edge = activeTouchEdge
-        Task { @MainActor [weak self] in
-            if let edge {
-                try? await client.paneInputEdgeTouch(
-                    paneId: id,
-                    x: point.x,
-                    y: point.y,
-                    phase: .move,
-                    edge: edge
-                )
-            } else {
-                try? await client.paneInputTouch(
-                    paneId: id,
-                    x: point.x,
-                    y: point.y,
-                    phase: .move
-                )
-            }
-            guard let self else { return }
-            self.touchMoveInFlight = false
-            self.flushTouchMoveIfNeeded()
-        }
-    }
-
-    private func sendTouch(_ point: CGPoint, phase: TouchPhase) {
-        let id = paneId
-        let client = daemonClient
-        let edge = activeTouchEdge
-        Task { @MainActor in
-            if let edge {
-                try? await client.paneInputEdgeTouch(
-                    paneId: id,
-                    x: point.x,
-                    y: point.y,
-                    phase: phase,
-                    edge: edge
-                )
-            } else {
-                try? await client.paneInputTouch(
-                    paneId: id,
-                    x: point.x,
-                    y: point.y,
-                    phase: phase
-                )
-            }
-        }
-    }
-
-    /// Live two-finger contact frame (Option-drag pinch/rotate). Same
-    /// coalescing shape as `touch`: `.down`/`.lift` are sent immediately
-    /// (a dropped `.lift` would strand a contact), `.move` is latest-wins
-    /// coalesced so a fast drag doesn't queue stale finger positions.
+    /// Live two-finger contact frame (Option-drag pinch/rotate). Same shape as
+    /// `touch`: `.down` and `.lift` are preserved in FIFO order (a dropped
+    /// `.lift` would strand a contact), `.move` is latest-wins so a fast drag
+    /// doesn't queue stale finger positions.
     func multitouch(phase: TouchPhase, finger1: CGPoint, finger2: CGPoint) {
+        startTouchPumps()
         switch phase {
         case .down:
             pendingMultitouchMove = nil
-            sendMultitouch(finger1: finger1, finger2: finger2, phase: phase)
+            intakeMultitouchGesture &+= 1
+            liveContinuation.yield(.multiDown(finger1, finger2, gesture: intakeMultitouchGesture))
 
         case .lift:
-            pendingMultitouchMove = nil
-            sendMultitouch(finger1: finger1, finger2: finger2, phase: phase)
+            liveContinuation.yield(.multiLift(finger1, finger2, gesture: intakeMultitouchGesture))
 
         case .move:
-            pendingMultitouchMove = (finger1, finger2)
-            flushMultitouchMoveIfNeeded()
-        }
-    }
-
-    private func flushMultitouchMoveIfNeeded() {
-        guard !multitouchMoveInFlight, let move = pendingMultitouchMove else { return }
-        pendingMultitouchMove = nil
-        multitouchMoveInFlight = true
-        let id = paneId
-        let client = daemonClient
-        Task { @MainActor [weak self] in
-            try? await client.paneInputMultitouch(
-                paneId: id,
-                phase: .move,
-                finger1: move.finger1,
-                finger2: move.finger2
-            )
-            guard let self else { return }
-            self.multitouchMoveInFlight = false
-            self.flushMultitouchMoveIfNeeded()
-        }
-    }
-
-    private func sendMultitouch(finger1: CGPoint, finger2: CGPoint, phase: TouchPhase) {
-        let id = paneId
-        let client = daemonClient
-        Task { @MainActor in
-            try? await client.paneInputMultitouch(
-                paneId: id,
-                phase: phase,
+            pendingMultitouchMove = PendingMultitouchMove(
                 finger1: finger1,
-                finger2: finger2
+                finger2: finger2,
+                gesture: intakeMultitouchGesture
             )
+            if !multitouchMoveNudged {
+                multitouchMoveNudged = true
+                liveContinuation.yield(.multiMoveAvailable)
+            }
         }
     }
 

@@ -940,3 +940,122 @@ private actor QuiesceSignal {
     private(set) var isComplete = false
     func complete() { isComplete = true }
 }
+
+/// Records that a task ran to completion, which `Task` itself doesn't expose.
+private final class CompletionFlag: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.deviceterm.tests.completion-flag")
+    private var completed = false
+
+    var isSet: Bool {
+        queue.sync { completed }
+    }
+
+    func set() {
+        queue.sync { completed = true }
+    }
+}
+
+/// A relay whose App Switcher macro blocks until released, so a test can see
+/// whether the caller waits for it and whether cancellation reaches it.
+private actor ParkingRelay: InteractionRelaying {
+    nonisolated let support: InteractionSupport
+    private var release: CheckedContinuation<Void, Never>?
+    private(set) var started = false
+    private(set) var startedCount = 0
+    private(set) var sawCancellation = false
+
+    init(support: InteractionSupport) {
+        self.support = support
+    }
+
+    /// Returns whether the macro actually reached the relay, so a test fails
+    /// loudly rather than passing on a spin that timed out.
+    func waitUntilStarted() async -> Bool {
+        for _ in 0..<10_000 where !started {
+            await Task.yield()
+        }
+        return started
+    }
+
+    func releaseMacro() {
+        release?.resume()
+        release = nil
+    }
+
+    /// Non-throwing: this relay parks rather than failing, and a non-throwing
+    /// function satisfies the protocol's throwing requirement.
+    @discardableResult
+    func perform(_ intent: InteractionIntent) async -> InteractionOutcome {
+        guard case let .touch(input) = intent, case .appSwitcher = input.kind else {
+            return .acknowledged
+        }
+        started = true
+        startedCount += 1
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            release = continuation
+        }
+        sawCancellation = input.cancellation?.isCancelled == true
+        return .acknowledged
+    }
+}
+
+@Test
+func openAppSwitcherWaitsForTheRelayMacroToFinish() async throws {
+    let pixelBuffer = try #require(makePixelBuffer(width: 16, height: 16))
+    let relay = ParkingRelay(support: touchOnly)
+    let backend = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: FakeFeed(frames: [DecodedFrame(pixelBuffer: pixelBuffer)]),
+        device: relay
+    )
+    // The gated human-input pump opens on the first frame.
+    try backend.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    let completed = CompletionFlag()
+    let call = Task {
+        try await backend.openAppSwitcher(edge: 3, generation: backend.currentInputGeneration())
+        completed.set()
+    }
+    #expect(await relay.waitUntilStarted())
+    // Suspended, not finished: returning while the relay still drives the
+    // device would release the pane's lane mid-macro.
+    #expect(!completed.isSet)
+    await relay.releaseMacro()
+    try await call.value
+    #expect(completed.isSet)
+}
+
+@Test
+func aTransferCancelsAnInFlightAppSwitcherWithoutKillingThePump() async throws {
+    let pixelBuffer = try #require(makePixelBuffer(width: 16, height: 16))
+    let relay = ParkingRelay(support: touchOnly)
+    let backend = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: FakeFeed(frames: [DecodedFrame(pixelBuffer: pixelBuffer)]),
+        device: relay
+    )
+    try backend.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    let call = Task { try await backend.openAppSwitcher(edge: 3, generation: backend.currentInputGeneration()) }
+    #expect(await relay.waitUntilStarted())
+    backend.cancelAppSwitcherRequests()
+    await relay.releaseMacro()
+    try await call.value
+    // The macro saw the signal, and the pump is still alive for the next verb:
+    // cancelling the pump itself would disable input on this pane for good.
+    #expect(await relay.sawCancellation)
+    backend.resumeInput()
+    try backend.tapDown(at: .zero, generation: backend.currentInputGeneration())
+}
+
+@Test
+func openAppSwitcherGivesUpWhenTheDeviceNeverStreams() async throws {
+    let relay = ParkingRelay(support: touchOnly)
+    // No frames, so the gated human-input pump never opens and never consumes
+    // the macro. An unbounded park would hold the pane's lane forever, and with
+    // it a deferred close's cleanup.
+    let backend = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
+    let call = Task { try await backend.openAppSwitcher(edge: 3, generation: backend.currentInputGeneration()) }
+    try await call.value
+    // It returned, and the macro is cancelled, so it no-ops if the gate opens
+    // later and the pump finally drains it.
+    #expect(await relay.startedCount == 0)
+}

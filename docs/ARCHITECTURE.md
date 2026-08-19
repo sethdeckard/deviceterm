@@ -1161,6 +1161,22 @@ ref-based wire shape that flows through the Intent layer. `"detach"`, the
 default when `mode` is omitted, drops the pane and leaves the sim
 running; `"shutdown"` also shuts down the sim.
 
+Closing a pane whose gesture still holds contact does not tear it down.
+The pane is retired instead: gone from `pane.list` and from every further
+request, but its backend stays alive until the gesture releases, because
+pulling it out mid-gesture strands the contact.
+
+The ack is immediate and carries no shutdown or tunnel action; those run
+afterward, once. The pane's target stays reserved for the same window, so
+a re-create against the same device parks rather than attaching beside the
+running gesture, and the daemon will not idle-exit while any of this is
+outstanding.
+
+The cost is bounded by the gesture cap, so a 60-second `longPress` holds
+the device, the tunnel, and the target for a full minute after the pane
+has visibly closed. A deferred shutdown that fails is logged to the
+daemon's lifecycle log rather than reported: the ack went out long before.
+
 `expectedAttachment` is the `attachment` from the attach response the caller
 is closing against. When present, the close is a no-op unless the record is
 still that admission, checked in the same synchronous step that removes it.
@@ -1189,6 +1205,41 @@ it to watch families is a client affordance concern
 (`PaneControlAffordance`), not a daemon gate. Edge gestures ride the
 simulator's edge tags on a sim and enriched system-gesture reports on
 physical hardware. Coordinates are normalized display coordinates.
+
+A pane has one shared digitizer stream, so the contact-producing verbs
+take turns through a per-pane lane: `tap`, `touch`, `edgeTouch`,
+`multitouch`, `swipe`, `edgeSwipe`, `longPress`, `pinch`, and the App
+Switcher. `crown`, `key`, `text`, `button`, and `rotate` drive no contact
+and never enter it.
+
+Without the lane two requests interleave into
+`down(A) down(B) up(A) up(B)`: successive downs read as continued contact
+and the first up clears it, merging two gestures into one.
+`PaneCoordinator` is an actor, but it releases isolation the moment a
+gesture awaits into the synthesis, so actor isolation alone doesn't order
+them.
+
+A gesture that holds contact across suspensions takes the lane for its
+whole run; others queue. Live contact jumps that queue, because a human
+drag must not wait out a backlog of scripted verbs, and it asks a `swipe`,
+`edgeSwipe`, `longPress`, or `pinch` to release early. A `tap` and the App
+Switcher are not interrupted: a tap is two frames long, and the App
+Switcher's trajectory only reads as a gesture whole.
+
+A live `lift` is never queued, since blocking it is the one thing that
+could strand a finger down. A lift arriving with no matching live contact
+is acknowledged and sends nothing, so it can't release contact a `tap` is
+holding.
+
+Two live producers on one pane are not arbitrated. The second one's
+contact merges into the first's, which is what the HID layer would do
+anyway. Telling them apart needs a stream identity the wire doesn't carry.
+
+A live contact with no phase for two seconds is assumed abandoned and
+released. The GUI refreshes a held single-finger or edge contact every
+33 ms, so an ordinary drag never approaches that. A stationary two-finger
+contact has no such keepalive, and neither does a client driving
+`pane.input.*` directly; both have to keep sending phases to hold longer.
 
 The paced gestures (`tap`, `swipe`, `edgeSwipe`, `longPress`, `pinch`,
 `crown`) sleep to absolute deadlines rather than for per-step intervals,
@@ -1221,20 +1272,24 @@ frames share one absolute schedule, so a late frame can be absorbed by the
 shorter waits after it. If the relay stays behind, the final lift runs late
 rather than dropping frames.
 
-Two things end a synthesis-side contact gesture early, and they differ in
-what they send. A cancelled request releases the contact, because nothing
-else will. A gesture whose pane transferred sends nothing: the release
-would be dropped as stale, and the backend's quiesce owns freeing that
-contact. Both stop at the same checkpoint, one per paced loop.
+Three things end a synthesis-side contact gesture early, and they differ
+in what they send. A cancelled request releases the contact, because
+nothing else will. So does a gesture the lane preempted, since live input
+is waiting on the digitizer. A gesture whose pane transferred sends
+nothing: the release would be dropped as stale, and the backend's quiesce
+owns freeing that contact. All three stop at the same checkpoint, one per
+paced loop.
 
 That checkpoint is the synthesis-side rule for loops holding contact, and
 it covers device panes too: they share the same gesture synthesis,
 differing only in the backend underneath. `crown` and the Home double-press
-fallback hold none, so they only stop. The physical-device App Switcher is
-a relay-side macro outside this path: every exit attempts a lift, including
-the failure path, but that attempt is best-effort. If it fails too, the
-contact is stranded, and the daemon never tracks the macro as held so
-quiesce can't recover it.
+fallback hold none, so they only stop.
+
+The physical-device App Switcher is a relay-side macro outside this path.
+Every exit attempts a lift, including the failure path, and that attempt is
+best-effort. When it fails, the backend records the macro as a held
+system-gesture contact, so the pane's held-contact recovery and the
+transfer quiesce both reach it.
 
 #### `pane.input.tap`
 
@@ -1294,6 +1349,10 @@ A gesture that ended before its first sample reports `steps: 0` and
 count alone. A current daemon always sends all three fields; they are
 optional only for old-daemon skew.
 
+Preemption is not an error. A gesture the lane cut short still
+acknowledges success, and reports what it sent: a swipe preempted before
+its first interpolated sample returns `steps: 0` and `dispatched: "tap"`.
+
 #### `pane.input.edgeSwipe`
 
 - Params: `{paneId, fromX, fromY, toX, toY, edge, durationMs?, holdMs?}`
@@ -1315,6 +1374,18 @@ the device's touchscreen, with the relay driving the swipe geometry, and
 the coordinator keeps a Home double-press fallback for backends without
 that path. The GUI "App Switcher" menu item and
 `deviceterm app-switcher` ride this.
+
+On a device the call returns once the relay's trajectory has finished, so
+the caller's lease covers the whole macro. Enqueueing and returning would
+free the pane's lane while the device was still being driven.
+
+The wait is bounded at the front only. The relay's pump can't accept work
+until the device's first frame opens its auth gate, so a request that isn't
+picked up within a couple of seconds gives up and reports the macro
+cancelled, having sent nothing. Once the pump starts the trajectory it runs
+to its lift however long it takes. An ownership transfer cancels a macro
+that is queued or mid-trajectory, and a cancelled one still attempts its
+lift.
 
 #### `pane.input.edgeTouch`
 

@@ -275,28 +275,38 @@ public enum PaneMethods {
                 )
             }
             let principal = try requirePrincipal()
-            let outcome = await paneCoordinator.close(
+            let result = await paneCoordinator.close(
                 paneId: paneId,
                 as: principal,
                 mode: mode,
-                expecting: params.expectedAttachment
-            )
-            if let deviceId = outcome.deviceTunnelToRelease {
-                // The pane mirrored a physical device; drop its tunnel
-                // keepalive now that the pane is gone (ref-counted, so the
-                // tunnel survives while another pane still mirrors it).
-                await physicalDeviceCoordinator.releaseKeepalive(deviceId: deviceId)
-            }
-            if let udid = outcome.udidToShutdown {
-                // Best-effort shutdown; the pane is already gone
-                // either way. A failure here is logged into the
-                // returned error message but doesn't undo the pane
-                // teardown.
-                do {
-                    try await deviceCoordinator.shutdown(udid: udid)
-                } catch let error as DeviceError {
-                    throw DeviceMethods.mapDeviceError(error)
+                expecting: params.expectedAttachment,
+                // Runs inside the coordinator's own sequence, which holds the
+                // pane's target reserved across it. Returning these for the
+                // caller to run would let a create attach as soon as the record
+                // was gone, and this close's shutdown would then kill it.
+                externalCleanup: { [physicalDeviceCoordinator, deviceCoordinator] actions in
+                    if let deviceId = actions.deviceTunnelToRelease {
+                        // Ref-counted, so the tunnel survives while another
+                        // pane still mirrors this device.
+                        await physicalDeviceCoordinator.releaseKeepalive(deviceId: deviceId)
+                    }
+                    guard let udid = actions.udidToShutdown else { return nil }
+                    do {
+                        try await deviceCoordinator.shutdown(udid: udid)
+                        return nil
+                    } catch {
+                        // Logged unconditionally, because a deferred close has
+                        // no caller left to fail: the ack went out before this
+                        // ran. An inline close also throws it.
+                        DiagnosticLog.lifecycle.error(
+                            "pane close: shutdown of \(udid, privacy: .public) failed: \(error)"
+                        )
+                        return error
+                    }
                 }
+            )
+            if let error = result.cleanupError as? DeviceError {
+                throw DeviceMethods.mapDeviceError(error)
             }
             return try JSONEncoder().encode(RPCAck(success: true))
         }

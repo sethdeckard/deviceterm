@@ -116,6 +116,12 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// routing tests want, so this only matters to a test that wants a paced
     /// gesture to stop mid-flight.
     var inputGenerationCurrent = true
+    /// When true, `releaseHeldContact` reports the contact still down, the way
+    /// a backend whose release send didn't land does.
+    var failReleaseHeldContact = false
+    /// When true, every touch primitive throws, modelling a gesture whose sends
+    /// start failing partway.
+    var failSends = false
 
     init(
         capabilities: DeviceBackendCapabilities = .simulator.withoutLocation,
@@ -130,6 +136,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { inputGenerationCurrent }
+
+    func releaseHeldContact() -> Bool { !failReleaseHeldContact }
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
@@ -182,6 +190,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func tapDown(at point: CGPoint, generation: UInt64) throws {
+        if failSends { throw DeviceBackendError.notActive }
         tapDownPoints.append(point)
         if blockTapDown {
             parkedLock.lock(); parked = true; parkedLock.unlock()
@@ -189,7 +198,10 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
-    func tapUp(at point: CGPoint, generation: UInt64) throws { tapUpPoints.append(point) }
+    func tapUp(at point: CGPoint, generation: UInt64) throws {
+        if failSends { throw DeviceBackendError.notActive }
+        tapUpPoints.append(point)
+    }
 
     func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) throws {
         if edgeUnsupported { throw DeviceBackendError.unsupportedEdgeGesture }
@@ -259,7 +271,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 }
 // swiftlint:enable unneeded_throws_rethrows
 
-private extension PaneCoordinator {
+extension PaneCoordinator {
     /// Create a pane backed by `backend`, bypassing the CoreSimulator
     /// acquire path. The target's udid is arbitrary (no live sim is
     /// touched). Returns the create result.
@@ -1144,13 +1156,18 @@ func inFlightGestureSurvivesConcurrentClose() async throws {
             durationMs: 300
         )
     }()
-    // Let the swipe reach its first await (past the initial tapDown),
-    // then close the pane, niling `record.backend` out from under it.
+    // Let the swipe reach its first await (past the initial tapDown), then
+    // close the pane while the swipe still holds contact.
     try await Task.sleep(nanoseconds: 20_000_000)
-    _ = await coordinator.close(paneId: result.paneId, as: .guiPeer, mode: .detach)
+    let closed = await coordinator.close(paneId: result.paneId, as: .guiPeer, mode: .detach)
+    // The swipe still held the pane's contact, so the close retired the pane
+    // and postponed its teardown rather than niling the backend mid-gesture.
+    let deferral = try #require(closed.deferral)
+    #expect(!backend.shutdownCalled)
     // The gesture must complete: it drives the backend it captured at
     // the start, not a per-step re-lookup that would now find no pane.
     try await gesture
+    await coordinator.awaitDeferredTeardown(deferral)
     #expect(backend.shutdownCalled)
     #expect(backend.tapDownPoints.count >= 2)
     #expect(backend.tapUpPoints.count == 1)

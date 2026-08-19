@@ -49,8 +49,9 @@ func subscribeOnUnknownPaneThrows() async throws {
 @Test
 func closeOnUnknownPaneIsNoOp() async {
     let coordinator = PaneCoordinator()
-    let outcome = await coordinator.close(paneId: UUID(), as: .guiPeer, mode: .detach)
-    #expect(outcome.udidToShutdown == nil)
+    let result = await coordinator.close(paneId: UUID(), as: .guiPeer, mode: .detach)
+    #expect(result.outcome.udidToShutdown == nil)
+    #expect(result.deferral == nil)
     let count = await coordinator.paneCount
     #expect(count == 0)
 }

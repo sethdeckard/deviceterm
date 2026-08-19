@@ -116,6 +116,70 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         case barrier(@Sendable () -> Void)
     }
 
+    /// One item of human input, plus an optional completion for a caller that
+    /// awaits its own work. Only the human-input pump carries one, so the
+    /// completion rides the payload rather than widening `PumpItem` for the
+    /// four pumps that never use it.
+    ///
+    /// `completion` fires once the work has been performed *or* dropped as
+    /// stale, so an awaiting caller is never stranded.
+    private struct HumanInputWork: @unchecked Sendable {
+        let input: TouchInput
+        /// Fires when the pump dequeues the work and is about to perform it, so
+        /// an awaiting caller can stop timing out on admission. Execution takes
+        /// as long as it takes.
+        let onStart: (@Sendable () -> Void)?
+        let completion: (@Sendable () -> Void)?
+
+        init(
+            _ input: TouchInput,
+            onStart: (@Sendable () -> Void)? = nil,
+            completion: (@Sendable () -> Void)? = nil
+        ) {
+            self.input = input
+            self.onStart = onStart
+            self.completion = completion
+        }
+    }
+
+    /// An App Switcher macro in flight. Its continuation resumes exactly once,
+    /// whichever of the four exits happens first: the macro finished, it was
+    /// cancelled, its generation went stale, or the pump's stream ended.
+    private final class AppSwitcherRequest: @unchecked Sendable {
+        let cancellation: InteractionCancellation
+        /// The completion and the deadline race to finish this request, so the
+        /// exactly-once check needs its own isolation: resuming a checked
+        /// continuation twice traps.
+        private let lock = DispatchQueue(label: "com.deviceterm.device.app-switcher-request")
+        private var resumed = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        init(cancellation: InteractionCancellation) {
+            self.cancellation = cancellation
+        }
+
+        /// Park the caller, unless this request already finished.
+        func install(_ continuation: CheckedContinuation<Void, Never>) {
+            let alreadyDone = lock.sync { () -> Bool in
+                if resumed { return true }
+                self.continuation = continuation
+                return false
+            }
+            if alreadyDone { continuation.resume() }
+        }
+
+        func finish() {
+            let waiting = lock.sync { () -> CheckedContinuation<Void, Never>? in
+                guard !resumed else { return nil }
+                resumed = true
+                let pending = continuation
+                continuation = nil
+                return pending
+            }
+            waiting?.resume()
+        }
+    }
+
     /// Probe every Nth frame for the content rect until it locks. A content-full
     /// frame normally locks on the first frame; throttling means a stream that
     /// can't be sized *yet* (asleep device / black launch screen) or *ever*
@@ -129,6 +193,14 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Consecutive exhaustion drops that trigger a controlled pool recovery
     /// (~2s at 60fps).
     private static let exhaustionRecoveryThreshold = 120
+    /// How long an App Switcher request waits for the human-input pump to pick
+    /// it up before giving up.
+    ///
+    /// The pump is gated on the device's first decoded frame, so a device that
+    /// never streams would otherwise park the caller forever. Matched to the
+    /// contact lane's own abandonment bound: past a couple of seconds, whatever
+    /// is holding the digitizer is not coming back.
+    private static let appSwitcherAdmissionTimeoutNanos: UInt64 = 2_000_000_000
 
     private let feed: any DecodedFrameFeed
     private let device: any InteractionRelaying
@@ -152,8 +224,12 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// would reintroduce the corruption the lease loop eliminates). Recovery from
     /// a genuinely stuck pool is the frame loop's job on sustained exhaustion.
     private var watchdogTask: Task<Void, Never>?
-    private let humanInputStream: AsyncStream<PumpItem<TouchInput>>
-    private let humanInputContinuation: AsyncStream<PumpItem<TouchInput>>.Continuation
+    /// App Switcher macros in flight. Mutated from the gesture task that
+    /// enqueues one and read from the transfer that cancels them, so it lives
+    /// under `inputGate` like the rest of this backend's input state.
+    private var appSwitcherRequests: [AppSwitcherRequest] = []
+    private let humanInputStream: AsyncStream<PumpItem<HumanInputWork>>
+    private let humanInputContinuation: AsyncStream<PumpItem<HumanInputWork>>.Continuation
     private var humanInputPump: Task<Void, Never>?
     private let buttonStream: AsyncStream<PumpItem<ButtonPress>>
     private let buttonContinuation: AsyncStream<PumpItem<ButtonPress>>.Continuation
@@ -240,7 +316,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         let slotCount = ProcessInfo.processInfo.environment[DeviceTermEnv.surfacePoolSlots]
             .flatMap(Int.init) ?? Self.defaultPoolSlots
         self.pool = LeasedSurfacePool(slotCount: slotCount)
-        (humanInputStream, humanInputContinuation) = AsyncStream<PumpItem<TouchInput>>.makeStream()
+        (humanInputStream, humanInputContinuation) = AsyncStream<PumpItem<HumanInputWork>>.makeStream()
         (buttonStream, buttonContinuation) = AsyncStream<PumpItem<ButtonPress>>.makeStream()
         (rotationStream, rotationContinuation) = AsyncStream<PumpItem<RotationRequest>>.makeStream()
         (locationStream, locationContinuation) = AsyncStream<PumpItem<LocationRequest>>.makeStream()
@@ -401,8 +477,14 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             self?.markInputGateOpened()
             for await item in stream {
                 switch item {
-                case let .perform(generation, input):
-                    guard self?.isInputGenerationCurrent(generation) == true else { continue }
+                case let .perform(generation, work):
+                    let input = work.input
+                    guard self?.isInputGenerationCurrent(generation) == true else {
+                        work.completion?()
+                        continue
+                    }
+                    defer { work.completion?() }
+                    work.onStart?()
                     // Record held state only if the send actually landed:
                     // a failed lift must not clear a genuinely-held contact
                     // (which quiesce would then never release).
@@ -840,11 +922,62 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the relay drives the swipe geometry. Always wired (the human-input
     /// surface is always present) so the coordinator's double-press fallback is
     /// reserved for backends without this path.
-    func openAppSwitcher(edge: Int, generation: UInt64) throws {
-        enqueueTouch(
-            TouchInput(point: DevicePoint(x: 0, y: 0), phase: .contact, kind: .appSwitcher(gestureEdge(from: edge))),
-            generation: generation
+    /// Returns once the relay's trajectory has finished, so the caller's lease
+    /// covers the whole macro. Enqueueing and returning would release the lane
+    /// while the device was still being driven, which is exactly the overlap
+    /// the lane exists to prevent.
+    func openAppSwitcher(edge: Int, generation: UInt64) async throws {
+        let cancellation = InteractionCancellation()
+        let request = AppSwitcherRequest(cancellation: cancellation)
+        inputGate.sync { appSwitcherRequests.append(request) }
+        defer { inputGate.sync { appSwitcherRequests.removeAll { $0 === request } } }
+        // The human-input pump only consumes work once the media stream's auth
+        // gate opens on the first frame. If no frame ever arrives the enqueued
+        // macro sits there, and an unbounded wait would hold the pane's lane
+        // and, through it, a deferred close's cleanup. Give up after a bound
+        // instead; the cancellation makes the buffered macro a no-op if it
+        // drains later.
+        //
+        // Bounds admission only. Once the pump starts the macro this is
+        // cancelled, because a trajectory that runs long still has to finish
+        // and lift rather than be abandoned partway.
+        let admissionDeadline = Task { [weak request] in
+            try? await Task.sleep(nanoseconds: Self.appSwitcherAdmissionTimeoutNanos)
+            guard !Task.isCancelled else { return }
+            request?.cancellation.cancel()
+            request?.finish()
+        }
+        defer { admissionDeadline.cancel() }
+        let input = TouchInput(
+            point: DevicePoint(x: 0, y: 0),
+            phase: .contact,
+            kind: .appSwitcher(gestureEdge(from: edge)),
+            cancellation: cancellation
         )
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            request.install(continuation)
+            humanInputContinuation.yield(
+                .perform(
+                    generation: generation,
+                    HumanInputWork(
+                        input,
+                        onStart: { admissionDeadline.cancel() },
+                        completion: { request.finish() }
+                    )
+                )
+            )
+        }
+    }
+
+    /// Stop an App Switcher macro that is queued or mid-trajectory.
+    ///
+    /// Cancels the request rather than the pump: the pump is one task draining
+    /// the stream for the backend's whole life, so cancelling it would disable
+    /// every later input on this pane.
+    func cancelAppSwitcherRequests() {
+        for request in inputGate.sync(execute: { appSwitcherRequests }) {
+            request.cancellation.cancel()
+        }
     }
 
     /// Map the `IndigoHIDEdge` value the GUI tags a system-gesture swipe with to
@@ -909,7 +1042,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the paced gesture is still looping drops every one of its later
     /// sends before it reaches the new owner.
     private func enqueueTouch(_ input: TouchInput, generation: UInt64) {
-        humanInputContinuation.yield(.perform(generation: generation, input))
+        humanInputContinuation.yield(.perform(generation: generation, HumanInputWork(input)))
     }
 
     func rotateCrown(delta: Double, generation: UInt64) throws {
@@ -1064,11 +1197,34 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
+    /// Free a contact left down by a gesture that failed partway. See the
+    /// `DeviceBackend` requirement: no generation bump, because nothing is
+    /// being transferred.
+    func releaseHeldContact() async -> Bool {
+        let contact: TouchInput? = inputGate.sync { heldTouch }
+        guard let contact else { return true }
+        // Released with the held contact's own kind, so a system-gesture
+        // contact gets its matching lift rather than a plain one.
+        let lift = TouchInput(point: contact.point, phase: .lift, kind: contact.kind)
+        guard (try? await device.perform(.touch(lift))) != nil else {
+            // A failed relay send is not proof the tunnel is down, and not
+            // proof the contact lifted. Report it as still held.
+            return false
+        }
+        inputGate.sync { if heldTouch == contact { heldTouch = nil } }
+        return true
+    }
+
     func quiesceInputForTransfer() async -> Bool {
         // (1) Invalidate the current generation. Buffered stale items are
         // now dropped by the pumps as they dequeue them; a new verb (were
         // one admitted) would carry the new generation.
         inputGate.sync { inputGeneration &+= 1 }
+        // An App Switcher macro already inside the relay won't see the new
+        // generation: the pump handed it over and it plays its own trajectory
+        // from there. Signal it directly, so the barrier below isn't waiting
+        // out a gesture that has no reason to keep going. It still lifts.
+        cancelAppSwitcherRequests()
         // Tracks whether every held-input release actually landed. A failed
         // release means we can't guarantee the device is input-clean, so the
         // coordinator must NOT flip ownership (a failed relay send is not

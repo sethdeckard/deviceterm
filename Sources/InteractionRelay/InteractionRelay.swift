@@ -130,7 +130,7 @@ package actor InteractionRelay: InteractionRelaying {
             )
 
         case let .appSwitcher(edge):
-            try await runAppSwitcher(edge: edge)
+            try await runAppSwitcher(edge: edge, cancellation: input.cancellation)
         }
         return .acknowledged
     }
@@ -165,8 +165,12 @@ package actor InteractionRelay: InteractionRelaying {
         rampFrames: Int = 8,
         holdFrames: Int = 4,
         frameNanos: UInt64 = 10_000_000,
+        cancellation: InteractionCancellation? = nil,
         pacer: any RelayPacing = SystemRelayPacer()
     ) async throws {
+        // Cancelled while queued behind other work on this pump: nothing has
+        // been sent, so there is no contact to lift and nothing to undo.
+        if cancellation?.isCancelled == true { return }
         let grab = edge.grabPoint
         let dwell = edge.dwellPoint
         let trajectory = AppSwitcherTrajectory.points(
@@ -176,13 +180,12 @@ package actor InteractionRelay: InteractionRelaying {
             rampFrames: rampFrames,
             holdFrames: holdFrames
         )
-        // The App Switcher is a self-contained trajectory that ends in its
-        // own lift, and the daemon tracks it as *self-releasing* (never
-        // held). So a mid-trajectory failure must still try to lift the
-        // contact, because a partial gesture strands a held touch nothing can
-        // release. The error path attempts the release best-effort: if that
-        // attempt also fails, the contact stays stranded and quiesce can't
-        // recover it.
+        // The App Switcher is a self-contained trajectory that ends in its own
+        // lift, so a mid-trajectory failure must still try to lift the contact.
+        // The error path attempts that best-effort. If the attempt also fails,
+        // the daemon's backend records the macro as a held system-gesture
+        // contact, and its held-contact recovery (and the transfer quiesce)
+        // release it from there.
         do {
             try await sendGestureContact(state: HIDReports.contactState, x: grab.x, y: grab.y, edge: edge)
             // Anchor after the grab lands, so the trajectory's frames are
@@ -197,6 +200,10 @@ package actor InteractionRelay: InteractionRelaying {
             // lateness doesn't compound across frames.
             for (index, point) in trajectory.enumerated() {
                 await pacer.sleep(until: anchor + .nanoseconds(frameNanos * UInt64(index + 1)))
+                // Cancelled mid-trajectory. Break rather than return, so the
+                // lift below still runs: the contact is down and the daemon
+                // never tracks this macro as held, so nothing else frees it.
+                if cancellation?.isCancelled == true { break }
                 try await sendGestureContact(
                     state: HIDReports.contactState,
                     x: point.x,
@@ -204,10 +211,9 @@ package actor InteractionRelay: InteractionRelaying {
                     edge: edge
                 )
             }
-            // The final lift is inside the guarded block too, so if *it*
-            // fails the catch still retries a release. Otherwise a failed
-            // final lift would strand the contact (the daemon never tracks
-            // `.appSwitcher` as held, so quiesce can't recover it).
+            // The final lift is inside the guarded block too, so if *it* fails
+            // the catch still retries a release. A failure past that falls to
+            // the daemon's held-contact recovery.
             try await sendGestureContact(state: HIDReports.releaseState, x: dwell.x, y: dwell.y, edge: edge)
         } catch {
             try? await sendGestureContact(state: HIDReports.releaseState, x: dwell.x, y: dwell.y, edge: edge)

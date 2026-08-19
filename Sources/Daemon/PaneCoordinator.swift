@@ -58,6 +58,42 @@ public struct PaneCloseOutcome: Sendable, Equatable {
     }
 }
 
+/// A token for close cleanup that continues asynchronously, because a gesture
+/// is still finishing or a held contact's release has to be retried. Awaitable,
+/// so a caller can tell when the pane's device is free again.
+public struct PaneCloseDeferral: Sendable {
+    public let paneId: UUID
+}
+
+/// The cross-coordinator work a close has to run, which `PaneCoordinator` owns
+/// neither `DeviceCoordinator` nor `PhysicalDeviceCoordinator` to do itself.
+///
+/// Passed in rather than handed back, because it runs inside the coordinator's
+/// target reservation on both the inline and deferred paths. Returning it would
+/// let a re-create attach as soon as the backend was down, and the pending
+/// shutdown would then kill the device out from under the new pane.
+public typealias PaneExternalCleanup = @Sendable (PaneCloseOutcome) async -> (any Error)?
+
+/// What a close hands back: the ack, a deferral when cleanup continues past it,
+/// and whatever the external cleanup reported when it ran inline.
+public struct PaneCloseResult: Sendable {
+    public let outcome: PaneCloseOutcome
+    public let deferral: PaneCloseDeferral?
+    /// What the external cleanup reported, for a close that ran it inline.
+    /// Nil on the deferred path: the ack is long gone by the time it runs.
+    public let cleanupError: (any Error)?
+
+    public init(
+        outcome: PaneCloseOutcome,
+        deferral: PaneCloseDeferral?,
+        cleanupError: (any Error)? = nil
+    ) {
+        self.outcome = outcome
+        self.deferral = deferral
+        self.cleanupError = cleanupError
+    }
+}
+
 /// One sim pane belonging to a session, the `panes.list` row shape
 /// and the CLI's pane-resolution unit.
 ///
@@ -534,6 +570,10 @@ public actor PaneCoordinator {
         /// tail before running and signals its own when done (success,
         /// skip, or throw), so B never reaches the backend or commits its
         /// base before A finishes.
+        /// Arbitration for the input verbs that hold digitizer contact.
+        /// Created on the pane's first contact verb, so a pane that only ever
+        /// rotates or types never builds one.
+        var contactLane: ContactLane?
         var rotationTail: SerialChainLink?
         /// The orientation **deviceterm last successfully commanded** on
         /// this pane's device, which a relative rotate advances from. It
@@ -789,6 +829,22 @@ public actor PaneCoordinator {
     // live with the gesture logic in `SimInputSynthesis`, their only user.
 
     private var panes: [UUID: Record] = [:]
+    /// Panes removed from `panes` whose teardown or external cleanup is still
+    /// in progress. Authorization and `panes.list` ignore these: a retired pane
+    /// is gone to every caller. Its own cleanup, and any gesture that captured
+    /// it, still reach it by identity.
+    ///
+    /// Every close passes through here, not only the ones that wait on a
+    /// gesture: the target stays reserved until the device is genuinely free.
+    private var retiring: [UUID: Record] = [:]
+    private var retirementWaiters: [(paneId: UUID, continuation: CheckedContinuation<Void, Never>)] = []
+    private var retiringTargetWaiters: [(target: PaneTarget, continuation: CheckedContinuation<Void, Never>)] = []
+    /// Pane retirement cleanups in flight. The idle monitor treats a non-zero
+    /// count as busy: the owning session is gone from `liveOwnerSessionIds` the
+    /// moment the record leaves `panes`, and a physical-device pane has no
+    /// owned-booted-sim fallback, so without this the daemon could exit while a
+    /// backend, a tunnel, or a final lift was still outstanding.
+    private var deferredCleanups: Int = 0
     /// Source of `Record.attachment`. Monotonic across the coordinator, so a
     /// value is unique to one admission of one record and a stale close can
     /// never coincide with a live admission.
@@ -826,8 +882,17 @@ public actor PaneCoordinator {
     /// can't carry an `xpc_object_t`).
     private let subscriptionRegistry: PaneSubscriptionRegistry?
 
-    /// Diagnostic accessor: number of pane records in any state.
+    /// Diagnostic accessor: live, listable pane records. Excludes retiring ones.
     public var paneCount: Int { panes.count }
+
+    /// Whether any pane retirement is still in progress.
+    ///
+    /// The idle monitor samples this alongside `liveOwnerSessionIds`: a
+    /// retiring pane's owner has already left that set, so without this the
+    /// daemon could exit while a backend or tunnel was still held.
+    public var hasDeferredCleanup: Bool {
+        deferredCleanups > 0
+    }
 
     /// SessionIds owning at least one non-terminal pane (booting or
     /// rendering). Terminal (shut-down/failed) records are excluded. The
@@ -1002,7 +1067,19 @@ public actor PaneCoordinator {
                 target: record.target
             )
         }
-        while let existing = panes.values.first(where: { isLiveTarget($0, target: target) }) {
+        // Resolve the target's current owner, re-checking after every
+        // suspension. A pane whose close deferred still owns its device while
+        // the gesture runs, and a live pane can become one of those inside any
+        // of the awaits below; attaching then would put two producers on one
+        // digitizer, which is the interleaving the lane exists to prevent.
+        while true {
+            if retiring.values.contains(where: { $0.target == target }) {
+                await awaitRetiringTarget(target)
+                continue
+            }
+            guard let existing = panes.values.first(where: { isLiveTarget($0, target: target) }) else {
+                break
+            }
             if existing.transferring {
                 // A transfer is quiescing this record: input is fenced and
                 // ownership is mid-flip. Don't hand back a (half-transferred)
@@ -1749,6 +1826,10 @@ public actor PaneCoordinator {
         // device can't be guaranteed input-clean, so abort rather than flip
         // ownership onto it (a failed relay send isn't proof the tunnel is
         // down: it can be transient).
+        // Fence the lane first, then quiesce the backend below: that quiesce
+        // invalidates the holder's remaining sends and frees the contact, so
+        // the lane emits nothing and only has to stop handing the pane out.
+        await record.contactLane?.transfer()
         let inputClean = await record.backend?.quiesceInputForTransfer() ?? true
 
         // (5) Re-validate after the awaits. Bail if a close/shutdown/fail
@@ -1912,11 +1993,20 @@ public actor PaneCoordinator {
 
     // MARK: - Close
 
-    /// Tear down a pane. Returns a `PaneCloseOutcome` whose
-    /// `udidToShutdown` is non-nil when the caller asked for
-    /// `.shutdown`. The RPC layer then calls
-    /// `DeviceCoordinator.shutdown` separately so pane lifecycle
-    /// and device lifecycle stay decoupled.
+    /// Tear down a pane.
+    ///
+    /// The pane leaves `panes` immediately and its target is reserved until the
+    /// teardown and `externalCleanup` have both finished, so a re-create can't
+    /// attach to a device this close is about to shut down. `externalCleanup`
+    /// is where the RPC layer performs what only it owns (the tunnel release
+    /// and `DeviceCoordinator.shutdown`), keeping pane lifecycle and device
+    /// lifecycle decoupled while running inside that reservation.
+    ///
+    /// The returned `PaneCloseResult` carries an action-free ack. When cleanup
+    /// can't finish inline, because a gesture is still holding contact or a
+    /// held contact needs retrying, it also carries a `deferral` to await; when
+    /// it did finish inline, `cleanupError` reports what `externalCleanup`
+    /// said.
     /// `expecting` fences the close to one admission of the record. When it
     /// is supplied and no longer matches, the close is a no-op: the record the
     /// caller meant to retire has since been re-admitted (a same-owner
@@ -1928,8 +2018,9 @@ public actor PaneCoordinator {
         paneId: UUID,
         as principal: PaneAccessPrincipal,
         mode: PaneCloseMode,
-        expecting attachment: UInt64? = nil
-    ) async -> PaneCloseOutcome {
+        expecting attachment: UInt64? = nil,
+        externalCleanup: PaneExternalCleanup? = nil
+    ) async -> PaneCloseResult {
         // Ownership gate. Unknown and foreign both resolve to "nothing to
         // close." Close stays non-throwing because a `device.shutdown` sweep
         // may remove the pane just before the GUI close; that benign race must
@@ -1940,15 +2031,21 @@ public actor PaneCoordinator {
         // validated GUI close still lands mid-transfer; it removes the
         // record and the transfer's post-`await` re-validation then bails.
         guard let record = try? authorize(paneId: paneId, as: principal, gatesInput: false) else {
-            return PaneCloseOutcome(udidToShutdown: nil)
+            return PaneCloseResult(outcome: PaneCloseOutcome(udidToShutdown: nil), deferral: nil)
         }
         // Checked in the same synchronous segment as the removal below, so a
         // re-admission can't land between the two.
         if let attachment, record.attachment != attachment {
-            return PaneCloseOutcome(udidToShutdown: nil)
+            return PaneCloseResult(outcome: PaneCloseOutcome(udidToShutdown: nil), deferral: nil)
         }
         panes.removeValue(forKey: paneId)
         record.epoch &+= 1
+        // Reserve the target for the whole close, not just the deferred kind.
+        // Everything below this point suspends, and the external shutdown runs
+        // later still; a create resolving in that window would attach to a
+        // device this close is about to tear down.
+        retiring[record.id] = record
+        deferredCleanups += 1
         // A physical-device pane holds a tunnel keepalive; signal the RPC
         // layer to release it. Sim panes leave this nil.
         let deviceTunnelToRelease: String?
@@ -1966,24 +2063,148 @@ public actor PaneCoordinator {
         for subscriptionId in Array(record.subscribers.keys) {
             await revokeSubscriber(record: record, subscriptionId: subscriptionId)
         }
+        let udidToShutdown = mode == .shutdown ? record.target.key : nil
+        // Stop admitting, wake anything queued, and free a live contact whose
+        // producer walked away. An active composite is left to finish.
+        let lane = record.contactLane
+        await lane?.close()
+        // Ask the lane first. A gesture still holding the digitizer owns that
+        // contact, and probing the backend here would send a lift into the
+        // middle of it; the deferred task retries once the gesture is done.
+        var needsDeferral = await lane?.hasActiveComposite == true
+        if !needsDeferral, mode == .detach, let backend = record.backend {
+            // No gesture in flight, so whatever is still down was left behind.
+            // A detach leaves the device running, so it has to come up before
+            // the target is handed on, and that retry must not block the ack.
+            needsDeferral = await backend.releaseHeldContact() == false
+        }
+        if needsDeferral {
+            // Cleanup can't finish inline: either a gesture still holds the
+            // digitizer, or a contact left behind has to be retried. Tearing
+            // the backend out now would strand that contact, so retire the pane
+            // instead: gone to every caller, alive for the work that remains.
+            deferTeardown(
+                record: record,
+                mode: mode,
+                actions: PaneCloseOutcome(
+                    udidToShutdown: udidToShutdown,
+                    deviceTunnelToRelease: deviceTunnelToRelease
+                ),
+                externalCleanup: externalCleanup
+            )
+            return PaneCloseResult(
+                outcome: PaneCloseOutcome(udidToShutdown: nil, deviceTunnelToRelease: nil),
+                deferral: PaneCloseDeferral(paneId: record.id)
+            )
+        }
+        await tearDownRetiring(record: record, mode: mode)
+        // Inside the reservation: the target isn't free until the device has
+        // actually been shut down and its tunnel released.
+        let cleanupError = await externalCleanup?(
+            PaneCloseOutcome(udidToShutdown: udidToShutdown, deviceTunnelToRelease: deviceTunnelToRelease)
+        )
+        finalizeRetirement(record: record)
+        // The actions have already run, so the ack names none of them.
+        return PaneCloseResult(
+            outcome: PaneCloseOutcome(udidToShutdown: nil, deviceTunnelToRelease: nil),
+            deferral: nil,
+            cleanupError: cleanupError
+        )
+    }
+
+    /// Finish a retirement whose cleanup could not complete inline.
+    ///
+    /// Detached and cancellation-safe on purpose: finalizing early would drop
+    /// the reservation and let a new pane attach to the same target while the
+    /// old gesture is still driving it, which is the interleaving the lane
+    /// exists to prevent. Whoever holds the deferral can go away; this still
+    /// runs to completion.
+    private func deferTeardown(
+        record: Record,
+        mode: PaneCloseMode,
+        actions: PaneCloseOutcome,
+        externalCleanup: PaneExternalCleanup?
+    ) {
+        Task { [weak self] in
+            await record.contactLane?.awaitIdle()
+            await self?.tearDownRetiring(record: record, mode: mode)
+            // Inside the reservation, deliberately. Waking a re-create at
+            // backend teardown would let it attach and then be shut down by
+            // this close's own pending `.shutdown`.
+            _ = await externalCleanup?(actions)
+            await self?.finalizeRetirement(record: record)
+        }
+    }
+
+    /// Tear down a retired record's backend, retrying the held-contact release
+    /// first on a detach.
+    private func tearDownRetiring(record: Record, mode: PaneCloseMode) async {
+        // A detach leaves the device running, so a contact the lane could not
+        // free would still be down when something attaches next. Keep trying
+        // rather than handing the target on dirty.
+        //
+        // A broken release reaches this loop only from the deferred task: the
+        // inline path gets here having already released successfully. So the
+        // retry never blocks the close RPC, the backend teardown, or the tunnel
+        // release. The target stays reserved throughout, which is what actually
+        // protects the next attach.
+        if mode == .detach, let backend = record.backend {
+            while await backend.releaseHeldContact() == false {
+                // A cancelled sleep returns at once, so without this the retry
+                // becomes a tight loop on the actor. Cancellation here means
+                // the daemon is going away, which takes the device state with
+                // it, so stop retrying and finish the teardown.
+                guard !Task.isCancelled else { break }
+                try? await Task.sleep(for: .milliseconds(ContactLane.liveExpiryMs))
+            }
+        }
         record.teardownSurfacePump()
         record.teardownOrientationPump(backend: record.backend)
         record.backend?.shutdownBackend()
         record.backend = nil
         record.currentSurface = nil
-        // No `simulatedLocation` reset here, deliberately: the record was
-        // removed from `panes` above, so nothing can read the claim again.
-        // The other lifecycle sites reset because their records survive.
-        if mode == .shutdown {
-            return PaneCloseOutcome(
-                udidToShutdown: record.target.key,
-                deviceTunnelToRelease: deviceTunnelToRelease
-            )
+    }
+
+    /// Drop the retirement and let anything waiting on this target proceed.
+    /// Runs once, after the external cleanup, so the device is genuinely free.
+    private func finalizeRetirement(record: Record) {
+        guard retiring.removeValue(forKey: record.id) != nil else { return }
+        deferredCleanups -= 1
+        resumeRetiringTargetWaiters(for: record.target)
+    }
+
+    /// Suspend until this retirement's backend teardown, external cleanup, and
+    /// finalization have all completed.
+    public func awaitDeferredTeardown(_ deferral: PaneCloseDeferral) async {
+        guard retiring[deferral.paneId] != nil else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            retirementWaiters.append((paneId: deferral.paneId, continuation: continuation))
         }
-        return PaneCloseOutcome(
-            udidToShutdown: nil,
-            deviceTunnelToRelease: deviceTunnelToRelease
-        )
+    }
+
+    private func resumeRetiringTargetWaiters(for target: PaneTarget) {
+        let matching = retirementWaiters.filter { retiring[$0.paneId] == nil }
+        retirementWaiters.removeAll { retiring[$0.paneId] == nil }
+        for waiter in matching {
+            waiter.continuation.resume()
+        }
+        let targeted = retiringTargetWaiters.filter { $0.target == target }
+        retiringTargetWaiters.removeAll { $0.target == target }
+        for waiter in targeted {
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Suspend while `target` is reserved by a retiring pane, so a re-create
+    /// can't attach beside work that is still finishing.
+    ///
+    /// Its own waiter list rather than `awaitTransferSettled`, which applies to
+    /// records still in `panes`.
+    private func awaitRetiringTarget(_ target: PaneTarget) async {
+        guard retiring.values.contains(where: { $0.target == target }) else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            retiringTargetWaiters.append((target: target, continuation: continuation))
+        }
     }
 
     // MARK: - Display orientation
@@ -2084,6 +2305,75 @@ public actor PaneCoordinator {
     // guarantee, and why the helper has the shape it does, is documented on
     // the helper itself.
 
+    /// This pane's contact lane, built on first use.
+    ///
+    /// The recovery closure captures the backend rather than looking the pane
+    /// up when it fires: a close removes the record from `panes` before the
+    /// lane gets a chance to free an abandoned contact, so a lookup would find
+    /// nothing and silently drop the lift. Releasing a contact the lane knows
+    /// the shape of is synchronous, so it is ordered ahead of both the backend
+    /// teardown and whatever gesture takes the lane next; recovering from a
+    /// failed composite has to ask the backend, which suspends.
+    private func lane(for record: Record, backend: any DeviceBackend) -> ContactLane {
+        if let existing = record.contactLane { return existing }
+        let lane = ContactLane { contact, generation in
+            switch contact {
+            case let .plain(point):
+                return (try? backend.tapUp(at: point, generation: generation)) != nil
+
+            case let .edge(point, edge):
+                return (try? backend.edgeTouchUp(at: point, edge: edge, generation: generation)) != nil
+
+            case let .multi(finger1, finger2):
+                return (try? backend.twoFingerUp(f1: finger1, f2: finger2, generation: generation)) != nil
+
+            case nil:
+                // A composite that failed partway. It never told the lane what
+                // it was holding, so the backend releases whatever it still
+                // has down, matched to that contact's own kind.
+                return await backend.releaseHeldContact()
+            }
+        }
+        record.contactLane = lane
+        return lane
+    }
+
+    /// Run a contact-holding gesture under the lane, releasing on every exit.
+    ///
+    /// Returns nil when the lane refused admission: the pane closed, it
+    /// transferred, a held contact has not been recovered yet, or the caller's
+    /// own task was cancelled while queued. A nil result means nothing was
+    /// sent.
+    private func withContactLane<T>(
+        _ record: Record,
+        backend: any DeviceBackend,
+        preemptible: Bool,
+        generation: UInt64,
+        _ body: (GestureFence) async throws -> T
+    ) async rethrows -> T? {
+        let lane = lane(for: record, backend: backend)
+        guard let ticket = await lane.admitComposite(preemptible: preemptible, generation: generation) else {
+            return nil
+        }
+        // The cancellation handler races the handoff, so a request cancelled
+        // while queued can still come back holding the lane. Give it back
+        // before the first send rather than driving the device for a caller
+        // that has gone away.
+        if Task.isCancelled {
+            await lane.release(ticket.id)
+            return nil
+        }
+        do {
+            let value = try await body(ticket.fence)
+            await lane.release(ticket.id)
+            return value
+        } catch {
+            // Unknown contact state: the terminal up may not have landed.
+            await lane.releaseAfterFailure(ticket.id)
+            throw error
+        }
+    }
+
     func tap(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double) async throws {
         let input = try inputBackend(
             paneId: paneId,
@@ -2091,30 +2381,71 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .tap
         )
-        try await SimInputSynthesis.tap(
+        // Not preemptible: the dwell is two frames, and cutting it short
+        // reintroduces the contact too brief for a control to act on.
+        try await withContactLane(
+            input.record,
             backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            x: x,
-            y: y
-        )
+            preemptible: false,
+            generation: input.generation
+        ) { fence in
+            try await SimInputSynthesis.tap(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                x: x,
+                y: y,
+                fence: fence
+            )
+        }
     }
 
-    func touch(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double, phase: TouchPhase) throws {
+    func touch(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        x: Double,
+        y: Double,
+        phase: TouchPhase
+    ) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.touch,
             operation: .touch
         )
-        try SimInputSynthesis.touch(
-            backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            x: x,
-            y: y,
-            phase: phase
+        let lane = lane(for: input.record, backend: input.backend)
+        let admitted = await lane.admitLive(
+            phase: phase,
+            contact: .plain(CGPoint(x: x, y: y)),
+            generation: input.generation
         )
+        guard admitted.send else { return }
+        try await sendingLiveContact(admitted, on: lane) {
+            try SimInputSynthesis.touch(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                x: x,
+                y: y,
+                phase: phase
+            )
+        }
+    }
+
+    /// Perform a live contact send, then drop the lease if this phase ended the
+    /// stream. Releasing first would let the next gesture's `down` reach the
+    /// digitizer ahead of this `up`.
+    private func sendingLiveContact(
+        _ admitted: ContactLane.LiveAdmission,
+        on lane: ContactLane,
+        _ send: () throws -> Void
+    ) async rethrows {
+        // Only a release that landed frees the lane. A failed lift leaves the
+        // contact down, so the lease stays with it and the lane's expiry
+        // synthesizes the release; dropping it here would admit the next
+        // gesture on top of a finger that is still held.
+        try send()
+        if let id = admitted.releaseAfterSend { await lane.release(id) }
     }
 
     func edgeTouch(
@@ -2124,22 +2455,31 @@ public actor PaneCoordinator {
         y: Double,
         phase: TouchPhase,
         edge: Int
-    ) throws {
+    ) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.touch,
             operation: .edgeTouch
         )
-        try SimInputSynthesis.edgeTouch(
-            backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            x: x,
-            y: y,
+        let lane = lane(for: input.record, backend: input.backend)
+        let admitted = await lane.admitLive(
             phase: phase,
-            edge: edge
+            contact: .edge(CGPoint(x: x, y: y), edge: edge),
+            generation: input.generation
         )
+        guard admitted.send else { return }
+        try await sendingLiveContact(admitted, on: lane) {
+            try SimInputSynthesis.edgeTouch(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                x: x,
+                y: y,
+                phase: phase,
+                edge: edge
+            )
+        }
     }
 
     func swipe(
@@ -2161,17 +2501,31 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .swipe
         )
-        return try await SimInputSynthesis.swipe(
+        let outcome = try await withContactLane(
+            input.record,
             backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            fromX: fromX,
-            fromY: fromY,
-            toX: toX,
-            toY: toY,
-            durationMs: durationMs,
-            holdMs: holdMs,
-            startHoldMs: startHoldMs
+            preemptible: true,
+            generation: input.generation
+        ) { fence in
+            try await SimInputSynthesis.swipe(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                fromX: fromX,
+                fromY: fromY,
+                toX: toX,
+                toY: toY,
+                durationMs: durationMs,
+                holdMs: holdMs,
+                startHoldMs: startHoldMs,
+                fence: fence
+            )
+        }
+        // Refused admission means nothing went out, which is a zero-sample
+        // gesture rather than a failure. The ack reports it as a tap.
+        return outcome ?? SwipeOutcome(
+            steps: 0,
+            durationMs: GestureTiming(durationMs: durationMs, maxMs: Self.maxGestureDurationMs).totalMs
         )
     }
 
@@ -2192,18 +2546,30 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .edgeSwipe
         )
-        try await SimInputSynthesis.edgeSwipe(
+        // On a sim this is an interpolated drag and preemptible like any
+        // other. On a device it realizes as the App Switcher macro, which only
+        // reads as a gesture whole, so live input waits it out instead.
+        let preemptible = input.backend.supportsSystemEdgeGesture
+        try await withContactLane(
+            input.record,
             backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            fromX: fromX,
-            fromY: fromY,
-            toX: toX,
-            toY: toY,
-            edge: edge,
-            durationMs: durationMs,
-            holdMs: holdMs
-        )
+            preemptible: preemptible,
+            generation: input.generation
+        ) { fence in
+            try await SimInputSynthesis.edgeSwipe(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                fromX: fromX,
+                fromY: fromY,
+                toX: toX,
+                toY: toY,
+                edge: edge,
+                durationMs: durationMs,
+                holdMs: holdMs,
+                fence: fence
+            )
+        }
     }
 
     func longPress(
@@ -2219,14 +2585,22 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .longPress
         )
-        try await SimInputSynthesis.longPress(
+        try await withContactLane(
+            input.record,
             backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            x: x,
-            y: y,
-            durationMs: durationMs
-        )
+            preemptible: true,
+            generation: input.generation
+        ) { fence in
+            try await SimInputSynthesis.longPress(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                x: x,
+                y: y,
+                durationMs: durationMs,
+                fence: fence
+            )
+        }
     }
 
     func key(paneId: UUID, as principal: PaneAccessPrincipal, keyCode: UInt32, down: Bool) throws {
@@ -2279,36 +2653,72 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .pinch
         )
-        try await SimInputSynthesis.pinch(
+        try await withContactLane(
+            input.record,
             backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
-            fromF1X: fromF1X,
-            fromF1Y: fromF1Y,
-            fromF2X: fromF2X,
-            fromF2Y: fromF2Y,
-            toF1X: toF1X,
-            toF1Y: toF1Y,
-            toF2X: toF2X,
-            toF2Y: toF2Y,
-            durationMs: durationMs
-        )
+            preemptible: true,
+            generation: input.generation
+        ) { fence in
+            try await SimInputSynthesis.pinch(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                fromF1X: fromF1X,
+                fromF1Y: fromF1Y,
+                fromF2X: fromF2X,
+                fromF2Y: fromF2Y,
+                toF1X: toF1X,
+                toF1Y: toF1Y,
+                toF2X: toF2X,
+                toF2Y: toF2Y,
+                durationMs: durationMs,
+                fence: fence
+            )
+        }
     }
 
-    func multitouch(paneId: UUID, as principal: PaneAccessPrincipal, phase: TouchPhase, points: [CGPoint]) throws {
+    func multitouch(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        phase: TouchPhase,
+        points: [CGPoint]
+    ) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.touch,
             operation: .multitouch
         )
-        try SimInputSynthesis.multitouch(
-            backend: input.backend,
-            paneId: paneId,
-            generation: input.generation,
+        // The synthesis rejects any other count, so a well-formed frame always
+        // has two contacts to name in the lease.
+        guard points.count == 2 else {
+            // The synthesis rejects any other count with a bridge error; let it
+            // report that rather than admitting a frame the lane can't name.
+            try SimInputSynthesis.multitouch(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                phase: phase,
+                points: points
+            )
+            return
+        }
+        let lane = lane(for: input.record, backend: input.backend)
+        let admitted = await lane.admitLive(
             phase: phase,
-            points: points
+            contact: .multi(points[0], points[1]),
+            generation: input.generation
         )
+        guard admitted.send else { return }
+        try await sendingLiveContact(admitted, on: lane) {
+            try SimInputSynthesis.multitouch(
+                backend: input.backend,
+                paneId: paneId,
+                generation: input.generation,
+                phase: phase,
+                points: points
+            )
+        }
     }
 
     func text(paneId: UUID, as principal: PaneAccessPrincipal, text: String) throws {

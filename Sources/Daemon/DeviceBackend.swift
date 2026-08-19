@@ -246,7 +246,7 @@ protocol DeviceBackend: AnyObject, Sendable {
     // implements this; others inherit the default that throws
     // `unsupportedEdgeGesture`, so the coordinator falls back to a Home
     // double-press.
-    func openAppSwitcher(edge: Int, generation: UInt64) throws
+    func openAppSwitcher(edge: Int, generation: UInt64) async throws
 
     // MARK: Keyboard (HID usage codes, translation is the caller's job)
 
@@ -323,6 +323,20 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// than flip ownership onto a device that may still hold the prior
     /// owner's input.
     func quiesceInputForTransfer() async -> Bool
+
+    /// Release whatever contact this backend still has down, matched to its
+    /// own kind, and report whether it is now clean.
+    ///
+    /// The narrow half of `quiesceInputForTransfer`: it frees the contact
+    /// without invalidating the input generation, for recovering from a
+    /// gesture that failed partway and may have left a finger down. The caller
+    /// knows a gesture ended badly but not what it was holding; the backend
+    /// tracks that already.
+    ///
+    /// `false` means the release itself failed, so the contact may still be
+    /// down. The caller must not treat the device as free on that answer: a
+    /// failed relay send is not proof the contact went away.
+    func releaseHeldContact() async -> Bool
 
     /// Open a fresh input generation so the new owner's input is admitted
     /// again. Called by the coordinator after the ownership flip, or on an
@@ -426,7 +440,8 @@ extension DeviceBackend {
     // Default: only the physical-device backend opens the App Switcher via a
     // system-gesture touch swipe. Others throw, so the coordinator falls back to
     // the Home double-press realization.
-    func openAppSwitcher(edge: Int, generation: UInt64) throws {
+    // swiftlint:disable:next async_without_await
+    func openAppSwitcher(edge: Int, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedEdgeGesture
     }
 
@@ -449,6 +464,9 @@ extension DeviceBackend {
     // is a no-op wherever admission isn't generation-gated.
     // swiftlint:disable async_without_await
     func quiesceInputForTransfer() async -> Bool { true }
+    // Default: a backend with no held-contact tracking has nothing to free,
+    // so it is trivially clean.
+    func releaseHeldContact() -> Bool { true }
     // swiftlint:enable async_without_await
     func resumeInput() {}
     func currentInputGeneration() -> UInt64 { 0 }

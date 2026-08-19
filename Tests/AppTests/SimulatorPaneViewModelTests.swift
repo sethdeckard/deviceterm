@@ -266,6 +266,91 @@ struct SimulatorPaneViewModelTests {
     }
 
     @Test
+    func liveTouchPhasesReachTheDaemonInTheOrderAppKitProducedThem() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        // Phases are serialized because neither RPC suspension nor XPC
+        // dispatch preserves the order AppKit produced them in.
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, edge: nil)
+        for step in 1...8 {
+            viewModel.touch(at: CGPoint(x: 0.5, y: 0.5 - CGFloat(step) * 0.01), phase: .move, edge: nil)
+        }
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, edge: nil)
+        await settle()
+
+        let phases = fake.touchCalls.map(\.phase)
+        #expect(phases.first == .down)
+        #expect(phases.last == .lift)
+        #expect(phases.filter { $0 == .down }.count == 1)
+        #expect(phases.filter { $0 == .lift }.count == 1)
+        // No move escapes ahead of the down or behind the lift.
+        let firstMove = phases.firstIndex(of: .move)
+        let lastMove = phases.lastIndex(of: .move)
+        #expect(firstMove.map { $0 > 0 } ?? true)
+        #expect(lastMove.map { $0 < phases.count - 1 } ?? true)
+    }
+
+    @Test
+    func aNewGesturesMoveIsNotConsumedByThePreviousOne() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        // Two drags back to back. Gesture tags are what keep the second drag's
+        // move from being sent as part of the first, or cleared by the first's
+        // teardown.
+        viewModel.touch(at: CGPoint(x: 0.1, y: 0.1), phase: .down, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.1, y: 0.2), phase: .move, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.1, y: 0.3), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.9, y: 0.1), phase: .down, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.9, y: 0.2), phase: .move, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.9, y: 0.3), phase: .lift, edge: nil)
+        await settle()
+
+        let phases = fake.touchCalls.map(\.phase)
+        #expect(phases.filter { $0 == .down }.count == 2)
+        #expect(phases.filter { $0 == .lift }.count == 2)
+        // Each gesture's moves stay on its own side of the pane.
+        let firstLift = phases.firstIndex(of: .lift) ?? 0
+        let early = fake.touchCalls.prefix(firstLift + 1)
+        let late = fake.touchCalls.suffix(from: firstLift + 1)
+        #expect(early.allSatisfy { $0.x < 0.5 })
+        #expect(late.allSatisfy { $0.x > 0.5 })
+    }
+
+    @Test
+    func anInFlightMoveDrainsBeforeTheLift() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.9), phase: .down, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.3), phase: .move, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.2), phase: .lift, edge: nil)
+        await settle()
+
+        // The lift is last, and the move that preceded it was not dropped on
+        // the way: a lift landing on a stale position ends the drag somewhere
+        // the finger never was.
+        let phases = fake.touchCalls.map(\.phase)
+        #expect(phases.contains(.move))
+        #expect(phases.last == .lift)
+        #expect(fake.touchCalls.last?.y == 0.2)
+    }
+
+    @Test
+    func aFailedSendDoesNotWedgeTheLivePump() async {
+        let fake = FakeDaemonClient()
+        fake.failTouch = true
+        let viewModel = makeViewModel(fake)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, edge: nil)
+        await settle()
+        fake.failTouch = false
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, edge: nil)
+        await settle()
+
+        // The terminal lift still has to land, so a failed send is swallowed
+        // rather than ending the pump.
+        #expect(fake.touchCalls.map(\.phase).contains(.lift))
+    }
+
+    @Test
     func multitouchStreamsDownMoveLiftWithCoalescedMoves() async {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)

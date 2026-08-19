@@ -69,12 +69,19 @@ enum SimInputSynthesis {
     /// The one place every paced loop decides whether to keep going, and the
     /// only place an early exit is chosen.
     ///
-    /// Generation invalidation dominates cancellation. A send under a stale
+    /// Generation invalidation dominates the other two. A send under a stale
     /// generation is discarded, and quiesce already owns releasing what that
     /// generation held, so an up here would be noise rather than a release.
-    static func checkpoint(backend: any DeviceBackend, generation: UInt64) -> PacedStep {
+    /// Cancellation and a raised fence both still release: nothing else will,
+    /// and a preempting live contact is waiting on the digitizer.
+    static func checkpoint(
+        backend: any DeviceBackend,
+        generation: UInt64,
+        fence: GestureFence? = nil
+    ) -> PacedStep {
         guard backend.isInputGenerationCurrent(generation) else { return .stopWithoutSend }
         if Task.isCancelled { return .releaseAndStop }
+        if fence?.isPreempted == true { return .releaseAndStop }
         return .proceed
     }
 
@@ -85,6 +92,7 @@ enum SimInputSynthesis {
         generation: UInt64,
         x: Double,
         y: Double,
+        fence: GestureFence? = nil,
         pacer: any GesturePacing = SystemGesturePacer()
     ) async throws {
         let point = CGPoint(x: x, y: y)
@@ -98,7 +106,7 @@ enum SimInputSynthesis {
             // Cancellation shortens the dwell rather than skipping the up.
             // A transfer is the one case that sends nothing: the release would
             // be dropped and the quiesce frees the contact instead.
-            if Self.checkpoint(backend: backend, generation: generation) != .stopWithoutSend {
+            if Self.checkpoint(backend: backend, generation: generation, fence: fence) != .stopWithoutSend {
                 try backend.tapUp(at: point, generation: generation)
             }
         } catch {
@@ -212,6 +220,7 @@ enum SimInputSynthesis {
         durationMs: Int,
         holdMs: Int = 0,
         startHoldMs: Int = 0,
+        fence: GestureFence? = nil,
         pacer: any GesturePacing = SystemGesturePacer()
     ) async throws -> PaneCoordinator.SwipeOutcome {
         let timing = GestureTiming(durationMs: durationMs, maxMs: PaneCoordinator.maxGestureDurationMs)
@@ -239,13 +248,14 @@ enum SimInputSynthesis {
                 at: start,
                 holdMs: startHoldMs,
                 generation: generation,
+                fence: fence,
                 pacer: pacer
             )
             let anchor = pacer.now()
             var step = 0
             while step < timing.steps {
                 await pacer.sleep(until: timing.deadline(forStep: step + 1, from: anchor))
-                switch Self.checkpoint(backend: backend, generation: generation) {
+                switch Self.checkpoint(backend: backend, generation: generation, fence: fence) {
                 case .stopWithoutSend:
                     return PaneCoordinator.SwipeOutcome(steps: emitted, durationMs: timing.totalMs)
 
@@ -268,7 +278,14 @@ enum SimInputSynthesis {
             }
             // Active dwell at the end point so the OS sees the finger stop
             // while still down. Skipped when holdMs is 0.
-            try await activeDwell(backend: backend, at: end, holdMs: holdMs, generation: generation, pacer: pacer)
+            try await activeDwell(
+                backend: backend,
+                at: end,
+                holdMs: holdMs,
+                generation: generation,
+                fence: fence,
+                pacer: pacer
+            )
             try backend.tapUp(at: end, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
@@ -297,6 +314,7 @@ enum SimInputSynthesis {
         edge: Int,
         durationMs: Int,
         holdMs: Int,
+        fence: GestureFence? = nil,
         pacer: any GesturePacing = SystemGesturePacer()
     ) async throws {
         // A physical device can't route a synthesized edge-tagged COORDINATE
@@ -313,6 +331,7 @@ enum SimInputSynthesis {
                 paneId: paneId,
                 generation: generation,
                 edge: edge,
+                fence: fence,
                 pacer: pacer
             )
             return
@@ -327,7 +346,7 @@ enum SimInputSynthesis {
             var step = 0
             while step < timing.steps {
                 await pacer.sleep(until: timing.deadline(forStep: step + 1, from: anchor))
-                switch Self.checkpoint(backend: backend, generation: generation) {
+                switch Self.checkpoint(backend: backend, generation: generation, fence: fence) {
                 case .stopWithoutSend:
                     return
 
@@ -357,7 +376,7 @@ enum SimInputSynthesis {
                             from: dwellAnchor
                         )
                     )
-                    switch Self.checkpoint(backend: backend, generation: generation) {
+                    switch Self.checkpoint(backend: backend, generation: generation, fence: fence) {
                     case .stopWithoutSend:
                         return
 
@@ -407,15 +426,17 @@ enum SimInputSynthesis {
         paneId: UUID,
         generation: UInt64,
         edge: Int,
+        fence: GestureFence?,
         pacer: any GesturePacing
     ) async throws {
         do {
-            try backend.openAppSwitcher(edge: edge, generation: generation)
+            try await backend.openAppSwitcher(edge: edge, generation: generation)
         } catch DeviceBackendError.unsupportedEdgeGesture {
             try await appSwitcherViaHomeDoublePress(
                 backend: backend,
                 paneId: paneId,
                 generation: generation,
+                fence: fence,
                 pacer: pacer
             )
         } catch {
@@ -437,6 +458,7 @@ enum SimInputSynthesis {
         backend: any DeviceBackend,
         paneId: UUID,
         generation: UInt64,
+        fence: GestureFence?,
         pacer: any GesturePacing
     ) async throws {
         do {
@@ -446,7 +468,7 @@ enum SimInputSynthesis {
             // it. Stop before the second press rather than driving the new
             // owner's device. No contact is held between the presses, so
             // neither early exit has anything to release.
-            guard Self.checkpoint(backend: backend, generation: generation) == .proceed else { return }
+            guard Self.checkpoint(backend: backend, generation: generation, fence: fence) == .proceed else { return }
             try backend.pressHardwareButton(.home, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
@@ -474,6 +496,7 @@ enum SimInputSynthesis {
         at point: CGPoint,
         holdMs: Int,
         generation: UInt64,
+        fence: GestureFence?,
         pacer: any GesturePacing
     ) async throws {
         guard holdMs > 0 else { return }
@@ -495,7 +518,7 @@ enum SimInputSynthesis {
             // the surrounding gesture releases the contact on its way out;
             // after a transfer the backend quiesce owns that release. This
             // helper sends neither.
-            guard Self.checkpoint(backend: backend, generation: generation) == .proceed else { return }
+            guard Self.checkpoint(backend: backend, generation: generation, fence: fence) == .proceed else { return }
             // Skip rather than burst, the rule the interpolated gestures follow.
             // A late wake drops the resends it missed instead of firing them
             // back to back; the contact stays held either way, so only the
@@ -526,6 +549,7 @@ enum SimInputSynthesis {
         x: Double,
         y: Double,
         durationMs: Int,
+        fence: GestureFence? = nil,
         pacer: any GesturePacing = SystemGesturePacer()
     ) async throws {
         let point = CGPoint(x: x, y: y)
@@ -544,7 +568,7 @@ enum SimInputSynthesis {
             poll: while pacer.now() < deadline {
                 let chunkEnd = min(pacer.now() + .milliseconds(Self.dwellReportIntervalMs), deadline)
                 await pacer.sleep(until: chunkEnd)
-                switch Self.checkpoint(backend: backend, generation: generation) {
+                switch Self.checkpoint(backend: backend, generation: generation, fence: fence) {
                 case .stopWithoutSend:
                     release = false
                     break poll
@@ -624,6 +648,7 @@ enum SimInputSynthesis {
         toF2X: Double,
         toF2Y: Double,
         durationMs: Int,
+        fence: GestureFence? = nil,
         pacer: any GesturePacing = SystemGesturePacer()
     ) async throws {
         let timing = GestureTiming(durationMs: durationMs, maxMs: PaneCoordinator.maxGestureDurationMs)
@@ -643,7 +668,7 @@ enum SimInputSynthesis {
             var step = 0
             while step < timing.steps {
                 await pacer.sleep(until: timing.deadline(forStep: step + 1, from: anchor))
-                switch Self.checkpoint(backend: backend, generation: generation) {
+                switch Self.checkpoint(backend: backend, generation: generation, fence: fence) {
                 case .stopWithoutSend:
                     return
 
@@ -833,7 +858,8 @@ enum SimInputSynthesis {
                 // early, ending a 160ms rotation at 144ms.
                 await pacer.sleep(until: timing.deadline(forStep: emitted + 1, from: anchor))
                 // Crown deltas are discrete (no held contact to release), so
-                // every early exit just stops the remaining steps.
+                // every early exit just stops the remaining steps, and crown
+                // takes no fence: holding no contact, it never joins the lane.
                 guard Self.checkpoint(backend: backend, generation: generation) == .proceed else { return }
                 let due = max(emitted + 1, timing.stepDue(at: pacer.now(), from: anchor))
                 // A skipped sample folds its share into this one. Position

@@ -168,6 +168,41 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         return allReleased
     }
 
+    /// Free a contact left down by a gesture that failed partway, without
+    /// touching the input generation: nothing here is being transferred, and
+    /// other verbs on this pane stay valid.
+    ///
+    /// Ungated for the same reason the quiesce releases ungated: the release is
+    /// the coordinator's, not the failed gesture's, and the gesture's own
+    /// generation may already be stale.
+    ///
+    /// Non-async: the simulator's sends are synchronous, and a non-async
+    /// function satisfies the protocol's async requirement.
+    func releaseHeldContact() -> Bool {
+        let held: HeldTouch? = inputGate.sync { heldTouch }
+        guard let held else { return true }
+        guard let hid = try? requireHID() else {
+            // No HID client: the backend is torn down, so nothing is held on a
+            // live device. Same reasoning as the quiesce.
+            inputGate.sync { heldTouch = nil }
+            return true
+        }
+        // Cleared only once the release actually lands, so a failed one is not
+        // silently forgotten.
+        switch held {
+        case let .single(point):
+            guard (try? hid.tapUp(at: point)) != nil else { return false }
+
+        case let .edge(point, edge):
+            guard (try? hid.edgeTouchUp(at: point, edge: edge)) != nil else { return false }
+
+        case let .twoFinger(finger1, finger2):
+            guard (try? hid.twoFingerUp(f1: finger1, f2: finger2)) != nil else { return false }
+        }
+        inputGate.sync { heldTouch = nil }
+        return true
+    }
+
     func resumeInput() {
         // Fresh generation (ABA guard) so a stale gesture can never match.
         inputGate.sync { inputGeneration &+= 1 }

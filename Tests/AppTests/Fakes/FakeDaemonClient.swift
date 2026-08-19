@@ -145,6 +145,11 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let down: Bool
     }
 
+    /// Injected transport failure for `paneInputTouch`.
+    enum InjectedFailure: Error {
+        case touchSend
+    }
+
     private(set) var bindTerminalCalls: [BindTerminalCall] = []
     private(set) var grantOrchestratorCalls: [GrantOrchestratorCall] = []
     /// Client-internal monotonic revision the fake stamps per grant send,
@@ -312,6 +317,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// until `releaseLocationSet()`, modelling a daemon that has not
     /// answered yet. Lets a test express "dispatched but not finished".
     var holdLocationSet = false
+
+    /// When set, `paneInputTouch` throws, modelling a transient transport
+    /// failure mid-drag.
+    var failTouch = false
     private var locationSetWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Continuation for the most recent `subscribePane` stream, so a
@@ -796,7 +805,8 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         x: Double,
         y: Double,
         phase: TouchPhase
-    ) {
+    ) throws {
+        if failTouch { throw InjectedFailure.touchSend }
         touchCalls.append(.init(paneId: paneId, x: x, y: y, phase: phase))
         paneInputCalls.append((.paneInputTouch, paneId))
     }

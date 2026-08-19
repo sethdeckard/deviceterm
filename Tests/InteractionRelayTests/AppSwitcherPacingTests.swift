@@ -58,3 +58,34 @@ func degenerateFrameCountsStillProduceAReachableTrajectory() {
     #expect(points.count == 1)
     #expect(points[0].y == 100)
 }
+
+// MARK: - Cancellation
+
+@Test
+func aCancellationTokenIsObservedFromWhereverItIsSet() {
+    let cancellation = InteractionCancellation()
+    #expect(!cancellation.isCancelled)
+    cancellation.cancel()
+    #expect(cancellation.isCancelled)
+    // Idempotent: transfer and teardown can both signal the same request.
+    cancellation.cancel()
+    #expect(cancellation.isCancelled)
+}
+
+@Test
+func aCancellationRidesTheTouchInputWithoutChangingItsIdentity() {
+    let point = DevicePoint(x: 0.5, y: 0.5)
+    let plain = TouchInput(point: point, phase: .contact, kind: .appSwitcher(.bottom))
+    let tokened = TouchInput(
+        point: point,
+        phase: .contact,
+        kind: .appSwitcher(.bottom),
+        cancellation: InteractionCancellation()
+    )
+    // Cancellation is control-plane state and does not affect touch-value
+    // equality: two inputs describing the same touch compare equal whichever
+    // token they carry.
+    #expect(plain == tokened)
+    #expect(plain.cancellation == nil)
+    #expect(tokened.cancellation != nil)
+}
