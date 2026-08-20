@@ -120,18 +120,24 @@ struct RegistrationRepairLockTests {
     }
 
     @Test
-    func aSecondReferenceKeepsTheLockHeldAfterTheFirstIsDropped() throws {
+    func handingTheStartupLockToARepairKeepsItHeldWithoutReacquiring() throws {
         // The property the startup critical section depends on: the launch lets
         // go while a background repair keeps the same handle, and the lock stays
-        // held until that repair is done.
+        // held until that repair is done. The repair reuses the handle because a
+        // second acquisition would contend with the startup's own descriptor.
         let path = makeLockPath()
         var launchHeld = try RegistrationRepairLock.tryAcquire(at: path)
-        let repairHeld = launchHeld
+        var repairHeld = launchHeld
+
+        #expect(try RegistrationRepairLock.tryAcquire(at: path) == nil)
 
         launchHeld = nil
         #expect(repairHeld != nil)
+        #expect(try RegistrationRepairLock.tryAcquire(at: path) == nil)
 
-        withExtendedLifetime(repairHeld) {}
+        repairHeld = nil
+        let reacquired = try RegistrationRepairLock.tryAcquire(at: path)
+        #expect(reacquired != nil)
     }
 
     @Test

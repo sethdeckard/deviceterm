@@ -470,7 +470,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         status: DaemonRegistration.status,
                         isSmokeMode: smokeMode
                     ) == .offerRepair {
-                    await offerRegistrationRepair(after: clientError)
+                    guard let startupRepairLock else {
+                        fail(
+                            "Could not repair the deviceterm helper's registration: "
+                                + "the startup repair lock is not held"
+                        )
+                        return
+                    }
+                    await offerRegistrationRepair(
+                        after: clientError,
+                        holding: startupRepairLock
+                    )
                     return
                 }
                 fail("Could not start deviceterm: \(error)")
@@ -490,7 +500,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     ///
     /// No daemon call follows a successful repair; the next launch creates a
     /// fresh connection.
-    private func offerRegistrationRepair(after failure: DaemonClientError) async {
+    private func offerRegistrationRepair(
+        after failure: DaemonClientError,
+        holding lock: RegistrationRepairLock.Handle
+    ) async {
         registrationLog.notice(
             """
             helper unreachable at launch (\(failure.description, privacy: .public)) \
@@ -532,12 +545,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         do {
             let store = try RegistrationRepairStore.standard()
-            guard let held = try RegistrationRepairLock.tryAcquire(at: store.lockPath) else {
-                throw RegistrationRepairLockError.cannotLock(
-                    "another copy of DeviceTerm is repairing the registration"
-                )
-            }
-            try await DaemonRegistration.repair(store: store, holding: held)
+            // Startup already owns the lock across registration and the
+            // handshake. A second flock on a new descriptor contends even in
+            // this process, so the consented repair must reuse that handle.
+            try await DaemonRegistration.repair(store: store, holding: lock)
         } catch {
             // The repair error, not the connection failure that prompted it:
             // the user asked for this action specifically, so what they need is
