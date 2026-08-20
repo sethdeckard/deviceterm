@@ -11,9 +11,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-ok()   { printf "  ✓ %s\n" "$1"; }
-skip() { printf "  · %s (not present yet — skipping)\n" "$1"; }
-fail() { printf "  ✗ %s\n" "$1" >&2; exit 1; }
+ok()     { printf "  ✓ %s\n" "$1"; }
+skip()   { printf "  · %s (not present yet — skipping)\n" "$1"; }
+# Use for host-denied capabilities; `skip` is reserved for missing backing
+# files.
+denied() { printf "  · %s — skipping\n" "$1"; }
+fail()   { printf "  ✗ %s\n" "$1" >&2; exit 1; }
 
 echo "verify:"
 
@@ -190,33 +193,70 @@ if [ -x scripts/instance-guard.sh ]; then
         [ -n "$ig_pid" ] && break
         sleep 0.2
     done
-    [ -n "$ig_pid" ] || fail "instance-guard: fixture process never appeared"
-    # Precondition: without a relative comm this proves nothing, since the
-    # absolute path would resolve through plain path arithmetic.
-    ig_comm=$(ps -p "$ig_pid" -o comm= 2>/dev/null || true)
-    case "$ig_comm" in
-        /*) fail "instance-guard: fixture comm '$ig_comm' is absolute, not relative" ;;
-        "") fail "instance-guard: fixture comm unreadable" ;;
-    esac
-    ig_want="$(cd "$ig_tmp" && pwd -P)/$ig_exe"
-    ig_got=$(./scripts/instance-guard.sh resolve-exe "$ig_pid" || true)
-    if [ -z "$ig_got" ] && ! lsof -a -p $$ -d txt -Fn >/dev/null 2>&1; then
-        skip "instance-guard relative-comm resolution (lsof denied)"
-    elif [ "$ig_got" != "$ig_want" ]; then
-        fail "instance-guard: resolve-exe gave '$ig_got', want '$ig_want'"
+    # An empty pgrep means "cannot see" rather than "nothing there". That is
+    # the rule the guard itself follows, since a sandboxed shell can be denied
+    # process enumeration. Probe the same `-f` full-argv mode the fixture
+    # lookup and `classify_all` use, restricting the match-all probe to this
+    # user with `-U`: macOS gates argv separately from process names, and `.`
+    # is the match-all pattern pgrep documents as a required operand. A probe
+    # that wrongly reports "denied" would turn a genuine launch failure into a
+    # silent skip, so it stays on the real call's capability.
+    if [ -z "$ig_pid" ] && ! pgrep -U "$(id -u)" -f . >/dev/null 2>&1; then
+        denied "instance-guard self-test (pgrep denied)"
+    elif [ -z "$ig_pid" ]; then
+        fail "instance-guard: fixture process never appeared"
     else
-        # `make run` rebuilds the bundle (`rm -rf "$APP"`, then recreate)
-        # BEFORE `ensure-clear` classifies anything, so a still-running
-        # daemon's executable is routinely unlinked by the time it is
-        # inspected. macOS lsof keeps reporting the path, unlike Linux lsof
-        # which would append a " (deleted)" the basename check would reject.
-        # Pin that, because the failure is silent: kill-own would skip its
-        # own stale daemon and the new app would connect straight to it.
-        rm -f "$ig_tmp/$ig_exe"
+        # Precondition: without a relative comm this proves nothing, since the
+        # absolute path would resolve through plain path arithmetic.
+        ig_comm=$(ps -p "$ig_pid" -o comm= 2>/dev/null || true)
+        case "$ig_comm" in
+            /*) fail "instance-guard: fixture comm '$ig_comm' is absolute, not relative" ;;
+            "") fail "instance-guard: fixture comm unreadable" ;;
+        esac
+        ig_want="$(cd "$ig_tmp" && pwd -P)/$ig_exe"
+        # Start time pins the fixture's identity, so a later reading can tell
+        # the same process from an unrelated one that inherited a recycled pid.
+        ig_start=$(ps -p "$ig_pid" -o lstart= 2>/dev/null | sed 's/^ *//;s/ *$//' || true)
         ig_got=$(./scripts/instance-guard.sh resolve-exe "$ig_pid" || true)
-        [ "$ig_got" = "$ig_want" ] \
-            || fail "instance-guard: unlinked exe gave '$ig_got', want '$ig_want'"
-        ok "instance-guard self-test (relative comm resolves, linked or not)"
+        if [ -z "$ig_got" ] && ! lsof -a -p $$ -d txt -Fn >/dev/null 2>&1; then
+            denied "instance-guard relative-comm resolution (lsof denied)"
+        elif [ "$ig_got" != "$ig_want" ]; then
+            fail "instance-guard: resolve-exe gave '$ig_got', want '$ig_want'"
+        else
+            # Unlinking the fixture models `make run`, which rebuilds the
+            # bundle (`rm -rf "$APP"`, then recreate) BEFORE `ensure-clear`
+            # classifies anything. macOS terminates a process whose executable
+            # is unlinked, so the fixture may be gone before this second
+            # lookup; empty is then the guard's documented no-identification
+            # outcome and is correct. Any other answer is a defect: a decorated
+            # path (Linux lsof appends " (deleted)") would fail
+            # `classify_all`'s basename check, and an unrelated absolute path
+            # can leave the process unclassified or misclassify ownership.
+            # Only the unclassified case silently lets kill-own skip the stale
+            # daemon, leaving the new app to connect straight to it.
+            rm -f "$ig_tmp/$ig_exe"
+            ig_got=$(./scripts/instance-guard.sh resolve-exe "$ig_pid" || true)
+            # Liveness is read AFTER the lookup, and that order is what makes
+            # empty decidable. Matching the start time confirms this is still
+            # the fixture rather than a recycled pid, and a fixture alive now
+            # was alive throughout the lookup; an empty answer there is a real
+            # failure to identify, and `classify_all` would skip that stale
+            # daemon. A fixture already gone may have died mid-lookup, where
+            # empty is the no-identification outcome.
+            ig_now=$(ps -p "$ig_pid" -o lstart= 2>/dev/null | sed 's/^ *//;s/ *$//' || true)
+            if [ -n "$ig_start" ] && [ "$ig_now" = "$ig_start" ]; then
+                ig_live=yes
+            else
+                ig_live=no
+            fi
+            case "$ig_got" in
+                "$ig_want") ;;
+                "") [ "$ig_live" = no ] \
+                        || fail "instance-guard: unlinked exe of live pid $ig_pid resolved empty" ;;
+                *)  fail "instance-guard: unlinked exe gave '$ig_got', want '$ig_want' or empty" ;;
+            esac
+            ok "instance-guard self-test (relative comm resolves; unlinked exe never misreports)"
+        fi
     fi
     kill "$ig_pid" 2>/dev/null || true
     ig_pid=""
