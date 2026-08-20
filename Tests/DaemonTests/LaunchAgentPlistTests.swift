@@ -11,7 +11,8 @@ import Testing
 // `MachServiceName.daemon` exactly (the daemon binds the
 // listener under that name and the GUI connects to it). The plist
 // also encodes the `BundleProgram`, label, KeepAlive policy, and
-// associated bundle ids. All are load-bearing and worth pinning.
+// associated bundle ids. The assertions pin the executable path,
+// label, association, lifetime, and scheduling policies.
 
 private struct LaunchAgentPlist: Decodable {
     enum CodingKeys: String, CodingKey {
@@ -80,7 +81,7 @@ func launchAgentPlistShapeIsValid() throws {
     #expect(plist.associatedBundleIdentifiers == ["com.deviceterm"])
     #expect(plist.runAtLoad == false)
     #expect(plist.keepAlive.successfulExit == false)
-    #expect(plist.processType == "Background")
+    #expect(plist.processType == "Adaptive")
 }
 
 @Test

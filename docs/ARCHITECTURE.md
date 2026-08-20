@@ -117,14 +117,16 @@ iPhone-glyph count is for.
 
 ## Daemon lifecycle
 
-The daemon stays in the background. Two transports vend the same
+The daemon has no foreground UI. Two transports vend the same
 `MethodRegistry`:
 
 - **XPC** (mach service): the GUI's path. The GUI registers an embedded
   LaunchAgent plist via `SMAppService.agent(plistName:)`; launchd holds the
   listener, demand-launches the daemon on the GUI's first send, and applies
   the plist's `KeepAlive={SuccessfulExit:false}` policy to relaunch on
-  abnormal exit only.
+  abnormal exit only. `ProcessType=Adaptive` lets launchd move the daemon
+  between background and interactive scheduling as XPC messages arrive over
+  the declared mach service.
 - **UDS** (Unix domain socket): the CLI and shim path. Each terminal pane's
   shell env carries `DEVICETERM_DAEMON_SOCK` pointing at the socket the daemon
   vends alongside the mach service.
@@ -135,6 +137,12 @@ demand-launches the daemon. UDS traffic can never demand-launch: the
 LaunchAgent declares only the mach service, so a CLI or shim call finds
 the daemon only because an in-tab caller implies a live GUI that already
 brought it up. Outside a tab the CLI reports it cannot connect.
+
+An ordinary launch does not rebuild an enabled registration. Re-registering
+would stop the helper and discard its in-memory sessions and panes, including
+work another checkout may still be driving. New registrations and any later
+repair that rebuilds the registration read the current plist and pick up its
+scheduling policy.
 
 **Stay alive while:** any GUI XPC peer connected OR any CLI UDS peer
 connected OR a non-terminal pane exists whose owner GUI is still alive (a
