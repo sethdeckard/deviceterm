@@ -132,18 +132,58 @@ one.
 - If `ax dump` ever returns a degenerate tree (an `AXApplication` nested inside
   itself, `truncated:true`), it is a known intermittent — re-dump; do not
   root-cause it inline. The depth/node ceilings mean it can't hang.
+- A node marked `"skipped": true` was deliberately not descended into, and it
+  carries no `children` key. This is **not** `truncated`, which means a limit
+  ran out: re-dumping or raising a ceiling will never reveal a skipped subtree,
+  so don't treat it as a flake. The dump walks from the application element, so
+  the menu bar comes along; the leading menu bar item is the Apple menu, which
+  macOS owns and fills, and it is skipped because a dump of the target app's UI
+  has no business carrying another program's. Every other menu, deviceterm's own
+  included, follows the normal traversal policy, which means it can still be cut
+  short by a depth or node ceiling and marked `truncated`. Don't paste a
+  system-owned subtree into a report if you find one by another route.
 
 ## The flagship cross-check
 
 The single most trustworthy assertion the harness exists for:
 
 > `windows list --all --json` reports `tabCount = N` for the window under test
-> **⇔** the AX dump contains exactly `N` tab-pill buttons (role `AXButton`) whose
-> titles are the tab display titles, **and** a screenshot shows `N` pills in the
-> strip.
+> **⇔** the AX dump contains exactly `N` tab pills, **and** a screenshot shows
+> `N` pills in the strip.
 
 If the number, the AX tree, and the pixels disagree, that is a real bug — report
 it with all three observations.
+
+**One thing voids the ⇔: privacy.** Both CLI listings are filtered to what the
+*calling* session may see; AX is not filtered at all. A tab another session
+marked private is missing from your `tabCount` and your `tabs list`, while its
+pill is still in the strip and still in the dump. Run the cross-check on an
+all-public workspace, or expect AX to exceed the CLI by exactly the tabs you
+cannot see.
+
+**Count pills by identifier, never by role.** A pill is a node whose
+`identifier` starts `deviceterm.tab.`, does not end `.close` (that is a pill's
+✕), and is not `deviceterm.tab.new` (the strip's "+"). Counting by role instead
+will overshoot: the "+" and every ✕ are `AXButton`, and so is a pile of window
+chrome, so an app-wide `AXButton` count is a different number entirely. Scoping
+to the window does not rescue it, because the chrome is in the window too.
+
+The pill roles are worth knowing for assertions other than counting:
+
+| element | role | identifier | notes |
+|---|---|---|---|
+| pill | `AXCheckBox` (subrole `AXToggle`) | `deviceterm.tab.<shortId>` | `title` is the display title; **`value` 1 = selected, 0 = not** |
+| its ✕ | `AXButton` | `deviceterm.tab.<shortId>.close` | `title` is `✕`, `help` is `Close Tab` |
+| the "+" | `AXButton` | `deviceterm.tab.new` | **no `title` key**; `description` and `help` both read `New Tab` |
+
+**Read selection from `value`, not `focused`.** `focused` is `false` on every
+pill including the selected one, so a `focused` predicate silently matches
+nothing.
+
+**The pill identifier is a join key, not a durable handle.** It names the tab's
+*current primary* session, so closing the first terminal of a split tab changes
+it. Re-read the identifier from a fresh dump rather than caching one across
+mutations.
 
 **Always pass `--all` to `windows list`.** Without it the listing is scoped to
 *your* session and shows only your own tab's window, while the harness captures
@@ -167,6 +207,39 @@ trust `isKey` to name the captured window — reconcile by identity instead
 across all rows), which moves by the same delta no matter which window a gesture
 lands in — the tactic the automated `make test-uitest` smoke uses.
 
+## Mutations land after the CLI returns
+
+A workspace verb returns when the GUI has **accepted** the command, not when the
+change is observable everywhere. Asserting the instant the CLI exits can read
+the old state and report a mismatch that was never real. How much is still
+outstanding depends on the verb:
+
+- **Route-backed mutations** (open, select, close) go through `Router.dispatch`,
+  which enqueues onto a serial drain and returns immediately. The GUI acks on
+  the enqueue, so the CLI can exit before the route has run at all.
+- **Direct mutations**, `tab rename` among them, update the view model before
+  the ack, so the GUI-side change is already made when the CLI returns. AppKit
+  still has to draw it and the daemon still has to be told, so neither pixels
+  nor `tabs list` is guaranteed current.
+
+**Poll for the expected delta rather than reading once**, on whichever source
+you are asserting against (`tabs list --json`, `windows list --all --json`, a
+fresh `ax dump`, a fresh capture). Bound the wait, and report a timeout as a
+timeout rather than as a mismatch. Size the bound to the operation instead of
+reaching for a habitual number: opening a tab waits on `session.create`, whose
+client-side request deadline is 15 s, so a two-second bound can fail a tab that
+was going to arrive.
+
+**Don't assume which source settles first, because it is operation-specific.**
+Opening a tab creates the session *before* the GUI appends the tab, so the row
+can appear in `tabs list` while the pill is not yet in the strip. Renaming runs
+the other way: the pill changes first, and the daemon learns the title
+afterwards. Poll each source on its own rather than treating any one of them as
+the leading indicator.
+
+A mismatch that survives polling is a finding worth reporting. A mismatch on the
+first read is usually just this.
+
 ---
 
 ## Scenario library
@@ -180,25 +253,48 @@ mismatch itself as a finding rather than papering over it.
 
 - **Mutate:** `deviceterm tab open`
 - **Assert:** `deviceterm tabs list --json` is an array of
-  `{current, shortId?, name?, sessionId, label?}` across the whole workspace;
-  its length grew by 1. Separately, `deviceterm windows list --all --json`'s
-  `tabCount` for the window you opened into grew by 1 (in the recommended
-  single-window setup, the sole row). Treat these as two independent deltas, not
-  one equality — `tabs list` is workspace-wide, `tabCount` is per-window.
-- **Observe:** `deviceterm-uitest ax dump` — count `AXButton`s in the tab strip;
+  `{current, shortId?, name?, displayTitle?, sessionId, label?}` across the whole
+  workspace, filtered to what your session may see; its length grew by 1.
+  Separately,
+  `deviceterm windows list --all --json`'s `tabCount` for the window you opened
+  into grew by 1 (in the recommended single-window setup, the sole row). Treat
+  these as two independent deltas, not one equality — `tabs list` is
+  workspace-wide, `tabCount` is per-window.
+
+  **They also count different things.** `tabs list` returns one row per
+  caller-visible terminal *session*, `tabCount` counts caller-visible GUI
+  *tabs*, and the pills show every tab in the window whether you can see it via
+  the CLI or not. On an all-public workspace a split tab is therefore several
+  session rows, one `tabCount`, and one pill, with all three correct. Use
+  `tabCount` and the pills when you mean tabs.
+- **Observe:** `deviceterm-uitest ax dump` — count tab pills by identifier
+  prefix (see the flagship cross-check above);
   `deviceterm-uitest capture window --out /tmp/e2e-tabs.png` then read the PNG.
 - **Verify:** the flagship cross-check holds (count matches across JSON + AX +
   pixels).
 - **Rename:** `deviceterm tab rename "My Tab"` sets the GUI **manual title**
   (top of the precedence chain: manual → OSC → session name → cwd basename →
-  `shell`). This is a GUI-side override the daemon does not store, so **do not
-  assert it via `tabs list --json`** — that `name` field is only the daemon
-  *session name* layer (set at `session.create` / worktree auto-name), which a
-  manual rename does not touch, so it stays unchanged. Verify the rename through
-  the harness instead: the tab pill's **AX title** and the **window titlebar** in
-  a capture both read `My Tab`. (There is no CLI view of the resolved display
-  title today — the manual and OSC layers are GUI-only — so AX/pixels are the
-  only ground truth for a rename.)
+  `shell`). **Do not assert it via `tabs list --json`'s `name`**: that field is
+  the daemon *session name* layer (set at `session.create` / worktree
+  auto-name), which a manual rename does not touch, so it stays unchanged
+  however the rename went.
+
+  The resolved title does reach the daemon, as **`displayTitle`** on the same
+  row, so it is a second opinion rather than nothing. It is not a substitute for
+  AX and pixels here, because the GUI pushes it asynchronously: a read
+  immediately after the rename can still show the old title. It can also be nil,
+  for instance on the non-primary terminals of a split tab, whose title
+  publishes under the primary's session.
+
+  Verify through the harness instead, on **the pill for the tab you renamed**,
+  whose `title` reads `My Tab`. Mind which tab that is: a bare `tab rename`
+  targets the *calling shell's own* tab, because `--tab` defaults to `current`.
+  The **window titlebar** shows the **selected** tab's title, so it only agrees
+  when the tab you renamed is also the selected one. If you opened a tab earlier
+  in this scenario, the new tab is selected and the titlebar still reads *its*
+  title while the rename worked perfectly. To assert the titlebar, name the
+  target explicitly with `tab rename --tab <shortId> "My Tab"`, or select the
+  caller's tab first.
 - **Select:** `deviceterm tab select --tab <shortId>`. **Do not assert with
   `tabs list --json`'s `current`** — that flag marks the row matching the
   *calling shell's* `DEVICETERM_SESSION`, i.e. the agent's own tab, regardless of
@@ -206,12 +302,21 @@ mismatch itself as a finding rather than papering over it.
   is a Router route, so it sets `workspace.selectedWindowID` — meaning
   `windows list --all --json`'s `isKey:true` row *is* the window holding the newly
   selected tab, and its `selectedTabShortId` should equal `<shortId>`. Confirm it
-  visually: the capture/AX show that pill as the active one.
-- **GUI-only open:** `deviceterm-uitest drive key cmd+t` (New Tab). Prefer the
-  ⌘T key equivalent. `drive click --ax "New Tab"` does open a tab, but "New Tab"
-  labels both the **Shell** menu item and the strip's "+", and the element
-  search walks the whole application, so the label alone doesn't say which one
-  you pressed. Re-assert the count grew.
+  in AX: that pill's **`value` is 1** and every other pill's is 0. Do not reach
+  for `focused`, which is false on all of them.
+
+  **GUI-only select:** `drive click --ax "deviceterm.tab.<shortId>"` selects that
+  exact tab. Prefer the identifier over the title, which is the live display
+  title and collides freely (several tabs in one window commonly share one).
+- **GUI-only open:** `deviceterm-uitest drive key cmd+t` (New Tab), or
+  `drive click --ax "deviceterm.tab.new"` to press the strip's "+" specifically.
+  Both open a tab; re-assert the count grew.
+
+  Do **not** use `drive click --ax "New Tab"` for this. That string matches the
+  **Shell** menu item by title and the "+" by description, and the element search
+  walks the whole application, so it presses one of them without telling you
+  which. The identifier is unambiguous, and the "+" publishes no title at all, so
+  the identifier is the only way to name it.
 - **Close:** `deviceterm tab close --tab <shortId> --mode detach` (detach keeps
   any booted sims). Re-assert the count dropped. *If the tab booted a sim, a
   modal appears — see scenario 5.*
@@ -311,11 +416,18 @@ the harness runs out of process.
   and returns cleanly. **⌥⌘W, not ⌘W:** ⌘W closes the *focused pane*, so with
   the sim pane focused it would detach the mirror and never raise the alert.
   ⌥⌘W is Close Tab whatever holds focus. (Pressing the pill's `✕` via
-  `drive click --ax "✕"` also
-  raises the alert, but that AXPress triggers `runModal` and blocks, so the drive
-  returns **`ok:false` "pressing ✕ failed"** *even though the alert is up*. Treat
-  a non-zero there as "modal raised," never as "nothing happened" — confirm by
-  observing, not by the drive's status.) The alert reads: message
+  `drive click --ax "deviceterm.tab.<shortId>.close"` also raises the alert, but
+  that AXPress triggers `runModal` and blocks, so the drive returns **`ok:false`
+  "pressing deviceterm.tab.<shortId>.close failed"** *even though the alert is
+  up*: the message interpolates whatever needle you passed, so it is not a fixed
+  string. The blocked-modal path reports `pressing <needle> failed`, but so does
+  every other unsuccessful AXPress, so that wording narrows the possibilities
+  without confirming anything. Confirm the alert by observing it. The other two
+  press failures mean no AXPress was attempted at all and are findings in their
+  own right: `no accessibility element titled <needle>` and `<needle> exists but
+  is not pressable`. Address the ✕ by identifier: every pill's ✕ has the title `✕`,
+  so `--ax "✕"` presses whichever one the walk reaches first, which need not be
+  the tab you meant.) The alert reads: message
   **`Close this tab?`**, informative *"Detach keeps any simulators this tab
   booted running. Shut Down stops them."*
 - **Observe:** the alert is a **separate `NSAlert` window** sitting above the
