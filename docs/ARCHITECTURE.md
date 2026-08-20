@@ -362,6 +362,17 @@ and the GUI holds its last good frame. For a **device** pane the surface is *lea
 see "Surface lifecycle" under Data flows for the ownership contract that
 keeps a slot from being overwritten while the GPU still reads it.
 
+Each pane has one latest-only ordered frame pump. For each retained frame,
+`PaneCoordinator` commits the sequence, current surface, and JSON subscriber
+events in one non-suspending turn. The pump performs side-band delivery outside
+the actor; its one-time rendering publication re-enters the coordinator for an
+epoch check and the `EventBroker` hop. Terminal teardown cancels and joins the
+pump before emitting terminal events, so queued frame work cannot follow them.
+
+Session revocation invalidates rendering work that has not reached publication
+and waits for any admitted rendering or terminal publication before emitting
+`session.closed`.
+
 ## RPC protocol
 
 **Framing.** Over UDS, length-prefixed JSON: `[uint32 BE length][JSON

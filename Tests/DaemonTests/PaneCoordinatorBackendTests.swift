@@ -1529,6 +1529,55 @@ private final class SurfaceCountBox: @unchecked Sendable {
     var alive = 0
 }
 
+/// One-shot gate for a selected surface-pump test point. The hook signals
+/// entry before parking, so the test can drive the competing lifecycle turn
+/// without timing assumptions.
+private actor SurfacePumpGate {
+    private let target: PaneCoordinator.SurfacePumpTestPoint
+    private var isOpen = false
+    private var didEnter = false
+    private var openWaiter: CheckedContinuation<Void, Never>?
+    private var enteredWaiter: CheckedContinuation<Void, Never>?
+
+    init(target: PaneCoordinator.SurfacePumpTestPoint) {
+        self.target = target
+    }
+
+    func arrive(at point: PaneCoordinator.SurfacePumpTestPoint) async {
+        guard point == target else { return }
+        didEnter = true
+        enteredWaiter?.resume()
+        enteredWaiter = nil
+        if isOpen { return }
+        await withCheckedContinuation { openWaiter = $0 }
+    }
+
+    func awaitEntered() async {
+        if didEnter { return }
+        await withCheckedContinuation { enteredWaiter = $0 }
+    }
+
+    func open() {
+        isOpen = true
+        openWaiter?.resume()
+        openWaiter = nil
+    }
+}
+
+private func waitForPaneState(
+    _ expected: PaneLifecycle,
+    sessionId: UUID,
+    coordinator: PaneCoordinator
+) async -> Bool {
+    for _ in 0..<1_000 {
+        if await coordinator.panesForSession(sessionId).first?.state == expected {
+            return true
+        }
+        await Task.yield()
+    }
+    return false
+}
+
 @Test("serial pump bounds retention while the consumer is parked")
 func serialPumpBoundsRetentionWhileConsumerParked() async throws {
     let coordinator = PaneCoordinator()
@@ -1609,6 +1658,192 @@ func orderedPumpDeliversEveryFrameWhenPaced() async throws {
     }
 
     await coordinator.unsubscribe(paneId: result.paneId, subscriptionId: subscriptionId)
+}
+
+@Test("first frame publishes rendering through the ordered pump")
+func firstFramePublishesRenderingThroughOrderedPump() async throws {
+    let broker = EventBroker()
+    let coordinator = PaneCoordinator(eventBroker: broker)
+    let backend = MockDeviceBackend()
+    let sessionId = UUID()
+    let (_, events) = await broker.subscribe(as: .session(sessionId, incarnation: nil))
+    var eventIterator = events.makeAsyncIterator()
+    _ = try await coordinator.createMockPane(
+        udid: "udid-pump-rendering",
+        sessionId: sessionId,
+        backend: backend
+    )
+    // Creation publishes the initial booting state before returning.
+    _ = await eventIterator.next()
+
+    let onSurface = try #require(backend.onSurface)
+    onSurface(try makeTestPublished())
+
+    let rendering = try #require(await eventIterator.next())
+    #expect(rendering.type == DaemonEventType.paneStateChanged)
+    #expect(rendering.state == PaneLifecycle.rendering.rawValue)
+    #expect(rendering.udid == "udid-pump-rendering")
+}
+
+@Test("retirement drops a queued frame across session revocation")
+func retirementDropsQueuedFrameAcrossSessionRevocation() async throws {
+    let pumpGate = SurfacePumpGate(target: .beforeCommit)
+    let revocationGate = SurfacePumpGate(target: .beforeTerminalPublicationWait)
+    let broker = EventBroker()
+    let coordinator = PaneCoordinator(eventBroker: broker)
+    await coordinator.setSurfacePumpTestHook { point in
+        await pumpGate.arrive(at: point)
+        await revocationGate.arrive(at: point)
+    }
+    let backend = MockDeviceBackend()
+    let sessionId = UUID()
+    let (_, daemonEvents) = await broker.subscribe(as: .guiPeer)
+    var daemonEventIterator = daemonEvents.makeAsyncIterator()
+    let pane = try await coordinator.createMockPane(
+        udid: "udid-pump-retirement",
+        sessionId: sessionId,
+        backend: backend
+    )
+    // Drain the initial booting publication.
+    _ = await daemonEventIterator.next()
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    var iterator = stream.makeAsyncIterator()
+    // Drain the initial state and orientation replay.
+    _ = await iterator.next()
+    _ = await iterator.next()
+
+    let onSurface = try #require(backend.onSurface)
+    onSurface(try makeTestPublished())
+    await pumpGate.awaitEntered()
+
+    let shutdown = Task {
+        await coordinator.markPanesShutdown(forUDID: "udid-pump-retirement")
+    }
+    let retirementStarted = await waitForPaneState(
+        .shutdown,
+        sessionId: sessionId,
+        coordinator: coordinator
+    )
+    let revocation = Task {
+        await coordinator.revokeSubscriptions(forSession: sessionId)
+    }
+    await revocationGate.awaitEntered()
+    await revocationGate.open()
+    await pumpGate.open()
+    await revocation.value
+    #expect(retirementStarted)
+    await broker.finishSession(
+        sessionId,
+        withFinalEvent: .sessionClosed(sessionId: sessionId.uuidString)
+    )
+    await shutdown.value
+
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var terminalEvents = 0
+    var surfaceEvents = 0
+    while let event = await iterator.next() {
+        switch event {
+        case let .stateChanged(_, state) where state == .shutdown:
+            terminalEvents += 1
+
+        case .surfaceChanged:
+            surfaceEvents += 1
+
+        default:
+            break
+        }
+    }
+    #expect(terminalEvents == 1)
+    #expect(surfaceEvents == 0)
+
+    let terminal = try #require(await daemonEventIterator.next())
+    let sessionClosed = try #require(await daemonEventIterator.next())
+    #expect(terminal.type == DaemonEventType.paneStateChanged)
+    #expect(terminal.state == PaneLifecycle.shutdown.rawValue)
+    #expect(sessionClosed.type == DaemonEventType.sessionClosed)
+}
+
+@Test("rendering cannot publish after a terminal pane event")
+func renderingPublicationDoesNotFollowTerminalPaneEvent() async throws {
+    let gate = SurfacePumpGate(target: .beforeStatePublication)
+    let broker = EventBroker()
+    let coordinator = PaneCoordinator(eventBroker: broker)
+    await coordinator.setSurfacePumpTestHook { await gate.arrive(at: $0) }
+    let backend = MockDeviceBackend()
+    let sessionId = UUID()
+    let (_, events) = await broker.subscribe(as: .session(sessionId, incarnation: nil))
+    var iterator = events.makeAsyncIterator()
+    _ = try await coordinator.createMockPane(
+        udid: "udid-pump-terminal-event",
+        sessionId: sessionId,
+        backend: backend
+    )
+    // Drain the initial booting publication.
+    _ = await iterator.next()
+
+    let onSurface = try #require(backend.onSurface)
+    onSurface(try makeTestPublished())
+    await gate.awaitEntered()
+
+    let shutdown = Task {
+        await coordinator.markPanesShutdown(forUDID: "udid-pump-terminal-event")
+    }
+    let retirementStarted = await waitForPaneState(
+        .shutdown,
+        sessionId: sessionId,
+        coordinator: coordinator
+    )
+    await gate.open()
+    await shutdown.value
+    #expect(retirementStarted)
+    await broker.publish(.deviceBooted(udid: "sentinel"), to: .session(sessionId))
+
+    var observed: [DaemonEvent] = []
+    while let event = await iterator.next() {
+        observed.append(event)
+        if event.type == DaemonEventType.deviceBooted { break }
+    }
+    #expect(observed.map(\.type) == [DaemonEventType.paneStateChanged, DaemonEventType.deviceBooted])
+    #expect(observed.first?.state == PaneLifecycle.shutdown.rawValue)
+}
+
+@Test("rendering committed before session close cannot publish after it")
+func renderingPublicationDoesNotFollowSessionClosed() async throws {
+    let gate = SurfacePumpGate(target: .beforeStatePublication)
+    let broker = EventBroker()
+    let coordinator = PaneCoordinator(eventBroker: broker)
+    await coordinator.setSurfacePumpTestHook { await gate.arrive(at: $0) }
+    let backend = MockDeviceBackend()
+    let sessionId = UUID()
+    let (_, events) = await broker.subscribe(as: .guiPeer)
+    var iterator = events.makeAsyncIterator()
+    let pane = try await coordinator.createMockPane(
+        udid: "udid-pump-session-close",
+        sessionId: sessionId,
+        backend: backend
+    )
+    // Drain the initial booting publication.
+    _ = await iterator.next()
+
+    let onSurface = try #require(backend.onSurface)
+    onSurface(try makeTestPublished())
+    await gate.awaitEntered()
+
+    await coordinator.revokeSubscriptions(forSession: sessionId)
+    await broker.finishSession(
+        sessionId,
+        withFinalEvent: .sessionClosed(sessionId: sessionId.uuidString)
+    )
+    await gate.open()
+    _ = await coordinator.close(paneId: pane.paneId, as: .guiPeer, mode: .detach)
+    await broker.publish(.deviceBooted(udid: "sentinel"), to: .everyone)
+
+    var observed: [String] = []
+    while let event = await iterator.next() {
+        observed.append(event.type)
+        if event.type == DaemonEventType.deviceBooted { break }
+    }
+    #expect(observed == [DaemonEventType.sessionClosed, DaemonEventType.deviceBooted])
 }
 
 @Test

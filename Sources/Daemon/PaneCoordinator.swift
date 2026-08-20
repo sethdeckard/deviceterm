@@ -716,16 +716,29 @@ public actor PaneCoordinator {
         /// on every fresh surface; `0` means no surface has been
         /// delivered yet. Restarts at 0 on daemon relaunch.
         var lastSequence: UInt64 = 0
-        /// Ordered surface pump for this pane. The backend's frame
-        /// callback fires from an arbitrary thread and yields each
-        /// `PublishedSurface` into `surfaceContinuation` (a
-        /// `.bufferingNewest(1)` stream); `surfacePump` drains it
-        /// serially into `handleSurfaceCallback`, so surfaces publish
-        /// in frame order and a superseded frame releases the moment a
-        /// newer one displaces it: no unbounded per-frame task
-        /// backlog. Both are cleared on teardown.
+        /// Ordered surface pump for this pane. The backend's frame callback
+        /// fires from an arbitrary thread and yields each `PublishedSurface`
+        /// into `surfaceContinuation` (a `.bufferingNewest(1)` stream). The
+        /// detached `surfacePump` asks `PaneCoordinator` to commit sequence and
+        /// record state in one non-suspending turn, then awaits side-band
+        /// fan-out itself. The first frame re-enters the coordinator once to
+        /// fence its lifecycle publication; steady-state frames do not park a
+        /// fan-out hop in this actor's mailbox. A superseded frame releases as
+        /// soon as a newer one displaces it. Both fields are cleared on
+        /// teardown.
         var surfaceContinuation: AsyncStream<PublishedSurface>.Continuation?
         var surfacePump: Task<Void, Never>?
+        /// True only while the first-frame `.rendering` event has passed its
+        /// lifecycle fence and is awaiting `EventBroker`. Session revocation
+        /// waits for it before publishing `.sessionClosed`.
+        var surfaceStatePublicationInFlight = false
+        var surfaceStatePublicationWaiters: [CheckedContinuation<Void, Never>] = []
+        /// The newest terminal transition admitted for this record. A sim
+        /// shutdown may supersede an in-flight failure, so only the matching
+        /// revision finishes the terminal-publication barrier.
+        var terminalPublicationRevision: UInt64 = 0
+        var terminalStatePublicationInFlight = false
+        var terminalStatePublicationWaiters: [CheckedContinuation<Void, Never>] = []
 
         init(
             id: UUID,
@@ -781,11 +794,13 @@ public actor PaneCoordinator {
         /// Called on every teardown path (close, sim shutdown, and a
         /// failed `startFrames`) so no pump outlives the pane.
         /// Idempotent: the fields are cleared after tearing down.
-        func teardownSurfacePump() {
+        func teardownSurfacePump() -> Task<Void, Never>? {
             surfaceContinuation?.finish()
-            surfacePump?.cancel()
+            let pump = surfacePump
+            pump?.cancel()
             surfaceContinuation = nil
             surfacePump = nil
+            return pump
         }
     }
 
@@ -815,6 +830,32 @@ public actor PaneCoordinator {
         let record: Record
         let backend: any DeviceBackend
         let generation: UInt64
+    }
+
+    /// Immutable work the frame callback commits in one actor turn and hands
+    /// back to the pane's ordered pump. JSON subscriber yields stay in that
+    /// turn because subscription revocation linearizes on the same actor. The
+    /// first-frame lifecycle event is revalidated before publication; every
+    /// side-band delivery stays on the pump.
+    private struct SurfacePublishWork: Sendable {
+        struct StatePublication: Sendable {
+            let paneId: UUID
+            let epoch: UInt64
+            let event: DaemonEvent
+            let audience: EventAudience
+        }
+
+        let paneId: UUID
+        let published: PublishedSurface
+        let sequence: UInt64
+        let statePublication: StatePublication?
+    }
+
+    /// Test-only suspension points for deterministic surface/lifecycle races.
+    enum SurfacePumpTestPoint: Sendable, Equatable {
+        case beforeCommit
+        case beforeStatePublication
+        case beforeTerminalPublicationWait
     }
 
     /// Upper bound on gesture durations (ms) accepted by `swipe`,
@@ -867,11 +908,12 @@ public actor PaneCoordinator {
     /// (e.g. forced collision-then-resolve) to exercise the retry
     /// path without depending on RNG luck.
     private let mintShortID: @Sendable () -> String
-    /// Optional event broker. When non-nil, the coordinator publishes
-    /// `pane.stateChanged` to it on every state transition, scoped to the
-    /// owning session, so that session's `deviceterm events` subscribers
-    /// (and the GUI peer) see pane lifecycle. Nil in tests that don't care
-    /// about the broker, which keeps the existing test surface terse.
+    /// Optional event broker. When non-nil, state transitions are published
+    /// to it for the owning session, so that session's `deviceterm events`
+    /// subscribers (and the GUI peer) see pane lifecycle. Frame-driven
+    /// transitions are awaited by the per-pane pump after their synchronous
+    /// coordinator commit. Nil in tests that don't care about the broker,
+    /// which keeps the existing test surface terse.
     private let eventBroker: EventBroker?
     /// Optional subscription registry. When non-nil, each surface
     /// callback delivers the `RetainedSurface` to the registry,
@@ -881,6 +923,9 @@ public actor PaneCoordinator {
     /// per-record fan-out (no side-band surface payload: UDS
     /// can't carry an `xpc_object_t`).
     private let subscriptionRegistry: PaneSubscriptionRegistry?
+    /// Test-only seam captured when a pane creates its pump. Always nil in
+    /// production.
+    private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
 
     /// Diagnostic accessor: live, listable pane records. Excludes retiring ones.
     public var paneCount: Int { panes.count }
@@ -918,6 +963,13 @@ public actor PaneCoordinator {
         self.mintShortID = mintShortID
         self.eventBroker = eventBroker
         self.subscriptionRegistry = subscriptionRegistry
+    }
+
+    /// Test-only: install the ordered-pump race hook above.
+    func setSurfacePumpTestHook(
+        _ hook: @escaping @Sendable (SurfacePumpTestPoint) async -> Void
+    ) {
+        surfacePumpTestHook = hook
     }
 
     // MARK: - Create
@@ -1211,17 +1263,37 @@ public actor PaneCoordinator {
         // Stand up the per-pane ordered surface pump before starting
         // frames: the backend can fire its callback synchronously
         // inside `startFrames` when a surface is already bound, so the
-        // continuation must exist first. The callback only yields, and the
-        // serial drain task funnels every frame into
-        // `handleSurfaceCallback` in receive order.
+        // continuation must exist first. The callback only yields. The
+        // detached serial drain asks this actor to commit each retained frame
+        // in receive order, then performs steady-state side-band fan-out
+        // without re-entering PaneCoordinator. The first frame re-enters once
+        // to fence its lifecycle publication against teardown and session
+        // revocation.
         let (surfaceStream, surfaceContinuation) = AsyncStream.makeStream(
             of: PublishedSurface.self,
             bufferingPolicy: .bufferingNewest(1)
         )
         record.surfaceContinuation = surfaceContinuation
-        record.surfacePump = Task { [weak self, paneId] in
+        let subscriptionRegistry = subscriptionRegistry
+        let surfacePumpTestHook = surfacePumpTestHook
+        record.surfacePump = Task.detached { [weak self, paneId] in
             for await published in surfaceStream {
-                await self?.handleSurfaceCallback(paneId: paneId, published: published)
+                guard !Task.isCancelled else { break }
+                await surfacePumpTestHook?(.beforeCommit)
+                guard let work = await self?.handleSurfaceCallback(
+                    paneId: paneId,
+                    published: published
+                ) else { continue }
+                if let statePublication = work.statePublication {
+                    await surfacePumpTestHook?(.beforeStatePublication)
+                    await self?.publishSurfaceStateIfCurrent(statePublication)
+                }
+                guard !Task.isCancelled else { break }
+                await subscriptionRegistry?.deliverSurface(
+                    paneId: work.paneId,
+                    published: work.published,
+                    sequence: work.sequence
+                )
             }
         }
 
@@ -1237,8 +1309,9 @@ public actor PaneCoordinator {
                 }
             )
         } catch {
-            record.teardownSurfacePump()
+            let surfacePump = record.teardownSurfacePump()
             panes.removeValue(forKey: paneId)
+            await surfacePump?.value
             throw PaneError.startStreamFailed(
                 udid: key,
                 message: BridgeMessage.unwrap(error)
@@ -1698,6 +1771,9 @@ public actor PaneCoordinator {
                 await awaitRevocableSetupDrained(record: record)
                 let revoked = await revokeSessionSubscribers(record: record, target: sessionId)
                 record.ownerRevoked = true
+                await awaitSurfaceStatePublication(record)
+                await surfacePumpTestHook?(.beforeTerminalPublicationWait)
+                await awaitTerminalStatePublication(record)
                 clearTransferring(record)
                 return revoked
             }
@@ -1956,7 +2032,10 @@ public actor PaneCoordinator {
     /// already-terminal guard, which differ (a sim shutdown still retires a
     /// `.failed` pane; a fault leaves either terminal state alone).
     private func retire(record: Record, to state: PaneLifecycle) async {
-        record.teardownSurfacePump()
+        record.terminalPublicationRevision &+= 1
+        let terminalPublicationRevision = record.terminalPublicationRevision
+        record.terminalStatePublicationInFlight = true
+        let surfacePump = record.teardownSurfacePump()
         record.teardownOrientationPump(backend: record.backend)
         record.backend?.shutdownBackend()
         record.backend = nil
@@ -1965,6 +2044,19 @@ public actor PaneCoordinator {
         record.locationEpoch &+= 1
         record.state = state
         record.epoch &+= 1
+
+        // A detached pump may already have committed work or queued its actor
+        // call when cancellation lands. Wait for that one task to finish before
+        // emitting terminal events. The handler's state/epoch fence
+        // rejects work that had not committed yet; admitted work finishes
+        // before subscribers can observe the terminal state.
+        await surfacePump?.value
+        guard panes[record.id] === record,
+            record.state == state else {
+            finishTerminalStatePublication(record, revision: terminalPublicationRevision)
+            return
+        }
+
         for subscriber in record.subscribers.values {
             subscriber.continuation.yield(.stateChanged(paneId: record.id, state: state))
         }
@@ -1978,6 +2070,7 @@ public actor PaneCoordinator {
             ),
             to: .session(record.sessionId)
         )
+        finishTerminalStatePublication(record, revision: terminalPublicationRevision)
     }
 
     /// Fail a pane whose backend reported an unrecoverable fault (a
@@ -2158,11 +2251,12 @@ public actor PaneCoordinator {
                 try? await Task.sleep(for: .milliseconds(ContactLane.liveExpiryMs))
             }
         }
-        record.teardownSurfacePump()
+        let surfacePump = record.teardownSurfacePump()
         record.teardownOrientationPump(backend: record.backend)
         record.backend?.shutdownBackend()
         record.backend = nil
         record.currentSurface = nil
+        await surfacePump?.value
     }
 
     /// Drop the retirement and let anything waiting on this target proceed.
@@ -3126,15 +3220,24 @@ public actor PaneCoordinator {
 
     // MARK: - Bridge callback (private)
 
-    private func handleSurfaceCallback(paneId: UUID, published: PublishedSurface) async {
-        guard let record = panes[paneId] else { return }
+    /// Commit one retained frame without suspending the coordinator. The
+    /// ordered per-pane pump awaits the returned broker and side-band fan-out,
+    /// so this actor handles one bounded mailbox turn per frame rather than
+    /// leaving a frame task to resume here after each cross-actor hop.
+    private func handleSurfaceCallback(
+        paneId: UUID,
+        published: PublishedSurface
+    ) -> SurfacePublishWork? {
+        guard let record = panes[paneId], record.state == .booting || record.state == .rendering else {
+            return nil
+        }
         // Sequence: a leased (device) frame carries its pool generation
         // (per-pane monotonic and never repeating) and is dropped if it
         // would not advance the sequence (defensive against an out-of-order
         // arrival). A sim frame keeps the plain incrementing counter.
         let sequence: UInt64
         if let lease = published.lease {
-            guard lease.generation > record.lastSequence else { return }
+            guard lease.generation > record.lastSequence else { return nil }
             sequence = lease.generation
         } else {
             sequence = record.lastSequence &+ 1
@@ -3156,6 +3259,7 @@ public actor PaneCoordinator {
             )
         }
         // First surface = transition out of booting.
+        let statePublication: SurfacePublishWork.StatePublication?
         if record.state == .booting {
             record.state = .rendering
             for (_, subscriber) in record.subscribers {
@@ -3165,14 +3269,18 @@ public actor PaneCoordinator {
             // event stream (scoped to the owning session). Boot-wait
             // callers (`deviceterm events | jq 'select(.state=="rendering")'`)
             // pick up here.
-            await eventBroker?.publish(
-                .paneStateChanged(
-                paneId: paneId.uuidString,
-                udid: record.target.key,
-                state: PaneLifecycle.rendering.rawValue
-            ),
-                to: .session(record.sessionId)
+            statePublication = SurfacePublishWork.StatePublication(
+                paneId: paneId,
+                epoch: record.epoch,
+                event: .paneStateChanged(
+                    paneId: paneId.uuidString,
+                    udid: record.target.key,
+                    state: PaneLifecycle.rendering.rawValue
+                ),
+                audience: .session(record.sessionId)
             )
+        } else {
+            statePublication = nil
         }
         // JSON evt path: yield to the per-record subscribers map
         // (the existing UDS fan-out). The same yield drives the
@@ -3181,17 +3289,66 @@ public actor PaneCoordinator {
         for (_, subscriber) in record.subscribers {
             subscriber.continuation.yield(.surfaceChanged(paneId: paneId, sequence: sequence))
         }
-        // Side-band path: hand the retained surface to the
-        // subscription registry so XPC subscribers receive it via
-        // their pre-registered delivery handle. UDS subscribers
-        // ignore this: they have no delivery handle registered, so
-        // the per-`(paneId, connectionId)` slot stays empty for
-        // them.
-        await subscriptionRegistry?.deliverSurface(
+        // The ordered pump handles the cross-actor side-band path after this
+        // turn. UDS subscribers have no delivery handle registered, so the
+        // registry's per-`(paneId, connectionId)` slot stays empty for them.
+        return SurfacePublishWork(
             paneId: paneId,
             published: published,
-            sequence: sequence
+            sequence: sequence,
+            statePublication: statePublication
         )
+    }
+
+    /// Publish the first-frame lifecycle event only if the record still holds
+    /// the state and ownership epoch committed with that frame. Once admitted,
+    /// terminal teardown joins the surface pump and session revocation waits on
+    /// `surfaceStatePublicationInFlight`, so neither terminal event can
+    /// overtake this publication.
+    private func publishSurfaceStateIfCurrent(
+        _ publication: SurfacePublishWork.StatePublication
+    ) async {
+        guard let record = panes[publication.paneId],
+            record.epoch == publication.epoch,
+            record.state == .rendering,
+            !record.ownerRevoked,
+            !record.transferring else { return }
+
+        record.surfaceStatePublicationInFlight = true
+        await eventBroker?.publish(publication.event, to: publication.audience)
+        record.surfaceStatePublicationInFlight = false
+        let waiters = record.surfaceStatePublicationWaiters
+        record.surfaceStatePublicationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    /// Wait until an admitted first-frame state publication has completed.
+    /// Used by session revocation before it allows `.sessionClosed` to publish.
+    private func awaitSurfaceStatePublication(_ record: Record) async {
+        guard record.surfaceStatePublicationInFlight else { return }
+        await withCheckedContinuation { record.surfaceStatePublicationWaiters.append($0) }
+    }
+
+    /// Release session revocation after the winning terminal transition has
+    /// published, or after a close removed the record before it could publish.
+    /// A superseded transition cannot clear the newer transition's barrier.
+    private func finishTerminalStatePublication(_ record: Record, revision: UInt64) {
+        guard record.terminalPublicationRevision == revision else { return }
+        record.terminalStatePublicationInFlight = false
+        let waiters = record.terminalStatePublicationWaiters
+        record.terminalStatePublicationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    /// Keep `.sessionClosed` behind a terminal pane event that was already
+    /// committed when the session's subscription sweep began.
+    private func awaitTerminalStatePublication(_ record: Record) async {
+        guard record.terminalStatePublicationInFlight else { return }
+        await withCheckedContinuation { record.terminalStatePublicationWaiters.append($0) }
     }
 
     // MARK: - Helpers
