@@ -191,7 +191,7 @@ public final class StatusItemController {
     /// Force one refresh now. Tests + the daemon's startup code
     /// call this to sync state without waiting for the next poll.
     public func refresh() async {
-        let sims = await coordinator.listOwnedBooted()
+        let sims = (try? await coordinator.listOwnedBooted()) ?? []
         // Resolve owning-session names up front (one actor message
         // per distinct sessionId) so `apply` can stay synchronous
         // and the menu state never spans multiple await points
@@ -356,7 +356,7 @@ public final class StatusItemController {
             // Re-read the live set rather than trusting a snapshot
             // captured when the menu was built. A sim may have shut
             // down externally between the build and the click.
-            let sims = await self.coordinator.listOwnedBooted()
+            let sims = (try? await self.coordinator.listOwnedBooted()) ?? []
             for sim in sims {
                 await self.shutDown(udid: sim.udid)
             }

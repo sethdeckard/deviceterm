@@ -65,21 +65,55 @@ private final class DeviceReaderQueueProbe: @unchecked Sendable {
     }
 }
 
+/// Deterministic replacement for the production sleep. Each `fire()` releases
+/// the one active deadline waiter; cancelling that waiter makes `next()` return
+/// nil, so completed reads retire their timer without leaving a test task.
+private final class DeviceReadDeadlineFixture: @unchecked Sendable {
+    private let stream: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init() {
+        (stream, continuation) = AsyncStream.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+    }
+
+    func sleep(nanoseconds _: UInt64) async throws {
+        var iterator = stream.makeAsyncIterator()
+        guard await iterator.next() != nil else { throw CancellationError() }
+    }
+
+    func fire() {
+        continuation.yield(())
+    }
+}
+
 private func makeCoordinator(
     fixture: DeviceReadFixture,
     readerQueue: DispatchQueue = DispatchQueue(
         label: "com.deviceterm.tests.device-cache-reader",
         qos: .default
     ),
-    beforeRead: (@Sendable () -> Void)? = nil
+    deadline: DeviceReadDeadlineFixture? = nil,
+    beforeRead: (@Sendable () -> Void)? = nil,
+    afterRead: (@Sendable () -> Void)? = nil
 ) -> DeviceCoordinator {
     DeviceCoordinator(
         deviceSnapshotTTLNanoseconds: snapshotTTL,
         deviceSnapshotClock: { fixture.now },
+        deviceSnapshotSleep: { nanoseconds in
+            if let deadline {
+                try await deadline.sleep(nanoseconds: nanoseconds)
+            } else {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            }
+        },
         deviceReaderQueue: readerQueue,
         readDevices: {
             beforeRead?()
-            return try fixture.read()
+            let devices = try fixture.read()
+            afterRead?()
+            return devices
         }
     )
 }
@@ -91,6 +125,16 @@ private func waitOffExecutor(for semaphore: DispatchSemaphore) async {
             continuation.resume()
         }
     }
+}
+
+private func awaitRecoveredRead(from coordinator: DeviceCoordinator) async -> [CSBDeviceInfo]? {
+    for _ in 0..<1_000 {
+        if let devices = try? await coordinator.listAll() {
+            return devices
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    return nil
 }
 
 @Test
@@ -189,6 +233,89 @@ func concurrentDeviceSnapshotMissesShareOneRead() async throws {
     _ = try await first.value
     _ = try await second.value
     #expect(fixture.count == 1)
+}
+
+@Test
+func blockedDeviceSnapshotTimesOutAllWaitersAndOpensCircuit() async {
+    let fixture = DeviceReadFixture()
+    let deadline = DeviceReadDeadlineFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(fixture: fixture, deadline: deadline) {
+        entered.signal()
+        release.wait()
+    }
+
+    let first = Task { try await coordinator.listAll() }
+    await waitOffExecutor(for: entered)
+    let second = Task { try await coordinator.listAll() }
+    for _ in 0..<10 { await Task.yield() }
+    deadline.fire()
+
+    await #expect(throws: DeviceError.listTimedOut) { try await first.value }
+    await #expect(throws: DeviceError.listTimedOut) { try await second.value }
+    await #expect(throws: DeviceError.listTimedOut) { try await coordinator.listAll() }
+    #expect(fixture.hasNoReads)
+
+    release.signal()
+    #expect(await awaitRecoveredRead(from: coordinator) != nil)
+    #expect(fixture.count == 1)
+}
+
+@Test
+func ownershipRestorePropagatesDeviceSnapshotTimeout() async {
+    let fixture = DeviceReadFixture()
+    let deadline = DeviceReadDeadlineFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(fixture: fixture, deadline: deadline) {
+        entered.signal()
+        release.wait()
+    }
+    let claims = [UUID().uuidString.lowercased(): UUID?.none]
+
+    let restore = Task { try await coordinator.restoreOwnership(claims) }
+    await waitOffExecutor(for: entered)
+    deadline.fire()
+
+    await #expect(throws: DeviceError.listTimedOut) { try await restore.value }
+    release.signal()
+    #expect(await awaitRecoveredRead(from: coordinator) != nil)
+}
+
+@Test
+func invalidationCannotQueueBehindTimedOutDeviceRead() async {
+    let fixture = DeviceReadFixture()
+    let deadline = DeviceReadDeadlineFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let completed = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        deadline: deadline,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        },
+        afterRead: { completed.signal() }
+    )
+
+    let first = Task { try await coordinator.listAll() }
+    await waitOffExecutor(for: entered)
+    deadline.fire()
+    await #expect(throws: DeviceError.listTimedOut) { try await first.value }
+
+    await coordinator.noteExternalBoot(udid: UUID().uuidString)
+    await #expect(throws: DeviceError.listTimedOut) { try await coordinator.listAll() }
+    release.signal()
+    await waitOffExecutor(for: completed)
+    for _ in 0..<10 { await Task.yield() }
+    #expect(fixture.count == 1)
+
+    #expect(await awaitRecoveredRead(from: coordinator) != nil)
+    #expect(fixture.count == 2)
 }
 
 @Test

@@ -15,13 +15,12 @@ import Testing
 // re-attaching the pane; a sim the user detached has nothing to carry it, and
 // this is the only path that brings it back.
 //
-// Two guards refuse claims: ownership the daemon already holds is preserved
-// rather than overwritten, and a sim CoreSimulator does not report as Booted
-// right now is not claimed. Everything else is accepted, with an attribution
-// the daemon can't confirm live removed. The coordinator asks for the booted
-// set through an injected reader, so what the daemon DOES with the answer is
-// pinned here on any host; that the reader really reads CoreSimulator is the
-// live track's job.
+// Completed reads apply two claim guards: existing ownership is preserved, and
+// sims not reported Booted are skipped. A timed-out read throws so the GUI can
+// retry. Other claims are accepted, with unresolvable attributions removed.
+// The coordinator asks for the booted set through an injected reader, so what
+// the daemon DOES with the answer is pinned here on any host; that the reader
+// really reads CoreSimulator is the live track's job.
 
 private let simA = "AAAAAAAA-1111-1111-1111-111111111111"
 private let simB = "BBBBBBBB-2222-2222-2222-222222222222"
@@ -42,25 +41,25 @@ private func coordinator(
 // MARK: - Coordinator rules
 
 @Test
-func restoreOwnershipClaimsABootedSimWithNoOwner() async {
+func restoreOwnershipClaimsABootedSimWithNoOwner() async throws {
     let coordinator = coordinator(booted: [simA])
     let session = UUID()
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): session])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): session])
 
     #expect(restored.attributed == [simA.lowercased()])
     #expect(await coordinator.ownerSession(forUDID: simA) == session)
 }
 
 @Test
-func restoreOwnershipLeavesASimThatIsNoLongerBootedUnclaimed() async {
+func restoreOwnershipLeavesASimThatIsNoLongerBootedUnclaimed() async throws {
     // The case the whole thing has to fail closed on: a sim that shut down
     // while the helper was gone. Claiming it would put a device deviceterm no
     // longer owns back into the running-sim count and the shut-down prompts.
     let coordinator = coordinator(booted: [simB])
     let session = UUID()
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): session])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): session])
 
     #expect(restored.attributed.isEmpty)
     #expect(await coordinator.ownerSession(forUDID: simA) == nil)
@@ -77,7 +76,7 @@ func restoreOwnershipDoesNotOverwriteALiveAttribution() async throws {
     let stale = UUID()
     try await coordinator.recordOwnership(udid: simA, sessionId: live)
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): stale])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): stale])
 
     #expect(restored.attributed.isEmpty)
     #expect(await coordinator.ownerSession(forUDID: simA) == live)
@@ -92,18 +91,18 @@ func restoreOwnershipIsIdempotentForTheOwnerItAlreadyHas() async throws {
     let session = UUID()
     try await coordinator.recordOwnership(udid: simA, sessionId: session)
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): session])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): session])
 
     #expect(restored.attributed == [simA.lowercased()])
     #expect(await coordinator.ownedCount == 1)
 }
 
 @Test
-func restoreOwnershipMatchesUDIDsCaseInsensitively() async {
+func restoreOwnershipMatchesUDIDsCaseInsensitively() async throws {
     let coordinator = coordinator(booted: [simA.lowercased()])
     let session = UUID()
 
-    let restored = await coordinator.restoreOwnership([simA.uppercased(): session])
+    let restored = try await coordinator.restoreOwnership([simA.uppercased(): session])
 
     #expect(restored.attributed == [simA.lowercased()])
     #expect(await coordinator.ownerSession(forUDID: simA) == session)
@@ -119,7 +118,7 @@ func restoreOwnershipDoesNotReportASimItOwnsThatIsNoLongerBooted() async throws 
     let session = UUID()
     try await coordinator.recordOwnership(udid: simA, sessionId: session)
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): session])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): session])
 
     #expect(restored.attributed.isEmpty)
     #expect(restored.written.isEmpty)
@@ -136,19 +135,19 @@ func restoreOwnershipReportsNothingWhenTheBridgeCannotEnumerateEitherWay() async
     let session = UUID()
     try await coordinator.recordOwnership(udid: simA, sessionId: session)
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): session])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): session])
 
     #expect(restored.attributed.isEmpty)
 }
 
 @Test
-func restoreOwnershipClaimsNothingWhenTheBridgeCannotEnumerate() async {
+func restoreOwnershipClaimsNothingWhenTheBridgeCannotEnumerate() async throws {
     // Same posture as `ownedBootedCount` and `isBooted`: a CoreSimulator that
     // can't answer means we can't confirm the sim is up, and an unconfirmed
     // sim is not claimed.
     let coordinator = coordinator(booted: nil)
 
-    let restored = await coordinator.restoreOwnership([simA.lowercased(): UUID()])
+    let restored = try await coordinator.restoreOwnership([simA.lowercased(): UUID()])
 
     #expect(restored.attributed.isEmpty)
     #expect(await coordinator.ownedCount == 0)
@@ -164,7 +163,7 @@ func restoreOwnershipPublishesNoBootEvent() async throws {
     let (subscriptionId, stream) = await broker.subscribe(as: .guiPeer)
     defer { Task { await broker.unsubscribe(subscriptionId) } }
 
-    _ = await coordinator.restoreOwnership([simA.lowercased(): UUID()])
+    _ = try await coordinator.restoreOwnership([simA.lowercased(): UUID()])
     // A real publish would already be queued by now; follow with one that
     // definitely publishes, so the assertion is "the next event is the boot,
     // not a restore" rather than "nothing arrived within a sleep".
@@ -237,6 +236,38 @@ private func restoreParams(_ devices: [(String, String?)]) throws -> Data {
             devices: devices.map { RestoredSimOwnership(udid: $0.0, sessionId: $0.1) }
         )
     )
+}
+
+@Test
+func restoreOwnershipHandlerReportsEnumerationTimeout() async {
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let coordinator = DeviceCoordinator(
+        deviceSnapshotSleep: { _ in },
+        readDevices: {
+            release.wait()
+            return []
+        }
+    )
+    let handler = restoreOwnershipHandler(
+        coordinator: coordinator,
+        sessionManager: SessionManager()
+    )
+
+    do {
+        _ = try await handler(try restoreParams([(simA, nil)]))
+        Issue.record("expected device.restoreOwnership to report the enumeration timeout")
+    } catch let error as RPCMethodError {
+        #expect(error.code == RPCErrorCode.serverError)
+        #expect(
+            error.message.hasPrefix(
+                "device.restoreOwnership: CoreSimulator device enumeration"
+            )
+        )
+        #expect(error.message.contains("within 3 seconds"))
+    } catch {
+        Issue.record("expected RPCMethodError, got \(error)")
+    }
 }
 
 @Test

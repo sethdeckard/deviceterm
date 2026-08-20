@@ -2,14 +2,14 @@
 
 @testable import Daemon
 import DaemonProtocol
+import Dispatch
 import Foundation
 import Testing
 
-// The aggregate `devices.list` roster. The opacity logic lives in the
-// pure `DeviceRoster.build`, so these cover it deterministically
-// without a device or CoreSimulator; the handler tests then prove the
-// thin wiring on a fresh daemon (no owned sims, no panes), which is
-// robust whether or not a physical device happens to be connected.
+// The aggregate `devices.list` roster. The pure roster tests cover opacity
+// without devices or CoreSimulator. Handler tests cover physical-device wire
+// fields, empty-roster wiring, and CoreSimulator-timeout mapping with hermetic
+// coordinators.
 
 private func ownership(_ key: String, _ session: UUID) -> PaneOwnership {
     PaneOwnership(target: .sim(udid: key), sessionId: session, paneShortId: "sh\(key)", paneId: UUID())
@@ -195,4 +195,38 @@ func devicesListOnFreshDaemonHasNoSimsAndNoAttachments() async throws {
     let roster = try JSONDecoder().decode([DeviceRosterEntry].self, from: data)
     #expect(roster.allSatisfy { $0.kind == .device })
     #expect(roster.allSatisfy { !$0.attached })
+}
+
+@Test
+func devicesListReportsCoreSimulatorEnumerationTimeout() async throws {
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let deviceCoordinator = DeviceCoordinator(
+        deviceSnapshotSleep: { _ in },
+        readDevices: {
+            release.wait()
+            return []
+        }
+    )
+    try await deviceCoordinator.recordOwnership(
+        udid: UUID().uuidString,
+        sessionId: UUID()
+    )
+    let handler = PhysicalDeviceMethods.devicesList(
+        deviceCoordinator: deviceCoordinator,
+        physicalDeviceCoordinator: PhysicalDeviceCoordinator(listDevices: { [] }),
+        paneCoordinator: PaneCoordinator(),
+        sessionManager: SessionManager()
+    )
+
+    do {
+        _ = try await handler(Data())
+        Issue.record("expected devices.list to report the enumeration timeout")
+    } catch let error as RPCMethodError {
+        #expect(error.code == RPCErrorCode.serverError)
+        #expect(error.message.hasPrefix("devices.list: CoreSimulator device enumeration"))
+        #expect(error.message.contains("within 3 seconds"))
+    } catch {
+        Issue.record("expected RPCMethodError, got \(error)")
+    }
 }

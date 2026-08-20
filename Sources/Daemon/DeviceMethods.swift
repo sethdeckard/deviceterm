@@ -368,7 +368,12 @@ public enum DeviceMethods {
                 // ago. Refusing would leave a running sim nothing claims.
                 admitted[udid] = await sessionManager.isAlive(sessionId) ? sessionId : nil
             }
-            let result = await coordinator.restoreOwnership(admitted)
+            let result: OwnershipRestoreResult
+            do {
+                result = try await coordinator.restoreOwnership(admitted)
+            } catch let error as DeviceError {
+                throw mapDeviceEnumerationError(error, method: .deviceRestoreOwnership)
+            }
             // The check above is a preflight. Crossing to the coordinator is a
             // suspension, and a session that closes inside it would leave a sim
             // attributed to one that is gone. Re-check what this call wrote and
@@ -516,9 +521,8 @@ public enum DeviceMethods {
 
     /// Translate `DeviceError` to an RPC-shaped error for the
     /// dispatcher. `notFound` and `malformedUDID` are "bad input
-    /// from the caller" → `invalidParams`. `bootFailed` /
-    /// `shutdownFailed` / `listFailed` are "we tried but
-    /// CoreSimulator said no" → `serverError`.
+    /// from the caller" → `invalidParams`. Boot, shutdown, and enumeration
+    /// failures or timeouts map to `serverError`.
     static func mapDeviceError(_ error: DeviceError) -> RPCMethodError {
         switch error {
         case let .notFound(udid):
@@ -539,11 +543,32 @@ public enum DeviceMethods {
                 message: "device.shutdown: \(message)"
             )
 
-        case let .listFailed(message):
-            return RPCMethodError(
-                code: RPCErrorCode.serverError,
-                message: "device.list: \(message)"
-            )
+        case .listFailed, .listTimedOut:
+            return mapDeviceEnumerationError(error, method: .deviceList)
         }
+    }
+
+    static func mapDeviceEnumerationError(
+        _ error: DeviceError,
+        method: RPCMethod
+    ) -> RPCMethodError {
+        let detail: String
+        switch error {
+        case let .listFailed(message):
+            detail = message
+
+        case .listTimedOut:
+            detail = """
+            CoreSimulator device enumeration did not finish within 3 seconds; \
+            retry, or restart DeviceTerm if it persists
+            """
+
+        case .notFound, .malformedUDID, .bootFailed, .shutdownFailed:
+            return mapDeviceError(error)
+        }
+        return RPCMethodError(
+            code: RPCErrorCode.serverError,
+            message: "\(method.rawValue): \(detail)"
+        )
     }
 }

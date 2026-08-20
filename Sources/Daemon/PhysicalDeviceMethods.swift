@@ -326,8 +326,18 @@ public enum PhysicalDeviceMethods {
             let callerId = SessionDispatchContext.originatingSessionId
                 .flatMap(UUID.init(uuidString:))
             let visible = Set(await sessionManager.sessions(visibleTo: callerId).map(\.id))
-            let sims = await deviceCoordinator.listOwnedBooted().map {
-                DeviceRoster.SimEntry(udid: $0.udid, name: $0.name, state: "Booted")
+            let ownedSims: [OwnedSim]
+            do {
+                ownedSims = try await deviceCoordinator.listOwnedBooted()
+            } catch let error as DeviceError {
+                throw DeviceMethods.mapDeviceEnumerationError(error, method: .devicesList)
+            }
+            let sims = ownedSims.map {
+                DeviceRoster.SimEntry(
+                    udid: $0.udid,
+                    name: $0.name,
+                    state: "Booted"
+                )
             }
             let physical = await physicalDeviceCoordinator.enumerate()
             let ownerships = await paneCoordinator.liveOwnerships()

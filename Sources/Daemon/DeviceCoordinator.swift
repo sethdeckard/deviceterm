@@ -52,6 +52,7 @@ public enum DeviceError: Error, Equatable, Sendable {
         message:
         String
         )
+    case listTimedOut
     /// `udid` parameter wasn't a well-formed string. UDID format on
     /// macOS is the standard 8-4-4-4-12 UUID. The bridge accepts it
     /// case-insensitively, but we still reject the empty string and
@@ -130,13 +131,29 @@ public actor DeviceCoordinator {
         let completedAtNanoseconds: UInt64
     }
 
+    private enum DeviceReadResult: Sendable {
+        case completed(CoreSimulatorDeviceReadResult)
+        case timedOut
+    }
+
+    private enum DeviceReadWaitResult: Sendable {
+        case completed(CoreSimulatorDeviceReadResult, generation: UInt64)
+        case retry
+        case timedOut
+    }
+
     private struct InFlightDeviceRead {
         let token: UUID
         let generation: UInt64
+        let startedAtNanoseconds: UInt64
         let task: Task<CoreSimulatorDeviceReadResult, Never>
+        let timeoutTask: Task<Void, Never>
+        var waiters: [CheckedContinuation<DeviceReadWaitResult, Never>]
+        var timedOut: Bool
     }
 
     private static let defaultDeviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000
+    private static let defaultDeviceSnapshotDeadlineNanoseconds: UInt64 = 3_000_000_000
 
     /// UDID (lowercased) → the session attributed to it, or nil for one
     /// explicitly claimed without an attribution. Cleared when the sim shuts
@@ -219,6 +236,8 @@ public actor DeviceCoordinator {
     /// throw / "can't confirm" result rather than a stale successful snapshot.
     private let deviceSnapshotTTLNanoseconds: UInt64
     private let deviceSnapshotClock: @Sendable () -> UInt64
+    private let deviceSnapshotDeadlineNanoseconds: UInt64
+    private let deviceSnapshotSleep: @Sendable (UInt64) async throws -> Void
     /// Hermetic restoration tests inject the booted set directly because
     /// `CSBDeviceInfo` has no public fixture initializer. Nil in production;
     /// every production boot-state read derives from `deviceReader`.
@@ -226,8 +245,9 @@ public actor DeviceCoordinator {
     private var cachedDeviceRead: CachedDeviceRead?
     private var inFlightDeviceRead: InFlightDeviceRead?
     /// Incremented synchronously with every observed or commanded device-state
-    /// change. A read started under an older generation is discarded and
-    /// retried, so it can neither answer its caller nor repopulate the cache.
+    /// change. Completed reads from an older generation are discarded. Active
+    /// waiters retry under the current generation; timed-out waiters retain
+    /// their timeout result.
     private var deviceSnapshotGeneration: UInt64 = 0
 
     /// Diagnostic accessor: raw size of the ownership map, i.e. how
@@ -250,6 +270,8 @@ public actor DeviceCoordinator {
         self.deviceReader = CoreSimulatorDeviceReader()
         self.deviceSnapshotTTLNanoseconds = Self.defaultDeviceSnapshotTTLNanoseconds
         self.deviceSnapshotClock = { DispatchTime.now().uptimeNanoseconds }
+        self.deviceSnapshotDeadlineNanoseconds = Self.defaultDeviceSnapshotDeadlineNanoseconds
+        self.deviceSnapshotSleep = { try await Task.sleep(nanoseconds: $0) }
         self.bootedUDIDsOverride = nil
     }
 
@@ -265,6 +287,8 @@ public actor DeviceCoordinator {
         self.deviceReader = CoreSimulatorDeviceReader()
         self.deviceSnapshotTTLNanoseconds = Self.defaultDeviceSnapshotTTLNanoseconds
         self.deviceSnapshotClock = { DispatchTime.now().uptimeNanoseconds }
+        self.deviceSnapshotDeadlineNanoseconds = Self.defaultDeviceSnapshotDeadlineNanoseconds
+        self.deviceSnapshotSleep = { try await Task.sleep(nanoseconds: $0) }
         self.bootedUDIDsOverride = readBootedUDIDs
     }
 
@@ -276,6 +300,10 @@ public actor DeviceCoordinator {
         deviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000,
         deviceSnapshotClock: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
+        },
+        deviceSnapshotDeadlineNanoseconds: UInt64 = 3_000_000_000,
+        deviceSnapshotSleep: @escaping @Sendable (UInt64) async throws -> Void = {
+            try await Task.sleep(nanoseconds: $0)
         },
         deviceReaderQueue: DispatchQueue = DispatchQueue(
             label: "com.deviceterm.daemon.coresimulator-devices.test"
@@ -290,6 +318,8 @@ public actor DeviceCoordinator {
         )
         self.deviceSnapshotTTLNanoseconds = deviceSnapshotTTLNanoseconds
         self.deviceSnapshotClock = deviceSnapshotClock
+        self.deviceSnapshotDeadlineNanoseconds = deviceSnapshotDeadlineNanoseconds
+        self.deviceSnapshotSleep = deviceSnapshotSleep
         self.bootedUDIDsOverride = nil
     }
 
@@ -300,11 +330,14 @@ public actor DeviceCoordinator {
     /// host. Used to back `device.list({scope: "all"})`.
     public func listAll() async throws -> [CSBDeviceInfo] {
         switch await deviceRead() {
-        case let .success(devices):
+        case let .completed(.success(devices)):
             return devices
 
-        case let .failure(failure):
+        case let .completed(.failure(failure)):
             throw DeviceError.listFailed(message: failure.message)
+
+        case .timedOut:
+            throw DeviceError.listTimedOut
         }
     }
 
@@ -345,18 +378,14 @@ public actor DeviceCoordinator {
     /// these per poll tick and derives *both* its badge visibility and
     /// count and its shutdown menu (`statusMenuEntries`) from the same
     /// snapshot, so the two can never disagree across separate
-    /// CoreSimulator reads. Falls back to `[]` on bridge failure, the
-    /// same degraded-but-honest posture as `ownedBootedCount()`.
+    /// CoreSimulator reads. Throws on bridge failure so RPC callers can
+    /// distinguish an incomplete roster from an authoritative empty one;
+    /// status-item callers explicitly retain the degraded `[]` fallback.
     /// When the ownership map is empty, returns `[]` without consulting
     /// CoreSimulator, since no live device can intersect an empty owned set.
-    public func listOwnedBooted() async -> [OwnedSim] {
+    public func listOwnedBooted() async throws -> [OwnedSim] {
         guard !ownership.isEmpty else { return [] }
-        let devices: [CSBDeviceInfo]
-        do {
-            devices = try await listOwned()
-        } catch {
-            return []
-        }
+        let devices = try await listOwned()
         return devices
             .filter { $0.state == .booted }
             .map { OwnedSim(
@@ -383,67 +412,191 @@ public actor DeviceCoordinator {
     /// bridge can't enumerate: a degraded CoreSimulator can't confirm liveness,
     /// so we don't assert the sim is still running.
     public func isBooted(udid: String) async -> Bool {
-        (await bootedUDIDs())?.contains(udid.lowercased()) ?? false
+        do {
+            return try await bootedUDIDs()?.contains(udid.lowercased()) ?? false
+        } catch {
+            return false
+        }
     }
 
     /// One cached device-set answer. Cache state stays on this actor so a
     /// commanded or observed transition can invalidate it synchronously with
     /// the corresponding ownership mutation. Only the blocking bridge read is
     /// handed to `CoreSimulatorDeviceReader`'s serial DispatchQueue.
-    private func deviceRead() async -> CoreSimulatorDeviceReadResult {
+    private func deviceRead() async -> DeviceReadResult {
         while true {
             let now = deviceSnapshotClock()
             if let cachedDeviceRead,
                 now >= cachedDeviceRead.completedAtNanoseconds,
                 now - cachedDeviceRead.completedAtNanoseconds < deviceSnapshotTTLNanoseconds {
-                return cachedDeviceRead.result
+                return .completed(cachedDeviceRead.result)
             }
             cachedDeviceRead = nil
 
-            let generation = deviceSnapshotGeneration
-            let token: UUID
-            let task: Task<CoreSimulatorDeviceReadResult, Never>
-            if let inFlightDeviceRead, inFlightDeviceRead.generation == generation {
-                token = inFlightDeviceRead.token
-                task = inFlightDeviceRead.task
-            } else {
-                token = UUID()
-                let reader = deviceReader
-                task = Task { await reader.read() }
-                inFlightDeviceRead = InFlightDeviceRead(
-                    token: token,
-                    generation: generation,
-                    task: task
-                )
+            if inFlightDeviceRead == nil {
+                startDeviceRead(generation: deviceSnapshotGeneration)
             }
 
-            // The unstructured read intentionally outlives a cancelled caller:
-            // CoreSimulator's synchronous operation cannot be cancelled. An
-            // invalidated result is discarded here so actor callers cannot use
-            // pre-transition state after their suspension resumes.
-            let result = await task.value
-            if inFlightDeviceRead?.token == token {
-                inFlightDeviceRead = nil
+            switch await waitForDeviceRead() {
+            case let .completed(result, generation):
+                guard deviceSnapshotGeneration == generation else { continue }
+                return .completed(result)
+
+            case .retry:
+                continue
+
+            case .timedOut:
+                return .timedOut
             }
-            guard deviceSnapshotGeneration == generation else { continue }
+        }
+    }
+
+    /// Begin one raw bridge read. Its task is deliberately unstructured: a
+    /// caller timing out or disconnecting cannot cancel CoreSimulator's
+    /// synchronous `SimDeviceSet.devices` call, so an independent supervisor
+    /// owns its eventual completion and accounts for its result.
+    private func startDeviceRead(generation: UInt64) {
+        let token = UUID()
+        let startedAtNanoseconds = deviceSnapshotClock()
+        let reader = deviceReader
+        let task = Task { await reader.read() }
+        let deadlineNanoseconds = deviceSnapshotDeadlineNanoseconds
+        let sleep = deviceSnapshotSleep
+        let timeoutTask = Task { [weak self] in
+            do {
+                try await sleep(deadlineNanoseconds)
+            } catch {
+                return
+            }
+            await self?.timeOutDeviceRead(token: token)
+        }
+        inFlightDeviceRead = InFlightDeviceRead(
+            token: token,
+            generation: generation,
+            startedAtNanoseconds: startedAtNanoseconds,
+            task: task,
+            timeoutTask: timeoutTask,
+            waiters: [],
+            timedOut: false
+        )
+        DiagnosticLog.attach.debug(
+            "CoreSimulator device enumeration started; generation \(generation, privacy: .public)"
+        )
+        Task { [weak self] in
+            let result = await task.value
+            await self?.completeDeviceRead(
+                token: token,
+                generation: generation,
+                result: result
+            )
+        }
+    }
+
+    private func waitForDeviceRead() async -> DeviceReadWaitResult {
+        await withCheckedContinuation { continuation in
+            guard var inFlightDeviceRead else {
+                continuation.resume(returning: .retry)
+                return
+            }
+            guard !inFlightDeviceRead.timedOut else {
+                continuation.resume(returning: .timedOut)
+                return
+            }
+            inFlightDeviceRead.waiters.append(continuation)
+            self.inFlightDeviceRead = inFlightDeviceRead
+        }
+    }
+
+    private func timeOutDeviceRead(token: UUID) {
+        guard var inFlightDeviceRead,
+            inFlightDeviceRead.token == token,
+            !inFlightDeviceRead.timedOut else { return }
+        let waiters = inFlightDeviceRead.waiters
+        inFlightDeviceRead.waiters = []
+        inFlightDeviceRead.timedOut = true
+        self.inFlightDeviceRead = inFlightDeviceRead
+        let deadlineMilliseconds = deviceSnapshotDeadlineNanoseconds / 1_000_000
+        DiagnosticLog.attach.error(
+            """
+            CoreSimulator device enumeration timed out after \
+            \(deadlineMilliseconds, privacy: .public)ms; circuit open
+            """
+        )
+        for waiter in waiters {
+            waiter.resume(returning: .timedOut)
+        }
+    }
+
+    private func completeDeviceRead(
+        token: UUID,
+        generation: UInt64,
+        result: CoreSimulatorDeviceReadResult
+    ) {
+        guard let inFlightDeviceRead, inFlightDeviceRead.token == token else { return }
+        inFlightDeviceRead.timeoutTask.cancel()
+        self.inFlightDeviceRead = nil
+
+        let isCurrent = deviceSnapshotGeneration == generation
+        if isCurrent {
             cachedDeviceRead = CachedDeviceRead(
                 result: result,
                 completedAtNanoseconds: deviceSnapshotClock()
             )
-            return result
         }
+
+        let elapsedMilliseconds = elapsedNanoseconds(
+            since: inFlightDeviceRead.startedAtNanoseconds
+        ) / 1_000_000
+        if inFlightDeviceRead.timedOut {
+            let disposition = isCurrent ? "cached" : "discarded after invalidation"
+            DiagnosticLog.attach.notice(
+                """
+                CoreSimulator device enumeration returned after timeout in \
+                \(elapsedMilliseconds, privacy: .public)ms; \
+                \(disposition, privacy: .public)
+                """
+            )
+        } else {
+            DiagnosticLog.attach.debug(
+                """
+                CoreSimulator device enumeration completed in \
+                \(elapsedMilliseconds, privacy: .public)ms; \
+                generation \(generation, privacy: .public)
+                """
+            )
+        }
+
+        for waiter in inFlightDeviceRead.waiters {
+            waiter.resume(returning: .completed(result, generation: generation))
+        }
+    }
+
+    private func elapsedNanoseconds(since start: UInt64) -> UInt64 {
+        let now = deviceSnapshotClock()
+        return now >= start ? now - start : 0
     }
 
     /// Production derives boot state from the same snapshot as `listAll()`.
     /// The override exists only for hermetic ownership-restoration fixtures.
-    private func bootedUDIDs() async -> Set<String>? {
+    /// A completed bridge failure remains "can't confirm" (`nil`), while a
+    /// timeout throws: restoration callers must retry a read CoreSimulator has
+    /// not answered rather than treating it as an authoritative empty set.
+    private func bootedUDIDs() async throws -> Set<String>? {
         if let bootedUDIDsOverride { return bootedUDIDsOverride() }
-        guard case let .success(devices) = await deviceRead() else { return nil }
-        return Set(
-            devices
-                .filter { $0.state == .booted }
-                .map { $0.udid.lowercased() }
-        )
+        switch await deviceRead() {
+        case let .completed(.success(devices)):
+            return Set(
+                devices
+                    .filter { $0.state == .booted }
+                    .map { $0.udid.lowercased() }
+            )
+
+        case .completed(.failure):
+            return nil
+
+        case .timedOut:
+            throw DeviceError.listTimedOut
+        }
     }
 
     private func invalidateDeviceSnapshot() {
@@ -576,14 +729,15 @@ public actor DeviceCoordinator {
     /// down until the notifier says so), so reporting it without checking
     /// would answer "restored" for a sim that is gone.
     ///
-    /// A bridge that can't answer reports nothing, matching the rest of this
-    /// actor's "a degraded CoreSimulator asserts nothing" posture: it can't
-    /// confirm any sim is up, including the ones already attributed.
-    public func restoreOwnership(_ claims: [String: UUID?]) async -> OwnershipRestoreResult {
+    /// A completed bridge failure reports nothing, matching the rest of this
+    /// actor's "a degraded CoreSimulator asserts nothing" posture. A timed-out
+    /// read throws instead: CoreSimulator has not answered yet, so the GUI's
+    /// bounded ownership-restoration retry window must remain open.
+    public func restoreOwnership(_ claims: [String: UUID?]) async throws -> OwnershipRestoreResult {
         guard !claims.isEmpty else {
             return OwnershipRestoreResult(attributed: [], written: [:])
         }
-        guard let booted = await bootedUDIDs() else {
+        guard let booted = try await bootedUDIDs() else {
             return OwnershipRestoreResult(attributed: [], written: [:])
         }
         var attributed: Set<String> = []

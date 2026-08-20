@@ -127,12 +127,12 @@ func ownedBootedCountReturnsZeroWhenNothingOwned() async {
 }
 
 @Test
-func listOwnedBootedReturnsEmptyWhenNothingOwned() async {
+func listOwnedBootedReturnsEmptyWhenNothingOwned() async throws {
     let coordinator = DeviceCoordinator(readDevices: {
         Issue.record("empty ownership must not enumerate CoreSimulator")
         return []
     })
-    let sims = await coordinator.listOwnedBooted()
+    let sims = try await coordinator.listOwnedBooted()
     #expect(sims.isEmpty)
 }
 
