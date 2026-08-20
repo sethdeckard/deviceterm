@@ -212,6 +212,28 @@ let package = Package(
             swiftSettings: strictWarnings
         ),
 
+        // Kernel-backed terminal provenance shared by the GUI and daemon:
+        // peer identity, verified ancestry, terminal probing, and the pure
+        // authorization matcher. Foundation + Darwin only; importing it never
+        // pulls the daemon or CoreSimulator into the GUI.
+        .target(
+            name: "TerminalProvenance",
+            path: "Sources/TerminalProvenance",
+            swiftSettings: strictWarnings,
+            linkerSettings: [
+                // The documented audit-token accessors decode the kernel's
+                // LOCAL_PEERTOKEN identity without relying on token layout.
+                .linkedLibrary("bsm"),
+            ]
+        ),
+
+        .testTarget(
+            name: "TerminalProvenanceTests",
+            dependencies: ["TerminalProvenance"],
+            path: "Tests/TerminalProvenanceTests",
+            swiftSettings: strictWarnings
+        ),
+
         // The shared RPC wire contract: length-prefixed framing, the
         // request/response/event envelope, the `{ok:true}` ack, the
         // client socket, and client-facing result/event Codable shapes.
@@ -262,6 +284,7 @@ let package = Package(
                 "InteractionRelay",
                 "MirrorPipeline",
                 "SurfaceTrace",
+                "TerminalProvenance",
             ],
             path: "Sources/Daemon",
             swiftSettings: strictWarnings,
@@ -476,6 +499,7 @@ let package = Package(
                 "TerminalSurface",
                 "LibghosttyBridge",
                 "SurfaceTrace",
+                "TerminalProvenance",
                 .product(name: "GhosttyKit", package: "libghostty-spm"),
                 .product(name: "GhosttyKitResources", package: "libghostty-spm"),
                 .product(name: "Sparkle", package: "Sparkle"),

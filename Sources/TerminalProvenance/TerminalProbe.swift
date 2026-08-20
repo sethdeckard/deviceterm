@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// TerminalProbe: derives a trusted terminal anchor from a foreground pid and
-// a tty name supplied by the validated GUI over `session.bindTerminal`.
+// TerminalProbe: derives trusted terminal facts from a foreground pid and
+// a tty name supplied by a trusted terminal surface.
 //
-// The GUI reads its terminal surface's foreground process pid and tty name
-// from libghostty and asks the daemon to bind them to a session. Neither value
-// is authority on its own: the daemon re-derives the anchor from the kernel and
-// keeps only kernel-verified facts. The numeric foreground pid is NEVER
-// retained: the anchor is the POSIX session id, the controlling TTY device,
-// and the session leader's start time, which together are the stable kernel
-// boundary a UDS peer is later matched against.
+// Neither input is authority on its own: the probe re-derives the terminal
+// identity from the kernel and returns only verified facts. The numeric
+// foreground pid is NEVER retained. The stable boundary is the POSIX session
+// id, controlling TTY device, and session-leader start time.
 //
 // Pid exit/reuse is guarded by reading the foreground process' identity before
 // AND after the session/TTY lookups: if its start time or controlling tty
@@ -21,10 +18,8 @@ import Foundation
 import Darwin
 #endif
 
-/// Kernel-verified facts describing a terminal, derived by the probe and
-/// stored (with the session id and issuing connection) as a `TerminalAnchor`.
-/// These are the exact fields a UDS peer's `PeerProcessIdentity` is matched
-/// against.
+/// Kernel-verified facts describing a terminal. These are the exact fields a
+/// UDS peer's `PeerProcessIdentity` is matched against.
 public struct TerminalAnchorFacts: Sendable, Equatable {
     /// The terminal's POSIX session id (`getsid(foregroundPid)`).
     public let terminalSessionId: pid_t

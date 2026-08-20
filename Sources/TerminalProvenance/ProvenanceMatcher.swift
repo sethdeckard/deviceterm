@@ -76,12 +76,12 @@ public enum ProvenanceVerdict: Sendable, Equatable {
 
 public enum ProvenanceMatcher {
     /// Decide the provenance verdict for `peer` against a session's captured
-    /// owner identity and (for UDS) its terminal anchor. The auth layer has
+    /// owner identity and (for UDS) its terminal facts. The auth layer has
     /// already confirmed the capability and that the session is live.
     public static func verdict(
         peer: ProvenancePeer,
         sessionOwner: OwnerProcessIdentity?,
-        anchor: TerminalAnchor?
+        anchor: TerminalAnchorFacts?
     ) -> ProvenanceVerdict {
         switch peer {
         case .missing:
@@ -129,7 +129,10 @@ public enum ProvenanceMatcher {
         return candidate == sessionOwner
     }
 
-    private static func matchesTerminal(_ peer: PeerProcessIdentity, _ anchor: TerminalAnchor) -> Bool {
+    private static func matchesTerminal(
+        _ peer: PeerProcessIdentity,
+        _ anchor: TerminalAnchorFacts
+    ) -> Bool {
         matchesTerminal(
             sessionId: peer.posixSessionId,
             ttyDev: peer.controllingTTYDev,
@@ -140,7 +143,7 @@ public enum ProvenanceMatcher {
 
     private static func matchesTerminal(
         _ ancestor: AncestorProcessIdentity,
-        _ anchor: TerminalAnchor
+        _ anchor: TerminalAnchorFacts
     ) -> Bool {
         matchesTerminal(
             sessionId: ancestor.posixSessionId,
@@ -156,10 +159,10 @@ public enum ProvenanceMatcher {
         sessionId: pid_t,
         ttyDev: dev_t,
         leaderStart: UInt64,
-        _ anchor: TerminalAnchor
+        _ anchor: TerminalAnchorFacts
     ) -> Bool {
-        sessionId == anchor.facts.terminalSessionId
-            && ttyDev == anchor.facts.controllingTTYDevice
-            && leaderStart == anchor.facts.sessionLeaderStartTime
+        sessionId == anchor.terminalSessionId
+            && ttyDev == anchor.controllingTTYDevice
+            && leaderStart == anchor.sessionLeaderStartTime
     }
 }

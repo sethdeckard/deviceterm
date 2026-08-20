@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-@testable import Daemon
 import Foundation
+@testable import TerminalProvenance
 import Testing
 #if canImport(Darwin)
 import Darwin

@@ -217,7 +217,7 @@ func bindTerminalHandlerAnchorsSessionForMatchingTerminalPeer() async throws {
         posixSessionLeaderStartTime: 7
     )
     #expect(
-        ProvenanceMatcher.verdict(peer: .uds(peer, ancestors: []), sessionOwner: nil, anchor: anchor)
+        ProvenanceMatcher.verdict(peer: .uds(peer, ancestors: []), sessionOwner: nil, anchor: anchor.facts)
             == .authorized
     )
     // A DIFFERENT terminal (wrong tty) is rejected even with the anchor present.
@@ -230,7 +230,7 @@ func bindTerminalHandlerAnchorsSessionForMatchingTerminalPeer() async throws {
         posixSessionLeaderStartTime: 7
     )
     #expect(
-        ProvenanceMatcher.verdict(peer: .uds(stranger, ancestors: []), sessionOwner: nil, anchor: anchor)
+        ProvenanceMatcher.verdict(peer: .uds(stranger, ancestors: []), sessionOwner: nil, anchor: anchor.facts)
             == .unauthorized
     )
 }

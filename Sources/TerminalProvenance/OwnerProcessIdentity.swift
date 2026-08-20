@@ -48,26 +48,6 @@ public struct OwnerProcessIdentity: Sendable, Equatable {
     }
     #endif
 
-    /// The owner identity of whoever established `context`'s connection:
-    /// the XPC peer's audit token, or the UDS peer's `LOCAL_PEERTOKEN`
-    /// identity. `nil` when the transport vended no identity (a UDS peer the
-    /// kernel couldn't name, or an XPC peer with no captured token), in which
-    /// case the session records no owner and the owner provenance arm never
-    /// matches. Captured at `session.create`, never from a wire field.
-    public static func from(_ context: DispatchPeerContext) -> OwnerProcessIdentity? {
-        switch context.transport {
-        case .xpc:
-            #if canImport(Darwin)
-            return context.auditToken.map(OwnerProcessIdentity.init(auditToken:))
-            #else
-            return nil
-            #endif
-
-        case .uds:
-            return context.peerProcess.map(OwnerProcessIdentity.init)
-        }
-    }
-
     #if canImport(Darwin)
     /// Resolve THIS process's owner identity via a connected socketpair and
     /// `LOCAL_PEERTOKEN`. Unlike `PeerProcessIdentity.resolve`, it reads only

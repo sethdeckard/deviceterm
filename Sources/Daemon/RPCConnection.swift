@@ -638,7 +638,7 @@ actor RPCConnection {
         switch ProvenanceMatcher.verdict(
             peer: currentProvenancePeer(),
             sessionOwner: snapshot.owner,
-            anchor: snapshot.anchor
+            anchor: snapshot.anchor?.facts
         ) {
         case .authorized:
             return (nil, incarnation)

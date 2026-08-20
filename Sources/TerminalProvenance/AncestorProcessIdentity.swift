@@ -22,8 +22,8 @@ import Darwin
 
 /// A process on the caller's parent chain, verified as a hop by the walk that
 /// produced it. Its terminal triple has the same meaning and the same source as
-/// `PeerProcessIdentity`'s, so `ProvenanceMatcher` compares it against a
-/// `TerminalAnchor` with the same test.
+/// `PeerProcessIdentity`'s, so `ProvenanceMatcher` compares it against
+/// `TerminalAnchorFacts` with the same test.
 public struct AncestorProcessIdentity: Sendable, Equatable {
     public let pid: pid_t
     /// Effective uid, checked against the peer's before this entry was

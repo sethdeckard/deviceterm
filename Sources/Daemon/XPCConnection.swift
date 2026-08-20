@@ -829,7 +829,7 @@ public actor XPCConnection {
         switch ProvenanceMatcher.verdict(
             peer: peer,
             sessionOwner: snapshot.owner,
-            anchor: snapshot.anchor
+            anchor: snapshot.anchor?.facts
         ) {
         case .authorized:
             return (nil, incarnation)

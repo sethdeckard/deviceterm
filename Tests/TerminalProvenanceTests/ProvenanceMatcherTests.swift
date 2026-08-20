@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-@testable import Daemon
 import Foundation
+@testable import TerminalProvenance
 import Testing
 #if canImport(Darwin)
 import Darwin
@@ -61,13 +61,11 @@ private func owner(pid: pid_t = 100, ver: Int32 = 1, euid: uid_t = 501) -> Owner
     OwnerProcessIdentity(pid: pid, pidVersion: ver, euid: euid)
 }
 
-private func anchor(sid: pid_t = 200, tty: dev_t = 5, leader: UInt64 = 9) -> TerminalAnchor {
-    TerminalAnchor(
-        sessionId: UUID(),
-        facts: TerminalAnchorFacts(
-            terminalSessionId: sid, sessionLeaderStartTime: leader, controllingTTYDevice: tty
-        ),
-        issuingGUIConnectionId: 1
+private func anchor(sid: pid_t = 200, tty: dev_t = 5, leader: UInt64 = 9) -> TerminalAnchorFacts {
+    TerminalAnchorFacts(
+        terminalSessionId: sid,
+        sessionLeaderStartTime: leader,
+        controllingTTYDevice: tty
     )
 }
 
