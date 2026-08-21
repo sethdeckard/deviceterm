@@ -38,8 +38,9 @@
 // to the owning subscription only. A slot held only by the surface (JSON dropped/late)
 // ages out after 250ms: its lease releases by ARC; a slot held only by
 // the JSON yields `(_, nil)` after the same timeout. Reconnect clears the
-// correlation table so a frame from the old connection can never pair with
-// one from the new.
+// correlation table. Both ingress pumps reject stale peer epochs, and the
+// surface pump revalidates after lease accounting, so an old frame cannot
+// repopulate or pair with the new connection's state.
 
 import DaemonProtocol
 import Foundation
@@ -57,6 +58,14 @@ import Darwin
 /// number connections independently, and introducing a shared one would put a
 /// correlation token on the wire for a diagnostic.
 private let connectionLog = Logger(subsystem: "com.deviceterm", category: "xpc")
+
+/// Purpose of one GUI XPC peer. The lanes share the daemon's Mach service and
+/// wire protocol, but use different connections so high-rate pane traffic
+/// cannot sit ahead of ordinary request replies in one XPC send queue.
+enum XPCClientLane: String, Sendable {
+    case control
+    case pane
+}
 
 /// A short, log-safe name for an XPC error object.
 ///
@@ -95,9 +104,9 @@ enum XPCWireKey {
     static let leaseEpoch = "leaseEpoch"
 }
 
-/// Sendable box for an `xpc_object_t` so it can ride the ordered ingress
-/// `AsyncStream`. XPC objects are reference-counted and thread-safe to
-/// pass across queues, which is why the unchecked conformance holds.
+/// Sendable box for an `xpc_object_t` so it can ride an ingress
+/// `AsyncStream`. XPC objects are reference-counted and thread-safe to pass
+/// across queues, which is why the unchecked conformance holds.
 struct XPCEventBox: @unchecked Sendable {
     let event: xpc_object_t
 }
@@ -189,6 +198,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     }
 
     private let machServiceName: String
+    private let lane: XPCClientLane
     private var connection: xpc_connection_t?
     private var nextId: UInt32 = 1
     private var pendingRequests: [UInt32: CheckedContinuation<Data, Error>] = [:]
@@ -203,12 +213,16 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     private var envelopeForToken: [UUID: UInt32] = [:]
     /// Background sweeper task: drops aged-out half-pairs.
     private var sweeperTask: Task<Void, Never>?
-    /// Ordered inbound pump: the libxpc handler yields every event into a
-    /// serial stream that a single task drains, so the subscribe ack is
-    /// processed before the JSON `surface.changed` that follows it (Swift
-    /// gives no ordering to a Task-per-callback). Recreated per connection.
-    private var inbound: AsyncStream<XPCEventBox>.Continuation?
-    private var inboundPump: Task<Void, Never>?
+    /// Ordered JSON/control ingress. The libxpc callback classifies messages
+    /// synchronously and yields RPC envelopes here, preserving arrival order
+    /// for subscribe acknowledgements and their following JSON events.
+    private var rpcInbound: AsyncStream<XPCEventBox>.Continuation?
+    private var rpcInboundPump: Task<Void, Never>?
+    /// Independent IOSurface ingress. A device frame can suspend on lease
+    /// accounting without holding the JSON pump, so lifecycle events and pane
+    /// subscription acknowledgements do not sit behind surface work.
+    private var surfaceInbound: AsyncStream<XPCEventBox>.Continuation?
+    private var surfaceInboundPump: Task<Void, Never>?
     /// GUI half of the lease loop: tracks held generations and emits
     /// cumulative `pane.surfaceRelease` watermarks. Recreated per connection.
     private var accountant: SurfaceReleaseAccountant?
@@ -221,6 +235,11 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// `-32001`) would never re-bind its anchor after a daemon restart.
     private var onReconnect: (@Sendable (Int) -> Void)?
     private var connectionGeneration = 0
+    /// Advances only when `installPeer` installs a real XPC handle. Kept
+    /// separate from `connectionGeneration` because its test seam can advance
+    /// that recovery fence without replacing the controlled peer whose old
+    /// reply the test still needs to observe.
+    private var ingressEpoch = 0
     private var mode: Mode = .normal
 
     /// The current connection generation, bumped on every (re)connect. The
@@ -233,8 +252,20 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     /// test assert pending-state cleanup after a cancellation.
     var pendingRequestCountForTesting: Int { pendingRequests.count }
 
-    init(machServiceName: String) {
+    init(machServiceName: String, lane: XPCClientLane = .control) {
         self.machServiceName = machServiceName
+        self.lane = lane
+    }
+
+    /// Classify a libxpc callback without hopping onto the connection actor.
+    /// Only a dictionary explicitly marked `surface` enters the surface pump;
+    /// errors and malformed/unknown dictionaries stay on the RPC pump so the
+    /// connection lifecycle has one authoritative teardown path.
+    nonisolated private static func isSurfacePayload(_ event: xpc_object_t) -> Bool {
+        guard xpc_get_type(event) == XPC_TYPE_DICTIONARY,
+            let kind = xpc_dictionary_get_string(event, XPCWireKey.type)
+        else { return false }
+        return String(cString: kind) == XPCWireKey.surfaceValue
     }
 
     /// The handler receives the generation of the connection just installed,
@@ -461,24 +492,45 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         installPeer(peer)
     }
 
-    /// Wire the per-connection ingress (event handler + ordered pump +
-    /// accountant), resume the peer, bump the generation, and fire the reconnect
-    /// hook on a reconnection. Shared by `connect()` and the test seam.
+    /// Wire the per-connection ingress (event handler + ordered RPC and surface
+    /// pumps + accountant), resume the peer, bump the generation, and fire the
+    /// reconnect hook on a reconnection. Shared by `connect()` and the test
+    /// seam.
     private func installPeer(_ peer: xpc_connection_t) {
-        // Ordered ingress: libxpc delivers callbacks serially on its own
-        // queue, so yielding each event into a serial stream (rather than
-        // spawning an unordered Task per callback) preserves arrival order
-        // through to the actor-isolated drain.
-        let (stream, continuation) = AsyncStream<XPCEventBox>.makeStream(
+        // Stamp this peer before any callback can run. Every pump carries the
+        // epoch back into the actor, so work from a canceled peer cannot
+        // invalidate or repopulate state after a replacement is installed.
+        connectionGeneration += 1
+        ingressEpoch += 1
+        let installedIngressEpoch = ingressEpoch
+        // libxpc delivers callbacks serially on its own queue. Classify there,
+        // then preserve order independently within the RPC and surface lanes.
+        // JSON responses/events remain mutually ordered; side-band surfaces
+        // already correlate by pane ID + sequence + token and may arrive on
+        // either side of their JSON half, so they need no cross-lane ordering.
+        let (rpcStream, rpcContinuation) = AsyncStream<XPCEventBox>.makeStream(
             bufferingPolicy: .unbounded
         )
-        inbound = continuation
+        let (surfaceStream, surfaceContinuation) = AsyncStream<XPCEventBox>.makeStream(
+            bufferingPolicy: .unbounded
+        )
+        rpcInbound = rpcContinuation
+        surfaceInbound = surfaceContinuation
         xpc_connection_set_event_handler(peer) { event in
-            continuation.yield(XPCEventBox(event: event))
+            if Self.isSurfacePayload(event) {
+                surfaceContinuation.yield(XPCEventBox(event: event))
+            } else {
+                rpcContinuation.yield(XPCEventBox(event: event))
+            }
         }
-        inboundPump = Task { [weak self] in
-            for await box in stream {
-                await self?.handleEvent(box.event)
+        rpcInboundPump = Task { [weak self] in
+            for await box in rpcStream {
+                await self?.handleRPCEvent(box.event, installedIngressEpoch: installedIngressEpoch)
+            }
+        }
+        surfaceInboundPump = Task { [weak self] in
+            for await box in surfaceStream {
+                await self?.handleSurfaceEvent(box.event, installedIngressEpoch: installedIngressEpoch)
             }
         }
         accountant = SurfaceReleaseAccountant { [weak self] params in
@@ -487,13 +539,15 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         xpc_connection_resume(peer)
         connection = peer
         startSweeperIfNeeded()
-        connectionGeneration += 1
         // This generation identifies the GUI's current XPC connection. It
         // advances only when a peer is installed, not when one is invalidated,
         // so a stable generation plus no intervening invalidation entry is what
         // indicates the connection stayed open.
         connectionLog.info(
-            "connected generation=\(self.connectionGeneration, privacy: .public)"
+            """
+            connected lane=\(self.lane.rawValue, privacy: .public) \
+            generation=\(self.connectionGeneration, privacy: .public)
+            """
         )
         // Generation 1 is the initial connect; every later one is a
         // reconnection after an invalidation, so the daemon is fresh (its
@@ -539,10 +593,14 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         pendingSurfacePairs.removeAll()
         subscriptionTokens.removeAll()
         envelopeForToken.removeAll()
-        inbound?.finish()
-        inbound = nil
-        inboundPump?.cancel()
-        inboundPump = nil
+        rpcInbound?.finish()
+        rpcInbound = nil
+        rpcInboundPump?.cancel()
+        rpcInboundPump = nil
+        surfaceInbound?.finish()
+        surfaceInbound = nil
+        surfaceInboundPump?.cancel()
+        surfaceInboundPump = nil
         let accountant = self.accountant
         self.accountant = nil
         Task { await accountant?.stop() }
@@ -898,6 +956,13 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         sendNotification(method: RPCMethod.paneSurfaceRelease.rawValue, params: data)
     }
 
+    /// Replay the current cumulative watermarks after this peer authenticates
+    /// as a different live session. The values are absolute and idempotent, so
+    /// this repairs any release the daemon refused under the closed principal.
+    func resendSurfaceReleaseWatermarks() async {
+        await accountant?.resendCurrentWatermarks()
+    }
+
     /// Tear the daemon's surface subscription down, keyed by the originating
     /// `pane.subscribe` request id, sent on any local termination of a
     /// pane subscription (stream cancelled, view closed).
@@ -909,7 +974,8 @@ actor XPCDaemonConnection: DaemonRequestTransport {
 
     // MARK: - Receive
 
-    private func handleEvent(_ event: xpc_object_t) async {
+    private func handleRPCEvent(_ event: xpc_object_t, installedIngressEpoch: Int) {
+        guard connection != nil, installedIngressEpoch == ingressEpoch else { return }
         let type = xpc_get_type(event)
         if type == XPC_TYPE_ERROR {
             // Connection terminated; reset state. Caller code that
@@ -927,16 +993,14 @@ actor XPCDaemonConnection: DaemonRequestTransport {
             let kind = xpc_dictionary_get_string(event, XPCWireKey.type)
                 .map({ String(cString: $0) })
         else { return }
-        switch kind {
-        case XPCWireKey.rpcValue:
-            handleRPCMessage(event)
+        guard kind == XPCWireKey.rpcValue else { return }
+        handleRPCMessage(event)
+    }
 
-        case XPCWireKey.surfaceValue:
-            await handleSurfacePayload(event)
-
-        default:
-            return
-        }
+    private func handleSurfaceEvent(_ event: xpc_object_t, installedIngressEpoch: Int) async {
+        guard connection != nil, installedIngressEpoch == ingressEpoch else { return }
+        guard Self.isSurfacePayload(event) else { return }
+        await handleSurfacePayload(event, installedIngressEpoch: installedIngressEpoch)
     }
 
     private func handleRPCMessage(_ event: xpc_object_t) {
@@ -1059,7 +1123,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         envelopeForToken[token] = envelopeId
     }
 
-    private func handleSurfacePayload(_ event: xpc_object_t) async {
+    private func handleSurfacePayload(_ event: xpc_object_t, installedIngressEpoch: Int) async {
         guard let paneIdC = xpc_dictionary_get_string(event, XPCWireKey.paneId) else { return }
         let paneId = String(cString: paneIdC)
         let sequence = UInt64(xpc_dictionary_get_uint64(event, XPCWireKey.sequence))
@@ -1083,6 +1147,10 @@ actor XPCDaemonConnection: DaemonRequestTransport {
             generation: sequence,
             surface: surface
         )
+        // `makeLease` can suspend on device accounting. An invalidation or
+        // replacement that ran meanwhile cleared the old pair table; never let
+        // this resumed frame repopulate it or pair with the new peer's JSON.
+        guard connection != nil, installedIngressEpoch == ingressEpoch else { return }
         tryFulfillSurfacePair(paneId: paneId, sequence: sequence, token: token, inboundLease: lease)
     }
 
@@ -1184,7 +1252,8 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         // the frame above.
         connectionLog.notice(
             """
-            invalidated generation=\(self.connectionGeneration, privacy: .public) \
+            invalidated lane=\(self.lane.rawValue, privacy: .public) \
+            generation=\(self.connectionGeneration, privacy: .public) \
             reason=\(reason, privacy: .public) \
             pendingRequests=\(self.pendingRequests.count, privacy: .public) \
             subscriptions=\(self.subscriptions.count, privacy: .public)

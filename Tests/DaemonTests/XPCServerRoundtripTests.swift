@@ -327,14 +327,12 @@ func drainWhileSetupParkedTearsDown() async throws {
 
 @Test
 func subscriptionEventsFlowWhileAnotherRequestIsParked() async throws {
-    // The GUI drives every pane over one shared XPC connection, and a
-    // physical-device attach parks a request on it for seconds while the
-    // tunnel and channels come up. Were dispatch serialized across
-    // requests, that bring-up would stall every live pane's event stream
-    // and the connection would read as dead. Pin the multiplexing: a pane
-    // subscription keeps delivering `evt` frames before, during, and after
-    // a second request is parked mid-handler, and the peer is never torn
-    // down. The scope is XPC transport multiplexing only.
+    // Each GUI lane is a shared XPC connection, and the pane lane multiplexes
+    // every live pane. Were server dispatch serialized across requests, any
+    // parked handler on a lane would stall its event streams. Pin the
+    // transport capability independently of the client's lane routing: a pane
+    // subscription keeps delivering `evt` frames before, during, and after a
+    // second request is parked mid-handler, and the peer is never torn down.
     let registry = PaneSubscriptionRegistry()
     let coordinator = PaneCoordinator(subscriptionRegistry: registry)
     let session = UUID()

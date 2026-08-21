@@ -12,7 +12,7 @@ public enum PhysicalDeviceMethods {
     /// Params for `physicalDevice.attach`. `deviceId` is the device to mount.
     /// `sessionId` names the tab session to attribute the pane to. It is
     /// honored **only** for the trusted GUI/XPC peer (which owns every tab and
-    /// has a single shared connection, so connection-auth alone can't pick the
+    /// has one shared control connection, so connection-auth alone can't pick the
     /// target tab) and only when it names a real session. The CLI/shim (UDS)
     /// never sends it and a UDS-supplied value is ignored: those callers use
     /// the connection-authenticated session. No `cap`: `sessionId` is

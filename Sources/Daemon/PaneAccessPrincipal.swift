@@ -10,9 +10,8 @@
 //     panes whose `Record.sessionId` matches.
 //   - `.guiPeer`: the signature-validated host GUI XPC peer, which
 //     spans every session: the GUI renders and drives panes across all
-//     tabs, and its single shared connection re-authenticates as
-//     whichever tab was created last, so it is identified as a *peer*,
-//     not a *session*.
+//     tabs, and each of its shared transport lanes may authenticate as
+//     any live tab, so it is identified as a *peer*, not a *session*.
 //
 // `internal`, not `public`: minting a principal is the module's own
 // concern (every caller lives in `Daemon`), and there is deliberately

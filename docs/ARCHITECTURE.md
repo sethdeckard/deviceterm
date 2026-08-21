@@ -131,13 +131,17 @@ iPhone-glyph count is for.
 The daemon has no foreground UI. Two transports vend the same
 `MethodRegistry`:
 
-- **XPC** (mach service): the GUI's path. The GUI registers an embedded
+- **XPC** (mach service): the GUI's path. The GUI opens two peers to the same
+  service. The control peer carries ordinary one-shot RPCs and `app.commands`;
+  the pane peer authenticates itself, then carries `pane.subscribe`, its JSON
+  events and IOSurface payloads, and its release and drain notifications. The
+  GUI registers an embedded
   LaunchAgent plist via `SMAppService.agent(plistName:)`; launchd holds the
-  listener, demand-launches the daemon on the GUI's first send, and applies
-  the plist's `KeepAlive={SuccessfulExit:false}` policy to relaunch on
-  abnormal exit only. `ProcessType=Adaptive` lets launchd move the daemon
-  between background and interactive scheduling as XPC messages arrive over
-  the declared mach service.
+  listener, demand-launches the daemon on the GUI's first send, and applies the
+  plist's `KeepAlive={SuccessfulExit:false}` policy to relaunch on abnormal
+  exit only. `ProcessType=Adaptive` lets launchd move the daemon between
+  background and interactive scheduling as XPC messages arrive over the
+  declared mach service.
 - **UDS** (Unix domain socket): the CLI and shim path. Each terminal pane's
   shell env carries `DEVICETERM_DAEMON_SOCK` pointing at the socket the daemon
   vends alongside the mach service.
@@ -318,15 +322,26 @@ existing human-confirmed orphan path, never automatic authority.
 
 ### Crash recovery
 
-`XPCDaemonConnection` observes `XPC_TYPE_ERROR` on
-invalidation, drops every in-flight request and subscription, and lets the
-next send trigger a fresh `xpc_connection_create_mach_service` → launchd
-demand-launch. On that reconnect the GUI **re-runs the wire-version handshake**
-first (a Sparkle update may have swapped in a daemon with a different wire
-contract; **only a definite version mismatch** routes to remediation, while a
-*transient* handshake failure (the daemon still coming up after its respawn)
-is retried durably with capped backoff, never mistaken for an incompatible
-helper and never abandoned).
+Each lane owns an `XPCDaemonConnection`. On `XPC_TYPE_ERROR`, that connection
+fails its pending requests, finishes its subscriptions, and lets the next send
+create a fresh peer through launchd.
+
+The control lane owns the client-wide daemon generation, wire-version
+handshake, and session restore. On reconnect it runs the handshake before
+restoring anything. Only a definite version mismatch enters remediation; a
+transient failure retries with capped backoff. A definite mismatch fences both
+lanes first, so the pane peer cannot continue receiving surfaces from a helper
+the control peer rejected.
+
+Each pane's resubscribe loop reconnects the pane lane when needed. Before every
+`pane.subscribe`, the GUI authenticates that peer with a live session and waits
+for the acknowledgement. That wait orders authentication before subscription
+even though daemon request dispatch is not FIFO.
+
+A fresh daemon may initially reject the pane authentication with retryable
+`notReady` until the control lane restores its sessions. The resubscribe loop
+retries. An interruption confined to the pane lane does not start another
+session restore while the control peer remains live.
 
 What a definite mismatch does next depends on **when it was detected**. The two
 moments differ in what there is to lose.
@@ -416,7 +431,7 @@ covers the second case, and is idempotent in the first.
 
 ### IOSurface delivery
 
-Surfaces ride the XPC channel as side-band payloads
+Surfaces ride the GUI's pane XPC peer as side-band payloads
 paired with the JSON `surface.changed` evt. The **side-band** carries the
 `subscriptionToken`; the JSON event rides its subscription's request-envelope
 id, which the GUI maps to that token (via the mapping the subscribe ack
@@ -430,6 +445,21 @@ swept roughly every 100 ms; a JSON-only timeout yields a `(_, nil)` event
 and the GUI holds its last good frame. For a **device** pane the surface is *leased*;
 see "Surface lifecycle" under Data flows for the ownership contract that
 keeps a slot from being overwritten while the GPU still reads it.
+
+Control requests and pane traffic use different XPC peers. Surface traffic
+therefore cannot wait ahead of `device.list` or another one-shot reply on the
+same peer.
+
+Within the pane peer, the libxpc callback sorts JSON envelopes and IOSurface
+dictionaries into separate ordered ingress pumps. A device surface can await
+lease accounting without holding the JSON pump that carries subscription
+acknowledgements and lifecycle events.
+
+JSON arrival order remains intact. The two pumps need no shared ordering
+because frame halves already pair by `(paneId, sequence, subscriptionToken)`.
+Both carry the installed peer's epoch, and a surface checks it again after
+lease accounting so work from an invalidated peer cannot repopulate the pair
+table.
 
 Each pane has one latest-only ordered frame pump. For each retained frame,
 `PaneCoordinator` commits the sequence, current surface, and JSON subscriber
@@ -500,27 +530,26 @@ method's types per file). Daemon-only private-API mappings (e.g.
 `HardwareButton.bridgeValue` → CoreSimulator) stay daemon-side in
 extensions; `DaemonProtocol` never links `CoreSimulatorBridge`.
 
-**Streaming model.** Server-streamed events reuse the request's `id` for
-every event frame. The client distinguishes a final `res` from a streaming
-`evt` by `type`. The GUI's pane subscription is consumer-pulled: control
-events (`state.changed` / `orientation.changed`) queue losslessly in order,
-while `surface.changed` is held latest-only (a stalled consumer coalesces to
-the newest frame, since that's what would be drawn anyway), so a surface
-burst can never evict a control event. Surfaces are bounded latest-only;
-control events queue losslessly with no configured bound (the queue drains as
-the consumer pulls).
+**Streaming model.** Server-streamed events reuse the request's `id` for every
+event frame. The client distinguishes a final `res` from a streaming `evt` by
+`type`. `app.commands` uses the control peer; every pane subscription uses the
+pane peer. A pane stream is consumer-pulled: control events (`state.changed` /
+`orientation.changed`) queue losslessly in order, while `surface.changed` is
+held latest-only. A stalled consumer therefore coalesces to the newest frame
+without evicting a control event. Surface storage is bounded latest-only;
+control events have no configured queue bound and drain as the consumer pulls.
 
-**Reconnect / resubscribe.** Each pane's `SimulatorPaneViewModel` drives its
-own subscription in a retry loop: when the daemon connection drops mid-stream
-(the connection finishes the stream on XPC invalidation), it backs off and
-re-subscribes: the XPC transport auto-reconnects (launchd demand-launches the
-daemon), and the daemon replays current pane state on a matching paneId. A
-resubscribe that fails with a transport error (a drop during the subscribe or
-its re-authentication) is itself retried after the same backoff. It stops
-retrying only on a deliberate terminal state (shutdown/failed) or a terminal
-daemon/protocol error from the resubscribe (a missing pane binding after the
-daemon restarted; only a fresh attach recovers it). CLI clients are
-short-lived and don't resubscribe.
+**Reconnect / resubscribe.** Each pane's `SimulatorPaneViewModel` owns its
+subscription retry loop. When the pane connection drops, the transport finishes
+the stream and the view model backs off before subscribing again. The next
+attempt reconnects through launchd, authenticates the pane peer, and asks the
+daemon to replay the current state for a matching paneId.
+
+A transport failure during subscription or authentication retries with the
+same backoff. The loop stops only for a deliberate terminal pane state or a
+terminal daemon or protocol error, such as a pane binding lost when the daemon
+restarted. Only a fresh attach recovers a missing binding. CLI clients are
+short-lived and do not resubscribe.
 
 **Bounded requests.** A daemon that stops answering keeps its connection open,
 so nothing fails and the GUI waits. Every request `DaemonClient` sends

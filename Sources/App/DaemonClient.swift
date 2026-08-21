@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// DaemonClient: the GUI's single persistent RPC connection.
+// DaemonClient: the GUI's persistent control and pane RPC lanes.
 //
 // `@MainActor` (not an actor): the surface, its delegate, the VCs and
 // NSWindow are all main-actor; an actor would force a hop per request
 // and invite subscription-replay reentrancy. The XPC transport
-// underneath (`XPCDaemonConnection`) is an actor and serializes its
-// own state; this façade just adapts the RPC envelope shape to the
+// underneath (`XPCDaemonConnection`) is an actor and serializes each
+// lane's state; this façade just adapts the RPC envelope shape to the
 // role-protocol surface the rest of the GUI consumes.
 //
 // **Transport.** The GUI talks to the daemon over a launchd-vended
@@ -283,7 +283,13 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// the user's own.
     static let unresponsiveTimeoutThreshold = 2
 
+    /// Ordinary app RPCs and the low-rate app-command stream. Its generation
+    /// is the daemon-client generation used by version checks and recovery.
     private let xpcConnection: XPCDaemonConnection
+    /// Pane subscriptions, their lifecycle events, and IOSurface side-band
+    /// payloads. Keeping them on a separate peer prevents a multi-pane frame
+    /// burst from queueing ordinary replies behind render traffic.
+    private let paneXPCConnection: XPCDaemonConnection
     private var udsConnection: UDSDaemonConnection?
     private var transport: DaemonTransport
     private(set) var supportsLiveTouchInput = false
@@ -307,6 +313,22 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// sessions close successfully, or after reauthentication rejects and
     /// prunes every cached credential.
     private var liveSessions: [SessionAuthenticateParams] = []
+    /// Session last confirmed as the independent pane peer's principal. This
+    /// may outlive a transport invalidation and is not used to skip subscription
+    /// authentication. Unlike the control peer, its one-way surface-release
+    /// notifications cannot observe an authorization refusal and trigger the
+    /// ordinary reauthentication path, so `closeSession` rotates this principal
+    /// explicitly.
+    private var paneAuthenticatedSessionId: String?
+    /// Sessions whose close outcome makes them unsafe as the pane peer's
+    /// principal. Confirmed closes also leave `liveSessions`; uncertain closes
+    /// stay cached for control-side reconciliation but are excluded here.
+    private var paneAuthenticationExcludedSessionIds: Set<String> = []
+    /// One coalescing repair loop for close-driven pane authentication changes.
+    /// A later close invalidates the candidate the loop is awaiting instead of
+    /// starting another request that could finish out of order.
+    private var paneAuthenticationRepairTask: Task<Void, Never>?
+    private var paneAuthenticationRepairRevision = 0
     /// Observers notified after a reconnect re-establishes the connection, so
     /// GUI terminal panes can re-bind their identities (the daemon's anchor
     /// store is in-memory and lost on its restart). Keyed by token so a closing
@@ -463,8 +485,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     private let injectedSubscribeTransport: DaemonSubscribeTransport?
 
     init(machServiceName: String = MachServiceName.daemon) {
-        let xpc = XPCDaemonConnection(machServiceName: machServiceName)
+        let xpc = XPCDaemonConnection(machServiceName: machServiceName, lane: .control)
+        let paneXPC = XPCDaemonConnection(machServiceName: machServiceName, lane: .pane)
         self.xpcConnection = xpc
+        self.paneXPCConnection = paneXPC
         self.transport = .xpc(xpc)
         self.injectedRequestTransport = nil
         self.injectedSubscribeTransport = nil
@@ -481,8 +505,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         subscribe subscribeTransport: DaemonSubscribeTransport? = nil,
         machServiceName: String = MachServiceName.daemon
     ) {
-        let xpc = XPCDaemonConnection(machServiceName: machServiceName)
+        let xpc = XPCDaemonConnection(machServiceName: machServiceName, lane: .control)
+        let paneXPC = XPCDaemonConnection(machServiceName: machServiceName, lane: .pane)
         self.xpcConnection = xpc
+        self.paneXPCConnection = paneXPC
         self.transport = .xpc(xpc)
         self.injectedRequestTransport = requestTransport
         self.injectedSubscribeTransport = subscribeTransport
@@ -665,6 +691,11 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         // shut down the current, different (possibly-updated) daemon: just
         // surface so the user relaunches a matching GUI.
         let pinned = await xpcConnection.markIncompatible(expectedGeneration: generation)
+        // The pane peer has no authority to participate in the version
+        // decision, but it must be terminally quiesced with the control peer.
+        // Fence control before the first pane-lane await: main-actor work can
+        // interleave there, and no ordinary RPC may reach a rejected helper.
+        await terminallyQuiescePaneConnection()
         let outcome: VersionMismatchOutcome
         if pinned {
             outcome = await attemptIncompatibleDaemonShutdown(mismatch)
@@ -754,7 +785,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
 
     /// Tear down the connection. Called by App quit paths + tests.
     func disconnect() async {
+        cancelPaneAuthenticationRepair()
         await xpcConnection.disconnect()
+        await paneXPCConnection.disconnect()
+        paneAuthenticatedSessionId = nil
         udsConnection?.close()
     }
 
@@ -1060,11 +1094,83 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             "mode": mode.rawValue
             ]
             )
-        _ = try await request(method: .sessionClose, params: params)
+        do {
+            _ = try await request(method: .sessionClose, params: params)
+        } catch {
+            // The daemon may have removed the session before its reply was
+            // lost. Keep the credential for control-side reconciliation, but
+            // move the pane peer to another known-live session now because its
+            // one-way releases cannot report a stale principal.
+            schedulePaneAuthenticationRotationAwayFrom(sessionId: sessionId)
+            throw error
+        }
         // The daemon deleted this session; drop its credential so a later
         // reconnect never replays a dead session: replaying one would fail
         // the reauth and, with it, every surviving pane's resubscribe.
         liveSessions.removeAll { $0.sessionId == sessionId }
+        schedulePaneAuthenticationRotationAwayFrom(sessionId: sessionId)
+    }
+
+    /// Pane-lane recovery must not extend the control request's deadline. The
+    /// close caller receives the control request's result immediately while
+    /// this task repairs the independent peer.
+    private func schedulePaneAuthenticationRotationAwayFrom(sessionId: String) {
+        paneAuthenticationExcludedSessionIds.insert(sessionId)
+        paneAuthenticationRepairRevision &+= 1
+        if paneAuthenticatedSessionId == sessionId {
+            paneAuthenticatedSessionId = nil
+        }
+        guard paneAuthenticationRepairTask == nil, paneAuthenticatedSessionId == nil else { return }
+        paneAuthenticationRepairTask = Task { @MainActor [weak self] in
+            await self?.repairPaneAuthentication()
+        }
+    }
+
+    /// Move the pane peer to the newest eligible session. The loop owns at most
+    /// one authentication request at a time. A close that arrives during the
+    /// await bumps the revision and excludes its session; the response is then
+    /// revalidated before it can become the principal or release watermarks.
+    private func repairPaneAuthentication() async {
+        defer { paneAuthenticationRepairTask = nil }
+        while !Task.isCancelled, paneAuthenticatedSessionId == nil {
+            let revision = paneAuthenticationRepairRevision
+            guard let candidate = paneAuthenticationCandidate() else { return }
+            // Prefer this survivor on later reconnects too. An uncertain close
+            // remains cached earlier in the list for control-side reconciliation.
+            liveSessions.removeAll { $0.sessionId == candidate.sessionId }
+            liveSessions.append(candidate)
+            do {
+                try await bounded(.sessionAuthenticate) { [self] in
+                    try await sendPaneAuthentication(candidate)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                // Preserve the close request's own result. Tear down only the
+                // pane peer so each view model reconnects with the surviving
+                // live-session cache.
+                sessionLog.error(
+                    """
+                    pane lane reauthentication failed after session close attempt; \
+                    disconnecting pane lane for subscriber retry
+                    """
+                )
+                await paneXPCConnection.disconnect()
+                return
+            }
+            guard isPaneAuthenticationCandidateEligible(candidate) else { continue }
+            paneAuthenticatedSessionId = candidate.sessionId
+            await paneXPCConnection.resendSurfaceReleaseWatermarks()
+            if revision != paneAuthenticationRepairRevision,
+                !isPaneAuthenticationCandidateEligible(candidate) {
+                paneAuthenticatedSessionId = nil
+            }
+        }
+    }
+
+    private func cancelPaneAuthenticationRepair() {
+        paneAuthenticationRepairRevision &+= 1
+        paneAuthenticationRepairTask?.cancel()
     }
 
     /// `session.setPrivateBatch`: atomically flip the privacy flag for
@@ -1406,8 +1512,15 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             return try await injectedSubscribeTransport.subscribePane(paneId: paneId)
         }
         switch transport {
-        case let .xpc(connection):
-            let (_, stream) = try await connection.subscribe(
+        case .xpc:
+            // `pane.subscribe` is session-scoped. The pane lane is an
+            // independent daemon connection, so authenticate it before every
+            // subscription handshake. This is intentionally idempotent: pane
+            // subscriptions are infrequent, and repeating authentication
+            // avoids a stale local "authenticated generation" cache across an
+            // invalidation that has not reconnected yet.
+            try await authenticatePaneConnection()
+            let (_, stream) = try await paneXPCConnection.subscribe(
                 method: RPCMethod.paneSubscribe.rawValue,
                 params: params,
                 paneId: paneId
@@ -1456,6 +1569,65 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
                 continuation.onTermination = { _ in task.cancel() }
             }
         }
+    }
+
+    /// Authenticate the independent pane lane with the most recently live GUI
+    /// session. A validated GUI principal spans panes across sessions after the
+    /// dispatcher's session-scope gate, so any live credential is sufficient.
+    /// A stale credential is handled by `subscribePaneOnce`: it reauthenticates
+    /// the control lane, prunes rejected credentials, and retries this whole
+    /// handshake with the surviving candidate.
+    private func authenticatePaneConnection() async throws {
+        while let candidate = paneAuthenticationCandidate() {
+            // Authentication mutates the daemon-side connection before its
+            // reply arrives. Until that reply is accepted, the local cache is
+            // unknown: cancellation or timeout can abandon a request the
+            // daemon already applied.
+            paneAuthenticatedSessionId = nil
+            do {
+                try await sendPaneAuthentication(candidate)
+            } catch {
+                // A fresh peer is the only definitive way to clear a remote
+                // principal whose authentication result is unknown. Existing
+                // subscriptions finish and reconnect through their normal
+                // retry path.
+                await paneXPCConnection.disconnect()
+                throw error
+            }
+            // A session close can interleave while the request awaits. The
+            // daemon may have accepted that now-dead principal, so overwrite it
+            // with another eligible credential before subscribing.
+            guard isPaneAuthenticationCandidateEligible(candidate) else { continue }
+            paneAuthenticatedSessionId = candidate.sessionId
+            return
+        }
+        // A successful authentication may have become ineligible while its
+        // reply was in flight. With no survivor to overwrite it, discard the
+        // peer rather than retaining an unrepresentable remote principal.
+        await paneXPCConnection.disconnect()
+        throw DaemonClientError.daemon(
+            code: Self.unauthorizedConnectionCode,
+            message: "pane lane requires a live authenticated session"
+        )
+    }
+
+    private func paneAuthenticationCandidate() -> SessionAuthenticateParams? {
+        liveSessions.last(where: isPaneAuthenticationCandidateEligible)
+    }
+
+    private func isPaneAuthenticationCandidateEligible(
+        _ candidate: SessionAuthenticateParams
+    ) -> Bool {
+        !paneAuthenticationExcludedSessionIds.contains(candidate.sessionId)
+            && liveSessions.contains(where: { $0.sessionId == candidate.sessionId })
+    }
+
+    private func sendPaneAuthentication(_ candidate: SessionAuthenticateParams) async throws {
+        let params = try JSONEncoder().encode(candidate)
+        _ = try await paneXPCConnection.request(
+            method: RPCMethod.sessionAuthenticate.rawValue,
+            params: params
+        )
     }
 
     /// Discrete tap at normalized (0..1) coords.
@@ -2024,6 +2196,12 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     func beginStartupRecovery(generation: Int, pid: Int32) async -> Bool {
         guard !versionFlowOwnedElsewhere else { return false }
         recoveryTarget = IncompatibleHelper(generation: generation, pid: pid)
+        // No pane traffic is expected during startup, but fence the lane now so
+        // a caller cannot demand-connect it while the registration is being
+        // replaced. The control connection alone remains able to ping and stop
+        // the pinned helper.
+        let paneGeneration = await paneXPCConnection.currentGeneration
+        _ = await paneXPCConnection.enterRecovery(expectedGeneration: paneGeneration)
         isRecoveryPinned = await xpcConnection.enterRecovery(expectedGeneration: generation)
         return isRecoveryPinned
     }
@@ -2085,6 +2263,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// latch already released.
     func leaveVersionRecovery() async {
         await xpcConnection.leaveRecovery()
+        await paneXPCConnection.leaveRecovery()
         recoveryTarget = nil
     }
 
@@ -2099,7 +2278,19 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         guard !versionMismatchHandled else { return }
         versionMismatchHandled = true
         recoveryTarget = nil
+        await terminallyQuiescePaneConnection()
         await xpcConnection.markIncompatible(expectedGeneration: nil)
+    }
+
+    /// Pane traffic never carries the bootstrap shutdown, so a terminal wire
+    /// decision can close that peer after fencing it. This drops queued surface
+    /// payloads as well as finishing subscription consumers; leaving the mode
+    /// `.incompatible` prevents a retry loop from demand-connecting it again.
+    private func terminallyQuiescePaneConnection() async {
+        cancelPaneAuthenticationRepair()
+        await paneXPCConnection.markIncompatible(expectedGeneration: nil)
+        await paneXPCConnection.disconnect()
+        paneAuthenticatedSessionId = nil
     }
 
     /// Ping the daemon and return the connection generation the ping was
@@ -2133,6 +2324,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// Test seam: the underlying XPC connection, so a controlled-peer test can
     /// install a replying peer and bump the generation mid-handshake.
     func xpcConnectionForTesting() -> XPCDaemonConnection { xpcConnection }
+
+    /// Test seam for proving pane subscriptions do not share the control peer.
+    func paneXPCConnectionForTesting() -> XPCDaemonConnection { paneXPCConnection }
 
     // MARK: - AppCommandControlling
 

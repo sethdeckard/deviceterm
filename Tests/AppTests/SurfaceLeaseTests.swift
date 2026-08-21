@@ -125,3 +125,29 @@ func accountantEmptySetWatermarkIsPastHighestReceived() async {
 
     await accountant.stop()
 }
+
+@Test
+func accountantCanReplayAnUnchangedWatermarkAfterReauthentication() async {
+    let sink = ReleaseSink()
+    let accountant = SurfaceReleaseAccountant { params in sink.record(params) }
+    let token = UUID()
+    await accountant.acquire(
+        paneId: "p1",
+        subscriptionToken: token,
+        leaseEpoch: 1,
+        generation: 10
+    )
+    await accountant.release(
+        paneId: "p1",
+        subscriptionToken: token,
+        leaseEpoch: 1,
+        generation: 10
+    )
+    await settleTicks()
+    #expect(sink.lowestHelds == [11])
+
+    await accountant.resendCurrentWatermarks()
+    #expect(sink.lowestHelds == [11, 11])
+
+    await accountant.stop()
+}

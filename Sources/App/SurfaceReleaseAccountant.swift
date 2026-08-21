@@ -75,6 +75,20 @@ actor SurfaceReleaseAccountant {
         }
     }
 
+    /// Re-send every current cumulative watermark after the XPC peer changes
+    /// its authenticated session. A release notification sent after the old
+    /// session closed is silently refused daemon-side, and no later surface
+    /// mutation is guaranteed to repair that lost final watermark.
+    func resendCurrentWatermarks() {
+        guard !stopped else { return }
+        for (key, var account) in accounts {
+            account.lastSent = nil
+            account.dirty = true
+            accounts[key] = account
+        }
+        flush()
+    }
+
     /// Stop the pump and forget all accounts (connection teardown).
     func stop() {
         stopped = true
