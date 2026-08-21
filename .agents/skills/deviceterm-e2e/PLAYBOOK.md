@@ -176,6 +176,24 @@ will overshoot: the "+" and every ✕ are `AXButton`, and so is a pile of window
 chrome, so an app-wide `AXButton` count is a different number entirely. Scoping
 to the window does not rescue it, because the chrome is in the window too.
 
+**`.agents/skills/deviceterm-e2e/helpers/tab-pills.sh` applies that predicate
+for you.** It prints one pill identifier per line, sorted. With no argument it
+takes its own fresh dump; hand it a path to read one you already have. It exits
+non-zero and says why when the dump reports `ok:false` or is `truncated`,
+rather than printing an empty list that would read as a genuine "no tabs".
+
+**Redirect it to a file and check its exit status; never pipe it.** That status
+is the whole of the protection above, and a pipeline discards it:
+`tab-pills.sh | wc -l` reports `wc`'s status, which is 0, and prints `0` for a
+dump the helper refused — the "no tabs" reading it exists to prevent, restored
+in full. (`pipefail` is off by default in both bash and zsh, so this is the
+behaviour you get, not a corner case.) Count with
+`tab-pills.sh >/tmp/e2e-pills.txt && wc -l </tmp/e2e-pills.txt` instead, and
+two saved files also give you `comm -13 /tmp/e2e-before.txt /tmp/e2e-after.txt`
+for what appeared between them, which the cleanup paths need. **A non-zero exit
+means you have no pill count at all** — not a count of zero — so re-dump or
+report rather than carrying the number forward.
+
 The pill roles are worth knowing for assertions other than counting:
 
 | element | role | identifier | notes |
@@ -359,9 +377,13 @@ not from the receipt.
   the CLI or not. On an all-public workspace a split tab is therefore several
   session rows, one `tabCount`, and one pill, with all three correct. Use
   `tabCount` and the pills when you mean tabs.
-- **Observe:** `deviceterm-uitest ax dump` — count tab pills by identifier
-  prefix (see the flagship cross-check above);
-  `deviceterm-uitest capture window --out /tmp/e2e-tabs.png` then read the PNG.
+- **Observe:** `.agents/skills/deviceterm-e2e/helpers/tab-pills.sh
+  >/tmp/e2e-pills.txt && wc -l </tmp/e2e-pills.txt` counts the pills, taking its
+  own dump. **Redirect, don't pipe** — see the flagship cross-check: piping to
+  `wc -l` prints `0` and exits 0 for a dump the helper refused. Run
+  `deviceterm-uitest ax dump` directly when you want the rest of the tree as
+  well. Then `deviceterm-uitest capture window --out /tmp/e2e-tabs.png` and read
+  the PNG.
 - **Verify:** the flagship cross-check holds (count matches across JSON + AX +
   pixels).
 - **Rename:** `deviceterm tab rename "My Tab"` sets the GUI **manual title**
@@ -478,10 +500,15 @@ not from the receipt.
 
 ### 2. Pane split + rearrange
 
-- **Setup:** take an `ax dump` first and record **the set of pill identifiers it
-  contains**, as `<before>`. Not just the count: the cleanup step at the end
-  needs to know which tabs were already the operator's, and only a set can tell
-  it that. Then `deviceterm tab open`, and note the new tab's `shortId` as
+- **Setup:** record **the set of pill identifiers** already in the strip as
+  `<before>`, before anything else:
+  `.agents/skills/deviceterm-e2e/helpers/tab-pills.sh >/tmp/e2e-before.txt`.
+  **If that exits non-zero, stop before mutating anything**: an empty or partial
+  `<before>` is worse than none, because the cleanup at the end would read the
+  operator's own tabs as tabs this scenario opened. Not just the count: that
+  cleanup needs to know which tabs were already theirs, and only a set can tell
+  it that. Then
+  `deviceterm tab open`, and note the new tab's `shortId` as
   `<work>`. Everything below runs against `<work>`, never your own tab: the
   GUI-only steps close panes by focus and can escalate to closing the whole tab,
   so a split made in your own tab puts the run one keystroke from ending itself.
@@ -555,8 +582,12 @@ not from the receipt.
   **Identify it by what is new, not by what is selected.** `opt+cmd+w` may
   already have taken the whole tab, and a ⌘W that closed the primary pane will
   have promoted the survivor, so the Setup identifier can name a terminal that no
-  longer exists. Take a fresh `ax dump` and let `<new>` be its pill identifiers
-  minus `<before>`:
+  longer exists. Take the set again and let `<new>` be the difference:
+  `.agents/skills/deviceterm-e2e/helpers/tab-pills.sh >/tmp/e2e-after.txt` then
+  `comm -13 /tmp/e2e-before.txt /tmp/e2e-after.txt`, which needs both sides
+  sorted and the helper sorts what it prints. **If that run exits non-zero you
+  have no set to diff** — close nothing, and report the tabs you opened by name
+  so the operator can. Otherwise:
 
   - `<new>` is **empty** → nothing this scenario created is still open. **Close
     nothing.**
