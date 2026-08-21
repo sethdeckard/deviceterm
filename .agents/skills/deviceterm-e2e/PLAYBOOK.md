@@ -119,6 +119,14 @@ one.
 - **Never boot or shut down the user's simulators without explicit approval.**
   Game-dev and other work may depend on running sims. Scenarios marked
   *needs a sim* require the user to nominate a throwaway sim first.
+- **Close only tabs this run opened, and never your own.** `--tab` defaults to
+  `current`, which is the tab your shell is running in, so a bare
+  `deviceterm tab close` ends your own session and takes the run with it. Name
+  the target explicitly, every time: `--tab <shortId>`. The GUI paths are
+  harder to aim, because they follow focus rather than a name: `cmd+w` closes
+  the focused *pane* and escalates to closing the whole tab when that terminal
+  is the tab's last, and `opt+cmd+w` is Close Tab regardless of focus. Leaving
+  a tab open and reporting it beats closing the wrong one.
 - When a close/quit modal appears, dismiss it with the **non-destructive**
   button only: **`Cancel`** on a tab/window close, **`Keep Running`** on quit.
   **Never** press `Shut Down Sims` or `Shut Down All & Quit` against the user's
@@ -180,6 +188,35 @@ The pill roles are worth knowing for assertions other than counting:
 pill including the selected one, so a `focused` predicate silently matches
 nothing.
 
+**Don't cross-check a pill's `title` against the CLI's `displayTitle`.** They
+are not the same value and are not read at the same moment, so they disagree for
+three independent reasons, none of which re-reading makes go away:
+
+- **Sampling.** A shell whose title carries a spinner or a clock changes between
+  the two reads. A run has already seen `◐` in one source and `◑` in the other
+  on the same tab. Re-reading *identifies* this one, because the difference moves
+  from read to read instead of staying put, but it will not converge while the
+  title goes on animating.
+- **Normalization.** The pill renders the title as the GUI has it, while
+  `displayTitle` is the form that crosses the wire: NFC-composed, stripped of
+  controls and most default-ignorable scalars, and truncated on grapheme
+  boundaries to a 256-byte budget. (Joiners and variation selectors are kept
+  on purpose, being orthographic in several scripts and structural inside emoji
+  sequences, so "stripped of the invisible" is not quite the rule.) A long or
+  oddly-composed title therefore differs **permanently**, and no amount of
+  re-reading converges it.
+- **Elision.** `displayTitle` is deliberately **absent** whenever the label would
+  tell you nothing `name` does not already: the title *is* the name, or it is the
+  GUI's generic fallback for a tab with no name, no title and no known directory.
+  It is also absent on the non-primary terminals of a split tab, whose title
+  publishes under the primary's session. A pill with a perfectly good title
+  beside a row with no `displayTitle` at all is the designed behaviour, not a
+  dropped update.
+
+Compare identifiers and counts, which are stable and are what the cross-check
+actually needs. A title difference is a finding only once you can rule out all
+three of the above, which in practice usually means it is not one.
+
 **The pill identifier is a join key, not a durable handle.** It names the tab's
 *current primary* session, so closing the first terminal of a split tab changes
 it. Re-read the identifier from a fresh dump rather than caching one across
@@ -196,9 +233,11 @@ observers don't agree on "which window" the way you'd expect:
 - The **harness** (capture, AX dump, drive) always acts on the **AppKit frontmost
   window** — what the user is looking at.
 - `windows list --all`'s **`isKey:true`** is *not* that window. It is deviceterm's
-  **Router-selected** window (`workspace.selectedWindowID`), which changes only on
-  navigation routes, not on plain focus changes — so after you click a different
-  window, `isKey` still points at the old one.
+  **Router-selected** window (`workspace.selectedWindowID`), which moves only when
+  a route acts on a *window* (opening, closing, or focusing one), not on plain
+  focus changes — so after you click a different window, `isKey` still points at
+  the old one. Tab-level routes leave it alone entirely: selecting a tab does not
+  make its window key.
 
 With one window the distinction vanishes. If you must run multi-window, don't
 trust `isKey` to name the captured window — reconcile by identity instead
@@ -238,7 +277,21 @@ afterwards. Poll each source on its own rather than treating any one of them as
 the leading indicator.
 
 A mismatch that survives polling is a finding worth reporting. A mismatch on the
-first read is usually just this.
+first read can be nothing but this, so re-read before you report one. On a quiet
+machine everything here may well settle inside a couple of hundred milliseconds
+and you will never see a retry; that is not evidence the bound is unnecessary,
+only that nothing was in flight.
+
+**Record a baseline before you mutate.** The counting and state-transition
+assertions in the scenario library are *deltas*: "its length grew by 1",
+"re-assert the count dropped", "count deltas, not absolutes". None of those is
+checkable without the "before", and nothing else in this document will remind you
+to capture it. Plenty of other assertions are absolute and need no baseline: a
+receipt's shape, an alert's wording, the status-item badge, `doctor`'s `ok`.
+
+Take the same three vantage points you intend to assert on, so a surprise in the
+baseline itself (tabs left over from an earlier run, a window you did not expect)
+surfaces before it is tangled up in a delta.
 
 ---
 
@@ -249,8 +302,47 @@ verify**. The exact CLI verbs, JSON keys, and GUI strings below are current as
 of this writing; if a string here doesn't match what you observe, treat the
 mismatch itself as a finding rather than papering over it.
 
-### 1. Tab lifecycle — open / select / rename / close
+### 1. Tab lifecycle — open / rename / select / close
 
+**Run the steps in the order they appear below**, which is the order of this
+heading. Rename before select is deliberate: the rename step demonstrates that
+the titlebar tracks the *selected* tab rather than the renamed one, and that
+only shows up while the tab `tab open` just created is still selected. Reorder
+it and the check passes vacuously.
+
+The four mutation verbs here all accept `--json`, which is worth using: the
+human line is a loose echo, while the receipt is a fixed shape you can assert
+on.
+
+| verb | `--json` receipt |
+|---|---|
+| `tab open` | `{ok:true, window}` (echo of the requested window ref, `"current"` when omitted) |
+| `tab rename` | `{ok:true, tab, name?}` (`name` omitted when restoring the automatic title) |
+| `tab select` | `{ok:true, tab}` |
+| `tab close` | `{ok:true, tab, mode}` |
+
+None of them returns the new tab's id: the GUI mints it asynchronously, so
+`tab open` is fire-and-forget and you learn the new `shortId` from `tabs list`,
+not from the receipt.
+
+- **Baseline:** before mutating anything, record all three vantage points:
+  `deviceterm tabs list --json`, `deviceterm windows list --all --json`, and an
+  `ax dump`. The counts and the selection below are measured against this; the
+  rest (receipt shapes, the renamed title) stands on its own.
+
+  **Keep two `shortId`s straight from here on.** `<caller>` is your own tab: take
+  it from `deviceterm tab info --json`, whose `shortId` is the tab's **primary**
+  terminal. Do **not** take it from the `tabs list` row with `current: true`.
+  That list has one row per terminal *session*, so if you are sitting in the
+  secondary pane of a split tab, that row's `shortId` names your session rather
+  than your tab, and it will match no pill and no `selectedTabShortId`, because
+  both of those speak only the primary's. `<opened>` is the tab the next step
+  creates, read from the `tabs list` row that appears; a fresh tab has exactly
+  one terminal, so its row is its primary either way.
+
+  The steps below name one or the other deliberately, because `tab open` leaves
+  `<opened>` selected: pointing the select step at `<opened>` would "select" a
+  tab that is already selected and pass without moving anything.
 - **Mutate:** `deviceterm tab open`
 - **Assert:** `deviceterm tabs list --json` is an array of
   `{current, shortId?, name?, displayTitle?, sessionId, label?}` across the whole
@@ -276,8 +368,11 @@ mismatch itself as a finding rather than papering over it.
   (top of the precedence chain: manual → OSC → session name → cwd basename →
   `shell`). **Do not assert it via `tabs list --json`'s `name`**: that field is
   the daemon *session name* layer (set at `session.create` / worktree
-  auto-name), which a manual rename does not touch, so it stays unchanged
-  however the rename went.
+  auto-name), which a manual rename does not touch, so it reads the same before
+  and after however the rename went. Expect it to be **absent rather than
+  unchanged** much of the time: the key is optional and the row omits it when
+  the session was never named, so a tab you rename may have no `name` at all.
+  That absence is the normal case, not a finding.
 
   The resolved title does reach the daemon, as **`displayTitle`** on the same
   row, so it is a second opinion rather than nothing. It is not a substitute for
@@ -286,44 +381,116 @@ mismatch itself as a finding rather than papering over it.
   for instance on the non-primary terminals of a split tab, whose title
   publishes under the primary's session.
 
-  Verify through the harness instead, on **the pill for the tab you renamed**,
-  whose `title` reads `My Tab`. Mind which tab that is: a bare `tab rename`
-  targets the *calling shell's own* tab, because `--tab` defaults to `current`.
-  The **window titlebar** shows the **selected** tab's title, so it only agrees
-  when the tab you renamed is also the selected one. If you opened a tab earlier
-  in this scenario, the new tab is selected and the titlebar still reads *its*
-  title while the rename worked perfectly. To assert the titlebar, name the
-  target explicitly with `tab rename --tab <shortId> "My Tab"`, or select the
-  caller's tab first.
-- **Select:** `deviceterm tab select --tab <shortId>`. **Do not assert with
-  `tabs list --json`'s `current`** — that flag marks the row matching the
-  *calling shell's* `DEVICETERM_SESSION`, i.e. the agent's own tab, regardless of
-  which tab is selected. Assert on the **selected window** instead: `tab select`
-  is a Router route, so it sets `workspace.selectedWindowID` — meaning
-  `windows list --all --json`'s `isKey:true` row *is* the window holding the newly
-  selected tab, and its `selectedTabShortId` should equal `<shortId>`. Confirm it
-  in AX: that pill's **`value` is 1** and every other pill's is 0. Do not reach
-  for `focused`, which is false on all of them.
+  Verify through the harness instead, on **`<caller>`'s pill**, whose `title`
+  reads `My Tab`. A bare `tab rename` renames `<caller>`, because `--tab`
+  defaults to `current`, which is the tab your shell is in.
 
-  **GUI-only select:** `drive click --ax "deviceterm.tab.<shortId>"` selects that
-  exact tab. Prefer the identifier over the title, which is the live display
-  title and collides freely (several tabs in one window commonly share one).
+  **The titlebar will not agree yet, and that is the point of running this
+  before the select step.** The titlebar shows the **selected** tab's title, and
+  `<opened>` is still selected, so it goes on reading `<opened>`'s title while
+  the rename has worked perfectly. Assert the pill now; the titlebar becomes
+  assertable one step later, once select moves to `<caller>`. If you would
+  rather rename the selected tab outright, name it: `tab rename --tab <opened>
+  "My Tab"`.
+- **Select:** `deviceterm tab select --tab <caller>`. **Target `<caller>`, not
+  `<opened>`**: `<opened>` has been selected since it was created, so selecting
+  it again moves nothing and every assertion below passes on pre-existing state.
+  `<caller>` is the one tab you know is *not* selected right now.
+
+  **Do not assert with `tabs list --json`'s `current`** — that flag marks the row
+  matching the *calling shell's* `DEVICETERM_SESSION`, i.e. the agent's own tab,
+  regardless of which tab is selected. (It will read `true` on `<caller>` both
+  before and after this step, which is exactly why it proves nothing.) Assert on
+  **`selectedTabShortId`** instead, taken from the `windows list --all --json`
+  row for **the window under test**: it should change from `<opened>` to
+  `<caller>`.
+
+  Read it from that row, not from whichever row carries `isKey:true`.
+  `tab select` selects a tab *within* its window and does not change which
+  window is key, so on a multi-window workspace `isKey` can be pointing
+  somewhere else entirely and its `selectedTabShortId` will not move. With the
+  single window this playbook asks for there is one row, and the distinction
+  cannot bite.
+
+  Confirm it in AX too: `<caller>`'s pill **`value` is 1** and every other
+  pill's is 0. Do not reach for `focused`, which is false on all of them.
+
+  This is also what makes the rename step assertable: with `<caller>` selected,
+  the titlebar should now read `My Tab`, the title it declined to show while
+  `<opened>` held the selection.
+
+  **GUI-only select:** `drive click --ax "deviceterm.tab.<opened>"` selects that
+  exact tab, moving selection back the other way. Prefer the identifier over the
+  title, which is the live display title and collides freely (several tabs in one
+  window commonly share one).
 - **GUI-only open:** `deviceterm-uitest drive key cmd+t` (New Tab), or
   `drive click --ax "deviceterm.tab.new"` to press the strip's "+" specifically.
-  Both open a tab; re-assert the count grew.
+  Both open a tab; re-assert the count grew. **Note each new tab's `shortId`**
+  from the `tabs list` row that appears, as `<gui>`; running both variants makes
+  two of them, and the close step below has to account for every one.
 
   Do **not** use `drive click --ax "New Tab"` for this. That string matches the
   **Shell** menu item by title and the "+" by description, and the element search
   walks the whole application, so it presses one of them without telling you
   which. The identifier is unambiguous, and the "+" publishes no title at all, so
   the identifier is the only way to name it.
-- **Close:** `deviceterm tab close --tab <shortId> --mode detach` (detach keeps
-  any booted sims). Re-assert the count dropped. *If the tab booted a sim, a
-  modal appears — see scenario 5.*
+- **Close:** `deviceterm tab close --tab <opened> --mode detach`. Re-assert the
+  count dropped.
+
+  **Then close every other tab this scenario opened**, one `tab close --tab
+  <gui> --mode detach` per identifier you noted at the GUI-only open step. The
+  count should return to its baseline; if it does not, say which tabs you left
+  and why. Running every step opens three tabs, one by CLI and one per GUI
+  variant, and closing only the first is how an operator's window fills with
+  strangers.
+
+  **No modal appears here, even if the tab booted a sim.** `--mode` already
+  states the disposition, so there is nothing to prompt for; the CLI hands it
+  straight to the close route. The disposition alert belongs to the GUI close
+  paths, which carry no mode and therefore have to ask (scenario 5).
+
+  **Never close `<caller>`**, and name every target explicitly, per the safety
+  rule above. `--tab` defaults to `current`, which is `<caller>`, so omitting the
+  flag here closes the tab you are working in and ends the run.
+
+  `--mode` takes **`detach`** or **`shutdown`**. Always pass `detach`: it leaves
+  any sims the tab booted running, while `shutdown` stops them, which is the
+  thing you may never do to the user's sims without approval. An unrecognized
+  value falls back to `detach`, so a typo fails safe, but do not rely on that
+  in place of typing it.
+- **Clean up, on every exit path including an early one.** Two things need
+  putting back, and the standing rule to stop the moment you find a bug would
+  otherwise skip both, leaving damage you caused as a second finding on top of
+  the one you went to report:
+
+  - **The title.** `deviceterm tab rename --tab <caller>` with no name puts
+    `<caller>` back on automatic titling. The rename step set a manual title on
+    **your own** tab, and closing anything does not undo it.
+  - **The tabs.** Close every tab this scenario opened that is still open:
+    `<opened>`, and each `<gui>`. On the success path the Close step has already
+    taken them; on an early exit it has not, so walk the list yourself. Compare
+    the tab count against the baseline as the check.
+
+  This is owed from the first step that opened or renamed anything, not just at
+  the end: if you stop early, clean up first, then report. Say so if a cleanup
+  step itself fails. Putting back what this scenario deliberately moved is not
+  "fixing a bug" and is not what the observe-only rule forbids.
 
 ### 2. Pane split + rearrange
 
-- **Mutate:** `deviceterm pane open --terminal` splits the active tab.
+- **Setup:** take an `ax dump` first and record **the set of pill identifiers it
+  contains**, as `<before>`. Not just the count: the cleanup step at the end
+  needs to know which tabs were already the operator's, and only a set can tell
+  it that. Then `deviceterm tab open`, and note the new tab's `shortId` as
+  `<work>`. Everything below runs against `<work>`, never your own tab: the
+  GUI-only steps close panes by focus and can escalate to closing the whole tab,
+  so a split made in your own tab puts the run one keystroke from ending itself.
+  Select `<work>` (`deviceterm tab select --tab <work>`) so the GUI steps, which
+  follow selection and focus, act on it.
+- **Mutate:** `deviceterm pane open --terminal --tab <work>` splits that tab.
+  **Pass `--tab` explicitly.** Omitting it splits the *calling shell's* tab
+  regardless of what is selected in the GUI, because `--tab` defaults to
+  `current`, and that is the one tab this scenario must leave alone.
 - **Assert:** the command's `--json` receipt is the ack
   `{ok:true, tab:"<target>"}` (`Receipt.PaneOpenTerminal`). **Do not** look for
   the new pane in `panes list --json` — that roster is the daemon's **sim/device**
@@ -366,6 +533,58 @@ mismatch itself as a finding rather than papering over it.
   keep at least one terminal. So a tab holding one terminal beside one sim has
   two panes, and ⌘W with the *terminal* focused takes the whole tab.
   `drive key opt+cmd+w` is Close Tab regardless of focus.
+
+  Both keys aim by **focus**, not by name, so neither can be pointed at a tab
+  and both take whatever is selected. Confirm `<work>` is still selected before
+  pressing either, per the closing rule in **Safety rules**; if selection has
+  moved back to your own tab at any point, these close *that* instead.
+
+  **Re-read `<work>` from a fresh dump between closes.** A tab's pill identifier
+  is its *primary* terminal's, and the primary is just the first terminal the tab
+  holds, so closing the primary pane promotes the survivor and the identifier
+  changes underneath you. A `<work>` captured at Setup will then match nothing in
+  the strip, and "the tab is gone" is the wrong conclusion to draw from that. This
+  is the join-key caveat from the flagship cross-check biting in practice.
+- **Clean up, on every exit path including an early one:** `<work>` usually
+  outlives this scenario. ⌘W closes a *pane*, so on a split tab it removes one
+  and leaves the tab standing, while ⌥⌘W does close the tab outright, so whether
+  `<work>` is still open depends on which keys you ran. Close it explicitly with
+  `deviceterm tab close --tab <work> --mode detach` if it is, which is what the
+  identification below is for.
+
+  **Identify it by what is new, not by what is selected.** `opt+cmd+w` may
+  already have taken the whole tab, and a ⌘W that closed the primary pane will
+  have promoted the survivor, so the Setup identifier can name a terminal that no
+  longer exists. Take a fresh `ax dump` and let `<new>` be its pill identifiers
+  minus `<before>`:
+
+  - `<new>` is **empty** → nothing this scenario created is still open. **Close
+    nothing.**
+  - `<new>` is **exactly one identifier** → that is `<work>`, whether or not it
+    still answers to the Setup value. **Strip the `deviceterm.tab.` prefix
+    before closing it**: `--tab` wants the bare `shortId`. Handing it the whole
+    identifier does not fail loudly, because a value containing dots is not
+    short-id-shaped, so the parser classifies it as a tab *name* and resolves it
+    against tab names instead: not-found at best, and the wrong tab if one
+    happens to carry that name.
+  - `<new>` has **more than one** → something you did not expect happened. Close
+    nothing and report the set.
+
+  This is the only recovery here that is safe to write down. Every tab the
+  operator already had is in `<before>` by construction, so it can never be a
+  candidate no matter what else moves. Do **not** substitute "the selected tab":
+  closing a tab makes DeviceTerm select a *neighbour*, which is the operator's,
+  and the AX pill and `selectedTabShortId` will then agree with each other about
+  it perfectly. Nor is a tab count enough, because the close is asynchronous: a
+  count read a moment too early still shows the tab present, and by the AX read
+  it is gone and a neighbour is selected.
+
+  **Do not go looking for it in `tabs list`** either. Those rows are terminal
+  sessions with no tab grouping of any kind, so after a promotion nothing in a
+  surviving row tells you which tab it belongs to.
+
+  If you stop early, do all of this before you report, and say so if a close
+  fails.
 - Note: `pane rename` and `pane move` are daemon placeholders (they return an
   internal error today) — don't assert on them. `pane attach` was **retired**;
   use `device attach` (scenario 7).
