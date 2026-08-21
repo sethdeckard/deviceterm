@@ -1182,37 +1182,52 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         return (try decode([DeviceListEntry].self, answer.data), answer.generation)
     }
 
-    /// `device.boot`: boot a simulator. When `(sessionId, cap)` is
-    /// provided the daemon records ownership for that session; the
-    /// GUI uses this from the .shutdown pane's Reboot button so the
-    /// resurrected pane is attributed to the same tab.
+    /// `device.boot`: register an optional causal claim and ask
+    /// CoreSimulator to begin booting. Ownership converges separately.
     func bootDevice(
         udid: String,
         sessionId: String? = nil,
-        capability: String? = nil
+        capability: String? = nil,
+        claim: BootClaimEvidence? = nil
     ) async throws {
         _ = try await bootDeviceWithGeneration(
             udid: udid,
             sessionId: sessionId,
-            capability: capability
+            capability: capability,
+            claim: claim
         )
     }
 
-    /// `device.boot`, plus the connection that recorded the ownership. A
-    /// credentialed boot attributes the sim, and the owned-sim mirror has to
-    /// file that against the helper it actually happened on.
+    /// `device.boot`, plus the connection that accepted the boot intent.
     func bootDeviceWithGeneration(
         udid: String,
         sessionId: String?,
-        capability: String?
+        capability: String?,
+        claim: BootClaimEvidence? = nil
     ) async throws -> Int {
-        var body: [String: Any] = ["udid": udid]
-        if let sessionId, let capability {
-            body["sessionId"] = sessionId
-            body["cap"] = capability
-        }
-        let params = try JSONSerialization.data(withJSONObject: body)
+        let params = try JSONEncoder().encode(
+            DeviceBootParams(
+                udid: udid,
+                sessionId: sessionId,
+                cap: capability,
+                claim: claim
+            )
+        )
         return try await requestWithGeneration(method: .deviceBoot, params: params).generation
+    }
+
+    func reconcileBootClaim(
+        claim: BootClaimEvidence,
+        sessionId: String?
+    ) async throws -> (result: DeviceReconcileBootClaimResult, generation: Int) {
+        let params = try JSONEncoder().encode(
+            DeviceReconcileBootClaimParams(claim: claim, sessionId: sessionId)
+        )
+        let answer = try await requestWithGeneration(
+            method: .deviceReconcileBootClaim,
+            params: params
+        )
+        return (try decode(DeviceReconcileBootClaimResult.self, answer.data), answer.generation)
     }
 
     /// `device.shutdown`: stop a booted simulator. Existing daemon

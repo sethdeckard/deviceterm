@@ -5,23 +5,23 @@
 //
 // CoreSimulator owns the actual simulator processes; we hold thin
 // `SimDeviceHandle` references transiently and track *which sims we own*
-// and, where there is one, the session attributed to each. The ownership map is the trust anchor for
+// and, where there is one, the session attributed to each. The ownership map
+// is the trust anchor for
 // `device.list({scope: "owned"})` and for the menu bar's
 // running-sim badge count, and is updated by:
 //
-//   - `boot(udid:owningSession:)` when the daemon initiates a boot on
-//     behalf of a caller that's holding session creds.
-//   - `recordOwnership`, reached by `shim.event` when a `simctl boot`
-//     runs inside a tab's shell and the shim posts a provenance-tagged
-//     event, and by `device.attach` when a caller claims an
-//     already-booted sim.
+//   - `reconcileBootClaim`, which promotes a causally bounded GUI or shim
+//     attempt only after CoreSimulator reports Booted.
+//   - `transferOwnership`, reached by `device.attach` when the user claims an
+//     already-Booted sim without inventing a lifecycle event.
+//   - `recordOwnership`, retained for compatibility and test setup.
 //   - `restoreOwnership`, reached by `device.restoreOwnership` when a
 //     validated GUI restores its claims to a daemon that restarted under
 //     it. It changes bookkeeping without booting a sim or publishing
 //     `device.booted`.
 //
-// Entries are removed by daemon shutdowns, by shim-reported shutdown
-// events, and by CoreSimulator shutdown notifications.
+// Entries are removed by daemon shutdowns, shim-reported shutdown events, and
+// CoreSimulator shutdown notifications.
 //
 // Handles never escape this actor: every public method either
 // returns a `Sendable` snapshot (`CSBDeviceInfo`) or just an ack.
@@ -31,6 +31,7 @@
 // within a serializing context").
 
 import CoreSimulatorBridge
+import DaemonProtocol
 import Foundation
 
 public enum DeviceError: Error, Equatable, Sendable {
@@ -126,6 +127,18 @@ struct NotifierArrival: Sendable {
 }
 
 public actor DeviceCoordinator {
+    private struct BootClaimRecord {
+        var evidence: BootClaimEvidence
+        var sessionId: UUID?
+        let expiresAtNanoseconds: UInt64
+        var status: BootClaimStatus
+    }
+
+    private struct ClosedBootSession {
+        let mode: PaneCloseMode
+        let expiresAtNanoseconds: UInt64
+    }
+
     private struct CachedDeviceRead {
         let result: CoreSimulatorDeviceReadResult
         let completedAtNanoseconds: UInt64
@@ -154,6 +167,7 @@ public actor DeviceCoordinator {
 
     private static let defaultDeviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000
     private static let defaultDeviceSnapshotDeadlineNanoseconds: UInt64 = 3_000_000_000
+    private static let bootClaimTerminalRetentionNanoseconds: UInt64 = 60_000_000_000
 
     /// UDID (lowercased) → the session attributed to it, or nil for one
     /// explicitly claimed without an attribution. Cleared when the sim shuts
@@ -169,6 +183,11 @@ public actor DeviceCoordinator {
     /// so the two levels never get confused: a bare subscript yields a double
     /// optional, the outer being ownership and the inner attribution.
     private var ownership: [String: UUID?] = [:]
+    private var bootClaims: [UUID: BootClaimRecord] = [:]
+    private var activeBootClaimByUDID: [String: UUID] = [:]
+    private var bootClaimPoller: Task<Void, Never>?
+    private var closedBootSessions: [UUID: ClosedBootSession] = [:]
+    private var closedBootSessionCleaner: Task<Void, Never>?
     /// Optional event broker. Publishes `device.booted` + `device.shutdown`
     /// to every session's `deviceterm events` subscribers (device events
     /// are `.everyone`).
@@ -203,7 +222,7 @@ public actor DeviceCoordinator {
     /// event, which would scatter ordering across reentrancy.
     private var notifierConsumer: Task<Void, Never>?
 
-    /// Last authoritative (`boot` RPC or shim `recordOwnership`)
+    /// Last authoritative (promoted claim or compatibility ownership record)
     /// `deviceBooted` publish per UDID. Used by the notification
     /// path to debounce a follow-up `noteExternalBoot` that lands
     /// after the authoritative one fired for the same boot. NOT
@@ -611,36 +630,31 @@ public actor DeviceCoordinator {
     /// `SimDisplayHandle`'s job, and is observed via the pane's
     /// `surface.changed` events once that chunk lands).
     ///
-    /// `owningSession`, when non-nil, claims provenance: the booted
-    /// sim is recorded as owned by that session. The session-cap
-    /// gate happens upstream in `DeviceMethods`, and `DeviceCoordinator`
-    /// trusts whatever UUID it's handed.
-    public func boot(udid: String, owningSession: UUID? = nil) async throws {
+    /// Attribution is separate: a pending claim promotes only after the
+    /// notifier or shared device snapshot reports `Booted`.
+    public func boot(udid: String, activatingClaimAttemptId: String? = nil) throws {
         let normalized = try requireValidUDID(udid)
+        let claimAttemptId = activatingClaimAttemptId.flatMap(UUID.init(uuidString:))
         let handle: SimDeviceHandle
         do {
             handle = try SimDeviceHandle.handle(forUDID: normalized)
         } catch {
+            failPreparedBootClaim(claimAttemptId)
             throw DeviceError.notFound(udid: normalized)
         }
         do {
             try handle.boot()
         } catch {
+            failPreparedBootClaim(claimAttemptId)
             throw DeviceError.bootFailed(
                 udid: normalized,
                 message: String(describing: error)
             )
         }
         invalidateDeviceSnapshot()
-        if let owningSession {
-            ownership[normalized] = owningSession
+        if let claimAttemptId {
+            activateBootClaim(claimAttemptId)
         }
-        // Publish device.booted to the event stream (device events reach
-        // every session). Agents watching `deviceterm events` pick up here. Goes
-        // through the debounce helper so the CoreSimulator
-        // notification path (which sees the same transition) can't
-        // double-publish.
-        await publishBoot(udid: normalized)
     }
 
     /// Shut down a device by UDID. The CoreSimulator call is
@@ -669,6 +683,7 @@ public actor DeviceCoordinator {
             )
         }
         ownership.removeValue(forKey: normalized)
+        cancelBootClaim(forUDID: normalized)
         // Publish device.shutdown. Symmetric with boot: debounced
         // against a same-UDID notification arrival.
         await publishShutdown(udid: normalized)
@@ -676,19 +691,169 @@ public actor DeviceCoordinator {
 
     // MARK: - Ownership manipulation (for shim events + tests)
 
-    /// Record that a session owns this UDID. Called by `shim.event`
-    /// handling when a `simctl boot` runs inside a tab's shell.
+    /// Reconcile one causally bounded DeviceTerm boot attempt. Registering the
+    /// claim never asserts that the simulator is already booted. Promotion is
+    /// gated on the shared CoreSimulator snapshot or its notifier.
+    public func reconcileBootClaim(
+        _ evidence: BootClaimEvidence,
+        sessionId: UUID?,
+        inspectCurrentState: Bool = true,
+        activateImmediately: Bool = true
+    ) async throws -> DeviceReconcileBootClaimResult {
+        guard let attemptId = UUID(uuidString: evidence.attemptId) else {
+            throw DeviceError.malformedUDID(udid: evidence.attemptId)
+        }
+        let normalized = try requireValidUDID(evidence.udid)
+        let now = deviceSnapshotClock()
+        expireBootClaims(now: now)
+        var effectiveSessionId = evidence.disposition == .attach ? sessionId : nil
+        var effectiveDisposition = evidence.disposition
+        if let sessionId, let closed = closedBootSessions[sessionId],
+            closed.expiresAtNanoseconds > now {
+            effectiveSessionId = nil
+            effectiveDisposition = closed.mode == .shutdown ? .shutdown : .detach
+        }
+        let submittedEvidence = BootClaimEvidence(
+            attemptId: evidence.attemptId,
+            udid: normalized,
+            source: evidence.source,
+            observedState: evidence.observedState,
+            disposition: effectiveDisposition,
+            remainingLeaseMilliseconds: evidence.remainingLeaseMilliseconds
+        )
+
+        if var existing = bootClaims[attemptId] {
+            guard existing.evidence.udid.caseInsensitiveCompare(normalized) == .orderedSame else {
+                return bootClaimResult(attemptId: attemptId, record: existing, status: .failed)
+            }
+            if existing.status == .pending {
+                existing.evidence = BootClaimEvidence(
+                    attemptId: existing.evidence.attemptId,
+                    udid: normalized,
+                    source: existing.evidence.source,
+                    observedState: strongest(
+                        existing.evidence.observedState,
+                        submittedEvidence.observedState
+                    ),
+                    disposition: submittedEvidence.disposition,
+                    remainingLeaseMilliseconds: submittedEvidence.remainingLeaseMilliseconds
+                )
+                existing.sessionId = effectiveSessionId
+                bootClaims[attemptId] = existing
+            }
+        } else {
+            let lease = min(
+                submittedEvidence.remainingLeaseMilliseconds,
+                BootClaimEvidence.maximumLeaseMilliseconds
+            )
+            guard lease > 0 else {
+                let record = BootClaimRecord(
+                    evidence: submittedEvidence,
+                    sessionId: effectiveSessionId,
+                    expiresAtNanoseconds: now,
+                    status: .expired
+                )
+                bootClaims[attemptId] = record
+                return bootClaimResult(attemptId: attemptId, record: record)
+            }
+            let duration = lease.multipliedReportingOverflow(by: 1_000_000)
+            let deadline = now.addingReportingOverflow(duration.partialValue)
+            guard !duration.overflow, !deadline.overflow else {
+                throw DeviceError.malformedUDID(udid: evidence.attemptId)
+            }
+            let record = BootClaimRecord(
+                evidence: BootClaimEvidence(
+                    attemptId: submittedEvidence.attemptId,
+                    udid: normalized,
+                    source: submittedEvidence.source,
+                    observedState: submittedEvidence.observedState,
+                    disposition: submittedEvidence.disposition,
+                    remainingLeaseMilliseconds: lease
+                ),
+                sessionId: effectiveSessionId,
+                expiresAtNanoseconds: deadline.partialValue,
+                status: .pending
+            )
+            bootClaims[attemptId] = record
+            if activateImmediately {
+                activateBootClaim(attemptId)
+            }
+        }
+
+        if inspectCurrentState, await isBooted(udid: normalized) {
+            _ = await promoteBootClaim(attemptId: attemptId)
+        }
+        if inspectCurrentState { ensureBootClaimPoller() }
+        guard let settled = bootClaims[attemptId] else {
+            return DeviceReconcileBootClaimResult(
+                attemptId: evidence.attemptId,
+                udid: normalized,
+                status: .failed,
+                sessionId: nil
+            )
+        }
+        return bootClaimResult(attemptId: attemptId, record: settled)
+    }
+
+    /// Apply the terminal's close choice before its session is removed. This
+    /// closes the window where a Booted notification could otherwise promote
+    /// an attach claim to a session whose close is already in flight.
+    public func noteSessionClosing(_ sessionId: UUID, mode: PaneCloseMode) async {
+        let now = deviceSnapshotClock()
+        expireBootClaims(now: now)
+        let deadline = now.addingReportingOverflow(
+            BootClaimEvidence.maximumLeaseMilliseconds * 1_000_000
+        )
+        closedBootSessions[sessionId] = ClosedBootSession(
+            mode: mode,
+            expiresAtNanoseconds: deadline.overflow ? UInt64.max : deadline.partialValue
+        )
+        ensureClosedBootSessionCleaner()
+        var promotedShutdowns: Set<String> = []
+        for attemptId in Array(bootClaims.keys) {
+            guard var record = bootClaims[attemptId], record.sessionId == sessionId,
+                record.status == .pending || record.status == .promoted else { continue }
+            record.sessionId = nil
+            record.evidence = BootClaimEvidence(
+                attemptId: record.evidence.attemptId,
+                udid: record.evidence.udid,
+                source: record.evidence.source,
+                observedState: record.evidence.observedState,
+                disposition: mode == .shutdown ? .shutdown : .detach,
+                remainingLeaseMilliseconds: record.evidence.remainingLeaseMilliseconds
+            )
+            bootClaims[attemptId] = record
+            guard record.status == .promoted, owns(record.evidence.udid),
+                owner(of: record.evidence.udid) == sessionId else { continue }
+            if mode == .shutdown {
+                promotedShutdowns.insert(record.evidence.udid)
+            } else {
+                ownership[record.evidence.udid] = UUID?.none
+            }
+        }
+        for udid in promotedShutdowns {
+            try? await shutdown(udid: udid)
+        }
+    }
+
+    /// Transfer an already-Booted simulator into a session without fabricating
+    /// a lifecycle transition. Used by `device.attach`.
+    public func transferOwnership(udid: String, sessionId: UUID) throws {
+        let normalized = try requireValidUDID(udid)
+        invalidateDeviceSnapshot()
+        ownership[normalized] = sessionId
+    }
+
+    /// MIGRATION: Accepts claimless shim.event boots during mixed-version
+    /// bundle replacement and for test setup. Claim-bearing events use
+    /// `reconcileBootClaim`.
     /// Idempotent: repeat calls for the same UDID overwrite the
     /// owning session (last writer wins, matches the GUI's
     /// "Already attached in tab X. Move? [y/n]" semantics).
     ///
-    /// Publishes `device.booted` here too. This is the primary
-    /// in-tab workflow path (per the "Getting a sim into your tab"
-    /// agent guide): `xcrun simctl boot` runs inside the tab, the
-    /// shim intercepts, the daemon learns about it via
-    /// `recordOwnership` rather than the daemon-side `boot(...)`
-    /// RPC. Without publishing here, `deviceterm events` would miss
-    /// every in-tab boot, the primary use case.
+    /// Publishes `device.booted` because the compatibility call represents a
+    /// completed boot. Current shims use `reconcileBootClaim` instead, which
+    /// waits for CoreSimulator to report Booted before publishing.
     public func recordOwnership(udid: String, sessionId: UUID) async throws {
         let normalized = try requireValidUDID(udid)
         invalidateDeviceSnapshot()
@@ -792,6 +957,7 @@ public actor DeviceCoordinator {
         let normalized = udid.lowercased()
         invalidateDeviceSnapshot()
         ownership.removeValue(forKey: normalized)
+        cancelBootClaim(forUDID: normalized)
         // The shim told us this UDID has shut down. Publish even if
         // our ownership map didn't have a record (the shim's view
         // of reality is the truth here). Debounced against a
@@ -826,8 +992,8 @@ public actor DeviceCoordinator {
     /// subscription in place and returns. Throws only on bridge-
     /// load failure (CoreSimulator unavailable, registration
     /// returned 0); callers that hit those should log + degrade
-    /// gracefully (no notifications, but the shim path still works
-    /// and `device.list` polling still surfaces booted sims).
+    /// gracefully (no notifications, but claim reconciliation's bounded
+    /// state polling still converges DeviceTerm-originated boots).
     ///
     /// Shape: the ObjC handler yields to an `AsyncStream`, and a
     /// long-lived consumer task loops `for await arrival in stream`,
@@ -897,7 +1063,7 @@ public actor DeviceCoordinator {
         guard event.kind == .stateChanged, !event.udid.isEmpty else { return }
         switch event.newState {
         case .booted:
-            await noteExternalBoot(udid: event.udid, arrivedAt: arrival.arrivedAt)
+            await noteObservedBoot(udid: event.udid, arrivedAt: arrival.arrivedAt)
 
         case .shutdown:
             await noteExternalShutdown(udid: event.udid, arrivedAt: arrival.arrivedAt)
@@ -916,8 +1082,8 @@ public actor DeviceCoordinator {
     }
 
     /// External-boot path: the notification said a UDID entered
-    /// `.booted` but no recent `recordOwnership` or `boot()` call
-    /// claimed it. Publish the event so subscribers see the boot;
+    /// `.booted` without a live causal claim. Publish the event so
+    /// subscribers see the boot;
     /// don't record ownership (the sim has no attributed session,
     /// matching the linkage-model's "external sims stay unattached"
     /// property, though the user can claim it via `deviceterm pane attach`).
@@ -928,6 +1094,19 @@ public actor DeviceCoordinator {
         let normalized = udid.lowercased()
         invalidateDeviceSnapshot()
         await publishBootDebounced(udid: normalized, arrivedAt: arrivedAt)
+    }
+
+    /// Reconcile a CoreSimulator Booted observation with a pending causal
+    /// claim. A claim that expired or otherwise cannot promote must not consume
+    /// the lifecycle event: it falls through as an external, unowned boot.
+    func noteObservedBoot(udid: String, arrivedAt: Date = Date()) async {
+        let normalized = udid.lowercased()
+        invalidateDeviceSnapshot()
+        if let attemptId = activeBootClaimByUDID[normalized],
+            await promoteBootClaim(attemptId: attemptId) {
+            return
+        }
+        await noteExternalBoot(udid: normalized, arrivedAt: arrivedAt)
     }
 
     /// External-shutdown path: a UDID transitioned to `.shutdown`.
@@ -951,6 +1130,7 @@ public actor DeviceCoordinator {
         let normalized = udid.lowercased()
         invalidateDeviceSnapshot()
         ownership.removeValue(forKey: normalized)
+        cancelBootClaim(forUDID: normalized)
         // Settle the debounce against `arrivedAt` before converging: both
         // the window comparison and the recorded stamp. Backend teardown is
         // unbounded and holds the serial consumer, so a queued duplicate
@@ -972,22 +1152,20 @@ public actor DeviceCoordinator {
 
     // MARK: - Publish debounce
     //
-    // Two sources converge here: the AUTHORITATIVE path (the `boot`
-    // / `shutdown` RPCs and the shim's `recordOwnership` /
-    // `releaseOwnership`) and the NOTIFICATION path (CoreSimulator's
-    // device-set notifier). Each source is debounced ONLY against
-    // the OTHER source within `debounceWindow`. Two consecutive
-    // authoritative publishes (e.g. session B reclaiming a UDID
-    // session A had owned) are distinct real events and both fire;
-    // a notification that arrives ~tens of ms after the shim for
-    // the same physical boot is suppressed.
+    // Two sources converge here: the AUTHORITATIVE path (a promoted boot
+    // claim, a compatibility `recordOwnership`, or a shutdown request/event)
+    // and the NOTIFICATION path (CoreSimulator's device-set notifier). Each
+    // source is debounced ONLY against the OTHER source within
+    // `debounceWindow`. Two consecutive authoritative publishes are distinct
+    // real events and both fire; a notification that arrives shortly after an
+    // authoritative publish for the same transition is suppressed.
     //
     // The notification path also debounces against itself, so a
     // duplicate notification (rare) doesn't double-emit.
 
-    /// Authoritative `deviceBooted` publish, used by `boot()` and
-    /// `recordOwnership()`. Skipped only when the notification path
-    /// fired for the same UDID within the debounce window.
+    /// Authoritative `deviceBooted` publish, used by promoted claims and the
+    /// compatibility `recordOwnership()`. Skipped only when the notification
+    /// path fired for the same UDID within the debounce window.
     private func publishBoot(udid: String) async {
         let now = Date()
         recentAuthoritativeBoots[udid] = now
@@ -1054,6 +1232,199 @@ public actor DeviceCoordinator {
             return false
         }
         return true
+    }
+
+    // MARK: - Boot-claim convergence
+
+    private func strongest(
+        _ lhs: BootClaimObservedState,
+        _ rhs: BootClaimObservedState
+    ) -> BootClaimObservedState {
+        func rank(_ state: BootClaimObservedState) -> Int {
+            switch state {
+            case .requested:
+                0
+
+            case .booting:
+                1
+
+            case .booted:
+                2
+            }
+        }
+        return rank(lhs) >= rank(rhs) ? lhs : rhs
+    }
+
+    private func bootClaimResult(
+        attemptId: UUID,
+        record: BootClaimRecord,
+        status: BootClaimStatus? = nil
+    ) -> DeviceReconcileBootClaimResult {
+        let resolvedStatus = status ?? record.status
+        return DeviceReconcileBootClaimResult(
+            attemptId: attemptId.uuidString.lowercased(),
+            udid: record.evidence.udid,
+            status: resolvedStatus,
+            sessionId: resolvedStatus == .promoted && record.evidence.disposition == .attach
+                ? record.sessionId?.uuidString
+                : nil
+        )
+    }
+
+    private func expireBootClaims(now: UInt64) {
+        closedBootSessions = closedBootSessions.filter {
+            $0.value.expiresAtNanoseconds > now
+        }
+        for attemptId in Array(bootClaims.keys) {
+            guard var record = bootClaims[attemptId] else { continue }
+            if record.status == .pending, now >= record.expiresAtNanoseconds {
+                record.status = .expired
+                bootClaims[attemptId] = record
+                if activeBootClaimByUDID[record.evidence.udid] == attemptId {
+                    activeBootClaimByUDID.removeValue(forKey: record.evidence.udid)
+                }
+            }
+            guard record.status != .pending else { continue }
+            let removal = record.expiresAtNanoseconds.addingReportingOverflow(
+                Self.bootClaimTerminalRetentionNanoseconds
+            )
+            if !removal.overflow, now >= removal.partialValue {
+                bootClaims.removeValue(forKey: attemptId)
+            }
+        }
+    }
+
+    private func ensureClosedBootSessionCleaner() {
+        guard closedBootSessionCleaner == nil, !closedBootSessions.isEmpty else { return }
+        closedBootSessionCleaner = Task { [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: BootClaimEvidence.maximumLeaseMilliseconds * 1_000_000
+                )
+            } catch {
+                return
+            }
+            await self?.closedBootSessionCleanerFired()
+        }
+    }
+
+    private func closedBootSessionCleanerFired() {
+        closedBootSessionCleaner = nil
+        expireBootClaims(now: deviceSnapshotClock())
+        ensureClosedBootSessionCleaner()
+    }
+
+    private func cancelBootClaim(forUDID udid: String) {
+        guard let attemptId = activeBootClaimByUDID.removeValue(forKey: udid),
+            var record = bootClaims[attemptId], record.status == .pending else { return }
+        record.status = .canceled
+        bootClaims[attemptId] = record
+    }
+
+    /// Make a causally established claim eligible for promotion. GUI claims
+    /// reach this only in the same actor turn in which CoreSimulator accepts
+    /// their boot intent; shim and restored claims arrive already established.
+    private func activateBootClaim(_ attemptId: UUID) {
+        guard let record = bootClaims[attemptId], record.status == .pending else { return }
+        let udid = record.evidence.udid
+        if let displaced = activeBootClaimByUDID[udid], displaced != attemptId,
+            var prior = bootClaims[displaced], prior.status == .pending {
+            prior.status = .superseded
+            bootClaims[displaced] = prior
+        }
+        activeBootClaimByUDID[udid] = attemptId
+        ensureBootClaimPoller()
+    }
+
+    /// A failed duplicate must not invalidate a claim whose earlier boot was
+    /// already accepted. Only an inactive candidate belongs to this failure.
+    private func failPreparedBootClaim(_ attemptId: UUID?) {
+        guard let attemptId, var record = bootClaims[attemptId],
+            record.status == .pending,
+            activeBootClaimByUDID[record.evidence.udid] != attemptId else { return }
+        record.status = .failed
+        bootClaims[attemptId] = record
+    }
+
+    /// Module-internal seam for the failed-duplicate regression test. The
+    /// production boot path calls the UUID-shaped helper in the same actor turn
+    /// as the CoreSimulator failure.
+    func failPreparedBootClaim(attemptId: String) {
+        failPreparedBootClaim(UUID(uuidString: attemptId))
+    }
+
+    private func promoteBootClaim(attemptId: UUID) async -> Bool {
+        guard var record = bootClaims[attemptId], record.status == .pending,
+            activeBootClaimByUDID[record.evidence.udid] == attemptId else { return false }
+        let now = deviceSnapshotClock()
+        guard now < record.expiresAtNanoseconds else {
+            expireBootClaims(now: now)
+            return false
+        }
+        switch record.evidence.disposition {
+        case .attach:
+            guard let sessionId = record.sessionId else {
+                record.status = .failed
+                bootClaims[attemptId] = record
+                activeBootClaimByUDID.removeValue(forKey: record.evidence.udid)
+                return false
+            }
+            ownership[record.evidence.udid] = sessionId
+
+        case .detach, .shutdown:
+            ownership[record.evidence.udid] = UUID?.none
+        }
+        record.status = .promoted
+        bootClaims[attemptId] = record
+        activeBootClaimByUDID.removeValue(forKey: record.evidence.udid)
+        await publishBoot(udid: record.evidence.udid)
+        if record.evidence.disposition == .shutdown {
+            try? await shutdown(udid: record.evidence.udid)
+        }
+        return true
+    }
+
+    private func ensureBootClaimPoller() {
+        guard bootClaimPoller == nil,
+            activeBootClaimByUDID.values.contains(where: {
+                bootClaims[$0]?.status == .pending
+            }) else { return }
+        bootClaimPoller = Task { [weak self] in
+            while !Task.isCancelled, await self?.pollBootClaims() == true {
+                do {
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                } catch {
+                    break
+                }
+            }
+            await self?.bootClaimPollerFinished()
+        }
+    }
+
+    private func pollBootClaims() async -> Bool {
+        expireBootClaims(now: deviceSnapshotClock())
+        let pending = activeBootClaimByUDID.compactMap { udid, attemptId in
+            bootClaims[attemptId]?.status == .pending ? (attemptId, udid) : nil
+        }
+        guard !pending.isEmpty else { return false }
+        let booted: Set<String>?
+        do {
+            booted = try await bootedUDIDs()
+        } catch {
+            return true
+        }
+        guard let booted else { return true }
+        for (attemptId, udid) in pending where booted.contains(udid) {
+            _ = await promoteBootClaim(attemptId: attemptId)
+        }
+        return activeBootClaimByUDID.values.contains {
+            bootClaims[$0]?.status == .pending
+        }
+    }
+
+    private func bootClaimPollerFinished() {
+        bootClaimPoller = nil
+        ensureBootClaimPoller()
     }
 
     // MARK: - Internal helpers

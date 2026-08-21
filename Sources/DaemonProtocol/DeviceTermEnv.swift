@@ -16,6 +16,8 @@ public enum DeviceTermEnv {
     public static let daemonPath = "DEVICETERM_DAEMON_PATH"
     /// Per-session `bin/` holding the xcrun/simctl/deviceterm shims.
     public static let shimDir = "DEVICETERM_SHIM_DIR"
+    /// Per-terminal GUI relay for DeviceTerm-originated simulator boot claims.
+    public static let bootClaimSock = "DEVICETERM_BOOT_CLAIM_SOCK"
     /// zsh `ZDOTDIR` pointing at the session's generated dotfiles.
     public static let zdotdir = "ZDOTDIR"
     /// Default pane target for pane-targeted CLI commands. Set by

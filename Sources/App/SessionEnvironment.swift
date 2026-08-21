@@ -4,21 +4,16 @@
 //
 // The GUI process (libghostty) spawns the terminal's shell, so the GUI
 // (not the daemon) owns the per-session scratch dir and the env
-// injected into that shell. Two properties are load-bearing:
-//
-//   1. There is no per-session UDS *server*. The daemon owns the one
-//      socket; the shim posts events to it directly. This type only
-//      mints the directory + dotfiles + symlinks.
-//   2. The session UUID and capability are *daemon-issued* (from
-//      `session.create`), not locally generated: the daemon is the
-//      session registry. `owner.pid` is the GUI pid (it is the GUI's
-//      death that strands a session dir; cold-start orphan recovery
-//      keys on it).
+// injected into that shell. It also owns the terminal-bound boot-claim relay
+// that lets the shim hand a boot attempt to the GUI without waiting for the
+// daemon. The session UUID and capability come from `session.create`; the
+// daemon remains the session registry. `owner.pid` is the GUI pid, which is
+// the liveness marker used by cold-start orphan recovery.
 //
 // The injected env must carry `DEVICETERM_DAEMON_SOCK` (the global
 // daemon socket: the daemon and shim both read this name) and
-// `DEVICETERM_SESSION_CAP` (the daemon's provenance check rejects
-// events without it).
+// `DEVICETERM_SESSION_CAP` for daemon authentication and
+// `DEVICETERM_BOOT_CLAIM_SOCK` for boot-attribution handoff.
 
 import DaemonProtocol
 import Foundation
@@ -47,6 +42,7 @@ final class SessionEnvironment {
     let binDir: String
     let zdotdir: String
     private var ownedUDIDs: Set<String> = []
+    private let bootClaimRelay: BootClaimRelay
     /// Path the orphan-recovery sweep looks for. `{sessionId,
     /// ownerPid, udids}`: `sessionId` is redundant with the dir
     /// name but makes the file self-describing; `ownerPid` is the
@@ -60,12 +56,14 @@ final class SessionEnvironment {
         sessionId: String,
         capability: String,
         daemonSocketPath: String,
-        role: SessionRole = .agent
+        role: SessionRole = .agent,
+        onBootClaim: @escaping BootClaimRelay.Handler = { _, _, _ in }
     ) {
         self.sessionId = sessionId
         self.capability = capability
         self.role = role
         self.daemonSocketPath = daemonSocketPath
+        self.bootClaimRelay = BootClaimRelay(sessionId: sessionId, handler: onBootClaim)
         let cache = (NSHomeDirectory() as NSString)
             .appendingPathComponent("Library/Caches/deviceterm/sessions")
         self.sessionDir = (cache as NSString).appendingPathComponent(sessionId)
@@ -137,13 +135,27 @@ final class SessionEnvironment {
         try setupSessionDir()
         try installShimSymlinks()
         try writeZshDotfiles()
+        try bootClaimRelay.start()
         let markerPath = (sessionDir as NSString).appendingPathComponent("owner.pid")
         try? "\(getpid())\n".write(toFile: markerPath, atomically: true, encoding: .utf8)
     }
 
     /// Remove this session's scratch dir. Called on tab/app teardown.
     func cleanup() {
+        bootClaimRelay.stop()
         try? FileManager.default.removeItem(atPath: sessionDir)
+    }
+
+    /// Stop accepting claims when the terminal pane is gone while preserving
+    /// its directory for detach/orphan recovery.
+    func stopBootClaimRelay() {
+        bootClaimRelay.stop()
+    }
+
+    /// Bind the local relay to the same kernel-derived terminal facts used by
+    /// daemon authentication. Until this succeeds, the relay answers notReady.
+    func bindBootClaimRelay(foregroundPid: pid_t, ttyName: String) {
+        bootClaimRelay.bind(foregroundPid: foregroundPid, ttyName: ttyName)
     }
 
     /// Record that this session has attached `udid` and persist the
@@ -177,6 +189,7 @@ final class SessionEnvironment {
             DeviceTermEnv.sessionRole: role.rawValue,
             DeviceTermEnv.daemonSock: daemonSocketPath,
             DeviceTermEnv.shimDir: binDir,
+            DeviceTermEnv.bootClaimSock: bootClaimRelay.socketPath,
             DeviceTermEnv.zdotdir: zdotdir,
             "PATH": "\(binDir):\(basePath)"
         ]

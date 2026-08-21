@@ -30,23 +30,21 @@ private func zshenv(_ env: SessionEnvironment) throws -> String {
 
 @Test
 func sessionCapabilityIsNeverWrittenToDisk() {
-    // The bearer capability must not appear in ANY generated dotfile. A
-    // same-uid process could read it off disk and authenticate as this
-    // session (mode 0700 on the parent dir does not isolate same-uid
-    // readers). It reaches the shell only through the inherited process
-    // environment, which a same-uid process cannot read out of another.
-    let secret = "super-secret-cap-token-Xyz123"
+    // The capability is not a secret or standalone authority, but generated
+    // dotfiles must not persist it unnecessarily. It reaches the terminal
+    // through the inherited process environment instead.
+    let capability = "cap-token-Xyz123"
     let env = SessionEnvironment(
         sessionId: "11111111-2222-3333-4444-555555555555",
-        capability: secret,
+        capability: capability,
         daemonSocketPath: "/tmp/deviceterm-test.sock",
         role: .agent
     )
     for (name, body) in env.zshDotfileContents() {
-        #expect(!body.contains(secret), "capability leaked into \(name)")
+        #expect(!body.contains(capability), "capability leaked into \(name)")
     }
     // It IS still delivered via the process-environment overlay.
-    #expect(env.shellEnvironment()[DeviceTermEnv.sessionCap] == secret)
+    #expect(env.shellEnvironment()[DeviceTermEnv.sessionCap] == capability)
 }
 
 @Test

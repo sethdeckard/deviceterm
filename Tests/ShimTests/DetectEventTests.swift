@@ -3,13 +3,13 @@
 // DetectEventTests: pin the shim's argv-detection layer across
 // every state-changing simctl invocation the shim is expected to
 // catch, plus the negative-space invocations that must NOT generate
-// a `shim.event` (otherwise we'd misattribute boots that never
+// a boot claim or shutdown event (otherwise we'd misattribute boots that never
 // happened or shutdowns we didn't cause).
 //
 // The shim's main loop relies on `detectEvent` to decide whether to
 // take a `simctl list` snapshot, run the child, take another
-// snapshot, diff for the unique state transition, and post the
-// `shim.event` over UDS. A miss here means the sim boots but
+// snapshot, diff for the unique state transition, and report it. A miss means
+// the sim boots but
 // deviceterm sees no pane attribution.
 
 import DaemonProtocol

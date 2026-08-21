@@ -3,7 +3,7 @@
 // ResolveDeviceTests: pin `resolveDevice`'s snapshot-diff
 // attribution behavior. The function takes before/after `simctl
 // list` snapshots and decides which device the user's spec is
-// pointing at. The load-bearing property: a non-transition is
+// pointing at. The required invariant is that a non-transition is
 // never resolved to a device. Without that gate an idempotent
 // invocation (`simctl bootstatus -b <udid>` against a sim that's
 // already Booted, which exits 0 without changing any state) would
@@ -41,6 +41,16 @@ func resolvesSingleBootTransition() {
     let resolved = resolveDevice(spec: phoneUDID, eventKind: .booted, before: before, after: after)
     #expect(resolved?.udid == phoneUDID)
     #expect(resolved?.name == "iPhone 17 Pro")
+    #expect(resolved?.state == "Booted")
+}
+
+@Test
+func resolvesBootingTransitionWithoutWaitingForBooted() {
+    let before = [dev(phoneUDID, "iPhone 17 Pro", state: "Shutdown")]
+    let after = [dev(phoneUDID, "iPhone 17 Pro", state: "Booting")]
+    let resolved = resolveDevice(spec: phoneUDID, eventKind: .booted, before: before, after: after)
+    #expect(resolved?.udid == phoneUDID)
+    #expect(resolved?.state == "Booting")
 }
 
 @Test
@@ -48,6 +58,22 @@ func resolvesSingleShutdownTransition() {
     let before = [dev(phoneUDID, "iPhone 17 Pro", state: "Booted")]
     let after = [dev(phoneUDID, "iPhone 17 Pro", state: "Shutdown")]
     let resolved = resolveDevice(spec: phoneUDID, eventKind: .shutdown, before: before, after: after)
+    #expect(resolved?.udid == phoneUDID)
+}
+
+@Test("shutdown resolves while a boot is still in progress", arguments: [
+    "Shutting Down",
+    "Shutdown"
+])
+func resolvesShutdownFromBooting(afterState: String) {
+    let before = [dev(phoneUDID, "iPhone 17 Pro", state: "Booting")]
+    let after = [dev(phoneUDID, "iPhone 17 Pro", state: afterState)]
+    let resolved = resolveDevice(
+        spec: phoneUDID,
+        eventKind: .shutdown,
+        before: before,
+        after: after
+    )
     #expect(resolved?.udid == phoneUDID)
 }
 
@@ -80,6 +106,19 @@ func rejectsBootEventWhenAlreadyBootedByName() {
         eventKind: .booted,
         before: snapshot,
         after: snapshot
+    )
+    #expect(resolved == nil)
+}
+
+@Test("an already-Booting device is not a new boot attempt")
+func rejectsBootEventWhenAlreadyBooting() {
+    let before = [dev(phoneUDID, "iPhone 17 Pro", state: "Booting")]
+    let after = [dev(phoneUDID, "iPhone 17 Pro", state: "Booted")]
+    let resolved = resolveDevice(
+        spec: phoneUDID,
+        eventKind: .booted,
+        before: before,
+        after: after
     )
     #expect(resolved == nil)
 }

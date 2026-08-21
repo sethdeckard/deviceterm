@@ -2,6 +2,7 @@
 
 import CoreSimulatorBridge
 @testable import Daemon
+import DaemonProtocol
 import DaemonTestSupport
 import Foundation
 import Testing
@@ -125,6 +126,77 @@ func deviceBootRejectsSessionIdWithoutCap() async throws {
         return
     }
     #expect(rpcError.code == RPCMethodError.invalidParamsCode)
+}
+
+@Test
+func deviceBootRejectsClaimWithoutSessionCredentials() async throws {
+    let coordinator = DeviceCoordinator()
+    let path = tempSocketPath(prefix: "deviceterm-dev")
+    let harness = try await startAuthenticatedHarness(
+        path: path,
+        deviceCoordinator: coordinator
+    )
+    let server = harness.server
+    let client = harness.client
+    defer { client.close(); Task { await server.stop() } }
+    let udid = UUID().uuidString
+
+    try client.send(
+        RPCEnvelope(
+            id: 1,
+            type: .request,
+            method: RPCMethod.deviceBoot.rawValue,
+            body: .params(
+                try paramsBytes(
+                    DeviceMethods.BootParams(
+                        udid: udid,
+                        claim: BootClaimEvidence(
+                            attemptId: UUID().uuidString,
+                            udid: udid,
+                            source: .gui,
+                            observedState: .requested
+                        )
+                    )
+                )
+            )
+        )
+    )
+    let response = try client.receive()
+    guard case let .error(rpcError) = response.body else {
+        Issue.record("expected .error, got \(response.body)")
+        return
+    }
+    #expect(rpcError.code == RPCMethodError.invalidParamsCode)
+}
+
+@Test
+func reconcileBootClaimRejectsSessionForDetachDisposition() async throws {
+    let coordinator = DeviceCoordinator()
+    let sessionManager = SessionManager()
+    let session = try await sessionManager.createSession(label: nil).state
+    let handler = DeviceMethods.reconcileBootClaim(
+        coordinator: coordinator,
+        sessionManager: sessionManager
+    )
+    let udid = UUID().uuidString
+    let params = DeviceReconcileBootClaimParams(
+        claim: BootClaimEvidence(
+            attemptId: UUID().uuidString,
+            udid: udid,
+            source: .gui,
+            observedState: .requested,
+            disposition: .detach
+        ),
+        sessionId: session.id.uuidString
+    )
+
+    await #expect(
+        throws: RPCMethodError.invalidParams(
+            "detach and shutdown claims must not include sessionId"
+        )
+    ) {
+        _ = try await handler(try paramsBytes(params))
+    }
 }
 
 @Test

@@ -531,7 +531,7 @@ let package = Package(
         // via `@testable import App` without a separate library.
         .testTarget(
             name: "AppTests",
-            dependencies: ["App", "DaemonProtocol"],
+            dependencies: ["App", "DaemonProtocol", "TerminalProvenance"],
             path: "Tests/AppTests",
             resources: [.process("Fixtures")],
             swiftSettings: strictWarnings

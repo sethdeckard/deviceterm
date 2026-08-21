@@ -12,10 +12,8 @@
 //   session.close({sessionId, cap, mode?})    → {ok: true}
 //   tabs.list                                  → [{sessionId, label?}]
 //
-// `session.close`'s `mode` is accepted but currently unused on the
-// daemon: the GUI fans out `device.shutdown` itself when the user
-// picks "Shut Down" so the field is reserved for a future where the
-// daemon takes that responsibility back.
+// `session.close` applies `mode` to an in-flight boot claim before removing
+// the session. Existing pane shutdown still uses the GUI's per-pane fan-out.
 
 import DaemonProtocol
 import Foundation
@@ -252,7 +250,10 @@ public enum SessionMethods {
         }
     }
 
-    public static func close(using manager: SessionManager) -> MethodRegistry.Handler {
+    public static func close(
+        using manager: SessionManager,
+        onClosing: @escaping @Sendable (UUID, PaneCloseMode) async -> Void = { _, _ in }
+    ) -> MethodRegistry.Handler {
         { paramsJSON in
             let params = try JSONDecoder().decode(CloseParams.self, from: paramsJSON)
             let (sessionId, capability) = try parseCredentials(
@@ -263,6 +264,22 @@ public enum SessionMethods {
             // connection's own: a stolen cap can't terminate a victim's tab.
             try requirePayloadMatchesConnection(sessionId)
             do {
+                _ = try await manager.validate(
+                    sessionId: sessionId,
+                    capability: capability
+                )
+                let mode: PaneCloseMode
+                if let rawMode = params.mode {
+                    guard let parsed = PaneCloseMode(rawValue: rawMode) else {
+                        throw RPCMethodError.invalidParams(
+                            "mode must be \"detach\" or \"shutdown\""
+                        )
+                    }
+                    mode = parsed
+                } else {
+                    mode = .detach
+                }
+                await onClosing(sessionId, mode)
                 try await manager.closeSession(sessionId: sessionId, capability: capability)
             } catch let error as SessionError {
                 throw mapSessionError(error)

@@ -22,9 +22,12 @@ The system splits across three processes:
 flowchart TD
     subgraph gui["DeviceTerm.app (GUI, NSApp)"]
         AD[AppDelegate] --> DC["DaemonClient (lazy spawn + connect)"]
+        AD --> BCC["BootClaimCoordinator (app-wide, memory-only)"]
         AD --> WC["WindowControllers (one per NSWindow)"]
         WC --> TS["TabStripViewController (custom strip + content swap)"]
         TS --> TC["TabContentViewController (one per tab)"]
+        TC --> BCR["BootClaimRelay (one per terminal)"]
+        BCR --> BCC
         TC --> CS[PaneLayoutViewController]
         CS --> TP["TerminalPaneViewController + GhosttyTerminalSurface (one session each)"]
         CS --> SP["SimulatorPaneViewController 0..N (MTKView)"]
@@ -41,11 +44,14 @@ flowchart TD
         PC --> CB
         SI["NSStatusItem (menu bar)"] ~~~ IM["IdleMonitor (lifetime predicate)"]
     end
-    subgraph cli["deviceterm-cli (symlinked into per-session bin/)"]
+    subgraph tools["Per-session helpers (symlinked into bin/)"]
         CLI["deviceterm tap / swipe / ax tree / panes list / attach"]
+        SHIM["deviceterm-shim (xcrun / simctl wrapper)"]
     end
     DC -->|"XPC (mach service)"| XS
     CLI -->|"UDS (same JSON RPC)"| RS
+    SHIM -->|"terminal-local UDS (boot claims)"| BCR
+    SHIM -->|"daemon UDS (fallback + other events)"| RS
 ```
 
 The CLI and shim reach the daemon over the Unix domain socket it vends
@@ -58,10 +64,15 @@ domains").
 Two binaries support this from the side:
 
 - **`deviceterm-shim`**: a wrapper for `xcrun` and `simctl` symlinked into each
-  tab's per-session `bin/` directory. Spawns the real binary as a subprocess
-  (inheriting stdio, forwarding signals), watches argv for `simctl`
-  boot/shutdown and `devicectl` install/launch patterns, and posts
-  `shim.event` notifications to the daemon when matched.
+  tab's per-session `bin/` directory. It spawns the real binary as a subprocess,
+  inheriting stdio and forwarding signals, and watches argv for `simctl`
+  boot/shutdown, `simctl bootstatus <device> -b`, and `devicectl` install/launch
+  patterns. A successful simulator transition from a non-booted state to
+  `Booting` or `Booted` produces a causal boot claim. The shim first queues it
+  through the terminal's GUI-owned relay. If the relay does not accept it within
+  five seconds, the shim sends the same attempt through authenticated
+  `shim.event`. Shutdown and physical-device attach continue through
+  `shim.event`.
 - **`deviceterm-probe`**: the compatibility probe. dlopens CoreSimulator,
   enumerates required classes/protocols/selectors, prints `OK` or a
   structured failure report, and exits non-zero if any are missing. The
@@ -198,24 +209,23 @@ still-valid credential. There are two restart shapes:
   cadence, so the mirror accepts none of the new connection's reads until
   re-assertion has run, holding the claims it already had. Re-assertion repeats
   only while the helper doesn't answer, inside a bounded window, and never
-  re-asks about a claim it declined: the helper judges a claim on current boot
-  state, and refuses one that conflicts with attribution it already holds, so a
-  claim asked again and again is one that eventually lands on whatever holds
-  that udid later. A sim still Booting when the helper evaluates the claim
-  loses it for the same reason, and a pane-backed one comes back through
-  recovery's Retry instead. Only one read feeds
+  re-asks about a claim it declined: the helper judges an ordinary restoration
+  claim on current boot state and refuses one that conflicts with attribution
+  it already holds. A simulator still `Booting` is not admitted through
+  `device.restoreOwnership`; a live pending boot claim follows the separate
+  convergence path below instead. Only one read feeds
   the mirror at a time: every tab polls on its own timer, same-connection
   dispatch is not FIFO, and `device.list` vends no revision, so neither the
   order the requests went out in nor the order the answers came back in says
   which snapshot the daemon took later. One in flight does, because the next
-  request can't be sent until the previous answer is in hand. A call that
-  records ownership (`device.attach`, or a credentialed `device.boot`) tells
-  the mirror directly instead of waiting for a poll, which covers a sim owned
-  and detached inside one interval: no read ever saw it and the pane that
-  would have carried it is gone. A sim CoreSimulator
-  still reports as non-Booted when restoration is evaluated is refused rather
-  than re-claimed; the daemon knows only current boot state, so one that has
-  since been re-booted can be claimed.
+  request can't be sent until the previous answer is in hand. A successful
+  `device.attach` or promoted boot claim tells the mirror directly instead of
+  waiting for a poll, which covers a sim owned and detached inside one interval:
+  no read ever saw it and the pane that would have carried it is gone. A sim
+  CoreSimulator still reports as non-Booted when ordinary restoration is
+  evaluated is refused rather than re-claimed; the daemon knows only current
+  boot state, so one that has since been re-booted can be claimed only through
+  a new causal attempt or explicit human action.
   A GUI that just launched has an empty mirror and nothing to re-assert, which
   is the cold-start orphan path below. Owned sims are never auto-shut-down on
   a manifest's say-so.
@@ -246,6 +256,65 @@ being booted) covers a different case: a sim that shut down under a live daemon
 and later re-booted. Physical-device panes have no equivalent watch, so outside
 restart recovery they mount only through explicit action or the shim's
 contextual auto-attach.
+
+### Boot attribution convergence
+
+A DeviceTerm-originated simulator boot becomes ownership only when two facts
+converge: causal evidence that DeviceTerm initiated the transition, and
+CoreSimulator reporting the same UDID as `Booted`. Command success alone does
+not establish ownership.
+
+Every attempt carries `BootClaimEvidence`: a stable attempt UUID, simulator
+UDID, source (`shim` or `gui`), strongest observed state, close disposition,
+and at most five minutes of remaining lease. Remaining time crosses processes
+rather than a timestamp because their monotonic clocks are not comparable.
+
+The shim snapshots `simctl list` before and after a successful boot command. A
+transition from a state other than `Booting` or `Booted` to either state is
+evidence for the device named by the command. An already-Booting or
+already-Booted no-op is not evidence, and a concurrent transition for a device
+that does not match the command is not attributed.
+
+Each terminal owns a random, mode-0600 Unix socket under `/tmp`, inherited by
+its shell as `DEVICETERM_BOOT_CLAIM_SOCK`. The path grants no authority. The
+GUI's `BootClaimRelay` checks the caller's effective UID and terminal or
+ancestor provenance with the same `ProvenanceMatcher` used by daemon UDS
+authentication. It runs on a serial `DispatchQueue`, accepts frames no larger
+than 16 KiB, stamps a fixed local monotonic deadline from the remaining lease,
+and writes its acknowledgement before handing an accepted claim to the main
+actor. Main-actor delay therefore cannot restart the lease. The shim gives this
+path at most five seconds, then falls back to authenticated `shim.event` with
+the same attempt UUID.
+
+One app-wide, memory-only `BootClaimCoordinator` retains accepted shim claims
+and GUI reboot claims. It retries `device.reconcileBootClaim` with backoff from
+100 ms to 2 s, keeps claims across daemon connection generations, and pauses
+them until `session.restoreBatch` has restored the sessions on a replacement
+daemon. A timeout is an unknown result rather than failure. The coordinator
+removes a claim only after promotion, a definitive terminal result, or its
+fixed lease.
+
+The daemon keys reconciliation by attempt UUID. Repeated requests reconcile the
+same record and return its current status without duplicating ownership or
+events. Once its boot is accepted, a newer attempt for the same UDID supersedes
+an older pending one. Notifier observations and the shared cached CoreSimulator
+snapshot can both promote a claim; polling is bounded by the claim lease.
+Promotion creates one ownership record and publishes one `device.booted` event
+within the live daemon generation. Shutdown cancels a pending claim. Settled
+records stay through the lease plus a short retry grace, then are pruned.
+
+Closing the originating session changes a pending attach claim to the user's
+close choice before the session disappears. The same hook handles a claim that
+promoted just before the close, before the GUI could observe it. Both GUI and
+daemon retain a bounded close tombstone, covering a claim whose reconciliation
+had already passed its session check but registers after the close hook. Detach
+leaves unlinked ownership; shutdown stops the simulator.
+
+A CoreSimulator boot with no live causal claim remains external and unowned,
+including boots from Xcode, Simulator.app, an unshimmed shell, and an
+already-Booted shim no-op. If both GUI and daemon exit, pending claims are lost
+by design. The on-disk ownership manifest remains an untrusted hint for the
+existing human-confirmed orphan path, never automatic authority.
 
 ### Crash recovery
 
@@ -464,9 +533,12 @@ CoreSimulator for as long as the device takes, so they get 120 s.
 handler, so the call may still complete. For an ordinary request the transport
 is cancelled and the late reply discarded; the mutation's outcome is then
 unknown, but none of those calls return a one-time identity, so nothing is lost
-that the GUI would need to name what it may have changed. The calls that do
-return one are bounded by their caller through `Deadline.wait`, which leaves
-the call running and reconciles whatever it produced. Both reconciliations are
+that the GUI would need to name what it may have changed. `device.boot` is the
+lifecycle exception: the GUI retains the attempt UUID before sending and
+reconciles that same claim after a timeout or daemon replacement, so an unknown
+reply cannot lose attribution. The calls that return a daemon-minted identity
+are bounded by their caller through `Deadline.wait`, which leaves the call
+running and reconciles whatever it produced. Both identity reconciliations are
 best-effort: `session.create` attempts to close a session no tab ever received,
 and `Router.runAttach` attempts to detach a pane no window is showing, skipping
 it when another mounted or attaching pane claims that target. The detach then
@@ -683,9 +755,10 @@ dispatcher then authorizes session-scoped methods from the connection's
 auth state rather than per-call creds. A few legacy handlers
 (`session.close`, `panes.list`, `pane.create`, `device.attach`,
 `shim.event`) still carry `(sessionId, cap)` in their params and
-re-validate it, and `device.boot` optionally carries the pair for
-ownership attribution, validated the same way when present. The dispatcher
-intercepts this method on both
+re-validate it. `device.boot` carries the pair only with a GUI-originated
+causal claim, and validates it the same way. The later
+`device.reconcileBootClaim` retry is validated-GUI-only and carries no
+capability. The dispatcher intercepts this method on both
 transports; the registry holds a deliberately unreachable stub so the
 drift guards and `daemon.capabilities` still see it.
 
@@ -746,9 +819,13 @@ session is refused.
 - Result: `{ok}`
 - Scope: session
 
-Tab close converges here. The daemon currently ignores `mode` (`"detach"`
-or `"shutdown"`); the GUI fans out `device.shutdown` itself when the user
-picks "Shut Down".
+Tab close converges here. The daemon uses `mode` (`"detach"` or `"shutdown"`)
+for live boot claims, but not for existing panes, whose shutdown remains the
+GUI's per-pane fan-out. Before removing the session, the daemon applies the mode
+to any pending claim from that session and to one that promoted just before the
+close. Detach leaves the boot owned but unlinked; shutdown stops it. This closes
+the window where a Booted notification or delayed reconciliation could attach a
+simulator to a session whose close is already in flight.
 
 #### `session.restoreBatch`
 
@@ -1029,16 +1106,41 @@ array, not a wrapper object.
 
 #### `device.boot`
 
-- Params: `{udid, sessionId?, cap?}`
+- Params: `{udid, sessionId?, cap?, claim?}`
 - Result: `{ok}`
 - Scope: session
 
-Returns when CoreSimulator accepts the boot intent. When `sessionId` and
-`cap` are both provided, the boot is recorded as owned by that session,
-feeding `device.list({scope: "owned"})` and the menu-bar count. Omitting
-both skips ownership attribution; the connection must still be an
-authenticated session either way, so there is no unauthenticated boot
-path. Providing one without the other is `invalidParams`.
+Returns when CoreSimulator accepts the boot intent, not when the simulator is
+Booted and not when ownership is committed. A session-attributed boot carries
+all three optional fields: matching `sessionId` and `cap`, plus a
+GUI-originated `claim` whose source is `gui`, observed state is `requested`,
+disposition is `attach`, and UDID matches the request. The daemon registers the
+attempt before calling CoreSimulator, then promotes it through the convergence
+path above.
+
+Omitting all three starts an authenticated but unattributed boot. Providing
+only one credential, credentials without a claim, or a claim without
+credentials is `invalidParams`. The connection must be an authenticated
+session either way, so there is no unauthenticated boot path.
+
+#### `device.reconcileBootClaim`
+
+- Params: `{claim, sessionId?}`
+- Result: `{attemptId, udid, status, sessionId?}`
+- Scope: validated GUI
+
+Retries or restores one in-memory boot claim. `status` is `pending`,
+`promoted`, `canceled`, `expired`, `failed`, or `superseded`. An `attach`
+claim requires a live `sessionId`; `detach` and `shutdown` carry none. The
+validated GUI peer is the authority, so no capability rides on this request
+and UDS cannot reach it.
+
+The attempt UUID is the idempotency key. A repeat returns the record's current
+status and never creates another ownership record or lifecycle event. The
+first accepted lease is fixed; retries may report less remaining time but
+cannot extend it. A different attempt for the same UDID supersedes the active
+pending one. `promoted` includes the owning session only when the disposition
+was `attach`.
 
 #### `device.shutdown`
 
@@ -1060,6 +1162,9 @@ Transfers ownership of an already-booted udid to `(sessionId, cap)` and
 creates a sim pane in one shot. `family`, the coarse device class, is the
 uniform source the GUI sizes from, since every attach path returns it;
 `capabilities` and `target` are as in `pane.create`.
+
+This is an ownership transfer, not a boot transition, so it publishes no
+`device.booted` event.
 
 This sim attach keeps its legacy `{udid, sessionId, cap}` param shape,
 the known exception; the newer `physicalDevice.attach` uses
@@ -1845,7 +1950,7 @@ side-band exists. Transport-intercepted on XPC; a no-op over UDS.
 #### `shim.event`
 
 - Params:
-  `{event, sessionId, cap, udid?, deviceName?, runtime?, invokedAs?, argv?, deviceIdentifier?}`
+  `{event, sessionId, cap, udid?, deviceName?, runtime?, invokedAs?, argv?, deviceIdentifier?, claim?}`
 - Result: `{ok}`
 - Scope: session
 
@@ -1860,9 +1965,18 @@ mismatch, a wrong terminal, or a foreign payload session are all hard
 rejects. The method doesn't appear in unauthenticated callers'
 `daemon.capabilities` response.
 
-`booted` and `shutdown` carry the sim `udid` and mutate ownership;
-`invokedAs` and `argv` describe the intercepted command. The shim treats
-the reply as best-effort and never blocks the intercepted command on it.
+`booted` is the fallback for a boot claim the terminal-local relay could not
+accept. It carries the sim `udid` and the same `claim` attempt UUID the relay
+was offered. The claim's source must be `shim`, its observed state must be
+`booting` or `booted`, its disposition must be `attach`, and its UDID must
+match the event. It enters the same pending reconciliation as a relayed claim;
+the event acknowledgement does not assert ownership. A missing claim remains
+accepted for mixed-version bundle replacement.
+
+`shutdown` carries the sim `udid`, drops ownership, and cancels a pending claim
+for that device. `invokedAs` and `argv` describe the intercepted command. The
+shim's relay attempt plus fallback are bounded and never change the intercepted
+command's result.
 
 `deviceAttach` is the physical-device contextual auto-attach: the shim
 saw `xcrun devicectl device install|process launch --device <id>`
@@ -2619,8 +2733,8 @@ flowchart TD
 ```
 
 The command's env carries `DEVICETERM_SESSION`, `DEVICETERM_SESSION_CAP`,
-`DEVICETERM_DAEMON_SOCK`, and `DEVICETERM_SHIM_DIR`, plus the `ZDOTDIR` and
-`PATH` overrides.
+`DEVICETERM_DAEMON_SOCK`, `DEVICETERM_SHIM_DIR`, and the terminal-local
+`DEVICETERM_BOOT_CLAIM_SOCK`, plus the `ZDOTDIR` and `PATH` overrides.
 
 The daemon is **not** in the PTY path. libghostty owns the master FD; the
 GUI consumes bytes through `GhosttyTerminalSurface` directly. The daemon
@@ -2772,7 +2886,8 @@ least-recently-freed ring.
 libghostty `posix_spawn`s the shell from inside the GUI process. The GUI
 hands `GhosttyTerminalSurface` a `TerminalCommand` whose env carries the
 daemon-minted env (`DEVICETERM_SESSION`, `DEVICETERM_SESSION_CAP`,
-`DEVICETERM_DAEMON_SOCK`, `DEVICETERM_SHIM_DIR`, `ZDOTDIR`, and the rest)
+`DEVICETERM_DAEMON_SOCK`, `DEVICETERM_SHIM_DIR`,
+`DEVICETERM_BOOT_CLAIM_SOCK`, `ZDOTDIR`, and the rest)
 so the shell and anything it spawns can talk
 back to the daemon. The daemon never sees PTY *bytes*. It does see two
 kinds of process identity, both kernel-verified rather than PTY-derived:
@@ -2804,9 +2919,11 @@ round-trip in practice.
 ```
 
 Mode `0700` on the directory. It holds the shim symlinks, the generated
-ZDOTDIR, and the ownership manifest, not a socket: the daemon's one UDS
-listener lives under `~/Library/Application Support/deviceterm/`, where
-macOS gates UDS access by directory permissions, not socket file mode.
+ZDOTDIR, and the ownership manifest, not either socket. The daemon's UDS
+listener lives under `~/Library/Application Support/deviceterm/`, where macOS
+gates access by directory permissions. The GUI instead creates each
+terminal's random boot-claim socket under `/tmp`, sets its file mode to `0600`,
+and removes it when that terminal environment tears down.
 
 ## Provenance & trust model
 
@@ -2842,6 +2959,15 @@ PLUS the caller's kernel identity matching one provenance arm
   runs each command in a fresh POSIX session with no controlling tty (Claude
   Code's shell tool does) matches nothing on its own facts, while its parent
   chain still leads back into the tab.
+
+The terminal-local boot-claim relay uses the bound-terminal and anchored-
+ancestry arms without a capability. It is already bound to one session by the
+GUI object that created it, so the message carries neither `sessionId` nor
+`cap`; the random socket path is routing, not authority. The relay obtains the
+caller's kernel peer token from the accepted socket, requires the same effective
+UID, and runs `ProvenanceMatcher` against that terminal's locally derived
+anchor. Until the terminal binds, it answers `notReady`; a non-matching caller
+is rejected.
 
 `session.authenticate` installs the connection's session principal only after
 an arm matches, and the check is **re-run on every scoped request**, so closing

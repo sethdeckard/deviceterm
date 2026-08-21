@@ -6,7 +6,9 @@
 //
 //   device.list({scope: "owned"|"all"})
 //        → [{udid, name, state, ownedBySession?, family, deviceType?}]
-//   device.boot({udid, sessionId?, cap?})  → {ok: true}
+//   device.boot({udid, sessionId?, cap?, claim?})  → {ok: true}
+//   device.reconcileBootClaim({claim, sessionId?})
+//        → {attemptId, udid, status, sessionId?}
 //   device.shutdown({udid})                → {ok: true}
 //   device.restoreOwnership({devices: [{udid, sessionId?}]})
 //        → {restoredCount, udids}
@@ -19,25 +21,20 @@
 // keeps reporting the orphan's dead session as owner and a later
 // `detach` close strands the daemon's record.
 //
-// `device.boot` has optional session attribution: when the caller
-// passes `sessionId` + `cap`, the daemon validates the pair through
-// `SessionManager` and records the booted sim as owned by that
-// session (so it's visible in `device.list({scope:"owned"})` and in
-// the status-item badge count). When the caller omits both, the
-// boot runs unattributed. Either way the method is `.session`-scoped:
-// the connection must already be authenticated, so omitting the pair
-// skips ownership bookkeeping without opening an unauthenticated
-// boot path. Providing exactly one of the two fields is rejected as
-// `invalidParams`. `device.shutdown` doesn't carry credentials at
-// all: UDS access is user-scoped, the user can already run
-// `xcrun simctl shutdown` directly, and disowning on shutdown is
-// just bookkeeping.
+// A session-attributed `device.boot` requires one stable boot claim. The RPC
+// only records the attempt and asks CoreSimulator to boot; ownership and the
+// `device.booted` event wait until a notifier or shared device snapshot reports
+// Booted. The validated GUI retries uncertain attempts through
+// `device.reconcileBootClaim`. Omitting both session credentials and a claim
+// keeps the existing authenticated, unattributed boot path.
 
 import CoreSimulatorBridge
 import DaemonProtocol
 import Foundation
 
 public enum DeviceMethods {
+    public typealias BootParams = DeviceBootParams
+
     // MARK: - Wire shapes
 
     public struct ListParams: Codable, Sendable {
@@ -68,33 +65,6 @@ public enum DeviceMethods {
         /// only if the bridge couldn't read the property; the GUI
         /// falls back to name-only in that case.
         public let deviceType: String?
-    }
-
-    public struct BootParams: Codable, Sendable {
-        public let udid: String
-        /// Optional session attribution. When the caller knows which
-        /// tab the boot is happening for (e.g. the GUI's pane-
-        /// shutdown Reboot button), passing `sessionId` + `cap` lets
-        /// the daemon record the booted sim as owned by that session,
-        /// so `device.list({scope: "owned"})` and the status-item
-        /// badge count include it.
-        ///
-        /// Omitting both skips the ownership bookkeeping; the sim
-        /// stays unattributed until `device.attach` claims it or a
-        /// later in-tab boot transitions it back to Booted (the shim
-        /// posts only real transitions, so rerunning `simctl boot`
-        /// against an already-Booted sim attributes nothing). The
-        /// method itself is `.session`-scoped, so even a
-        /// credential-less boot arrives on an authenticated
-        /// connection.
-        public let sessionId: String?
-        public let cap: String?
-
-        public init(udid: String, sessionId: String? = nil, cap: String? = nil) {
-            self.udid = udid
-            self.sessionId = sessionId
-            self.cap = cap
-        }
     }
 
     public struct ShutdownParams: Codable, Sendable {
@@ -160,7 +130,7 @@ public enum DeviceMethods {
         sessionManager: SessionManager
     ) -> MethodRegistry.Handler {
         { paramsJSON in
-            let params = try JSONDecoder().decode(BootParams.self, from: paramsJSON)
+            let params = try JSONDecoder().decode(DeviceBootParams.self, from: paramsJSON)
             let owningSession: UUID?
             if let sessionIdString = params.sessionId {
                 guard let capString = params.cap else {
@@ -192,12 +162,91 @@ public enum DeviceMethods {
                 }
                 owningSession = nil
             }
+            if let claim = params.claim {
+                guard owningSession != nil else {
+                    throw RPCMethodError.invalidParams(
+                        "sessionId and cap are required when claim is provided"
+                    )
+                }
+                guard claim.source == .gui, claim.observedState == .requested,
+                    claim.disposition == .attach,
+                    claim.udid.caseInsensitiveCompare(params.udid) == .orderedSame else {
+                    throw RPCMethodError.invalidParams("claim does not match device.boot")
+                }
+                do {
+                    _ = try await coordinator.reconcileBootClaim(
+                        claim,
+                        sessionId: owningSession,
+                        inspectCurrentState: false,
+                        activateImmediately: false
+                    )
+                } catch let error as DeviceError {
+                    throw mapDeviceError(error)
+                }
+            } else if owningSession != nil {
+                throw RPCMethodError.invalidParams(
+                    "claim is required for a session-attributed boot"
+                )
+            }
             do {
-                try await coordinator.boot(udid: params.udid, owningSession: owningSession)
+                try await coordinator.boot(
+                    udid: params.udid,
+                    activatingClaimAttemptId: params.claim?.attemptId
+                )
             } catch let error as DeviceError {
                 throw mapDeviceError(error)
             }
             return try JSONEncoder().encode(RPCAck(success: true))
+        }
+    }
+
+    public static func reconcileBootClaim(
+        coordinator: DeviceCoordinator,
+        sessionManager: SessionManager
+    ) -> MethodRegistry.Handler {
+        { paramsJSON in
+            let params: DeviceReconcileBootClaimParams
+            do {
+                params = try JSONDecoder().decode(
+                    DeviceReconcileBootClaimParams.self,
+                    from: paramsJSON
+                )
+            } catch {
+                throw RPCMethodError.invalidParams("malformed device.reconcileBootClaim params")
+            }
+            guard UUID(uuidString: params.claim.attemptId) != nil,
+                UUID(uuidString: params.claim.udid) != nil else {
+                throw RPCMethodError.invalidParams("attemptId and udid must be UUID strings")
+            }
+            var sessionId: UUID?
+            if let raw = params.sessionId {
+                guard let parsed = UUID(uuidString: raw), await sessionManager.isAlive(parsed) else {
+                    throw RPCMethodError.unauthorized("session is not live")
+                }
+                sessionId = parsed
+            }
+            switch params.claim.disposition {
+            case .attach:
+                guard sessionId != nil else {
+                    throw RPCMethodError.invalidParams("attach claims require a live sessionId")
+                }
+
+            case .detach, .shutdown:
+                guard sessionId == nil else {
+                    throw RPCMethodError.invalidParams(
+                        "detach and shutdown claims must not include sessionId"
+                    )
+                }
+            }
+            do {
+                let result = try await coordinator.reconcileBootClaim(
+                    params.claim,
+                    sessionId: sessionId
+                )
+                return try JSONEncoder().encode(result)
+            } catch let error as DeviceError {
+                throw mapDeviceError(error)
+            }
         }
     }
 
@@ -260,7 +309,7 @@ public enum DeviceMethods {
                 throw PaneMethods.mapPaneError(error)
             }
             do {
-                try await coordinator.recordOwnership(
+                try await coordinator.transferOwnership(
                     udid: params.udid,
                     sessionId: sessionId
                 )

@@ -226,6 +226,7 @@ struct ResolvedDevice: Sendable {
     let udid: String
     let name: String
     let runtime: String
+    let state: String
 }
 
 /// Resolve the affected device by diffing two `simctl list`
@@ -240,8 +241,8 @@ struct ResolvedDevice: Sendable {
 /// this, an idempotent invocation (`simctl bootstatus -b <udid>`
 /// against an already-Booted sim, which exits 0 without changing
 /// any state) would have its spec resolved by name/UDID and the
-/// shim would post a fabricated `.booted` event. The daemon would
-/// then bind ownership of an externally-booted sim to the calling
+/// shim would post a fabricated boot claim. The daemon would then bind
+/// ownership of an externally-booted sim to the calling
 /// session, breaking the linkage model's "external sims stay
 /// unattached until `deviceterm pane attach`" property. `simctl boot
 /// <udid>` against an already-Booted device fails non-zero so the
@@ -260,10 +261,14 @@ func resolveDevice(
         guard let prev = beforeByUDID[dev.udid] else { return false }
         switch eventKind {
         case .booted:
-            return prev.state != "Booted" && dev.state == "Booted"
+            let wasBootingOrBooted = prev.state == "Booting" || prev.state == "Booted"
+            let isBootingOrBooted = dev.state == "Booting" || dev.state == "Booted"
+            return !wasBootingOrBooted && isBootingOrBooted
 
         case .shutdown:
-            return prev.state == "Booted" && dev.state != "Booted"
+            let wasBootingOrBooted = prev.state == "Booting" || prev.state == "Booted"
+            let isBootingOrBooted = dev.state == "Booting" || dev.state == "Booted"
+            return wasBootingOrBooted && !isBootingOrBooted
 
         case .deviceAttach:
             // Physical-device attach is not a sim-snapshot transition; it
@@ -292,7 +297,12 @@ func resolveDevice(
     }
     if matched.count == 1 {
         let dev = matched[0]
-        return ResolvedDevice(udid: dev.udid, name: dev.name, runtime: dev.runtime)
+        return ResolvedDevice(
+            udid: dev.udid,
+            name: dev.name,
+            runtime: dev.runtime,
+            state: dev.state
+        )
     }
     return nil
 }

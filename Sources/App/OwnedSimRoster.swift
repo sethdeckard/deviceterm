@@ -149,20 +149,16 @@ final class OwnedSimRoster {
         // ownership, so a missing `ownedBySession` says nobody is attributed
         // rather than that nobody owns it.
         //
-        // State is deliberately not filtered. `device.boot` returns once the
-        // boot is accepted, not once it lands, so a poll moments later can
-        // report `Booting` and a Booted-only filter would erase the claim the
-        // boot just recorded. Whether a sim is still up is a live question the
-        // helper answers at restore time; the mirror only has to remember that
-        // it was ours.
+        // State is deliberately not filtered. `.owned` already carries the
+        // daemon's attribution decision, and the helper checks current Booted
+        // state again before restoring it after a replacement.
         for entry in entries {
             claims[entry.udid.lowercased()] = entry.ownedBySession
         }
     }
 
-    /// A call the GUI just made succeed that recorded ownership daemon-side:
-    /// `device.attach`, or a `device.boot` carrying session credentials. The
-    /// mirror learns it without waiting for a poll.
+    /// A daemon answer that established ownership: `device.attach` or a
+    /// promoted boot claim. The mirror learns it without waiting for a poll.
     ///
     /// Without this the mirror's only input is a poll up to two seconds away,
     /// and a sim owned and then detached inside one interval leaves recovery
@@ -182,7 +178,7 @@ final class OwnedSimRoster {
     /// Any read already in flight may carry a snapshot older than this, since
     /// dispatch says nothing about when the helper took it, so its result is
     /// refused rather than risked against a completed action.
-    func noteOwned(udid: String, sessionId: String, generation: Int) {
+    func noteOwned(udid: String, sessionId: String?, generation: Int) {
         claims[udid.lowercased()] = sessionId
         if trustedGeneration == nil { trustedGeneration = generation }
         highestAcceptedRead = nextRead

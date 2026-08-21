@@ -243,6 +243,12 @@ final class Router {
     /// back: nothing else the GUI can act on automatically holds it. See
     /// `OwnedSimRoster`.
     private let ownedSims = OwnedSimRoster()
+    private lazy var bootClaims = BootClaimCoordinator(
+        daemon: daemon,
+        didPromote: { [weak self] udid, sessionId, generation in
+            self?.noteSimOwned(udid: udid, sessionId: sessionId, generation: generation)
+        }
+    )
     /// How long an attach may run before its placeholder flips to failed with
     /// Retry. Generous because the work behind it genuinely is: acquiring a
     /// simulator's display and HID, or bringing up a device tunnel. The call
@@ -328,6 +334,7 @@ final class Router {
         privacyReconcileTasks.removeAll()
         ownershipRestoreTask?.cancel()
         ownershipRestoreTask = nil
+        bootClaims.shutdown()
         continuation?.finish()
         await drainTask?.value
     }
@@ -705,7 +712,7 @@ final class Router {
     /// its answer. Sampling the current one here instead would name a
     /// replacement installed in between, and the mirror would go on to believe
     /// that helper's empty roster and drop the claim it just made.
-    func noteSimOwned(udid: String, sessionId: String, generation: Int) {
+    func noteSimOwned(udid: String, sessionId: String?, generation: Int) {
         ownedSims.noteOwned(udid: udid, sessionId: sessionId, generation: generation)
     }
 
@@ -715,6 +722,31 @@ final class Router {
     /// daemon that answered the last one.
     func noteConnectionReplaced(generation: Int) {
         ownedSims.connectionReplaced(generation: generation)
+        bootClaims.connectionReplaced()
+    }
+
+    func acceptBootClaim(
+        sessionId: String,
+        claim: BootClaimEvidence,
+        deadlineNanoseconds: UInt64
+    ) {
+        bootClaims.accept(
+            sessionId: sessionId,
+            claim: claim,
+            deadlineNanoseconds: deadlineNanoseconds
+        )
+    }
+
+    func beginGUIBootClaim(udid: String, sessionId: String) -> BootClaimEvidence {
+        bootClaims.beginGUIBoot(udid: udid, sessionId: sessionId)
+    }
+
+    func finishGUIBootRequest(attemptId: String, outcome: BootClaimRequestOutcome) {
+        bootClaims.bootRequestFinished(attemptId: attemptId, outcome: outcome)
+    }
+
+    func resumeBootClaimsAfterSessionRestore() {
+        bootClaims.resumeAfterSessionRestore()
     }
 
     /// Where each of a tab's sims belongs in the typed array once recovery
@@ -1091,6 +1123,7 @@ final class Router {
         // tab. The Intent layer translates this into a callable error
         // when invoked from the CLI.
         guard tab.terminals.count > 1 else { return }
+        bootClaims.sessionClosed(terminal.sessionId, mode: mode)
         try? await daemon.closeSession(
             sessionId: terminal.sessionId,
             capability: terminal.capability,
@@ -2047,12 +2080,16 @@ final class Router {
     }
 
     /// Daemon-side teardown for a tab being closed: close each sim pane,
-    /// fan out device.shutdown across owned booted sims on `.shutdown`
-    /// (session.close itself ignores `mode`), then close every
-    /// terminal pane's session. The owned-booted fan-out checks each
+    /// fan out device.shutdown across owned booted sims on `.shutdown`, then
+    /// close every terminal pane's session. `session.close` also preserves the
+    /// mode for a boot claim still converging, but existing panes remain this
+    /// GUI fan-out's responsibility. The owned-booted fan-out checks each
     /// terminal session for ownership because sims may be linked to
     /// non-primary terminals.
     private func closeTabRecords(_ tab: TabState, mode: PaneCloseMode) async {
+        for terminal in tab.terminals {
+            bootClaims.sessionClosed(terminal.sessionId, mode: mode)
+        }
         // Closing tombstone: this method cancels privacy work but then
         // `await`s several daemon teardown RPCs while the tab is STILL in the
         // workspace (removal happens synchronously at the call site after we

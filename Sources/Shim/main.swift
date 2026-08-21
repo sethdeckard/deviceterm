@@ -4,16 +4,14 @@
 //
 // Runs in every deviceterm tab's shell as the first entry on PATH so
 // `xcrun` and `simctl` invocations come through us instead of the
-// real binaries. The shim itself is transparent: it `exec`s the
+// real binaries. The shim itself is transparent: it spawns the
 // real command with inherited stdio, mirrors the child's exit
 // status, and forwards signals. The interesting part is the side
-// effect: when the child succeeds and the invocation was one the
-// shim recognizes, it posts a provenance-tagged `shim.event` to the
-// daemon so the device gets attributed to the originating tab. Two
-// invocation shapes qualify, and they are disjoint: `simctl
-// boot|shutdown <spec>` (a sim state transition) and `devicectl
-// device install|process launch --device <spec>` (a physical-device
-// deploy or run).
+// effect: successful simulator boot transitions send a causal claim
+// through the GUI relay with daemon fallback; shutdown and physical-
+// device triggers send authenticated daemon events. Recognized command
+// families are `simctl` boot, shutdown, and bootstatus-with-`-b`, plus
+// `devicectl device install|process launch --device <spec>`.
 //
 // Behavior:
 // 1. Inspect argv[0] basename to decide which real binary to launch
@@ -30,23 +28,20 @@
 //    stdin/stdout/stderr fd's directly (no pipes) so TTY,
 //    colours, and exit-status semantics stay intact.
 // 5. Forward common signals to the child while it runs.
-// 6. Wait for the child. If it exited 0, post the `shim.event`
-//    the detected shape calls for: a sim transition snapshots
-//    again and diffs to identify the device that actually flipped;
-//    a device attach sends the spec as typed. Best-effort; the
-//    shim is exiting either way.
+// 6. Wait for the child. If it exited 0, report the detected shape: a sim
+//    transition snapshots again and diffs to identify the device that
+//    actually flipped; a device attach sends the spec as typed. Best-effort;
+//    the shim is exiting either way.
 // 7. Exit mirroring the child's termination (same exit code, or
 //    re-raise the same signal).
 //
-// Provenance: the daemon validates the shim's `(DEVICETERM_SESSION,
-// DEVICETERM_SESSION_CAP)` pair against its live session before
-// mutating ownership. The cap is a session-tied secret injected by
-// the daemon into the tab shell's env at PTY spawn (see AGENTS.md
-// "Trust boundary"); a stale shell can't forge events for sibling
-// tabs because each session has its own cap.
+// Provenance: the GUI relay matches the caller's kernel identity to the
+// terminal anchor. The fallback daemon path validates the session capability
+// plus the same terminal provenance. The capability alone grants no authority.
 
 import DaemonProtocol
 import Darwin
+import Dispatch
 import Foundation
 
 // MARK: - Env helpers
@@ -169,14 +164,144 @@ func sendShimEvent(
     originalArgv: [String],
     invokedAs: String
 ) {
-    postShimEvent([
+    var fields: [String: Any] = [
         "event": event.kind.rawValue,
         "udid": resolved.udid,
         "deviceName": resolved.name,
         "runtime": resolved.runtime,
         "invokedAs": invokedAs,
         "argv": originalArgv
-    ])
+    ]
+    if event.kind == .booted {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let leaseDuration = BootClaimEvidence.maximumLeaseMilliseconds * 1_000_000
+        let leaseDeadline = now.addingReportingOverflow(leaseDuration)
+        guard !leaseDeadline.overflow else { return }
+        let claim = BootClaimEvidence(
+            attemptId: UUID().uuidString.lowercased(),
+            udid: resolved.udid,
+            source: .shim,
+            observedState: resolved.state == "Booted" ? .booted : .booting
+        )
+        if sendBootClaimToRelay(claim, leaseDeadlineNanoseconds: leaseDeadline.partialValue) {
+            return
+        }
+        guard let fallbackClaim = claimWithRemainingLease(
+            claim,
+            deadlineNanoseconds: leaseDeadline.partialValue
+        ) else { return }
+        if let data = try? JSONEncoder().encode(fallbackClaim),
+            let object = try? JSONSerialization.jsonObject(with: data) {
+            fields["claim"] = object
+        }
+    }
+    postShimEvent(fields)
+}
+
+/// Queue a boot claim in the terminal's GUI-owned relay. The relay acknowledges
+/// on its socket queue, then dispatches the accepted claim to the main actor, so
+/// the shim waits on neither the daemon nor the main actor. A missing, busy, or
+/// unbound relay falls back to authenticated `shim.event` with the same attempt
+/// id.
+func sendBootClaimToRelay(
+    _ claim: BootClaimEvidence,
+    leaseDeadlineNanoseconds: UInt64
+) -> Bool {
+    guard let path = envValue(DeviceTermEnv.bootClaimSock), !path.isEmpty,
+        let currentClaim = claimWithRemainingLease(
+            claim,
+            deadlineNanoseconds: leaseDeadlineNanoseconds
+        ),
+        let payload = try? JSONEncoder().encode(currentClaim),
+        payload.count <= 16 * 1_024 else {
+        return false
+    }
+    let deadline = Date(timeIntervalSinceNow: 5)
+    guard let fd = connectBootClaimRelay(to: path, deadline: deadline) else { return false }
+    let frame = RPCFraming.encode(payload)
+    defer { UDSClientSocket.close(fd) }
+    do {
+        try UDSClientSocket.writeAll(fd: fd, data: frame)
+        let response = try readOneFrame(
+            fd: fd,
+            timeoutSeconds: max(0, deadline.timeIntervalSinceNow)
+        )
+        return try JSONDecoder().decode(BootClaimRelayAck.self, from: response).status == .accepted
+    } catch {
+        return false
+    }
+}
+
+private func claimWithRemainingLease(
+    _ claim: BootClaimEvidence,
+    deadlineNanoseconds: UInt64
+) -> BootClaimEvidence? {
+    let now = DispatchTime.now().uptimeNanoseconds
+    guard deadlineNanoseconds > now else { return nil }
+    let remaining = (deadlineNanoseconds - now) / 1_000_000
+    guard remaining > 0 else { return nil }
+    return BootClaimEvidence(
+        attemptId: claim.attemptId,
+        udid: claim.udid,
+        source: claim.source,
+        observedState: claim.observedState,
+        disposition: claim.disposition,
+        remainingLeaseMilliseconds: min(
+            remaining,
+            BootClaimEvidence.maximumLeaseMilliseconds
+        )
+    )
+}
+
+private func connectBootClaimRelay(to path: String, deadline: Date) -> Int32? {
+    guard path.utf8.count <= UDSClientSocket.maxPathLength else { return nil }
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return nil }
+    var noSigPipe: Int32 = 1
+    _ = setsockopt(
+        fd,
+        SOL_SOCKET,
+        SO_NOSIGPIPE,
+        &noSigPipe,
+        socklen_t(MemoryLayout.size(ofValue: noSigPipe))
+    )
+    let flags = fcntl(fd, F_GETFL, 0)
+    _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: 104) { destination in
+            path.withCString { source in _ = strncpy(destination, source, 104) }
+        }
+    }
+    let result = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
+            Darwin.connect(fd, address, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    if result == 0 { return fd }
+    guard errno == EINPROGRESS else {
+        Darwin.close(fd)
+        return nil
+    }
+    while Date() < deadline {
+        var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let milliseconds = Int32(max(1, min(50, deadline.timeIntervalSinceNow * 1_000)))
+        let pollResult = Darwin.poll(&descriptor, 1, milliseconds)
+        if pollResult > 0 {
+            var socketError: Int32 = 0
+            var length = socklen_t(MemoryLayout.size(ofValue: socketError))
+            guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0,
+                socketError == 0 else {
+                Darwin.close(fd)
+                return nil
+            }
+            return fd
+        }
+        if pollResult < 0, errno != EINTR { break }
+    }
+    Darwin.close(fd)
+    return nil
 }
 
 /// Post a physical-device contextual auto-attach: the shim saw a

@@ -158,10 +158,9 @@ struct OwnedSimRosterTests {
         // and that Unlinked form is exactly how the helper reports one back
         // after restoration.
         //
-        // State isn't filtered either. `device.boot` returns on accepting the
-        // boot, so a poll moments later can still say `Booting`, and a
-        // Booted-only filter would erase the claim the boot just recorded.
-        // Whether a sim is up is the helper's call at restore time.
+        // State isn't filtered either. `.owned` is already the helper's
+        // ownership decision; whether the simulator is still up is checked
+        // again when a replacement helper evaluates restoration.
         let roster = OwnedSimRoster()
 
         poll(

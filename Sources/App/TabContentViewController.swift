@@ -9,10 +9,9 @@
 //
 // Each terminal pane carries its own daemon session: `sessionEnvsByID`
 // holds a `SessionEnvironment` per `TerminalPaneID` (provisioned the
-// first time the reconcile sees that terminal). Sim panes attribute to
-// the primary terminal's session env for ownership recording, a
-// later shim-intercept linkage refinement will re-route ownership
-// to the specific terminal that booted the sim.
+// first time the reconcile sees that terminal). GUI-created sim panes
+// attribute to the primary terminal's session env; shim boot claims arrive
+// through the relay owned by the exact terminal that initiated the boot.
 //
 // Discovery + resurrect dispatch attachSimPane / detachSimPane routes
 // through the Router: one path for all pane mounting.
@@ -194,7 +193,14 @@ final class TabContentViewController: NSViewController {
             sessionId: primary.sessionId,
             capability: primary.capability,
             daemonSocketPath: daemonSocketPath,
-            role: role
+            role: role,
+            onBootClaim: { [weak router] sessionId, claim, deadline in
+                router?.acceptBootClaim(
+                    sessionId: sessionId,
+                    claim: claim,
+                    deadlineNanoseconds: deadline
+                )
+            }
         )
         try primaryEnv.provision()
         let primaryVC = TerminalPaneViewController(
@@ -443,6 +449,9 @@ final class TabContentViewController: NSViewController {
         for terminalVC in terminalVCByID.values {
             terminalVC.requestClose()
         }
+        for environment in sessionEnvsByID.values {
+            environment.stopBootClaimRelay()
+        }
         for paneVC in simPaneVCByUDID.values {
             simPaneActions.stopRecordingForCleanup(paneVC)
         }
@@ -474,7 +483,9 @@ final class TabContentViewController: NSViewController {
             // Stop any grant-retry loop for the removed terminal's session (the
             // Router already closed it) before we drop the env, so a parked
             // retry can't regrant a session that's being torn down.
-            if let sessionId = sessionEnvsByID.removeValue(forKey: terminalID)?.sessionId {
+            if let environment = sessionEnvsByID.removeValue(forKey: terminalID) {
+                environment.stopBootClaimRelay()
+                let sessionId = environment.sessionId
                 grantCoordinator.sessionRemoved(sessionId: sessionId)
             }
         }
@@ -486,7 +497,14 @@ final class TabContentViewController: NSViewController {
                     sessionId: terminal.sessionId,
                     capability: terminal.capability,
                     daemonSocketPath: daemonSocketPath,
-                    role: role
+                    role: role,
+                    onBootClaim: { [weak router] sessionId, claim, deadline in
+                        router?.acceptBootClaim(
+                            sessionId: sessionId,
+                            claim: claim,
+                            deadlineNanoseconds: deadline
+                        )
+                    }
                 )
                 try env.provision()
                 sessionEnvsByID[terminal.id] = env
@@ -556,6 +574,10 @@ final class TabContentViewController: NSViewController {
         // replay is safe. Returns whether the bind succeeded.
         terminalVC.performBind = { [weak self] sessionId, identity in
             guard let self else { return false }
+            self.sessionEnvsByID[id]?.bindBootClaimRelay(
+                foregroundPid: identity.foregroundPid,
+                ttyName: identity.ttyName
+            )
             do {
                 try await self.daemonClient.bindTerminal(
                     sessionId: sessionId,

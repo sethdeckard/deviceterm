@@ -15,5 +15,6 @@ func deviceTermEnvNames() {
     #expect(DeviceTermEnv.daemonSock == "DEVICETERM_DAEMON_SOCK")
     #expect(DeviceTermEnv.daemonPath == "DEVICETERM_DAEMON_PATH")
     #expect(DeviceTermEnv.shimDir == "DEVICETERM_SHIM_DIR")
+    #expect(DeviceTermEnv.bootClaimSock == "DEVICETERM_BOOT_CLAIM_SOCK")
     #expect(DeviceTermEnv.zdotdir == "ZDOTDIR")
 }

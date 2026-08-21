@@ -255,7 +255,11 @@ public enum DaemonMethods {
             RPCMethod.sessionBindTerminal.rawValue:
                 .validatedGUI(SessionMethods.bindTerminal(store: terminalAnchorStore)),
             RPCMethod.sessionClose.rawValue:
-                .session(SessionMethods.close(using: sessionManager)),
+                .session(
+                    SessionMethods.close(using: sessionManager) { sessionId, mode in
+                        await deviceCoordinator.noteSessionClosing(sessionId, mode: mode)
+                    }
+                ),
             RPCMethod.sessionSetPrivateBatch.rawValue:
                 .validatedGUI(SessionMethods.setPrivateBatch(using: sessionManager)),
             RPCMethod.sessionRestoreBatch.rawValue:
@@ -313,6 +317,12 @@ public enum DaemonMethods {
                 sessionManager: sessionManager
             )
                 ),
+            RPCMethod.deviceReconcileBootClaim.rawValue: .validatedGUI(
+                DeviceMethods.reconcileBootClaim(
+                    coordinator: deviceCoordinator,
+                    sessionManager: sessionManager
+                )
+            ),
             RPCMethod.deviceRestoreOwnership.rawValue: .validatedGUI(
                 DeviceMethods.restoreOwnership(
                 coordinator: deviceCoordinator,

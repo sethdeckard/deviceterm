@@ -5,15 +5,15 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-// DeviceCoordinator × CoreSimulator notifications: pins the
-// debounce + ownership semantics of the two-path attribution
-// model.
+// DeviceCoordinator × CoreSimulator notifications: pins the debounce and
+// compatibility ownership semantics used around notifier delivery.
+// BootClaimReconciliationTests covers causal claims.
 //
 // Two paths converge on the same publish helper:
 //
-//   - Shim path (`recordOwnership` / `releaseOwnership`): argv
-//     intercepted by the shim; ownership recorded for the calling
-//     session.
+//   - Compatibility path (`recordOwnership` / `releaseOwnership`): an
+//     authoritative ownership transition used by mixed-version bundle
+//     replacement and focused test setup.
 //   - Notification path (`noteExternalBoot` / `noteExternalShutdown`):
 //     fed by `CSBDeviceNotifier` so the daemon also sees boots
 //     the shim missed (xcodebuild, Simulator.app, absolute-path

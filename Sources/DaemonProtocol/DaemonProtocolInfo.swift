@@ -14,10 +14,10 @@
 public enum DaemonProtocolInfo {
     /// The RPC wire-version string. Must equal the daemon's
     /// `DaemonInfo.version` (`Sources/Daemon/DaemonMethods.swift`).
-    /// 0.2.0 covers the `attachment` admission id (`pane.create` /
-    /// `device.attach` / `physicalDevice.attach` return it, and
-    /// `pane.closeById` accepts it as `expectedAttachment`) and
-    /// `device.restoreOwnership`. Every process speaking this version ships
-    /// and updates in the same bundle.
-    public static let wireVersion = "0.2.0"
+    /// 0.3.0 adds convergent boot claims: `device.boot` carries an attempt,
+    /// `shim.event` can relay the same attempt after a local-relay failure,
+    /// and `device.reconcileBootClaim` retries attribution across daemon
+    /// generations. Every process speaking this version ships and updates in
+    /// the same bundle.
+    public static let wireVersion = "0.3.0"
 }

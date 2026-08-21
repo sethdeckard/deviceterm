@@ -116,34 +116,47 @@ final class SimPaneActionCoordinator {
         router.noteSimShutdown(udid: udid)
     }
 
-    /// Boot with the tab's credentials, and on success tell the owned-sim
-    /// mirror what the daemon just recorded.
+    /// Retain a GUI boot claim before sending the boot request, then reconcile
+    /// it whether the response succeeds or becomes uncertain.
     ///
-    /// All three boot legs here (Reboot, live reboot, post-erase) attribute
-    /// ownership, so all three have to report it. A poll would otherwise be
-    /// the mirror's only source, and each boot starts from a shut-down sim
-    /// whose claim a poll has already cleared: closing the pane before the
-    /// next poll leaves a booted sim deviceterm owns with nothing recovery can
-    /// act on.
+    /// All three boot legs here (Reboot, live reboot, post-erase) use the same
+    /// path. The claim outlives an unanswered RPC and is promoted only after
+    /// the daemon observes Booted.
     ///
     /// Module-internal rather than private so a test can drive it without a
     /// live pane view controller, which is what the boot legs above wire it to.
-    func bootAndRecordOwnership(
+    func bootAndReconcileOwnership(
         udid: String,
         sessionId: String,
         capability: String
     ) async {
-        let generation: Int
+        let claim = router.beginGUIBootClaim(udid: udid, sessionId: sessionId)
         do {
-            generation = try await daemonClient.bootDeviceWithGeneration(
+            _ = try await daemonClient.bootDeviceWithGeneration(
                 udid: udid,
                 sessionId: sessionId,
-                capability: capability
+                capability: capability,
+                claim: claim
             )
+            router.finishGUIBootRequest(attemptId: claim.attemptId, outcome: .accepted)
         } catch {
-            return
+            router.finishGUIBootRequest(
+                attemptId: claim.attemptId,
+                outcome: bootClaimOutcome(for: error)
+            )
         }
-        router.noteSimOwned(udid: udid, sessionId: sessionId, generation: generation)
+    }
+
+    private func bootClaimOutcome(for error: Error) -> BootClaimRequestOutcome {
+        guard let clientError = error as? DaemonClientError else { return .rejected }
+        switch clientError {
+        case .daemon:
+            return .rejected
+
+        case .transport, .timedOut, .versionMismatch, .decode,
+            .shutdownNotAcknowledged, .shutdownTimedOut:
+            return .uncertain
+        }
     }
 
     /// Close a sim pane, prompting when its sim is one deviceterm owns, is
@@ -165,7 +178,7 @@ final class SimPaneActionCoordinator {
     /// itself: that detach is an internal step of a re-attach, and the sim
     /// it names is deliberately left running.
     ///
-    /// Module-internal rather than private, like `bootAndRecordOwnership`
+    /// Module-internal rather than private, like `bootAndReconcileOwnership`
     /// above, so a test can drive it without a live pane view controller.
     func requestClosePane(udid: String, displayName: String) async {
         // Neither the paneId nor the udid identifies what the user is
@@ -274,7 +287,7 @@ final class SimPaneActionCoordinator {
             guard let self else { return }
             let (sessionId, capability) = self.credentials
             Task { @MainActor in
-                await self.bootAndRecordOwnership(
+                await self.bootAndReconcileOwnership(
                     udid: udid,
                     sessionId: sessionId,
                     capability: capability
@@ -311,7 +324,7 @@ final class SimPaneActionCoordinator {
                     attempts += 1
                 }
                 guard paneVC.currentState == .shutdown else { return }
-                await self.bootAndRecordOwnership(
+                await self.bootAndReconcileOwnership(
                     udid: udid,
                     sessionId: sessionId,
                     capability: capability
@@ -349,7 +362,7 @@ final class SimPaneActionCoordinator {
                     alert.runModal()
                     return
                 }
-                await self.bootAndRecordOwnership(
+                await self.bootAndReconcileOwnership(
                     udid: udid,
                     sessionId: sessionId,
                     capability: capability

@@ -164,7 +164,7 @@ struct DaemonClientDeadlineTests {
         // silent regression.
         let (client, _) = makeClient()
         await #expect(throws: Never.self) {
-            try await client.bootDevice(udid: "U", sessionId: "S", capability: "C")
+            try await client.bootDevice(udid: "U")
         }
         await #expect(throws: Never.self) { try await client.shutdownDevice(udid: "U") }
     }

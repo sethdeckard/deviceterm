@@ -119,6 +119,11 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     case deviceBoot = "device.boot"
     case deviceShutdown = "device.shutdown"
     case deviceAttach = "device.attach"
+    /// `device.reconcileBootClaim({claim, sessionId?})` converges one
+    /// GUI-retained boot attempt after a timeout or daemon replacement.
+    /// `.validatedGUI`-scoped; a claim is promoted to ownership only after
+    /// CoreSimulator reports the simulator as Booted.
+    case deviceReconcileBootClaim = "device.reconcileBootClaim"
     /// `device.restoreOwnership({devices: [{udid, sessionId?}]})
     /// → {restoredCount, udids}`. The simulator counterpart to
     /// `session.restoreBatch`: a validated GUI restores deviceterm's owned-sim

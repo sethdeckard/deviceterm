@@ -43,6 +43,19 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let udid: String
         let sessionId: String?
         let capability: String?
+        let claim: BootClaimEvidence?
+
+        init(
+            udid: String,
+            sessionId: String?,
+            capability: String?,
+            claim: BootClaimEvidence? = nil
+        ) {
+            self.udid = udid
+            self.sessionId = sessionId
+            self.capability = capability
+            self.claim = claim
+        }
     }
     struct AttachDeviceCall: Equatable {
         let sessionId: String
@@ -169,8 +182,15 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private(set) var closeSessionCalls: [CloseSessionCall] = []
     private(set) var deviceListCalls: [DeviceListCall] = []
     private(set) var bootDeviceCalls: [BootDeviceCall] = []
+    private(set) var reconcileBootClaimCalls: [DeviceReconcileBootClaimParams] = []
+    var reconcileBootClaimStatus: BootClaimStatus = .promoted
+    var reconcileBootClaimError: Error?
+    private var reconcileBootClaimGateArmed = false
+    private var reconcileBootClaimContinuations: [CheckedContinuation<Void, Never>] = []
+    private var failedBootClaimAttempts: Set<String> = []
     /// When set, `bootDevice` throws this after recording the call.
     var bootDeviceError: Error?
+    var bootDeviceErrorMarksClaimFailed = true
     private(set) var shutdownDeviceCalls: [String] = []
     private(set) var attachDeviceCalls: [AttachDeviceCall] = []
     /// Every `device.restoreOwnership` batch the client sent, in order.
@@ -678,25 +698,77 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     func bootDevice(
         udid: String,
         sessionId: String?,
-        capability: String?
+        capability: String?,
+        claim: BootClaimEvidence? = nil
     ) throws {
         _ = try bootDeviceWithGeneration(
             udid: udid,
             sessionId: sessionId,
-            capability: capability
+            capability: capability,
+            claim: claim
         )
     }
 
     func bootDeviceWithGeneration(
         udid: String,
         sessionId: String?,
-        capability: String?
+        capability: String?,
+        claim: BootClaimEvidence? = nil
     ) throws -> Int {
         bootDeviceCalls.append(
-            .init(udid: udid, sessionId: sessionId, capability: capability)
+            .init(
+                udid: udid,
+                sessionId: sessionId,
+                capability: capability,
+                claim: claim
+            )
         )
-        if let bootDeviceError { throw bootDeviceError }
+        if let bootDeviceError {
+            if bootDeviceErrorMarksClaimFailed, let attemptId = claim?.attemptId {
+                failedBootClaimAttempts.insert(attemptId)
+            }
+            throw bootDeviceError
+        }
         return connectionGeneration
+    }
+
+    func armReconcileBootClaimBarrier() { reconcileBootClaimGateArmed = true }
+
+    func releaseReconcileBootClaimBarrier() {
+        reconcileBootClaimGateArmed = false
+        let continuations = reconcileBootClaimContinuations
+        reconcileBootClaimContinuations.removeAll()
+        for continuation in continuations { continuation.resume() }
+    }
+
+    func markBootClaimFailed(attemptId: String) {
+        failedBootClaimAttempts.insert(attemptId)
+    }
+
+    private func awaitReconcileBootClaimGate() async {
+        guard reconcileBootClaimGateArmed else { return }
+        await withCheckedContinuation { reconcileBootClaimContinuations.append($0) }
+    }
+
+    func reconcileBootClaim(
+        claim: BootClaimEvidence,
+        sessionId: String?
+    ) async throws -> (result: DeviceReconcileBootClaimResult, generation: Int) {
+        reconcileBootClaimCalls.append(.init(claim: claim, sessionId: sessionId))
+        await awaitReconcileBootClaimGate()
+        if let reconcileBootClaimError { throw reconcileBootClaimError }
+        let status = failedBootClaimAttempts.contains(claim.attemptId)
+            ? BootClaimStatus.failed
+            : reconcileBootClaimStatus
+        return (
+            DeviceReconcileBootClaimResult(
+                attemptId: claim.attemptId,
+                udid: claim.udid,
+                status: status,
+                sessionId: status == .promoted ? sessionId : nil
+            ),
+            connectionGeneration
+        )
     }
 
     func shutdownDevice(udid: String) {

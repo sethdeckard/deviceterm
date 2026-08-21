@@ -180,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Reconnect only: close any restored-but-no-longer-live session,
                 // then fire the terminal-rebind observers.
                 await self.closeGhostSessions(restored: inventory)
+                self.router.resumeBootClaimsAfterSessionRestore()
                 self.daemonClient.notifyReconnect()
                 // Pane records live only in the helper's memory. This
                 // connection may have reached a replacement holding none of

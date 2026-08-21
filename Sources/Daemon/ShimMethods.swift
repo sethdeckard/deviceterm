@@ -11,25 +11,20 @@
 //   3. Diffs the snapshots to identify the device whose state
 //      actually flipped (uniquely resolving even bare names that
 //      collide across runtimes).
-//   4. Posts a `shim.event` request to the daemon socket, tagged
-//      with the session's `(DEVICETERM_SESSION, DEVICETERM_SESSION_CAP)`
-//      env vars so the daemon can attribute the sim to that tab.
+//   4. Queues a boot claim through the terminal-local GUI relay. If that relay
+//      cannot accept it, posts the same attempt through authenticated
+//      `shim.event` as a fallback.
 //
 // The daemon validates `(sessionId, cap)` against `SessionManager`
-// before mutating ownership; cap mismatch is a hard reject per
-// the trust boundary in AGENTS.md. After validation, `booted`
-// events record ownership; `shutdown` events release it.
+// before accepting a fallback; cap mismatch is a hard reject per the trust
+// boundary in AGENTS.md. A boot claim becomes ownership only after
+// CoreSimulator reports Booted. Shutdown events release ownership.
 //
 // Wire shape per docs/ARCHITECTURE.md:
 //
 //   shim.event({event: "booted"|"shutdown",
 //               sessionId, cap, udid,
-//               deviceName?, runtime?, invokedAs?, argv?})  → {ok}
-//
-// The shim treats the response as fire-and-forget: it sends the
-// request and closes the socket without reading. The daemon's
-// SO_NOSIGPIPE handling makes the resulting write-to-closed-peer
-// a benign close, not a SIGPIPE.
+//               deviceName?, runtime?, invokedAs?, argv?, claim?})  → {ok}
 
 import DaemonProtocol
 import Foundation
@@ -55,6 +50,9 @@ public enum ShimMethods {
         /// `deviceAttach` event. The daemon resolves it to a connected
         /// device. Absent for sim transitions.
         public let deviceIdentifier: String?
+        /// Stable causal attempt carried when a simulator boot could not be
+        /// queued through the terminal-local GUI relay.
+        public let claim: BootClaimEvidence?
 
         public init(
             event: String,
@@ -65,7 +63,8 @@ public enum ShimMethods {
             runtime: String? = nil,
             invokedAs: String? = nil,
             argv: [String]? = nil,
-            deviceIdentifier: String? = nil
+            deviceIdentifier: String? = nil,
+            claim: BootClaimEvidence? = nil
         ) {
             self.event = event
             self.sessionId = sessionId
@@ -76,6 +75,7 @@ public enum ShimMethods {
             self.invokedAs = invokedAs
             self.argv = argv
             self.deviceIdentifier = deviceIdentifier
+            self.claim = claim
         }
     }
 
@@ -88,11 +88,12 @@ public enum ShimMethods {
 
     /// `shim.event`: provenance handler. Validates session creds,
     /// then routes the observed intent:
-    /// - `booted`/`shutdown` mutate `DeviceCoordinator` ownership for the
-    ///   carried sim UDID (and, for shutdown, drive every attached sim pane
-    ///   for that UDID into `.shutdown` so the GUI's pane.subscribe stream
-    ///   surfaces it; otherwise IOSurface frames just stop and the pane
-    ///   freezes on the last rendered frame with no signal).
+    /// - `booted` registers a causal claim whose ownership waits for an
+    ///   observed CoreSimulator Booted state. `shutdown` releases ownership
+    ///   and drives every attached sim pane for that UDID into `.shutdown` so
+    ///   the GUI's pane.subscribe stream surfaces it; otherwise IOSurface
+    ///   frames just stop and the pane freezes on the last rendered frame with
+    ///   no signal.
     /// - `deviceAttach` is a physical-device contextual auto-attach: resolve
     ///   the `devicectl --device <id>` spec to a connected device and publish
     ///   the same `pane.attach` back-channel command the GUI picker and
@@ -139,10 +140,26 @@ public enum ShimMethods {
             case .booted:
                 let udid = try requireUDID(params, event: .booted)
                 do {
-                    try await deviceCoordinator.recordOwnership(
-                        udid: udid,
-                        sessionId: sessionId
-                    )
+                    if let claim = params.claim {
+                        guard claim.source == .shim, claim.disposition == .attach,
+                            claim.observedState == .booting || claim.observedState == .booted,
+                            claim.udid.caseInsensitiveCompare(udid) == .orderedSame else {
+                            throw RPCMethodError.invalidParams(
+                                "boot claim does not match shim event"
+                            )
+                        }
+                        _ = try await deviceCoordinator.reconcileBootClaim(
+                            claim,
+                            sessionId: sessionId
+                        )
+                    } else {
+                        // MIGRATION: Claimless events remain valid for test
+                        // fixtures and mixed-version bundle replacement.
+                        try await deviceCoordinator.recordOwnership(
+                            udid: udid,
+                            sessionId: sessionId
+                        )
+                    }
                 } catch let error as DeviceError {
                     throw DeviceMethods.mapDeviceError(error)
                 }

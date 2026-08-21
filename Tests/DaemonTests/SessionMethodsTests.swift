@@ -282,6 +282,39 @@ func sessionCloseSucceedsWithMatchingCredentials() async throws {
 }
 
 @Test
+func sessionCloseRejectsUnknownModeWithoutClosingSession() async throws {
+    let manager = SessionManager()
+    let created = try await manager.createSession(label: nil)
+    let envelope = RPCEnvelope(
+        id: 31,
+        type: .request,
+        method: RPCMethod.sessionClose.rawValue,
+        body: .params(
+            try paramsBytes(
+                SessionMethods.CloseParams(
+                    sessionId: created.state.id.uuidString,
+                    cap: created.capability.token,
+                    mode: "shudown"
+                )
+            )
+        )
+    )
+
+    let response = try await roundTrip(
+        envelope,
+        manager: manager,
+        authenticatedAs: created
+    )
+
+    guard case let .error(rpcError) = response.body else {
+        Issue.record("expected .error body, got \(response.body)")
+        return
+    }
+    #expect(rpcError.code == RPCMethodError.invalidParamsCode)
+    #expect(await manager.sessionCount == 1)
+}
+
+@Test
 func sessionCloseRejectsWrongCapability() async throws {
     let manager = SessionManager()
     let created = try await manager.createSession(label: nil)
@@ -408,10 +441,10 @@ func tabsListExposesLabelsButNotCapabilities() async throws {
     #expect(tabs.count == 3)
     let labels = tabs.map(\.label)
     #expect(labels == ["alpha", nil, "beta"])
-    // Tabs entries don't carry the capability. That secret never
-    // leaves the manager + the one-time `session.create` response.
-    // (No structural assertion needed; the TabsListEntry type
-    // simply doesn't have a capability field.)
+    // Tabs entries don't carry the capability. It is returned by the one-time
+    // `session.create` response and injected into that terminal's environment,
+    // not exposed through daemon-wide inventory. (No structural assertion is
+    // needed; TabsListEntry simply has no capability field.)
     for entry in tabs {
         #expect(UUID(uuidString: entry.sessionId) != nil)
     }

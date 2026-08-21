@@ -47,8 +47,8 @@ func ownedBootedSimSurfacesInDeviceListWithBootedState() async throws {
     let client = try TestClient.connectAuthenticated(to: path, as: created)
     defer { client.close() }
 
-    // shim.event "booted" carrying this session's cap → records ownership
-    // of the already-booted sim against the session.
+    // The claimless shim.event shape exercises mixed-version bundle
+    // compatibility and records the already-booted sim for this session.
     try client.send(
         RPCEnvelope(
         id: 1,

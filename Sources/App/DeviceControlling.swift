@@ -25,19 +25,25 @@ protocol DeviceControlling: AnyObject {
     func deviceListWithGeneration(
         scope: DeviceListScope
     ) async throws -> (entries: [DeviceListEntry], generation: Int)
-    /// `device.boot`: boot `udid`. When `(sessionId, capability)` is
-    /// given the daemon attributes ownership to that session.
+    /// `device.boot`: register an optional causal claim and boot `udid`.
     func bootDevice(
         udid: String,
         sessionId: String?,
-        capability: String?
+        capability: String?,
+        claim: BootClaimEvidence?
     ) async throws
-    /// `device.boot`, returning the connection that recorded the ownership.
+    /// `device.boot`, returning the connection that accepted the intent.
     func bootDeviceWithGeneration(
         udid: String,
         sessionId: String?,
-        capability: String?
+        capability: String?,
+        claim: BootClaimEvidence?
     ) async throws -> Int
+    /// Reconcile a GUI-retained boot attempt against the live daemon.
+    func reconcileBootClaim(
+        claim: BootClaimEvidence,
+        sessionId: String?
+    ) async throws -> (result: DeviceReconcileBootClaimResult, generation: Int)
     /// `device.shutdown`: stop a booted simulator.
     func shutdownDevice(udid: String) async throws
     /// `device.attach`: transfer ownership of an already-Booted `udid`

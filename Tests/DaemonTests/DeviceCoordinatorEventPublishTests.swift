@@ -8,17 +8,13 @@ import Testing
 // DeviceCoordinator × EventBroker: pins the publish wiring for
 // BOTH lifecycle paths:
 //
-//   - Direct daemon RPC `device.boot` / `device.shutdown` → calls
-//     `boot(...)` / `shutdown(...)` directly. Tested via
-//     reflection-on-a-real-coordinator below (those methods also
-//     hit CoreSimulator, so we don't cover them in unit-tests).
+//   - A promoted boot claim / direct `device.shutdown` RPC. Boot-claim
+//     publishing is covered in BootClaimReconciliationTests; shutdown hits
+//     CoreSimulator and stays outside these unit tests.
 //
-//   - Shim-detected in-tab boot/shutdown → ShimMethods calls
-//     `recordOwnership(...)` / `releaseOwnership(udid:)`. THESE are
-//     the load-bearing path: without
-//     publishing here, the primary in-tab workflow (`xcrun simctl
-//     boot` inside the tab) would never emit `device.booted` to
-//     `deviceterm events` subscribers.
+//   - Claimless compatibility boots and shim shutdowns call
+//     `recordOwnership(...)` / `releaseOwnership(udid:)`. These tests cover
+//     that compatibility contract and the direct shutdown path.
 
 private let validUDID = "11111111-1111-1111-1111-111111111111"
 
@@ -66,6 +62,24 @@ func recordOwnershipPublishesEvenOnReclaim() async throws {
     )
     let secondEvent = try #require(await iterator.next())
     #expect(secondEvent.type == DaemonEventType.deviceBooted)
+
+    await broker.unsubscribe(subscriptionId)
+}
+
+@Test
+func transferOwnershipDoesNotPublishDeviceBooted() async throws {
+    let otherUDID = "22222222-2222-2222-2222-222222222222"
+    let broker = EventBroker()
+    let coordinator = DeviceCoordinator(eventBroker: broker)
+    let (subscriptionId, stream) = await broker.subscribe(as: .guiPeer)
+
+    try await coordinator.transferOwnership(udid: validUDID, sessionId: UUID())
+    await coordinator.noteExternalBoot(udid: otherUDID)
+
+    var iterator = stream.makeAsyncIterator()
+    let event = try #require(await iterator.next())
+    #expect(event.type == DaemonEventType.deviceBooted)
+    #expect(event.udid == otherUDID)
 
     await broker.unsubscribe(subscriptionId)
 }
