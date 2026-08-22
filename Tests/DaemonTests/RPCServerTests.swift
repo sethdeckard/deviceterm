@@ -274,6 +274,107 @@ private actor CancelTracker {
     func tick() { calls += 1 }
 }
 
+private actor RequestTracker {
+    private var calls = 0
+    var observed: Int { calls }
+    func tick() { calls += 1 }
+}
+
+private struct BackpressureWriteResult {
+    let completeFrames: Int
+    let stoppedBeforeLimit: Bool
+}
+
+private func writeUntilBackpressured(
+    fd: Int32,
+    frame: Data,
+    maximumFrames: Int
+) throws -> BackpressureWriteResult {
+    var completeFrames = 0
+    for _ in 0..<maximumFrames {
+        let count = frame.withUnsafeBytes { bytes in
+            Darwin.write(fd, bytes.baseAddress, bytes.count)
+        }
+        if count == frame.count {
+            completeFrames += 1
+            continue
+        }
+        if count >= 0 {
+            return BackpressureWriteResult(
+                completeFrames: completeFrames,
+                stoppedBeforeLimit: true
+            )
+        }
+
+        let saved = errno
+        if saved == EINTR {
+            continue
+        }
+        if saved == EAGAIN || saved == EWOULDBLOCK || saved == EPIPE || saved == ECONNRESET {
+            return BackpressureWriteResult(
+                completeFrames: completeFrames,
+                stoppedBeforeLimit: true
+            )
+        }
+        throw UDSSocketError.writeFailed(errno: saved)
+    }
+    return BackpressureWriteResult(
+        completeFrames: completeFrames,
+        stoppedBeforeLimit: false
+    )
+}
+
+@Test
+func unreadPeerAppliesRequestBackpressure() async throws {
+    let tracker = RequestTracker()
+    let largeResult = Data(("{\"payload\":\"" + String(repeating: "x", count: 512) + "\"}").utf8)
+    let registry = MethodRegistry(
+        handlers: [
+            "test.large": .daemonWide { _ in
+                await tracker.tick()
+                return largeResult
+            }
+        ]
+    )
+    let path = tempSocketPath()
+    let server = RPCServer(socketPath: path, methods: registry)
+    try await server.start()
+    try await Task.sleep(for: .milliseconds(50))
+    let client = try TestClient.connect(to: path)
+    var cleanedUp = false
+    defer {
+        if !cleanedUp {
+            client.close()
+            Task { await server.stop() }
+        }
+    }
+    let request = RPCEnvelope(id: 1, type: .request, method: "test.large", body: .empty)
+    let frame = RPCFraming.encode(try request.encode())
+    let writeResult = try writeUntilBackpressured(
+        fd: client.fd,
+        frame: frame,
+        maximumFrames: 10_000
+    )
+    try await Task.sleep(for: .milliseconds(100))
+    let firstCount = await tracker.observed
+    try await Task.sleep(for: .milliseconds(100))
+    let secondCount = await tracker.observed
+
+    // A finite nonblocking producer avoids turning a failed backpressure
+    // assertion into a hung test. Once the peer stops reading responses,
+    // later request frames remain behind the blocked response instead of
+    // creating retained responses.
+    #expect(writeResult.stoppedBeforeLimit)
+    #expect(writeResult.completeFrames > 0)
+    #expect(firstCount > 0)
+    #expect(firstCount < writeResult.completeFrames)
+    #expect(secondCount == firstCount)
+
+    client.close()
+    await server.stop()
+    cleanedUp = true
+}
+
 @Test
 func subscriptionStreamsEventsCorrelatedByRequestId() async throws {
     // Hand-rolled registry: one subscription method that yields three

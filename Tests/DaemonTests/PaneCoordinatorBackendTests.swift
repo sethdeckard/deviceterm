@@ -35,6 +35,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     private(set) var buttons: [HardwareButton] = []
     private(set) var keyDownUsages: [UInt32] = []
     private(set) var keyUpUsages: [UInt32] = []
+    private(set) var typedKeystrokeBatches: [[HIDKeystroke]] = []
     private(set) var openAppSwitcherCalls = 0
     /// The `IndigoHIDEdge` value each `openAppSwitcher` call carried, so a test
     /// can assert the device swipe rotates with the pane's orientation.
@@ -70,11 +71,23 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// default, so it doesn't affect the input-routing tests.
     var blockTapDown = false
     private let tapDownGate = DispatchSemaphore(value: 0)
+    /// Test gate for an AX read running on `PaneAccessibility`'s blocking
+    /// queue. Used to retire the pane during the coordinator's suspension.
+    var blockAccessibility = false
+    private let accessibilityGate = DispatchSemaphore(value: 0)
     private let parkedLock = NSLock()
     private var parked = false
+    private var accessibilityParked = false
+    private var accessibilityReleased = false
     /// True once a blocked `tapDown` has parked the actor.
     var tapDownParked: Bool {
         parkedLock.lock(); defer { parkedLock.unlock() }; return parked
+    }
+    var accessibilityReadParked: Bool {
+        parkedLock.lock(); defer { parkedLock.unlock() }; return accessibilityParked
+    }
+    var accessibilityResourcesReleased: Bool {
+        parkedLock.lock(); defer { parkedLock.unlock() }; return accessibilityReleased
     }
     /// Test gate: when set, the *first* `rotate` suspends until
     /// `releaseFirstRotate()`, so a test can hold one rotation mid-flight and
@@ -177,6 +190,9 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Release a parked `tapDown`.
     func releaseTapDown() { tapDownGate.signal() }
 
+    /// Release a parked accessibility read.
+    func releaseAccessibility() { accessibilityGate.signal() }
+
     /// Release a parked first `rotate` (or record the release so a rotation
     /// that parks later resumes immediately).
     func releaseFirstRotate() {
@@ -229,6 +245,16 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func keyUp(hidUsage: UInt32, generation: UInt64) throws { keyUpUsages.append(hidUsage) }
 
+    func typeKeystrokes(_ keystrokes: [HIDKeystroke], generation: UInt64) throws {
+        typedKeystrokeBatches.append(keystrokes)
+        for keystroke in keystrokes {
+            if keystroke.shift { keyDownUsages.append(KeyboardInputMap.hidShift) }
+            keyDownUsages.append(keystroke.usage)
+            keyUpUsages.append(keystroke.usage)
+            if keystroke.shift { keyUpUsages.append(KeyboardInputMap.hidShift) }
+        }
+    }
+
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws { buttons.append(button) }
 
     func openAppSwitcher(edge: Int, generation: UInt64) throws {
@@ -263,11 +289,21 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func rotateCrown(delta: Double, generation: UInt64) throws { crownDeltas.append(delta) }
 
-    func accessibilityFrontmostTree() throws -> [String: Any] { [:] }
+    func accessibilityFrontmostTree() throws -> [String: Any] {
+        if blockAccessibility {
+            parkedLock.withLock { accessibilityParked = true }
+            accessibilityGate.wait()
+        }
+        return [:]
+    }
 
     func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }
 
     func shutdownBackend() { shutdownCalled = true }
+
+    func releaseAccessibilityResources() {
+        parkedLock.withLock { accessibilityReleased = true }
+    }
 }
 // swiftlint:enable unneeded_throws_rethrows
 
@@ -311,6 +347,151 @@ func createPaneStartsFramesAndListsThePane() async throws {
     #expect(panes.first?.paneId == result.paneId)
     #expect(panes.first?.udid == "udid-a")
     #expect(panes.first?.capabilities == backend.capabilities.wire)
+}
+
+@Test
+func textRoutesAsOneValidatedKeystrokeBatch() async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(
+        udid: "text-batch",
+        sessionId: UUID(),
+        backend: backend
+    )
+
+    try await coordinator.text(paneId: pane.paneId, as: .guiPeer, text: "aA")
+
+    let lower = try #require(KeyboardInputMap.asciiKeyMap["a"])
+    let upper = try #require(KeyboardInputMap.asciiKeyMap["A"])
+    #expect(
+        backend.typedKeystrokeBatches == [
+            [
+                HIDKeystroke(usage: lower.keyCode, shift: false),
+                HIDKeystroke(usage: upper.keyCode, shift: true)
+            ]
+        ]
+    )
+}
+
+@Test
+func accessibilityReadRetiredDuringBridgeWaitIsRejected() async throws {
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let backend = MockDeviceBackend()
+    backend.blockAccessibility = true
+    let pane = try await coordinator.createMockPane(
+        udid: "ax-retire",
+        sessionId: session,
+        backend: backend
+    )
+    let read = Task {
+        try await coordinator.accessibilityTree(
+            paneId: pane.paneId,
+            as: .session(session, incarnation: nil)
+        )
+    }
+    for _ in 0..<2_000 where !backend.accessibilityReadParked {
+        await Task.yield()
+    }
+    #expect(backend.accessibilityReadParked)
+
+    _ = await coordinator.close(paneId: pane.paneId, as: .guiPeer, mode: .detach)
+    backend.releaseAccessibility()
+
+    switch await read.result {
+    case .success:
+        Issue.record("retired pane returned its accessibility payload")
+
+    case let .failure(error):
+        #expect(error as? PaneError == .notFound(paneId: pane.paneId))
+    }
+}
+
+@Test
+func accessibilityReadCompletedDuringShutdownIsRejectedAndReleasesClient() async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.blockAccessibility = true
+    let pane = try await coordinator.createMockPane(
+        udid: "ax-terminal",
+        sessionId: UUID(),
+        backend: backend
+    )
+    let read = Task {
+        try await coordinator.accessibilityTree(paneId: pane.paneId, as: .guiPeer)
+    }
+    for _ in 0..<2_000 where !backend.accessibilityReadParked {
+        await Task.yield()
+    }
+    #expect(backend.accessibilityReadParked)
+
+    await coordinator.markPanesShutdown(forUDID: "ax-terminal")
+    #expect(backend.shutdownCalled)
+    #expect(!backend.accessibilityResourcesReleased)
+    backend.releaseAccessibility()
+
+    switch await read.result {
+    case .success:
+        Issue.record("terminal pane returned its accessibility payload")
+
+    case let .failure(error):
+        #expect(error as? PaneError == .paneNotActive(paneId: pane.paneId))
+    }
+    for _ in 0..<200 {
+        if backend.accessibilityResourcesReleased { break }
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    #expect(backend.accessibilityResourcesReleased)
+}
+
+@Test
+func accessibilityReadOnOnePaneDoesNotBlockAnotherPane() async throws {
+    let coordinator = PaneCoordinator()
+    let blockedBackend = MockDeviceBackend()
+    blockedBackend.blockAccessibility = true
+    let blockedPane = try await coordinator.createMockPane(
+        udid: "ax-blocked-pane",
+        sessionId: UUID(),
+        backend: blockedBackend
+    )
+    let readyPane = try await coordinator.createMockPane(
+        udid: "ax-ready-pane",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    let blockedRead = Task {
+        try await coordinator.accessibilityTree(paneId: blockedPane.paneId, as: .guiPeer)
+    }
+    for _ in 0..<2_000 where !blockedBackend.accessibilityReadParked {
+        await Task.yield()
+    }
+    #expect(blockedBackend.accessibilityReadParked)
+
+    let readyRead = Task {
+        try await coordinator.accessibilityTree(paneId: readyPane.paneId, as: .guiPeer)
+    }
+    let completedPromptly = await withTaskGroup(of: Bool.self) { group in
+        group.addTask {
+            _ = try? await readyRead.value
+            return true
+        }
+        group.addTask {
+            try? await Task.sleep(for: .milliseconds(200))
+            return false
+        }
+        let completed = await group.next() ?? false
+        if !completed {
+            blockedBackend.releaseAccessibility()
+        }
+        group.cancelAll()
+        return completed
+    }
+    if completedPromptly {
+        blockedBackend.releaseAccessibility()
+    }
+    _ = await blockedRead.result
+    _ = await readyRead.result
+    #expect(completedPromptly)
 }
 
 @Test

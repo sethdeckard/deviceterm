@@ -4,7 +4,8 @@
 //
 // Each accepted client gets one of these. The actor encapsulates:
 //
-//   - The connection fd (closed via the read source's cancel handler).
+//   - The connection fd (shut down on close, then released after the read
+//     source cancels and the active write finishes).
 //   - A serial `DispatchSourceRead` that fires when the fd has bytes
 //     to drain.
 //   - A `Data` accumulator for partially-received frames.
@@ -117,6 +118,21 @@ actor RPCConnection {
         let task: Task<Void, Never>
     }
 
+    /// One frame waiting for the connection's writer pump. The continuation
+    /// keeps `send`'s established contract: it returns only after the frame was
+    /// written or the connection failed.
+    private struct PendingWrite {
+        let frame: Data
+        let completion: CheckedContinuation<Bool, Never>
+    }
+
+    /// Bound frames retained behind a peer that has stopped reading. One
+    /// oversized frame is admitted into an empty pending queue so a legitimate
+    /// response up to `RPCFraming.defaultPayloadCap` can still be delivered;
+    /// no additional frame joins it.
+    private static let maximumPendingWriteCount = 64
+    private static let maximumPendingWriteBytes = 1 * 1_024 * 1_024
+
     private let id: UInt64
     private let fd: Int32
     private let methods: MethodRegistry
@@ -147,8 +163,17 @@ actor RPCConnection {
     private let orchestratorGrantStore: OrchestratorGrantStore?
     private weak var server: RPCServer?
     nonisolated private let ioQueue: DispatchQueue
+    nonisolated private let writeQueue: BlockingWorkQueue
     private var readSource: DispatchSourceRead?
     private var readBuffer = Data()
+    /// Dispatch read events may enqueue several actor tasks while a response
+    /// write suspends. Only one task may drain frames; otherwise actor
+    /// reentrancy defeats socket backpressure and pipelines more work.
+    private var readPumpRunning = false
+    private var readPumpRequested = false
+    private var pendingWrites: [PendingWrite] = []
+    private var pendingWriteBytes = 0
+    private var writerPumpRunning = false
     private var subscriptions: [UInt32: SubscriptionRecord] = [:]
     private var closed: Bool = false
     /// The session this connection authenticated as, if any. Set by
@@ -194,6 +219,7 @@ actor RPCConnection {
             ?? composedProvenanceSnapshotResolver(peer: peerIdentityResolver)
         self.server = server
         self.ioQueue = DispatchQueue(label: "deviceterm.daemon.conn.\(id)")
+        self.writeQueue = BlockingWorkQueue(label: "deviceterm.daemon.conn-write.\(id)")
     }
 
     // Hand handlers a parseable JSON object when the request had no
@@ -218,16 +244,21 @@ actor RPCConnection {
     func start() {
         guard readSource == nil, !closed else { return }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: ioQueue)
-        let fdCopy = fd
         source.setEventHandler { [weak self] in
-            // Hop into the actor. Reads are idempotent under EAGAIN
-            // so re-firing during an in-flight handler is harmless.
             Task { [weak self] in
                 await self?.handleReadable()
             }
         }
+        let fdCopy = fd
+        let writer = writeQueue
         source.setCancelHandler {
-            Darwin.close(fdCopy)
+            // Dispatch source cancellation drains its event handler first.
+            // Enqueueing close from here, behind the active blocking write,
+            // prevents both the read source and an old writer from observing a
+            // descriptor number the kernel has already reused.
+            writer.submit {
+                Darwin.close(fdCopy)
+            }
         }
         source.resume()
         readSource = source
@@ -235,9 +266,11 @@ actor RPCConnection {
 
     /// Close the connection. Cancels every in-flight subscription
     /// (their `onCancel` closures release per-subscription resources
-    /// via `withTaskCancellationHandler`), cancels the read source
-    /// (which closes the fd via its cancel handler), and asks the
-    /// server to drop us from its connections map. Idempotent.
+    /// via `withTaskCancellationHandler`), shuts down the fd, cancels the read
+    /// source, and asks the server to drop us from its connections map. The read
+    /// source's cancellation handler closes the fd at the tail of `writeQueue`,
+    /// after its event handler and any active write have finished, so descriptor
+    /// reuse cannot redirect old connection work. Idempotent.
     func close() {
         guard !closed else { return }
         closed = true
@@ -245,7 +278,18 @@ actor RPCConnection {
             record.task.cancel()
         }
         subscriptions.removeAll()
-        readSource?.cancel()
+        failPendingWrites()
+        Darwin.shutdown(fd, SHUT_RDWR)
+        if let readSource {
+            readSource.cancel()
+        } else {
+            // A connection can be closed before `start()` installs its read
+            // source. There is then no cancellation handler to own the close.
+            let fdCopy = fd
+            writeQueue.submit {
+                Darwin.close(fdCopy)
+            }
+        }
         readSource = nil
         Task { [weak server, id] in
             await server?.removeConnection(id: id)
@@ -256,16 +300,27 @@ actor RPCConnection {
 
     private func handleReadable() async {
         guard !closed else { return }
+        if readPumpRunning {
+            readPumpRequested = true
+            return
+        }
+        readPumpRunning = true
+        defer { readPumpRunning = false }
         do {
-            guard let chunk = try UDSSocket.readAvailable(fd: fd) else {
-                // Peer closed cleanly.
-                close()
-                return
-            }
-            if !chunk.isEmpty {
+            repeat {
+                readPumpRequested = false
+                guard let chunk = try UDSSocket.readAvailable(fd: fd) else {
+                    // Peer closed cleanly.
+                    close()
+                    return
+                }
+                guard !chunk.isEmpty else { continue }
                 readBuffer.append(chunk)
-            }
-            try await drainFrames()
+                try await drainFrames()
+                // A response write can suspend while more socket data arrives.
+                // Loop once more even if Dispatch coalesced that readiness
+                // notification into a task that only set `readPumpRequested`.
+            } while !closed && readPumpRequested
         } catch {
             // Any I/O or framing fault closes the connection. Future
             // chunks can split "transient framing error → send error
@@ -307,7 +362,7 @@ actor RPCConnection {
             // to correlate the error on; a method-less notification is
             // simply dropped.
             if let id = envelope.id {
-                send(
+                await send(
                     errorResponse: RPCError(
                     code: RPCErrorCode.invalidRequest,
                     message: "Request envelope missing `method`"
@@ -338,12 +393,12 @@ actor RPCConnection {
                 envelopeId: envelopeId,
                 body: envelope.body
             )
-            send(envelope: response)
+            await send(envelope: response)
             return
         }
 
         guard let resolved = methods.lookup(method) else {
-            send(
+            await send(
                 envelope: RPCEnvelope(
                 id: envelopeId,
                 type: .response,
@@ -403,7 +458,7 @@ actor RPCConnection {
             session: effectiveSession,
             invalidationError: provenanceReject
         ) {
-            send(
+            await send(
                 envelope: RPCEnvelope(
                 id: envelopeId,
                 type: .response,
@@ -453,7 +508,7 @@ actor RPCConnection {
                             )
                         }
                 }
-            send(envelope: response)
+            await send(envelope: response)
 
         case let .subscription(handler):
             await SessionDispatchContext.$originatingSessionId
@@ -886,7 +941,7 @@ actor RPCConnection {
                 code: methodError.code,
                 message: methodError.message
             )
-            send(
+            await send(
                 envelope: RPCEnvelope(
                 id: envelopeId,
                 type: .response,
@@ -900,7 +955,7 @@ actor RPCConnection {
                 code: RPCErrorCode.serverError,
                 message: String(describing: error)
             )
-            send(
+            await send(
                 envelope: RPCEnvelope(
                 id: envelopeId,
                 type: .response,
@@ -912,7 +967,7 @@ actor RPCConnection {
         }
 
         // Confirm the subscription is live before any events flow.
-        send(
+        await send(
             envelope: RPCEnvelope(
             id: envelopeId,
             type: .response,
@@ -962,8 +1017,8 @@ actor RPCConnection {
     private func sendEvent(
         envelopeId: UInt32,
         event: MethodRegistry.SubscriptionEvent
-    ) {
-        send(
+    ) async {
+        await send(
             envelope: RPCEnvelope(
             id: envelopeId,
             type: .event,
@@ -979,18 +1034,84 @@ actor RPCConnection {
 
     // MARK: - Send
 
-    private func send(envelope: RPCEnvelope) {
+    private func send(envelope: RPCEnvelope) async {
+        guard !closed else { return }
         do {
             let payload = try envelope.encode()
             let frame = RPCFraming.encode(payload)
-            try UDSSocket.writeAll(fd: fd, data: frame)
+            let wrote = await enqueueWrite(frame)
+            guard wrote else {
+                close()
+                return
+            }
         } catch {
             close()
         }
     }
 
-    private func send(errorResponse: RPCError, correlatingId id: UInt32) {
-        send(
+    /// Admit a frame to the bounded per-connection writer. A peer that stops
+    /// draining is disconnected once the pending budget is exhausted. The
+    /// budget bounds only additional queued frames: the active write and the
+    /// first frame admitted to an empty queue may exceed its byte limit. Close
+    /// still resumes every parked sender.
+    private func enqueueWrite(_ frame: Data) async -> Bool {
+        guard !closed else { return false }
+        let pendingQueueIsEmpty = pendingWrites.isEmpty
+        let exceedsCount = pendingWrites.count >= Self.maximumPendingWriteCount
+        let exceedsBytes = pendingWriteBytes + frame.count > Self.maximumPendingWriteBytes
+        if exceedsCount || (exceedsBytes && !pendingQueueIsEmpty) {
+            close()
+            return false
+        }
+
+        return await withCheckedContinuation { continuation in
+            pendingWrites.append(PendingWrite(frame: frame, completion: continuation))
+            pendingWriteBytes += frame.count
+            guard !writerPumpRunning else { return }
+            writerPumpRunning = true
+            Task { [weak self] in
+                await self?.drainWrites()
+            }
+        }
+    }
+
+    /// Dequeue one frame at a time before entering the blocking queue. Only the
+    /// active frame and the bounded `pendingWrites` array are retained while a
+    /// peer is backpressured.
+    private func drainWrites() async {
+        while !closed, !pendingWrites.isEmpty {
+            let pending = pendingWrites.removeFirst()
+            pendingWriteBytes -= pending.frame.count
+            let frame = pending.frame
+            let wrote = await writeQueue.run { [fd] in
+                do {
+                    try UDSSocket.writeAll(fd: fd, data: frame)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            pending.completion.resume(returning: wrote)
+            guard wrote else {
+                writerPumpRunning = false
+                close()
+                return
+            }
+        }
+        writerPumpRunning = false
+    }
+
+    private func failPendingWrites() {
+        let pending = pendingWrites
+        pendingWrites.removeAll(keepingCapacity: false)
+        pendingWriteBytes = 0
+        for write in pending {
+            write.completion.resume(returning: false)
+        }
+    }
+
+    private func send(errorResponse: RPCError, correlatingId id: UInt32) async {
+        await send(
             envelope: RPCEnvelope(
             id: id,
             type: .response,

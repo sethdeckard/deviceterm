@@ -59,6 +59,9 @@ public final class TunnelKeepalive: @unchecked Sendable {
     /// mid-mirror, since there is no respawn), bounded so a crashed-daemon
     /// orphan that escaped the startup reap self-exits within a day.
     static let sessionTimeoutSeconds = 86_400
+    private static let reapQueue = BlockingWorkQueue(
+        label: "com.deviceterm.daemon.tunnel-reap"
+    )
 
     private let queue = DispatchQueue(label: "com.deviceterm.tunnel-keepalive")
     private let spawn: Spawner
@@ -84,9 +87,14 @@ public final class TunnelKeepalive: @unchecked Sendable {
 
     /// SIGINT any keepalive `devicectl` left over from a previously-crashed
     /// daemon, identified by our unique notification name in its argv.
-    /// Best-effort, synchronous; called once at daemon startup. Never
-    /// touches the calling process.
-    public static func reapOrphans() {
+    /// Best-effort; called once at daemon startup. Never touches the calling
+    /// process. The process and pipe waits run outside Swift's cooperative
+    /// executor.
+    public static func reapOrphans() async {
+        await reapQueue.run { reapOrphansSynchronously() }
+    }
+
+    private static func reapOrphansSynchronously() {
         let pgrep = Process()
         pgrep.launchPath = "/usr/bin/pgrep"
         pgrep.arguments = ["-f", notificationName]

@@ -142,10 +142,18 @@ enum DeviceBackendError: Error {
     case unknownLocationScenario(name: String)
 }
 
-/// The display + input primitives a pane backend must provide. All
-/// methods are synchronous and called only from inside the
-/// `PaneCoordinator` actor; the frame callback hops back into that
-/// actor before any coordinator state is touched.
+/// One translated key plus the modifier state needed to type it. A complete
+/// text request is handed to the backend as one batch so a simulator can keep
+/// another input request from interleaving between its key-down and key-up.
+struct HIDKeystroke: Equatable, Sendable {
+    let usage: UInt32
+    let shift: Bool
+}
+
+/// The display + input primitives a pane backend must provide. Operations
+/// whose system API can block are async so implementations can leave Swift's
+/// cooperative executor; the frame callback hops into `PaneCoordinator`
+/// before any coordinator state is touched.
 protocol DeviceBackend: AnyObject, Sendable {
     /// What this backend can do; drives the coordinator's per-verb gate.
     var capabilities: DeviceBackendCapabilities { get }
@@ -219,10 +227,10 @@ protocol DeviceBackend: AnyObject, Sendable {
     // never reaches the new owner's device. A backend with no input fence
     // ignores it.
 
-    func tapDown(at point: CGPoint, generation: UInt64) throws
-    func tapUp(at point: CGPoint, generation: UInt64) throws
-    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws
-    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws
+    func tapDown(at point: CGPoint, generation: UInt64) async throws
+    func tapUp(at point: CGPoint, generation: UInt64) async throws
+    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws
+    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws
 
     // MARK: Edge-tagged touch (system gestures, sim-only)
     //
@@ -233,9 +241,9 @@ protocol DeviceBackend: AnyObject, Sendable {
     // these; other backends inherit the default that throws
     // `unsupportedEdgeGesture`.
 
-    func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) throws
-    func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) throws
-    func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) throws
+    func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws
+    func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) async throws
+    func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) async throws
 
     // MARK: System gesture (App Switcher, device-only)
     //
@@ -250,12 +258,13 @@ protocol DeviceBackend: AnyObject, Sendable {
 
     // MARK: Keyboard (HID usage codes, translation is the caller's job)
 
-    func keyDown(hidUsage: UInt32, generation: UInt64) throws
-    func keyUp(hidUsage: UInt32, generation: UInt64) throws
+    func keyDown(hidUsage: UInt32, generation: UInt64) async throws
+    func keyUp(hidUsage: UInt32, generation: UInt64) async throws
+    func typeKeystrokes(_ keystrokes: [HIDKeystroke], generation: UInt64) async throws
 
     // MARK: Buttons / rotation / crown
 
-    func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws
+    func pressHardwareButton(_ button: HardwareButton, generation: UInt64) async throws
     /// Rotate to `orientation`, returning whether the rotation was
     /// **performed** rather than fenced by a transfer that bumped the
     /// generation.
@@ -273,7 +282,7 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// the coordinator falls back to this return value, and external
     /// rotations are then invisible to that pane.
     func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool
-    func rotateCrown(delta: Double, generation: UInt64) throws
+    func rotateCrown(delta: Double, generation: UInt64) async throws
 
     // MARK: Accessibility (lazy acquisition lives in the backend)
 
@@ -298,6 +307,11 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// invalidate the input path out from under a captured reference:
     /// release input resources via the object's own lifetime instead.
     func shutdownBackend()
+
+    /// Release a cached accessibility bridge after every AX operation already
+    /// admitted for this pane has drained. `PaneCoordinator` invokes this on
+    /// the pane's accessibility queue, never concurrently with an AX read.
+    func releaseAccessibilityResources()
 
     // MARK: Ownership-transfer input fence
     //
@@ -427,15 +441,17 @@ extension DeviceBackend {
 
     // Default: only the CoreSimulator backend overrides these. Other
     // backends (physical device, stub) reject edge gestures.
-    func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) throws {
+    // swiftlint:disable async_without_await
+    func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedEdgeGesture
     }
-    func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) throws {
+    func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedEdgeGesture
     }
-    func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) throws {
+    func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedEdgeGesture
     }
+    // swiftlint:enable async_without_await
 
     // Default: only the physical-device backend opens the App Switcher via a
     // system-gesture touch swipe. Others throw, so the coordinator falls back to
@@ -443,6 +459,28 @@ extension DeviceBackend {
     // swiftlint:disable:next async_without_await
     func openAppSwitcher(edge: Int, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedEdgeGesture
+    }
+
+    /// Backends without a synchronous bridge queue retain the established
+    /// per-key behavior. The simulator overrides this to hold one queue slot
+    /// for the complete request.
+    func typeKeystrokes(_ keystrokes: [HIDKeystroke], generation: UInt64) async throws {
+        for keystroke in keystrokes {
+            if keystroke.shift {
+                try await keyDown(hidUsage: KeyboardInputMap.hidShift, generation: generation)
+                do {
+                    try await keyDown(hidUsage: keystroke.usage, generation: generation)
+                    try await keyUp(hidUsage: keystroke.usage, generation: generation)
+                    try await keyUp(hidUsage: KeyboardInputMap.hidShift, generation: generation)
+                } catch {
+                    try? await keyUp(hidUsage: KeyboardInputMap.hidShift, generation: generation)
+                    throw error
+                }
+            } else {
+                try await keyDown(hidUsage: keystroke.usage, generation: generation)
+                try await keyUp(hidUsage: keystroke.usage, generation: generation)
+            }
+        }
     }
 
     // Default: no surface pool, so lease bookkeeping is a no-op. Only a
@@ -471,6 +509,10 @@ extension DeviceBackend {
     func resumeInput() {}
     func currentInputGeneration() -> UInt64 { 0 }
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { true }
+
+    // Default: backends without a cached accessibility bridge own nothing that
+    // needs queue-ordered release.
+    func releaseAccessibilityResources() {}
 
     // Default: a backend that hasn't wired location rejects it rather
     // than silently succeeding. A conformer taking these defaults must

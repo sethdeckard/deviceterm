@@ -71,6 +71,10 @@ private struct DeviceCtlConnectionProperties: Decodable {
 }
 
 enum DeviceCtl {
+    private static let processQueue = BlockingWorkQueue(
+        label: "com.deviceterm.daemon.devicectl-list"
+    )
+
     /// Parse a `devicectl list devices --json-output` payload into the
     /// physically-connected devices (`reality == "physical"`), dropping
     /// simulators. Pure and total. Throws only on a structurally-invalid
@@ -97,7 +101,7 @@ enum DeviceCtl {
     /// non-zero exit, unreadable/garbled JSON) so the picker simply shows
     /// no devices rather than the RPC erroring.
     static func listPhysicalDevices() async -> [DeviceCtlDevice] {
-        await Task.detached {
+        await processQueue.run {
             let jsonPath = NSTemporaryDirectory()
                 + "deviceterm-devicectl-\(ProcessInfo.processInfo.processIdentifier)-"
                 + UUID().uuidString + ".json"
@@ -118,6 +122,6 @@ enum DeviceCtl {
                 let devices = try? parse(data)
             else { return [] }
             return devices
-        }.value
+        }
     }
 }

@@ -2,13 +2,12 @@
 //
 // SimInputSynthesis: the pure input-synthesis half of `PaneCoordinator`.
 //
-// Every `pane.input.*` gesture is coordinate/timing math plus synchronous
+// Every `pane.input.*` gesture is coordinate/timing math plus async
 // `DeviceBackend` HID sends; none of it touches `PaneCoordinator`'s mutable
 // pane state. The coordinator resolves the backend (its one stateful step,
-// `requireBackend`), then hands it here. These statics take a resolved
-// `any DeviceBackend` (Sendable) and are `nonisolated`, so the gesture's
-// `Task.sleep` pacing runs off the actor, the same isolation the actor
-// already released at every `await` before the seam.
+// `requireBackend`), then hands it here. Simulator sends join a per-pane
+// Dispatch queue because SimulatorKit waits synchronously for completion;
+// physical-device sends join their relay pump.
 //
 // The one gesture with a state side effect stays on the actor: `rotate`
 // here does only the backend call; the coordinator fans the
@@ -97,17 +96,18 @@ enum SimInputSynthesis {
     ) async throws {
         let point = CGPoint(x: x, y: y)
         do {
-            try backend.tapDown(at: point, generation: generation)
+            try await backend.tapDown(at: point, generation: generation)
             // Anchor after the down is submitted, so the dwell covers contact
-            // time rather than contact time plus the submission. A sim send is
-            // synchronous, so submission is delivery; a device backend enqueues
-            // it and the dwell starts ahead of the report reaching the guest.
+            // time rather than contact time plus the submission. A simulator
+            // send returns after SimulatorKit's completion callback; a device
+            // backend enqueues it and the dwell starts ahead of the report
+            // reaching the guest.
             await pacer.sleep(until: pacer.now() + .milliseconds(Self.tapDwellMs))
             // Cancellation shortens the dwell rather than skipping the up.
             // A transfer is the one case that sends nothing: the release would
             // be dropped and the quiesce frees the contact instead.
             if Self.checkpoint(backend: backend, generation: generation, fence: fence) != .stopWithoutSend {
-                try backend.tapUp(at: point, generation: generation)
+                try await backend.tapUp(at: point, generation: generation)
             }
         } catch {
             throw PaneError.bridgeFailed(
@@ -129,15 +129,15 @@ enum SimInputSynthesis {
         x: Double,
         y: Double,
         phase: TouchPhase
-    ) throws {
+    ) async throws {
         let point = CGPoint(x: x, y: y)
         do {
             switch phase {
             case .down, .move:
-                try backend.tapDown(at: point, generation: generation)
+                try await backend.tapDown(at: point, generation: generation)
 
             case .lift:
-                try backend.tapUp(at: point, generation: generation)
+                try await backend.tapUp(at: point, generation: generation)
             }
         } catch {
             throw PaneError.bridgeFailed(
@@ -168,18 +168,18 @@ enum SimInputSynthesis {
         y: Double,
         phase: TouchPhase,
         edge: Int
-    ) throws {
+    ) async throws {
         let point = CGPoint(x: x, y: y)
         do {
             switch phase {
             case .down:
-                try backend.edgeTouchDown(at: point, edge: edge, generation: generation)
+                try await backend.edgeTouchDown(at: point, edge: edge, generation: generation)
 
             case .move:
-                try backend.edgeTouchMove(at: point, edge: edge, generation: generation)
+                try await backend.edgeTouchMove(at: point, edge: edge, generation: generation)
 
             case .lift:
-                try backend.edgeTouchUp(at: point, edge: edge, generation: generation)
+                try await backend.edgeTouchUp(at: point, edge: edge, generation: generation)
             }
         } catch let error as DeviceBackendError {
             throw PaneError.mapBackendError(error, paneId: paneId, operation: .edgeTouch)
@@ -239,7 +239,7 @@ enum SimInputSynthesis {
         // would overstate what was sent.
         var emitted = 0
         do {
-            try backend.tapDown(at: start, generation: generation)
+            try await backend.tapDown(at: start, generation: generation)
             // Active dwell at the origin before moving, which lets the OS lock
             // onto a bottom-edge system gesture before the drag. Skipped
             // when startHoldMs is 0 so a plain swipe is unchanged.
@@ -260,7 +260,7 @@ enum SimInputSynthesis {
                     return PaneCoordinator.SwipeOutcome(steps: emitted, durationMs: timing.totalMs)
 
                 case .releaseAndStop:
-                    try backend.tapUp(at: end, generation: generation)
+                    try await backend.tapUp(at: end, generation: generation)
                     return PaneCoordinator.SwipeOutcome(steps: emitted, durationMs: timing.totalMs)
 
                 case .proceed:
@@ -273,7 +273,7 @@ enum SimInputSynthesis {
                 // a dropped sample costs nothing else.
                 step = max(step + 1, timing.stepDue(at: pacer.now(), from: anchor))
                 let next = CGPoint(x: fromX + deltaX * Double(step), y: fromY + deltaY * Double(step))
-                try backend.tapDown(at: next, generation: generation)
+                try await backend.tapDown(at: next, generation: generation)
                 emitted += 1
             }
             // Active dwell at the end point so the OS sees the finger stop
@@ -286,7 +286,7 @@ enum SimInputSynthesis {
                 fence: fence,
                 pacer: pacer
             )
-            try backend.tapUp(at: end, generation: generation)
+            try await backend.tapUp(at: end, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
                 paneId: paneId,
@@ -341,7 +341,11 @@ enum SimInputSynthesis {
         let deltaY = (toY - fromY) / Double(timing.steps)
         let end = CGPoint(x: toX, y: toY)
         do {
-            try backend.edgeTouchDown(at: CGPoint(x: fromX, y: fromY), edge: edge, generation: generation)
+            try await backend.edgeTouchDown(
+                at: CGPoint(x: fromX, y: fromY),
+                edge: edge,
+                generation: generation
+            )
             let anchor = pacer.now()
             var step = 0
             while step < timing.steps {
@@ -351,7 +355,7 @@ enum SimInputSynthesis {
                     return
 
                 case .releaseAndStop:
-                    try backend.edgeTouchUp(at: end, edge: edge, generation: generation)
+                    try await backend.edgeTouchUp(at: end, edge: edge, generation: generation)
                     return
 
                 case .proceed:
@@ -359,7 +363,7 @@ enum SimInputSynthesis {
                 }
                 step = max(step + 1, timing.stepDue(at: pacer.now(), from: anchor))
                 let next = CGPoint(x: fromX + deltaX * Double(step), y: fromY + deltaY * Double(step))
-                try backend.edgeTouchMove(at: next, edge: edge, generation: generation)
+                try await backend.edgeTouchMove(at: next, edge: edge, generation: generation)
             }
             if holdMs > 0 {
                 let capped = min(max(holdMs, 0), PaneCoordinator.maxGestureDurationMs)
@@ -381,7 +385,7 @@ enum SimInputSynthesis {
                         return
 
                     case .releaseAndStop:
-                        try backend.edgeTouchUp(at: end, edge: edge, generation: generation)
+                        try await backend.edgeTouchUp(at: end, edge: edge, generation: generation)
                         return
 
                     case .proceed:
@@ -403,10 +407,10 @@ enum SimInputSynthesis {
                     emitted += 1
                     let jitter = emitted.isMultiple(of: 2) ? Self.dwellJitter : -Self.dwellJitter
                     let dwellPoint = CGPoint(x: end.x + jitter, y: end.y)
-                    try backend.edgeTouchMove(at: dwellPoint, edge: edge, generation: generation)
+                    try await backend.edgeTouchMove(at: dwellPoint, edge: edge, generation: generation)
                 }
             }
-            try backend.edgeTouchUp(at: end, edge: edge, generation: generation)
+            try await backend.edgeTouchUp(at: end, edge: edge, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
                 paneId: paneId,
@@ -462,14 +466,14 @@ enum SimInputSynthesis {
         pacer: any GesturePacing
     ) async throws {
         do {
-            try backend.pressHardwareButton(.home, generation: generation)
+            try await backend.pressHardwareButton(.home, generation: generation)
             await pacer.sleep(until: pacer.now() + .nanoseconds(Self.appSwitcherDoublePressGapNs))
             // The gap is an `await`; a transfer or a cancellation can land in
             // it. Stop before the second press rather than driving the new
             // owner's device. No contact is held between the presses, so
             // neither early exit has anything to release.
             guard Self.checkpoint(backend: backend, generation: generation, fence: fence) == .proceed else { return }
-            try backend.pressHardwareButton(.home, generation: generation)
+            try await backend.pressHardwareButton(.home, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
                 paneId: paneId,
@@ -538,7 +542,10 @@ enum SimInputSynthesis {
             // can't land two same-signed nudges in a row and hand the bridge
             // the identical-point resend the jitter exists to avoid.
             let jitter = emitted.isMultiple(of: 2) ? Self.dwellJitter : -Self.dwellJitter
-            try backend.tapDown(at: CGPoint(x: point.x + jitter, y: point.y), generation: generation)
+            try await backend.tapDown(
+                at: CGPoint(x: point.x + jitter, y: point.y),
+                generation: generation
+            )
         }
     }
 
@@ -555,7 +562,7 @@ enum SimInputSynthesis {
         let point = CGPoint(x: x, y: y)
         let cappedMs = min(max(durationMs, 0), PaneCoordinator.maxGestureDurationMs)
         do {
-            try backend.tapDown(at: point, generation: generation)
+            try await backend.tapDown(at: point, generation: generation)
             // Anchor after the down is submitted. See `tap` for what that
             // means on each backend.
             let anchor = pacer.now()
@@ -581,7 +588,7 @@ enum SimInputSynthesis {
                 }
             }
             if release {
-                try backend.tapUp(at: point, generation: generation)
+                try await backend.tapUp(at: point, generation: generation)
             }
         } catch {
             throw PaneError.bridgeFailed(
@@ -592,7 +599,13 @@ enum SimInputSynthesis {
         }
     }
 
-    static func key(backend: any DeviceBackend, paneId: UUID, generation: UInt64, keyCode: UInt32, down: Bool) throws {
+    static func key(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        generation: UInt64,
+        keyCode: UInt32,
+        down: Bool
+    ) async throws {
         // Wire value is the kVK virtual key from `NSEvent.keyCode`;
         // Indigo expects HID usage codes. Translation is the
         // daemon's job. Without it, every key is gibberish.
@@ -601,9 +614,9 @@ enum SimInputSynthesis {
         }
         do {
             if down {
-                try backend.keyDown(hidUsage: hid, generation: generation)
+                try await backend.keyDown(hidUsage: hid, generation: generation)
             } else {
-                try backend.keyUp(hidUsage: hid, generation: generation)
+                try await backend.keyUp(hidUsage: hid, generation: generation)
             }
         } catch {
             throw PaneError.bridgeFailed(
@@ -619,9 +632,9 @@ enum SimInputSynthesis {
         paneId: UUID,
         generation: UInt64,
         button: HardwareButton
-    ) throws {
+    ) async throws {
         do {
-            try backend.pressHardwareButton(button, generation: generation)
+            try await backend.pressHardwareButton(button, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
                 paneId: paneId,
@@ -659,7 +672,7 @@ enum SimInputSynthesis {
         let endF1 = CGPoint(x: toF1X, y: toF1Y)
         let endF2 = CGPoint(x: toF2X, y: toF2Y)
         do {
-            try backend.twoFingerDown(
+            try await backend.twoFingerDown(
                 f1: CGPoint(x: fromF1X, y: fromF1Y),
                 f2: CGPoint(x: fromF2X, y: fromF2Y),
                 generation: generation
@@ -673,7 +686,7 @@ enum SimInputSynthesis {
                     return
 
                 case .releaseAndStop:
-                    try backend.twoFingerUp(f1: endF1, f2: endF2, generation: generation)
+                    try await backend.twoFingerUp(f1: endF1, f2: endF2, generation: generation)
                     return
 
                 case .proceed:
@@ -688,9 +701,9 @@ enum SimInputSynthesis {
                     x: fromF2X + deltaF2X * Double(step),
                     y: fromF2Y + deltaF2Y * Double(step)
                 )
-                try backend.twoFingerDown(f1: finger1, f2: finger2, generation: generation)
+                try await backend.twoFingerDown(f1: finger1, f2: finger2, generation: generation)
             }
-            try backend.twoFingerUp(f1: endF1, f2: endF2, generation: generation)
+            try await backend.twoFingerUp(f1: endF1, f2: endF2, generation: generation)
         } catch {
             throw PaneError.bridgeFailed(
                 paneId: paneId,
@@ -713,7 +726,7 @@ enum SimInputSynthesis {
         generation: UInt64,
         phase: TouchPhase,
         points: [CGPoint]
-    ) throws {
+    ) async throws {
         guard points.count == 2 else {
             throw PaneError.bridgeFailed(
                 paneId: paneId,
@@ -724,10 +737,10 @@ enum SimInputSynthesis {
         do {
             switch phase {
             case .down, .move:
-                try backend.twoFingerDown(f1: points[0], f2: points[1], generation: generation)
+                try await backend.twoFingerDown(f1: points[0], f2: points[1], generation: generation)
 
             case .lift:
-                try backend.twoFingerUp(f1: points[0], f2: points[1], generation: generation)
+                try await backend.twoFingerUp(f1: points[0], f2: points[1], generation: generation)
             }
         } catch {
             throw PaneError.bridgeFailed(
@@ -748,48 +761,31 @@ enum SimInputSynthesis {
     /// any HID event is sent. Without that, "abcé" would type
     /// "abc" and then throw on `é`, partially mutating the focused
     /// field even though the caller sees an error.
-    static func text(backend: any DeviceBackend, paneId: UUID, generation: UInt64, text: String) throws {
+    static func text(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        generation: UInt64,
+        text: String
+    ) async throws {
         for character in text where KeyboardInputMap.asciiKeyMap[character] == nil {
             throw PaneError.unsupportedCharacter(
                 paneId: paneId,
                 character: character
             )
         }
-        for character in text {
-            // Already proven non-nil by the validation pass above.
-            guard let mapping = KeyboardInputMap.asciiKeyMap[character] else { continue }
-            do {
-                if mapping.shift {
-                    try backend.keyDown(hidUsage: KeyboardInputMap.hidShift, generation: generation)
-                    // Inner do-catch handles the Shift release on
-                    // both paths:
-                    //   - success: release Shift with `try`, so a
-                    //     genuine release failure surfaces to the
-                    //     caller instead of being swallowed.
-                    //   - character throw: best-effort release Shift
-                    //     (try?) so it doesn't get stuck in the sim's
-                    //     modifier state, then propagate the original
-                    //     error rather than masking it with a release
-                    //     failure.
-                    do {
-                        try backend.keyDown(hidUsage: mapping.keyCode, generation: generation)
-                        try backend.keyUp(hidUsage: mapping.keyCode, generation: generation)
-                        try backend.keyUp(hidUsage: KeyboardInputMap.hidShift, generation: generation)
-                    } catch {
-                        try? backend.keyUp(hidUsage: KeyboardInputMap.hidShift, generation: generation)
-                        throw error
-                    }
-                } else {
-                    try backend.keyDown(hidUsage: mapping.keyCode, generation: generation)
-                    try backend.keyUp(hidUsage: mapping.keyCode, generation: generation)
-                }
-            } catch {
-                throw PaneError.bridgeFailed(
-                    paneId: paneId,
-                    operation: .text,
-                    message: BridgeMessage.unwrap(error)
-                )
+        let keystrokes = text.compactMap { character in
+            KeyboardInputMap.asciiKeyMap[character].map {
+                HIDKeystroke(usage: $0.keyCode, shift: $0.shift)
             }
+        }
+        do {
+            try await backend.typeKeystrokes(keystrokes, generation: generation)
+        } catch {
+            throw PaneError.bridgeFailed(
+                paneId: paneId,
+                operation: .text,
+                message: BridgeMessage.unwrap(error)
+            )
         }
     }
 
@@ -845,7 +841,7 @@ enum SimInputSynthesis {
     ) async throws {
         do {
             if durationMs <= 0 {
-                try backend.rotateCrown(delta: delta, generation: generation)
+                try await backend.rotateCrown(delta: delta, generation: generation)
                 return
             }
             let timing = GestureTiming(durationMs: durationMs, maxMs: PaneCoordinator.maxGestureDurationMs)
@@ -867,7 +863,7 @@ enum SimInputSynthesis {
                 // absolute; a crown delta is relative, so dropping one would
                 // quietly shorten the total rotation the caller asked for.
                 let share = delta * Double(due - emitted) / Double(timing.steps)
-                try backend.rotateCrown(delta: share, generation: generation)
+                try await backend.rotateCrown(delta: share, generation: generation)
                 emitted = due
             }
         } catch {

@@ -15,9 +15,29 @@ import DaemonProtocol
 import Foundation
 
 enum PaneAccessibility {
+    /// AXP's callback bridge waits synchronously for each simulator reply.
+    /// Keep the whole read and JSON conversion on the pane's serial Dispatch
+    /// queue so no non-Sendable Foundation tree crosses the continuation.
+    /// Separate panes use separate queues and can make progress independently.
+
     /// Serialize the frontmost iOS app's accessibility tree to JSON
     /// bytes, annotated for `family`.
-    static func tree(backend: any DeviceBackend, paneId: UUID, family: DeviceFamily) throws -> Data {
+    static func tree(
+        backend: any DeviceBackend,
+        queue: BlockingWorkQueue,
+        paneId: UUID,
+        family: DeviceFamily
+    ) async throws -> Data {
+        try await queue.run {
+            try treeSynchronously(backend: backend, paneId: paneId, family: family)
+        }
+    }
+
+    private static func treeSynchronously(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        family: DeviceFamily
+    ) throws -> Data {
         let tree: [String: Any]
         do {
             tree = try backend.accessibilityFrontmostTree()
@@ -51,7 +71,24 @@ enum PaneAccessibility {
     /// against the frontmost app's screen frame before the bridge call,
     /// since AXPTranslator's `objectAtPoint:` operates in pixel
     /// coordinates (see AXSweep's header note).
-    static func element(backend: any DeviceBackend, paneId: UUID, x: Double, y: Double) throws -> Data {
+    static func element(
+        backend: any DeviceBackend,
+        queue: BlockingWorkQueue,
+        paneId: UUID,
+        x: Double,
+        y: Double
+    ) async throws -> Data {
+        try await queue.run {
+            try elementSynchronously(backend: backend, paneId: paneId, x: x, y: y)
+        }
+    }
+
+    private static func elementSynchronously(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        x: Double,
+        y: Double
+    ) throws -> Data {
         let rootTree: [String: Any]
         do {
             rootTree = try backend.accessibilityFrontmostTree()
@@ -121,7 +158,22 @@ enum PaneAccessibility {
     /// carrying the offending point's coordinates. JSON encoding
     /// failure on the result root also propagates as `bridgeFailed`,
     /// matching how `ax tree` handles the same case.
-    static func sweep(backend: any DeviceBackend, paneId: UUID, step: Double?) throws -> Data {
+    static func sweep(
+        backend: any DeviceBackend,
+        queue: BlockingWorkQueue,
+        paneId: UUID,
+        step: Double?
+    ) async throws -> Data {
+        try await queue.run {
+            try sweepSynchronously(backend: backend, paneId: paneId, step: step)
+        }
+    }
+
+    private static func sweepSynchronously(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        step: Double?
+    ) throws -> Data {
         // Pre-flight: read `frontmostTree()` once to confirm the
         // AX bridge is reachable AND to learn the screen pixel
         // frame the grid scales into. The bridge's

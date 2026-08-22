@@ -163,38 +163,51 @@ struct DeviceCtlLocation: DeviceLocationSimulating {
     static let scenarioNotFoundCode = 20_001
     static let coreDeviceErrorDomain = "com.apple.dt.CoreDeviceError"
 
-    /// Production runner. Reads the `--json-output` file and removes it
-    /// before returning, so nothing accumulates in the temp dir.
-    static let spawn: Runner = { arguments, jsonPath in
-        await Task.detached {
-            defer { try? FileManager.default.removeItem(atPath: jsonPath) }
-            let process = Process()
-            process.launchPath = "/usr/bin/xcrun"
-            process.arguments = arguments
-            process.standardOutput = FileHandle.nullDevice
-            let errPipe = Pipe()
-            process.standardError = errPipe
-            do {
-                try process.run()
-            } catch {
-                return DeviceCtlRun(status: -1, json: nil, stderr: "\(error)")
-            }
-            // Drain stderr before waiting: devicectl's diagnostics are
-            // small, but a full pipe buffer would deadlock the wait.
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            return DeviceCtlRun(
-                status: process.terminationStatus,
-                json: FileManager.default.contents(atPath: jsonPath),
-                stderr: String(data: errData, encoding: .utf8) ?? ""
-            )
-        }.value
-    }
-
     private let run: Runner
 
-    init(run: @escaping Runner = DeviceCtlLocation.spawn) {
-        self.run = run
+    init(run: Runner? = nil) {
+        if let run {
+            self.run = run
+        } else {
+            // `RealDeviceBackend` owns one DeviceCtlLocation per device. Its
+            // own location pump orders mutations for that device; this queue
+            // moves the synchronous process wait off Swift's cooperative pool
+            // without blocking another device's runner.
+            let processQueue = BlockingWorkQueue(
+                label: "com.deviceterm.daemon.devicectl-location.\(UUID().uuidString)"
+            )
+            self.run = Self.productionRunner(on: processQueue)
+        }
+    }
+
+    /// Production runner. Reads the `--json-output` file and removes it before
+    /// returning, so nothing accumulates in the temp dir.
+    private static func productionRunner(on processQueue: BlockingWorkQueue) -> Runner {
+        { arguments, jsonPath in
+            await processQueue.run {
+                defer { try? FileManager.default.removeItem(atPath: jsonPath) }
+                let process = Process()
+                process.launchPath = "/usr/bin/xcrun"
+                process.arguments = arguments
+                process.standardOutput = FileHandle.nullDevice
+                let errPipe = Pipe()
+                process.standardError = errPipe
+                do {
+                    try process.run()
+                } catch {
+                    return DeviceCtlRun(status: -1, json: nil, stderr: "\(error)")
+                }
+                // Drain stderr before waiting: devicectl's diagnostics are
+                // small, but a full pipe buffer would deadlock the wait.
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                return DeviceCtlRun(
+                    status: process.terminationStatus,
+                    json: FileManager.default.contents(atPath: jsonPath),
+                    stderr: String(data: errData, encoding: .utf8) ?? ""
+                )
+            }
+        }
     }
 
     // MARK: Pure

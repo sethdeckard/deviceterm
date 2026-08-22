@@ -503,6 +503,10 @@ public actor PaneCoordinator {
         /// `requireBackend` keys on. Owns the display subscription, HID,
         /// rotation, and (lazily) the accessibility client internally.
         var backend: (any DeviceBackend)?
+        /// AXP waits synchronously for replies. Serializing a pane's complete
+        /// AX operations here preserves its bridge ordering while letting AX
+        /// work on other panes proceed independently.
+        let accessibilityWorkQueue: BlockingWorkQueue
         var subscribers: [UUID: Subscriber] = [:]
         var state: PaneLifecycle
         /// Set while an ownership transfer (adoption) is quiescing this
@@ -764,6 +768,9 @@ public actor PaneCoordinator {
             self.name = name
             self.deviceType = deviceType
             self.capabilities = capabilities
+            self.accessibilityWorkQueue = BlockingWorkQueue(
+                label: "com.deviceterm.daemon.pane-ax.\(id)"
+            )
         }
 
         /// Best-effort read of the device's native pixel dimensions.
@@ -2037,8 +2044,7 @@ public actor PaneCoordinator {
         record.terminalStatePublicationInFlight = true
         let surfacePump = record.teardownSurfacePump()
         record.teardownOrientationPump(backend: record.backend)
-        record.backend?.shutdownBackend()
-        record.backend = nil
+        shutDownBackend(for: record)
         record.currentSurface = nil
         record.simulatedLocation = nil
         record.locationEpoch &+= 1
@@ -2253,10 +2259,23 @@ public actor PaneCoordinator {
         }
         let surfacePump = record.teardownSurfacePump()
         record.teardownOrientationPump(backend: record.backend)
-        record.backend?.shutdownBackend()
-        record.backend = nil
+        shutDownBackend(for: record)
         record.currentSurface = nil
         await surfacePump?.value
+    }
+
+    /// Stop the backend immediately, then release its cached AX bridge after
+    /// every accessibility operation admitted before teardown has drained.
+    /// A contact lane may retain the backend for held-contact recovery after a
+    /// terminal transition, so relying on backend deinit would retain the AX
+    /// delegate registration indefinitely.
+    private func shutDownBackend(for record: Record) {
+        guard let backend = record.backend else { return }
+        backend.shutdownBackend()
+        record.accessibilityWorkQueue.submit {
+            backend.releaseAccessibilityResources()
+        }
+        record.backend = nil
     }
 
     /// Drop the retirement and let anything waiting on this target proceed.
@@ -2404,22 +2423,24 @@ public actor PaneCoordinator {
     /// The recovery closure captures the backend rather than looking the pane
     /// up when it fires: a close removes the record from `panes` before the
     /// lane gets a chance to free an abandoned contact, so a lookup would find
-    /// nothing and silently drop the lift. Releasing a contact the lane knows
-    /// the shape of is synchronous, so it is ordered ahead of both the backend
-    /// teardown and whatever gesture takes the lane next; recovering from a
-    /// failed composite has to ask the backend, which suspends.
+    /// nothing and silently drop the lift. Every release joins the backend's
+    /// ordered input queue before the lane admits the next gesture.
     private func lane(for record: Record, backend: any DeviceBackend) -> ContactLane {
         if let existing = record.contactLane { return existing }
         let lane = ContactLane { contact, generation in
             switch contact {
             case let .plain(point):
-                return (try? backend.tapUp(at: point, generation: generation)) != nil
+                return (try? await backend.tapUp(at: point, generation: generation)) != nil
 
             case let .edge(point, edge):
-                return (try? backend.edgeTouchUp(at: point, edge: edge, generation: generation)) != nil
+                return (try? await backend.edgeTouchUp(at: point, edge: edge, generation: generation)) != nil
 
             case let .multi(finger1, finger2):
-                return (try? backend.twoFingerUp(f1: finger1, f2: finger2, generation: generation)) != nil
+                return (try? await backend.twoFingerUp(
+                    f1: finger1,
+                    f2: finger2,
+                    generation: generation
+                )) != nil
 
             case nil:
                 // A composite that failed partway. It never told the lane what
@@ -2515,7 +2536,7 @@ public actor PaneCoordinator {
         )
         guard admitted.send else { return }
         try await sendingLiveContact(admitted, on: lane) {
-            try SimInputSynthesis.touch(
+            try await SimInputSynthesis.touch(
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
@@ -2532,13 +2553,13 @@ public actor PaneCoordinator {
     private func sendingLiveContact(
         _ admitted: ContactLane.LiveAdmission,
         on lane: ContactLane,
-        _ send: () throws -> Void
+        _ send: () async throws -> Void
     ) async rethrows {
         // Only a release that landed frees the lane. A failed lift leaves the
         // contact down, so the lease stays with it and the lane's expiry
         // synthesizes the release; dropping it here would admit the next
         // gesture on top of a finger that is still held.
-        try send()
+        try await send()
         if let id = admitted.releaseAfterSend { await lane.release(id) }
     }
 
@@ -2564,7 +2585,7 @@ public actor PaneCoordinator {
         )
         guard admitted.send else { return }
         try await sendingLiveContact(admitted, on: lane) {
-            try SimInputSynthesis.edgeTouch(
+            try await SimInputSynthesis.edgeTouch(
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
@@ -2697,14 +2718,19 @@ public actor PaneCoordinator {
         }
     }
 
-    func key(paneId: UUID, as principal: PaneAccessPrincipal, keyCode: UInt32, down: Bool) throws {
+    func key(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        keyCode: UInt32,
+        down: Bool
+    ) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.key,
             operation: .key(down: down)
         )
-        try SimInputSynthesis.key(
+        try await SimInputSynthesis.key(
             backend: input.backend,
             paneId: paneId,
             generation: input.generation,
@@ -2713,14 +2739,18 @@ public actor PaneCoordinator {
         )
     }
 
-    func pressButton(paneId: UUID, as principal: PaneAccessPrincipal, button: HardwareButton) throws {
+    func pressButton(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        button: HardwareButton
+    ) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.button,
             operation: .button(button)
         )
-        try SimInputSynthesis.pressButton(
+        try await SimInputSynthesis.pressButton(
             backend: input.backend,
             paneId: paneId,
             generation: input.generation,
@@ -2788,7 +2818,7 @@ public actor PaneCoordinator {
         guard points.count == 2 else {
             // The synthesis rejects any other count with a bridge error; let it
             // report that rather than admitting a frame the lane can't name.
-            try SimInputSynthesis.multitouch(
+            try await SimInputSynthesis.multitouch(
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
@@ -2805,7 +2835,7 @@ public actor PaneCoordinator {
         )
         guard admitted.send else { return }
         try await sendingLiveContact(admitted, on: lane) {
-            try SimInputSynthesis.multitouch(
+            try await SimInputSynthesis.multitouch(
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
@@ -2815,14 +2845,19 @@ public actor PaneCoordinator {
         }
     }
 
-    func text(paneId: UUID, as principal: PaneAccessPrincipal, text: String) throws {
+    func text(paneId: UUID, as principal: PaneAccessPrincipal, text: String) async throws {
         let input = try inputBackend(
             paneId: paneId,
             as: principal,
             supporting: \.text,
             operation: .text
         )
-        try SimInputSynthesis.text(backend: input.backend, paneId: paneId, generation: input.generation, text: text)
+        try await SimInputSynthesis.text(
+            backend: input.backend,
+            paneId: paneId,
+            generation: input.generation,
+            text: text
+        )
     }
 
     func rotate(paneId: UUID, as principal: PaneAccessPrincipal, target: RotationTarget) async throws {
@@ -2926,9 +2961,12 @@ public actor PaneCoordinator {
     // (`accessibilityTree` also reads the pane's immutable `family`). The
     // bridge read + `AXTreeAnnotator`/`AXSweep` post-processing + JSON
     // serialization are pure and live in `PaneAccessibility`; the bridge's
-    // non-Sendable Foundation dicts never escape it, only `Data`.
+    // non-Sendable Foundation dicts never escape it, only `Data`. Each read
+    // re-authorizes after its off-pool suspension so a session cannot receive
+    // a result after the pane closes, transfers away, or reaches a terminal
+    // lifecycle while its record remains available for the GUI overlay.
 
-    func accessibilityTree(paneId: UUID, as principal: PaneAccessPrincipal) throws -> Data {
+    func accessibilityTree(paneId: UUID, as principal: PaneAccessPrincipal) async throws -> Data {
         // `requireBackend` authorizes ownership and hands back the record,
         // so the family read below is a single authorized lookup; no
         // second unauthorized `panes[paneId]` read. Unknown family safely
@@ -2940,27 +2978,95 @@ public actor PaneCoordinator {
             operation: .axTree
         )
         let family = DeviceFamily(rawValue: record.family) ?? .unknown
-        return try PaneAccessibility.tree(backend: backend, paneId: paneId, family: family)
+        let data = try await PaneAccessibility.tree(
+            backend: backend,
+            queue: record.accessibilityWorkQueue,
+            paneId: paneId,
+            family: family
+        )
+        try revalidateAccessibility(
+            record: record,
+            backend: backend,
+            paneId: paneId,
+            as: principal
+        )
+        return data
     }
 
-    func accessibilityElement(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double) throws -> Data {
-        let backend = try requireBackend(
+    func accessibilityElement(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        x: Double,
+        y: Double
+    ) async throws -> Data {
+        let (record, backend) = try requireBackend(
             paneId: paneId,
             as: principal,
             supporting: \.accessibility,
             operation: .axPoint
-        ).backend
-        return try PaneAccessibility.element(backend: backend, paneId: paneId, x: x, y: y)
+        )
+        let data = try await PaneAccessibility.element(
+            backend: backend,
+            queue: record.accessibilityWorkQueue,
+            paneId: paneId,
+            x: x,
+            y: y
+        )
+        try revalidateAccessibility(
+            record: record,
+            backend: backend,
+            paneId: paneId,
+            as: principal
+        )
+        return data
     }
 
-    func accessibilitySweep(paneId: UUID, as principal: PaneAccessPrincipal, step: Double?) throws -> Data {
-        let backend = try requireBackend(
+    func accessibilitySweep(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        step: Double?
+    ) async throws -> Data {
+        let (record, backend) = try requireBackend(
             paneId: paneId,
             as: principal,
             supporting: \.accessibility,
             operation: .axSweep
-        ).backend
-        return try PaneAccessibility.sweep(backend: backend, paneId: paneId, step: step)
+        )
+        let data = try await PaneAccessibility.sweep(
+            backend: backend,
+            queue: record.accessibilityWorkQueue,
+            paneId: paneId,
+            step: step
+        )
+        try revalidateAccessibility(
+            record: record,
+            backend: backend,
+            paneId: paneId,
+            as: principal
+        )
+        return data
+    }
+
+    /// Fence a completed AX payload against the exact pane record and backend
+    /// that produced it. Terminal shutdown/failure retains the record but
+    /// clears its backend; ownership-only authorization therefore is not a
+    /// sufficient post-suspension check.
+    private func revalidateAccessibility(
+        record: Record,
+        backend: any DeviceBackend,
+        paneId: UUID,
+        as principal: PaneAccessPrincipal
+    ) throws {
+        let current = try authorize(paneId: paneId, as: principal, gatesInput: false)
+        guard current === record else {
+            throw PaneError.notFound(paneId: paneId)
+        }
+        guard let currentBackend = current.backend,
+            ObjectIdentifier(currentBackend) == ObjectIdentifier(backend),
+            current.state != .shutdown,
+            current.state != .failed else {
+            throw PaneError.paneNotActive(paneId: paneId)
+        }
     }
 
     // MARK: - Location

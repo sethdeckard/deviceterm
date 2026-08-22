@@ -194,7 +194,7 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         // (identified by their unique notification name) before standing up
         // our own, so we don't leave stale `devicectl` processes holding
         // tunnels up across an unclean restart.
-        TunnelKeepalive.reapOrphans()
+        await TunnelKeepalive.reapOrphans()
         let tunnelKeepalive = TunnelKeepalive()
         // Store the keepalive before the next suspension so
         // `applicationWillTerminate` can shut it down. `shutdownAll()` is

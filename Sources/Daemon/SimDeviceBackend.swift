@@ -8,10 +8,10 @@
 // to. This is a faithful move of that logic behind the seam. No
 // behavior changes, the bridge calls are identical.
 //
-// `@unchecked Sendable`: the bridge handles are non-Sendable, but only
-// the owning `PaneCoordinator` actor ever touches a backend, and the
-// display callback hops back into that actor before any state is read:
-// the same invariant the record class relied on.
+// `@unchecked Sendable`: the bridge handles are non-Sendable. The owning
+// coordinator uses display and location state, `inputWorkQueue` serializes
+// HID/Purple work, each pane's AX queue serializes accessibility work, and
+// `inputGate` protects the small state shared across those domains.
 
 import CoreSimulatorBridge
 import DaemonProtocol
@@ -56,19 +56,25 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     // edge swipe reaches SpringBoard's system-gesture recognizer directly.
     let supportsSystemEdgeGesture = true
 
-    // Ownership-transfer input fence. The sim sends synchronously with no
-    // downstream queue, so, unlike the device backend, there is nothing
-    // to buffer-drop or barrier: a transfer just bumps the generation, and
-    // the paced `SimInputSynthesis` gesture checks it before each send and
-    // releases its held contact when it goes stale. `inputGate` (a
-    // documented DispatchQueue) serialises the counter across the gesture's
-    // off-actor task and the coordinator's quiesce. Witnesses live below,
-    // after `init`.
+    // Ownership-transfer input fence. `inputWorkQueue` orders every simulator
+    // send with transfer quiesce. A transfer bumps the generation there, and
+    // the paced `SimInputSynthesis` gesture checks it before each later send.
+    // `inputGate` protects short generation and held-state snapshots across
+    // the queue, paced tasks, and the coordinator.
     /// Delivery queue for display-orientation callbacks. Serial, so
     /// deliveries reach the coordinator in queue order.
     private let orientationQueue = DispatchQueue(label: "com.deviceterm.sim.display-orientation")
+    /// SimulatorKit's HID completion API waits synchronously. This per-pane
+    /// queue preserves bridge ordering without occupying a Swift
+    /// cooperative-executor worker.
+    private let inputWorkQueue = BlockingWorkQueue(
+        label: "com.deviceterm.daemon.sim-input"
+    )
 
     private let inputGate = DispatchQueue(label: "com.deviceterm.sim.input-gate")
+    /// Whether new lazy bridge work may begin. AX work reads this from its
+    /// serial blocking queue while teardown writes it on the coordinator.
+    private var backendActive = true
     private var inputGeneration: UInt64 = 1
     /// The contact currently held down, if any (see `HeldTouch`).
     private var heldTouch: HeldTouch?
@@ -100,15 +106,17 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         inputGate.sync { generation == inputGeneration }
     }
 
-    // The protocol requires `async`; the sim's quiesce is synchronous (no
-    // queue to drain), so there's nothing to await.
-    // swiftlint:disable:next async_without_await
     func quiesceInputForTransfer() async -> Bool {
-        // Bump the generation first: the `inputGate.sync` waits out any
-        // in-flight gated send, and every subsequent gesture send is then
-        // dropped as stale. Snapshot the held state *without clearing*: it
-        // is cleared only once its release actually lands, so a failed
-        // release isn't silently lost.
+        await inputWorkQueue.run { [self] in
+            quiesceInputForTransferSynchronously()
+        }
+    }
+
+    private func quiesceInputForTransferSynchronously() -> Bool {
+        // The surrounding `inputWorkQueue` waits out earlier sends. Bump the
+        // generation before snapshotting held state so every later paced
+        // gesture send is dropped as stale. Keep the held state until its
+        // release actually lands so a failed release is not silently lost.
         let (held, keys): (HeldTouch?, Set<UInt32>) = inputGate.sync {
             inputGeneration &+= 1
             return (heldTouch, heldKeys)
@@ -176,9 +184,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the coordinator's, not the failed gesture's, and the gesture's own
     /// generation may already be stale.
     ///
-    /// Non-async: the simulator's sends are synchronous, and a non-async
-    /// function satisfies the protocol's async requirement.
-    func releaseHeldContact() -> Bool {
+    func releaseHeldContact() async -> Bool {
+        await inputWorkQueue.run { [self] in
+            releaseHeldContactSynchronously()
+        }
+    }
+
+    private func releaseHeldContactSynchronously() -> Bool {
         let held: HeldTouch? = inputGate.sync { heldTouch }
         guard let held else { return true }
         guard let hid = try? requireHID() else {
@@ -208,20 +220,18 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         inputGate.sync { inputGeneration &+= 1 }
     }
 
-    /// Run `body` (a bridge send plus its held-state update) under
-    /// `inputGate`, but only if `generation` is still current, atomically
-    /// dropping a send from an operation a transfer invalidated (the check
-    /// and the send share one critical section, so a bump can't slip
-    /// between them). `body` updates held state only after the send
-    /// succeeds, so a failed send leaves the tracker untouched. Returns
-    /// whether the send actually ran (false = dropped as stale).
+    /// Run `body` only if `generation` is still current. Every caller executes
+    /// on `inputWorkQueue`, and transfer quiesce joins that same serial order,
+    /// so a generation bump cannot slip between this check and the send.
+    /// `inputGate` protects the short cross-executor read without being held
+    /// across SimulatorKit's completion wait.
     @discardableResult
     private func gatedSend(_ generation: UInt64, _ body: () throws -> Void) throws -> Bool {
-        try inputGate.sync {
-            guard generation == inputGeneration else { return false }
-            try body()
-            return true
+        guard inputGate.sync(execute: { generation == inputGeneration }) else {
+            return false
         }
+        try body()
+        return true
     }
 
     // MARK: Frames
@@ -292,70 +302,126 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         return hidClient
     }
 
-    func tapDown(at point: CGPoint, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().tapDown(at: point)
-            heldTouch = .single(point)
+    func tapDown(at point: CGPoint, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().tapDown(at: point) }) {
+                inputGate.sync { heldTouch = .single(point) }
+            }
         }
     }
 
-    func tapUp(at point: CGPoint, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().tapUp(at: point)
-            heldTouch = nil
+    func tapUp(at point: CGPoint, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().tapUp(at: point) }) {
+                inputGate.sync { heldTouch = nil }
+            }
         }
     }
 
-    func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().edgeTouchDown(at: point, edge: edge)
-            heldTouch = .edge(point, edge)
+    func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().edgeTouchDown(at: point, edge: edge) }) {
+                inputGate.sync { heldTouch = .edge(point, edge) }
+            }
         }
     }
 
-    func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().edgeTouchMove(at: point, edge: edge)
-            heldTouch = .edge(point, edge)
+    func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().edgeTouchMove(at: point, edge: edge) }) {
+                inputGate.sync { heldTouch = .edge(point, edge) }
+            }
         }
     }
 
-    func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().edgeTouchUp(at: point, edge: edge)
-            heldTouch = nil
+    func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().edgeTouchUp(at: point, edge: edge) }) {
+                inputGate.sync { heldTouch = nil }
+            }
         }
     }
 
-    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().twoFingerDown(f1: finger1, f2: finger2)
-            heldTouch = .twoFinger(finger1, finger2)
+    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().twoFingerDown(f1: finger1, f2: finger2) }) {
+                inputGate.sync { heldTouch = .twoFinger(finger1, finger2) }
+            }
         }
     }
 
-    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().twoFingerUp(f1: finger1, f2: finger2)
-            heldTouch = nil
+    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            if try gatedSend(generation, { try requireHID().twoFingerUp(f1: finger1, f2: finger2) }) {
+                inputGate.sync { heldTouch = nil }
+            }
         }
     }
 
-    func keyDown(hidUsage: UInt32, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().keyDown(keyCode: hidUsage)
-            heldKeys.insert(hidUsage)
+    func keyDown(hidUsage: UInt32, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            try keyDownSynchronously(hidUsage: hidUsage, generation: generation)
         }
     }
 
-    func keyUp(hidUsage: UInt32, generation: UInt64) throws {
-        try gatedSend(generation) {
-            try requireHID().keyUp(keyCode: hidUsage)
-            heldKeys.remove(hidUsage)
+    func keyUp(hidUsage: UInt32, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            try keyUpSynchronously(hidUsage: hidUsage, generation: generation)
         }
     }
 
-    func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {
+    func typeKeystrokes(_ keystrokes: [HIDKeystroke], generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            for keystroke in keystrokes {
+                if keystroke.shift {
+                    try keyDownSynchronously(
+                        hidUsage: KeyboardInputMap.hidShift,
+                        generation: generation
+                    )
+                    do {
+                        try keyDownSynchronously(hidUsage: keystroke.usage, generation: generation)
+                        try keyUpSynchronously(hidUsage: keystroke.usage, generation: generation)
+                        try keyUpSynchronously(
+                            hidUsage: KeyboardInputMap.hidShift,
+                            generation: generation
+                        )
+                    } catch {
+                        try? keyUpSynchronously(
+                            hidUsage: KeyboardInputMap.hidShift,
+                            generation: generation
+                        )
+                        throw error
+                    }
+                } else {
+                    try keyDownSynchronously(hidUsage: keystroke.usage, generation: generation)
+                    try keyUpSynchronously(hidUsage: keystroke.usage, generation: generation)
+                }
+            }
+        }
+    }
+
+    private func keyDownSynchronously(hidUsage: UInt32, generation: UInt64) throws {
+        if try gatedSend(generation, { try requireHID().keyDown(keyCode: hidUsage) }) {
+            inputGate.sync { _ = heldKeys.insert(hidUsage) }
+        }
+    }
+
+    private func keyUpSynchronously(hidUsage: UInt32, generation: UInt64) throws {
+        if try gatedSend(generation, { try requireHID().keyUp(keyCode: hidUsage) }) {
+            inputGate.sync { _ = heldKeys.remove(hidUsage) }
+        }
+    }
+
+    func pressHardwareButton(_ button: HardwareButton, generation: UInt64) async throws {
+        try await inputWorkQueue.run { [self] in
+            try pressHardwareButtonSynchronously(button, generation: generation)
+        }
+    }
+
+    private func pressHardwareButtonSynchronously(
+        _ button: HardwareButton,
+        generation: UInt64
+    ) throws {
         // Self-releasing when it succeeds (press+release inside the bridge
         // call). But that composite can partially land, down without up,
         // and the sim can't confirm it, so on failure record it as uncertain.
@@ -375,8 +441,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
-    func rotateCrown(delta: Double, generation: UInt64) throws {
-        try gatedSend(generation) { try requireHID().rotateCrown(delta: delta) }
+    func rotateCrown(delta: Double, generation: UInt64) async throws {
+        _ = try await inputWorkQueue.run { [self] in
+            try gatedSend(generation) { try requireHID().rotateCrown(delta: delta) }
+        }
     }
 
     // Reports only that the send cleared the generation fence. The bridge
@@ -384,12 +452,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     // can confirm the device moved, let alone that the display followed;
     // `true` means "sent, not dropped as stale" and no more. Presentation
     // comes from `startDisplayOrientation` instead, which does observe.
-    // No async work: see the protocol's async signature.
-    // swiftlint:disable:next async_without_await
     func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool {
-        try gatedSend(generation) {
-            guard let purpleClient else { throw DeviceBackendError.notActive }
-            try purpleClient.rotate(to: orientation.bridgeValue)
+        try await inputWorkQueue.run { [self] in
+            try gatedSend(generation) {
+                guard let purpleClient else { throw DeviceBackendError.notActive }
+                try purpleClient.rotate(to: orientation.bridgeValue)
+            }
         }
     }
 
@@ -403,14 +471,15 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         try requireAX().elementAtPoint(pixelPoint)
     }
 
-    /// Resolve (or lazily acquire) the AX client. Throws `.notActive`
-    /// if the backend has been torn down, and `.accessibilityUnavailable`
-    /// (without retrying) once acquisition has permanently failed.
+    /// Resolve (or lazily acquire) the AX client. Returns the cached client for
+    /// AX work admitted before teardown. Otherwise throws `.notActive` once new
+    /// bridge work is disabled, and `.accessibilityUnavailable` (without
+    /// retrying) once acquisition has permanently failed.
     private func requireAX() throws -> SimAccessibility {
         if let axClient { return axClient }
-        // The handles are released together on shutdown; a missing
-        // display handle is the canonical "no longer active" signal.
-        guard displayHandle != nil else { throw DeviceBackendError.notActive }
+        guard inputGate.sync(execute: { backendActive }) else {
+            throw DeviceBackendError.notActive
+        }
         if axAcquisitionFailed {
             throw DeviceBackendError.accessibilityUnavailable(
                 message: "AccessibilityPlatformTranslation unavailable on this host"
@@ -530,13 +599,15 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     // MARK: Lifecycle
 
     func shutdownBackend() {
-        // Stop the frame stream and drop the display + AX handles
-        // immediately: the IOSurface use-count must release so the
-        // kernel can reclaim the surface, and the AX delegate
-        // registration should drop promptly.
+        // Stop admitting lazy bridge work before releasing the display.
+        inputGate.sync { backendActive = false }
+        // Stop the frame stream and drop the display handle immediately: the
+        // IOSurface use-count must release so the kernel can reclaim it.
         displayHandle?.stop()
         displayHandle = nil
-        axClient = nil
+        // An AX call already queued before teardown owns this backend until it
+        // returns. Keep its client stable; the pane's AX queue clears it after
+        // all admitted reads finish.
         // Location holds only a `SimDevice` reference and has no
         // in-flight sequence to finish (each call is a single unpaced
         // send), so unlike HID/Purple it drops with the display handle.
@@ -554,5 +625,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // reject post-shutdown input. They release when this backend
         // deallocs: immediately in the common case, or once the
         // in-flight gesture's captured reference drops.
+    }
+
+    /// Called on the pane's serial AX queue after previously admitted reads
+    /// finish, so dropping the client unregisters its shared-delegate token
+    /// without racing a bridge call.
+    func releaseAccessibilityResources() {
+        axClient = nil
     }
 }

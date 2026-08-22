@@ -489,6 +489,16 @@ encoded as a **base64 JSON string**. The current method set has no binary
 payloads. Sim renders travel as XPC-marshalled `IOSurface` objects on a
 side-band message, never inline bytes (see "IOSurface delivery").
 
+Each UDS connection serializes replies and events on its own Dispatch-backed
+writer. `writeAll` still waits 1 ms and retries when a nonblocking write returns
+`EAGAIN`. That can occupy the connection's writer until the peer drains or
+disconnects, but it does not park a Swift cooperative-executor worker or
+another connection's writer.
+
+Closing shuts the socket down immediately, fails pending frames, and closes its
+descriptor after the active write and read-source handler finish. This prevents
+a reused descriptor from receiving an old connection's frame.
+
 **Version identity.** `DaemonProtocolInfo.wireVersion` identifies the RPC
 contract shared by the app, daemon, bundled CLI, and shim. The GUI uses it to
 detect an incompatible helper during an update and replace that helper
@@ -1468,6 +1478,14 @@ and the first up clears it, merging two gestures into one.
 gesture awaits into the synthesis, so actor isolation alone doesn't order
 them.
 
+The contact lane orders whole contact operations. Beneath it, each simulator
+pane has a serial input queue for HID and Purple bridge calls, including
+ownership-transfer quiesce. SimulatorKit waits synchronously for completion,
+so the caller awaits the queue while Swift's cooperative executor remains free.
+The queue preserves bridge-send order and lets quiesce wait out earlier sends
+before advancing the input generation. Another simulator uses a different
+queue.
+
 A gesture that holds contact across suspensions takes the lane for its
 whole run; others queue. Live contact jumps that queue, because a human
 drag must not wait out a backlog of scripted verbs, and it asks a `swipe`,
@@ -1500,11 +1518,12 @@ dwell, and each active dwell anchors where it begins; `crown` anchors
 before its first step, having no contact to wait on. Lateness is bounded
 within a phase, not across the gesture.
 
-That is bounded drift, not exact-duration delivery. On a sim each send
-blocks until CoreSimulator completes it, so scheduler lateness and that
-send's latency both land on top of the schedule, and the send's latency has
-never been measured. A device backend enqueues instead, so a hold is
-measured from submission and the guest sees it later still. Absent
+That is bounded drift, not exact-duration delivery. On a simulator, each send
+awaits a synchronous CoreSimulator completion on the pane's input queue. The
+wait no longer occupies `PaneCoordinator` or a cooperative-executor worker, but
+scheduler lateness and bridge latency still land on top of the schedule. The
+send latency has never been measured. A device backend enqueues instead, so a
+hold is measured from submission and the guest sees it later still. Absent
 cancellation, transfer, or a failed send, a requested hold is a floor on
 submitted contact rather than a promise about delivery.
 
@@ -1768,7 +1787,14 @@ forward-compat per-finger identity. Coordinates may fall outside
 - Result: `{ok}`
 - Scope: session
 
-Replays the string as keyboard input.
+Replays the string as keyboard input. The daemon validates the complete string
+before sending any HID event, so an unsupported character cannot leave a valid
+prefix typed into the device.
+
+A simulator submits the translated keystrokes as one input-queue operation.
+Another input request cannot enter between Shift, key-down, key-up, and
+Shift-up. If a bridge send fails while Shift is held, the same queue attempts
+Shift-up before returning the error.
 
 #### `pane.input.crown`
 
@@ -1815,9 +1841,18 @@ Returns the element under the normalized 0..1 point.
 - Result: `{tree}` with a synthetic root
 - Scope: session
 
-Grid-walks `pane.ax.point` over a normalized step (default 0.05; the
-daemon clamps to `[0.02, 0.5]`, since finer would monopolize the actor
-for minutes and block other pane ops). The result shape mirrors
+Grid-walks `pane.ax.point` over a normalized step (default 0.05; the daemon
+clamps to `[0.02, 0.5]`, since a finer grid could occupy that pane's AX queue
+for minutes). The complete bridge read, tree processing, and JSON encoding run
+on a serial Dispatch queue owned by the pane. AX requests for the same pane wait
+their turn, while other panes and non-AX coordinator work continue.
+
+Closing a pane does not cancel a bridge read already underway. After the read
+completes, `PaneCoordinator` reauthorizes the original principal before
+returning its data. A closed pane, or a session that lost ownership during the
+wait, receives no payload.
+
+The result shape mirrors
 `pane.ax.tree` with a synthetic root `{role: "AXSweepRoot",
 frame: {x:0,y:0,w:1,h:1}, children: [unique elements], step,
 sweepedPoints}`. The `step` field echoes the actually-used post-clamp
@@ -1903,11 +1938,13 @@ The error names the verb the caller invoked: a command that failed while
 running reports `location.set`, while a genuine acquisition failure
 reports `location.acquire`.
 
-Backends: a sim goes through the `SimLocation` bridge wrapper; a
-physical device shells out to `xcrun devicectl device simulate
-location`. Each invocation waits for `devicectl` to exit and retains no
-keepalive process: the simulation continues on-device afterwards,
-including a multi-minute scenario, and a later clear still finds it
+Backends: a sim goes through the `SimLocation` bridge wrapper; a physical
+device shells out to `xcrun devicectl device simulate location`. Each
+physical-device backend waits for `devicectl` on its own serial Dispatch queue,
+not on Swift's cooperative executor. The backend's location pump orders
+commands for that device, while a slow invocation does not delay another
+device's location work. The simulation continues on-device after the process
+exits, including a multi-minute scenario, and a later clear still finds it
 active.
 
 #### `pane.location.state`
@@ -3273,19 +3310,28 @@ split adds a pane and an arrow moves focus through exactly this.
 
 ## Concurrency model
 
-- Package-wide strict concurrency. Every type crossing an actor or task
-  boundary is `Sendable` (or `@unchecked Sendable` with a comment
-  explaining the manual invariant).
+- Package-wide strict concurrency. Every type crossing an actor or task boundary
+  is `Sendable` (or `@unchecked Sendable` with a comment explaining the manual
+  invariant).
 - All shared mutable daemon state (`DeviceCoordinator`, `SessionManager`,
   `PaneCoordinator`, `RPCServer`'s connection registry) lives behind
-  **actors** or explicit serial `DispatchQueue`s. No ad hoc `NSLock` /
-  `os_unfair_lock` for new state. Where Obj-C bridging requires queue
-  isolation (e.g. `CoreSimulatorBridge` callbacks), use a documented
-  queue + a wrapper that gates access.
-- Long-lived async events use `AsyncSequence`/`AsyncStream`. One-shot async
-  work uses `async throws` returning a value. The pane-subscription event
-  stream (`AsyncStream<PaneEvent>` inside the daemon, surfaced to the GUI
-  as RPC `evt` frames) is the canonical shape.
+  explicit serial `DispatchQueue`s. No ad hoc `NSLock` or `os_unfair_lock` for
+  new state. Where Objective-C bridging requires queue isolation, use a
+  documented queue and a wrapper that gates access.
+- A synchronous API with no asynchronous wait runs on a documented Dispatch
+  queue. `BlockingWorkQueue` bridges daemon work back through a `Sendable`
+  continuation. Queues are serial where ordering matters, including connection
+  writes, simulator input, pane accessibility, and each `devicectl` use.
+  Signature walks use a concurrent queue because different peers are
+  independent; lookups for the same peer still coalesce before the walk begins.
+  GUI `simctl` commands and recording shutdown use separate Dispatch queues.
+- Moving a wait to Dispatch does not cancel the underlying operation. An RPC
+  deadline or task cancellation can release its caller while the process or
+  bridge call continues and keeps its queue occupied.
+- Long-lived async events use `AsyncSequence` or `AsyncStream`. One-shot async
+  work uses `async throws` returning a value. The pane-subscription event stream
+  (`AsyncStream<PaneEvent>` inside the daemon, surfaced to the GUI as RPC `evt`
+  frames) is the canonical shape.
 
 ## Reactive state
 

@@ -250,10 +250,11 @@ public enum UDSSocket {
 
     /// Write all bytes of `data` to `fd`. Loops until the full buffer
     /// has been written or a non-recoverable error fires. Retries
-    /// `EINTR`. For UDS, `EAGAIN` on write is rare; when it happens
-    /// we briefly back off and retry. A write-side `DispatchSource`
-    /// would be the cleaner long-term answer, but this is sufficient
-    /// for the response/event volumes the daemon handles.
+    /// `EINTR`. For UDS, `EAGAIN` on write is rare; when it happens we briefly
+    /// back off and retry. `RPCConnection` invokes this on its per-connection
+    /// blocking queue, never its actor's cooperative-executor worker.
+    /// REFACTOR: Replace the 1 ms EAGAIN polling with a write-side
+    /// `DispatchSource`.
     public static func writeAll(fd: Int32, data: Data) throws {
         try data.withUnsafeBytes { rawBuf in
             guard var ptr = rawBuf.baseAddress else { return }
