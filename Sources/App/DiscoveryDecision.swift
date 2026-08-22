@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// DiscoveryDecision: the pure core of TabContentViewController's
-// bounded discovery poll. Given the daemon's owned+booted sims for
-// this tab and the
-// tab's bookkeeping sets, it decides which sims to attach a pane for and
-// the pruned "already handled" memory. The poll itself stays in the VC
-// (await deviceList → decide → attach); only this set logic, the
-// bug-prone part, is extracted and unit-tested.
+// DiscoveryDecision: the pure per-tab core of app-wide owned-sim discovery.
+// Given the daemon's owned+booted sims for this tab and the tab's bookkeeping
+// sets, it decides which sims need panes and prunes the "already handled"
+// memory. The coordinator reads once, each VC decides and dispatches attach;
+// only the bug-prone set logic is extracted and unit-tested.
 
 import DaemonProtocol
 

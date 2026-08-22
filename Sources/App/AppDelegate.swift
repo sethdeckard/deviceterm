@@ -140,7 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// types; the router gets Session/Device/Pane.
     private let daemonClient: DaemonClient
     private let workspace = WorkspaceViewModel()
-    private lazy var router = Router(workspace: workspace, daemon: daemonClient)
+    private lazy var router = Router(
+        workspace: workspace,
+        daemon: daemonClient,
+        rpcPerformance: daemonClient.rpcPerformance
+    )
     private lazy var simResurrect = SimResurrect(daemonClient: daemonClient)
     /// The single consumer of `RouteIntent` from every external
     /// source. Wired with `self` as the `IntentActionDelegate` so
@@ -358,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         // live. It may or may not reach a fresh helper, and a
                         // fresh one answers that it owns nothing, so the mirror
                         // ignores those reads until the (idempotent)
-                        // re-assertion completes. Polls keep running and
+                        // re-assertion completes. The app-wide poll keeps running and
                         // discovery keeps using them; it is only the mirror
                         // that holds off. The mirror is all recovery has for
                         // the sims a pane isn't carrying. The transport's own counter, the
@@ -1188,7 +1192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // predicate.
         let mode = pendingCloseModeByID.removeValue(forKey: windowID) ?? .detach
         // Tear down before dropping the WC so the per-tab cleanup runs
-        // (observation, discovery poll, terminal.requestClose, SimResurrect
+        // (observation, discovery observer, terminal.requestClose, SimResurrect
         // unwatch); releasing the WC alone would leak those.
         (windowCtl.contentViewController as? TabStripViewController)?.teardown()
         windowControllerByID.removeValue(forKey: windowID)
@@ -1473,7 +1477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // already have dropped the WC; this catches the close-from-Router
         // path (e.g. quit) and clears closing-in-flight bookkeeping. Run
         // per-tab teardown before closing the window so libghostty
-        // surfaces / discovery polls / SimResurrect watches don't leak.
+        // surfaces / discovery observers / SimResurrect watches don't leak.
         for windowID in Array(windowControllerByID.keys) where !liveIDs.contains(windowID) {
             if let windowCtl = windowControllerByID.removeValue(forKey: windowID) {
                 (windowCtl.contentViewController as? TabStripViewController)?.teardown()

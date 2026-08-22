@@ -201,30 +201,36 @@ still-valid credential. There are two restart shapes:
   layout. A placeholder already sitting failed is retried on the same pass,
   which is what carries a recovery that a *second* restart interrupted: its
   attaches died with the helper, and the panes they were rebuilding are no
-  longer mounted for a sweep to find. A pane is one carrier, not the only
-  one: a sim DeviceTerm booted and the user then detached keeps running with
-  nothing on screen to re-attach. Those come back through
-  `device.restoreOwnership` (below), from the GUI's in-memory mirror of the
-  owned roster. Nothing new is read for it, because every tab's discovery poll
-  already asks `device.list({scope: "owned"})` every couple of seconds and that
-  answer is daemon-wide; the mirror is what makes it outlive the daemon that
-  gave it. Each read is tagged with the connection that answered, because a
-  replacement daemon answers "nothing is owned" correctly and on that same poll
-  cadence, so the mirror accepts none of the new connection's reads until
-  re-assertion has run, holding the claims it already had. Re-assertion repeats
-  only while the helper doesn't answer, inside a bounded window, and never
-  re-asks about a claim it declined: the helper judges an ordinary restoration
-  claim on current boot state and refuses one that conflicts with attribution
-  it already holds. A simulator still `Booting` is not admitted through
-  `device.restoreOwnership`; a live pending boot claim follows the separate
-  convergence path below instead. Only one read feeds
-  the mirror at a time: every tab polls on its own timer, same-connection
-  dispatch is not FIFO, and `device.list` vends no revision, so neither the
-  order the requests went out in nor the order the answers came back in says
-  which snapshot the daemon took later. One in flight does, because the next
-  request can't be sent until the previous answer is in hand. A successful
-  `device.attach` or promoted boot claim tells the mirror directly instead of
-  waiting for a poll, which covers a sim owned and detached inside one interval:
+  longer mounted for a sweep to find.
+
+  A pane is one carrier, not the only one. A simulator DeviceTerm booted can
+  keep running after the user detaches its pane. `device.restoreOwnership`
+  restores that case from the GUI's in-memory ownership mirror.
+
+  The mirror adds no daemon read. One app-wide
+  `OwnedSimDiscoveryCoordinator` calls `device.list({scope: "owned"})` every
+  two seconds and sends each successful daemon-wide snapshot to every live
+  tab. A tab registers for its lifetime, so an agent in a background tab or
+  minimized window still receives discovery updates.
+
+  The mirror keeps its last accepted snapshot across daemon replacement. Each
+  read carries the connection generation that answered it. A replacement
+  correctly reports an empty roster before restoration, so the mirror rejects
+  that generation's reads until `device.restoreOwnership` has had its turn.
+
+  Restoration retries only while the helper does not answer, within a bounded
+  window. It does not retry a claim the helper declined. The helper checks
+  current boot state and refuses conflicting attribution. It also refuses an
+  ordinary restoration while the simulator is still `Booting`; a live pending
+  boot claim follows the separate convergence path below.
+
+  Only one roster read can be in flight. `device.list` provides no snapshot
+  revision, so the coordinator waits for each call to finish before starting
+  the next.
+
+  A successful `device.attach` or promoted boot claim tells the mirror
+  directly instead of waiting for a poll, which covers a sim owned and
+  detached inside one interval:
   no read ever saw it and the pane that would have carried it is gone. A sim
   CoreSimulator still reports as non-Booted when ordinary restoration is
   evaluated is refused rather than re-claimed; the daemon knows only current
@@ -552,11 +558,11 @@ restarted. Only a fresh attach recovers a missing binding. CLI clients are
 short-lived and do not resubscribe.
 
 **Bounded requests.** A daemon that stops answering keeps its connection open,
-so nothing fails and the GUI waits. Every request `DaemonClient` sends
-therefore carries a deadline, except the `app.commands` subscription handshake
-(below), and expiry surfaces `DaemonClientError.timedOut(method:)`. The default
-is 15 s; `device.boot`, `device.shutdown`, and `pane.create` block inside
-CoreSimulator for as long as the device takes, so they get 120 s.
+so nothing fails and the GUI waits. Every caller-visible GUI RPC wait has a
+deadline except the `app.commands` subscription handshake described below. The
+default is 15 seconds. `device.boot`, `device.shutdown`, and `pane.create` can
+block inside CoreSimulator for as long as the device takes, so they get 120
+seconds.
 
 **A deadline ends the wait, not the work.** Nothing cancels the daemon's
 handler, so the call may still complete. For an ordinary request the transport
@@ -593,6 +599,25 @@ daemon that never answers again produces nothing else, so signalling only the
 first would give the GUI one chance to act on something still true minutes
 later. The count changes nothing about what the client does; it keeps issuing
 and bounding calls either way.
+
+GUI RPC timings go to Apple unified logging under the `rpc-performance`
+category. Debug attempt records contain method, lane, outcome, and elapsed
+time. Timeout and slow-reply records contain method, lane, and elapsed time;
+summaries contain aggregate counts and latency. None contains device, session,
+or capability identity, and individual frames are never recorded. A timeout
+logs at error level. A reply logs at notice level after one second for an
+ordinary method or ten seconds for a long-running method.
+
+Every 30 seconds, the logger flushes each active method/lane bucket with call,
+reply, timeout, and failure counts plus average and maximum latency. The timer
+flushes a burst even when no later RPC arrives. A request after an idle
+boundary starts the next bucket.
+
+Timing belongs to the layer that owns the deadline. `session.create` and pane
+attaches record at their `Deadline.wait` boundary, while pane authentication
+and `pane.subscribe` are separate attempts. This prevents an outer timeout
+from appearing as an inner cancellation or an authentication stall from being
+attributed to a subscribe request that was never sent.
 
 The GUI decides when to act on the repeats, because only it knows what is
 already on screen. It raises a prompt offering **Restart Helper** or **Keep
@@ -3296,8 +3321,8 @@ The GUI is a thin AppKit shell over a testable view-model layer:
   `WindowController`/`TabStripViewController`/pane controllers to that state by
   stable `WindowID`/`TabID` identity (it provisions the session env,
   builds the terminal/sim views, and owns the pane subscriptions).
-  Menu actions, the discovery/resurrect loops, and orphan re-attach all
-  dispatch routes: one path for all navigation and pane mounting. The
+  Menu actions, discovery observers, sim-resurrect watches, and orphan
+  re-attach all dispatch routes: one path for navigation and pane mounting. The
   router *enables* session restoration, but no layout is persisted.
 
 ## Configuration domains

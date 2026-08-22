@@ -173,7 +173,7 @@ struct TabListViewModelTests {
 
     @Test
     func addSimPaneIsIdempotentByUDID() {
-        // Racing attach paths (the discovery poll vs. an explicit
+        // Racing attach paths (discovery vs. an explicit
         // `deviceterm device attach`) both round-trip through
         // `daemon.device.attach`; daemon-side dedup returns the
         // same paneId to both, but without this model-layer guard

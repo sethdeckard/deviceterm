@@ -231,6 +231,12 @@ struct DaemonClientXPCLaneTests {
         await #expect(throws: DaemonClientError.self) {
             _ = try await client.subscribePane(paneId: UUID().uuidString)
         }
+        #expect(
+            client.rpcPerformanceBucketsForTesting()["pane:session.authenticate"]?.timeouts == 1
+        )
+        #expect(
+            client.rpcPerformanceBucketsForTesting()["pane:pane.subscribe"]?.timeouts == 0
+        )
         #expect(panePeer.authenticatedSessionIds == [first.sessionId, second.sessionId])
         #expect(await paneConnection.pendingRequestCountForTesting == 0)
 

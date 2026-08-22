@@ -25,7 +25,7 @@ struct DaemonClientVersionMismatchTests {
     /// next), inspecting recorded state only after those calls return, so the
     /// mutable fields are never touched concurrently.
     private final class ScriptedTransport: DaemonRequestTransport, @unchecked Sendable {
-        enum ShutdownBehavior { case ack, nack, fail, hang }
+        enum ShutdownBehavior { case ack, notReadyThenAck, nack, fail, hang }
 
         private(set) var methods: [String] = []
         private var pingVersions: [String?]
@@ -70,6 +70,15 @@ struct DaemonClientVersionMismatchTests {
             case RPCMethod.daemonShutdown.rawValue:
                 switch shutdownBehavior {
                 case .ack:
+                    return Data(#"{"ok":true}"#.utf8)
+
+                case .notReadyThenAck:
+                    if shutdownCount == 1 {
+                        throw DaemonClientError.daemon(
+                            code: -32_002,
+                            message: "validated GUI identity is not ready"
+                        )
+                    }
                     return Data(#"{"ok":true}"#.utf8)
 
                 case .nack:
@@ -123,6 +132,31 @@ struct DaemonClientVersionMismatchTests {
         #expect(transport.shutdownCount == 1)
         #expect(captured.count == 1)
         #expect(isConfirmed(captured.first))
+    }
+
+    @Test
+    func shutdownRetriesTransientValidatedGUIReadiness() async throws {
+        let transport = ScriptedTransport(
+            pingVersions: [],
+            shutdown: .notReadyThenAck
+        )
+        let diagnostics = RPCPerformanceDiagnostics(automaticallyEmitSummaries: false)
+        let client = DaemonClient(
+            injecting: transport,
+            rpcPerformance: diagnostics
+        )
+        client.shutdownAckTimeoutNanos = 500_000_000
+
+        try await client.shutdownIncompatibleDaemon()
+
+        #expect(transport.shutdownCount == 2)
+        let bucket = try #require(
+            client.rpcPerformanceBucketsForTesting()["control:daemon.shutdown"]
+        )
+        #expect(bucket.calls == 1)
+        #expect(bucket.replies == 1)
+        #expect(bucket.timeouts == 0)
+        #expect(bucket.failures == 0)
     }
 
     // MARK: - Remediation happens at most once per client lifetime
@@ -212,6 +246,9 @@ struct DaemonClientVersionMismatchTests {
 
         #expect(isIndeterminate(outcome))
         #expect(!isConfirmed(outcome))
+        #expect(
+            client.rpcPerformanceBucketsForTesting()["control:daemon.shutdown"]?.timeouts == 1
+        )
     }
 
     // MARK: - Shutdown is pinned to the mismatched daemon instance (generation)

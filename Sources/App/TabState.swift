@@ -20,7 +20,7 @@
 // the last entry (use `closeTab` instead). `primaryTerminal` is the
 // safe accessor for callers that need a representative session
 // (tab-info, status item grouping, sim-pane attribution for the
-// discovery poll).
+// discovery snapshot).
 
 import DaemonProtocol
 

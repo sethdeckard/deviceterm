@@ -145,7 +145,7 @@ enum Route: Sendable {
     ///
     /// `family` (wire string, optional) sizes the in-flight placeholder
     /// pane with the same metrics the real pane will take so the success
-    /// swap doesn't resize. The discovery poll passes the booted sim's
+    /// swap doesn't resize. Discovery passes the booted sim's
     /// `device.list` family (the watch hot path); other callers pass nil
     /// (→ phone-default, corrected on swap).
     case attachSimPane(

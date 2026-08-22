@@ -276,11 +276,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// anyone over. Two in a row with nothing answered between them is worth
     /// offering a restart for, which is a question rather than an action.
     ///
-    /// A silent helper reaches it without the user doing anything, because
-    /// each tab's discovery poll issues a `device.list` under the ordinary
-    /// bound: about half a minute for one idle tab (the poll is serial, so its
-    /// expiries land a bound apart), sooner with more tabs or any traffic of
-    /// the user's own.
+    /// A silent helper reaches the threshold without user action: the app-wide
+    /// coordinator issues serial `device.list` calls under the ordinary bound,
+    /// so the second expiry arrives after roughly half a minute regardless of
+    /// tab count.
     static let unresponsiveTimeoutThreshold = 2
 
     /// Ordinary app RPCs and the low-rate app-command stream. Its generation
@@ -396,6 +395,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     var onUnresponsive: (@MainActor (Int) -> Void)?
     /// Calls that have reached their deadline with no answer in between.
     private var consecutiveTimeouts = 0
+    /// Local-only release diagnostics. Per-call detail is debug level; persisted
+    /// logs contain only severe replies, timeouts, and periodic aggregates.
+    let rpcPerformance: RPCPerformanceDiagnostics
     /// The transport's connection generation as last observed, updated when a
     /// peer is installed rather than read back on demand. Held so the
     /// unresponsive signal can name a connection synchronously: the transport
@@ -484,7 +486,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// reconnect path without a live socket. Always nil in production.
     private let injectedSubscribeTransport: DaemonSubscribeTransport?
 
-    init(machServiceName: String = MachServiceName.daemon) {
+    init(
+        machServiceName: String = MachServiceName.daemon,
+        rpcPerformance: RPCPerformanceDiagnostics = RPCPerformanceDiagnostics()
+    ) {
         let xpc = XPCDaemonConnection(machServiceName: machServiceName, lane: .control)
         let paneXPC = XPCDaemonConnection(machServiceName: machServiceName, lane: .pane)
         self.xpcConnection = xpc
@@ -492,6 +497,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         self.transport = .xpc(xpc)
         self.injectedRequestTransport = nil
         self.injectedSubscribeTransport = nil
+        self.rpcPerformance = rpcPerformance
     }
 
     /// Test seam: inject a scripted `request` transport (and optionally a
@@ -503,7 +509,8 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     init(
         injecting requestTransport: DaemonRequestTransport,
         subscribe subscribeTransport: DaemonSubscribeTransport? = nil,
-        machServiceName: String = MachServiceName.daemon
+        machServiceName: String = MachServiceName.daemon,
+        rpcPerformance: RPCPerformanceDiagnostics = RPCPerformanceDiagnostics()
     ) {
         let xpc = XPCDaemonConnection(machServiceName: machServiceName, lane: .control)
         let paneXPC = XPCDaemonConnection(machServiceName: machServiceName, lane: .pane)
@@ -512,6 +519,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         self.transport = .xpc(xpc)
         self.injectedRequestTransport = requestTransport
         self.injectedSubscribeTransport = subscribeTransport
+        self.rpcPerformance = rpcPerformance
     }
 
     // MARK: - Shell env path resolution
@@ -743,21 +751,22 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         // Bound the wait: a daemon that answered `ping` but never replies to
         // `daemon.shutdown` must not block the remediation (and thus the failure
         // alert / startup / reconnect) forever. On expiry the ack is unknown, so
-        // the caller reports it as indeterminate.
-        let timeoutNanos = shutdownAckTimeoutNanos
-        let data = try await withThrowingTaskGroup(of: Data.self) { group in
-            group.addTask { [self] in try await request(method: .daemonShutdown, params: nil) }
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanos)
-                throw DaemonClientError.shutdownTimedOut
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else {
-                throw DaemonClientError.shutdownTimedOut
-            }
-            return first
+        // the caller reports it as indeterminate. This bootstrap call reaches
+        // the transport directly so the five-second bound is the one timing
+        // and classifying it; nesting the ordinary request bound would record
+        // its cancellation instead of the real timeout. Retry transient
+        // validated-GUI readiness refusals inside that same bound.
+        let answer: (data: Data, generation: Int) = try await bounded(
+            .daemonShutdown,
+            deadline: shutdownAckTimeoutNanos,
+            timeoutError: .shutdownTimedOut
+        ) { [self] in
+            try await transportRequestRetryingNotReadyUntilCancelled(
+                method: .daemonShutdown,
+                params: nil
+            )
         }
-        let ack = try decode(DaemonShutdownAck.self, data)
+        let ack = try decode(DaemonShutdownAck.self, answer.data)
         guard ack.ok else { throw DaemonClientError.shutdownNotAcknowledged }
     }
 
@@ -836,6 +845,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         // can be using it: the GUI is the only party that ever sees this
         // capability, and it is dropping it here.
         let data: Data
+        let startedAt = rpcPerformance.now()
         do {
             data = try await Deadline.wait(
                 nanos: requestDeadlineNanos,
@@ -843,12 +853,26 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
                 late: { [weak self] late in await self?.closeUnclaimedSession(late) },
                 work: { [self] in try await request(method: .sessionCreate, params: params) }
             )
+            rpcPerformance.record(
+                method: .sessionCreate,
+                lane: .control,
+                startedAtNanoseconds: startedAt,
+                error: nil,
+                severeDelayNanoseconds: 10_000_000_000
+            )
         } catch {
             // `bounded` does this for the calls it wraps; this one is bounded
             // here instead, and opening a tab is exactly the thing a user
             // tries when the helper has gone quiet. The expiry is raised by
             // the deadline rather than the inner call, so only this frame
             // sees it.
+            rpcPerformance.record(
+                method: .sessionCreate,
+                lane: .control,
+                startedAtNanoseconds: startedAt,
+                error: error,
+                severeDelayNanoseconds: 10_000_000_000
+            )
             noteHelperFailure(error)
             throw error
         }
@@ -1140,9 +1164,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             liveSessions.removeAll { $0.sessionId == candidate.sessionId }
             liveSessions.append(candidate)
             do {
-                try await bounded(.sessionAuthenticate) { [self] in
-                    try await sendPaneAuthentication(candidate)
-                }
+                try await sendBoundedPaneAuthentication(candidate)
             } catch is CancellationError {
                 return
             } catch {
@@ -1499,7 +1521,12 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// deadline.
     private func rawSubscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
         let params = try JSONSerialization.data(withJSONObject: ["paneId": paneId])
-        return try await bounded(.paneSubscribe) { [self] in
+        if injectedSubscribeTransport == nil, case .xpc = transport {
+            // Authentication is its own RPC. Time and classify it separately
+            // so a stall before subscribe is not reported as pane.subscribe.
+            try await authenticatePaneConnection()
+        }
+        return try await bounded(.paneSubscribe, lane: .pane) { [self] in
             try await rawSubscribePaneOnTransport(paneId: paneId, params: params)
         }
     }
@@ -1513,13 +1540,6 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
         switch transport {
         case .xpc:
-            // `pane.subscribe` is session-scoped. The pane lane is an
-            // independent daemon connection, so authenticate it before every
-            // subscription handshake. This is intentionally idempotent: pane
-            // subscriptions are infrequent, and repeating authentication
-            // avoids a stale local "authenticated generation" cache across an
-            // invalidation that has not reconnected yet.
-            try await authenticatePaneConnection()
             let (_, stream) = try await paneXPCConnection.subscribe(
                 method: RPCMethod.paneSubscribe.rawValue,
                 params: params,
@@ -1585,7 +1605,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             // daemon already applied.
             paneAuthenticatedSessionId = nil
             do {
-                try await sendPaneAuthentication(candidate)
+                try await sendBoundedPaneAuthentication(candidate)
             } catch {
                 // A fresh peer is the only definitive way to clear a remote
                 // principal whose authentication result is unknown. Existing
@@ -1628,6 +1648,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             method: RPCMethod.sessionAuthenticate.rawValue,
             params: params
         )
+    }
+
+    private func sendBoundedPaneAuthentication(
+        _ candidate: SessionAuthenticateParams
+    ) async throws {
+        try await bounded(.sessionAuthenticate, lane: .pane) { [self] in
+            try await sendPaneAuthentication(candidate)
+        }
     }
 
     /// Discrete tap at normalized (0..1) coords.
@@ -1966,10 +1994,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         // that can tell whether a late pane is still wanted. See
         // `DaemonClientError.timedOut`.
         guard !Self.selfReconcilingMethods.contains(method) else {
-            // These skip `bounded`, so they'd also skip the accounting it
-            // does. An attach is as much proof the helper is alive as any
-            // other call, whether it succeeded or was refused, and a streak
-            // neither cleared would outlive the condition that started it.
+            // Their caller owns the deadline, late-result cleanup, and timing.
+            // A reply is still proof the helper is alive, whether it succeeded
+            // or was refused, so it must clear an unanswered-call streak here.
             do {
                 let answer = try await transportRequest(method: method, params: params)
                 noteHelperAnswered()
@@ -2040,9 +2067,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             noteHelperAnswered()
 
         // Neither silence nor an answer. A transport loss says the connection
-        // went away, which recovers on the next send. The shutdown acks are
-        // bounded by their own caller and never reach here, so they have no
-        // streak to affect.
+        // went away, which recovers on the next send. A shutdown timeout
+        // reaches here through `bounded` but does not affect the streak. A
+        // negative ack is decoded afterward and never reaches this classifier.
         case .transport, .shutdownNotAcknowledged, .shutdownTimedOut:
             break
         }
@@ -2082,13 +2109,31 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         }
     }
 
+    /// Retry prompt provenance-not-ready replies until the enclosing operation
+    /// succeeds, fails definitively, or cancels this task. The caller owns the
+    /// total deadline and performance record; this helper adds neither.
+    private func transportRequestRetryingNotReadyUntilCancelled(
+        method: RPCMethod,
+        params: Data?
+    ) async throws -> (data: Data, generation: Int) {
+        while true {
+            try Task.checkCancellation()
+            do {
+                return try await transportRequest(method: method, params: params)
+            } catch let DaemonClientError.daemon(code, _)
+                where code == Self.notReadyConnectionCode {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
     /// Run one transport call under a deadline, so a daemon that accepts a
     /// request and then stops answering can't park a caller forever.
     ///
-    /// Every wrapped call is a *transport* call, not a whole retry loop: the
-    /// `-32002` retry in `request` and the reauth retry in `requestOnce` each
-    /// bound their attempts individually, which is what keeps a single bound
-    /// meaningful whether or not a call was retried.
+    /// Most wrapped calls bound one transport attempt. The `-32002` retry in
+    /// `request` and the reauth retry in `requestOnce` each bound their attempts
+    /// individually. Bootstrap shutdown instead retries transient readiness
+    /// refusals within one acknowledgement deadline.
     ///
     /// The loser of the race is cancelled and awaited at scope exit, so this
     /// only terminates because both transports honor cancellation on a parked
@@ -2104,37 +2149,70 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// `operation` stays `@MainActor` so the raced call runs in the same
     /// isolation it would without the race, reaching `transport` and the
     /// injected test seams directly.
-    /// `deadline` overrides the method's usual bound. Only the recovery
-    /// handshake passes one: it re-asks on a cadence while it waits out a
-    /// stopping helper, so it wants a far shorter wait than an ordinary ping,
-    /// without changing what an ordinary ping gets.
+    /// `deadline` overrides the method's usual bound. Recovery pings use a
+    /// short retry cadence, and the bootstrap shutdown uses its five-second
+    /// acknowledgement bound. `timeoutError` preserves shutdown's distinct
+    /// indeterminate-result error while classifying it as a timed-out RPC.
     private func bounded<T: Sendable>(
         _ method: RPCMethod,
         deadline overrideNanos: UInt64? = nil,
+        lane: XPCClientLane = .control,
+        timeoutError: DaemonClientError? = nil,
         _ operation: @escaping @Sendable @MainActor () async throws -> T
     ) async throws -> T {
         let deadline = overrideNanos ?? (Self.slowMethods.contains(method)
             ? slowRequestDeadlineNanos
             : requestDeadlineNanos)
+        let expiry = timeoutError ?? DaemonClientError.timedOut(method: method.rawValue)
+        let startedAt = rpcPerformance.now()
         do {
             let value = try await withThrowingTaskGroup(of: T.self) { group in
                 group.addTask { try await operation() }
                 group.addTask {
                     try await Task.sleep(nanoseconds: deadline)
-                    throw DaemonClientError.timedOut(method: method.rawValue)
+                    throw expiry
                 }
                 defer { group.cancelAll() }
                 guard let first = try await group.next() else {
-                    throw DaemonClientError.timedOut(method: method.rawValue)
+                    throw expiry
                 }
                 return first
             }
+            recordRPCPerformance(
+                method: method,
+                lane: lane,
+                startedAt: startedAt,
+                error: nil
+            )
             noteHelperAnswered()
             return value
         } catch {
+            recordRPCPerformance(
+                method: method,
+                lane: lane,
+                startedAt: startedAt,
+                error: error
+            )
             noteHelperFailure(error)
             throw error
         }
+    }
+
+    private func recordRPCPerformance(
+        method: RPCMethod,
+        lane: XPCClientLane,
+        startedAt: UInt64,
+        error: (any Error)?
+    ) {
+        let longRunning = Self.slowMethods.contains(method)
+            || Self.selfReconcilingMethods.contains(method)
+        rpcPerformance.record(
+            method: method,
+            lane: lane,
+            startedAtNanoseconds: startedAt,
+            error: error,
+            severeDelayNanoseconds: longRunning ? 10_000_000_000 : 1_000_000_000
+        )
     }
 
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
@@ -2327,6 +2405,13 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
 
     /// Test seam for proving pane subscriptions do not share the control peer.
     func paneXPCConnectionForTesting() -> XPCDaemonConnection { paneXPCConnection }
+
+    /// Test seam for proving the public request paths feed lane-specific
+    /// performance accounting rather than only exercising the accumulator in
+    /// isolation.
+    func rpcPerformanceBucketsForTesting() -> [String: RPCPerformanceBucket] {
+        rpcPerformance.bucketsForTesting()
+    }
 
     // MARK: - AppCommandControlling
 

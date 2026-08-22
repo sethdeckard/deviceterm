@@ -153,6 +153,9 @@ struct DaemonClientDeadlineTests {
         // The call was really sent: the deadline abandons the wait, it does
         // not refuse to issue the request.
         #expect(transport.methods == [RPCMethod.deviceList.rawValue])
+        #expect(
+            client.rpcPerformanceBucketsForTesting()["control:device.list"]?.timeouts == 1
+        )
     }
 
     @Test
@@ -184,6 +187,9 @@ struct DaemonClientDeadlineTests {
         } catch {
             Issue.record("expected timedOut, got \(error)")
         }
+        #expect(
+            client.rpcPerformanceBucketsForTesting()["control:session.create"]?.timeouts == 1
+        )
         // The cleanup rides the same slow peer, so give it room to answer.
         client.requestDeadlineNanos = 5_000_000_000
         // It was the FIRST session on this connection, so nothing had
@@ -258,6 +264,9 @@ struct DaemonClientDeadlineTests {
         } catch {
             Issue.record("expected timedOut, got \(error)")
         }
+        #expect(
+            client.rpcPerformanceBucketsForTesting()["pane:pane.subscribe"]?.timeouts == 1
+        )
     }
 
     @Test

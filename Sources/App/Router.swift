@@ -124,6 +124,10 @@ final class Router {
 
     private let daemon: any SessionControlling & DeviceControlling & PaneControlling
         & PhysicalDeviceControlling
+    /// Shared with `DaemonClient` so caller-owned attach deadlines land in the
+    /// same method/lane windows as ordinary client-owned bounds. Nil in Router
+    /// tests that do not exercise diagnostics.
+    private let rpcPerformance: RPCPerformanceDiagnostics?
     /// Injected name-detector: production defaults to the GUI's CWD
     /// via `WorktreeName.detect`. Tests inject a fixed function so
     /// `createSessionCalls` stay deterministic regardless of where the
@@ -237,12 +241,15 @@ final class Router {
     /// is cancelled, or a newer connection supersedes it, so unlike the
     /// one-shot calls around it there is something for quit to stop.
     private var ownershipRestoreTask: Task<Void, Never>?
-    /// Which sims deviceterm owns, mirrored from the discovery poll so the
+    /// Which sims deviceterm owns, mirrored from app-wide discovery so the
     /// answer outlives the helper that gave it. Recovery re-asserts it against
     /// a replacement helper, which is the only way a sim with no pane comes
     /// back: nothing else the GUI can act on automatically holds it. See
     /// `OwnedSimRoster`.
-    private let ownedSims = OwnedSimRoster()
+    private let ownedSims: OwnedSimRoster
+    /// One daemon-wide `.owned` read per cadence. Tabs subscribe for their
+    /// own attribution/attach decision, including while their window is hidden.
+    private let ownedSimDiscovery: OwnedSimDiscoveryCoordinator
     private lazy var bootClaims = BootClaimCoordinator(
         daemon: daemon,
         didPromote: { [weak self] udid, sessionId, generation in
@@ -275,13 +282,21 @@ final class Router {
         workspace: WorkspaceViewModel,
         daemon: any SessionControlling & DeviceControlling & PaneControlling
         & PhysicalDeviceControlling,
+        rpcPerformance: RPCPerformanceDiagnostics? = nil,
         detectWorktreeName: @escaping @MainActor () -> String? = {
             WorktreeName.detect(cwd: FileManager.default.currentDirectoryPath)
         }
     ) {
         self.workspace = workspace
         self.daemon = daemon
+        self.rpcPerformance = rpcPerformance
         self.detectWorktreeName = detectWorktreeName
+        let ownedSims = OwnedSimRoster()
+        self.ownedSims = ownedSims
+        self.ownedSimDiscovery = OwnedSimDiscoveryCoordinator(
+            daemon: daemon,
+            ownedSims: ownedSims
+        )
         let (stream, continuation) = AsyncStream.makeStream(of: Route.self)
         self.continuation = continuation
         self.drainTask = Task { @MainActor [weak self] in
@@ -334,6 +349,7 @@ final class Router {
         privacyReconcileTasks.removeAll()
         ownershipRestoreTask?.cancel()
         ownershipRestoreTask = nil
+        ownedSimDiscovery.shutdown()
         bootClaims.shutdown()
         continuation?.finish()
         await drainTask?.value
@@ -675,9 +691,8 @@ final class Router {
     }
 
     /// Claim the roster-read slot for a poll about to run, or nil when another
-    /// tab's read holds it. Only one roster read runs at a time, because
-    /// neither the order requests go out in nor the order answers come back in
-    /// says which snapshot the daemon took later.
+    /// read holds it. Only one roster read runs at a time because the daemon
+    /// vends no snapshot revision to order overlapping answers.
     ///
     /// Release it with `endOwnedSimsRead` on every path out, including failure
     /// and cancellation.
@@ -685,15 +700,27 @@ final class Router {
 
     func endOwnedSimsRead(_ token: Int) { ownedSims.endRead(token) }
 
-    /// One successful `device.list({scope: "owned"})` read from a tab's
-    /// discovery poll, carrying the connection that answered it and the token
-    /// it was issued under. The poll pays for the read either way; the mirror
-    /// is what makes the answer outlive the helper.
+    /// One successful app-wide `device.list({scope: "owned"})` read, carrying
+    /// the connection that answered it and the token it was issued under. The
+    /// mirror is what makes the answer outlive the helper.
     ///
     /// A failed read must not arrive here as an empty roster: "the helper
     /// didn't answer" and "the helper owns nothing" are opposite facts.
     func noteOwnedSims(_ entries: [DeviceListEntry], generation: Int, read: Int) {
         ownedSims.record(entries, generation: generation, read: read)
+    }
+
+    /// Observe the one app-wide owned-sim snapshot stream. Registration is tied
+    /// to a tab VC's lifetime, not its visibility, because agents keep working
+    /// in background tabs and minimized windows.
+    func addOwnedSimDiscoveryObserver(
+        _ observer: @escaping @MainActor ([DeviceListEntry]) -> Void
+    ) -> OwnedSimDiscoveryObserverToken {
+        ownedSimDiscovery.addObserver(observer)
+    }
+
+    func removeOwnedSimDiscoveryObserver(_ token: OwnedSimDiscoveryObserverToken) {
+        ownedSimDiscovery.removeObserver(token)
     }
 
     /// A shutdown the GUI just made succeed. The daemon has dropped the sim,
@@ -1728,6 +1755,7 @@ final class Router {
         await awaitDetach(of: spec.target)
         guard let primary = workspace.windowContaining(tab: tabID)?
             .tabs.tab(id: tabID)?.primaryTerminal else { return false }
+        let startedAt = rpcPerformance?.now()
         do {
             // The bound lives here, not in `DaemonClient`, because only this
             // layer can say whether a pane that arrives late is still wanted.
@@ -1742,6 +1770,15 @@ final class Router {
                 },
                 work: { try await spec.attach(primary) }
             )
+            if let startedAt {
+                rpcPerformance?.record(
+                    method: spec.method,
+                    lane: .control,
+                    startedAtNanoseconds: startedAt,
+                    error: nil,
+                    severeDelayNanoseconds: 10_000_000_000
+                )
+            }
             // If the tab is being torn down, or quit cancelled us, do NOT
             // mount. Mid-teardown the pending record is still in nav state
             // and the tab is still in the workspace (it's removed only after
@@ -1790,6 +1827,15 @@ final class Router {
             await reconcileDeferredDetaches(for: spec.target)
             return true
         } catch {
+            if let startedAt {
+                rpcPerformance?.record(
+                    method: spec.method,
+                    lane: .control,
+                    startedAtNanoseconds: startedAt,
+                    error: error,
+                    severeDelayNanoseconds: 10_000_000_000
+                )
+            }
             logError("\(spec.failureLog): \(error)")
             workspace.windowContaining(tab: tabID)?.tabs.failPendingPane(
                 id: pendingId,

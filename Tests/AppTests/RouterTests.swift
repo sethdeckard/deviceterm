@@ -31,12 +31,14 @@ struct RouterTests {
 
     private func makeRouter(
         _ fake: FakeDaemonClient,
+        rpcPerformance: RPCPerformanceDiagnostics? = nil,
         detectWorktreeName: @escaping @MainActor () -> String? = { nil }
     ) -> (Router, WorkspaceViewModel) {
         let workspace = WorkspaceViewModel()
         let router = Router(
             workspace: workspace,
             daemon: fake,
+            rpcPerformance: rpcPerformance,
             detectWorktreeName: detectWorktreeName
         )
         return (router, workspace)
@@ -2748,7 +2750,8 @@ struct RouterTests {
         let fake = FakeDaemonClient()
         fake.attachResult = PaneCreateResponse(paneId: "LATE", scale: nil, family: "phone")
         fake.armAttachBarrier()
-        let (router, workspace) = makeRouter(fake)
+        let diagnostics = RPCPerformanceDiagnostics(automaticallyEmitSummaries: false)
+        let (router, workspace) = makeRouter(fake, rpcPerformance: diagnostics)
         router.attachDeadlineNanos = 10_000_000
         router.dispatch(.openWindow())
         await settle()
@@ -2760,6 +2763,9 @@ struct RouterTests {
             return
         }
         #expect(message.contains("timed out"))
+        #expect(
+            diagnostics.bucketsForTesting()["control:device.attach"]?.timeouts == 1
+        )
         // The daemon finishes long after the client stopped waiting.
         fake.releaseAttach()
         await settle()
@@ -3142,12 +3148,12 @@ struct RouterTests {
 
     // MARK: - Restoring ownership of sims no pane carries
 
-    /// One owned, booted sim as a tab's discovery poll would report it.
+    /// One owned, booted sim as the app-wide discovery snapshot reports it.
     private func ownedEntry(_ udid: String, session: String?) -> DeviceListEntry {
         DeviceListEntry(udid: udid, name: "iPhone", state: "Booted", ownedBySession: session)
     }
 
-    /// One discovery poll: claim the ordering token first, as the poll does,
+    /// One discovery snapshot: claim the ordering token first, as the coordinator does,
     /// then hand the answer back under it.
     private func pollOwned(
         _ router: Router,

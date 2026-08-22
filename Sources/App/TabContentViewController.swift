@@ -13,8 +13,8 @@
 // attribute to the primary terminal's session env; shim boot claims arrive
 // through the relay owned by the exact terminal that initiated the boot.
 //
-// Discovery + resurrect dispatch attachSimPane / detachSimPane routes
-// through the Router: one path for all pane mounting.
+// App-wide discovery snapshots + resurrect dispatch attachSimPane /
+// detachSimPane routes through the Router: one path for all pane mounting.
 
 import AppKit
 import DaemonProtocol
@@ -22,8 +22,6 @@ import TerminalSurface
 
 @MainActor
 final class TabContentViewController: NSViewController {
-    private static let discoveryIntervalNs: UInt64 = 2_000_000_000
-
     let tabID: TabID
     /// The parent window's identifier. Used to scope Route intents
     /// minted from per-tab surfaces (e.g. the terminal pane right-
@@ -83,12 +81,12 @@ final class TabContentViewController: NSViewController {
     /// of the shell.
     private var sessionEnvsByID: [TerminalPaneID: SessionEnvironment] = [:]
     private var terminalVCByID: [TerminalPaneID: TerminalPaneViewController] = [:]
-    /// Discovery-poll dedup: udids the tab has already dispatched an
+    /// Discovery-snapshot dedup: udids the tab has already dispatched an
     /// attach for during this boot. A later detach (sim still booted)
-    /// must not re-attach on the next poll.
+    /// must not re-attach on the next snapshot.
     private var handledUDIDs: Set<String> = []
     private var isTornDown = false
-    private var discoveryTask: Task<Void, Never>?
+    private var discoveryObserverToken: OwnedSimDiscoveryObserverToken?
     private var observation: ObservationToken?
     /// Separate from `observation` on purpose: the reconcile closure never
     /// reads the title, and Observation tracks only what a pass actually
@@ -120,7 +118,7 @@ final class TabContentViewController: NSViewController {
     private(set) var latestWorkingDirectory: String?
 
     /// Sessions exposed for legacy tab-scoped consumers (status item
-    /// grouping, the discovery-poll's ownership filter, the
+    /// grouping, the discovery snapshot's ownership filter, the
     /// orchestrator-only `sendInput` / `captureScreen` default-target
     /// path). All resolve to the **primary** terminal's session, the
     /// authoritative "which session represents this tab" answer for
@@ -266,6 +264,9 @@ final class TabContentViewController: NSViewController {
             workingDirectory: nil,
             sessionName: sessionName
         )
+        discoveryObserverToken = router.addOwnedSimDiscoveryObserver { [weak self] owned in
+            self?.discoverBootedSims(in: owned)
+        }
     }
 
     @available(*, unavailable)
@@ -282,6 +283,9 @@ final class TabContentViewController: NSViewController {
         // retain a dead closure across tab open/close cycles.
         if let reconnectObserverToken {
             daemonClient.removeReconnectObserver(reconnectObserverToken)
+        }
+        if let discoveryObserverToken {
+            router.removeOwnedSimDiscoveryObserver(discoveryObserverToken)
         }
     }
 
@@ -304,7 +308,6 @@ final class TabContentViewController: NSViewController {
             )
         observation = App.observe { [weak self] in self?.reconcileAll() }
         titleObservation = App.observe { [weak self] in self?.reportDisplayTitle() }
-        startDiscoveryPoll()
     }
 
     /// Hand the publisher the tab's current label and current representative
@@ -337,8 +340,8 @@ final class TabContentViewController: NSViewController {
     /// window id for "Open in New Tab"), then re-arms observation so the
     /// reconcile tracks and immediately syncs against the new instance.
     /// Without it, the moved VC would keep observing the source VM (where
-    /// `tab(id:)` now returns nil), freezing reconcile and the discovery
-    /// poll for the tab.
+    /// `tab(id:)` now returns nil), freezing reconcile and discovery for the
+    /// tab.
     func rebind(to newVM: TabListViewModel, windowID newWindowID: WindowID) {
         tabListVM = newVM
         windowID = newWindowID
@@ -421,8 +424,8 @@ final class TabContentViewController: NSViewController {
 
     // MARK: - Lifecycle
 
-    /// Called by TabStripViewController when reconcile drops this VC. Cancels the
-    /// discovery poll, asks libghostty to close each terminal pane's
+    /// Called by TabStripViewController when reconcile drops this VC. Removes
+    /// its discovery observer, asks libghostty to close each terminal pane's
     /// shell, and clears any SimResurrect watches we still hold.
     func teardown() {
         isTornDown = true
@@ -444,8 +447,10 @@ final class TabContentViewController: NSViewController {
         }
         observation?.cancel()
         titleObservation?.cancel()
-        discoveryTask?.cancel()
-        discoveryTask = nil
+        if let discoveryObserverToken {
+            router.removeOwnedSimDiscoveryObserver(discoveryObserverToken)
+            self.discoveryObserverToken = nil
+        }
         for terminalVC in terminalVCByID.values {
             terminalVC.requestClose()
         }
@@ -756,7 +761,7 @@ final class TabContentViewController: NSViewController {
             simPaneActions.wire(paneVC: paneVC, simPane: simPane)
             simPaneVCByUDID[simPane.udid] = paneVC
             // Sim ownership is recorded against the tab's primary
-            // terminal env, so discovery-poll attribution is
+            // terminal env, so discovery attribution is
             // tab-scoped rather than per-terminal: a sim booted from
             // a non-primary terminal still attributes to the tab.
             if let primaryID = tabListVM.tab(id: tabID)?.primaryTerminal.id {
@@ -868,47 +873,10 @@ final class TabContentViewController: NSViewController {
         }
     }
 
-    // MARK: - Discovery poll
+    // MARK: - Discovery snapshots
 
-    private func startDiscoveryPoll() {
-        guard discoveryTask == nil else { return }
-        discoveryTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.discoveryIntervalNs)
-                if Task.isCancelled { return }
-                guard let self else { return }
-                await self.discoverBootedSims()
-            }
-        }
-    }
-
-    private func discoverBootedSims() async {
-        // Abort on a failed read: treating it as an empty roster would forget
-        // every handled udid, re-attach a pane for a sim the user deliberately
-        // detached, and erase the claims recovery reads.
-        //
-        // The generation comes back WITH the answer rather than being sampled
-        // after it. A replacement helper installed while this call was in
-        // flight would otherwise be credited with the previous helper's roster,
-        // which is the one attribution error the mirror cannot survive.
-        //
-        // Only one tab feeds the mirror per pass. Neither the order the
-        // requests went out in nor the order the answers came back in says
-        // which snapshot the daemon took later, so the mirror takes one read
-        // at a time; the rest of this pass runs for discovery regardless.
-        // Released on every path out, including the failure and cancellation
-        // returns below.
-        let token = router.beginOwnedSimsRead()
-        defer { if let token { router.endOwnedSimsRead(token) } }
-        guard let read = try? await daemonClient.deviceListWithGeneration(scope: .owned)
-        else { return }
-        if Task.isCancelled || isTornDown { return }
-        // `.owned` is daemon-wide, so this tab's poll carries the whole roster,
-        // and the mirror is what makes it outlive the helper that answered.
-        if let token {
-            router.noteOwnedSims(read.entries, generation: read.generation, read: token)
-        }
-        let owned = read.entries
+    private func discoverBootedSims(in owned: [DeviceListEntry]) {
+        guard !isTornDown else { return }
         // Discovery is tab-scoped: any sim owned by any terminal in
         // this tab counts as discoverable here. In practice that is
         // the same set as "owned by primary terminal" because
@@ -938,7 +906,7 @@ final class TabContentViewController: NSViewController {
         )
         handledUDIDs = decision.updatedHandled
         for device in decision.toAttach {
-            if Task.isCancelled || isTornDown { return }
+            if isTornDown { return }
             // Mark handled at dispatch time so a follow-up poll doesn't
             // re-fire before the Router updates simPanes.
             handledUDIDs.insert(device.udid)

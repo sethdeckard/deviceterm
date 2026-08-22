@@ -9,10 +9,10 @@
 // and this mirror is the only live, trusted record automatic warm-restart
 // recovery can act on.
 //
-// Nothing new is read for it. Every tab's discovery poll already asks for
-// `device.list({scope: "owned"})` every couple of seconds, and that answer
-// is daemon-wide, so any one tab's poll is the whole roster. What the mirror
-// adds is holding onto it across the moment the daemon forgets.
+// Nothing extra is read for it. The app-wide discovery coordinator already
+// asks for `device.list({scope: "owned"})` every couple of seconds and fans
+// that daemon-wide answer out to every live tab. What the mirror adds is
+// holding onto it across the moment the daemon forgets.
 //
 // The mirror is NOT the on-disk `owned-udids.json`, and deliberately can't
 // become it. That file is an untrusted recovery hint a same-uid process can
@@ -54,16 +54,9 @@ final class OwnedSimRoster {
     /// The read currently outstanding, or nil when none is. At most one at a
     /// time, which is what puts the snapshots in an order at all.
     ///
-    /// Every tab polls on its own timer, and same-connection XPC dispatch is
-    /// not FIFO, so neither the order the requests went out in nor the order
-    /// the answers came back in says which snapshot the daemon took later.
-    /// Only one in flight does: the next request cannot be sent until the
-    /// previous answer is in hand, so its snapshot is strictly newer. The
-    /// daemon vends no revision to order them by instead.
-    ///
-    /// A tab that finds the slot taken still runs its own poll for discovery.
-    /// It just doesn't report the answer here, and the mirror is fed by
-    /// whichever tab holds the slot on that pass.
+    /// The coordinator acquires this slot before each read, and roster tests
+    /// use the same fence directly. Since the daemon provides no snapshot
+    /// revision, only one read may be in flight.
     private var outstandingRead: Int?
     private var nextRead = 0
     /// The highest token whose answer has been taken. Tokens only ever rise,
