@@ -41,13 +41,13 @@ public struct RPCMethodError: Error, Sendable, Equatable {
 
     /// Caller isn't authorized for the requested method: a terminal
     /// (non-retryable) scope refusal. Role itself is not authority; this
-    /// code covers refusals such as a missing live orchestration grant on an
-    /// `.orchestratorTab`-tagged method, an unvalidated GUI peer reaching for
-    /// a GUI-only method, or a forbidden orchestrator-role mint at
+    /// code covers refusals such as a missing live automation grant on an
+    /// `.automationTab`-tagged method, an unvalidated GUI peer reaching for
+    /// a GUI-only method, or a forbidden automation-role mint at
     /// `session.create`. The individual error message describes the applicable
     /// refusal. Distinct from `unauthorizedCode` so a client can distinguish a
     /// terminal scope refusal from invalid or stale session authentication.
-    public static let roleViolationCode = -32_011
+    public static let scopeViolationCode = -32_011
 
     /// Reserved, and **deliberately unused on the pane path.** Per-pane
     /// authorization (`PaneCoordinator.authorize`) does not surface a
@@ -89,8 +89,8 @@ public struct RPCMethodError: Error, Sendable, Equatable {
         RPCMethodError(code: notReadyCode, message: message)
     }
 
-    public static func roleViolation(_ message: String) -> RPCMethodError {
-        RPCMethodError(code: roleViolationCode, message: message)
+    public static func scopeViolation(_ message: String) -> RPCMethodError {
+        RPCMethodError(code: scopeViolationCode, message: message)
     }
 
     public static func unlinkedPane(_ message: String) -> RPCMethodError {

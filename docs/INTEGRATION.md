@@ -7,7 +7,7 @@ consuming these contracts.
 
 Use `deviceterm help` for command syntax and `deviceterm agents` for
 in-terminal automation notes. Workflows live in the companion guides:
-[`AUTOMATION.md`](AUTOMATION.md) for workspace control, orchestration, and
+[`AUTOMATION.md`](AUTOMATION.md) for workspace control, automation, and
 events, and [`USAGE.md`](USAGE.md) for driving devices inside a tab.
 
 ## Contents
@@ -17,7 +17,7 @@ events, and [`USAGE.md`](USAGE.md) for driving devices inside a tab.
 - [Discovery and State](#discovery-and-state)
 - [Action Receipts](#action-receipts)
 - [Accessibility](#accessibility)
-- [Orchestration](#orchestration)
+- [Automation](#automation)
 - [Events](#events)
 
 ## Contract Rules
@@ -177,11 +177,11 @@ This guide uses four scope labels:
 | Local | No daemon connection |
 | Daemon-wide | Daemon connection, but no authenticated tab required |
 | Session | Live authenticated DeviceTerm terminal session |
-| Orchestration | Session scope plus a live orchestration grant issued by the GUI |
+| Automation | Session scope plus a live automation grant issued by the GUI |
 
-A role such as `"orchestrator"` is descriptive metadata. Cross-tab input and
+A role such as `"automation"` is descriptive metadata. Cross-tab input and
 capture require a live grant, not the role string alone. Only the GUI issues
-a grant; see [`AUTOMATION.md`](AUTOMATION.md#orchestrate-other-tabs).
+a grant; see [`AUTOMATION.md`](AUTOMATION.md#drive-other-tabs).
 
 Private sessions remain opaque to other callers. Lists omit private sessions,
 panes, and ownership annotations unless the caller owns that private tab.
@@ -207,8 +207,8 @@ panes, and ownership annotations unless the caller owns that private tab.
 | `device attach --json` | Device attachment receipt | Session | GUI accepted the attachment; rendering may still be pending | Stable-additive |
 | `window open`, `window close`, `window focus` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
 | `tab set-private --json` | Privacy receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
-| `tab send-input --json` | Input receipt | Orchestration | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
-| `tab capture --json` | `{text}` | Orchestration | Visible viewport captured | Stable-additive |
+| `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
+| `tab capture --json` | `{text}` | Automation | Visible viewport captured | Stable-additive |
 | `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper; best-effort node |
 | `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep completed | Stable-additive wrapper; best-effort children |
 | `events` | JSON Lines stream | Session | Subscription remains active until EOF or termination | Stable-additive |
@@ -889,18 +889,18 @@ A successful empty `children` array means the bridge responded but the sweep
 found no unique elements. A systemic bridge failure exits nonzero and prints an
 error instead of returning a successful empty wrapper.
 
-## Orchestration
+## Automation
 
 ### Hold a Live Grant
 
-Cross-tab terminal input and capture require a live orchestration grant,
+Cross-tab terminal input and capture require a live automation grant,
 checked for each request. A caller without one receives
-`error.role_violation`, including a caller whose environment still says its
-role is `"orchestrator"`.
+`error.scope_violation`, including a caller whose environment still says its
+role is `"automation"`.
 
 Only the GUI issues a grant, and the CLI cannot grant authority to itself.
 The grant lifecycle is described in
-[`AUTOMATION.md`](AUTOMATION.md#open-an-orchestrator-tab).
+[`AUTOMATION.md`](AUTOMATION.md#open-an-automation-tab).
 
 ### Send Input
 

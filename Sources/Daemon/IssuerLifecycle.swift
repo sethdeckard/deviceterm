@@ -6,7 +6,7 @@
 // A store may key its entries to the id of the validated-GUI XPC connection
 // that issued them. When that connection closes, its entries must be revoked
 // AND any of its requests still in flight (one that suspended before the close
-// and resumes after) must be rejected. The orchestration-grant store is the
+// and resumes after) must be rejected. The automation-grant store is the
 // current embedder; the type is written to be embedded by any such store so
 // the closed-issuer logic isn't hand-rolled (and drift) per store.
 //

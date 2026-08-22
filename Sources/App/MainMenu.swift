@@ -105,13 +105,13 @@ func makeMainMenu() -> NSMenu {
     let shellMenu = NSMenu(title: "Shell")
     shellMenu.addItem(KeybindingCatalog.makeMenuItem(.newWindow))
     shellMenu.addItem(KeybindingCatalog.makeMenuItem(.newTab))
-    // Orchestrator-role minting has no CLI verb, so the menu is the
+    // Automation-role minting has no CLI verb, so the menu is the
     // intended product-UI path. Putting it on ⌘⇧T rather than ⌘T
-    // discourages accidental orchestrator-tab opens and leaves ⌘T as the
+    // discourages accidental automation-tab opens and leaves ⌘T as the
     // muscle-memory default. The daemon backs this up: `session.create`
-    // refuses an orchestrator role over UDS, and over XPC only accepts
+    // refuses an automation role over UDS, and over XPC only accepts
     // one from a peer whose audit token matches the daemon's signature.
-    shellMenu.addItem(KeybindingCatalog.makeMenuItem(.openOrchestratorTab))
+    shellMenu.addItem(KeybindingCatalog.makeMenuItem(.openAutomationTab))
     // Duplicate Tab opens a tab inheriting the source tab's role and
     // working directory. The tab strip's own copy resolves which tab
     // from the clicked item's represented object; a main-menu item

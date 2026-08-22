@@ -29,13 +29,13 @@ public actor RPCServer {
     private let methods: MethodRegistry
     private let authValidator: AuthValidator?
     private let provenance: ProvenanceContext?
-    /// The live orchestration-grant store the `.orchestratorTab` scope check
-    /// consults on every request. Read OFF the registry (`methods.orchestratorGrant`),
+    /// The live automation-grant store the `.automationTab` scope check
+    /// consults on every request. Read OFF the registry (`methods.automationGrant`),
     /// never a separate parameter, so the ledger this server enforces against is
     /// the SAME one the grant/revoke handlers write and the advertiser reads, by
     /// construction. Nil disables the check (a granted session then can't reach
-    /// the orchestrator surface over UDS: fail closed).
-    private let orchestratorGrantStore: OrchestratorGrantStore?
+    /// the automation surface over UDS: fail closed).
+    private let automationGrantStore: AutomationGrantStore?
     private let peerIdentityResolver: PeerIdentityResolver
     /// Nil makes each connection compose a resolver over `peerIdentityResolver`;
     /// inject one when a test must vary the ancestor prefix between requests.
@@ -88,7 +88,7 @@ public actor RPCServer {
         self.methods = methods
         self.authValidator = authValidator
         self.provenance = methods.provenance
-        self.orchestratorGrantStore = methods.orchestratorGrant
+        self.automationGrantStore = methods.automationGrant
         self.peerIdentityResolver = peerIdentityResolver
         self.provenanceSnapshotResolver = provenanceSnapshotResolver
         self.acceptQueue = DispatchQueue(label: "deviceterm.daemon.accept")
@@ -181,7 +181,7 @@ public actor RPCServer {
                     authValidator: authValidator,
                     sessionProvenanceLookup: provenance?.lookup,
                     restorationGate: provenance?.restorationComplete,
-                    orchestratorGrantStore: orchestratorGrantStore,
+                    automationGrantStore: automationGrantStore,
                     peerIdentityResolver: peerIdentityResolver,
                     provenanceSnapshotResolver: provenanceSnapshotResolver
                 )

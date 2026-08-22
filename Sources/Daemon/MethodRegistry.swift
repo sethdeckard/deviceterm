@@ -27,9 +27,9 @@
 // Each entry is tagged with a `MethodScope`. The dispatcher in
 // `RPCConnection` reads the tag and pre-checks the connection's
 // auth state before invoking the handler: `.session` requires
-// `authenticatedSession != nil`; `.orchestratorTab` additionally
-// requires a live orchestration grant for the session (from the
-// `OrchestratorGrantStore`, checked per request, not a role);
+// `authenticatedSession != nil`; `.automationTab` additionally
+// requires a live automation grant for the session (from the
+// `AutomationGrantStore`, checked per request, not a role);
 // `.validatedGUI` requires an XPC peer that validated against the
 // daemon's signature (the GUI back-channel). Handlers see only
 // requests that have already passed those checks.
@@ -89,7 +89,7 @@ public struct MethodRegistry: Sendable {
 
     /// A one-shot handler tagged with its `MethodScope`. Construct
     /// via the `.daemonWide(_:)` / `.session(_:)` /
-    /// `.orchestratorTab(_:)` / `.validatedGUI(_:)` factories below for
+    /// `.automationTab(_:)` / `.validatedGUI(_:)` factories below for
     /// readable registration tables.
     public struct ScopedHandler: Sendable {
         public let scope: MethodScope
@@ -136,17 +136,17 @@ public struct MethodRegistry: Sendable {
     /// server then fails its `provenance != nil` precondition).
     public let provenance: ProvenanceContext?
 
-    /// The live orchestration-grant store this registry was built against: the
-    /// SAME instance the `orchestrator.grant`/`.revoke` handlers mutate, the
+    /// The live automation-grant store this registry was built against: the
+    /// SAME instance the `automation.grant`/`.revoke` handlers mutate, the
     /// `daemon.capabilities` advertiser reads, and the session close path
     /// revokes from. Both servers (`RPCServer`/`XPCServer`) read this off the
-    /// registry rather than taking a separate `orchestratorGrantStore:`
+    /// registry rather than taking a separate `automationGrantStore:`
     /// parameter, so the ledger advertising consults, the ledger the two
-    /// dispatchers' `.orchestratorTab` scope checks consult, and the ledger the
+    /// dispatchers' `.automationTab` scope checks consult, and the ledger the
     /// handlers write cannot diverge: there is exactly one store, carried by the
     /// registry, mirroring `provenance`. Nil when the registry doesn't exercise
-    /// orchestration grants (the scope check then fails closed).
-    public let orchestratorGrant: OrchestratorGrantStore?
+    /// automation grants (the scope check then fails closed).
+    public let automationGrant: AutomationGrantStore?
 
     /// Method names this registry knows about. Used by diagnostic
     /// endpoints and probe-style tooling. Sorted for stable output.
@@ -158,12 +158,12 @@ public struct MethodRegistry: Sendable {
         handlers: [String: ScopedHandler] = [:],
         subscriptions: [String: ScopedSubscription] = [:],
         provenance: ProvenanceContext? = nil,
-        orchestratorGrant: OrchestratorGrantStore? = nil
+        automationGrant: AutomationGrantStore? = nil
     ) {
         self.oneShot = handlers
         self.subscriptions = subscriptions
         self.provenance = provenance
-        self.orchestratorGrant = orchestratorGrant
+        self.automationGrant = automationGrant
     }
 
     /// Look up a method by name. Returns `nil` if no method is
@@ -196,23 +196,23 @@ public struct MethodRegistry: Sendable {
     ///   - `nil`: no session creds (out-of-tab caller). Returns
     ///     `.daemonWide` methods only. Lets `deviceterm --help` from a
     ///     stock terminal show the unauthenticated subset.
-    ///   - `.agent` / `.orchestrator`: in-tab session. Returns
-    ///     `.daemonWide` + `.session`. `.orchestratorTab` methods are
-    ///     added purely from `orchestratorTabReachable` (the session's
+    ///   - `.agent` / `.automation`: in-tab session. Returns
+    ///     `.daemonWide` + `.session`. `.automationTab` methods are
+    ///     added purely from `automationTabReachable` (the session's
     ///     live grant), NOT from the role. So a granted `.agent` sees
-    ///     them and an ungranted `.orchestrator` does not.
+    ///     them and an ungranted `.automation` does not.
     ///
     /// `.validatedGUI` methods are added orthogonally when
     /// `validatedGUIReachable` is true (the peer validated against the
     /// daemon's signature over XPC).
     public func methodsForRole(
         _ role: SessionRole?,
-        orchestratorTabReachable: Bool,
+        automationTabReachable: Bool,
         validatedGUIReachable: Bool
     ) -> [String] {
         let allowed = MethodScope.allowedFor(
             role: role,
-            orchestratorTabReachable: orchestratorTabReachable,
+            automationTabReachable: automationTabReachable,
             validatedGUIReachable: validatedGUIReachable
         )
         let oneShotNames = oneShot
@@ -246,22 +246,22 @@ public extension MethodRegistry.ScopedHandler {
         .init(scope: .session, handler: handler)
     }
 
-    /// Orchestrator-tab-only: dispatcher requires the connection to be
-    /// authenticated AND the session to hold a **live orchestration grant**
-    /// (from the `OrchestratorGrantStore`, checked per request); otherwise
-    /// it rejects with `error.role_violation` before the handler runs.
+    /// Automation-tab-only: dispatcher requires the connection to be
+    /// authenticated AND the session to hold a **live automation grant**
+    /// (from the `AutomationGrantStore`, checked per request); otherwise
+    /// it rejects with `error.scope_violation` before the handler runs.
     /// Authority is the grant, not the role: a granted `.agent` reaches it,
-    /// an ungranted `.orchestrator` does not. `tab.sendInput` and
+    /// an ungranted `.automation` does not. `tab.sendInput` and
     /// `tab.capture` carry this scope. Reachable over BOTH transports for a
     /// granted session: the GUI's validated XPC connection, and UDS from the
     /// CLI inside a granted tab. A UDS session authenticates via cap + kernel
     /// terminal-process provenance, so the grant rests on a real identity, not
     /// the cap alone. Escalation stays XPC-GUI-only: a UDS caller can neither
-    /// mint an orchestrator role nor issue itself a grant.
-    static func orchestratorTab(
+    /// mint an automation role nor issue itself a grant.
+    static func automationTab(
         _ handler: @escaping MethodRegistry.Handler
     ) -> Self {
-        .init(scope: .orchestratorTab, handler: handler)
+        .init(scope: .automationTab, handler: handler)
     }
 
     /// Validated-GUI-only: reachable only over XPC from a peer whose

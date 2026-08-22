@@ -15,14 +15,14 @@ func sessionRoleAgentRawValue() {
 }
 
 @Test
-func sessionRoleOrchestratorRawValue() {
-    #expect(SessionRole.orchestrator.rawValue == "orchestrator")
+func sessionRoleAutomationRawValue() {
+    #expect(SessionRole.automation.rawValue == "automation")
 }
 
 @Test
 func sessionRoleCaseCount() {
     // Two roles, no more. The role enum is deliberately bounded to
-    // agent/orchestrator: "human" is a GUI-only escalation primitive
+    // agent/automation: "human" is a GUI-only escalation primitive
     // rather than a role a session can hold, so it has no case here.
     // Adding a third case is a real semantic change to the trust
     // model, not a mechanical extension, so this guard exists to make
@@ -39,11 +39,11 @@ func sessionRoleCodableRoundTripAgent() throws {
 }
 
 @Test
-func sessionRoleCodableRoundTripOrchestrator() throws {
-    let encoded = try JSONEncoder().encode(SessionRole.orchestrator)
-    #expect(String(data: encoded, encoding: .utf8) == "\"orchestrator\"")
+func sessionRoleCodableRoundTripAutomation() throws {
+    let encoded = try JSONEncoder().encode(SessionRole.automation)
+    #expect(String(data: encoded, encoding: .utf8) == "\"automation\"")
     let decoded = try JSONDecoder().decode(SessionRole.self, from: encoded)
-    #expect(decoded == .orchestrator)
+    #expect(decoded == .automation)
 }
 
 @Test

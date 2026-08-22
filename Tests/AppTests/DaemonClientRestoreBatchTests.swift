@@ -46,7 +46,7 @@ struct DaemonClientRestoreBatchTests {
                 sessionId: "S2",
                 capability: "cap-2",
                 shortId: "bbb222",
-                role: .orchestrator,
+                role: .automation,
                 name: nil,
                 isPrivate: true
             )

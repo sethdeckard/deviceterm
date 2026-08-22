@@ -161,9 +161,9 @@ final class IntentDispatcher {
             case .agent:
                 router.dispatch(.newTab(windowID, cwd: cwd, cmd: cmd))
 
-            case .orchestrator:
+            case .automation:
                 router.dispatch(
-                    .openOrchestratorTab(windowID, cwd: cwd, cmd: cmd)
+                    .openAutomationTab(windowID, cwd: cwd, cmd: cmd)
                 )
             }
             return .ok

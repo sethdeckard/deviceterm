@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Reply for `orchestrator.grant` / `orchestrator.revoke`.
+/// Reply for `automation.grant` / `automation.revoke`.
 ///
 /// `applied` is whether the batch was accepted and its intended end-state now
 /// holds for every target: all-or-none, last-write-wins by the `(epoch,
@@ -15,7 +15,7 @@ import Foundation
 /// GUI can tell an accepted request from a rejected/stale no-op without
 /// inferring it from ordering. (A grant naming a non-live target is a distinct
 /// failure: the handler rejects it with `invalidParams`, not `applied: false`.)
-public struct OrchestratorGrantResult: Codable, Sendable, Equatable {
+public struct AutomationGrantResult: Codable, Sendable, Equatable {
     public let applied: Bool
 
     public init(applied: Bool) {

@@ -33,9 +33,9 @@ public enum SessionMethods {
         /// that don't carry the field encode/decode cleanly.
         public let name: String?
         /// Optional role assignment. Defaults to `.agent` when
-        /// omitted; the GUI's "Open Orchestrator Tab" menu is the
-        /// product-UI path that passes `.orchestrator` (no CLI verb
-        /// does). The handler enforces this: an orchestrator role
+        /// omitted; the GUI's "Open Automation Tab" menu is the
+        /// product-UI path that passes `.automation` (no CLI verb
+        /// does). The handler enforces this: an automation role
         /// is refused over UDS, and over XPC only accepted from a
         /// signature-validated peer. Optional on the wire for skew
         /// tolerance against pre-role clients.
@@ -120,7 +120,7 @@ public enum SessionMethods {
             //     complete) returns the RETRYABLE `notReady`, so a recoverable
             //     validation blip doesn't fail opening a tab (the GUI retries);
             //   - a STABLE `.rejected` signature mismatch (a rogue XPC peer) is a
-            //     hard `roleViolation`.
+            //     hard `scopeViolation`.
             // UDS creates are agent sessions, never GUI-restorable, and skip this.
             if let context = DispatchPeerContext.current,
                 context.transport == .xpc,
@@ -129,19 +129,19 @@ public enum SessionMethods {
                     throw RPCMethodError.notReady("peer validation not ready")
                 }
                 throw RPCMethodError(
-                    code: RPCMethodError.roleViolationCode,
+                    code: RPCMethodError.scopeViolationCode,
                     message: "session.create refused: peer failed validation"
                 )
             }
-            // Mint-time orchestrator gate. Only the human GUI (a validated XPC
-            // peer, guaranteed by the check above) may mint an orchestrator
+            // Mint-time automation gate. Only the human GUI (a validated XPC
+            // peer, guaranteed by the check above) may mint an automation
             // session; UDS (and a nil context) can never. The connection-layer
-            // scope check covers orchestrator-scoped methods after the mint.
-            if requestedRole == .orchestrator,
+            // scope check covers automation-scoped methods after the mint.
+            if requestedRole == .automation,
                 DispatchPeerContext.current?.transport != .xpc {
                 throw RPCMethodError(
-                    code: RPCMethodError.roleViolationCode,
-                    message: "orchestrator sessions can only be minted from the GUI"
+                    code: RPCMethodError.scopeViolationCode,
+                    message: "automation sessions can only be minted from the GUI"
                 )
             }
             // Capture the owner identity from the transport peer: the audit

@@ -32,12 +32,12 @@ enum CLIIntentTranslator {
                 from: command.params
             )
             // The back-channel is the EXTERNAL path: a CLI/UDS caller.
-            // The orchestrator role is human-only: it is minted solely by
-            // the in-process "Open Orchestrator Tab" menu, which builds its
+            // The automation role is human-only: it is minted solely by
+            // the in-process "Open Automation Tab" menu, which builds its
             // RouteIntent directly and never routes through here. So an
             // external `tab.open` always yields an `.agent` tab, regardless
             // of any `params.role` a hand-rolled UDS client sets, otherwise
-            // it could launder an orchestrator mint through the validated
+            // it could launder an automation mint through the validated
             // GUI (the daemon's `session.create` gate refuses a UDS mint,
             // but the GUI, as a validated peer, would mint on its behalf).
             // The real CLI only ever sends "agent" here.

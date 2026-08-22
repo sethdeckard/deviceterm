@@ -4,9 +4,9 @@
 import Foundation
 import Testing
 
-// `OrchestratorGrantStore`: the in-memory lease ledger with `(epoch,
+// `AutomationGrantStore`: the in-memory lease ledger with `(epoch,
 // revision)` ordering and live-session membership. Issued/revoked by
-// validated-GUI handlers, read by the orchestrator scope check. Nothing is
+// validated-GUI handlers, read by the automation scope check. Nothing is
 // persisted. A grant target must be a registered live session; removal drops
 // it so a late grant is rejected however long delayed.
 
@@ -15,14 +15,14 @@ private func key(_ epoch: UInt64, _ revision: Int) -> GrantOrderingKey {
 }
 
 /// Register `ids` as live sessions and return them.
-private func live(_ store: OrchestratorGrantStore, _ ids: UUID...) async -> [UUID] {
+private func live(_ store: AutomationGrantStore, _ ids: UUID...) async -> [UUID] {
     for id in ids { await store.registerSession(id) }
     return ids
 }
 
 @Test
 func grantThenHasGrant() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     #expect(await store.hasGrant(session) == false)
     _ = await live(store, session)
@@ -34,13 +34,13 @@ func grantThenHasGrant() async {
 @Test
 func grantForUnregisteredSessionIsRejected() async {
     // A target that was never registered live is not grantable.
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     #expect(await store.grant(sessionIds: [UUID()], key: key(1, 1), issuedBy: 1) == .sessionNotLive)
 }
 
 @Test
 func revokeWithDominatingKeyRemovesGrant() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     _ = await store.grant(sessionIds: [session], key: key(1, 1), issuedBy: 1)
@@ -53,7 +53,7 @@ func staleGrantExecutedAfterNewerRevokeDoesNotResurrect() async {
     // The non-FIFO hazard: a revoke (higher revision) runs first, then a
     // stale grant (lower revision) runs. The grant must lose, dominance
     // check fails, so authority stays revoked.
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     _ = await store.revoke(sessionIds: [session], key: key(1, 2))
@@ -63,7 +63,7 @@ func staleGrantExecutedAfterNewerRevokeDoesNotResurrect() async {
 
 @Test
 func newerGrantAfterRevokeRegrants() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     _ = await store.revoke(sessionIds: [session], key: key(1, 1))
@@ -73,7 +73,7 @@ func newerGrantAfterRevokeRegrants() async {
 
 @Test
 func staleEpochGrantLosesToNewerConnection() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     _ = await store.grant(sessionIds: [session], key: key(20, 1), issuedBy: 20)
@@ -85,7 +85,7 @@ func staleEpochGrantLosesToNewerConnection() async {
 
 @Test
 func revokeAllByConnectionRevokesOnlyThatConnectionsGrants() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let ownedByOne = UUID()
     let ownedByTwo = UUID()
     _ = await live(store, ownedByOne, ownedByTwo)
@@ -98,7 +98,7 @@ func revokeAllByConnectionRevokesOnlyThatConnectionsGrants() async {
 
 @Test
 func reissuedGrantOwnedByNewerConnectionSurvivesOldTeardown() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     _ = await store.grant(sessionIds: [session], key: key(10, 1), issuedBy: 10)
@@ -109,7 +109,7 @@ func reissuedGrantOwnedByNewerConnectionSurvivesOldTeardown() async {
 
 @Test
 func lateGrantFromClosedIssuerIsRejected() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     await store.revokeAll(issuedBy: 5)
@@ -123,7 +123,7 @@ func lateGrantFromClosedIssuerIsRejected() async {
 func removedSessionRejectsAnyLateGrantRegardlessOfChurn() async {
     // The removed-session fence is live-session membership, not a time/count
     // window: a target removed BEFORE 300 further removals is still rejected.
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let target = UUID()
     _ = await live(store, target)
     await store.revokeForRemovedSession(target)
@@ -142,7 +142,7 @@ func revokeForNonLiveTargetStoresNoTombstone() async {
     // NOT recreate a permanent entry: a late/arbitrary revoke recreating
     // tombstones is unbounded ledger growth. `entries` stays empty; a stale
     // grant is already fenced by the liveness gate, not a tombstone.
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let removed = UUID()
     _ = await live(store, removed)
     await store.revokeForRemovedSession(removed)
@@ -160,7 +160,7 @@ func revokeForNonLiveTargetStoresNoTombstone() async {
 
 @Test
 func removedSessionRevokeDropsAnExistingGrant() async {
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let session = UUID()
     _ = await live(store, session)
     _ = await store.grant(sessionIds: [session], key: key(1, 1), issuedBy: 1)
@@ -173,7 +173,7 @@ func removedSessionRevokeDropsAnExistingGrant() async {
 func staleBatchAppliesToNoneAndReportsNotApplied() async {
     // All-or-none: a batch whose key dominates one target but not another
     // (a mixed-staleness batch) must mutate NOTHING and report .notApplied.
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let fresh = UUID()
     let alreadyHigher = UUID()
     _ = await live(store, fresh, alreadyHigher)
@@ -188,7 +188,7 @@ func staleBatchAppliesToNoneAndReportsNotApplied() async {
 func mixedBatchWithOneNonLiveTargetIsRejected() async {
     // If any target isn't live, the whole batch is .sessionNotLive: none
     // granted (all-or-none).
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     let liveOne = UUID()
     _ = await live(store, liveOne)
     let outcome = await store.grant(sessionIds: [liveOne, UUID()], key: key(1, 1), issuedBy: 1)

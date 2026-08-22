@@ -82,7 +82,7 @@ func integrationGuideSurfaceMatrixPinsScopeCategories() throws {
         "| `version --json` | Version report | Local,",
         "| `tabs list --json` | Array of tab rows | Daemon-wide |",
         "| `panes list --json` | Array of pane rows | Session |",
-        "| `tab send-input --json` | Input receipt | Orchestration |",
+        "| `tab send-input --json` | Input receipt | Automation |",
         "| `pane rename`, `pane move` | No success shape | Session | Unsupported; command fails |"
     ]
     for row in scopedRows {

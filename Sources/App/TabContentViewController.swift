@@ -49,7 +49,7 @@ final class TabContentViewController: NSViewController {
     private let daemonClient:
         any DeviceControlling & PaneControlling & PaneSubscribing & TerminalBinding & ReconnectObserving
             & PaneAccessibilityControlling & PaneLocationControlling
-            & OrchestratorGranting & DisplayTitlePublishing
+            & AutomationGranting & DisplayTitlePublishing
     private let simResurrect: SimResurrect
     private let router: Router
     /// The window's tab-list nav state this VC reconciles against. A
@@ -62,10 +62,10 @@ final class TabContentViewController: NSViewController {
     /// one per tab. Device / pending panes wire far less, so their wiring
     /// stays inline below.
     private let simPaneActions: SimPaneActionCoordinator
-    /// Issues + retries this tab's orchestration grant once a terminal binds
-    /// (orchestrator tabs only; a no-op otherwise). Per-tab: its retry loops are
+    /// Issues + retries this tab's automation grant once a terminal binds
+    /// (automation tabs only; a no-op otherwise). Per-tab: its retry loops are
     /// cancelled when the tab (and this VC) tears down.
-    private let grantCoordinator: OrchestratorGrantCoordinator
+    private let grantCoordinator: AutomationGrantCoordinator
     /// Keeps the daemon's copy of this tab's live label current, so
     /// `tabs.list` can serve it in place of the static name from
     /// `session.create`. Per-tab: its pending push is dropped when the tab
@@ -119,7 +119,7 @@ final class TabContentViewController: NSViewController {
 
     /// Sessions exposed for legacy tab-scoped consumers (status item
     /// grouping, the discovery snapshot's ownership filter, the
-    /// orchestrator-only `sendInput` / `captureScreen` default-target
+    /// automation-only `sendInput` / `captureScreen` default-target
     /// path). All resolve to the **primary** terminal's session, the
     /// authoritative "which session represents this tab" answer for
     /// surfaces that don't yet model per-terminal sessions.
@@ -160,7 +160,7 @@ final class TabContentViewController: NSViewController {
         tabListVM: TabListViewModel,
         daemonClient: any DeviceControlling & PaneControlling & PaneSubscribing & TerminalBinding & ReconnectObserving
             & PaneAccessibilityControlling & PaneLocationControlling
-            & OrchestratorGranting & DisplayTitlePublishing,
+            & AutomationGranting & DisplayTitlePublishing,
         simResurrect: SimResurrect,
         router: Router,
         daemonSocketPath: String = DaemonClient.socketPath()
@@ -169,7 +169,7 @@ final class TabContentViewController: NSViewController {
         self.windowID = windowID
         self.role = role
         self.daemonClient = daemonClient
-        self.grantCoordinator = OrchestratorGrantCoordinator(client: daemonClient)
+        self.grantCoordinator = AutomationGrantCoordinator(client: daemonClient)
         self.titlePublisher = DisplayTitlePublisher(
             .init(send: { [weak daemonClient] sessionId, title in
                 try await daemonClient?.setDisplayTitle(sessionId: sessionId, title: title)
@@ -388,7 +388,7 @@ final class TabContentViewController: NSViewController {
     /// Forward an intent-layer `sendInput` to the primary terminal
     /// pane's surface so the bytes flow through libghostty's input
     /// pipeline. Called by `AppDelegate`'s `IntentActionDelegate`
-    /// bridging for the orchestrator-only `deviceterm tab send-input`
+    /// bridging for the automation-only `deviceterm tab send-input`
     /// verb. Throws when the underlying surface refuses input (e.g.
     /// attach hasn't completed even after forced view load); the
     /// dispatcher relays the typed error.
@@ -401,7 +401,7 @@ final class TabContentViewController: NSViewController {
 
     /// Resolve the **original** primary terminal pane VC, the one
     /// the daemon session bound to at tab open. Tab-scoped operations
-    /// (orchestrator's `sendInput` / `captureScreen`, tab-switch
+    /// (automation's `sendInput` / `captureScreen`, tab-switch
     /// focus) must target this session regardless of where the user
     /// has dragged the pane in the tree. Reading nav-state's
     /// `primaryTerminal.id` on every call keeps the answer stable
@@ -429,7 +429,7 @@ final class TabContentViewController: NSViewController {
     /// shell, and clears any SimResurrect watches we still hold.
     func teardown() {
         isTornDown = true
-        // Stop any in-flight orchestration-grant retry loops. The tab is going
+        // Stop any in-flight automation-grant retry loops. The tab is going
         // away, so a lingering retry could regrant a closing session and would
         // keep the coordinator (and this VC) alive through a persistent outage.
         grantCoordinator.cancelAll()
@@ -598,9 +598,9 @@ final class TabContentViewController: NSViewController {
             // and arming a new retry loop here would re-open one after it. The
             // bind itself succeeded, so still report success.
             if Task.isCancelled || self.isTornDown { return true }
-            // The session is now terminal-bound. For an orchestrator tab, hand
+            // The session is now terminal-bound. For an automation tab, hand
             // it to the grant coordinator, which issues (and, on transient
-            // failure, retries with fresh revisions) the live orchestration
+            // failure, retries with fresh revisions) the live automation
             // grant so an in-tab CLI can drive the cross-tab `tab.send-input` /
             // `tab.capture` verbs, gated on bind (not create) so the grant
             // never precedes the moment the session can be authenticated. Fires

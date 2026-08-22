@@ -3,7 +3,7 @@
 # scripts/demo-present.sh — a presenter-style demo driver for recording
 # deviceterm screencasts.
 #
-# You run this INSIDE an Orchestrator tab (Shell → Open Orchestrator Tab,
+# You run this INSIDE an Automation tab (Shell → Open Automation Tab,
 # ⌘⇧T) in a SECOND, off-camera window. It reads a demo file (one shell
 # command per line) and, each time you press a key, "types" the next
 # command into the RECORDED tab — character by character, like a human —
@@ -79,7 +79,7 @@ case "$SETTLE" in ''|*[!0-9]*) die "--settle expects a non-negative integer (mil
 command -v deviceterm >/dev/null 2>&1 \
     || die "the 'deviceterm' CLI isn't on PATH — run this inside a deviceterm tab"
 
-# Auto-target: pick the sole session that isn't this orchestrator driver.
+# Auto-target: pick the sole session that isn't this automation driver.
 # `tabs list --json` is a bare array of {sessionId, shortId, name, label};
 # we exclude our own session (the driver injects $DEVICETERM_SESSION) and,
 # if exactly one session remains, use its shortId (falling back to sessionId).

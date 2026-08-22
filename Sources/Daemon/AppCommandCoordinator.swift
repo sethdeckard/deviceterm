@@ -212,7 +212,7 @@ public actor AppCommandCoordinator {
     /// replies. Accepts the result only from the **current subscriber
     /// connection**. A result from any other connection is a forgery
     /// attempt and returns `false` (the handler turns that into a
-    /// role-violation reject). Resumes the matching continuation and
+    /// scope-violation reject). Resumes the matching continuation and
     /// cancels its timeout. An unknown `commandId` from the correct
     /// subscriber (e.g. a result for a command that already timed out)
     /// is not a violation. It returns `true` and is silently dropped.

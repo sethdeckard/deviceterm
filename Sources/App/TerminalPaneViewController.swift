@@ -459,7 +459,7 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     /// screencasts, so a command reads as typed rather than pasted).
     /// The call is **non-blocking**: it validates the surface, enqueues
     /// the animation on a per-pane serial task, and returns immediately
-    /// so the orchestrator's ack (and the daemon's back-channel drain)
+    /// so the automation's ack (and the daemon's back-channel drain)
     /// isn't held for the typing duration. Concurrent paced calls chain
     /// in order rather than interleaving. `nil`/`0` is the synchronous
     /// instant one-shot. The delay is clamped to a sane ceiling so a

@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Daemon-internal ordering key for orchestration grants, mirroring
+/// Daemon-internal ordering key for automation grants, mirroring
 /// `PrivacyOrderingKey`. Lexicographic `(epoch, revision)`: `epoch` is
 /// server-derived from the issuing XPC connection id (monotonic, so a
 /// reconnected GUI always dominates an older one and a client can't forge
@@ -21,7 +21,7 @@ struct GrantOrderingKey: Comparable, Sendable, Equatable {
     }
 }
 
-/// The result of an `orchestrator.grant` batch.
+/// The result of an `automation.grant` batch.
 enum GrantOutcome: Sendable, Equatable {
     /// Applied: every target was a live session and the key dominated.
     case applied
@@ -33,9 +33,9 @@ enum GrantOutcome: Sendable, Equatable {
     case sessionNotLive
 }
 
-/// Daemon-wide store of orchestration grants. Actor-isolated: mutated only
-/// by validated-GUI handlers (`orchestrator.grant` / `orchestrator.revoke`),
-/// by connection teardown, and by session removal; read by the orchestrator
+/// Daemon-wide store of automation grants. Actor-isolated: mutated only
+/// by validated-GUI handlers (`automation.grant` / `automation.revoke`),
+/// by connection teardown, and by session removal; read by the automation
 /// scope check and capability advertising on every request.
 ///
 /// Nothing here is written to disk. A daemon restart starts empty; grants live
@@ -62,7 +62,7 @@ enum GrantOutcome: Sendable, Equatable {
 /// assumption: a grant that runs before its target's removal is cleared by the
 /// removal; one that runs after is rejected (target no longer live). Memory is
 /// proportional to live sessions: a removed session leaves no residue.
-public actor OrchestratorGrantStore {
+public actor AutomationGrantStore {
     private struct Entry {
         var key: GrantOrderingKey
         var granted: Bool
@@ -172,7 +172,7 @@ public actor OrchestratorGrantStore {
         entries.removeValue(forKey: sessionId)
     }
 
-    /// Whether `sessionId` currently holds a live grant. The orchestrator
+    /// Whether `sessionId` currently holds a live grant. The automation
     /// scope check and capability advertising call this on every request.
     func hasGrant(_ sessionId: UUID) -> Bool {
         entries[sessionId]?.granted ?? false

@@ -334,6 +334,6 @@ func unvalidatedXPCPeerRefusedFromBackChannel() async throws {
         Issue.record("an unvalidated XPC peer must be refused the back-channel; got \(envelope.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await coord.hasSubscriber == false)
 }

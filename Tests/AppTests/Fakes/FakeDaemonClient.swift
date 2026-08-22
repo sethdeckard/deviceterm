@@ -15,7 +15,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,
     PaneAccessibilityControlling, PaneLocationControlling,
     TerminalBinding, ReconnectObserving,
-    OrchestratorGranting, DisplayTitlePublishing {
+    AutomationGranting, DisplayTitlePublishing {
     // MARK: - Recorded calls
 
     struct BindTerminalCall: Equatable {
@@ -23,7 +23,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let foregroundPid: Int32
         let ttyName: String
     }
-    struct GrantOrchestratorCall: Equatable {
+    struct GrantAutomationCall: Equatable {
         let sessionIds: [UUID]
         let revision: Int
     }
@@ -164,15 +164,15 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     }
 
     private(set) var bindTerminalCalls: [BindTerminalCall] = []
-    private(set) var grantOrchestratorCalls: [GrantOrchestratorCall] = []
+    private(set) var grantAutomationCalls: [GrantAutomationCall] = []
     /// Client-internal monotonic revision the fake stamps per grant send,
     /// mirroring `DaemonClient.grantRevision`, so a test can assert the
     /// recorded revisions strictly increase across issues/reissues.
     private var grantRevisionCounter = 0
     /// Scripted per-call outcomes (FIFO). An `Error` throws; a `Bool` sets
     /// `applied`. Empty → `applied: true`.
-    var grantOrchestratorFailures: [Error?] = []
-    var grantOrchestratorApplied: [Bool] = []
+    var grantAutomationFailures: [Error?] = []
+    var grantAutomationApplied: [Bool] = []
     private(set) var reconnectObservers: [ReconnectObserverToken: @MainActor () -> Void] = [:]
     /// Synthetic connection generation, incremented before reconnect
     /// observers run. The numbering is the fake's own: production's first
@@ -1078,20 +1078,20 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         try await Task.sleep(nanoseconds: 0)  // mirror a real round-trip's await boundary
     }
 
-    // MARK: - OrchestratorGranting
+    // MARK: - AutomationGranting
 
     @discardableResult
-    func grantOrchestrator(sessionIds: [UUID]) async throws -> OrchestratorGrantResult {
+    func grantAutomation(sessionIds: [UUID]) async throws -> AutomationGrantResult {
         grantRevisionCounter += 1
-        grantOrchestratorCalls.append(
-            GrantOrchestratorCall(sessionIds: sessionIds, revision: grantRevisionCounter)
+        grantAutomationCalls.append(
+            GrantAutomationCall(sessionIds: sessionIds, revision: grantRevisionCounter)
         )
         try await Task.sleep(nanoseconds: 0)  // mirror a real round-trip's await boundary
-        if !grantOrchestratorFailures.isEmpty, let failure = grantOrchestratorFailures.removeFirst() {
+        if !grantAutomationFailures.isEmpty, let failure = grantAutomationFailures.removeFirst() {
             throw failure
         }
-        let applied = grantOrchestratorApplied.isEmpty ? true : grantOrchestratorApplied.removeFirst()
-        return OrchestratorGrantResult(applied: applied)
+        let applied = grantAutomationApplied.isEmpty ? true : grantAutomationApplied.removeFirst()
+        return AutomationGrantResult(applied: applied)
     }
 
     // MARK: - ReconnectObserving

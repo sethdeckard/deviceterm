@@ -117,7 +117,7 @@ final class Router {
     private static let definitePrivacyRejectionCodes: Set<Int> = [
         -32_602,  // invalidParams (malformed batch / bad UUID)
         -32_001,  // unauthorized (unknown session in the batch)
-        -32_011   // roleViolation (not the validated GUI peer, e.g. --smoke UDS)
+        -32_011   // scopeViolation (not the validated GUI peer, e.g. --smoke UDS)
     ]
 
     let workspace: WorkspaceViewModel
@@ -411,11 +411,11 @@ final class Router {
                 command: cmd
             )
 
-        case let .openOrchestratorTab(windowID, cwd, cmd):
+        case let .openAutomationTab(windowID, cwd, cmd):
             guard let window = workspace.window(id: windowID) else { return }
             await addTab(
                 to: window,
-                role: .orchestrator,
+                role: .automation,
                 reattach: [],
                 cwd: cwd,
                 command: cmd
@@ -888,8 +888,8 @@ final class Router {
             // `deviceterm tab rename` can fill it.
             //
             // Role: the standard tab-open path passes `.agent`; the
-            // "Open Orchestrator Tab" menu's route passes
-            // `.orchestrator`. The daemon may reject the request (e.g.
+            // "Open Automation Tab" menu's route passes
+            // `.automation`. The daemon may reject the request (e.g.
             // an older daemon that doesn't accept the role parameter
             // returns `.agent`); trust the response's `role` rather
             // than the requested one so the tab's recorded role
@@ -1445,7 +1445,7 @@ final class Router {
                 // public OR private, e.g. an older send committed). Only an
                 // INDETERMINATE transport loss retries with a fresh revision,
                 // reported as `.pending`. (`.rejected` also covers an opposite
-                // supersede, see the `defer` above.) `roleViolation` (-32011)
+                // supersede, see the `defer` above.) `scopeViolation` (-32011)
                 // is a definite/terminal signature rejection on BOTH transports
                 // now: the smoke UDS structural refusal AND a genuine XPC
                 // signature mismatch (which retrying can't fix). The transient,
@@ -1524,7 +1524,7 @@ final class Router {
             do {
                 result = try await daemon.privacySnapshot(sessionIds: sessionIds, revision: revision)
             } catch {
-                // A `roleViolation` (-32011) is a definite/terminal signature
+                // A `scopeViolation` (-32011) is a definite/terminal signature
                 // rejection on BOTH transports: the `--smoke` UDS structural
                 // refusal (no audit token to validate) AND a genuine XPC
                 // signature mismatch, so retrying can never succeed: stop and

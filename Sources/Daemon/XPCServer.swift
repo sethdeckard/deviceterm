@@ -30,13 +30,13 @@ public actor XPCServer {
     public static let xpcIdBase: UInt64 = 1_000_000_000
 
     private let methods: MethodRegistry
-    /// Live orchestration-grant store, handed to each connection so its
-    /// orchestrator scope check reads live grant state. Read OFF the registry
-    /// (`methods.orchestratorGrant`), never a separate parameter, so the ledger
+    /// Live automation-grant store, handed to each connection so its
+    /// automation scope check reads live grant state. Read OFF the registry
+    /// (`methods.automationGrant`), never a separate parameter, so the ledger
     /// this server enforces against is the SAME one the grant/revoke handlers
     /// write and the advertiser reads, by construction (mirroring `provenance`).
-    /// Nil when the registry doesn't exercise orchestration grants.
-    private let orchestratorGrantStore: OrchestratorGrantStore?
+    /// Nil when the registry doesn't exercise automation grants.
+    private let automationGrantStore: AutomationGrantStore?
     /// Bundles the shared anchor store + the per-request provenance lookup so
     /// the store the close path revokes is GUARANTEED the store the lookup
     /// reads (see `ProvenanceContext`). Nil in tests that don't exercise
@@ -91,7 +91,7 @@ public actor XPCServer {
         self.methods = methods
         self.authValidator = authValidator
         self.subscriptionRegistry = subscriptionRegistry
-        self.orchestratorGrantStore = methods.orchestratorGrant
+        self.automationGrantStore = methods.automationGrant
         self.provenance = methods.provenance
         self.peerValidator = peerValidator
         self.nextConnectionId = Self.xpcIdBase
@@ -184,7 +184,7 @@ public actor XPCServer {
             authValidator: authValidator,
             subscriptionRegistry: subscriptionRegistry,
             server: self,
-            orchestratorGrantStore: orchestratorGrantStore,
+            automationGrantStore: automationGrantStore,
             terminalAnchorStore: provenance?.anchorStore,
             sessionProvenanceLookup: provenance?.lookup,
             restorationGate: provenance?.restorationComplete,

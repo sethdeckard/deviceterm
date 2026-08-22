@@ -6,11 +6,11 @@
 // dir. A tab always holds at least one terminal pane (the primary);
 // additional terminals are added via `Route.openTerminalPane`.
 //
-// The tab still carries the `role` (agent / orchestrator) because role
-// is a tab-wide property: "Open Orchestrator Tab" mints an
-// orchestrator tab, and every terminal within shares that role. Role is
+// The tab still carries the `role` (agent / automation) because role
+// is a tab-wide property: "Open Automation Tab" mints an
+// automation tab, and every terminal within shares that role. Role is
 // descriptive metadata, not authority (cross-tab verbs are gated by a
-// live orchestration grant); each terminal's session inherits the tab's
+// live automation grant); each terminal's session inherits the tab's
 // role at create-time.
 
 import DaemonProtocol

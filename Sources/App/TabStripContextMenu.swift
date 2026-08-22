@@ -4,7 +4,7 @@
 //
 // Provides the standard per-tab right-click actions: renaming,
 // lifecycle (close / close others / close to the right),
-// duplication, privacy toggle, and the orchestrator-tab escape
+// duplication, privacy toggle, and the automation-tab escape
 // hatch. Each item gets an EXPLICIT `target` (the strip VC) rather
 // than a nil-targeted responder-chain dispatch. The strip VC is a
 // sibling of the focused pane's VC, not an ancestor, so a chain walk
@@ -87,8 +87,8 @@ func makeTabStripContextMenu(
     )
     menu.addItem(
         menuItem(
-            title: "Open Orchestrator Tab",
-            action: #selector(TabStripViewController.openOrchestratorTabFromMenu(_:)),
+            title: "Open Automation Tab",
+            action: #selector(TabStripViewController.openAutomationTabFromMenu(_:)),
             for: tabID,
             target: target
         )

@@ -5,12 +5,12 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-// MethodRegistry's scope tagging + `methodsForRole(_:orchestratorTabReachable:validatedGUIReachable:)`.
+// MethodRegistry's scope tagging + `methodsForRole(_:automationTabReachable:validatedGUIReachable:)`.
 // The registry is the source of truth for `daemon.capabilities`, so
 // these tests pin the mapping exactly: nil gets daemonWide only; a
-// session (agent OR orchestrator) gets daemonWide + session, and the
-// `.orchestratorTab` methods are added purely from
-// `orchestratorTabReachable` (the live grant), independent of role.
+// session (agent OR automation) gets daemonWide + session, and the
+// `.automationTab` methods are added purely from
+// `automationTabReachable` (the live grant), independent of role.
 // `MethodScopeTransportTests` covers what makes it reachable.
 
 private func passthrough() -> MethodRegistry.Handler {
@@ -25,7 +25,7 @@ func methodsForRoleNilReturnsDaemonWideOnly() {
             "b.session": .session(passthrough())
         ]
     )
-    #expect(registry.methodsForRole(nil, orchestratorTabReachable: true, validatedGUIReachable: false) == ["a.public"])
+    #expect(registry.methodsForRole(nil, automationTabReachable: true, validatedGUIReachable: false) == ["a.public"])
 }
 
 @Test
@@ -38,62 +38,62 @@ func methodsForRoleAgentReturnsDaemonWideAndSession() {
     )
     let methods = registry.methodsForRole(
         .agent,
-        orchestratorTabReachable: true,
+        automationTabReachable: true,
         validatedGUIReachable: false
     )
     #expect(methods == ["a.public", "b.session"])
 }
 
 @Test
-func methodsForRoleOrchestratorReturnsAllThreeScopes() {
+func methodsForRoleAutomationReturnsAllThreeScopes() {
     let registry = MethodRegistry(
         handlers: [
             "a.public": .daemonWide(passthrough()),
             "b.session": .session(passthrough()),
-            "c.orchestrator": .orchestratorTab(passthrough())
+            "c.automation": .automationTab(passthrough())
         ]
     )
-    let methods = registry.methodsForRole(.orchestrator, orchestratorTabReachable: true, validatedGUIReachable: false)
-    #expect(methods == ["a.public", "b.session", "c.orchestrator"])
+    let methods = registry.methodsForRole(.automation, automationTabReachable: true, validatedGUIReachable: false)
+    #expect(methods == ["a.public", "b.session", "c.automation"])
 }
 
 @Test
-func methodsForRoleUngrantedExcludesOrchestrator() {
+func methodsForRoleUngrantedExcludesAutomation() {
     // Authority is a grant, not a role. An UNGRANTED caller
-    // (orchestratorTabReachable: false) never sees the orchestrator surface,
+    // (automationTabReachable: false) never sees the automation surface,
     // whatever its role.
     let registry = MethodRegistry(
         handlers: [
             "a.public": .daemonWide(passthrough()),
             "b.session": .session(passthrough()),
-            "c.orchestrator": .orchestratorTab(passthrough())
+            "c.automation": .automationTab(passthrough())
         ]
     )
     #expect(
-        registry.methodsForRole(.agent, orchestratorTabReachable: false, validatedGUIReachable: false)
+        registry.methodsForRole(.agent, automationTabReachable: false, validatedGUIReachable: false)
             == ["a.public", "b.session"]
     )
     #expect(
-        registry.methodsForRole(.orchestrator, orchestratorTabReachable: false, validatedGUIReachable: false)
+        registry.methodsForRole(.automation, automationTabReachable: false, validatedGUIReachable: false)
             == ["a.public", "b.session"]
     )
 }
 
 @Test
-func methodsForRoleGrantedAgentIncludesOrchestrator() {
-    // A GRANTED agent (orchestratorTabReachable: true) sees the orchestrator
-    // surface. A live orchestration grant gates orchestrator scope; role is
+func methodsForRoleGrantedAgentIncludesAutomation() {
+    // A GRANTED agent (automationTabReachable: true) sees the automation
+    // surface. A live automation grant gates automation scope; role is
     // descriptive.
     let registry = MethodRegistry(
         handlers: [
             "a.public": .daemonWide(passthrough()),
             "b.session": .session(passthrough()),
-            "c.orchestrator": .orchestratorTab(passthrough())
+            "c.automation": .automationTab(passthrough())
         ]
     )
     #expect(
-        registry.methodsForRole(.agent, orchestratorTabReachable: true, validatedGUIReachable: false)
-            == ["a.public", "b.session", "c.orchestrator"]
+        registry.methodsForRole(.agent, automationTabReachable: true, validatedGUIReachable: false)
+            == ["a.public", "b.session", "c.automation"]
     )
 }
 
@@ -105,7 +105,7 @@ func methodsForRoleSortsResults() {
             "alpha.public": .daemonWide(passthrough())
         ]
     )
-    let methods = registry.methodsForRole(nil, orchestratorTabReachable: true, validatedGUIReachable: false)
+    let methods = registry.methodsForRole(nil, automationTabReachable: true, validatedGUIReachable: false)
     #expect(methods == methods.sorted())
 }
 
@@ -125,7 +125,7 @@ func methodsForRoleIncludesSubscriptions() {
                 }
         ]
     )
-    let agentMethods = registry.methodsForRole(.agent, orchestratorTabReachable: true, validatedGUIReachable: false)
+    let agentMethods = registry.methodsForRole(.agent, automationTabReachable: true, validatedGUIReachable: false)
     #expect(agentMethods.contains("a.public"))
     #expect(agentMethods.contains("b.subscribe"))
 }
@@ -146,14 +146,14 @@ func scopeOfReturnsRegisteredScope() {
 // MARK: - Factory shapes
 
 @Test
-func orchestratorTabFactoryTagsHandlerWithOrchestratorTabScope() {
+func automationTabFactoryTagsHandlerWithAutomationTabScope() {
     // The handler stays trivial; dispatcher enforces the role
     // check. End-to-end behavior is tested in
     // `RPCConnectionAuthTests` via a real server+connection.
-    let scoped = MethodRegistry.ScopedHandler.orchestratorTab { _ in
+    let scoped = MethodRegistry.ScopedHandler.automationTab { _ in
         Data("{}".utf8)
     }
-    #expect(scoped.scope == .orchestratorTab)
+    #expect(scoped.scope == .automationTab)
 }
 
 @Test
@@ -181,9 +181,9 @@ func daemonWideFactoryTagsHandlerWithDaemonWideScope() {
 }
 
 @Test
-func methodsForRoleOrchestratorUnreachableExcludesOrchestratorScope() {
+func methodsForRoleAutomationUnreachableExcludesAutomationScope() {
     // `daemon.capabilities` promises the verbs the caller can
-    // actually invoke. A connection that can't reach orchestrator
+    // actually invoke. A connection that can't reach automation
     // scope is refused those calls at dispatch even when the session
     // holds the role, so advertising them would promise calls that
     // always fail; the CLI filters `--help` off this list.
@@ -191,9 +191,9 @@ func methodsForRoleOrchestratorUnreachableExcludesOrchestratorScope() {
         handlers: [
             "a.public": .daemonWide(passthrough()),
             "b.session": .session(passthrough()),
-            "c.orchestrator": .orchestratorTab(passthrough())
+            "c.automation": .automationTab(passthrough())
         ]
     )
-    let methods = registry.methodsForRole(.orchestrator, orchestratorTabReachable: false, validatedGUIReachable: false)
+    let methods = registry.methodsForRole(.automation, automationTabReachable: false, validatedGUIReachable: false)
     #expect(methods == ["a.public", "b.session"])
 }

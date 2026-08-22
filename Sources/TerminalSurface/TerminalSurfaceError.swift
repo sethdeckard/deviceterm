@@ -28,7 +28,7 @@ public enum TerminalSurfaceError: Error, Sendable, Equatable {
     /// An operation requiring an attached surface (e.g. `sendInput`)
     /// was called before `attach` succeeded: viewDidLoad hasn't
     /// run yet on the hosting VC, or attach itself failed. The
-    /// orchestrator-only `deviceterm tab send-input` verb surfaces
+    /// automation-only `deviceterm tab send-input` verb surfaces
     /// this as the typed failure rather than silently dropping the
     /// bytes; the caller can either activate the tab first
     /// (forcing view load) or treat the attach failure as fatal.
@@ -37,7 +37,7 @@ public enum TerminalSurfaceError: Error, Sendable, Equatable {
     /// The engine refused a screen-text read (`readScreenText`).
     /// Usually transient; typically means the surface is
     /// mid-resize or libghostty's text-extraction path returned
-    /// false. The orchestrator-only `deviceterm tab capture` verb
+    /// false. The automation-only `deviceterm tab capture` verb
     /// relays this so the caller can retry.
     case captureFailed(
         detail:

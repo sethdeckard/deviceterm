@@ -17,10 +17,10 @@ protocol SessionControlling: AnyObject {
     /// cap. `name` is optional; the GUI uses it to carry a worktree-
     /// derived branch name so a tab opened in a worktree auto-labels.
     /// `role` is the session's role (descriptive metadata, not an authority
-    /// gate: cross-tab verbs are gated by a live orchestration grant);
-    /// standard tab-open call sites pass `.agent`. The GUI's "Open Orchestrator Tab" menu is the
-    /// product-UI path that passes `.orchestrator`; no CLI verb emits
-    /// the request, and the daemon refuses an orchestrator mint
+    /// gate: cross-tab verbs are gated by a live automation grant);
+    /// standard tab-open call sites pass `.agent`. The GUI's "Open Automation Tab" menu is the
+    /// product-UI path that passes `.automation`; no CLI verb emits
+    /// the request, and the daemon refuses an automation mint
     /// that doesn't arrive over XPC from a signature-validated peer.
     /// `initialPrivate` seeds the session's privacy flag atomically at
     /// create time: passed `true` for a terminal joining a tab that is

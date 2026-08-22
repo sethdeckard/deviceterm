@@ -8,7 +8,7 @@ import Testing
 // `HelpText.render(role:)` + `roleHeader(role:)`. The header line is the
 // visible API contract: it reports the descriptive role the daemon
 // advertised for the caller. It does not describe authorization, which
-// follows the session's live orchestration grant and its transport. It is
+// follows the session's live automation grant and its transport. It is
 // the only role-varying part of the output; the command list itself is
 // never filtered, so a listed command can still be refused.
 
@@ -25,9 +25,9 @@ func headerForAgentRoleIdentifiesIt() {
 }
 
 @Test
-func headerForOrchestratorRoleIdentifiesIt() {
-    let header = HelpText.roleHeader(role: .orchestrator)
-    #expect(header.contains("role: orchestrator"))
+func headerForAutomationRoleIdentifiesIt() {
+    let header = HelpText.roleHeader(role: .automation)
+    #expect(header.contains("role: automation"))
 }
 
 @Test

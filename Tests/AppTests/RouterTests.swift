@@ -81,8 +81,8 @@ struct RouterTests {
     @Test
     func openWindowDefaultsToAgentRole() async {
         // Regression guard: the standard openWindow path mints
-        // `.agent` sessions. Only the GUI's "Open Orchestrator Tab"
-        // menu opens an `.orchestrator` session, and it'll come in
+        // `.agent` sessions. Only the GUI's "Open Automation Tab"
+        // menu opens an `.automation` session, and it'll come in
         // via a different Route. If a future change silently flipped
         // this default, multi-agent isolation would break (every tab
         // would bypass linkage).
@@ -94,38 +94,38 @@ struct RouterTests {
     }
 
     @Test
-    func openOrchestratorTabMintsOrchestratorSession() async {
-        // The "Open Orchestrator Tab" menu's route MUST end up at
-        // `session.create(role: .orchestrator)`. Without this, the
+    func openAutomationTabMintsAutomationSession() async {
+        // The "Open Automation Tab" menu's route MUST end up at
+        // `session.create(role: .automation)`. Without this, the
         // menu would silently mint agent sessions and the user-grant
         // signal in the tab strip would be a lie.
         let fake = FakeDaemonClient()
         fake.sessionToReturn = SessionCreateResponse(
             sessionId: "ORCH",
             capability: "C",
-            role: .orchestrator
+            role: .automation
         )
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.openOrchestratorTab(WindowID(value: 1)))
+        router.dispatch(.openAutomationTab(WindowID(value: 1)))
         await settle()
         // Two session.create calls: the initial agent tab from
-        // openWindow, then the orchestrator tab.
+        // openWindow, then the automation tab.
         #expect(fake.createSessionCalls.count == 2)
-        #expect(fake.createSessionCalls[1].role == .orchestrator)
+        #expect(fake.createSessionCalls[1].role == .automation)
         // Tab state reflects the role for the strip marker + future
         // linkage check.
         let tabs = workspace.window(id: WindowID(value: 1))?.tabs.tabs
         #expect(tabs?.count == 2)
-        #expect(tabs?.last?.role == .orchestrator)
+        #expect(tabs?.last?.role == .automation)
     }
 
     @Test
-    func openOrchestratorTabRespectsDaemonRoleResponse() async {
+    func openAutomationTabRespectsDaemonRoleResponse() async {
         // The daemon's response is the source of truth: if it sends
         // a different role back (e.g. a future policy demotes
-        // orchestrator requests in certain modes), the tab records
+        // automation requests in certain modes), the tab records
         // what the daemon actually granted, not what we asked for.
         let fake = FakeDaemonClient()
         fake.sessionToReturn = SessionCreateResponse(
@@ -136,7 +136,7 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.openOrchestratorTab(WindowID(value: 1)))
+        router.dispatch(.openAutomationTab(WindowID(value: 1)))
         await settle()
         let tabs = workspace.window(id: WindowID(value: 1))?.tabs.tabs
         #expect(tabs?.last?.role == .agent)
@@ -890,9 +890,9 @@ struct RouterTests {
     }
 
     @Test
-    func openTerminalPaneInheritsOrchestratorRole() async {
+    func openTerminalPaneInheritsAutomationRole() async {
         // The role on the added terminal's session.create call mirrors
-        // the tab's role: orchestrator tabs spawn orchestrator
+        // the tab's role: automation tabs spawn automation
         // terminals, agent tabs spawn agent terminals. Role is a
         // tab-wide property in the locked design.
         let fake = FakeDaemonClient()
@@ -900,25 +900,25 @@ struct RouterTests {
             SessionCreateResponse(
                 sessionId: "O1",
                 capability: "OC1",
-                role: .orchestrator
+                role: .automation
             ),
             SessionCreateResponse(
                 sessionId: "O2",
                 capability: "OC2",
-                role: .orchestrator
+                role: .automation
             )
         ]
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.openOrchestratorTab(WindowID(value: 1)))
+        router.dispatch(.openAutomationTab(WindowID(value: 1)))
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 2)))
         await settle()
-        // session.create calls: initial agent tab, orchestrator tab,
-        // additional terminal in the orchestrator tab.
+        // session.create calls: initial agent tab, automation tab,
+        // additional terminal in the automation tab.
         #expect(fake.createSessionCalls.count == 3)
-        #expect(fake.createSessionCalls[2].role == .orchestrator)
+        #expect(fake.createSessionCalls[2].role == .automation)
     }
 
     @Test
@@ -1218,7 +1218,7 @@ struct RouterTests {
         // SNAPSHOT does: it finds the daemon still public (the refused mutation
         // never landed) and reconciles the tab back to public, reporting the
         // failure, instead of a misleading `.pendingPrivate`. (Smoke, where
-        // the snapshot ALSO roleViolations, is covered separately by
+        // the snapshot ALSO scopeViolations, is covered separately by
         // `signatureRejectionLeavesTabFailClosedHidden`.)
         let fake = FakeDaemonClient()
         fake.setPrivateBatchFailures = [

@@ -269,7 +269,7 @@ let package = Package(
         // Security framework supplies `SecCodeCopySelf`,
         // `SecCodeCopyStaticCode`, and `SecCodeCopySigningInformation`,
         // used at startup for self-mirror peer identity validation
-        // (the orchestrator-mint + orchestrator-scope gate reads the
+        // (the automation-mint + automation-scope gate reads the
         // daemon's own team identifier from its signature, then
         // matches it against the XPC peer's audit-token-derived
         // signature). The daemon does NOT link ServiceManagement —

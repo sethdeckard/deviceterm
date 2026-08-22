@@ -21,7 +21,7 @@
 // payload or surface a typed error to the CLI.
 //
 // Role gating: handlers are tagged at registration time
-// (`.daemonWide` / `.session` / `.orchestratorTab` / `.validatedGUI`);
+// (`.daemonWide` / `.session` / `.automationTab` / `.validatedGUI`);
 // the dispatcher's scope check in `RPCConnection.scopeCheck` /
 // `XPCConnection.scopeCheck` rejects before any of these run.
 
@@ -45,7 +45,7 @@ public enum AppCommandMethods {
             // absent rather than registering an unpinned subscriber.
             guard let connectionId = DispatchPeerContext.current?.connectionId else {
                 throw RPCMethodError(
-                    code: RPCMethodError.roleViolationCode,
+                    code: RPCMethodError.scopeViolationCode,
                     message: "app.commands requires a connection-bound "
                         + "XPC subscription"
                 )
@@ -91,7 +91,7 @@ public enum AppCommandMethods {
             // but a missing id must not be read as "no check").
             guard let connectionId = DispatchPeerContext.current?.connectionId else {
                 throw RPCMethodError(
-                    code: RPCMethodError.roleViolationCode,
+                    code: RPCMethodError.scopeViolationCode,
                     message: "app.commandResult requires a connection-bound "
                         + "XPC peer"
                 )
@@ -105,7 +105,7 @@ public enum AppCommandMethods {
                 from: connectionId
             ) else {
                 throw RPCMethodError(
-                    code: RPCMethodError.roleViolationCode,
+                    code: RPCMethodError.scopeViolationCode,
                     message: "app.commandResult accepted only from the "
                         + "active back-channel subscriber"
                 )

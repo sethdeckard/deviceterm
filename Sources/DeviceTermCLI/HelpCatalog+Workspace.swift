@@ -59,23 +59,23 @@ extension HelpCatalog {
                   private tab and its panes drop out of every other
                   session's `tabs list` and `windows list`, can't be reached
                   by their refs, and are refused to `tab send-input` /
-                  `tab capture` even from an orchestrator tab. Your own
+                  `tab capture` even from an automation tab. Your own
                   views are unchanged. Only a tab you own a terminal in can
                   be flipped. Default --tab is the caller's current tab; the
                   value takes true/false, yes/no, on/off, or 1/0.
                   Example: deviceterm tab set-private true
 
               tab send-input [--tab <ref>] [--type-delay <ms>] <text>
-                  Requires a live orchestration grant. Write <text> into the
+                  Requires a live automation grant. Write <text> into the
                   resolved tab's terminal as though the user had typed it. Control
                   sequences (\\n, \\r, \\x03, …) flow through libghostty's
                   input pipeline like real keypresses. The receipt reports
                   only the byte count, never the typed text.
-                  Authorization is a live orchestration grant, not a role.
-                  Run it from a tab opened via Shell > "Open Orchestrator Tab":
+                  Authorization is a live automation grant, not a role.
+                  Run it from a tab opened via Shell > "Open Automation Tab":
                   the GUI grants that tab's session, so the verb works from
                   inside it. From an ordinary agent tab it is refused
-                  (error.role_violation).
+                  (error.scope_violation).
                   --type-delay <ms> animates the injection one character at a
                   time (for screencasts); omit it for the instant one-shot.
                   The verb returns as soon as the typing is enqueued (it does
@@ -88,14 +88,14 @@ extension HelpCatalog {
                   Example: deviceterm tab send-input --type-delay 45 -- 'ls -la\\n'
 
               tab capture [--tab <ref>]
-                  Requires a live orchestration grant. Print the resolved tab's
+                  Requires a live automation grant. Print the resolved tab's
                   currently-visible viewport (the rendered terminal screen) to
                   stdout. Captures the visible viewport only; there are no
                   scrollback or line-count flags. Human mode emits the
                   raw text (so `deviceterm tab capture > screen.txt` saves the
                   screen); `--json` emits a `{text}` object. Same grant-gated
                   authority as send-input: works from a tab opened via Shell >
-                  "Open Orchestrator Tab", refused from an agent tab.
+                  "Open Automation Tab", refused from an agent tab.
                   Example: deviceterm tab capture --tab abc123 | grep error
             """
         ),

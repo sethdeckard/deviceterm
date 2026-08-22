@@ -8,7 +8,7 @@
 // update-related wire mismatch (Sparkle can swap DeviceTerm.app while a
 // daemon holding an owned booted sim stays alive, so quitting the GUI
 // does not guarantee the daemon exits). No UDS caller, session
-// credential, orchestration grant, or unvalidated XPC peer can reach it,
+// credential, automation grant, or unvalidated XPC peer can reach it,
 // closing the unauthenticated confused-deputy surface. It does not
 // claim to prevent every same-uid, signal-level DoS. Ordinary daemon
 // lifecycle still uses idle exit.
@@ -106,10 +106,10 @@ public enum DaemonMethods {
     /// already includes capabilities, so the response correctly
     /// advertises self-callability.
     public static func capabilities(
-        orchestratorGrantStore: OrchestratorGrantStore,
+        automationGrantStore: AutomationGrantStore,
         methodsForRole: @escaping @Sendable (
             _ role: SessionRole?,
-            _ orchestratorTabReachable: Bool,
+            _ automationTabReachable: Bool,
             _ validatedGUIReachable: Bool
         ) -> [String]
     ) -> MethodRegistry.ScopedHandler {
@@ -130,11 +130,11 @@ public enum DaemonMethods {
             let transport = context?.transport ?? .uds
             let validatedGUI = context?.validatedGUIPeer ?? false
             let hasGrant = if let sessionId {
-                await orchestratorGrantStore.hasGrant(sessionId)
+                await automationGrantStore.hasGrant(sessionId)
             } else {
                 false
             }
-            let orchestratorTabReachable = MethodScope.orchestratorTabReachable(
+            let automationTabReachable = MethodScope.automationTabReachable(
                 hasGrant: hasGrant,
                 transport: transport,
                 validatedGUI: validatedGUI
@@ -147,7 +147,7 @@ public enum DaemonMethods {
                 role: role,
                 allowedMethods: methodsForRole(
                     role,
-                    orchestratorTabReachable,
+                    automationTabReachable,
                     validatedGUIReachable
                 ),
                 wireVersion: DaemonInfo.version,
@@ -167,13 +167,13 @@ public enum DaemonMethods {
     /// `daemon.capabilities` registry-drift guard pins that.
     static func methodsForRole(
         _ role: SessionRole?,
-        orchestratorTabReachable: Bool,
+        automationTabReachable: Bool,
         validatedGUIReachable: Bool,
         scopes: [(name: String, scope: MethodScope)]
     ) -> [String] {
         let allowed = MethodScope.allowedFor(
             role: role,
-            orchestratorTabReachable: orchestratorTabReachable,
+            automationTabReachable: automationTabReachable,
             validatedGUIReachable: validatedGUIReachable
         )
         return scopes
@@ -190,7 +190,7 @@ public enum DaemonMethods {
     /// introspect / fixture-time them.
     ///
     /// Each entry is tagged with a `MethodScope` via the
-    /// `.daemonWide(_:)` / `.session(_:)` / `.orchestratorTab(_:)` /
+    /// `.daemonWide(_:)` / `.session(_:)` / `.automationTab(_:)` /
     /// `.validatedGUI(_:)` factories on `ScopedHandler`.
     /// `daemon.capabilities` registers
     /// last with a closure that captures a snapshot of the
@@ -215,7 +215,7 @@ public enum DaemonMethods {
         // it is structurally impossible to hand the registry a store that
         // diverges from the manager's revocation store. Mirrors how the
         // terminal-anchor store is sourced from the provenance context/manager.
-        let orchestratorGrantStore = sessionManager.orchestratorGrantStore
+        let automationGrantStore = sessionManager.automationGrantStore
         // The `session.bindTerminal` handler MUST bind into the SAME store the
         // connections' provenance lookup reads and the XPC close path revokes:
         // otherwise a bind lands in a store the lookup can't see. When a
@@ -268,10 +268,10 @@ public enum DaemonMethods {
                 .validatedGUI(SessionMethods.privacySnapshot(using: sessionManager)),
             RPCMethod.sessionSetDisplayTitle.rawValue:
                 .validatedGUI(SessionMethods.setDisplayTitle(using: sessionManager)),
-            RPCMethod.orchestratorGrant.rawValue:
-                .validatedGUI(OrchestratorMethods.grant(store: orchestratorGrantStore)),
-            RPCMethod.orchestratorRevoke.rawValue:
-                .validatedGUI(OrchestratorMethods.revoke(store: orchestratorGrantStore)),
+            RPCMethod.automationGrant.rawValue:
+                .validatedGUI(AutomationMethods.grant(store: automationGrantStore)),
+            RPCMethod.automationRevoke.rawValue:
+                .validatedGUI(AutomationMethods.revoke(store: automationGrantStore)),
             RPCMethod.tabsList.rawValue:
                 .daemonWide(SessionMethods.tabsList(using: sessionManager)),
             RPCMethod.panesList.rawValue: .session(
@@ -527,18 +527,18 @@ public enum DaemonMethods {
                 )
             ),
 
-            // Orchestrator-only read/write verbs. The dispatcher's
-            // scope check rejects callers without a live orchestration
+            // Automation-only read/write verbs. The dispatcher's
+            // scope check rejects callers without a live automation
             // grant before the handler runs; the GUI-side IntentDispatcher
             // resolves the ref and performs the read/write via
             // IntentActionDelegate.
-            RPCMethod.tabSendInput.rawValue: .orchestratorTab(
+            RPCMethod.tabSendInput.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabSendInput,
                     coordinator: appCommandCoordinator
                 )
             ),
-            RPCMethod.tabCapture.rawValue: .orchestratorTab(
+            RPCMethod.tabCapture.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabCapture,
                     coordinator: appCommandCoordinator
@@ -583,11 +583,11 @@ public enum DaemonMethods {
             )
         let scopesSnapshot = scopes
         handlers[RPCMethod.daemonCapabilities.rawValue] = capabilities(
-            orchestratorGrantStore: orchestratorGrantStore,
-            methodsForRole: { role, orchestratorTabReachable, validatedGUIReachable in
+            automationGrantStore: automationGrantStore,
+            methodsForRole: { role, automationTabReachable, validatedGUIReachable in
                 methodsForRole(
                 role,
-                orchestratorTabReachable: orchestratorTabReachable,
+                automationTabReachable: automationTabReachable,
                 validatedGUIReachable: validatedGUIReachable,
                 scopes: scopesSnapshot
             )
@@ -600,7 +600,7 @@ public enum DaemonMethods {
             // Carry the SAME store the grant/revoke handlers and the
             // capabilities advertiser use, so both dispatchers' scope checks
             // read it off the registry: one ledger, no divergence.
-            orchestratorGrant: orchestratorGrantStore
+            automationGrant: automationGrantStore
         )
     }
 }

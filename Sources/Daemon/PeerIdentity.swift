@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // PeerIdentity: self-mirror peer validation for the
-// orchestrator-mint + orchestrator-scope gate on XPC peers.
+// automation-mint + automation-scope gate on XPC peers.
 //
 // At daemon startup the daemon reads its own signing info via
 // `SecCodeCopySelf` → `SecCodeCopyStaticCode` →
 // `SecCodeCopySigningInformation` and caches the result in
 // `selfIdentity`. When an XPC peer asks for an
-// orchestrator-scoped operation (or mints an orchestrator
+// automation-scoped operation (or mints an automation
 // session), the validator runs the same chain on the peer's
 // audit-token-derived `SecCode` and compares the result against
 // the daemon's own signature:
@@ -213,8 +213,8 @@ public enum PeerIdentity {
             )
         }
         // Signed but no team identifier: treat as unsigned for
-        // the orchestrator gate (a developer cert without team
-        // shouldn't reach orchestrator scope).
+        // the automation gate (a developer cert without team
+        // shouldn't reach automation scope).
         return .unsigned
     }
 

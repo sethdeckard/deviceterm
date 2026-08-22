@@ -45,7 +45,7 @@ func emitsOneEntryPerTerminalCarryingTabRoleAndTerminalFields() throws {
             terminal(1, sessionId: "S1", shortId: "aaa111", name: "one"),
             terminal(2, sessionId: "S2", shortId: "bbb222", name: nil)
         ],
-        role: .orchestrator
+        role: .automation
     )
     let inventory = try #require(SessionRestoreInventory.build(from: [onlyTab]))
     #expect(inventory.count == 2)
@@ -53,7 +53,7 @@ func emitsOneEntryPerTerminalCarryingTabRoleAndTerminalFields() throws {
     #expect(inventory[0].capability == "cap-S1")
     #expect(inventory[0].shortId == "aaa111")
     #expect(inventory[0].name == "one")
-    #expect(inventory[0].role == .orchestrator)   // role is tab-wide
+    #expect(inventory[0].role == .automation)   // role is tab-wide
     #expect(inventory[0].isPrivate == false)
     #expect(inventory[1].sessionId == "S2")
     #expect(inventory[1].name == nil)

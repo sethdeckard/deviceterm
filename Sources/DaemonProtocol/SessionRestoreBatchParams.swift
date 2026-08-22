@@ -60,7 +60,7 @@ public struct SessionRestoreBatchParams: Codable, Sendable, Equatable {
 ///   audit token, exactly as `session.create` does; never wire-supplied.
 /// - **terminal anchor / grant**: never persisted, never restored here;
 ///   the GUI re-establishes them AFTER restore (`session.bindTerminal`,
-///   then orchestration grants) in a fixed order.
+///   then automation grants) in a fixed order.
 /// - **epoch**: the ordering epoch is the caller's XPC connection id,
 ///   derived server-side from the dispatch context, never wire-supplied (a
 ///   client can't forge or rewind it). Paired with `revision` it fences a
@@ -85,7 +85,7 @@ public struct RestoredSession: Codable, Sendable, Equatable {
     /// Preserved verbatim (never re-derived) so cached `--tab <ref>`
     /// values and scripts keep working across a daemon restart.
     public let shortId: String
-    /// The role the session was minted with (`agent` | `orchestrator`).
+    /// The role the session was minted with (`agent` | `automation`).
     public let role: SessionRole
     /// The optional human/agent-set tab name.
     public let name: String?

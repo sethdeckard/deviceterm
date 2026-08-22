@@ -73,7 +73,7 @@ extension CLICommands {
 
         case "capture":
             // `deviceterm tab capture [--tab <ref>]`:
-            // orchestrator-only. No positional tail; any extras
+            // automation-only. No positional tail; any extras
             // are rejected so a future flag isn't silently
             // swallowed.
             let extras = Array(pos.dropFirst())
@@ -87,7 +87,7 @@ extension CLICommands {
 
         case "send-input":
             // `deviceterm tab send-input [--tab <ref>]
-            // [--type-delay <ms>] <text...>`: orchestrator-only. The
+            // [--type-delay <ms>] <text...>`: automation-only. The
             // text is the positional tail after `send-input`; joined
             // with spaces so quoted args carrying spaces stay intact
             // (mirrors the `text` verb convention). C-style escapes
@@ -413,7 +413,7 @@ extension CLICommands {
     // `AppCommandParams.<Kind>` struct as the request body; the
     // daemon's `AppCommandMethods.publishVerb` decodes it on the
     // back-channel publish path. The role is always "agent", with no
-    // CLI verb spawns an orchestrator session.
+    // CLI verb spawns an automation session.
 
     /// Resolve `--cwd <path>` to an absolute path before it crosses
     /// the wire. libghostty's `working_directory` validates with an

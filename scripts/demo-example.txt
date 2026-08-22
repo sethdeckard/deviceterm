@@ -1,6 +1,6 @@
 # demo-example.txt: an example DeviceTerm demo script.
 #
-# Run it with the presenter helper from an off-camera orchestrator tab:
+# Run it with the presenter helper from an off-camera automation tab:
 #   scripts/demo-present.sh scripts/demo-example.txt --target <recorded-tab-ref>
 #
 # Each non-comment line is one step. Press any key in the driver window

@@ -681,7 +681,7 @@ Each entry lists the wire shape and the scope the dispatcher enforces:
   model").
 - **validated GUI**: the signature-validated GUI peer over XPC; UDS can
   never reach it.
-- **orchestrator tab**: a session holding a live orchestration grant,
+- **automation tab**: a session holding a live automation grant,
   re-checked per request. Over UDS any granted, provenance-checked session
   qualifies; over XPC only the validated GUI peer does.
 
@@ -710,11 +710,11 @@ invoke. Authority is the provenance-checked connection, not the request
 body: no `(sessionId, cap)` is read from the payload, so a stolen cap can't
 surface a victim's role or grant advertising.
 
-`role` is descriptive metadata only. The orchestrator surface in
-`allowedMethods` follows the session's live orchestration grant and
+`role` is descriptive metadata only. The automation surface in
+`allowedMethods` follows the session's live automation grant and
 transport, never its role, so advertising matches exactly what dispatch
-enforces: a granted agent session is advertised the orchestrator verbs, and
-an ungranted orchestrator session is not.
+enforces: a granted agent session is advertised the automation verbs, and
+an ungranted automation session is not.
 
 Works with or without an authenticated connection: an unauthenticated
 (out-of-tab) connection gets `role: null` plus the daemon-wide subset. It
@@ -762,7 +762,7 @@ verifies the replacement, then continues the launch. At a reconnect it sends
 the same call only while the mismatched peer is still the connected one, then
 asks the user to restart. See "Crash recovery".
 
-No UDS caller, session credential, orchestration grant, or unvalidated XPC
+No UDS caller, session credential, automation grant, or unvalidated XPC
 peer can reach it. That closes the unauthenticated confused-deputy
 surface, though it does not claim to prevent every same-uid, signal-level
 DoS. Ordinary daemon lifecycle still uses idle exit, not this method.
@@ -796,9 +796,9 @@ marked restorable (its close leaves a tombstone; see
 verdict-stability split: a transient `.unavailable` verdict (the signature
 walk couldn't complete) returns the retryable `notReady` so a recoverable
 blip self-heals, while a stable `.rejected` signature mismatch (a rogue
-peer) is a hard `roleViolation`.
+peer) is a hard `scopeViolation`.
 
-`role: "orchestrator"` is additionally refused outright over UDS; only the
+`role: "automation"` is additionally refused outright over UDS; only the
 human GUI mints it, so the human-only escalation property is enforced by
 the daemon, not by convention. UDS agent creates carry no GUI validation
 and are unaffected.
@@ -947,7 +947,7 @@ Every legitimate GUI session is restorable from creation: an XPC
 and a validated inventory that lists an existing session also confirms it
 restorable. A transient validation failure (an `.unavailable` verdict,
 carried through the dispatch context) is retryable everywhere, including
-the orchestrator mint, so a recoverable blip doesn't fail opening a tab;
+the automation mint, so a recoverable blip doesn't fail opening a tab;
 only a stable signature mismatch is a hard refusal.
 
 The only sound reclaim for a tombstone is a restore that omits the id. The
@@ -984,7 +984,7 @@ never logged or interpolated into an error.
 
 The peer's audit token is the authority: no `(sessionId, cap)` handshake
 rides on the wire, and a UDS caller is refused with
-`error.role_violation`.
+`error.scope_violation`.
 
 Atomically flips the privacy flag for every session backing one tab. The
 daemon validates that all ids name live sessions before mutating, then
@@ -1043,7 +1043,7 @@ superseded indeterminate send.
 - Scope: validated GUI
 
 The peer's audit token is the authority; no capability rides on the wire,
-and a UDS caller is refused with `error.role_violation`.
+and a UDS caller is refused with `error.scope_violation`.
 
 Publishes the tab's live label (the shell's OSC 0/2 title, a manual
 rename, or whatever else won the GUI's title precedence) in the optional,
@@ -2114,7 +2114,7 @@ unsubscribe the live GUI.
 The GUI's per-command reply on the back-channel; `data` is the verb's
 JSON payload as a base64 string, `error` is `{code, message}`. Accepted
 only from the current subscriber connection: a result from any other
-connection is refused with `error.role_violation`, so a second local
+connection is refused with `error.scope_violation`, so a second local
 process can't forge replies. The daemon's `AppCommandCoordinator` keys
 pending continuations by `commandId` and resumes the matching awaiting
 CLI handler. A 5 s timeout surfaces a wedged or absent GUI as
@@ -2148,7 +2148,7 @@ daemon-wide.
 
 Opens a tab, optionally in a given window and working directory, running
 an optional command. `role` rides the wire, but the GUI translator
-forces `agent` regardless of the value; an orchestrator tab is opened
+forces `agent` regardless of the value; an automation tab is opened
 only from the GUI menu.
 
 #### `tab.close`
@@ -2337,17 +2337,17 @@ are omitted, and indices and counts cover only the visible ones. An
 out-of-tab caller gets an empty list by default and the public
 caller-visible projection with `all`.
 
-### Orchestration
+### Automation
 
-#### `orchestrator.grant`
+#### `automation.grant`
 
 - Params: `{sessionIds, revision}`
 - Result: `{applied}`
 - Scope: validated GUI
 
-Issues live orchestration grants (leases) for a tab's sessions,
+Issues live automation grants (leases) for a tab's sessions,
 attributed to the issuing GUI connection, which is read server-side from
-the dispatch context, never the payload. Orchestration authority is the
+the dispatch context, never the payload. Automation authority is the
 presence of a live grant, checked per request, never a persisted role:
 a forged role grants nothing, and nothing role-bearing is persisted at
 all.
@@ -2361,13 +2361,13 @@ mutates (`invalidParams`, all-or-none).
 Grants are never persisted: they live only in memory, so the store is
 empty after a daemon restart and can be repopulated only over this
 validated-GUI connection. The GUI is the sole issuer: it grants an
-orchestrator tab's session once that terminal binds, so the grant rests
+automation tab's session once that terminal binds, so the grant rests
 on a live, terminal-bound session, and it reissues on reconnect after
 the terminal rebinds. Revocation is implicit too: closing a tab or
 terminal calls `session.close`, and the store revokes on session
 removal.
 
-#### `orchestrator.revoke`
+#### `automation.revoke`
 
 - Params: `{sessionIds, revision}`
 - Result: `{applied}`
@@ -2376,7 +2376,7 @@ removal.
 Revokes the live grants for the given sessions (tab closed or
 downgraded), ordered by the same `(epoch, revision)` key. Revocation is
 immediate: a socket authenticated before the revoke fails its next
-orchestrator call, because the scope check reads live grant state.
+automation call, because the scope check reads live grant state.
 Grants are also revoked automatically when the issuing GUI connection
 disappears and when a session is removed.
 
@@ -2391,22 +2391,22 @@ one. Dominance is strict, so an exactly-replayed revision loses too.
 
 - Params: `{tab, text, typeDelayMillis?}`
 - Result: `{ok}`
-- Scope: orchestrator tab
+- Scope: automation tab
 
 Writes `text` into the resolved tab's terminal as though the user had
-typed it. Authorization is a live orchestration grant for the session,
+typed it. Authorization is a live automation grant for the session,
 checked per request, never a role; a caller without a grant is rejected
-at the dispatcher's scope check with `error.role_violation`.
+at the dispatcher's scope check with `error.scope_violation`.
 
 Reachable over both transports for a session that holds a grant: a
-validated-GUI XPC connection, or the CLI inside a granted orchestrator
+validated-GUI XPC connection, or the CLI inside a granted automation
 tab, since a UDS session authenticates via cap plus kernel
 terminal-process provenance. The GUI issues the grant when an
-orchestrator tab's terminal binds and reissues it on reconnect, so
+automation tab's terminal binds and reissues it on reconnect, so
 `deviceterm tab send-input` works from inside such a tab; an ordinary
 agent tab holds no grant and is refused. Only escalation stays
 XPC-GUI-only: grants are minted solely by the validated GUI
-(`orchestrator.grant`), so a UDS caller can only exercise a grant it was
+(`automation.grant`), so a UDS caller can only exercise a grant it was
 given, never issue one.
 
 The receipt reports the target tab and the UTF-8 byte count, plus
@@ -2423,11 +2423,11 @@ or absent is the instant one-shot. The CLI caps the value at 1000 ms.
 
 - Params: `{tab}`
 - Result: `{text}`
-- Scope: orchestrator tab
+- Scope: automation tab
 
 Returns the resolved tab's currently-visible viewport as plain text;
 there are no scrollback or line-count flags. Authorization is a live
-orchestration grant, per request, never a role, reachable over both
+automation grant, per request, never a role, reachable over both
 transports exactly as `tab.sendInput`.
 
 CLI human mode writes the captured text to stdout, appending a trailing
@@ -3105,7 +3105,7 @@ does not discard already-buffered events, so the guarantee is "no new
 yield/send after the linearization point," while pre-revocation buffered
 events remain legitimately readable.
 
-- **Orchestrator grants (one-shot verbs).** `hasGrant` is consulted per
+- **Automation grants (one-shot verbs).** `hasGrant` is consulted per
   request. A call that passed the check may finish; the next call after the
   grant is revoked (tab closed/downgraded, issuing GUI connection lost, or
   session removed) is refused. In-flight finishes; nothing new begins.
@@ -3146,7 +3146,7 @@ user-scoped, so a same-uid caller can shut down any sim, a device-lifecycle
 action rather than tab-private state); and the back-channel's cross-session
 reach to any *public* tab (`tab.close/select/move/rename`, `windows.list`) is
 the deliberate public/private split. `tab.sendInput`/`tab.capture` still
-additionally require an orchestrator grant, and private tabs stay owner-scoped
+additionally require an automation grant, and private tabs stay owner-scoped
 and opaque.
 
 ## UI framework boundaries

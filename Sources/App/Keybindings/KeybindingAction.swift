@@ -24,7 +24,7 @@ enum KeybindingAction: String, CaseIterable, Sendable {
     // Tabs, windows, and session lifecycle
     case newWindow = "new-window"
     case newTab = "new-tab"
-    case openOrchestratorTab = "open-orchestrator-tab"
+    case openAutomationTab = "open-automation-tab"
     case closePane = "close-pane"
     case closeTab = "close-tab"
     case closeWindow = "close-window"

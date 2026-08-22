@@ -146,9 +146,9 @@ func locationStateOverValidatedXPCIsAdmitted() async throws {
     // The pane doesn't exist, so the handler answers `notFound`
     // (`invalidParams`). That is the *handler* speaking, meaning the
     // scope gate let the call through. A scope refusal would be
-    // `roleViolation` instead.
+    // `scopeViolation` instead.
     guard case let .error(error) = envelope.body else { return }
-    #expect(error.code != RPCMethodError.roleViolationCode)
+    #expect(error.code != RPCMethodError.scopeViolationCode)
 }
 
 @Test
@@ -180,7 +180,7 @@ func locationStateOverUnvalidatedXPCIsRefused() async throws {
         Issue.record("expected an error body for an unvalidated peer")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }
 
 /// The load-bearing one. A fully authenticated UDS session, a real
@@ -215,7 +215,7 @@ func locationMethodsAreRefusedOverUDS(method: RPCMethod) async throws {
         Issue.record("expected .error body for UDS \(method.rawValue); got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }
 
 /// `daemon.capabilities` must not advertise what it won't dispatch. A

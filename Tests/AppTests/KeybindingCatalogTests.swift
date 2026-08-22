@@ -162,7 +162,7 @@ struct KeybindingCatalogTests {
             (.quit, "⌘Q"),
             (.newWindow, "⌘N"),
             (.newTab, "⌘T"),
-            (.openOrchestratorTab, "⇧⌘T"),
+            (.openAutomationTab, "⇧⌘T"),
             (.closePane, "⌘W"),
             (.closeTab, "⌥⌘W"),
             (.closeWindow, "⇧⌘W"),

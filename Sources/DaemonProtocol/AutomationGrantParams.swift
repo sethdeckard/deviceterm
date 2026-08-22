@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Parameters for `orchestrator.grant` and `orchestrator.revoke`.
+/// Parameters for `automation.grant` and `automation.revoke`.
 ///
 /// `sessionIds` is a typed `[UUID]`, so a malformed identifier fails
 /// decoding and the request is rejected `invalidParams` before any mutation.
@@ -17,7 +17,7 @@ import Foundation
 /// The issuing connection is derived server-side from the dispatch context,
 /// never carried here, so a payload can't claim to act for another
 /// connection.
-public struct OrchestratorGrantParams: Codable, Sendable, Equatable {
+public struct AutomationGrantParams: Codable, Sendable, Equatable {
     public let sessionIds: [UUID]
     public let revision: Int
 

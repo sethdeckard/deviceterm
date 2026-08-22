@@ -6,7 +6,7 @@
 // One context is constructed per dispatched request by the
 // transport layer (UDS in `RPCConnection`, XPC in `XPCConnection`)
 // and threaded through the handler signature in `MethodRegistry`.
-// The orchestrator-mint gate, the orchestrator-scope check, the
+// The automation-mint gate, the automation-scope check, the
 // `daemon.capabilities` response, and pane-subscription tagging
 // all read from it instead of consulting
 // per-call ad-hoc state on the originating connection.
@@ -25,8 +25,8 @@ import Darwin
 #endif
 
 public struct DispatchPeerContext: Sendable {
-    /// Which transport vended the connection. The orchestrator-mint
-    /// gate (in `session.create`) uses this to reject orchestrator
+    /// Which transport vended the connection. The automation-mint
+    /// gate (in `session.create`) uses this to reject automation
     /// mints over UDS unconditionally; XPC peers then run through
     /// the audit-token + self-mirror gate.
     public enum Transport: String, Sendable, Equatable {
@@ -54,8 +54,8 @@ public struct DispatchPeerContext: Sendable {
 
     /// The session this connection authenticated as, if any. Set
     /// by a successful `session.authenticate` frame. The
-    /// orchestrator-scope check reads its `id` to look up the session's
-    /// live orchestration grant (authority is the grant, not the role).
+    /// automation-scope check reads its `id` to look up the session's
+    /// live automation grant (authority is the grant, not the role).
     /// Daemon-wide methods see `nil`.
     public let authenticatedSession: SessionState?
 
@@ -63,7 +63,7 @@ public struct DispatchPeerContext: Sendable {
     /// its audit token passed the daemon's self-mirror signature
     /// check (`PeerIdentity.validateGUIPeer`). Stamped on every XPC
     /// dispatch as a reliable identity fact, so downstream consumers
-    /// (the pane-access principal, the orchestrator scope/mint gates,
+    /// (the pane-access principal, the automation scope/mint gates,
     /// `daemon.capabilities` advertising, and the device-attach
     /// attribution gate) read one verdict instead of each re-running
     /// the walk. Repeated connections reuse the verdict while the peer
@@ -78,9 +78,9 @@ public struct DispatchPeerContext: Sendable {
     /// transient failure to read the peer's identity. A `.production` or a
     /// genuine `.rejected` signature mismatch is stable; an `.unavailable`
     /// verdict (the `SecCode` walk couldn't complete) is NOT. Gates that hard-
-    /// reject an unvalidated peer (the orchestrator mint) consult this so a
+    /// reject an unvalidated peer (the automation mint) consult this so a
     /// recoverable validation blip returns the RETRYABLE `notReady` instead of a
-    /// terminal `roleViolation`, while a stable mismatch stays hard. UDS and test
+    /// terminal `scopeViolation`, while a stable mismatch stays hard. UDS and test
     /// contexts default to stable (a UDS peer's non-GUI-ness is definitive).
     public let validationStable: Bool
 
@@ -130,7 +130,7 @@ public extension DispatchPeerContext {
     /// The currently dispatching call's peer context, bound by the
     /// transport-layer dispatcher (`RPCConnection` on UDS, the XPC
     /// listener on XPC) for the duration of each handler invocation.
-    /// Handlers that need to know who's calling (the orchestrator-
+    /// Handlers that need to know who's calling (the automation-
     /// mint gate, role-aware `daemon.capabilities`,
     /// subscription tagging) read this instead of consulting
     /// ad-hoc state on the originating connection.

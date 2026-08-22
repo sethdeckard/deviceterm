@@ -79,7 +79,7 @@ bottom right. Run `deviceterm help`, `deviceterm help <command>`, or
 JSON contract follows SemVer; [`INTEGRATION.md`](docs/INTEGRATION.md) documents
 the compatibility policy and parseable shapes, and
 [`AUTOMATION.md`](docs/AUTOMATION.md) covers controlling DeviceTerm itself:
-workspace commands, orchestration, and events.
+workspace commands, automation, and events.
 
 ## Features
 
@@ -117,7 +117,7 @@ test, signing, and release instructions.
 - [`USAGE.md`](docs/USAGE.md): day-to-day tabs, panes, devices, input, and
   configuration.
 - [`AUTOMATION.md`](docs/AUTOMATION.md): controlling DeviceTerm itself from
-  the CLI; workspace commands, orchestration, and events.
+  the CLI; workspace commands, automation, and events.
 - [`INTEGRATION.md`](docs/INTEGRATION.md): public CLI and JSON contracts for
   advanced integrations.
 - [`PHILOSOPHY.md`](docs/PHILOSOPHY.md): product principles.

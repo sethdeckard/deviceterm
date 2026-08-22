@@ -20,5 +20,5 @@ typealias DaemonClienting =
     SessionControlling & DeviceControlling & PhysicalDeviceControlling
     & PaneControlling & PaneSubscribing & PaneAccessibilityControlling
     & PaneLocationControlling
-    & TerminalBinding & ReconnectObserving & OrchestratorGranting
+    & TerminalBinding & ReconnectObserving & AutomationGranting
     & DisplayTitlePublishing

@@ -7,7 +7,7 @@ import Foundation
 import Testing
 @preconcurrency import XPC
 
-// Orchestrator authority is a LIVE grant, not a cached role, enforced over
+// Automation authority is a LIVE grant, not a cached role, enforced over
 // the real XPC dispatch path. And the grant/revoke verbs are
 // validated-GUI-only. Payloads are atomic. Session close and GUI disconnect
 // revoke on the same already-authenticated socket.
@@ -16,22 +16,22 @@ private let validatedGUIPeer: PeerValidator = { _ in
     .production(peerTeamID: "TEST", peerBundleID: "test.host")
 }
 
-private func orchestratorServer(
+private func automationServer(
     manager: SessionManager,
-    grants: OrchestratorGrantStore,
+    grants: AutomationGrantStore,
     coordinator: AppCommandCoordinator = AppCommandCoordinator()
 ) -> XPCServer {
     let registry = MethodRegistry(
         handlers: [
-            RPCMethod.orchestratorGrant.rawValue:
-                .validatedGUI(OrchestratorMethods.grant(store: grants)),
-            RPCMethod.orchestratorRevoke.rawValue:
-                .validatedGUI(OrchestratorMethods.revoke(store: grants)),
+            RPCMethod.automationGrant.rawValue:
+                .validatedGUI(AutomationMethods.grant(store: grants)),
+            RPCMethod.automationRevoke.rawValue:
+                .validatedGUI(AutomationMethods.revoke(store: grants)),
             RPCMethod.tabCapture.rawValue:
-                .orchestratorTab(AppCommandMethods.publishVerb(kind: .tabCapture, coordinator: coordinator))
+                .automationTab(AppCommandMethods.publishVerb(kind: .tabCapture, coordinator: coordinator))
         ],
         provenance: TestPeerIdentity.xpcProvenance(manager),
-        orchestratorGrant: grants
+        automationGrant: grants
     )
     let authValidator: AuthValidator = { try await manager.validate(sessionId: $0, capability: $1) }
     return XPCServer(
@@ -55,7 +55,7 @@ private func authenticate(_ created: CreatedSession, client: xpc_connection_t, r
 }
 
 private func grantBody(_ ids: [UUID], revision: Int) throws -> Data {
-    try JSONEncoder().encode(OrchestratorGrantParams(sessionIds: ids, revision: revision))
+    try JSONEncoder().encode(AutomationGrantParams(sessionIds: ids, revision: revision))
 }
 
 private func send(_ id: UInt32, _ method: RPCMethod, _ body: Data, to client: xpc_connection_t) {
@@ -84,13 +84,13 @@ private final class ValidationGate: @unchecked Sendable {
 }
 
 @Test
-func orchestratorScopeIsGatedByLiveGrantNotRole() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+func automationScopeIsGatedByLiveGrantNotRole() async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     // A plain .agent session, proving ROLE is not the authority.
     let created = try await manager.createSession(label: nil)
     let sid = created.state.id
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -100,29 +100,29 @@ func orchestratorScopeIsGatedByLiveGrantNotRole() async throws {
 
     // No grant → refused at the scope gate.
     sendRequest(envelopeId: 2, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
-    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.roleViolationCode)
+    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 
     // Grant → the call reaches the handler (guiUnavailable, -32099).
-    send(3, .orchestratorGrant, try grantBody([sid], revision: 1), to: clientPair)
+    send(3, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     _ = try await replyBox.awaitReply()
     sendRequest(envelopeId: 4, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == -32_099)
 
     // Revoke → the SAME authenticated socket is refused again (live recheck).
-    send(5, .orchestratorRevoke, try grantBody([sid], revision: 2), to: clientPair)
+    send(5, .automationRevoke, try grantBody([sid], revision: 2), to: clientPair)
     _ = try await replyBox.awaitReply()
     sendRequest(envelopeId: 6, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
-    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.roleViolationCode)
+    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
-func orchestratorRoleWithoutGrantIsRefused() async throws {
-    // Even a .orchestrator-role session is refused with no live grant:
+func automationRoleWithoutGrantIsRefused() async throws {
+    // Even a .automation-role session is refused with no live grant:
     // the role is metadata, not authority.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
-    let created = try await manager.createSession(label: nil, role: .orchestrator)
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil, role: .automation)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -131,15 +131,15 @@ func orchestratorRoleWithoutGrantIsRefused() async throws {
     try await authenticate(created, client: clientPair, replyBox: replyBox)
 
     sendRequest(envelopeId: 2, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
-    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.roleViolationCode)
+    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
 func grantForNonLiveSessionIsRejected() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -151,7 +151,7 @@ func grantForNonLiveSessionIsRejected() async throws {
     // and NOTHING is granted (all-or-none).
     sendRequest(
         envelopeId: 2,
-        method: RPCMethod.orchestratorGrant.rawValue,
+        method: RPCMethod.automationGrant.rawValue,
         params: try grantBody([created.state.id, UUID()], revision: 1),
         client: clientPair
     )
@@ -161,13 +161,13 @@ func grantForNonLiveSessionIsRejected() async throws {
 
 @Test
 func malformedIdBatchIsRejectedWithNoMutation() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     // Pre-grant the valid session so we can prove a later malformed batch
     // doesn't disturb it.
     await grants.grant(sessionIds: [created.state.id], key: GrantOrderingKey(epoch: 1, revision: 1), issuedBy: 1)
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -178,7 +178,7 @@ func malformedIdBatchIsRejectedWithNoMutation() async throws {
     // A revoke batch with a malformed id → invalidParams at decode, no
     // mutation: the pre-existing grant survives.
     let malformed = Data(#"{"sessionIds":["\#(created.state.id.uuidString)","not-a-uuid"],"revision":9}"#.utf8)
-    sendRequest(envelopeId: 2, method: RPCMethod.orchestratorRevoke.rawValue, params: malformed, client: clientPair)
+    sendRequest(envelopeId: 2, method: RPCMethod.automationRevoke.rawValue, params: malformed, client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.invalidParamsCode)
     #expect(await grants.hasGrant(created.state.id))
 }
@@ -186,11 +186,11 @@ func malformedIdBatchIsRejectedWithNoMutation() async throws {
 @Test
 func sessionCloseRevokesGrantAndRefusesSameSocket() async throws {
     // The grant store is injected into the manager, so closeSession revokes.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     let sid = created.state.id
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -199,7 +199,7 @@ func sessionCloseRevokesGrantAndRefusesSameSocket() async throws {
     try await authenticate(created, client: clientPair, replyBox: replyBox)
 
     // Grant, confirm reach.
-    send(2, .orchestratorGrant, try grantBody([sid], revision: 1), to: clientPair)
+    send(2, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     _ = try await replyBox.awaitReply()
     sendRequest(envelopeId: 3, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == -32_099)
@@ -208,7 +208,7 @@ func sessionCloseRevokesGrantAndRefusesSameSocket() async throws {
     // The per-request provenance re-check now sees the session gone and
     // downgrades the socket's cached principal to unauthenticated, so the
     // refusal is `unauthorized` (the session no longer exists) rather than
-    // `roleViolation` (a live session lacking a grant). A stronger statement:
+    // `scopeViolation` (a live session lacking a grant). A stronger statement:
     // the socket isn't just ungranted, it's no longer authenticated at all.
     try await manager.closeSession(sessionId: sid, capability: created.capability)
     #expect(await grants.hasGrant(sid) == false)
@@ -216,12 +216,12 @@ func sessionCloseRevokesGrantAndRefusesSameSocket() async throws {
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.unauthorizedCode)
 }
 
-@Test(arguments: [RPCMethod.orchestratorGrant, RPCMethod.orchestratorRevoke])
+@Test(arguments: [RPCMethod.automationGrant, RPCMethod.automationRevoke])
 func grantAndRevokeRefusedOverUDS(method: RPCMethod) async throws {
     // Both are .validatedGUI: an authenticated UDS caller (any role) can't
     // reach them, so no same-uid CLI process can issue itself a grant.
     let manager = SessionManager()
-    let created = try await manager.createSession(label: nil, role: .orchestrator)
+    let created = try await manager.createSession(label: nil, role: .automation)
     let path = tempSocketPath(prefix: "deviceterm-orch-grant")
     let server = try await startServer(path: path, sessionManager: manager)
     defer { Task { await server.stop() } }
@@ -229,7 +229,7 @@ func grantAndRevokeRefusedOverUDS(method: RPCMethod) async throws {
     defer { client.close() }
 
     let body = try JSONEncoder().encode(
-        OrchestratorGrantParams(sessionIds: [created.state.id], revision: 1)
+        AutomationGrantParams(sessionIds: [created.state.id], revision: 1)
     )
     try client.send(RPCEnvelope(id: 1, type: .request, method: method.rawValue, body: .params(body)))
     let response = try client.receive()
@@ -237,16 +237,16 @@ func grantAndRevokeRefusedOverUDS(method: RPCMethod) async throws {
         Issue.record("expected \(method.rawValue) refused over UDS; got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }
 
 @Test
 func guiDisconnectRevokesItsGrants() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     let sid = created.state.id
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -254,7 +254,7 @@ func guiDisconnectRevokesItsGrants() async throws {
     setupClient(clientPair, replyBox: replyBox)
     try await authenticate(created, client: clientPair, replyBox: replyBox)
 
-    send(2, .orchestratorGrant, try grantBody([sid], revision: 1), to: clientPair)
+    send(2, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     _ = try await replyBox.awaitReply()
     #expect(await grants.hasGrant(sid))
 
@@ -272,23 +272,23 @@ func guiDisconnectRevokesItsGrants() async throws {
     #expect(revoked)
 }
 
-@Test(arguments: [RPCMethod.orchestratorGrant, RPCMethod.orchestratorRevoke])
+@Test(arguments: [RPCMethod.automationGrant, RPCMethod.automationRevoke])
 func grantAndRevokeRefusedOverUnvalidatedXPC(method: RPCMethod) async throws {
     // An XPC peer whose signature doesn't validate can't grant/revoke: the
     // `.validatedGUI` scope refuses it, so a rogue local XPC client can't
     // mint itself authority.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     let registry = MethodRegistry(
         handlers: [
-            RPCMethod.orchestratorGrant.rawValue:
-                .validatedGUI(OrchestratorMethods.grant(store: grants)),
-            RPCMethod.orchestratorRevoke.rawValue:
-                .validatedGUI(OrchestratorMethods.revoke(store: grants))
+            RPCMethod.automationGrant.rawValue:
+                .validatedGUI(AutomationMethods.grant(store: grants)),
+            RPCMethod.automationRevoke.rawValue:
+                .validatedGUI(AutomationMethods.revoke(store: grants))
         ],
         provenance: TestPeerIdentity.xpcProvenance(manager),
-        orchestratorGrant: grants
+        automationGrant: grants
     )
     let authValidator: AuthValidator = { try await manager.validate(sessionId: $0, capability: $1) }
     let server = XPCServer(
@@ -303,17 +303,17 @@ func grantAndRevokeRefusedOverUnvalidatedXPC(method: RPCMethod) async throws {
     setupClient(clientPair, replyBox: replyBox)
 
     send(1, method, try grantBody([created.state.id], revision: 1), to: clientPair)
-    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.roleViolationCode)
+    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
     #expect(await grants.hasGrant(created.state.id) == false)
 }
 
 @Test
 func grantReplyReportsAppliedForFreshAndStaleBatches() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     let sid = created.state.id
-    let server = orchestratorServer(manager: manager, grants: grants)
+    let server = automationServer(manager: manager, grants: grants)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -323,14 +323,14 @@ func grantReplyReportsAppliedForFreshAndStaleBatches() async throws {
 
     func applied(_ reply: xpc_object_t) throws -> Bool? {
         guard case let .result(bytes) = try decodeEnvelope(reply: reply).body else { return nil }
-        return try JSONDecoder().decode(OrchestratorGrantResult.self, from: bytes).applied
+        return try JSONDecoder().decode(AutomationGrantResult.self, from: bytes).applied
     }
 
     // A fresh grant applies.
-    send(2, .orchestratorGrant, try grantBody([sid], revision: 5), to: clientPair)
+    send(2, .automationGrant, try grantBody([sid], revision: 5), to: clientPair)
     #expect(try applied(try await replyBox.awaitReply()) == true)
     // A stale re-grant (lower revision, same connection epoch) does not.
-    send(3, .orchestratorGrant, try grantBody([sid], revision: 1), to: clientPair)
+    send(3, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     #expect(try applied(try await replyBox.awaitReply()) == false)
 }
 
@@ -341,8 +341,8 @@ func firstGrantSuspendedInValidationThenDisconnectDoesNotGrant() async throws {
     // (so `close()` sees no resolved verdict and records no tombstone); the
     // request then resumes with a `true` verdict. The post-verdict `closed`
     // recheck must abort it: no grant for the dead connection.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     let sid = created.state.id
 
@@ -360,11 +360,11 @@ func firstGrantSuspendedInValidationThenDisconnectDoesNotGrant() async throws {
     }
     let registry = MethodRegistry(
         handlers: [
-            RPCMethod.orchestratorGrant.rawValue:
-                .validatedGUI(OrchestratorMethods.grant(store: grants))
+            RPCMethod.automationGrant.rawValue:
+                .validatedGUI(AutomationMethods.grant(store: grants))
         ],
         provenance: TestPeerIdentity.xpcProvenance(manager),
-        orchestratorGrant: grants
+        automationGrant: grants
     )
     let authValidator: AuthValidator = { try await manager.validate(sessionId: $0, capability: $1) }
     let server = XPCServer(
@@ -380,7 +380,7 @@ func firstGrantSuspendedInValidationThenDisconnectDoesNotGrant() async throws {
 
     // Send the grant (no auth needed: .validatedGUI). Its verdict
     // resolution blocks in the validator.
-    send(1, .orchestratorGrant, try grantBody([sid], revision: 1), to: clientPair)
+    send(1, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     var enteredValidation = false
     for _ in 0..<200 where !enteredValidation {
         if gate.entered { enteredValidation = true } else { try await Task.sleep(nanoseconds: 10_000_000) }
@@ -413,7 +413,7 @@ func firstGrantSuspendedInValidationThenDisconnectDoesNotGrant() async throws {
 @Test
 func daemonRestartBeginsWithNoGrants() async {
     // Grants are never persisted; a fresh store (models a restart) is empty.
-    let store = OrchestratorGrantStore()
+    let store = AutomationGrantStore()
     #expect(await store.hasGrant(UUID()) == false)
 }
 
@@ -458,11 +458,11 @@ private func advertisedMethods(
 }
 
 @Test
-func capabilitiesAdvertisesOrchestratorForGrantedAgentOverXPC() async throws {
+func capabilitiesAdvertisesAutomationForGrantedAgentOverXPC() async throws {
     // A GRANTED .agent session, over validated XPC, is advertised the
-    // orchestrator surface: advertising follows the grant, not the role.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    // automation surface: advertising follows the grant, not the role.
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)  // .agent
     await grants.grant(sessionIds: [created.state.id], key: GrantOrderingKey(epoch: 1, revision: 1), issuedBy: 1)
     let server = capabilitiesServer(manager: manager)
@@ -473,12 +473,12 @@ func capabilitiesAdvertisesOrchestratorForGrantedAgentOverXPC() async throws {
 }
 
 @Test
-func capabilitiesOmitsOrchestratorForUngrantedOrchestratorOverXPC() async throws {
-    // An UNGRANTED .orchestrator session is NOT advertised the surface,
+func capabilitiesOmitsAutomationForUngrantedAutomationOverXPC() async throws {
+    // An UNGRANTED .automation session is NOT advertised the surface,
     // matching what dispatch enforces: no over-advertising.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
-    let created = try await manager.createSession(label: nil, role: .orchestrator)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil, role: .automation)
     let server = capabilitiesServer(manager: manager)
     defer { Task { await server.stop() } }
     let methods = try await advertisedMethods(for: created, server: server)

@@ -69,7 +69,7 @@ struct MainMenuTests {
         #expect(titles == [
             "New Window",
             "New Tab",
-            "Open Orchestrator Tab",
+            "Open Automation Tab",
             "Duplicate Tab",
             "",  // separator
             "Split Right",
@@ -697,11 +697,11 @@ struct MainMenuTests {
     }
 
     @Test
-    func openOrchestratorTabHasCommandShiftT() throws {
+    func openAutomationTabHasCommandShiftT() throws {
         let shell = try #require(shellMenu(), "Shell submenu missing")
         let item = try #require(
-            shell.items.first(where: { $0.title == "Open Orchestrator Tab" }),
-            "Open Orchestrator Tab missing"
+            shell.items.first(where: { $0.title == "Open Automation Tab" }),
+            "Open Automation Tab missing"
         )
         #expect(item.keyEquivalent == "t")
         #expect(item.keyEquivalentModifierMask == [.command, .shift])

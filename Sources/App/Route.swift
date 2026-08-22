@@ -51,19 +51,19 @@ enum Route: Sendable {
         cwd: String? = nil,
         cmd: [String]? = nil
     )
-    /// Add a fresh tab whose session has `.orchestrator` role. The only
-    /// product-UI path for minting the orchestrator role, fed by the
+    /// Add a fresh tab whose session has `.automation` role. The only
+    /// product-UI path for minting the automation role, fed by the
     /// File-menu item of the same name and intentionally unreachable from
     /// any CLI verb. The role is descriptive metadata, not authority:
-    /// cross-tab verbs are gated by a live orchestration grant, not the
-    /// role. The daemon refuses an orchestrator mint that doesn't arrive
+    /// cross-tab verbs are gated by a live automation grant, not the
+    /// role. The daemon refuses an automation mint that doesn't arrive
     /// over XPC from a signature-validated peer, and the CLI provides no
     /// verb that would emit one.
     ///
     /// `cwd` / `cmd` semantics match `newTab`; the menu item passes
     /// nil for both, but the shape is symmetric so an
-    /// orchestrator-spawn intent could populate them.
-    case openOrchestratorTab(
+    /// automation-spawn intent could populate them.
+    case openAutomationTab(
         WindowID,
         cwd: String? = nil,
         cmd: [String]? = nil

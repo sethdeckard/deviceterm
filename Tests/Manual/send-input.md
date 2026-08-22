@@ -21,11 +21,11 @@ it.
 ## Preconditions
 
 - A clean build: `make build`.
-- No leftover daemon: `pkill -f deviceterm-daemon` (the GUI lazy-spawns).
+- No leftover app or daemon from this checkout: `make kill-daemon` (the GUI lazy-spawns).
 - Launch with `make run`.
-- **Two tabs.** A driver opened with Shell → Open Orchestrator Tab
+- **Two tabs.** A driver opened with Shell → Open Automation Tab
   (⌘⇧T), and an ordinary recorded tab. `send-input` is
-  orchestrator-only; from a plain tab it fails `error.role_violation`.
+  automation-only; from a plain tab it fails `error.scope_violation`.
 - The recorded tab's ref from `deviceterm tabs list`, used as `<ref>`
   throughout.
 

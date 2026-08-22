@@ -111,7 +111,7 @@ func restoreBatchIsRefusedOverUDS() async throws {
         Issue.record("restoreBatch over UDS must be refused")
         return
     }
-    #expect(err.code == RPCMethodError.roleViolationCode)
+    #expect(err.code == RPCMethodError.scopeViolationCode)
     // And the barrier stays pending: a refused call can't release it.
     #expect(await manager.isRestorationComplete == false)
 }

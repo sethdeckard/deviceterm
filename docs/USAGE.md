@@ -16,7 +16,7 @@ deviceterm help <command>
 ```
 
 This guide covers working inside a tab. For controlling DeviceTerm itself
-from the CLI (tabs, windows, orchestration, events), see
+from the CLI (tabs, windows, automation, events), see
 [`AUTOMATION.md`](AUTOMATION.md). For JSON formats, completion semantics,
 exit codes, and stability guarantees, see [`INTEGRATION.md`](INTEGRATION.md).
 
@@ -353,7 +353,7 @@ Use the **Shell** menu to create:
 
 - a window;
 - a tab;
-- an orchestrator tab;
+- an automation tab;
 - a terminal split to the right or below; or
 - a physical-device mirror.
 
@@ -880,7 +880,7 @@ the selected device pane.
 |---|---|
 | ⌘N | New Window |
 | ⌘T | New Tab |
-| ⇧⌘T | Open Orchestrator Tab |
+| ⇧⌘T | Open Automation Tab |
 | ⌘D | Split Right |
 | ⇧⌘D | Split Down |
 | ⌘W | Close Pane |

@@ -512,6 +512,6 @@ func restoreOwnershipRefusedOverUDS() async throws {
         Issue.record("expected .error for UDS device.restoreOwnership; got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await deviceCoordinator.ownedCount == 0)
 }

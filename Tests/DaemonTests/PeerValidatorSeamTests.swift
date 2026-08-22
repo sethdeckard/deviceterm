@@ -11,7 +11,7 @@ import Testing
 // in-process test peer: the runner *is* `PeerIdentity.selfIdentity`).
 // Pins that a stable (production) verdict is walked at most once per
 // connection (its result is cached) and that the verdict drives the
-// orchestrator mint gate. Cross-connection dedup by process identity,
+// automation mint gate. Cross-connection dedup by process identity,
 // and the non-cacheable path, are covered directly in
 // `PeerVerdictCacheTests`.
 
@@ -62,12 +62,12 @@ func peerVerdictResolvedOncePerConnectionAndCached() async throws {
 }
 
 @Test
-func verdictDrivesOrchestratorMint() async throws {
-    // A validated peer mints an orchestrator session; a rejected peer is
-    // refused with roleViolation, proving the cached verdict actually
+func verdictDrivesAutomationMint() async throws {
+    // A validated peer mints an automation session; a rejected peer is
+    // refused with scopeViolation, proving the cached verdict actually
     // gates the mint.
     let mintParams = try JSONEncoder().encode(
-        SessionMethods.CreateParams(label: nil, role: .orchestrator)
+        SessionMethods.CreateParams(label: nil, role: .automation)
     )
 
     // Validated → mint succeeds.
@@ -88,7 +88,7 @@ func verdictDrivesOrchestratorMint() async throws {
         )
         let envelope = try decodeEnvelope(reply: try await replyBox.awaitReply())
         guard case .result = envelope.body else {
-            Issue.record("validated peer should mint an orchestrator session; got \(envelope.body)")
+            Issue.record("validated peer should mint an automation session; got \(envelope.body)")
             return
         }
     }
@@ -109,22 +109,22 @@ func verdictDrivesOrchestratorMint() async throws {
         )
         let envelope = try decodeEnvelope(reply: try await replyBox.awaitReply())
         guard case let .error(error) = envelope.body else {
-            Issue.record("rejected peer must not mint an orchestrator session; got \(envelope.body)")
+            Issue.record("rejected peer must not mint an automation session; got \(envelope.body)")
             return
         }
-        #expect(error.code == RPCMethodError.roleViolationCode)
+        #expect(error.code == RPCMethodError.scopeViolationCode)
     }
 }
 
 @Test
-func aTransientValidationFailureIsRetryableForOrchestratorMint() async throws {
+func aTransientValidationFailureIsRetryableForAutomationMint() async throws {
     // An `.unavailable` verdict (a recoverable validation blip, not a signature
-    // mismatch) must refuse an orchestrator mint with the RETRYABLE notReady, not
-    // a terminal roleViolation, so opening an orchestrator tab survives the
+    // mismatch) must refuse an automation mint with the RETRYABLE notReady, not
+    // a terminal scopeViolation, so opening an automation tab survives the
     // blip (DaemonClient retries notReady). A stable `.rejected` stays hard
-    // (covered by `verdictDrivesOrchestratorMint`).
+    // (covered by `verdictDrivesAutomationMint`).
     let mintParams = try JSONEncoder().encode(
-        SessionMethods.CreateParams(label: nil, role: .orchestrator)
+        SessionMethods.CreateParams(label: nil, role: .automation)
     )
     let server = createOnlyServer(manager: SessionManager()) { _ in .unavailable(reason: "blip") }
     let (listener, clientPair) = makeAnonymousPair()
@@ -149,9 +149,9 @@ func aTransientValidationFailureIsRetryableForOrchestratorMint() async throws {
 @Test
 func anUnvalidatedXPCAgentCreateSplitsOnValidationStability() async throws {
     // An AGENT create over XPC applies the SAME stable-vs-unstable split as the
-    // orchestrator mint: a transient `.unavailable` verdict is retryable
+    // automation mint: a transient `.unavailable` verdict is retryable
     // (notReady) so a legit GUI blip self-heals; a STABLE `.rejected` signature
-    // mismatch is a hard refusal (roleViolation); a validated peer creates.
+    // mismatch is a hard refusal (scopeViolation); a validated peer creates.
     let agentParams = try JSONEncoder().encode(SessionMethods.CreateParams(label: nil))
 
     func agentCreateResult(_ verdict: @escaping PeerValidator) async throws -> RPCEnvelope.Body {
@@ -177,12 +177,12 @@ func anUnvalidatedXPCAgentCreateSplitsOnValidationStability() async throws {
     }
     #expect(transient.code == RPCMethodError.notReadyCode)
 
-    // Stable mismatch → hard roleViolation.
+    // Stable mismatch → hard scopeViolation.
     guard case let .error(stable) = try await agentCreateResult({ _ in .rejected(reason: "test") }) else {
         Issue.record("rejected verdict should refuse the agent create")
         return
     }
-    #expect(stable.code == RPCMethodError.roleViolationCode)
+    #expect(stable.code == RPCMethodError.scopeViolationCode)
 
     // Validated → creates.
     guard case .result = try await agentCreateResult({ _ in

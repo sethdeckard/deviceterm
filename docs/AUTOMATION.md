@@ -2,7 +2,7 @@
 
 Use the `deviceterm` CLI to control DeviceTerm itself: open and arrange tabs,
 panes, and windows, inspect workspace state, drive other tabs from an
-orchestrator tab, and wait on events. The caller can be a person at a prompt,
+automation tab, and wait on events. The caller can be a person at a prompt,
 a script, an agent, or a program coordinating several agents; the commands
 and the rules are the same.
 
@@ -19,7 +19,7 @@ promises behind every command here are defined in
 - [Understand Tabs, Sessions, and Authority](#understand-tabs-sessions-and-authority)
 - [Control the Workspace](#control-the-workspace)
 - [Discover State](#discover-state)
-- [Orchestrate Other Tabs](#orchestrate-other-tabs)
+- [Drive Other Tabs](#drive-other-tabs)
 - [Wait on Events](#wait-on-events)
 
 ## Understand Tabs, Sessions, and Authority
@@ -28,7 +28,7 @@ Authority has three tiers. Device panes are contained to the session that
 currently owns them. Workspace commands reach any public tab the caller can
 see.
 Reading another tab's contents or typing into it requires a live
-orchestration grant that only the GUI can issue.
+automation grant that only the GUI can issue.
 
 The grant sits where it does because capture and input reach another
 session's contents: what its terminal shows and what runs in it. Workspace
@@ -80,16 +80,16 @@ cap: it has no ancestor in the tab at all.
 
 ### Escalate Only Through the GUI
 
-Cross-tab input and capture require a live orchestration grant, and only the
-GUI issues one, when a person opens an orchestrator tab. There is no CLI verb
+Cross-tab input and capture require a live automation grant, and only the
+GUI issues one, when a person opens an automation tab. There is no CLI verb
 for escalation, and constructing the raw request by hand does not work: the
 daemon refuses it from anything but the validated GUI.
 
-A role string such as `"orchestrator"` is descriptive metadata. Without a
-live grant, cross-tab input and capture fail with `error.role_violation`
-even when `DEVICETERM_SESSION_ROLE` says `orchestrator`.
+A role string such as `"automation"` is descriptive metadata. Without a
+live grant, cross-tab input and capture fail with `error.scope_violation`
+even when `DEVICETERM_SESSION_ROLE` says `automation`.
 
-[Open an Orchestrator Tab](#open-an-orchestrator-tab) covers the grant
+[Open an Automation Tab](#open-an-automation-tab) covers the grant
 lifecycle.
 
 ## Control the Workspace
@@ -199,16 +199,16 @@ version probe did not complete; it does not prove that no daemon is
 reachable. Field semantics and a ready-made check are in
 [the version report](INTEGRATION.md#version-report).
 
-## Orchestrate Other Tabs
+## Drive Other Tabs
 
-### Open an Orchestrator Tab
+### Open an Automation Tab
 
-Open the tab with **Shell ▸ Open Orchestrator Tab** or ⇧⌘T.
+Open the tab with **Shell ▸ Open Automation Tab** or ⇧⌘T.
 
-The GUI issues that tab's terminal session a live orchestration grant. The
+The GUI issues that tab's terminal session a live automation grant. The
 grant lives in daemon memory and is checked on every cross-tab request; it is
 revoked when the tab closes, when the issuing GUI connection is lost, or when
-the session ends. An ordinary tab receives `error.role_violation` for
+the session ends. An ordinary tab receives `error.scope_violation` for
 cross-tab capture and input, and the CLI cannot grant authority to itself.
 
 ### Send Input to Another Tab
@@ -251,8 +251,8 @@ deviceterm tab set-private true
 
 Every terminal session in the tab changes together. Other sessions cannot
 list the private tab or its panes, resolve its references, capture it, or
-send input to it; your own sessions keep access. Orchestration grants do not
-bypass privacy, so an orchestrator tab cannot capture or type into a tab
+send input to it; your own sessions keep access. Automation grants do not
+bypass privacy, so an automation tab cannot capture or type into a tab
 after that target becomes private.
 
 Only a tab the caller owns a terminal in can be flipped. The receipt's

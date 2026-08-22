@@ -43,9 +43,9 @@ func responseRoundTripNoSession() throws {
 }
 
 @Test
-func responseRoundTripOrchestratorRole() throws {
+func responseRoundTripAutomationRole() throws {
     let response = DaemonCapabilitiesResponse(
-        role: .orchestrator,
+        role: .automation,
         allowedMethods: ["tab.send-input", "tab.capture"],
         wireVersion: "0.1.0",
         linkagePolicyVersion: 1
@@ -53,7 +53,7 @@ func responseRoundTripOrchestratorRole() throws {
     let encoded = try JSONEncoder().encode(response)
     let decoded = try JSONDecoder()
         .decode(DaemonCapabilitiesResponse.self, from: encoded)
-    #expect(decoded.role == .orchestrator)
+    #expect(decoded.role == .automation)
 }
 
 @Test
@@ -73,7 +73,7 @@ func methodScopeRawValuesAreStable() {
     // silent one.
     #expect(MethodScope.daemonWide.rawValue == "daemonWide")
     #expect(MethodScope.session.rawValue == "session")
-    #expect(MethodScope.orchestratorTab.rawValue == "orchestratorTab")
+    #expect(MethodScope.automationTab.rawValue == "automationTab")
     #expect(MethodScope.validatedGUI.rawValue == "validatedGUI")
     #expect(MethodScope.allCases.count == 4)
 }

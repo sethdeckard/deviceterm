@@ -31,11 +31,11 @@ final class PaneLocationViewModel {
         let task: Task<LocationAlert?, Never>
     }
 
-    /// Mirror of the daemon's `RPCMethodError.roleViolationCode`.
+    /// Mirror of the daemon's `RPCMethodError.scopeViolationCode`.
     /// Duplicated rather than imported because the App module doesn't
     /// link the daemon; the same mirroring appears in
     /// `DisplayTitlePublisher` and `AppCommandSubscriber`.
-    private static let roleViolationCode = -32_011
+    private static let scopeViolationCode = -32_011
     /// Mirror of the daemon's `RPCMethodError.unauthorizedCode`.
     private static let unauthorizedCode = -32_001
 
@@ -569,7 +569,7 @@ final class PaneLocationViewModel {
     /// a momentary failure leaves the last good snapshot in place.
     private func handle(_ error: any Error, whileDoing action: String) {
         if case let DaemonClientError.daemon(code, _) = error,
-            code == Self.roleViolationCode || code == Self.unauthorizedCode {
+            code == Self.scopeViolationCode || code == Self.unauthorizedCode {
             isAvailable = false
             log.info("location unavailable on this connection; disabling the menu")
             return

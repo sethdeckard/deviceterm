@@ -522,7 +522,7 @@ struct WorkspaceCommandsTests {
         }
     }
 
-    // MARK: - tab send-input (orchestrator-only)
+    // MARK: - tab send-input (automation-only)
 
     @Test
     func tabSendInputJoinsMultiTokenText() {
@@ -741,7 +741,7 @@ struct WorkspaceCommandsTests {
         #expect(decoded.typeDelayMillis == 45)
     }
 
-    // MARK: - tab capture (orchestrator-only)
+    // MARK: - tab capture (automation-only)
 
     @Test
     func tabCaptureDefaultsToCurrentTab() {

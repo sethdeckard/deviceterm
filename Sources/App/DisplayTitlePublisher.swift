@@ -63,7 +63,7 @@ final class DisplayTitlePublisher {
         let title: String?
     }
 
-    /// `-32011` role violation: the peer isn't the validated GUI. Two ways
+    /// `-32011` scope violation: the peer isn't the validated GUI. Two ways
     /// to be here, and both are stable for the life of the process: the
     /// `--smoke` UDS fallback, which carries no audit token at all, and an
     /// XPC peer whose signature check came back a stable mismatch (an

@@ -49,7 +49,7 @@ struct TabStripContextMenuTests {
             "Duplicate Tab",
             "",  // separator
             "New Tab",
-            "Open Orchestrator Tab",
+            "Open Automation Tab",
             "",  // separator
             "Close Tab",
             "Close Other Tabs",
@@ -97,8 +97,8 @@ struct TabStripContextMenuTests {
             ("Duplicate Tab", #selector(TabStripViewController.duplicateTabFromMenu(_:))),
             ("New Tab", #selector(TabStripViewController.newTabFromMenu(_:))),
             (
-                "Open Orchestrator Tab",
-                #selector(TabStripViewController.openOrchestratorTabFromMenu(_:))
+                "Open Automation Tab",
+                #selector(TabStripViewController.openAutomationTabFromMenu(_:))
             ),
             ("Close Tab", #selector(TabStripViewController.closeTabFromMenu(_:))),
             (

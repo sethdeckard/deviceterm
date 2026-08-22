@@ -313,18 +313,18 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     case windowFocus = "window.focus"
     case windowsList = "windows.list"
 
-    // MARK: - tab.* (orchestrator-only read/write verbs)
+    // MARK: - tab.* (automation-only read/write verbs)
 
-    /// `tab.sendInput`: orchestrator-only. CLI's `deviceterm tab
+    /// `tab.sendInput`: automation-only. CLI's `deviceterm tab
     /// send-input --tab <ref> <text>` flows through the back-channel
     /// publish-verb to the GUI's `IntentDispatcher`, which writes
     /// `text` into the resolved tab's terminal surface via
     /// `IntentActionDelegate.sendInput`. Daemon registers this case
-    /// at `.orchestratorTab` scope so a caller without a live
-    /// orchestration grant is rejected at the dispatcher's scope check
+    /// at `.automationTab` scope so a caller without a live
+    /// automation grant is rejected at the dispatcher's scope check
     /// before reaching the handler.
     case tabSendInput = "tab.sendInput"
-    /// `tab.capture`: orchestrator-only. CLI's `deviceterm tab
+    /// `tab.capture`: automation-only. CLI's `deviceterm tab
     /// capture [--tab <ref>]` returns the resolved tab's currently-
     /// visible viewport as plain text. Flows through publishVerb;
     /// the GUI reads via `IntentActionDelegate.captureTab` and
@@ -339,16 +339,16 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// its terminal-pane sessions and flips them atomically via the
     /// daemon's `session.setPrivateBatch`.
     case tabSetPrivate = "tab.setPrivate"
-    /// `orchestrator.grant`: issue live orchestration grants for a tab's
+    /// `automation.grant`: issue live automation grants for a tab's
     /// sessions. `.validatedGUI`-scoped: only a signature-validated GUI
     /// peer over XPC may call it, and the grant is attributed to that
-    /// connection. Orchestration authority is the presence of a live
+    /// connection. Automation authority is the presence of a live
     /// grant, checked per request (never a persisted role) so a forged
     /// manifest role grants nothing. UDS can never reach this method.
-    case orchestratorGrant = "orchestrator.grant"
-    /// `orchestrator.revoke`: revoke the live orchestration grants for the
+    case automationGrant = "automation.grant"
+    /// `automation.revoke`: revoke the live automation grants for the
     /// given sessions (tab closed or downgraded). `.validatedGUI`-scoped;
     /// UDS can never reach it. Revocation is immediate: a socket
     /// authenticated before the revoke loses authority on its next call.
-    case orchestratorRevoke = "orchestrator.revoke"
+    case automationRevoke = "automation.revoke"
 }

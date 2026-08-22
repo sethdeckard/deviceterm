@@ -105,10 +105,10 @@ enum KeybindingCatalog {
             responders: [TabStripViewController.self, AppDelegate.self]
         ),
         KeybindingEntry(
-            action: .openOrchestratorTab,
+            action: .openAutomationTab,
             chord: KeyChord("t", [.shift, .command]),
-            title: "Open Orchestrator Tab",
-            selector: #selector(TabStripViewController.openOrchestratorTab(_:)),
+            title: "Open Automation Tab",
+            selector: #selector(TabStripViewController.openAutomationTab(_:)),
             responders: [TabStripViewController.self]
         ),
         // ⌘W closes the focused pane, and resolves to the whole tab when

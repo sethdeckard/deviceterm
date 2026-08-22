@@ -14,7 +14,7 @@ import Testing
 // an ordinary failure is transient and leaves the last good snapshot
 // alone.
 
-private let roleViolation = DaemonClientError.daemon(code: -32_011, message: "not the validated GUI peer")
+private let scopeViolation = DaemonClientError.daemon(code: -32_011, message: "not the validated GUI peer")
 private let unauthorized = DaemonClientError.daemon(code: -32_001, message: "stale session")
 private let transientFailure = DaemonClientError.daemon(code: -32_000, message: "device busy")
 
@@ -206,7 +206,7 @@ func aFailedApplyDoesNotMoveTheSnapshot() async {
     #expect(viewModel.isAvailable)
 }
 
-@Test("a scope refusal disables the surface permanently", arguments: [roleViolation, unauthorized])
+@Test("a scope refusal disables the surface permanently", arguments: [scopeViolation, unauthorized])
 @MainActor
 func scopeRefusalDisablesTheSurface(error: DaemonClientError) async {
     let client = FakeDaemonClient()
@@ -364,7 +364,7 @@ func aFailedSetStillSavesTheCoordinate() async {
 func aRefusedSurfaceSavesNothing() async {
     let store = FakeLocationsStore()
     let client = FakeDaemonClient()
-    client.locationStateFailure = roleViolation
+    client.locationStateFailure = scopeViolation
     let viewModel = makeViewModel(client, locations: store)
     viewModel.refresh()
     await settle()
@@ -481,7 +481,7 @@ func useMyLocationRefusesTheInvalidSentinel() async {
 @MainActor
 func aRefusedSurfaceTakesNoFix() async {
     let client = FakeDaemonClient()
-    client.locationStateFailure = roleViolation
+    client.locationStateFailure = scopeViolation
     let provider = FakeLocationProvider()
     let viewModel = makeViewModel(client, provider: provider)
     viewModel.refresh()
@@ -612,7 +612,7 @@ func useMyLocationReportsARefusedSet() async {
 @MainActor
 func useMyLocationStaysQuietOnAScopeRefusal() async {
     let client = FakeDaemonClient()
-    client.locationSetFailure = roleViolation
+    client.locationSetFailure = scopeViolation
     let viewModel = makeViewModel(client)
 
     let alert = await viewModel.useMyLocation(isPaneLive: { true })
@@ -720,7 +720,7 @@ private final class SupersedableLocationClient: PaneLocationControlling {
 @MainActor
 func aSupersededRefreshCannotDisableTheSurface() async {
     let client = SupersedableLocationClient()
-    client.firstReadFailure = roleViolation
+    client.firstReadFailure = scopeViolation
     let viewModel = PaneLocationViewModel(
         paneId: "pane-1",
         client: client,
@@ -970,7 +970,7 @@ func aDroppedClaimReleasesTheRoute() async {
 @MainActor
 func aRefusedSurfaceStaysQuietOnRoutes() async {
     let client = FakeDaemonClient()
-    client.locationSetFailure = roleViolation
+    client.locationSetFailure = scopeViolation
     let routes = FakeRouteFiles()
     routes.stub("/routes/run.gpx", .success(sampleRoute))
     let viewModel = makeViewModel(client, routeFiles: routes)

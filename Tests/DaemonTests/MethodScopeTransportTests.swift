@@ -5,19 +5,19 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-// `MethodScope.orchestratorTabReachable` / `validatedGUIReachable`:
+// `MethodScope.automationTabReachable` / `validatedGUIReachable`:
 // the predicates both the dispatcher's scope check and
 // `daemon.capabilities` consult. Advertising and enforcement
 // disagreeing is the bug this guards: a caller told it may run
 // `tab.capture` and then refused is worse than never being offered it.
 
 @Test
-func orchestratorTabUnreachableWithoutAGrant() {
+func automationTabUnreachableWithoutAGrant() {
     // Authority is a live grant, not a role. With no grant, unreachable on
     // every transport regardless of the validated-GUI verdict.
     for transport in [DispatchPeerContext.Transport.uds, .xpc] {
         #expect(
-            !MethodScope.orchestratorTabReachable(
+            !MethodScope.automationTabReachable(
                 hasGrant: false,
                 transport: transport,
                 validatedGUI: true
@@ -27,34 +27,34 @@ func orchestratorTabUnreachableWithoutAGrant() {
 }
 
 @Test
-func orchestratorTabReachableOverUDSWithGrant() {
-    // A granted UDS session reaches the orchestrator surface: it authenticated
+func automationTabReachableOverUDSWithGrant() {
+    // A granted UDS session reaches the automation surface: it authenticated
     // via cap + kernel terminal-process provenance, and the validated GUI
     // minted the grant. No audit token is involved over UDS, so the
     // validated-GUI verdict is irrelevant to the UDS decision, reachable
     // either way, purely on the grant.
     #expect(
-        MethodScope.orchestratorTabReachable(hasGrant: true, transport: .uds, validatedGUI: false)
+        MethodScope.automationTabReachable(hasGrant: true, transport: .uds, validatedGUI: false)
     )
     #expect(
-        MethodScope.orchestratorTabReachable(hasGrant: true, transport: .uds, validatedGUI: true)
+        MethodScope.automationTabReachable(hasGrant: true, transport: .uds, validatedGUI: true)
     )
     // Still refused over UDS WITHOUT a grant (covered by
-    // `orchestratorTabUnreachableWithoutAGrant`, restated here for the axis).
+    // `automationTabUnreachableWithoutAGrant`, restated here for the axis).
     #expect(
-        !MethodScope.orchestratorTabReachable(hasGrant: false, transport: .uds, validatedGUI: false)
+        !MethodScope.automationTabReachable(hasGrant: false, transport: .uds, validatedGUI: false)
     )
 }
 
 @Test
-func orchestratorTabReachableOverValidatedXPCWithGrant() {
+func automationTabReachableOverValidatedXPCWithGrant() {
     // Granted + validated XPC → reachable; an unvalidated XPC peer fails
     // closed even with a grant.
     #expect(
-        MethodScope.orchestratorTabReachable(hasGrant: true, transport: .xpc, validatedGUI: true)
+        MethodScope.automationTabReachable(hasGrant: true, transport: .xpc, validatedGUI: true)
     )
     #expect(
-        !MethodScope.orchestratorTabReachable(hasGrant: true, transport: .xpc, validatedGUI: false)
+        !MethodScope.automationTabReachable(hasGrant: true, transport: .xpc, validatedGUI: false)
     )
 }
 
@@ -80,37 +80,37 @@ func validatedGUIReachableOnlyOverValidatedXPC() {
 
 @Test
 func allowedScopesTrackGrantNotRole() {
-    // A GRANTED agent gets the orchestrator surface. A live orchestration
-    // grant gates orchestrator scope; role is descriptive.
+    // A GRANTED agent gets the automation surface. A live automation
+    // grant gates automation scope; role is descriptive.
     #expect(
         MethodScope.allowedFor(
             role: .agent,
-            orchestratorTabReachable: true,
+            automationTabReachable: true,
             validatedGUIReachable: false
-        ) == [.daemonWide, .session, .orchestratorTab]
+        ) == [.daemonWide, .session, .automationTab]
     )
-    // An UNGRANTED orchestrator does not; it degrades to the agent set.
+    // An UNGRANTED automation does not; it degrades to the agent set.
     #expect(
         MethodScope.allowedFor(
-            role: .orchestrator,
-            orchestratorTabReachable: false,
+            role: .automation,
+            automationTabReachable: false,
             validatedGUIReachable: false
         ) == [.daemonWide, .session]
     )
-    // A granted orchestrator gets it too (same as a granted agent).
+    // A granted automation gets it too (same as a granted agent).
     #expect(
         MethodScope.allowedFor(
-            role: .orchestrator,
-            orchestratorTabReachable: true,
+            role: .automation,
+            automationTabReachable: true,
             validatedGUIReachable: false
-        ) == [.daemonWide, .session, .orchestratorTab]
+        ) == [.daemonWide, .session, .automationTab]
     )
-    // No session (nil role) never gets `.orchestratorTab`, since a grant
+    // No session (nil role) never gets `.automationTab`, since a grant
     // requires a session.
     #expect(
         MethodScope.allowedFor(
             role: nil,
-            orchestratorTabReachable: true,
+            automationTabReachable: true,
             validatedGUIReachable: false
         ) == [.daemonWide]
     )
@@ -124,15 +124,15 @@ func validatedGUIScopeIsInsertedOrthogonallyToRole() {
     #expect(
         MethodScope.allowedFor(
             role: nil,
-            orchestratorTabReachable: false,
+            automationTabReachable: false,
             validatedGUIReachable: true
         ) == [.daemonWide, .validatedGUI]
     )
     #expect(
         MethodScope.allowedFor(
-            role: .orchestrator,
-            orchestratorTabReachable: true,
+            role: .automation,
+            automationTabReachable: true,
             validatedGUIReachable: true
-        ) == [.daemonWide, .session, .orchestratorTab, .validatedGUI]
+        ) == [.daemonWide, .session, .automationTab, .validatedGUI]
     )
 }

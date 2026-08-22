@@ -55,8 +55,8 @@ public struct AuthenticatedHarness {
 }
 
 /// Start a server + mint a session + connect an auth'd client in one
-/// call. Defaults to `.agent` role; pass `role: .orchestrator` when
-/// testing orchestrator-only dispatch behavior.
+/// call. Defaults to `.agent` role; pass `role: .automation` when
+/// testing automation-only dispatch behavior.
 public func startAuthenticatedHarness(
     path: String,
     sessionManager: SessionManager = SessionManager(),

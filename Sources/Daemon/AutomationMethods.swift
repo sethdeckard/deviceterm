@@ -3,7 +3,7 @@
 import DaemonProtocol
 import Foundation
 
-/// Handlers for `orchestrator.grant` / `orchestrator.revoke`.
+/// Handlers for `automation.grant` / `automation.revoke`.
 ///
 /// Both are `.validatedGUI`-scoped, so the dispatcher admits them only over
 /// XPC from a signature-validated GUI peer. UDS can never reach them. The
@@ -18,12 +18,12 @@ import Foundation
 /// set. A revoke does not require live targets: a session already gone is
 /// treated as already-revoked and stores nothing (so a late or spurious
 /// revoke can't accrete tombstones), while live targets are tombstoned.
-enum OrchestratorMethods {
-    static func grant(store: OrchestratorGrantStore) -> MethodRegistry.Handler {
+enum AutomationMethods {
+    static func grant(store: AutomationGrantStore) -> MethodRegistry.Handler {
         { paramsJSON in
-            let params = try decodeParams(paramsJSON, verb: "orchestrator.grant")
+            let params = try decodeParams(paramsJSON, verb: "automation.grant")
             guard let context = DispatchPeerContext.current else {
-                throw RPCMethodError.unauthorized("orchestrator.grant requires a dispatch context")
+                throw RPCMethodError.unauthorized("automation.grant requires a dispatch context")
             }
             let key = GrantOrderingKey(epoch: context.connectionId, revision: params.revision)
             switch await store.grant(
@@ -33,35 +33,35 @@ enum OrchestratorMethods {
             ) {
             case .sessionNotLive:
                 throw RPCMethodError.invalidParams(
-                    "orchestrator.grant: a target is not a live session"
+                    "automation.grant: a target is not a live session"
                 )
 
             case .applied:
-                return try JSONEncoder().encode(OrchestratorGrantResult(applied: true))
+                return try JSONEncoder().encode(AutomationGrantResult(applied: true))
 
             case .notApplied:
-                return try JSONEncoder().encode(OrchestratorGrantResult(applied: false))
+                return try JSONEncoder().encode(AutomationGrantResult(applied: false))
             }
         }
     }
 
-    static func revoke(store: OrchestratorGrantStore) -> MethodRegistry.Handler {
+    static func revoke(store: AutomationGrantStore) -> MethodRegistry.Handler {
         { paramsJSON in
-            let params = try decodeParams(paramsJSON, verb: "orchestrator.revoke")
+            let params = try decodeParams(paramsJSON, verb: "automation.revoke")
             guard let context = DispatchPeerContext.current else {
-                throw RPCMethodError.unauthorized("orchestrator.revoke requires a dispatch context")
+                throw RPCMethodError.unauthorized("automation.revoke requires a dispatch context")
             }
             let key = GrantOrderingKey(epoch: context.connectionId, revision: params.revision)
             let applied = await store.revoke(sessionIds: params.sessionIds, key: key)
-            return try JSONEncoder().encode(OrchestratorGrantResult(applied: applied))
+            return try JSONEncoder().encode(AutomationGrantResult(applied: applied))
         }
     }
 
     /// Decode the typed `[UUID]` payload, mapping any malformed id (a decode
     /// failure) to `invalidParams` so the whole batch is rejected atomically.
-    private static func decodeParams(_ json: Data, verb: String) throws -> OrchestratorGrantParams {
+    private static func decodeParams(_ json: Data, verb: String) throws -> AutomationGrantParams {
         do {
-            return try JSONDecoder().decode(OrchestratorGrantParams.self, from: json)
+            return try JSONDecoder().decode(AutomationGrantParams.self, from: json)
         } catch {
             throw RPCMethodError.invalidParams("\(verb): malformed params (\(error))")
         }

@@ -174,14 +174,14 @@ func sessionCreateDefaultsToAgentRole() async throws {
 }
 
 @Test
-func sessionCreateRejectsOrchestratorRoleOverUDS() async throws {
-    // The post-lifecycle trust boundary: orchestrator mints over
+func sessionCreateRejectsAutomationRoleOverUDS() async throws {
+    // The post-lifecycle trust boundary: automation mints over
     // UDS are unconditionally rejected. UDS carries no audit token,
     // so the daemon can't validate the peer against its own signature
     // (kernel terminal provenance authenticates the SESSION, but not
     // human-GUI escalation), so the dispatcher refuses the mint before
     // SessionManager.createSession can run. Wire
-    // callers that need orchestrator must go through XPC where
+    // callers that need automation must go through XPC where
     // PeerIdentity validates the peer against the daemon's
     // own signature.
     let manager = SessionManager()
@@ -194,7 +194,7 @@ func sessionCreateRejectsOrchestratorRoleOverUDS() async throws {
             SessionMethods.CreateParams(
             label: nil,
             name: nil,
-            role: .orchestrator
+            role: .automation
         )
             )
             )
@@ -202,16 +202,16 @@ func sessionCreateRejectsOrchestratorRoleOverUDS() async throws {
     let response = try await roundTrip(envelope, manager: manager)
     guard case let .error(error) = response.body else {
         let bodyDescription = "\(response.body)"
-        Issue.record("expected .error body rejecting orchestrator mint, got \(bodyDescription)")
+        Issue.record("expected .error body rejecting automation mint, got \(bodyDescription)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     let count = await manager.sessionCount
     #expect(count == 0)
 }
 
 @Test
-func sessionManagerStillSupportsInternalOrchestratorMinting() async throws {
+func sessionManagerStillSupportsInternalAutomationMinting() async throws {
     // The transport handler rejects unauthorized mints, while the
     // validated-GUI XPC path delegates to
     // `SessionManager.createSession(role:)`. Keep the manager
@@ -219,9 +219,9 @@ func sessionManagerStillSupportsInternalOrchestratorMinting() async throws {
     let manager = SessionManager()
     let state = try await manager.makeSessionState(
         label: nil,
-        role: .orchestrator
+        role: .automation
     )
-    #expect(state.role == .orchestrator)
+    #expect(state.role == .automation)
 }
 
 @Test
@@ -583,7 +583,7 @@ func setDisplayTitleRefusedOverUDS() async throws {
         Issue.record("expected .error body for UDS setDisplayTitle; got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await manager.displayTitle(created.state.id) == nil)
 }
 
@@ -634,6 +634,6 @@ func setPrivateBatchRefusedOverUDS() async throws {
         Issue.record("expected .error body for UDS setPrivateBatch; got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await manager.isPrivate(state.id) == false)
 }

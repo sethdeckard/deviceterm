@@ -1,8 +1,8 @@
 # Recording a DeviceTerm Demo
 
-> **Run the driver from an orchestrator tab.** Open one with **Shell → Open
-> Orchestrator Tab** (⌘⇧T). An ordinary tab cannot control another tab and
-> receives `error.role_violation`.
+> **Run the driver from an automation tab.** Open one with **Shell → Open
+> Automation Tab** (⌘⇧T). An ordinary tab cannot control another tab and
+> receives `error.scope_violation`.
 
 DeviceTerm can type a prepared sequence of commands into a terminal while you
 record it. The commands appear at a natural pace, and the off-camera driver
@@ -36,9 +36,9 @@ Blank lines and lines beginning with `#` are skipped.
 
    Use its short ID, or assign a name with `deviceterm tab rename`.
 
-3. Open an orchestrator tab with **Shell → Open Orchestrator Tab** (⌘⇧T).
+3. Open an automation tab with **Shell → Open Automation Tab** (⌘⇧T).
 
-4. Drag the orchestrator tab into a separate window and place it outside the
+4. Drag the automation tab into a separate window and place it outside the
    recording frame.
 
 5. Copy `scripts/demo-example.txt` and edit it. Put one shell command on each
@@ -46,7 +46,7 @@ Blank lines and lines beginning with `#` are skipped.
 
 ## Record the Demo
 
-Run the presenter helper from the off-camera orchestrator tab:
+Run the presenter helper from the off-camera automation tab:
 
 ```sh
 scripts/demo-present.sh scripts/demo-example.txt \

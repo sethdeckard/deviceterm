@@ -36,11 +36,11 @@
 //     filters the no-session subset: calling these without env creds
 //     is pointless (no owned pane to reach), so they don't appear in
 //     an out-of-tab caller's `allowedMethods`.
-//   - `.orchestratorTab`: requires valid creds AND a **live
-//     orchestration grant** for the session, checked against the
-//     `OrchestratorGrantStore` on every request. Authority is the grant,
+//   - `.automationTab`: requires valid creds AND a **live
+//     automation grant** for the session, checked against the
+//     `AutomationGrantStore` on every request. Authority is the grant,
 //     not the role: a granted `.agent` reaches it, an ungranted
-//     `.orchestrator` does not. Grants are issued in memory only by the
+//     `.automation` does not. Grants are issued in memory only by the
 //     validated GUI and never persisted, so a forged/rehydrated role
 //     grants nothing. `tab.send-input` and `tab.capture` carry this tag.
 //     Reachable over BOTH transports for a granted session: over the GUI's
@@ -48,7 +48,7 @@
 //     tab (a UDS session authenticates via cap + kernel terminal-process
 //     provenance, so the grant sits on a real, provenance-checked identity).
 //     Only *escalation* stays XPC-GUI-only: a UDS caller can neither mint an
-//     orchestrator role nor issue itself a grant, so it can only exercise a
+//     automation role nor issue itself a grant, so it can only exercise a
 //     grant the GUI already gave its session.
 //   - `.validatedGUI`: reachable ONLY over XPC from a peer whose audit
 //     token validates against the daemon's own signature, and
@@ -69,6 +69,6 @@
 public enum MethodScope: String, Codable, Sendable, Equatable, CaseIterable {
     case daemonWide
     case session
-    case orchestratorTab
+    case automationTab
     case validatedGUI
 }

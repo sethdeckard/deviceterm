@@ -269,7 +269,7 @@ public enum PhysicalDeviceMethods {
     /// Whether the caller is the signature-validated host GUI, the only peer
     /// allowed to name another session. Transport alone is insufficient (any
     /// process can open the XPC service): the peer must have passed the
-    /// self-mirror signature check the orchestrator-mint gate uses. Reads the
+    /// self-mirror signature check the automation-mint gate uses. Reads the
     /// resolved GUI verdict stamped by `XPCConnection`
     /// (`DispatchPeerContext.validatedGUIPeer`); never a fresh signature walk.
     /// UDS peers carry no audit token and are rejected regardless of the

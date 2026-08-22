@@ -20,12 +20,12 @@ import Foundation
 // Keeping all three in agreement is a review obligation, not
 // something the type system enforces.
 extension MethodScope {
-    /// Whether a connection can reach `.orchestratorTab`-scoped methods.
+    /// Whether a connection can reach `.automationTab`-scoped methods.
     ///
-    /// Authority is a **live orchestration grant**, not a role, so this
+    /// Authority is a **live automation grant**, not a role, so this
     /// takes `hasGrant` (the session's live grant state, read from the
-    /// `OrchestratorGrantStore`), never `SessionRole`. A granted `.agent`
-    /// session is reachable; an ungranted `.orchestrator` session is not.
+    /// `AutomationGrantStore`), never `SessionRole`. A granted `.agent`
+    /// session is reachable; an ungranted `.automation` session is not.
     /// The role stays descriptive metadata; it grants nothing.
     ///
     /// Reachable over **both** transports for a granted session, because the
@@ -34,14 +34,14 @@ extension MethodScope {
     ///   terminal-process provenance, and the grant was minted by the validated
     ///   GUI for this exact session. Cap + provenance + live grant together are
     ///   the authority. What provenance proves is that the caller's live parent
-    ///   chain reaches the orchestrator tab's controlling terminal, which is
+    ///   chain reaches the automation tab's controlling terminal, which is
     ///   either the caller itself sitting in that terminal or a descendant that
     ///   detached from it. A same-uid process that merely stole the cap has no
     ///   such chain and can't authenticate, so it never reaches here.
     /// - **XPC**: the peer's audit token must validate against the daemon's
     ///   own signature; `validatedGUI` is the already-resolved verdict, never a
     ///   fresh signature walk.
-    static func orchestratorTabReachable(
+    static func automationTabReachable(
         hasGrant: Bool,
         transport: DispatchPeerContext.Transport,
         validatedGUI: Bool
@@ -49,7 +49,7 @@ extension MethodScope {
         guard hasGrant else { return false }
         switch transport {
         case .uds:
-            // A granted UDS session reaches the orchestrator tab by
+            // A granted UDS session reaches the automation tab by
             // construction: the grant guard above required a live grant, and a
             // UDS session only authenticates after passing terminal-process
             // provenance. No audit token is involved (UDS carries none); the
@@ -87,14 +87,14 @@ extension MethodScope {
     /// don't need the peer-validation / grant-store dependencies.
     ///
     /// `role` decides only the `.daemonWide` / `.session` base; it does
-    /// **not** gate `.orchestratorTab`. That scope is added purely from
-    /// `orchestratorTabReachable`, which the caller derives from the live
-    /// grant, so a granted `.agent` is advertised the orchestrator surface
-    /// and an ungranted `.orchestrator` is not. `.validatedGUI` is likewise
+    /// **not** gate `.automationTab`. That scope is added purely from
+    /// `automationTabReachable`, which the caller derives from the live
+    /// grant, so a granted `.agent` is advertised the automation surface
+    /// and an ungranted `.automation` is not. `.validatedGUI` is likewise
     /// orthogonal to role.
     static func allowedFor(
         role: SessionRole?,
-        orchestratorTabReachable: Bool,
+        automationTabReachable: Bool,
         validatedGUIReachable: Bool
     ) -> Set<MethodScope> {
         var allowed: Set<MethodScope>
@@ -102,14 +102,14 @@ extension MethodScope {
         case nil:
             allowed = [.daemonWide]
 
-        case .agent, .orchestrator:
+        case .agent, .automation:
             allowed = [.daemonWide, .session]
-            // `.orchestratorTab` requires a session AND a live grant; the
-            // caller folds the grant into `orchestratorTabReachable`. A live
-            // orchestration grant gates the scope; role is descriptive, so a
-            // granted `.agent` gets it and an ungranted `.orchestrator` does
+            // `.automationTab` requires a session AND a live grant; the
+            // caller folds the grant into `automationTabReachable`. A live
+            // automation grant gates the scope; role is descriptive, so a
+            // granted `.agent` gets it and an ungranted `.automation` does
             // not.
-            if orchestratorTabReachable { allowed.insert(.orchestratorTab) }
+            if automationTabReachable { allowed.insert(.automationTab) }
         }
         if validatedGUIReachable { allowed.insert(.validatedGUI) }
         return allowed

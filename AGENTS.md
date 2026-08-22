@@ -466,11 +466,11 @@ The daemon vends two transports with different trust models. UDS (the CLI /
 shim path) authenticates a session with a capability PLUS the caller's kernel
 peer provenance (`LOCAL_PEERTOKEN` → the caller's POSIX session / controlling
 tty, matched against the session's bound terminal). It is not cap-only. It
-reaches `.orchestratorTab` scope (`tab.send-input`/`tab.capture`) only when its
-session currently holds a **live orchestration grant**, re-checked per request;
+reaches `.automationTab` scope (`tab.send-input`/`tab.capture`) only when its
+session currently holds a **live automation grant**, re-checked per request;
 authority is the grant plus that provenance, never a role. What UDS can never do
-is *escalate*: it cannot mint an orchestrator role and cannot issue itself a
-grant: both `orchestrator.grant`/`.revoke` and the orchestrator-role mint at
+is *escalate*: it cannot mint an automation role and cannot issue itself a
+grant: both `automation.grant`/`.revoke` and the automation-role mint at
 `session.create` are refused for anything but a validated-GUI XPC peer, so a UDS
 caller can only exercise a grant the GUI already handed its session. XPC (the
 GUI path) validates the peer's audit token against the daemon's own signature:

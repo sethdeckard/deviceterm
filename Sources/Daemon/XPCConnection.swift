@@ -104,11 +104,11 @@ public actor XPCConnection {
     private let methods: MethodRegistry
     private let authValidator: AuthValidator?
     private let subscriptionRegistry: PaneSubscriptionRegistry?
-    /// Live orchestration-grant store, consulted by the orchestrator scope
+    /// Live automation-grant store, consulted by the automation scope
     /// check on every request. Authority is the presence of a live grant,
     /// not a cached role, so a forged manifest role authorizes nothing.
-    /// Nil in tests that don't exercise the orchestrator scope.
-    private let orchestratorGrantStore: OrchestratorGrantStore?
+    /// Nil in tests that don't exercise the automation scope.
+    private let automationGrantStore: AutomationGrantStore?
     /// The terminal-anchor store, for revoking this connection's issued
     /// anchors on close (the validated GUI issues terminal bindings over
     /// XPC). Read only for `revokeAll(issuedBy:)` at teardown: the XPC
@@ -189,7 +189,7 @@ public actor XPCConnection {
         authValidator: AuthValidator? = nil,
         subscriptionRegistry: PaneSubscriptionRegistry? = nil,
         server: XPCServer? = nil,
-        orchestratorGrantStore: OrchestratorGrantStore? = nil,
+        automationGrantStore: AutomationGrantStore? = nil,
         terminalAnchorStore: TerminalAnchorStore? = nil,
         sessionProvenanceLookup: SessionProvenanceLookup? = nil,
         restorationGate: RestorationGate? = nil,
@@ -202,7 +202,7 @@ public actor XPCConnection {
         self.authValidator = authValidator
         self.subscriptionRegistry = subscriptionRegistry
         self.server = server
-        self.orchestratorGrantStore = orchestratorGrantStore
+        self.automationGrantStore = automationGrantStore
         self.terminalAnchorStore = terminalAnchorStore
         self.sessionProvenanceLookup = sessionProvenanceLookup
         self.restorationGate = restorationGate
@@ -290,17 +290,17 @@ public actor XPCConnection {
     public func close() async {
         guard !closed else { return }
         closed = true
-        // Revoke every orchestration grant this connection issued before the
+        // Revoke every automation grant this connection issued before the
         // close completes: a grant's authority dies with the GUI connection
         // that holds the lease. A grant reissued by a newer connection (which
         // took ownership) is left intact. Gated on the validated-GUI verdict:
-        // only a validated peer can grant (`orchestrator.grant` is
+        // only a validated peer can grant (`automation.grant` is
         // `.validatedGUI`), so only such a connection can have grants or an
         // in-flight late grant to fence, which also keeps the store's
         // closed-issuer set from being grown by unvalidated connect/disconnect
         // churn.
-        if let orchestratorGrantStore, guiPeerVerdict == true {
-            await orchestratorGrantStore.revokeAll(issuedBy: id)
+        if let automationGrantStore, guiPeerVerdict == true {
+            await automationGrantStore.revokeAll(issuedBy: id)
         }
         // Revoke every terminal anchor this connection bound, on the same
         // gate and for the same reason: a terminal binding's authority is the
@@ -488,7 +488,7 @@ public actor XPCConnection {
         // Re-validate provenance once (see the UDS `dispatch`). A revoked
         // session downgrades the effective principal to nil so a `.daemonWide`
         // origin-aware handler (capabilities) can't resolve using stale
-        // identity; `.session`/`.orchestratorTab` then reject via scopeCheck.
+        // identity; `.session`/`.automationTab` then reject via scopeCheck.
         // The resolved incarnation rides into the principal so a parked request
         // can't pass a later incarnation's producer gate.
         let provenanceReject: RPCError?
@@ -679,7 +679,7 @@ public actor XPCConnection {
     /// `session.authenticate` racing in on a cache-miss suspension can't
     /// scope-check under one identity while the request is handled or
     /// attributed as another. The check itself is `async` only to read live
-    /// grant state for the `.orchestratorTab` arm (against the already-fixed
+    /// grant state for the `.automationTab` arm (against the already-fixed
     /// session id); no other identity input is re-read after the snapshot.
     private func scopeCheck(
         scope: MethodScope,
@@ -708,8 +708,8 @@ public actor XPCConnection {
             }
             return nil
 
-        case .orchestratorTab:
-            // Authority is a LIVE orchestration grant, not a cached role.
+        case .automationTab:
+            // Authority is a LIVE automation grant, not a cached role.
             // The authenticated session must currently hold a grant issued
             // by the validated GUI, checked against the live store on every
             // request, so a forged role authorizes nothing, and nothing
@@ -718,7 +718,7 @@ public actor XPCConnection {
             guard let session else {
                 return RPCError(
                     code: RPCMethodError.unauthorizedCode,
-                    message: "orchestrator-scoped method requires an "
+                    message: "automation-scoped method requires an "
                         + "authenticated connection; call "
                         + "session.authenticate first"
                 )
@@ -730,15 +730,15 @@ public actor XPCConnection {
                 // rejected. Only a STABLE verdict is a real signature mismatch.
                 return validationRefusal(
                     verdictStable: verdictStable,
-                    stableMessage: "orchestrator-scoped XPC peer failed validation"
+                    stableMessage: "automation-scoped XPC peer failed validation"
                 )
             }
-            let granted = await orchestratorGrantStore?.hasGrant(session.id) ?? false
+            let granted = await automationGrantStore?.hasGrant(session.id) ?? false
             guard granted else {
                 return RPCError(
-                    code: RPCMethodError.roleViolationCode,
-                    message: "this session has no live orchestration grant; "
-                        + "open an orchestrator tab in the deviceterm GUI"
+                    code: RPCMethodError.scopeViolationCode,
+                    message: "this session has no live automation grant; "
+                        + "open an automation tab in the deviceterm GUI"
                 )
             }
             return nil
@@ -751,7 +751,7 @@ public actor XPCConnection {
             // (`app.commands` / `app.commandResult`) carries this scope.
             guard validatedGUI else {
                 // Transient identity-read failure → retryable; stable verdict →
-                // hard rejection. (See the `.orchestratorTab` arm.) This keeps a
+                // hard rejection. (See the `.automationTab` arm.) This keeps a
                 // definite-mismatch `daemon.shutdown` and the back-channel
                 // reachable across a momentary signature-read blip instead of
                 // abandoning them on the first flake.
@@ -765,13 +765,13 @@ public actor XPCConnection {
     }
 
     /// Map a failed GUI-peer verdict to an error: a STABLE verdict is a genuine
-    /// signature mismatch (hard `roleViolationCode`); an EPHEMERAL one (the
+    /// signature mismatch (hard `scopeViolationCode`); an EPHEMERAL one (the
     /// audit token couldn't be read this time, not cached) is the retryable
     /// `notReadyCode`, so a legitimate GUI re-resolves on its next request
     /// rather than being pinned to a rejection by one transient flake.
     private func validationRefusal(verdictStable: Bool, stableMessage: String) -> RPCError {
         if verdictStable {
-            return RPCError(code: RPCMethodError.roleViolationCode, message: stableMessage)
+            return RPCError(code: RPCMethodError.scopeViolationCode, message: stableMessage)
         }
         return RPCError(
             code: RPCMethodError.notReadyCode,

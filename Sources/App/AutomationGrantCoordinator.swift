@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Issues and *keeps* a session's live orchestration grant once it is
-// terminal-bound: the recoverable grant-pending lifecycle for an orchestrator
+// Issues and *keeps* a session's live automation grant once it is
+// terminal-bound: the recoverable grant-pending lifecycle for an automation
 // tab.
 //
 // A one-shot "grant after bind" is not enough: a transient validation outage
@@ -23,8 +23,8 @@ import DaemonProtocol
 import Foundation
 
 @MainActor
-final class OrchestratorGrantCoordinator {
-    private let client: any OrchestratorGranting
+final class AutomationGrantCoordinator {
+    private let client: any AutomationGranting
     private let baseBackoffNanos: UInt64
     private let maxBackoffNanos: UInt64
     /// Injectable delay; returns `false` if cancelled during the wait. Tests
@@ -52,7 +52,7 @@ final class OrchestratorGrantCoordinator {
     var generationEntryCountForTesting: Int { generation.count }
 
     init(
-        client: any OrchestratorGranting,
+        client: any AutomationGranting,
         baseBackoffNanos: UInt64 = 200_000_000,
         maxBackoffNanos: UInt64 = 5_000_000_000,
         sleep: @escaping (UInt64) async -> Bool = { nanos in
@@ -68,7 +68,7 @@ final class OrchestratorGrantCoordinator {
     /// A grant failure worth retrying: a transport drop, or the retryable
     /// `notReady` (-32002) the validated-GUI scope check returns when the peer's
     /// signature couldn't be resolved this time. Everything else, a dead
-    /// session (`invalidParams`), a stable `role_violation`, a decode error, is
+    /// session (`invalidParams`), a stable `scope_violation`, a decode error, is
     /// terminal.
     private static func isRetryable(_ error: Error) -> Bool {
         switch error {
@@ -83,13 +83,13 @@ final class OrchestratorGrantCoordinator {
         }
     }
 
-    /// The orchestrator tab's session is now terminal-bound (initial bind or a
+    /// The automation tab's session is now terminal-bound (initial bind or a
     /// reconnect rebind): (re)issue its grant, retrying transient failures until
-    /// it applies. A non-orchestrator role is a no-op: no grant, so its in-tab
+    /// it applies. A non-automation role is a no-op: no grant, so its in-tab
     /// CLI never reaches the cross-tab verbs. Re-calling supersedes any in-flight
     /// attempt for the same session.
     func sessionBound(role: SessionRole, sessionId: String) {
-        guard role == .orchestrator, let uuid = UUID(uuidString: sessionId) else { return }
+        guard role == .automation, let uuid = UUID(uuidString: sessionId) else { return }
         tasks[uuid]?.cancel()
         nextGeneration += 1
         let gen = nextGeneration
@@ -151,14 +151,14 @@ final class OrchestratorGrantCoordinator {
         var backoff = baseBackoffNanos
         while !Task.isCancelled, generation[sessionId] == gen {
             do {
-                let result = try await client.grantOrchestrator(sessionIds: [sessionId])
+                let result = try await client.grantAutomation(sessionIds: [sessionId])
                 if !result.applied {
                     // A higher `(epoch, revision)` already decided this session's
                     // grant: a reconnected connection with a newer epoch owns
                     // the reissue. Retrying can't win against a higher epoch, so
                     // stop.
                     FileHandle.standardError.write(
-                        Data("deviceterm: orchestration grant superseded by a newer connection\n".utf8)
+                        Data("deviceterm: automation grant superseded by a newer connection\n".utf8)
                     )
                 }
                 return
@@ -176,10 +176,10 @@ final class OrchestratorGrantCoordinator {
                 backoff = min(backoff * 2, maxBackoffNanos)
             } catch {
                 // Terminal: the session is gone (`invalidParams`) or the peer
-                // failed validation (`role_violation`). Retrying is pointless:
+                // failed validation (`scope_violation`). Retrying is pointless:
                 // fail closed (no grant, verbs unavailable) and stop.
                 FileHandle.standardError.write(
-                    Data("deviceterm: orchestration grant failed permanently: \(error)\n".utf8)
+                    Data("deviceterm: automation grant failed permanently: \(error)\n".utf8)
                 )
                 return
             }

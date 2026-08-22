@@ -231,12 +231,12 @@ struct DisplayTitlePublisherTests {
     }
 
     @Test
-    func stopsForGoodOnARoleViolation() async {
+    func stopsForGoodOnAScopeViolation() async {
         // The `--smoke` UDS fallback carries no audit token, which is a
         // property of how the app was launched: no reconnect changes it.
         // One refusal, then silence, not one per prompt redraw.
         let sink = TitleSink()
-        sink.failures = [DaemonClientError.daemon(code: -32_011, message: "role violation")]
+        sink.failures = [DaemonClientError.daemon(code: -32_011, message: "scope violation")]
         let publisher = makePublisher(sink)
         publisher.update(sessionId: "S1", title: "vim")
         await drain(publisher)

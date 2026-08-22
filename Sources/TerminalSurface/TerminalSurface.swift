@@ -66,7 +66,7 @@ public protocol TerminalSurface: AnyObject {
 
     /// Inject `text` into the surface as if the user had typed it.
     /// The engine routes it through its normal input pipeline
-    /// to the PTY. Powers the orchestrator-only `deviceterm tab
+    /// to the PTY. Powers the automation-only `deviceterm tab
     /// send-input` verb (the read-write side of the back-channel),
     /// and any future programmatic input surface. Throws
     /// `TerminalSurfaceError.notAttached` before `attach` has
@@ -76,7 +76,7 @@ public protocol TerminalSurface: AnyObject {
     func sendInput(_ text: String) throws
 
     /// Capture the surface's currently-visible viewport as plain
-    /// text. Powers the orchestrator-only `deviceterm tab capture`
+    /// text. Powers the automation-only `deviceterm tab capture`
     /// verb. Returns the rendered cell contents (no styling, no
     /// cursor marker) with `"\n"` separating screen rows. Throws
     /// `TerminalSurfaceError.notAttached` before `attach` has

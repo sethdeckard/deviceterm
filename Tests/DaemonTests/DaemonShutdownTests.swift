@@ -11,7 +11,7 @@ import Testing
 // terminating an incompatible old helper after a definite update-related wire
 // mismatch. These tests pin the trust rule: only a signature-validated XPC peer
 // reaches the handler (and fires the terminate trigger); every UDS caller
-// (whatever its role, capability, or orchestration grant) is refused, as is an
+// (whatever its role, capability, or automation grant) is refused, as is an
 // unvalidated or stably-invalid XPC peer. A transient validation failure is
 // fail-closed for the attempt but retryable, and never fires the trigger
 // prematurely. Capability advertising must agree with dispatch.
@@ -91,7 +91,7 @@ func daemonShutdownRefusedForStablyInvalidXPCPeer() async throws {
         Issue.record("expected refusal, got \(reply.body)")
         return
     }
-    #expect(err.code == RPCMethodError.roleViolationCode)
+    #expect(err.code == RPCMethodError.scopeViolationCode)
     // Past the ack grace: the handler never ran, so the trigger never fired.
     try await Task.sleep(nanoseconds: (DaemonMethods.shutdownAckGraceMs + 200) * 1_000_000)
     #expect(await recorder.fired == 0)
@@ -127,7 +127,7 @@ func daemonShutdownTransientValidationIsRetryableAndNeverFiresPrematurely() asyn
     setupClient(clientPair, replyBox: replyBox)
 
     // First attempt: ephemeral `.unavailable` verdict → the RETRYABLE
-    // `notReadyCode` (not a hard `roleViolationCode`), and it is NOT cached, so a
+    // `notReadyCode` (not a hard `scopeViolationCode`), and it is NOT cached, so a
     // later attempt re-resolves. The GUI client's `request()` retries this code,
     // so a momentary signature-read blip doesn't abandon the shutdown.
     sendRequest(envelopeId: 1, method: RPCMethod.daemonShutdown.rawValue, client: clientPair)
@@ -137,7 +137,7 @@ func daemonShutdownTransientValidationIsRetryableAndNeverFiresPrematurely() asyn
         return
     }
     #expect(err.code == RPCMethodError.notReadyCode)
-    #expect(err.code != RPCMethodError.roleViolationCode)
+    #expect(err.code != RPCMethodError.scopeViolationCode)
     #expect(await recorder.fired == 0)  // never fired on the refused attempt
 
     // Second attempt: the validator is now stable-production → authorized.
@@ -150,9 +150,9 @@ func daemonShutdownTransientValidationIsRetryableAndNeverFiresPrematurely() asyn
     #expect(fired)
 }
 
-// MARK: - 2 & 3. Refused over UDS for every role (unauth / agent / orchestrator)
+// MARK: - 2 & 3. Refused over UDS for every role (unauth / agent / automation)
 
-@Test(arguments: [nil, SessionRole.agent, SessionRole.orchestrator] as [SessionRole?])
+@Test(arguments: [nil, SessionRole.agent, SessionRole.automation] as [SessionRole?])
 func daemonShutdownRefusedOverUDS(role: SessionRole?) async throws {
     let manager = SessionManager()
     var created: CreatedSession?
@@ -180,16 +180,16 @@ func daemonShutdownRefusedOverUDS(role: SessionRole?) async throws {
         Issue.record("expected daemon.shutdown refused over UDS; got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }
 
-// MARK: - 4. An orchestration grant does not authorize shutdown
+// MARK: - 4. An automation grant does not authorize shutdown
 
 @Test
-func daemonShutdownRefusedForGrantedOrchestratorOverUDS() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
-    let created = try await manager.createSession(label: nil, role: .orchestrator)
+func daemonShutdownRefusedForGrantedAutomationOverUDS() async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil, role: .automation)
     await grants.grant(
         sessionIds: [created.state.id],
         key: GrantOrderingKey(epoch: 1, revision: 1),
@@ -213,7 +213,7 @@ func daemonShutdownRefusedForGrantedOrchestratorOverUDS() async throws {
     }
     // `.validatedGUI` is refused over UDS by construction. Grants are never
     // consulted for it.
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }
 
 // MARK: - 7. Capabilities advertises shutdown only where dispatch allows it
@@ -245,7 +245,7 @@ func daemonShutdownAdvertisedToValidatedGUIXPCPeer() async throws {
     #expect(advertised.allowedMethods.contains(RPCMethod.daemonShutdown.rawValue))
 }
 
-@Test(arguments: [nil, SessionRole.agent, SessionRole.orchestrator] as [SessionRole?])
+@Test(arguments: [nil, SessionRole.agent, SessionRole.automation] as [SessionRole?])
 func daemonShutdownOmittedFromCapabilitiesOverUDS(role: SessionRole?) async throws {
     let manager = SessionManager()
     var created: CreatedSession?

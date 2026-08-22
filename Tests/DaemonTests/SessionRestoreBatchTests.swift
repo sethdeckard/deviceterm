@@ -71,14 +71,14 @@ func reinsertDuringTeardownRevokesBeforeRegistering() async throws {
     // teardown of incarnation G is parked mid-transition; a NEWER restore
     // reinserts the SAME UUID (G+1) while G's teardown is in flight; on release,
     // G's revoke must complete BEFORE G+1's registration, so the reinserted
-    // incarnation never inherits G's orchestrator grant and becomes ready only
+    // incarnation never inherits G's automation grant and becomes ready only
     // at G+1.
-    let grantStore = OrchestratorGrantStore()
+    let grantStore = AutomationGrantStore()
     let broker = EventBroker()
     let manager = SessionManager(
         eventBroker: broker,
         startsPendingRestoration: true,
-        orchestratorGrantStore: grantStore
+        automationGrantStore: grantStore
     )
     await manager.setPaneRevoker { _ in }
 
@@ -534,10 +534,10 @@ func anOlderRestoreTailDoesNotRegisterASessionANewerRestoreReaped() async throws
     // reap: it must NOT register the now-dead session in the grant store. Pins
     // the generation-safe async tail against the "older tail clobbers newer
     // state" hazard.
-    let grantStore = OrchestratorGrantStore()
+    let grantStore = AutomationGrantStore()
     let manager = SessionManager(
         startsPendingRestoration: true,
-        orchestratorGrantStore: grantStore
+        automationGrantStore: grantStore
     )
     let alpha = entry(capability: try Capability.random(), shortId: "aaa111")
 
@@ -589,10 +589,10 @@ func aCloseRacingARestoreTailLeavesTheStoresConsistent() async throws {
     // reconcile), then release: the shared serial store chain plus the liveness
     // recheck must leave the store consistent with `sessions` (session gone,
     // revoked), not registered by a restore reconcile that ignored the close.
-    let grantStore = OrchestratorGrantStore()
+    let grantStore = AutomationGrantStore()
     let manager = SessionManager(
         startsPendingRestoration: true,
-        orchestratorGrantStore: grantStore
+        automationGrantStore: grantStore
     )
     let cap = try Capability.random()
     let sessionA = UUID()
@@ -647,10 +647,10 @@ func aRestoreDoesNotResurrectASessionClosedMidReconcile() async throws {
     // already-captured restore (still listing the id) while the close is parked.
     // The daemon must NOT resurrect the closed session, must report it absent,
     // and the store must not re-register it, even mid-close.
-    let grantStore = OrchestratorGrantStore()
+    let grantStore = AutomationGrantStore()
     let manager = SessionManager(
         startsPendingRestoration: true,
-        orchestratorGrantStore: grantStore
+        automationGrantStore: grantStore
     )
     let cap = try Capability.random()
     let sessionA = UUID()
@@ -766,10 +766,10 @@ func aRestoreParkedBeforeTheManagerDoesNotResurrectDespiteChurn() async throws {
     // the ONLY reclaim is a restore that OMITS A, and none ran, so A's tombstone
     // survives the churn. (An unsound transition-count expiry would have let the
     // churn expire the tombstone and the parked restore resurrect A.)
-    let grantStore = OrchestratorGrantStore()
+    let grantStore = AutomationGrantStore()
     let manager = SessionManager(
         startsPendingRestoration: true,
-        orchestratorGrantStore: grantStore
+        automationGrantStore: grantStore
     )
     let capA = try Capability.random()
     let sessionA = UUID()

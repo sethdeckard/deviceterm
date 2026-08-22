@@ -205,6 +205,6 @@ func setPrivateBatchOverUnvalidatedXPCRefusedWithoutMutation() async throws {
         Issue.record("unvalidated XPC setPrivateBatch must be refused; got \(envelope.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await manager.isPrivate(alpha.id) == false)
 }

@@ -14,7 +14,7 @@ import Darwin
 // `MethodRegistryScopeTests` (advertising) and the per-handler tests
 // in this directory (handler logic), these tests pin the dispatcher's
 // scope-check responsibility: `.session` methods require an
-// authenticated connection; `.orchestratorTab` and `.validatedGUI`
+// authenticated connection; `.automationTab` and `.validatedGUI`
 // methods are refused outright on this transport (UDS carries no audit
 // token); `.daemonWide` methods work regardless. The CLI never threads
 // creds. The connection's auth state is the source of truth.
@@ -65,7 +65,7 @@ func daemonWideMethodWorksWithoutAuth() async throws {
     defer { client.close() }
 
     // No auth: `daemon.ping` must still respond cleanly. Confirms
-    // the dispatcher only gates .session/.orchestratorTab/.validatedGUI
+    // the dispatcher only gates .session/.automationTab/.validatedGUI
     // scopes, not .daemonWide ones; out-of-tab `deviceterm tabs list` /
     // `deviceterm version` work for stock-terminal callers.
     try client.send(
@@ -207,23 +207,23 @@ func authenticateReplacesPriorAuthState() async throws {
     }
 }
 
-// MARK: - Orchestrator scope over UDS
+// MARK: - Automation scope over UDS
 //
-// An UNGRANTED session (whatever role it holds) cannot reach orchestrator
-// scope over UDS. Authority is a live orchestration grant, not the cap and not
+// An UNGRANTED session (whatever role it holds) cannot reach automation
+// scope over UDS. Authority is a live automation grant, not the cap and not
 // the role: the cap is deliberately readable by every child process in the tab
-// (so it can't prove orchestrator authority on its own), and the role is
+// (so it can't prove automation authority on its own), and the role is
 // descriptive metadata. So an authenticated-but-ungranted UDS caller is refused
-// at the scope check with `role_violation`, exactly as it would be over XPC.
+// at the scope check with `scope_violation`, exactly as it would be over XPC.
 // The complementary GRANTED-session positive path (a UDS caller inside a
-// granted tab DOES reach the surface) lives in `OrchestratorGrantUDSScopeTests`;
+// granted tab DOES reach the surface) lives in `AutomationGrantUDSScopeTests`;
 // these two pin the refusal half: that neither role opens the surface without
 // a grant.
 
 @Test
-func orchestratorScopeRejectedOverUDSEvenWithOrchestratorRole() async throws {
+func automationScopeRejectedOverUDSEvenWithAutomationRole() async throws {
     let manager = SessionManager()
-    let created = try await manager.createSession(label: nil, role: .orchestrator)
+    let created = try await manager.createSession(label: nil, role: .automation)
     let path = tempSocketPath(prefix: "deviceterm-cxn-orch")
     let server = try await startServer(path: path, sessionManager: manager)
     defer { Task { await server.stop() } }
@@ -246,18 +246,18 @@ func orchestratorScopeRejectedOverUDSEvenWithOrchestratorRole() async throws {
     guard case let .error(error) = response.body else {
         Issue.record(
             """
-            an ungranted orchestrator-role session reached a handler over \
+            an ungranted automation-role session reached a handler over \
             UDS; the live-grant check is the only thing standing between a \
             tab-readable cap and cross-tab input
             """
         )
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }
 
 @Test
-func orchestratorScopeRejectedOverUDSWithAgentRole() async throws {
+func automationScopeRejectedOverUDSWithAgentRole() async throws {
     // Same rejection for an agent-role session. Authority is the grant,
     // not the role, so an ungranted session of either role is refused.
     let manager = SessionManager()
@@ -282,8 +282,8 @@ func orchestratorScopeRejectedOverUDSWithAgentRole() async throws {
         )
     let response = try client.receive()
     guard case let .error(error) = response.body else {
-        Issue.record("expected .error for agent-role orchestrator call")
+        Issue.record("expected .error for agent-role automation call")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
 }

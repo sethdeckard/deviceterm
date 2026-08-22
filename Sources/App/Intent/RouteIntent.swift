@@ -60,10 +60,10 @@ enum RouteIntent: Sendable, Equatable {
     /// Open a new tab in a target window (`nil` = the caller's own window
     /// via the origin-aware `.current`, not the human's key window).
     /// `role` mirrors the locked refinement: `.agent` for the
-    /// standard path; `.orchestrator` only when the caller is the
-    /// menu's "Open Orchestrator Tab" item (the CLI never emits
-    /// `.orchestrator` here). `cmd` is the orchestrator-only initial
-    /// command: present only on orchestrator-issued intents.
+    /// standard path; `.automation` only when the caller is the
+    /// menu's "Open Automation Tab" item (the CLI never emits
+    /// `.automation` here). `cmd` is the automation-only initial
+    /// command: present only on automation-issued intents.
     case openTab(
         inWindow: WindowRef?,
         role: SessionRole,
@@ -165,7 +165,7 @@ enum RouteIntent: Sendable, Equatable {
     // MARK: - Grant-gated cross-tab read/write
 
     /// Write `text` into the resolved tab's terminal as though the
-    /// user had typed it. Authorized by a live orchestration grant, not
+    /// user had typed it. Authorized by a live automation grant, not
     /// a role; the dispatcher's scope check rejects an ungranted caller
     /// before this intent is constructed. The GUI's `IntentActionDelegate`
     /// receives the resolved (window, tab, text) triple and writes
@@ -180,7 +180,7 @@ enum RouteIntent: Sendable, Equatable {
         )
 
     /// Read the resolved tab's currently-visible viewport as plain
-    /// text. Authorized by a live orchestration grant, not a role.
+    /// text. Authorized by a live automation grant, not a role.
     /// Dispatcher resolves the ref, asks `IntentActionDelegate.captureTab`
     /// for the text, and returns a `.data(.tabCapture(...))`
     /// payload the CLI prints to stdout.

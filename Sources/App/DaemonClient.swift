@@ -192,7 +192,7 @@ private enum DaemonTransport {
 }
 
 @MainActor
-final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGranting,
+final class DaemonClient: SessionControlling, DeviceControlling, AutomationGranting,
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,
     PaneAccessibilityControlling, PaneLocationControlling,
     AppCommandControlling, TerminalBinding,
@@ -351,7 +351,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// server-side with the connection epoch so a same-connection retry with a
     /// changed inventory strictly dominates the earlier attempt. Never rewinds.
     private var restoreRevision = 0
-    /// Monotonic per-send revision shared by `orchestrator.grant` and
+    /// Monotonic per-send revision shared by `automation.grant` and
     /// `.revoke`, paired server-side with the connection epoch for
     /// `(epoch, revision)` last-write-wins ordering. Grant and revoke draw from
     /// the SAME counter so a later revoke always dominates an earlier grant (and
@@ -1199,7 +1199,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// a tab's terminal-pane sessions, subject to daemon-side
     /// `(epoch, revision)` last-write-wins. `.validatedGUI`-scoped, so no
     /// cap on the wire; over the `--smoke` UDS fallback the daemon refuses
-    /// it with `roleViolation`. Returns `SessionSetPrivateBatchResult`
+    /// it with `scopeViolation`. Returns `SessionSetPrivateBatchResult`
     /// `{applied, revision, isPrivate}`. `applied: false` means the batch
     /// was stale (a higher-key write won) and nothing mutated.
     func setPrivateBatch(
@@ -1224,7 +1224,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// only when it says something `name` does not; readers fall back to
     /// `name` otherwise. `.validatedGUI`-scoped, so no cap on the wire;
     /// over the `--smoke` UDS fallback the daemon refuses it with
-    /// `roleViolation` and the publisher stops.
+    /// `scopeViolation` and the publisher stops.
     ///
     /// The title is normalized here as well as daemon-side: an OSC title is
     /// unbounded caller-controlled text, and bounding it before encoding
@@ -1241,20 +1241,20 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
         _ = try await request(method: .sessionSetDisplayTitle, params: params)
     }
 
-    /// `orchestrator.grant`: `.validatedGUI`-scoped (the GUI's audit token is
+    /// `automation.grant`: `.validatedGUI`-scoped (the GUI's audit token is
     /// the authority; no cap on the wire). Stamps a fresh monotonic revision
     /// per send so the daemon's `(epoch, revision)` ordering can reject a stale
     /// retry; callers never manage the revision. Issued after a terminal binds
     /// (and reissued on reconnect once it rebinds), so the grant rests on a
     /// live, terminal-bound session an in-tab CLI can authenticate as.
     @discardableResult
-    func grantOrchestrator(sessionIds: [UUID]) async throws -> OrchestratorGrantResult {
+    func grantAutomation(sessionIds: [UUID]) async throws -> AutomationGrantResult {
         grantRevision += 1
         let params = try JSONEncoder().encode(
-            OrchestratorGrantParams(sessionIds: sessionIds, revision: grantRevision)
+            AutomationGrantParams(sessionIds: sessionIds, revision: grantRevision)
         )
-        let data = try await request(method: .orchestratorGrant, params: params)
-        return try decode(OrchestratorGrantResult.self, data)
+        let data = try await request(method: .automationGrant, params: params)
+        return try decode(AutomationGrantResult.self, data)
     }
 
     /// Re-supply the daemon's COMPLETE session inventory after a daemon-only
@@ -1262,7 +1262,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// token is the authority, so no cap rides as a separate factor (the bearer
     /// cap inside each entry is what the daemon re-derives the verifier from).
     /// Over the `--smoke` UDS fallback the daemon refuses it with
-    /// `roleViolation`; the caller treats a refusal as "restore unsupported on
+    /// `scopeViolation`; the caller treats a refusal as "restore unsupported on
     /// this transport" (daemon-restart recovery is an XPC-only feature).
     func restoreBatch(sessions: [RestoredSession]) async throws -> SessionRestoreBatchResult {
         // Allocate a fresh, monotonically increasing revision per SEND (each
@@ -1407,7 +1407,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
     /// helper that restarted, preserving a live session attribution where one
     /// exists. `.validatedGUI`-scoped, so no cap rides on
     /// the wire; over the `--smoke` UDS fallback the daemon refuses it with
-    /// `roleViolation`, the same transport limit `restoreBatch` has.
+    /// `scopeViolation`, the same transport limit `restoreBatch` has.
     func restoreOwnership(
         devices: [RestoredSimOwnership]
     ) async throws -> DeviceRestoreOwnershipResult {
@@ -1941,7 +1941,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             && method != .sessionPrivacySnapshot
             && method != .sessionRestoreBatch
             && method != .sessionSetDisplayTitle
-            && method != .orchestratorGrant {
+            && method != .automationGrant {
             // The connection was re-established (daemon respawn / XPC
             // interruption) so the daemon-side `RPCConnection` is fresh
             // and unauthenticated: every session-scoped call now -32001s
@@ -1965,7 +1965,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, OrchestratorGra
             // propagate so the Router allocates a fresh revision for any
             // retry.
             //
-            // `orchestrator.grant` is excluded for the same reason: it is
+            // `automation.grant` is excluded for the same reason: it is
             // `.validatedGUI` and carries a monotonic `revision`, so a silent
             // resend would replay a stale key. It stamps a fresh revision on
             // each explicit send and is reissued naturally on reconnect once the

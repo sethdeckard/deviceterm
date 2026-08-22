@@ -60,17 +60,17 @@ the live-simulator track (`make test-live`), but human-perceptible
 smoothness isn't: it depends on display refresh, GPU pipeline, and the
 viewer's eyes.
 
-## 4. Production-build orchestrator gate
+## 4. Production-build automation gate
 
 **Setup.** Build a Developer-ID-signed + notarized + stapled
 bundle via `scripts/build-release.sh`. Install on a clean
 machine.
 
-**Action.** Open an orchestrator tab via Shell → Open
-Orchestrator Tab.
+**Action.** Open an automation tab via Shell → Open
+Automation Tab.
 
-**Expected.** The orchestrator tab opens. Inside it,
-`echo $DEVICETERM_SESSION_ROLE` prints `orchestrator`.
+**Expected.** The automation tab opens. Inside it,
+`echo $DEVICETERM_SESSION_ROLE` prints `automation`.
 
 **Negative case.** Re-sign the GUI bundle ad-hoc (or with a
 different developer id) and relaunch. Retry the same action.

@@ -321,9 +321,9 @@ public enum CLICommand: Equatable, Sendable {
         )
     /// `deviceterm tab send-input [--tab <ref>] [--type-delay <ms>]
     /// <text>`: write text into the resolved tab's terminal as
-    /// though the user had typed it. Authorized by a live orchestration
+    /// though the user had typed it. Authorized by a live automation
     /// grant, not a role; a caller without a grant is rejected at the
-    /// dispatcher's scope check with `error.role_violation`. `typeDelay`,
+    /// dispatcher's scope check with `error.scope_violation`. `typeDelay`,
     /// when positive, animates the injection one character at a time (for
     /// screencasts); `nil` = the instant one-shot.
     case tabSendInput(
@@ -334,7 +334,7 @@ public enum CLICommand: Equatable, Sendable {
         )
     /// `deviceterm tab capture [--tab <ref>]`: print the resolved
     /// tab's currently-visible viewport to stdout. Authorized by a live
-    /// orchestration grant, not a role. Human mode emits the raw text;
+    /// automation grant, not a role. Human mode emits the raw text;
     /// `--json` emits a `{text}` object (`TabCapturePayload`).
     case tabCapture(
         tab:
@@ -343,7 +343,7 @@ public enum CLICommand: Equatable, Sendable {
     /// `deviceterm tab set-private <true|false> [--tab <ref>]`:
     /// toggle the resolved tab's privacy flag. Defaults to the
     /// caller's tab. Owner-only on the daemon side (cap-validated);
-    /// orchestrator can't flip another tab's privacy bit.
+    /// automation can't flip another tab's privacy bit.
     case tabSetPrivate(
         tab:
         Wire.TabRef,

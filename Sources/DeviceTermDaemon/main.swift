@@ -9,7 +9,7 @@
 //      ~/Library/Application Support/deviceterm/daemon.sock).
 //   3. Construct the actors that own daemon state: SessionManager,
 //      DeviceCoordinator, PaneCoordinator, PhysicalDeviceCoordinator,
-//      OrchestratorGrantStore, and TerminalAnchorStore.
+//      AutomationGrantStore, and TerminalAnchorStore.
 //   4. Start both transports on one shared method registry: the
 //      RPCServer on the UDS path and the XPCServer on the mach service.
 //   5. Start the StatusItemController and IdleMonitor.
@@ -138,14 +138,14 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         let leasingEnabled = ProcessInfo.processInfo
             .environment[DeviceTermEnv.surfaceLeases] != "0"
         let subscriptionRegistry = PaneSubscriptionRegistry(leasingEnabled: leasingEnabled)
-        // One live orchestration-grant store, handed to the session manager.
+        // One live automation-grant store, handed to the session manager.
         // `DaemonMethods.defaultRegistry` sources the registry's store (which
         // the grant/revoke handlers write, both dispatchers' scope checks read,
         // and `daemon.capabilities` advertises from) FROM the manager, so the
         // ledger enforcement reads, the ledger the handlers mutate, and the
         // ledger close-revocation touches are the same instance by construction,
         // not merely equal by convention. Never persisted; empty at start.
-        let orchestratorGrantStore = OrchestratorGrantStore()
+        let automationGrantStore = AutomationGrantStore()
         // One live terminal-anchor store shared by the session manager
         // (register/revoke on create/close), the `session.bindTerminal`
         // handler (the validated GUI binds a session's terminal), the UDS
@@ -161,7 +161,7 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         let sessionManager = SessionManager(
             eventBroker: eventBroker,
             startsPendingRestoration: true,
-            orchestratorGrantStore: orchestratorGrantStore,
+            automationGrantStore: automationGrantStore,
             terminalAnchorStore: terminalAnchorStore
         )
         // One provenance context derived from the session manager: the store

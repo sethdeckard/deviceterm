@@ -53,17 +53,17 @@ struct CLIIntentTranslatorTests {
     }
 
     @Test
-    func translatesTabOpenClampsExternalOrchestratorToAgent() throws {
-        // The back-channel is the external path; the orchestrator role is
+    func translatesTabOpenClampsExternalAutomationToAgent() throws {
+        // The back-channel is the external path; the automation role is
         // human-only (minted only by the in-process menu). A hand-rolled
-        // UDS client that sets `role: "orchestrator"` must NOT launder an
-        // orchestrator mint through the validated GUI. The translated
+        // UDS client that sets `role: "automation"` must NOT launder an
+        // automation mint through the validated GUI. The translated
         // intent is clamped to `.agent`.
         let cmd = try makeCommand(
             kind: .tabOpen,
             params: AppCommandParams.OpenTab(
                 window: Wire.WindowRef(type: "index", value: "2"),
-                role: "orchestrator",
+                role: "automation",
                 cwd: "/tmp",
                 cmd: nil
             )

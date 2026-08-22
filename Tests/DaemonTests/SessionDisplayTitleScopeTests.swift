@@ -137,6 +137,6 @@ func setDisplayTitleOverUnvalidatedXPCRefusedWithoutCaching() async throws {
         Issue.record("unvalidated XPC setDisplayTitle must be refused; got \(envelope.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await manager.displayTitle(session.id) == nil)
 }

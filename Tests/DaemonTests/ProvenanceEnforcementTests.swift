@@ -107,7 +107,7 @@ func closedSessionDowngradesDaemonWideCapabilities() async throws {
     let harness = try await startAuthenticatedHarness(
         path: path,
         sessionManager: manager,
-        role: .orchestrator
+        role: .automation
     )
     let server = harness.server
     let client = harness.client
@@ -123,7 +123,7 @@ func closedSessionDowngradesDaemonWideCapabilities() async throws {
         )
     )
     let before = try decodeCapabilities(try client.receive())
-    #expect(before.role == .orchestrator)
+    #expect(before.role == .automation)
 
     // After close: the daemon-wide handler must NOT keep advertising the stale
     // (now-closed) principal; the effective session downgrades to nil.

@@ -22,7 +22,7 @@ import Testing
 
 @Test(
     arguments: [RPCMethod.appCommands, RPCMethod.appCommandResult],
-    [nil, SessionRole.agent, SessionRole.orchestrator] as [SessionRole?]
+    [nil, SessionRole.agent, SessionRole.automation] as [SessionRole?]
 )
 func backChannelRefusedOverUDS(method: RPCMethod, role: SessionRole?) async throws {
     let manager = SessionManager()
@@ -57,7 +57,7 @@ func backChannelRefusedOverUDS(method: RPCMethod, role: SessionRole?) async thro
         Issue.record("expected \(method.rawValue) refused over UDS; got \(response.body)")
         return
     }
-    #expect(error.code == RPCMethodError.roleViolationCode)
+    #expect(error.code == RPCMethodError.scopeViolationCode)
     // The refusal happens at the scope gate: no subscription was ever
     // installed (the eviction path never ran).
     #expect(await coord.hasSubscriber == false)

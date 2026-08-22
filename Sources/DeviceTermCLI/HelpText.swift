@@ -12,7 +12,7 @@
 // Text is wrapped to 78 columns so it reads in any 80-col terminal.
 // `render(role:)` prepends a role-aware header, so a caller can see which
 // role the daemon gave it. That header is the only role-varying part of the
-// output. The verb list is never filtered: an orchestrator-only verb like
+// output. The verb list is never filtered: an automation-only verb like
 // `tab send-input` appears in every caller's view, and a listed command may
 // still be refused because the connection lacks the required grant.
 //
@@ -71,7 +71,7 @@ public enum HelpText {
     ///
     /// The role is descriptive metadata, not an authorization summary:
     /// what a call is admitted to do follows the session's live
-    /// orchestration grant and its transport. The list below it is
+    /// automation grant and its transport. The list below it is
     /// unfiltered, so "reference" rather than "available" is the honest
     /// framing. A listed command can still be refused.
     ///
@@ -79,14 +79,14 @@ public enum HelpText {
     ///     deviceterm session" so they know the session-scoped verbs below
     ///     won't work for them; the daemon rejects them with
     ///     `unauthorized` if invoked.
-    ///   - `role: .agent` / `.orchestrator`: in-tab.
+    ///   - `role: .agent` / `.automation`: in-tab.
     public static func roleHeader(role: SessionRole?) -> String {
         switch role {
         case .agent:
             "Command reference (session role: agent)\n"
 
-        case .orchestrator:
-            "Command reference (session role: orchestrator)\n"
+        case .automation:
+            "Command reference (session role: automation)\n"
 
         case .none:
             "Command reference (no deviceterm session)\n"

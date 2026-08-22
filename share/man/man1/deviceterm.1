@@ -185,19 +185,19 @@ views, can't be reached by their refs, and are refused to
 .B tab send-input
 /
 .B tab capture
-even from an orchestrator tab. The caller's own views are unchanged, and
+even from an automation tab. The caller's own views are unchanged, and
 only a tab the caller owns a terminal in can be flipped. The value takes
 true/false, yes/no, on/off, or 1/0.
 .TP
 .B tab send-input " " [\fB--tab\fR \fIref\fR] " " [\fB--type-delay\fR \fIms\fR] " " \fItext\fR
-Requires a live orchestration grant \(em authority is the grant, not a
+Requires a live automation grant. Authority is the grant, not a
 role. Write
 .I text
 into the resolved tab's terminal as though the user had typed it. Control
 sequences (\\n, \\r, \\x03) flow through libghostty's input pipeline like
 real keypresses. A caller whose session holds no grant is rejected at the
 dispatcher's scope check with
-.BR error.role_violation .
+.BR error.scope_violation .
 The receipt reports only the byte count, never the typed text.
 .B --type-delay
 .I ms
@@ -209,7 +209,7 @@ paced text to plain commands plus a trailing newline. The delay is
 capped at 1000 ms.
 .TP
 .B tab capture " " [\fB--tab\fR \fIref\fR]
-Requires a live orchestration grant. Print the resolved tab's
+Requires a live automation grant. Print the resolved tab's
 currently-visible viewport (the rendered terminal screen) to stdout.
 Captures the visible viewport only; there are no scrollback or
 line-count flags. Human mode emits the raw text;
@@ -217,7 +217,7 @@ line-count flags. Human mode emits the raw text;
 emits a
 .B {text}
 object. A caller whose session holds no grant is rejected with
-.BR error.role_violation .
+.BR error.scope_violation .
 .TP
 .B tabs list
 List every open daemon session.

@@ -143,17 +143,19 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         )
     }
 
-    /// SF Symbol prepended to orchestrator-role tabs in the strip. The
-    /// marker signals the orchestrator role was minted by a human menu
+    /// SF Symbol prepended to automation-role tabs in the strip. The
+    /// marker signals the automation role was minted by a human menu
     /// action, so the affordance is visible without being loud. Returns
     /// nil for `.agent` (the default).
-    private static func orchestratorMarker(role: SessionRole) -> NSImageView? {
-        guard role == .orchestrator else { return nil }
-        // `key.fill` reads as "this tab was opened as an orchestrator";
-        // subtle accent tint keeps it from competing with the title.
+    private static func automationMarker(role: SessionRole) -> NSImageView? {
+        guard role == .automation else { return nil }
+        // `wand.and.rays` is the platform's own automation vocabulary. A
+        // key would read as "this opens something", which is backwards:
+        // an automation grant is exactly what a protected tab refuses.
+        // Subtle accent tint keeps it from competing with the title.
         let image = NSImage(
-            systemSymbolName: "key.fill",
-            accessibilityDescription: "Orchestrator role"
+            systemSymbolName: "wand.and.rays",
+            accessibilityDescription: "Automation tab"
         )
         let view = NSImageView()
         view.image = image
@@ -163,7 +165,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             weight: .regular
         )
         view.setContentHuggingPriority(.required, for: .horizontal)
-        view.toolTip = "Orchestrator-role tab (opened from the menu)"
+        view.toolTip = "Automation tab (opened from the menu)"
         return view
     }
 
@@ -414,16 +416,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             )
     }
 
-    /// Shell → "Open Orchestrator Tab". The product-UI path for
-    /// minting a session with `.orchestrator` role; no CLI verb
+    /// Shell → "Open Automation Tab". The product-UI path for
+    /// minting a session with `.automation` role; no CLI verb
     /// emits this. The CLI back-channel encodes role as a string;
-    /// menu emissions pass the typed `.orchestrator` enum directly.
+    /// menu emissions pass the typed `.automation` enum directly.
     @objc
-    func openOrchestratorTab(_ sender: Any?) {
+    func openAutomationTab(_ sender: Any?) {
         dispatchIntent(
             .openTab(
             inWindow: .windowID(windowID),
-            role: .orchestrator,
+            role: .automation,
             cwd: nil,
             cmd: nil
         )
@@ -615,7 +617,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// Forward an intent-layer `sendInput` to the named tab. Throws
     /// `IntentError.notFound` when the tab isn't hosted by this
     /// strip: the dispatcher relays the typed error back to the
-    /// originating CLI so an orchestrator sees "tab gone" rather
+    /// originating CLI so an automation sees "tab gone" rather
     /// than a misleading ok. Re-throws any error from the
     /// underlying VC chain (typically `TerminalSurfaceError.notAttached`
     /// when the tab's terminal couldn't bring up a surface).
@@ -912,11 +914,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     }
 
     @objc
-    func openOrchestratorTabFromMenu(_ sender: NSMenuItem) {
+    func openAutomationTabFromMenu(_ sender: NSMenuItem) {
         dispatchIntent(
             .openTab(
                 inWindow: .windowID(windowID),
-                role: .orchestrator,
+                role: .automation,
                 cwd: nil,
                 cmd: nil
             )
@@ -1166,7 +1168,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // entering the cell doesn't reflow the layout.
 
             var otherViews: [NSView] = [title]
-            if let marker = Self.orchestratorMarker(role: tab.role) {
+            if let marker = Self.automationMarker(role: tab.role) {
                 // Marker sits between the close and the title.
                 otherViews.insert(marker, at: 0)
             }

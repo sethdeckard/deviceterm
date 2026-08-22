@@ -17,7 +17,11 @@ public enum DaemonProtocolInfo {
     /// 0.3.0 adds convergent boot claims: `device.boot` carries an attempt,
     /// `shim.event` can relay the same attempt after a local-relay failure,
     /// and `device.reconcileBootClaim` retries attribution across daemon
-    /// generations. Every process speaking this version ships and updates in
-    /// the same bundle.
+    /// generations. It carries the automation vocabulary: `automation.grant`
+    /// and `automation.revoke` issue and revoke grants, and `SessionRole`
+    /// encodes its second case as `"automation"` on `session.create`,
+    /// `session.restoreBatch`, `tabs.list`, and `daemon.capabilities`, and in
+    /// the `DEVICETERM_SESSION_ROLE` the GUI injects. Every process speaking
+    /// this version ships and updates in the same bundle.
     public static let wireVersion = "0.3.0"
 }

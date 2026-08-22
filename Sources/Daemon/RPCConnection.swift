@@ -155,12 +155,12 @@ actor RPCConnection {
     /// ancestry arm's authority is the *live* chain: a harness can be orphaned
     /// while this connection stays open, and the next request has to see that.
     nonisolated private let provenanceSnapshotResolver: ProvenanceSnapshotResolver
-    /// The live orchestration-grant store the `.orchestratorTab` scope check
+    /// The live automation-grant store the `.automationTab` scope check
     /// reads on every request (the same instance the validated GUI grants into
     /// and the session close revokes from). `nil` disables the check; a
-    /// granted session then can't reach the orchestrator surface over this
+    /// granted session then can't reach the automation surface over this
     /// connection (fail closed).
-    private let orchestratorGrantStore: OrchestratorGrantStore?
+    private let automationGrantStore: AutomationGrantStore?
     private weak var server: RPCServer?
     nonisolated private let ioQueue: DispatchQueue
     nonisolated private let writeQueue: BlockingWorkQueue
@@ -192,7 +192,7 @@ actor RPCConnection {
         authValidator: AuthValidator? = nil,
         sessionProvenanceLookup: SessionProvenanceLookup? = nil,
         restorationGate: RestorationGate? = nil,
-        orchestratorGrantStore: OrchestratorGrantStore? = nil,
+        automationGrantStore: AutomationGrantStore? = nil,
         peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
         provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil
     ) {
@@ -202,7 +202,7 @@ actor RPCConnection {
         self.authValidator = authValidator
         self.sessionProvenanceLookup = sessionProvenanceLookup
         self.restorationGate = restorationGate
-        self.orchestratorGrantStore = orchestratorGrantStore
+        self.automationGrantStore = automationGrantStore
         // Resolve the peer identity once, now, while the fd is freshly
         // accepted and the peer is still connected. This caches the
         // token-validated identity of the process that established the
@@ -419,8 +419,8 @@ actor RPCConnection {
         // dispatcher reads the connection's auth state. Three rules:
         //   - `.daemonWide` → proceed regardless of auth.
         //   - `.session` → require authenticatedSession != nil.
-        //   - `.orchestratorTab` → require an authenticated session that
-        //     currently holds a live orchestration grant (the validated GUI
+        //   - `.automationTab` → require an authenticated session that
+        //     currently holds a live automation grant (the validated GUI
         //     minted it; provenance was re-checked above); see `scopeCheck`.
         //   - `.validatedGUI` → hard reject. No UDS peer carries an audit
         //     token to validate against the daemon's signature.
@@ -478,7 +478,7 @@ actor RPCConnection {
         //   - `DispatchPeerContext.current`: the broader caller-
         //     identity record. Carries transport, connectionId,
         //     and the authenticated session. New readers (the
-        //     orchestrator-mint gate, role-aware capabilities)
+        //     automation-mint gate, role-aware capabilities)
         //     consult
         //     this. UDS dispatch sets `transport: .uds` and
         //     `auditToken: nil`; the XPC dispatcher will bind the
@@ -578,8 +578,8 @@ actor RPCConnection {
     ///
     /// UDS connections can never reach `.validatedGUI`; a UDS peer carries no
     /// audit token, so it can't validate against the daemon's own signature.
-    /// `.orchestratorTab` IS reachable over UDS, but only for a session holding
-    /// a **live orchestration grant**: the grant was minted by the validated
+    /// `.automationTab` IS reachable over UDS, but only for a session holding
+    /// a **live automation grant**: the grant was minted by the validated
     /// GUI for this exact session, and the session's kernel terminal-process
     /// provenance was already proved at `session.authenticate` and re-checked
     /// once in `dispatch` (a revoked session/anchor arrives here as a nil
@@ -590,7 +590,7 @@ actor RPCConnection {
     /// principal just failed re-validation; `invalidationError` carries the
     /// specific reason in the latter case). The provenance re-check itself runs
     /// once in `dispatch`, so this is pure policy over the resolved identity.
-    /// `async` only to read live grant state for the `.orchestratorTab` arm
+    /// `async` only to read live grant state for the `.automationTab` arm
     /// against the already-fixed session id; no other identity input is re-read.
     private func scopeCheck(
         scope: MethodScope,
@@ -618,8 +618,8 @@ actor RPCConnection {
             }
             return nil
 
-        case .orchestratorTab:
-            // Authority is a LIVE orchestration grant, not a role; the same
+        case .automationTab:
+            // Authority is a LIVE automation grant, not a role; the same
             // test the XPC dispatcher applies. The session already passed the
             // per-request provenance re-check in `dispatch` (a revoked session
             // or lost terminal anchor arrives as a nil `session`), so the only
@@ -629,17 +629,17 @@ actor RPCConnection {
             guard let session else {
                 return invalidationError ?? RPCError(
                     code: RPCMethodError.unauthorizedCode,
-                    message: "orchestrator-scoped method requires an "
+                    message: "automation-scoped method requires an "
                         + "authenticated connection; call "
                         + "session.authenticate first"
                 )
             }
-            let granted = await orchestratorGrantStore?.hasGrant(session.id) ?? false
+            let granted = await automationGrantStore?.hasGrant(session.id) ?? false
             guard granted else {
                 return RPCError(
-                    code: RPCMethodError.roleViolationCode,
-                    message: "this session has no live orchestration grant; "
-                        + "open an orchestrator tab in the deviceterm GUI"
+                    code: RPCMethodError.scopeViolationCode,
+                    message: "this session has no live automation grant; "
+                        + "open an automation tab in the deviceterm GUI"
                 )
             }
             return nil
@@ -648,7 +648,7 @@ actor RPCConnection {
             // No UDS peer validates against the daemon's signature, so
             // `.validatedGUI` is unreachable over UDS by construction.
             return RPCError(
-                code: RPCMethodError.roleViolationCode,
+                code: RPCMethodError.scopeViolationCode,
                 message: "validated-GUI-scoped methods are not available "
                     + "over UDS; use the deviceterm GUI"
             )

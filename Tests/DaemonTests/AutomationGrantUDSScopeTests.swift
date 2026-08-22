@@ -6,14 +6,14 @@ import DaemonTestSupport
 import Foundation
 import Testing
 
-// The orchestrator surface (`tab.sendInput` / `tab.capture`) is reachable over
-// UDS, but ONLY for a session holding a live orchestration grant. A UDS caller
+// The automation surface (`tab.sendInput` / `tab.capture`) is reachable over
+// UDS, but ONLY for a session holding a live automation grant. A UDS caller
 // authenticates via cap + kernel terminal-process provenance, and the grant is
 // minted by the validated GUI, so cap + provenance + live grant (never a role)
 // is the authority. These run against the real UDS dispatch path so advertising
 // and enforcement are proven to agree.
 //
-// Grants can't be issued over UDS (`orchestrator.grant` is `.validatedGUI`), so
+// Grants can't be issued over UDS (`automation.grant` is `.validatedGUI`), so
 // the tests place them directly on the shared store, modelling the GUI having
 // granted the session, then drive the verbs over the wire.
 
@@ -22,7 +22,7 @@ private let liveGrantKey = GrantOrderingKey(epoch: 1, revision: 1)
 /// The handler-reached signal: `AppCommandMethods.publishVerb` returns
 /// `guiUnavailable` (-32099) when no GUI is subscribed. An error only
 /// producible PAST the scope check, so it unambiguously proves the granted
-/// call cleared the `.orchestratorTab` gate, without standing up a fake GUI.
+/// call cleared the `.automationTab` gate, without standing up a fake GUI.
 private let guiUnavailableCode = -32_099
 
 private func errorCode(_ response: RPCEnvelope) -> Int? {
@@ -55,9 +55,9 @@ private func send(
 }
 
 @Test(arguments: [RPCMethod.tabSendInput, RPCMethod.tabCapture])
-func grantedSessionReachesOrchestratorVerbOverUDS(method: RPCMethod) async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+func grantedSessionReachesAutomationVerbOverUDS(method: RPCMethod) async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     // A plain .agent session, proving the GRANT, not a role, opens the surface.
     let created = try await manager.createSession(label: nil)
     await grants.grant(sessionIds: [created.state.id], key: liveGrantKey, issuedBy: 1)
@@ -74,9 +74,9 @@ func grantedSessionReachesOrchestratorVerbOverUDS(method: RPCMethod) async throw
 }
 
 @Test
-func ungrantedSessionRefusedOrchestratorVerbOverUDS() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+func ungrantedSessionRefusedAutomationVerbOverUDS() async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)  // no grant placed
 
     let path = tempSocketPath(prefix: "deviceterm-orch-uds")
@@ -85,17 +85,17 @@ func ungrantedSessionRefusedOrchestratorVerbOverUDS() async throws {
     let client = try TestClient.connectAuthenticated(to: path, as: created)
     defer { client.close() }
 
-    // Authenticated but ungranted → hard roleViolation (creds valid, no grant).
-    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.roleViolationCode)
+    // Authenticated but ungranted → hard scopeViolation (creds valid, no grant).
+    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
-func ungrantedOrchestratorRoleRefusedOverUDS() async throws {
-    // Even an .orchestrator-ROLE session is refused with no live grant: the
+func ungrantedAutomationRoleRefusedOverUDS() async throws {
+    // Even an .automation-ROLE session is refused with no live grant: the
     // role is descriptive metadata, not authority, over UDS just as over XPC.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
-    let created = try await manager.createSession(label: nil, role: .orchestrator)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil, role: .automation)
 
     let path = tempSocketPath(prefix: "deviceterm-orch-uds")
     let server = try await startServer(path: path, sessionManager: manager)
@@ -103,15 +103,15 @@ func ungrantedOrchestratorRoleRefusedOverUDS() async throws {
     let client = try TestClient.connectAuthenticated(to: path, as: created)
     defer { client.close() }
 
-    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.roleViolationCode)
+    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
-func unauthenticatedConnectionRefusedOrchestratorVerbOverUDS() async throws {
-    // No session at all → unauthorized, not roleViolation: the connection isn't
+func unauthenticatedConnectionRefusedAutomationVerbOverUDS() async throws {
+    // No session at all → unauthorized, not scopeViolation: the connection isn't
     // just ungranted, it never authenticated.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
 
     let path = tempSocketPath(prefix: "deviceterm-orch-uds")
     let server = try await startServer(path: path, sessionManager: manager)
@@ -126,8 +126,8 @@ func unauthenticatedConnectionRefusedOrchestratorVerbOverUDS() async throws {
 func revokingGrantRefusesSameUDSSocket() async throws {
     // The grant is re-checked live on every request: revoking it mid-connection
     // closes the surface again on the already-authenticated socket.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     let sid = created.state.id
     await grants.grant(sessionIds: [sid], key: liveGrantKey, issuedBy: 1)
@@ -142,15 +142,15 @@ func revokingGrantRefusesSameUDSSocket() async throws {
 
     // Revoke with a newer key (the session is still live, just ungranted now).
     _ = await grants.revoke(sessionIds: [sid], key: GrantOrderingKey(epoch: 1, revision: 2))
-    #expect(errorCode(try send(.tabCapture, over: client, id: 2)) == RPCMethodError.roleViolationCode)
+    #expect(errorCode(try send(.tabCapture, over: client, id: 2)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
-func capabilitiesAdvertisesOrchestratorForGrantedSessionOverUDS() async throws {
+func capabilitiesAdvertisesAutomationForGrantedSessionOverUDS() async throws {
     // Advertising follows the grant on UDS too: a granted session sees the
-    // orchestrator verbs in its allowedMethods, matching what dispatch enforces.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    // automation verbs in its allowedMethods, matching what dispatch enforces.
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)
     await grants.grant(sessionIds: [created.state.id], key: liveGrantKey, issuedBy: 1)
 
@@ -177,8 +177,8 @@ func grantGivesZeroExtraPaneReachOverUDS() async throws {
     // pane OWNERSHIP (`PaneAccessPrincipal`), which never consults grant state,
     // so a granted session A still cannot drive a pane owned by session B. This
     // pins that the grant is architecturally incapable of widening pane reach.
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
     let paneCoordinator = PaneCoordinator()
     let sessionA = try await manager.createSession(label: nil)  // will be granted
     let sessionB = try await manager.createSession(label: nil)  // owns the pane
@@ -215,10 +215,10 @@ func grantGivesZeroExtraPaneReachOverUDS() async throws {
 }
 
 @Test
-func capabilitiesOmitsOrchestratorForUngrantedSessionOverUDS() async throws {
-    let grants = OrchestratorGrantStore()
-    let manager = SessionManager(orchestratorGrantStore: grants)
-    let created = try await manager.createSession(label: nil, role: .orchestrator)  // ungranted
+func capabilitiesOmitsAutomationForUngrantedSessionOverUDS() async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil, role: .automation)  // ungranted
 
     let path = tempSocketPath(prefix: "deviceterm-orch-uds")
     let server = try await startServer(path: path, sessionManager: manager)

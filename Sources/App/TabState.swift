@@ -120,14 +120,14 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// Non-empty list of terminal panes. Index 0 is the primary
     /// terminal, the one created when the tab opened and the
     /// fallback target for tab-scoped operations (tab-info `sessionId`,
-    /// sim-pane attribution, the orchestrator's `tab send-input`
+    /// sim-pane attribution, the automation's `tab send-input`
     /// destination).
     var terminals: [TerminalPaneState]
     /// Role the daemon assigned at session creation (descriptive
     /// metadata, not an authorization gate). Defaults
     /// to `.agent` for the standard tab-open path; the GUI's "Open
-    /// Orchestrator Tab" menu is the product-UI path that yields
-    /// `.orchestrator`. Immutable for the tab's lifetime; re-roleing
+    /// Automation Tab" menu is the product-UI path that yields
+    /// `.automation`. Immutable for the tab's lifetime; re-roleing
     /// requires closing and re-opening the tab through the menu. The
     /// role is tab-wide: every terminal pane inherits it at session
     /// create-time.
@@ -203,7 +203,7 @@ struct TabState: Identifiable, Equatable, Sendable {
 
     /// The primary terminal pane at index 0, always present. Tab-scoped
     /// operations (sim-pane attribution, `tab info`'s reported
-    /// session, orchestrator `send-input` default target) use this.
+    /// session, automation `send-input` default target) use this.
     var primaryTerminal: TerminalPaneState { terminals[0] }
 
     init(

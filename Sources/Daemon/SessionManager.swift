@@ -68,10 +68,10 @@ public struct SessionState: Sendable, Equatable {
     /// Role the daemon assigned at create time (descriptive metadata, not
     /// an authorization gate). Defaults to
     /// `.agent` when `session.create` omits the field. Immutable for
-    /// the session's lifetime. The GUI's "Open Orchestrator Tab"
+    /// the session's lifetime. The GUI's "Open Automation Tab"
     /// menu is the intended product-UI path for minting a fresh
-    /// `.orchestrator` session (no CLI verb emits the request).
-    /// The daemon enforces that: an orchestrator mint is refused
+    /// `.automation` session (no CLI verb emits the request).
+    /// The daemon enforces that: an automation mint is refused
     /// outright over UDS, and over XPC only after the peer's audit
     /// token validates against the daemon's own signature.
     public let role: SessionRole
@@ -403,16 +403,16 @@ public actor SessionManager {
     /// not exercise restoration; production opts into pending via
     /// `startsPendingRestoration`.
     private var restorationBarrierReleased: Bool
-    /// The orchestration-grant store is a required shared dependency (defaults
+    /// The automation-grant store is a required shared dependency (defaults
     /// to a fresh empty store). Closing a session revokes its grant before the
-    /// close completes, so an orchestration lease can never outlive the session
+    /// close completes, so an automation lease can never outlive the session
     /// it authorizes: the same authenticated socket fails its next
-    /// orchestrator call after close. This is the **single owner** of the grant
+    /// automation call after close. This is the **single owner** of the grant
     /// ledger: `DaemonMethods.defaultRegistry` sources the registry's store
     /// (which both dispatchers' scope checks and the advertiser read) FROM this
     /// manager, so the ledger the handlers write, the ledger enforcement reads,
     /// and the ledger close-revocation mutates cannot diverge.
-    let orchestratorGrantStore: OrchestratorGrantStore
+    let automationGrantStore: AutomationGrantStore
     /// The terminal-anchor store is a required shared dependency, not an
     /// optional. The manager keeps its live-session set in lockstep with
     /// `sessions` (register at create/restore, remove at close), and the
@@ -454,7 +454,7 @@ public actor SessionManager {
         isProcessAlive: @Sendable @escaping (pid_t) -> Bool = SessionManager.processIsAlive,
         eventBroker: EventBroker? = nil,
         startsPendingRestoration: Bool = false,
-        orchestratorGrantStore: OrchestratorGrantStore = OrchestratorGrantStore(),
+        automationGrantStore: AutomationGrantStore = AutomationGrantStore(),
         terminalAnchorStore: TerminalAnchorStore = TerminalAnchorStore()
     ) {
         self.now = now
@@ -462,7 +462,7 @@ public actor SessionManager {
         self.isProcessAlive = isProcessAlive
         self.eventBroker = eventBroker
         self.restorationBarrierReleased = !startsPendingRestoration
-        self.orchestratorGrantStore = orchestratorGrantStore
+        self.automationGrantStore = automationGrantStore
         self.terminalAnchorStore = terminalAnchorStore
     }
 
@@ -863,7 +863,7 @@ public actor SessionManager {
     private func runRegistration(_ id: UUID, _ incarnation: UInt64) async {
         if let hook = transitionEntryHook { await hook() }
         guard case .pendingRegistration(incarnation) = sessionPhase[id] else { return }
-        await orchestratorGrantStore.registerSession(id)
+        await automationGrantStore.registerSession(id)
         await terminalAnchorStore.registerSession(id)
         // Re-check after the store awaits: a removal may have superseded this
         // incarnation. If so, bail; the teardown enqueued after us revokes what
@@ -904,7 +904,7 @@ public actor SessionManager {
     /// skippable there.
     private func runTeardown(_ id: UUID, _ incarnation: UInt64) async {
         if let hook = transitionEntryHook { await hook() }
-        await orchestratorGrantStore.revokeForRemovedSession(id)
+        await automationGrantStore.revokeForRemovedSession(id)
         await terminalAnchorStore.revokeForRemovedSession(id)
         await paneRevoker?(id)
         await eventBroker?.finishSession(id, withFinalEvent: .sessionClosed(sessionId: id.uuidString))
@@ -977,10 +977,10 @@ public actor SessionManager {
     /// client and keeps no copy; the daemon retains only the verifier.
     ///
     /// `name` is whatever the request supplied, stored as-is;
-    /// `role` is `.agent` by default. The GUI's "Open Orchestrator
-    /// Tab" menu is the product-UI path that passes `.orchestrator`;
+    /// `role` is `.agent` by default. The GUI's "Open Automation
+    /// Tab" menu is the product-UI path that passes `.automation`;
     /// no CLI verb emits it, and the daemon refuses an
-    /// orchestrator mint that doesn't arrive over XPC from a
+    /// automation mint that doesn't arrive over XPC from a
     /// signature-validated peer. Role is immutable for the
     /// session's lifetime: no role-mutation primitive exists on
     /// the wire. Daemon assigns `shortId` via

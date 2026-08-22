@@ -1577,7 +1577,7 @@ extension AppDelegate: IntentActionDelegate {
         // Same window → strip → tab-content lookup as renameTab,
         // but throws when the window or tab isn't reachable so the
         // dispatcher relays the typed error back to the
-        // originating CLI handler (orchestrator's
+        // originating CLI handler (automation's
         // `deviceterm tab send-input` should see "tab gone" rather
         // than a misleading ok).
         guard let windowCtl = windowControllerByID[windowID],

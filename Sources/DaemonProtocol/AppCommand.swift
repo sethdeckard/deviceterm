@@ -47,13 +47,13 @@ public enum AppCommandKind: String, Codable, Sendable, CaseIterable {
     case windowsList    = "windows.list"
     /// `deviceterm tab send-input`: write into a tab's shell as
     /// though the user had typed. Grant-gated on the daemon side
-    /// (a live orchestration grant, not a role); the GUI's
+    /// (a live automation grant, not a role); the GUI's
     /// IntentDispatcher writes through to the resolved tab's terminal
     /// surface via `IntentActionDelegate`.
     case tabSendInput = "tab.sendInput"
     /// `deviceterm tab capture`: read the resolved tab's currently-
     /// visible viewport as plain text. Grant-gated on the daemon side
-    /// (a live orchestration grant, not a role); the GUI's
+    /// (a live automation grant, not a role); the GUI's
     /// IntentDispatcher reads via `IntentActionDelegate.captureTab` and
     /// returns the text as a `TabCapturePayload` on the back-channel result.
     case tabCapture = "tab.capture"
@@ -117,8 +117,8 @@ public enum AppCommandParams {
     public struct OpenTab: Codable, Sendable, Equatable {
         /// Optional window ref, encoded shape per `Wire.WindowRef`.
         public let window: Wire.WindowRef?
-        /// `"agent"` or `"orchestrator"`. Always agent over the
-        /// CLI back-channel: no CLI verb emits orchestrator. The
+        /// `"agent"` or `"automation"`. Always agent over the
+        /// CLI back-channel: no CLI verb emits automation. The
         /// field exists for menu / deep-link translators.
         public let role: String
         public let cwd: String?

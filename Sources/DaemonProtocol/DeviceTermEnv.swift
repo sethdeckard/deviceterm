@@ -30,7 +30,7 @@ public enum DeviceTermEnv {
     /// holds an already-resolved key, the fallback matches it by exact
     /// key (no shortId/name tier shadowing).
     public static let targetPane = "DEVICETERM_TARGET_PANE"
-    /// The `SessionRole` (raw string `"agent"` or `"orchestrator"`)
+    /// The `SessionRole` (raw string `"agent"` or `"automation"`)
     /// the daemon assigned to the tab's session. Injected by the GUI
     /// at tab open so the agent can introspect cheaply via shell
     /// (`echo $DEVICETERM_SESSION_ROLE`) without an RPC round-trip.

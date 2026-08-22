@@ -178,15 +178,15 @@ public enum AgentsText {
         deviceterm window focus --window 2      # bring window 2 forward
         deviceterm window close --window 2      # close window 2
 
-      Cross-tab shell control (run from an orchestrator tab):
+      Cross-tab shell control (run from an automation tab):
         deviceterm tab send-input --tab abc123 'echo hi\\n'
         # Writes the text into the resolved tab's terminal as
         # though the user had typed it. control sequences flow
         # through libghostty's input pipeline. Authorization is a
-        # live orchestration grant, not a role. Works from a tab
-        # opened via Shell > "Open Orchestrator Tab" (the GUI grants
+        # live automation grant, not a role. Works from a tab
+        # opened via Shell > "Open Automation Tab" (the GUI grants
         # that tab's session); from an ordinary agent tab it is
-        # refused (error.role_violation).
+        # refused (error.scope_violation).
         deviceterm tab send-input --tab abc123 --type-delay 45 -- 'ls\\n'
         # --type-delay <ms> animates the injection one character at a
         # time (for recording screencasts). Omit it for the instant
@@ -195,13 +195,13 @@ public enum AgentsText {
         # order. Delay is capped at 1000ms. See docs/DEMO.md for the
         # presenter-style recording workflow.
 
-      Cross-tab screen read (run from an orchestrator tab):
+      Cross-tab screen read (run from an automation tab):
         deviceterm tab capture --tab abc123 | grep error
         deviceterm tab capture --tab abc123 --json | jq -r .text
         # Returns the resolved tab's currently-visible viewport as
         # plain text. Viewport only; no scrollback or line-count
         # flags. Same grant-gated authority as send-input: works from
-        # an orchestrator tab, refused from an agent tab. The intended
+        # an automation tab, refused from an agent tab. The intended
         # pairing is: tab send-input '<cmd>\\n' then wait for the prompt and
         # tab capture to read the output.
 
@@ -320,17 +320,17 @@ public enum AgentsText {
         terminal is a hard reject.
 
       Roles
-        Two roles exist: `agent` (default) and `orchestrator`. The
+        Two roles exist: `agent` (default) and `automation`. The
         role is fixed for the session's lifetime and readable from
         `$DEVICETERM_SESSION_ROLE`. The role is descriptive metadata,
         not an authorization gate; cross-tab verbs are authorized by a
-        live orchestration grant, independently of role. `deviceterm
+        live automation grant, independently of role. `deviceterm
         help` names your role in its header but lists every verb
         regardless. A listed command may be refused because the
         connection lacks the required authorization.
 
-        An orchestrator role is minted only through the validated GUI
-        path, exposed as Shell → Open Orchestrator Tab. The daemon
+        An automation role is minted only through the validated GUI
+        path, exposed as Shell → Open Automation Tab. The daemon
         enforces that rather than trusting the caller: a mint request
         arriving over the CLI's
         socket is refused outright, and one arriving from the GUI is
@@ -351,14 +351,14 @@ public enum AgentsText {
           `pane.attach` wire method carries a relink flag that the
           shim's auto-attach sets, and the daemon forwards it
           without checking who asked.
-        - Role escalation (agent → orchestrator) — Shell → Open
-          Orchestrator Tab. The daemon refuses an orchestrator mint
+        - Role escalation (agent → automation) — Shell → Open
+          Automation Tab. The daemon refuses an automation mint
           over the CLI socket outright.
         - Privacy-mutation for someone else — a `tab set-private`
           only touches a tab the caller owns a terminal in. The GUI
           enforces that owner gate, and the atomic batch RPC behind
           it is accepted only from the signature-validated GUI peer,
-          never a raw CLI socket. Orchestrator is not special-cased.
+          never a raw CLI socket. Automation is not special-cased.
 
       Pane reach
         Panes are linked to an owning session, and the daemon
@@ -389,7 +389,7 @@ public enum AgentsText {
         running `xcrun simctl boot` creates a sim that has no
         deviceterm pane. `deviceterm panes list` won't show it.
         `deviceterm device attach <udid>` lets an agent (or
-        orchestrator) claim such an externally-booted sim into
+        automation) claim such an externally-booted sim into
         the current tab; the in-tab self-attach via shim is the
         other path.
 
@@ -418,7 +418,7 @@ public enum AgentsText {
 
         https://github.com/sethdeckard/deviceterm/blob/main/docs/INTEGRATION.md
 
-      For workspace control, orchestration grants, and event-wait
+      For workspace control, automation grants, and event-wait
       workflows, read the automation guide:
 
         https://github.com/sethdeckard/deviceterm/blob/main/docs/AUTOMATION.md
