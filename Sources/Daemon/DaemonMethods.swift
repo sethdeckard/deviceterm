@@ -430,7 +430,16 @@ public enum DaemonMethods {
             // caller's tab/pane; daemon-wide for `windows.list`
             // (out-of-tab callers see only their own windows, but
             // the verb itself doesn't need session creds).
-            RPCMethod.tabOpen.rawValue: .session(
+            //
+            // Five carry `.automationTab` instead: `tab.open`,
+            // `tab.select`, `tab.move`, `window.open`, and
+            // `window.focus` create or rearrange workspace surfaces,
+            // or change which one has focus. Selecting a tab can
+            // replace the visible tab and move terminal focus; moving
+            // one can shift other tabs' positions. Neither effect is
+            // contained to the caller's own tab, so the gate is flat
+            // and needs no target resolution.
+            RPCMethod.tabOpen.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabOpen,
                     coordinator: appCommandCoordinator
@@ -448,7 +457,7 @@ public enum DaemonMethods {
                     coordinator: appCommandCoordinator
                 )
             ),
-            RPCMethod.tabSelect.rawValue: .session(
+            RPCMethod.tabSelect.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabSelect,
                     coordinator: appCommandCoordinator
@@ -460,7 +469,7 @@ public enum DaemonMethods {
                     coordinator: appCommandCoordinator
                 )
             ),
-            RPCMethod.tabMove.rawValue: .session(
+            RPCMethod.tabMove.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabMove,
                     coordinator: appCommandCoordinator
@@ -502,7 +511,7 @@ public enum DaemonMethods {
                     coordinator: appCommandCoordinator
                 )
             ),
-            RPCMethod.windowOpen.rawValue: .session(
+            RPCMethod.windowOpen.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .windowOpen,
                     coordinator: appCommandCoordinator
@@ -514,7 +523,7 @@ public enum DaemonMethods {
                     coordinator: appCommandCoordinator
                 )
             ),
-            RPCMethod.windowFocus.rawValue: .session(
+            RPCMethod.windowFocus.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .windowFocus,
                     coordinator: appCommandCoordinator

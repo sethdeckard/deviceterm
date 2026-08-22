@@ -42,7 +42,10 @@
 //     not the role: a granted `.agent` reaches it, an ungranted
 //     `.automation` does not. Grants are issued in memory only by the
 //     validated GUI and never persisted, so a forged/rehydrated role
-//     grants nothing. `tab.send-input` and `tab.capture` carry this tag.
+//     grants nothing. `tab.send-input` and `tab.capture` carry this tag,
+//     as do the five workspace-wide verbs (`tab.open`, `tab.select`,
+//     `tab.move`, `window.open`, `window.focus`), which create or
+//     rearrange workspace surfaces or change workspace focus.
 //     Reachable over BOTH transports for a granted session: over the GUI's
 //     validated XPC connection, and over UDS from the CLI inside a granted
 //     tab (a UDS session authenticates via cap + kernel terminal-process

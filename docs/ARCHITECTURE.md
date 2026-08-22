@@ -2138,19 +2138,26 @@ of `current`, `index` (the value is the stringified index), or `keyed`.
 own tab or window, not the human's key window, and `.index` counts the
 caller-visible window projection (see "GUI command back-channel").
 
-Every verb here is session-scoped except `windows.list`, which stays
-daemon-wide.
+Most verbs here are session-scoped. `windows.list` stays daemon-wide, and
+`tab.open`, `tab.select`, `tab.move`, `window.open`, and `window.focus`
+need an automation grant, because they affect workspace structure or focus
+rather than anything inside the caller's own tab.
 
 #### `tab.open`
 
 - Params: `{window?, role, cwd?, cmd?}`
 - Result: `{ok}`
-- Scope: session
+- Scope: automation tab
 
 Opens a tab, optionally in a given window and working directory, running
 an optional command. `role` rides the wire, but the GUI translator
 forces `agent` regardless of the value; an automation tab is opened
 only from the GUI menu.
+
+A new tab is workspace structure, not something inside the caller's own
+tab, so an ungranted session is refused with `error.scope_violation`. A
+script can't bootstrap a workspace for itself; a person opens the first
+automation tab.
 
 #### `tab.close`
 
@@ -2175,9 +2182,11 @@ rename included, the GUI's `IntentDispatcher` calls an injected
 
 - Params: `{tab}`
 - Result: `{ok}`
-- Scope: session
+- Scope: automation tab
 
-Selects the resolved tab.
+Selects the resolved tab. Gated even when the target is the caller's own
+tab: selection can replace the visible tab and terminal focus in that
+window.
 
 #### `tab.info`
 
@@ -2193,7 +2202,7 @@ dispatching a Route.
 
 - Params: `{tab, toIndex?, toWindow?}`
 - Result: `{ok}`
-- Scope: session
+- Scope: automation tab
 
 Reorders a tab within its window (`toWindow` nil, `toIndex` required) or
 relocates it to a different window (`toWindow` set; a nil `toIndex`
@@ -2202,6 +2211,10 @@ as a same-window reorder and still requires `toIndex`. Cross-window
 relocation moves the tab's live view controller,
 so the GUI performs it in the AppDelegate transfer coordinator rather
 than the Router.
+
+Gated even when the target is the caller's own tab. A reorder can shift other
+tabs' positions, and `toWindow` moves the tab into what may be another agent's
+window.
 
 #### `tab.setProtected`
 
@@ -2304,7 +2317,7 @@ leaving the GUI drag as the relocation path.
 
 - Params: `{}`
 - Result: `{ok}`
-- Scope: session
+- Scope: automation tab
 
 Opens a new window.
 
@@ -2322,9 +2335,11 @@ protected tab. `mode` is `"detach"` or `"shutdown"`.
 
 - Params: `{window}`
 - Result: `{ok}`
-- Scope: session
+- Scope: automation tab
 
-Focuses the resolved window.
+Focuses the resolved window. Gated even on the caller's own window: bringing
+a window forward takes the human's attention, and which window is key is
+shared state.
 
 #### `windows.list`
 
@@ -3141,14 +3156,15 @@ events remain legitimately readable.
   not to this soft pause; this is the intentional GUI-disconnect / rebind model
   and is out of scope to harden.
 
-Two further accepted limitations sit alongside these: `device.shutdown` is
+Two further accepted limitations sit alongside these. `device.shutdown` is
 `.daemonWide` and unattributed (parity with `xcrun simctl shutdown`; UDS is
 user-scoped, so a same-uid caller can shut down any sim, a device-lifecycle
-action rather than per-tab protection state); and the back-channel's
-cross-session reach to any *unprotected* tab
-(`tab.close/select/move/rename`, `windows.list`) is the deliberate
-protected/unprotected split. `tab.sendInput`/`tab.capture` still
-additionally require an automation grant, and protected tabs stay
+action rather than per-tab protection state).
+
+And the back-channel's cross-session reach to any *unprotected* tab
+(`tab.close/rename`, `windows.list`) is the deliberate protected/unprotected
+split. `tab.sendInput` and `tab.capture` additionally require an automation
+grant, as do `tab.select` and `tab.move`, and protected tabs stay
 owner-scoped and opaque.
 
 ## UI framework boundaries

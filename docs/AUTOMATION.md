@@ -24,17 +24,31 @@ promises behind every command here are defined in
 
 ## Understand Tabs, Sessions, and Authority
 
-Authority has three tiers. Device panes are contained to the session that
-currently owns them. Workspace commands reach any unprotected tab the caller
-can see.
-Reading another tab's contents or typing into it requires a live
-automation grant that only the GUI can issue.
+Authority has three levels.
 
-The grant sits where it does because capture and input reach another
-session's contents: what its terminal shows and what runs in it. Workspace
-commands touch arrangement and lifecycle, never contents, and the structure
-of unprotected tabs is deliberately shared. A tab that should be untouchable
-opts out of every tier with [`tab set-protected`](#protect-a-tab).
+An **ordinary tab** reads the workspace and mutates what it can already
+reach: its own device panes, and any unprotected tab visible to it.
+
+Opening an **automation tab** causes the GUI to issue that tab a live grant.
+Its role stays descriptive if the grant is missing or revoked, so the tab keeps
+its name and its badge while holding no authority.
+
+The grant adds two groups: creating and arranging surfaces (`tab open`,
+`tab select`, `tab move`, `window open`, `window focus`), and reading or
+typing into another tab (`tab capture`, `tab send-input`).
+
+A **protected tab** is invisible to other sessions, and a grant does not
+reach it. Opt a tab out of everything above with
+[`tab set-protected`](#protect-a-tab).
+
+Creating and arranging surfaces is gated even when the target is your own
+tab, because the effect isn't contained to it: a reorder can shift other tabs,
+and selecting one can replace the visible tab and terminal focus in that
+window.
+
+The consequence is that a script can't open new tabs or windows for itself. An
+ordinary tab can still split itself with `pane open --terminal`; anything that
+mints a tab or a window needs a person to open the first automation tab.
 
 ### Know Your Session
 
@@ -109,6 +123,10 @@ with another terminal pane, and `window open` mints a new window holding one
 fresh tab. `--cmd` is typed into the new shell after attach, so the command
 runs once and the shell stays interactive.
 
+`tab open` and `window open` need a live automation grant, and an ordinary
+tab is refused with `error.scope_violation`. `pane open --terminal` doesn't,
+because it splits the tab the caller is already in.
+
 A success receipt means the GUI accepted the mutation for asynchronous
 processing; it does not prove the change completed, and it does not return
 the new session id. Confirm the outcome with the list commands; the event
@@ -133,10 +151,17 @@ window. `tab close` and `window close` take `--mode <detach|shutdown>` to
 decide what happens to owned Simulators, the same decision the GUI close
 prompt offers.
 
-These verbs reach any unprotected tab visible to the caller, not only your
-own. A `tab close --tab <ref>` naming another session's unprotected tab
-closes it, ending whatever was running there; protect a tab when other
-sessions should not be able to touch it.
+`tab select`, `tab move`, and `window focus` need a live automation grant,
+including when the target is your own tab. An ordinary tab is refused with
+`error.scope_violation`.
+
+`tab rename` and `tab close` don't, and they reach any unprotected tab visible
+to the caller, not only your own. A `tab close --tab <ref>` naming another
+session's unprotected tab closes it, ending whatever was running there; protect
+a tab when other sessions should not be able to touch it.
+
+`window close` needs no grant either, but it refuses a window holding a tab you
+can't see, so it can't tear down a co-hosted protected tab.
 
 `pane close` and `pane info` resolve Simulator panes only. Close a
 physical-device pane in the GUI.
@@ -207,10 +232,14 @@ reachable. Field semantics and a ready-made check are in
 Open the tab with **Shell ▸ Open Automation Tab** or ⇧⌘T.
 
 The GUI issues that tab's terminal session a live automation grant. The
-grant lives in daemon memory and is checked on every cross-tab request; it is
-revoked when the tab closes, when the issuing GUI connection is lost, or when
-the session ends. An ordinary tab receives `error.scope_violation` for
-cross-tab capture and input, and the CLI cannot grant authority to itself.
+grant lives in daemon memory and is checked on every request that needs it.
+It's revoked when the tab closes, when the issuing GUI connection is lost, or
+when the session ends.
+
+The grant covers `tab capture` and `tab send-input`, plus `tab open`,
+`tab select`, `tab move`, `window open`, and `window focus`. An ordinary tab
+receives `error.scope_violation` for all seven, and the CLI cannot grant
+authority to itself.
 
 ### Send Input to Another Tab
 

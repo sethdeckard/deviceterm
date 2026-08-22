@@ -179,9 +179,9 @@ This guide uses four scope labels:
 | Session | Live authenticated DeviceTerm terminal session |
 | Automation | Session scope plus a live automation grant issued by the GUI |
 
-A role such as `"automation"` is descriptive metadata. Cross-tab input and
-capture require a live grant, not the role string alone. Only the GUI issues
-a grant; see [`AUTOMATION.md`](AUTOMATION.md#drive-other-tabs).
+A role such as `"automation"` is descriptive metadata. The commands marked
+Automation below require a live grant, not the role string alone. Only the
+GUI issues a grant; see [`AUTOMATION.md`](AUTOMATION.md#drive-other-tabs).
 
 Protected sessions remain opaque to other callers. Lists omit protected
 sessions, panes, and ownership annotations unless the caller owns that
@@ -203,10 +203,12 @@ protected tab.
 | `dump-config --json` | Configuration report | Local | Configuration file parsed | Stable-additive |
 | `tap`, `swipe`, `app-switcher`, `long-press`, `pinch` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `button`, `key`, `text`, `rotate`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
-| `tab open`, `tab close`, `tab rename`, `tab select`, `tab move` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `tab close`, `tab rename` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `tab open`, `tab select`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
 | `pane open --terminal`, `pane close` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
 | `device attach --json` | Device attachment receipt | Session | GUI accepted the attachment; rendering may still be pending | Stable-additive |
-| `window open`, `window close`, `window focus` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `window close` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `window open`, `window focus` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab set-protected --json` | Protection receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
 | `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
 | `tab capture --json` | `{text}` | Automation | Visible viewport captured | Stable-additive |
@@ -894,8 +896,9 @@ error instead of returning a successful empty wrapper.
 
 ### Hold a Live Grant
 
-Cross-tab terminal input and capture require a live automation grant,
-checked for each request. A caller without one receives
+Seven commands require a live automation grant, checked for each request:
+`tab open`, `tab select`, `tab move`, `window open`, `window focus`,
+`tab send-input`, and `tab capture`. A caller without one receives
 `error.scope_violation`, including a caller whose environment still says its
 role is `"automation"`.
 

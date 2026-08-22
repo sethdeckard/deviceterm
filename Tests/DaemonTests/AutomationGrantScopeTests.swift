@@ -134,6 +134,45 @@ func automationRoleWithoutGrantIsRefused() async throws {
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 }
 
+/// The workspace-wide verbs, which affect workspace structure or focus rather
+/// than anything inside the caller's own tab. Duplicated from the UDS suite
+/// deliberately: each file names the set it drives, and
+/// `registryTagsExactlyTheAutomationSurface` is what pins the real one.
+private let workspaceWideMethods: [RPCMethod] = [
+    .tabOpen, .tabSelect, .tabMove, .windowOpen, .windowFocus
+]
+
+@Test(arguments: workspaceWideMethods)
+func workspaceVerbGatedByLiveGrantOverXPC(method: RPCMethod) async throws {
+    // Both halves of the matrix over the real registry and the real XPC
+    // dispatch path: refused for an ordinary tab, reached once the grant
+    // lands. Driving the same authenticated socket for both proves the grant
+    // is read per request rather than cached at authentication.
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil)
+    let server = defaultRegistryServer(manager: manager)
+    let (listener, clientPair) = makeAnonymousPair()
+    let replyBox = ReplyBox()
+    await server.bind(listener: listener)
+    defer { Task { await server.stop() } }
+    setupClient(clientPair, replyBox: replyBox)
+    try await authenticate(created, client: clientPair, replyBox: replyBox)
+
+    sendRequest(envelopeId: 2, method: method.rawValue, params: Data("{}".utf8), client: clientPair)
+    #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
+
+    // Granted → past the gate and into the handler, which reports
+    // guiUnavailable (-32099) with no GUI subscribed.
+    await grants.grant(
+        sessionIds: [created.state.id],
+        key: GrantOrderingKey(epoch: 1, revision: 1),
+        issuedBy: 1
+    )
+    sendRequest(envelopeId: 3, method: method.rawValue, params: Data("{}".utf8), client: clientPair)
+    #expect(try errorCode(try await replyBox.awaitReply()) == -32_099)
+}
+
 @Test
 func grantForNonLiveSessionIsRejected() async throws {
     let grants = AutomationGrantStore()
@@ -419,7 +458,7 @@ func daemonRestartBeginsWithNoGrants() async {
 
 // MARK: - Capability advertising matches the grant matrix
 
-private func capabilitiesServer(manager: SessionManager) -> XPCServer {
+private func defaultRegistryServer(manager: SessionManager) -> XPCServer {
     let registry = DaemonMethods.defaultRegistry(
         sessionManager: manager,
         deviceCoordinator: DeviceCoordinator(),
@@ -465,11 +504,14 @@ func capabilitiesAdvertisesAutomationForGrantedAgentOverXPC() async throws {
     let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil)  // .agent
     await grants.grant(sessionIds: [created.state.id], key: GrantOrderingKey(epoch: 1, revision: 1), issuedBy: 1)
-    let server = capabilitiesServer(manager: manager)
+    let server = defaultRegistryServer(manager: manager)
     defer { Task { await server.stop() } }
     let methods = try await advertisedMethods(for: created, server: server)
     #expect(methods.contains(RPCMethod.tabCapture.rawValue))
     #expect(methods.contains(RPCMethod.tabSendInput.rawValue))
+    for method in workspaceWideMethods {
+        #expect(methods.contains(method.rawValue))
+    }
 }
 
 @Test
@@ -479,9 +521,12 @@ func capabilitiesOmitsAutomationForUngrantedAutomationOverXPC() async throws {
     let grants = AutomationGrantStore()
     let manager = SessionManager(automationGrantStore: grants)
     let created = try await manager.createSession(label: nil, role: .automation)
-    let server = capabilitiesServer(manager: manager)
+    let server = defaultRegistryServer(manager: manager)
     defer { Task { await server.stop() } }
     let methods = try await advertisedMethods(for: created, server: server)
     #expect(!methods.contains(RPCMethod.tabCapture.rawValue))
     #expect(!methods.contains(RPCMethod.tabSendInput.rawValue))
+    for method in workspaceWideMethods {
+        #expect(!methods.contains(method.rawValue))
+    }
 }

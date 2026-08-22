@@ -19,6 +19,14 @@ import Testing
 
 private let liveGrantKey = GrantOrderingKey(epoch: 1, revision: 1)
 
+/// The workspace-wide verbs. They create or rearrange workspace surfaces or
+/// change which one has focus, so they need the same live grant
+/// `tab.sendInput`/`tab.capture` do. The scope gate runs before target
+/// resolution, so the refusal never depends on which tab is named.
+private let workspaceWideMethods: [RPCMethod] = [
+    .tabOpen, .tabSelect, .tabMove, .windowOpen, .windowFocus
+]
+
 /// The handler-reached signal: `AppCommandMethods.publishVerb` returns
 /// `guiUnavailable` (-32099) when no GUI is subscribed. An error only
 /// producible PAST the scope check, so it unambiguously proves the granted
@@ -71,6 +79,39 @@ func grantedSessionReachesAutomationVerbOverUDS(method: RPCMethod) async throws 
     // Reaches the handler (no GUI subscribed → guiUnavailable), which is only
     // reachable past the scope gate.
     #expect(errorCode(try send(method, over: client)) == guiUnavailableCode)
+}
+
+@Test(arguments: workspaceWideMethods)
+func grantedSessionReachesWorkspaceVerbOverUDS(method: RPCMethod) async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil)
+    await grants.grant(sessionIds: [created.state.id], key: liveGrantKey, issuedBy: 1)
+
+    let path = tempSocketPath(prefix: "deviceterm-orch-uds")
+    let server = try await startServer(path: path, sessionManager: manager)
+    defer { Task { await server.stop() } }
+    let client = try TestClient.connectAuthenticated(to: path, as: created)
+    defer { client.close() }
+
+    #expect(errorCode(try send(method, over: client)) == guiUnavailableCode)
+}
+
+@Test(arguments: workspaceWideMethods)
+func ungrantedSessionRefusedWorkspaceVerbOverUDS(method: RPCMethod) async throws {
+    // Authentication succeeds without a grant; the scope gate must still
+    // refuse the request.
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let created = try await manager.createSession(label: nil)
+
+    let path = tempSocketPath(prefix: "deviceterm-orch-uds")
+    let server = try await startServer(path: path, sessionManager: manager)
+    defer { Task { await server.stop() } }
+    let client = try TestClient.connectAuthenticated(to: path, as: created)
+    defer { client.close() }
+
+    #expect(errorCode(try send(method, over: client)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
@@ -168,6 +209,9 @@ func capabilitiesAdvertisesAutomationForGrantedSessionOverUDS() async throws {
     let allowed = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: bytes).allowedMethods
     #expect(allowed.contains(RPCMethod.tabSendInput.rawValue))
     #expect(allowed.contains(RPCMethod.tabCapture.rawValue))
+    for method in workspaceWideMethods {
+        #expect(allowed.contains(method.rawValue))
+    }
 }
 
 @Test
@@ -234,4 +278,9 @@ func capabilitiesOmitsAutomationForUngrantedSessionOverUDS() async throws {
     let allowed = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: bytes).allowedMethods
     #expect(!allowed.contains(RPCMethod.tabSendInput.rawValue))
     #expect(!allowed.contains(RPCMethod.tabCapture.rawValue))
+    // `allowedMethods` reports the connection's callable surface, so it
+    // must omit verbs the dispatcher will refuse.
+    for method in workspaceWideMethods {
+        #expect(!allowed.contains(method.rawValue))
+    }
 }

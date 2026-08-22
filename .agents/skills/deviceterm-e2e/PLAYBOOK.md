@@ -1,10 +1,16 @@
 # deviceterm E2E playbook
 
 Neutral, tool-agnostic instructions for an agent running **inside a deviceterm
-tab** that has been asked to end-to-end test **deviceterm itself** — its own
-AppKit GUI (window/tab/pane chrome, status item, modal prompts, device picker),
-not just the CLI/daemon contract. The Claude and Codex `SKILL.md` files point
-here; this is the single source of truth.
+Automation Tab** that has been asked to end-to-end test **deviceterm itself** —
+its own AppKit GUI (window/tab/pane chrome, status item, modal prompts, device
+picker), not just the CLI/daemon contract. The Claude and Codex `SKILL.md` files
+point here; this is the single source of truth.
+
+An ordinary tab is not enough. The scenarios open, select, and move tabs and
+windows, and those verbs require a live automation grant that only the GUI
+issues, when a person opens an Automation Tab (Shell > Open Automation Tab,
+⇧⌘T). Closing a tab or window still needs no grant. Preflight checks for the
+grant, so you will find out before a scenario does.
 
 ## The mental model
 
@@ -84,8 +90,18 @@ photographed, and multi-monitor setups are a non-issue.
 
 Run `.agents/skills/deviceterm-e2e/helpers/preflight.sh` to **check** the
 environment — the agent verifies, it does not provision. It passes only when all
-three hold: the harness resident is up **and** holds both TCC grants, deviceterm
-is running, and deviceterm reports at least one window.
+four hold: the harness resident is up **and** holds both TCC grants, deviceterm
+is running, deviceterm reports at least one window, and your host tab holds a
+live automation grant.
+
+The grant gate reads `deviceterm doctor --json` and looks for `tab.capture` in
+`allowedMethods`. It ignores `$DEVICETERM_SESSION_ROLE`, because the role string
+survives a grant that never landed or was revoked, so it would pass in a tab
+that cannot actually run the scenarios.
+
+`tab.capture` is a probe, not a verb any scenario uses. Probing one of the
+workspace verbs would make the gate depend on the same scope tagging it exists
+to check, so a verb tagged wrong would report a grant this tab doesn't hold.
 
 **If preflight fails, stop and hand off to the operator — do not try to fix it
 yourself.** Setup is a one-time human prerequisite, not part of a run:
@@ -100,6 +116,11 @@ yourself.** Setup is a one-time human prerequisite, not part of a run:
     and complete the one-time grant (it reveals the app + opens the panes).
   - **No window** → ask them to reopen deviceterm on an unlocked display
     (a locked/asleep screen makes libghostty launch it window-less).
+  - **No automation grant** → ask them to open an Automation Tab (Shell > Open
+    Automation Tab, ⇧⌘T) and rerun the skill from it. Like the TCC grants, this
+    is a human action with no agent-side path: the daemon refuses a grant
+    request from anything but the signature-validated GUI, so you cannot mint
+    one for yourself.
 
 Only proceed to scenarios once preflight passes clean. A green preflight is your
 guarantee the harness can actually observe — never run scenarios past a failing
@@ -205,6 +226,11 @@ The pill roles are worth knowing for assertions other than counting:
 **Read selection from `value`, not `focused`.** `focused` is `false` on every
 pill including the selected one, so a `focused` predicate silently matches
 nothing.
+
+**Your own pill carries an automation badge.** Every automation-role tab's pill
+shows a `wand.and.rays` marker that agent-role tabs don't have, and you run from
+one. The badge publishes no `deviceterm.tab.` identifier, so counting is
+unaffected, but a pixel comparison of the strip will show it.
 
 **Don't cross-check a pill's `title` against the CLI's `displayTitle`.** They
 are not the same value and are not read at the same moment, so they disagree for

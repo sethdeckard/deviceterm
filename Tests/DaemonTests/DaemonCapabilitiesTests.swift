@@ -156,6 +156,17 @@ func capabilitiesWithAgentCredsOmitsAutomationMethods() async throws {
     #expect(!response.allowedMethods.contains(RPCMethod.tabCapture.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.tabSendInput.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.sessionSetProtectedBatch.rawValue))
+    // The workspace-wide verbs sit behind the same grant, so an ungranted
+    // tab isn't advertised them either. What it keeps is the daemon-wide
+    // and session-scoped surface.
+    #expect(!response.allowedMethods.contains(RPCMethod.tabOpen.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.tabSelect.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.tabMove.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.windowOpen.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.windowFocus.rawValue))
+    #expect(response.allowedMethods.contains(RPCMethod.tabClose.rawValue))
+    #expect(response.allowedMethods.contains(RPCMethod.tabRename.rawValue))
+    #expect(response.allowedMethods.contains(RPCMethod.paneOpenTerminal.rawValue))
 }
 
 @Test

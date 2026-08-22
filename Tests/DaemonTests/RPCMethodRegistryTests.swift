@@ -20,3 +20,23 @@ func registryKeysMatchRPCMethodCases() {
     )
     #expect(Set(registry.methodNames) == Set(RPCMethod.allCases.map(\.rawValue)))
 }
+
+@Test
+func registryTagsExactlyTheAutomationSurface() {
+    // Which verbs need a live automation grant is a closed set, pinned
+    // here so one can't be added or dropped as a side effect. Two groups:
+    // verbs that create or rearrange workspace surfaces or change focus,
+    // plus two terminal-content verbs. All seven are gated before target
+    // resolution.
+    let registry = DaemonMethods.defaultRegistry(
+        sessionManager: SessionManager(),
+        deviceCoordinator: DeviceCoordinator(),
+        paneCoordinator: PaneCoordinator()
+    )
+    let tagged = registry.methodNames.filter { registry.scope(of: $0) == .automationTab }
+    let expected: [RPCMethod] = [
+        .tabOpen, .tabSelect, .tabMove, .windowOpen, .windowFocus,
+        .tabSendInput, .tabCapture
+    ]
+    #expect(Set(tagged) == Set(expected.map(\.rawValue)))
+}

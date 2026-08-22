@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # preflight.sh — fail loud before any E2E scenario runs.
 #
-# The three things a false pass hides: the harness resident isn't running,
-# it lacks its TCC grants (so capture/drive silently error), or deviceterm
-# isn't up with a real window. Check all three here so a scenario never
-# "passes" against a machine that couldn't have observed anything.
+# The four things a false pass hides: the harness resident isn't running,
+# it lacks its TCC grants (so capture/drive silently error), deviceterm
+# isn't up with a real window, or the host tab holds no automation grant
+# (so every scenario that opens or arranges a surface is refused). Check
+# all four here so a scenario never "passes" against a machine that
+# couldn't have observed anything.
 #
 # Prints a one-line status per check and exits non-zero on the first
 # failure, echoing the exact remediation. Run it from the repo root.
@@ -82,6 +84,30 @@ else
     # daemon — surface its own message so the cause is unambiguous.
     cat /tmp/dt-e2e-windows.err >&2
     fail "couldn't list windows — deviceterm's GUI isn't running (or its daemon back-channel isn't up yet); run 'make run', then retry"
+fi
+
+# 4. The host tab holds a live automation grant. Scenarios open, select,
+#    and move tabs and windows, and those verbs need a grant that only
+#    the GUI issues. Check `allowedMethods`, NOT
+#    $DEVICETERM_SESSION_ROLE: the role is descriptive metadata that
+#    survives a grant that never landed or was revoked, which is exactly
+#    the false pass this file exists to prevent. `allowedMethods` is
+#    derived from the live grant, so it can't lie.
+#
+#    Probe with `tab.capture`, which no scenario runs. Probing a
+#    workspace verb the scenarios do run would make this gate depend on
+#    the same scope tagging it exists to check, so a verb tagged wrong
+#    would report a grant this tab does not hold.
+#
+#    `doctor` exits non-zero when any of its own checks fail, for reasons
+#    that have nothing to do with authority, so read the report rather
+#    than the exit status. Gate 3 already proved the daemon and GUI are
+#    up, so an absent `tab.capture` here means no grant.
+dt doctor --json >/tmp/dt-e2e-cli-doctor.json 2>/tmp/dt-e2e-cli-doctor.err || true
+if grep -q '"tab\.capture"' /tmp/dt-e2e-cli-doctor.json; then
+    ok "host tab holds a live automation grant"
+else
+    fail "host tab holds no automation grant — open an Automation Tab (Shell > Open Automation Tab, ⇧⌘T) and rerun the skill from it"
 fi
 
 echo "preflight ok — scenarios may run."

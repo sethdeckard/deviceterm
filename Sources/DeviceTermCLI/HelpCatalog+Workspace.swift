@@ -13,14 +13,14 @@ extension HelpCatalog {
             summary: "Open, close, rename, move, or drive a tab",
             detail: """
               tab open [--window <ref>] [--cwd <path>] [--cmd '<cmd>']
-                  Mint a fresh agent-role tab. --window picks the host
-                  window. The default is your own window, the one holding
-                  the calling tab. --cwd sets the shell's startup directory
-                  (the CLI resolves relative and ~-prefixed paths against
-                  its own CWD before sending). --cmd is typed into the new
-                  shell after attach, so the command runs once and the user
-                  stays at an interactive prompt, matching the shape it
-                  would have if typed by hand.
+                  Requires a live automation grant. Mint a fresh agent-role
+                  tab. --window picks the host window. The default is your
+                  own window, the one holding the calling tab. --cwd sets
+                  the shell's startup directory (the CLI resolves relative
+                  and ~-prefixed paths against its own CWD before sending).
+                  --cmd is typed into the new shell after attach, so the
+                  command runs once and the user stays at an interactive
+                  prompt, matching the shape it would have if typed by hand.
                   Example: deviceterm tab open --window 2
                   Example: deviceterm tab open --cwd ~/projects/app --cmd 'claude'
 
@@ -37,7 +37,8 @@ extension HelpCatalog {
                   Example: deviceterm tab rename "auth-feature"
 
               tab select [--tab <ref>]
-                  Focus the named tab in its window.
+                  Requires a live automation grant, including for your own
+                  tab. Focus the named tab in its window.
                   Example: deviceterm tab select --tab abc123
 
               tab info [--tab <ref>]
@@ -46,6 +47,10 @@ extension HelpCatalog {
                   Example: deviceterm tab info
 
               tab move [--tab <ref>] [--to <index>] [--to-window <ref>]
+                  Requires a live automation grant, including for your own
+                  tab: a reorder can shift other tabs' positions, and
+                  --to-window moves the tab into what may be another
+                  agent's window.
                   Reorder the named tab within its window (--to <index>) or
                   move it to another window (--to-window <ref>, optionally at
                   --to <index>; default appends at the end). At least one of
@@ -152,7 +157,8 @@ extension HelpCatalog {
             summary: "Open, close, or focus a window",
             detail: """
               window open
-                  Mint a new window with one fresh agent-role tab.
+                  Requires a live automation grant. Mint a new window with
+                  one fresh agent-role tab.
                   Example: deviceterm window open
 
               window close [--window <ref>] [--mode <detach|shutdown>]
@@ -165,8 +171,10 @@ extension HelpCatalog {
                   Example: deviceterm window close
 
               window focus [--window <ref>]
-                  Bring the named window forward. --window current is your
-                  own window (the caller's), not the human's key window.
+                  Requires a live automation grant, including for your own
+                  window. Bring the named window forward. --window current
+                  is your own window (the caller's), not the human's key
+                  window.
                   Example: deviceterm window focus --window 2
             """
         ),

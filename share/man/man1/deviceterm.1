@@ -132,8 +132,8 @@ List the current session's device panes.
 Back-channel verbs.
 .TP
 .B tab open " " [\fB--window\fR \fIref\fR] " " [\fB--cwd\fR \fIpath\fR] " " [\fB--cmd\fR \fIcmd\fR]
-Mint a fresh agent-role tab in the chosen window (default: the window
-holding the calling tab).
+Requires a live automation grant. Mint a fresh agent-role tab in the
+chosen window (default: the window holding the calling tab).
 .B --cwd
 sets the shell's startup directory; without it the new tab inherits the
 GUI login-shell default.
@@ -154,6 +154,7 @@ Apply a manual title; omit
 to restore the automatic title.
 .TP
 .B tab select " " [\fB--tab\fR \fIref\fR]
+Requires a live automation grant, including for the caller's own tab.
 Focus the named tab in its window.
 .TP
 .B tab info " " [\fB--tab\fR \fIref\fR]
@@ -163,6 +164,7 @@ panes).
 emits the raw payload.
 .TP
 .B tab move " " [\fB--tab\fR \fIref\fR] " " [\fB--to\fR \fIindex\fR] " " [\fB--to-window\fR \fIref\fR]
+Requires a live automation grant, including for the caller's own tab.
 Reorder the named tab within its window
 .RB ( --to )
 or move it to another window
@@ -249,12 +251,14 @@ Not implemented; returns
 .B intent.internalError
 .TP
 .B window open
-Mint a new window with one fresh agent-role tab.
+Requires a live automation grant. Mint a new window with one fresh
+agent-role tab.
 .TP
 .B window close " " [\fB--window\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
 Close the named window.
 .TP
 .B window focus " " [\fB--window\fR \fIref\fR]
+Requires a live automation grant, including for the caller's own window.
 Bring the named window forward.
 .TP
 .B windows list " " [\fB--all\fR]

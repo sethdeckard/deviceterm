@@ -466,8 +466,10 @@ The daemon vends two transports with different trust models. UDS (the CLI /
 shim path) authenticates a session with a capability PLUS the caller's kernel
 peer provenance (`LOCAL_PEERTOKEN` → the caller's POSIX session / controlling
 tty, matched against the session's bound terminal). It is not cap-only. It
-reaches `.automationTab` scope (`tab.send-input`/`tab.capture`) only when its
-session currently holds a **live automation grant**, re-checked per request;
+reaches `.automationTab` scope (`tab.send-input`/`tab.capture`, plus the
+workspace-wide `tab.open`/`tab.select`/`tab.move`/`window.open`/`window.focus`)
+only when its session currently holds a **live automation grant**, re-checked
+per request;
 authority is the grant plus that provenance, never a role. What UDS can never do
 is *escalate*: it cannot mint an automation role and cannot issue itself a
 grant: both `automation.grant`/`.revoke` and the automation-role mint at

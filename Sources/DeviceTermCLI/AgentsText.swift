@@ -154,28 +154,36 @@ public enum AgentsText {
         # nested `deviceterm` call auto-targets the resolved pane without
         # --pane. <ref> can be a UDID, shortId, name, or paneId prefix.
 
-      Spawn a fresh agent tab in the current window:
+      Spawn a fresh agent tab in the current window (needs a grant):
         deviceterm tab open
         deviceterm tab open --cwd ~/projects/app --cmd 'claude'
-        # New tab appears in the same window. The verb returns once
-        # the GUI accepts the route; the new tab's session id isn't
-        # reflected back (fire-and-forget). --cwd sets the shell's
-        # startup directory (the CLI resolves relative / ~-prefixed
-        # paths against its own CWD); --cmd is typed into the new
-        # shell after attach so it runs once and the user lands at
-        # an interactive prompt. Same flags on `pane open --terminal`.
+        # Requires a live automation grant; an ordinary tab is
+        # refused with error.scope_violation. Run it from a tab
+        # opened via Shell > "Open Automation Tab". New tab appears
+        # in the same window. The verb returns once the GUI accepts
+        # the route; the new tab's session id isn't reflected back
+        # (fire-and-forget). --cwd sets the shell's startup directory
+        # (the CLI resolves relative / ~-prefixed paths against its
+        # own CWD); --cmd is typed into the new shell after attach so
+        # it runs once and the user lands at an interactive prompt.
+        # Same flags on `pane open --terminal`, which needs no grant.
 
       Rename / select / inspect existing tabs by shortId:
         deviceterm tabs list                    # see open tabs
-        deviceterm tab select --tab abc123      # focus tab abc123
+        deviceterm tab select --tab abc123      # focus it (grant)
+        deviceterm tab move --tab abc123 --to 0 # reorder it (grant)
         deviceterm tab rename "billing"         # rename current
         deviceterm tab info                     # role + linked panes
         deviceterm tab close --tab abc123       # close that tab
+        # "(grant)" marks a verb needing a live automation grant.
+        # Both need it even when the target is your own tab:
+        # selecting one can replace the visible tab and move terminal
+        # focus, and moving one can shift other tabs' positions.
 
       Manage windows:
-        deviceterm window open                  # new window
+        deviceterm window open                  # new window (grant)
         deviceterm windows list                 # see all windows
-        deviceterm window focus --window 2      # bring window 2 forward
+        deviceterm window focus --window 2      # bring forward (grant)
         deviceterm window close --window 2      # close window 2
 
       Cross-tab shell control (run from an automation tab):
@@ -323,11 +331,13 @@ public enum AgentsText {
         Two roles exist: `agent` (default) and `automation`. The
         role is fixed for the session's lifetime and readable from
         `$DEVICETERM_SESSION_ROLE`. The role is descriptive metadata,
-        not an authorization gate; cross-tab verbs are authorized by a
-        live automation grant, independently of role. `deviceterm
-        help` names your role in its header but lists every verb
-        regardless. A listed command may be refused because the
-        connection lacks the required authorization.
+        not an authorization gate. Seven verbs are authorized by a
+        live automation grant, independently of role: tab open,
+        tab select, tab move, window open, window focus,
+        tab send-input, and tab capture. `deviceterm help` names
+        your role in its header but lists every verb regardless. A
+        listed command may be refused because the connection lacks
+        the required authorization.
 
         An automation role is minted only through the validated GUI
         path, exposed as Shell → Open Automation Tab. The daemon
@@ -352,6 +362,10 @@ public enum AgentsText {
         - Role escalation (agent → automation) — Shell → Open
           Automation Tab. The daemon refuses an automation mint
           over the CLI socket outright.
+        - Workspace-wide mutation (tab open / select / move,
+          window open / focus) — a live automation grant, checked
+          by the daemon on every request. The role string alone
+          does not carry it.
         - Protection-mutation for someone else — a
           `tab set-protected` only touches a tab the caller owns a
           terminal in. The GUI enforces that owner gate, and the
