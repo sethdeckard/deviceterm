@@ -20,8 +20,8 @@
 //    tabs the caller can legitimately see, and `.current` is resolved
 //    relative to the caller's own session, never the human's focus.
 //    `sessionID == nil` means **no authority**; never "skip the check":
-//    a nil-session external caller owns no tab, so every non-public tab
-//    is inaccessible to it and privacy mutation is denied.
+//    a nil-session external caller owns no tab, so every non-unprotected tab
+//    is inaccessible to it and protection mutation is denied.
 enum IntentOrigin: Sendable, Equatable {
     case inProcess
     case external(sessionID: String?)

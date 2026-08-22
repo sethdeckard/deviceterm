@@ -5,9 +5,9 @@
 // Combines booted sims + connected physical devices and annotates each
 // with the owning session of a live pane that mirrors it, but only
 // when that session is visible to the caller, so a device attached to a
-// private tab the caller doesn't own reads as unattached. That reuses
+// protected tab the caller doesn't own reads as unattached. That reuses
 // the exact `tabs.list` opacity rule (the caller passes the set of
-// session ids visible to them; an owner-hidden private session simply
+// session ids visible to them; an owner-hidden protected session simply
 // isn't in it). Pure, so the opacity logic is unit-tested without a
 // device or CoreSimulator.
 
@@ -52,7 +52,7 @@ enum DeviceRoster {
             let target: PaneTarget = kind == .sim ? .sim(udid: id) : .device(deviceId: id)
             // Opacity: annotate the owner only when the caller can see
             // that session; otherwise the device reads as unattached,
-            // exactly as `tabs.list` hides a private tab from non-owners.
+            // exactly as `tabs.list` hides a protected tab from non-owners.
             if let owner = ownerByTarget[target], visibleSessionIds.contains(owner.sessionId) {
                 return DeviceRosterEntry(
                     id: id,

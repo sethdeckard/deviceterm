@@ -8,11 +8,12 @@
 // mapping is the authoritative source: one `RestoredSession` per terminal pane
 // (each backs its own daemon session), assembled straight from the workspace's
 // `TabState`s: not from `DaemonClient.liveSessions`, which retains only
-// `(sessionId, cap)` and can't source role / short id / name / privacy.
+// `(sessionId, cap)` and can't source role / short id / name / protection.
 //
-// Privacy is derived FAIL-CLOSED from `isEffectivelyHidden`, not committed
-// `isPrivate`: a tab mid-transition to private (`.pendingPrivate`) restores
-// private so it is never briefly exposed as public through `tabs.list`. Entry
+// Protection is derived FAIL-CLOSED from `isEffectivelyProtected`, not
+// committed `isProtected`: a tab mid-transition to protected
+// (`.pendingProtected`) restores protected so it is never briefly exposed
+// through `tabs.list`. Entry
 // order is significant (it defines the restored set's `tabs.list` ordering)
 // so tabs are walked in workspace order and terminals in tab order.
 
@@ -41,7 +42,7 @@ enum SessionRestoreInventory {
     static func build(from tabs: [TabState]) -> [RestoredSession]? {
         var inventory: [RestoredSession] = []
         for tab in tabs {
-            let isPrivate = tab.isEffectivelyHidden
+            let isProtected = tab.isEffectivelyProtected
             for terminal in tab.terminals {
                 // No daemon session yet → nothing to restore (created fresh).
                 if terminal.sessionId.isEmpty { continue }
@@ -55,7 +56,7 @@ enum SessionRestoreInventory {
                         shortId: shortId,
                         role: tab.role,
                         name: terminal.name,
-                        isPrivate: isPrivate
+                        isProtected: isProtected
                     )
                 )
             }

@@ -810,7 +810,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         label: String?,
         name: String?,
         role: SessionRole,
-        initialPrivate: Bool = false
+        initialProtected: Bool = false
     ) async throws -> SessionCreateResponse {
         // `compactMapValues { $0 }` strips nil entries before JSON
         // serialization so the wire shape carries optional fields
@@ -824,15 +824,15 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         // token server-side (the exact-owner provenance arm and the
         // orphan-liveness pid), so no owner pid rides on the wire: a caller
         // can't name a pid it doesn't own.
-        // `initialPrivate` is sent only when true, so an ordinary public
-        // create carries no extra key (a nil is stripped by
+        // `initialProtected` is sent only when true, so an ordinary
+        // unprotected create carries no extra key (a nil is stripped by
         // `compactMapValues`, and the daemon reads absent as false).
         let params = try JSONSerialization.data(
             withJSONObject: [
                 "label": label as Any,
                 "name": name as Any,
                 "role": role.rawValue,
-                "initialPrivate": initialPrivate ? true : nil
+                "initialProtected": initialProtected ? true : nil
             ].compactMapValues { $0 },
             options: []
         )
@@ -1195,27 +1195,27 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         paneAuthenticationRepairTask?.cancel()
     }
 
-    /// `session.setPrivateBatch`: atomically flip the privacy flag for
+    /// `session.setProtectedBatch`: atomically flip the protection flag for
     /// a tab's terminal-pane sessions, subject to daemon-side
     /// `(epoch, revision)` last-write-wins. `.validatedGUI`-scoped, so no
     /// cap on the wire; over the `--smoke` UDS fallback the daemon refuses
-    /// it with `scopeViolation`. Returns `SessionSetPrivateBatchResult`
-    /// `{applied, revision, isPrivate}`. `applied: false` means the batch
+    /// it with `scopeViolation`. Returns `SessionSetProtectedBatchResult`
+    /// `{applied, revision, isProtected}`. `applied: false` means the batch
     /// was stale (a higher-key write won) and nothing mutated.
-    func setPrivateBatch(
+    func setProtectedBatch(
         sessionIds: [String],
-        isPrivate: Bool,
+        isProtected: Bool,
         revision: Int
-    ) async throws -> SessionSetPrivateBatchResult {
+    ) async throws -> SessionSetProtectedBatchResult {
         let params = try JSONEncoder().encode(
-            SessionSetPrivateBatchParams(
+            SessionSetProtectedBatchParams(
             sessionIds: sessionIds,
-            isPrivate: isPrivate,
+            isProtected: isProtected,
             revision: revision
         )
             )
-        let data = try await request(method: .sessionSetPrivateBatch, params: params)
-        return try decode(SessionSetPrivateBatchResult.self, data)
+        let data = try await request(method: .sessionSetProtectedBatch, params: params)
+        return try decode(SessionSetProtectedBatchResult.self, data)
     }
 
     /// `session.setDisplayTitle`: publish the tab's live label so
@@ -1278,15 +1278,15 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         return try decode(SessionRestoreBatchResult.self, data)
     }
 
-    func privacySnapshot(
+    func protectionSnapshot(
         sessionIds: [String],
         revision: Int
-    ) async throws -> SessionPrivacySnapshotResult {
+    ) async throws -> SessionProtectionSnapshotResult {
         let params = try JSONEncoder().encode(
-            SessionPrivacySnapshotParams(sessionIds: sessionIds, revision: revision)
+            SessionProtectionSnapshotParams(sessionIds: sessionIds, revision: revision)
         )
-        let data = try await request(method: .sessionPrivacySnapshot, params: params)
-        return try decode(SessionPrivacySnapshotResult.self, data)
+        let data = try await request(method: .sessionProtectionSnapshot, params: params)
+        return try decode(SessionProtectionSnapshotResult.self, data)
     }
 
     /// `device.list`: `scope` is "owned" or "all". Existing daemon
@@ -1937,8 +1937,8 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         } catch let DaemonClientError.daemon(code, message)
             where code == Self.unauthorizedConnectionCode
             && method != .sessionAuthenticate
-            && method != .sessionSetPrivateBatch
-            && method != .sessionPrivacySnapshot
+            && method != .sessionSetProtectedBatch
+            && method != .sessionProtectionSnapshot
             && method != .sessionRestoreBatch
             && method != .sessionSetDisplayTitle
             && method != .automationGrant {
@@ -1956,7 +1956,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             // original error; a transport drop mid-reauth propagates so the
             // caller can classify it.
             //
-            // `session.setPrivateBatch` is excluded: it is `.validatedGUI`
+            // `session.setProtectedBatch` is excluded: it is `.validatedGUI`
             // (audit-token authority, no session auth to lose on reconnect),
             // so its `-32001` is only ever "unknown session in the batch":
             // never a reconnect. A transparent retry here would physically

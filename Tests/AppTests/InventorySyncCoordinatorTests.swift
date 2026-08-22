@@ -20,7 +20,7 @@ private func session(_ id: String) -> RestoredSession {
         shortId: id,
         role: .agent,
         name: nil,
-        isPrivate: false
+        isProtected: false
     )
 }
 

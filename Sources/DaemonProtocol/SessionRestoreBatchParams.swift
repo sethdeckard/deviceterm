@@ -39,7 +39,7 @@ public struct SessionRestoreBatchParams: Codable, Sendable, Equatable {
     /// epoch and a `restore` tier into an `(epoch, tier, revision)` ordering
     /// key, so a same-connection retry that carries a changed inventory strictly
     /// dominates the earlier attempt (letting it authoritatively update a live
-    /// session's privacy or reap one an earlier retry asserted). A strictly
+    /// session's protection or reap one an earlier retry asserted). A strictly
     /// older restore key is rejected; an equal key may replay idempotently. The
     /// tier keeps a restore below any live user action at the same epoch.
     public let revision: Int
@@ -89,10 +89,10 @@ public struct RestoredSession: Codable, Sendable, Equatable {
     public let role: SessionRole
     /// The optional human/agent-set tab name.
     public let name: String?
-    /// The desired absolute privacy state, derived fail-closed from the
+    /// The desired absolute protection state, derived fail-closed from the
     /// GUI's effective-hidden presentation (a mid-transition tab restores
-    /// private, never briefly public).
-    public let isPrivate: Bool
+    /// protected, never briefly unprotected).
+    public let isProtected: Bool
 
     public init(
         sessionId: String,
@@ -100,14 +100,14 @@ public struct RestoredSession: Codable, Sendable, Equatable {
         shortId: String,
         role: SessionRole,
         name: String?,
-        isPrivate: Bool
+        isProtected: Bool
     ) {
         self.sessionId = sessionId
         self.capability = capability
         self.shortId = shortId
         self.role = role
         self.name = name
-        self.isPrivate = isPrivate
+        self.isProtected = isProtected
     }
 }
 

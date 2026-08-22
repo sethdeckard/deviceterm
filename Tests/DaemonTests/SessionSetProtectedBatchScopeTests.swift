@@ -7,33 +7,33 @@ import Foundation
 import Testing
 @preconcurrency import XPC
 
-// `session.setPrivateBatch` over the real XPC dispatch path with an
+// `session.setProtectedBatch` over the real XPC dispatch path with an
 // injected `PeerValidator`. It is `.validatedGUI`-scoped, so the same
 // audit-token anchor that gates the GUI back-channel gates this
-// cross-session privacy write: a signature-validated peer is admitted
+// cross-session protection write: a signature-validated peer is admitted
 // on its token alone (no session auth), an unvalidated one is refused,
 // and a refused call mutates nothing. The UDS refusal is pinned
-// separately in `SessionMethodsTests.setPrivateBatchRefusedOverUDS`.
+// separately in `SessionMethodsTests.setProtectedBatchRefusedOverUDS`.
 
 private let validatedGUIPeer: PeerValidator = { _ in
     .production(peerTeamID: "TEST", peerBundleID: "test.host")
 }
 private let rejectedGUIPeer: PeerValidator = { _ in .rejected(reason: "test") }
 
-private func batchResult(_ reply: xpc_object_t) -> SessionSetPrivateBatchResult? {
+private func batchResult(_ reply: xpc_object_t) -> SessionSetProtectedBatchResult? {
     guard let envelope = try? decodeEnvelope(reply: reply),
         case let .result(bytes) = envelope.body else { return nil }
-    return try? JSONDecoder().decode(SessionSetPrivateBatchResult.self, from: bytes)
+    return try? JSONDecoder().decode(SessionSetProtectedBatchResult.self, from: bytes)
 }
 
-private func setPrivateBatchServer(
+private func setProtectedBatchServer(
     manager: SessionManager,
     validator: @escaping PeerValidator
 ) -> XPCServer {
     let registry = MethodRegistry(
         handlers: [
-            RPCMethod.sessionSetPrivateBatch.rawValue:
-                .validatedGUI(SessionMethods.setPrivateBatch(using: manager))
+            RPCMethod.sessionSetProtectedBatch.rawValue:
+                .validatedGUI(SessionMethods.setProtectedBatch(using: manager))
         ],
         subscriptions: [:],
         provenance: TestPeerIdentity.xpcProvenance(manager)
@@ -47,11 +47,11 @@ private func setPrivateBatchServer(
 }
 
 @Test
-func setPrivateBatchOverValidatedXPCFlipsTheWholeSet() async throws {
+func setProtectedBatchOverValidatedXPCFlipsTheWholeSet() async throws {
     let manager = SessionManager()
     let alpha = try await manager.makeSessionState(label: nil)
     let beta = try await manager.makeSessionState(label: nil)
-    let server = setPrivateBatchServer(manager: manager, validator: validatedGUIPeer)
+    let server = setProtectedBatchServer(manager: manager, validator: validatedGUIPeer)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -61,29 +61,29 @@ func setPrivateBatchOverValidatedXPCFlipsTheWholeSet() async throws {
     // No session.authenticate first: the validated peer reaches the
     // method on its audit token alone.
     let body = try JSONEncoder().encode(
-        SessionSetPrivateBatchParams(
+        SessionSetProtectedBatchParams(
             sessionIds: [alpha.id.uuidString, beta.id.uuidString],
-            isPrivate: true,
+            isProtected: true,
             revision: 1
         )
     )
     sendRequest(
         envelopeId: 1,
-        method: RPCMethod.sessionSetPrivateBatch.rawValue,
+        method: RPCMethod.sessionSetProtectedBatch.rawValue,
         params: body,
         client: clientPair
     )
     let envelope = try decodeEnvelope(reply: try await replyBox.awaitReply())
     if case let .error(error) = envelope.body {
-        Issue.record("validated-GUI setPrivateBatch should succeed; got error \(error.code)")
+        Issue.record("validated-GUI setProtectedBatch should succeed; got error \(error.code)")
         return
     }
-    #expect(await manager.isPrivate(alpha.id))
-    #expect(await manager.isPrivate(beta.id))
+    #expect(await manager.isProtected(alpha.id))
+    #expect(await manager.isProtected(beta.id))
 }
 
 @Test
-func setPrivateBatchLaterConnectionEpochDominatesEarlier() async throws {
+func setProtectedBatchLaterConnectionEpochDominatesEarlier() async throws {
     // The ordering epoch is the SERVER-derived XPC connection id. A
     // replacement connection (accepted later) gets a strictly higher epoch,
     // so its write dominates the earlier connection's even at a LOWER
@@ -92,67 +92,67 @@ func setPrivateBatchLaterConnectionEpochDominatesEarlier() async throws {
     // connections (the SessionManager unit test injects epochs directly).
     let manager = SessionManager()
     let session = try await manager.makeSessionState(label: nil)
-    let server = setPrivateBatchServer(manager: manager, validator: validatedGUIPeer)
+    let server = setProtectedBatchServer(manager: manager, validator: validatedGUIPeer)
     let (listener, peerA) = makeAnonymousPair()
     await server.bind(listener: listener)
     defer { Task { await server.stop() } }
     let replyA = ReplyBox()
     setupClient(peerA, replyBox: replyA)
 
-    // Connection A sets it private at a HIGH revision.
+    // Connection A sets it protected at a HIGH revision.
     sendRequest(
         envelopeId: 1,
-        method: RPCMethod.sessionSetPrivateBatch.rawValue,
-        params: try JSONEncoder().encode(SessionSetPrivateBatchParams(
-            sessionIds: [session.id.uuidString], isPrivate: true, revision: 100
+        method: RPCMethod.sessionSetProtectedBatch.rawValue,
+        params: try JSONEncoder().encode(SessionSetProtectedBatchParams(
+            sessionIds: [session.id.uuidString], isProtected: true, revision: 100
         )),
         client: peerA
     )
     let resultA1 = try #require(batchResult(try await replyA.awaitReply()))
     #expect(resultA1.applied)
-    #expect(await manager.isPrivate(session.id))
+    #expect(await manager.isProtected(session.id))
 
     // A replacement connection B (later accept → higher epoch) sets it
-    // PUBLIC at a LOW revision, dominates on epoch alone.
+    // UNPROTECTED at a LOW revision, dominates on epoch alone.
     let peerB = xpc_connection_create_from_endpoint(xpc_endpoint_create(listener))
     let replyB = ReplyBox()
     setupClient(peerB, replyBox: replyB)
     sendRequest(
         envelopeId: 2,
-        method: RPCMethod.sessionSetPrivateBatch.rawValue,
-        params: try JSONEncoder().encode(SessionSetPrivateBatchParams(
-            sessionIds: [session.id.uuidString], isPrivate: false, revision: 1
+        method: RPCMethod.sessionSetProtectedBatch.rawValue,
+        params: try JSONEncoder().encode(SessionSetProtectedBatchParams(
+            sessionIds: [session.id.uuidString], isProtected: false, revision: 1
         )),
         client: peerB
     )
     let resultB1 = try #require(batchResult(try await replyB.awaitReply()))
     #expect(resultB1.applied)                               // higher epoch wins
-    #expect(await manager.isPrivate(session.id) == false)
+    #expect(await manager.isProtected(session.id) == false)
 
     // A LATE write from the OLD connection A, even at a higher revision, is
     // rejected: its epoch no longer dominates.
     sendRequest(
         envelopeId: 3,
-        method: RPCMethod.sessionSetPrivateBatch.rawValue,
-        params: try JSONEncoder().encode(SessionSetPrivateBatchParams(
-            sessionIds: [session.id.uuidString], isPrivate: true, revision: 999
+        method: RPCMethod.sessionSetProtectedBatch.rawValue,
+        params: try JSONEncoder().encode(SessionSetProtectedBatchParams(
+            sessionIds: [session.id.uuidString], isProtected: true, revision: 999
         )),
         client: peerA
     )
     let resultA2 = try #require(batchResult(try await replyA.awaitReply()))
     #expect(resultA2.applied == false)                     // stale: old epoch
-    #expect(await manager.isPrivate(session.id) == false)   // stays public
+    #expect(await manager.isProtected(session.id) == false)   // stays unprotected
 }
 
 @Test
-func setPrivateBatchUnknownIdRejectedThroughRealHandler() async throws {
+func setProtectedBatchUnknownIdRejectedThroughRealHandler() async throws {
     // Validation runs through the real dispatch path (not just a
     // SessionManager unit test): a batch naming one live and one unknown
     // session is refused all-or-none, and the live session is left
     // untouched, so a rejection is unambiguously "nothing committed."
     let manager = SessionManager()
     let live = try await manager.makeSessionState(label: nil)
-    let server = setPrivateBatchServer(manager: manager, validator: validatedGUIPeer)
+    let server = setProtectedBatchServer(manager: manager, validator: validatedGUIPeer)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -160,15 +160,15 @@ func setPrivateBatchUnknownIdRejectedThroughRealHandler() async throws {
     setupClient(clientPair, replyBox: replyBox)
 
     let body = try JSONEncoder().encode(
-        SessionSetPrivateBatchParams(
+        SessionSetProtectedBatchParams(
             sessionIds: [live.id.uuidString, UUID().uuidString],
-            isPrivate: true,
+            isProtected: true,
             revision: 1
         )
     )
     sendRequest(
         envelopeId: 1,
-        method: RPCMethod.sessionSetPrivateBatch.rawValue,
+        method: RPCMethod.sessionSetProtectedBatch.rawValue,
         params: body,
         client: clientPair
     )
@@ -177,14 +177,14 @@ func setPrivateBatchUnknownIdRejectedThroughRealHandler() async throws {
         Issue.record("unknown id in batch must be rejected; got \(envelope.body)")
         return
     }
-    #expect(await manager.isPrivate(live.id) == false)
+    #expect(await manager.isProtected(live.id) == false)
 }
 
 @Test
-func setPrivateBatchOverUnvalidatedXPCRefusedWithoutMutation() async throws {
+func setProtectedBatchOverUnvalidatedXPCRefusedWithoutMutation() async throws {
     let manager = SessionManager()
     let alpha = try await manager.makeSessionState(label: nil)
-    let server = setPrivateBatchServer(manager: manager, validator: rejectedGUIPeer)
+    let server = setProtectedBatchServer(manager: manager, validator: rejectedGUIPeer)
     let (listener, clientPair) = makeAnonymousPair()
     let replyBox = ReplyBox()
     await server.bind(listener: listener)
@@ -192,19 +192,19 @@ func setPrivateBatchOverUnvalidatedXPCRefusedWithoutMutation() async throws {
     setupClient(clientPair, replyBox: replyBox)
 
     let body = try JSONEncoder().encode(
-        SessionSetPrivateBatchParams(sessionIds: [alpha.id.uuidString], isPrivate: true, revision: 1)
+        SessionSetProtectedBatchParams(sessionIds: [alpha.id.uuidString], isProtected: true, revision: 1)
     )
     sendRequest(
         envelopeId: 1,
-        method: RPCMethod.sessionSetPrivateBatch.rawValue,
+        method: RPCMethod.sessionSetProtectedBatch.rawValue,
         params: body,
         client: clientPair
     )
     let envelope = try decodeEnvelope(reply: try await replyBox.awaitReply())
     guard case let .error(error) = envelope.body else {
-        Issue.record("unvalidated XPC setPrivateBatch must be refused; got \(envelope.body)")
+        Issue.record("unvalidated XPC setProtectedBatch must be refused; got \(envelope.body)")
         return
     }
     #expect(error.code == RPCMethodError.scopeViolationCode)
-    #expect(await manager.isPrivate(alpha.id) == false)
+    #expect(await manager.isProtected(alpha.id) == false)
 }

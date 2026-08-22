@@ -554,7 +554,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     /// Fire-and-forget shape for menu / button handlers whose failure is
     /// benign (select, reorder): they trigger the GUI mutation and drop
-    /// the result. Handlers whose rejection the human must see (privacy)
+    /// the result. Handlers whose rejection the human must see (protection)
     /// await the result and surface it themselves; don't route those
     /// through here.
     private func dispatchIntent(_ intent: RouteIntent) {
@@ -828,36 +828,36 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// object, so it names the selected tab instead.
 
     @objc
-    func togglePrivacyFromMenu(_ sender: NSMenuItem) {
+    func toggleProtectionFromMenu(_ sender: NSMenuItem) {
         guard let tabID = sender.representedObject as? TabID,
             let tab = tabListVM.tab(id: tabID) else { return }
         let sessionId = tab.primaryTerminal.sessionId
         guard !sessionId.isEmpty else { return }
         // Toggle relative to what's shown *now* (effective-hidden), so a
         // menu action during an in-flight transition flips the right way.
-        let makePrivate = !tab.isEffectivelyHidden
+        let makeProtected = !tab.isEffectivelyProtected
         let dispatcher = intentDispatcher
         Task { @MainActor [weak self] in
             let result = await dispatcher.dispatch(
-                .setTabPrivate(.sessionId(sessionId), isPrivate: makePrivate),
+                .setTabProtected(.sessionId(sessionId), isProtected: makeProtected),
                 origin: .inProcess
             )
-            // Unlike a CLI caller, the human at the privacy menu has no
+            // Unlike a CLI caller, the human at the protection menu has no
             // result stream to read: surface a rejection as an alert rather
             // than dropping it silently. The tab stays fail-closed, so a
-            // failed "make private" leaves it hidden but unconfirmed; the
-            // user needs to know it didn't take.
+            // failed "protect" leaves it hidden but unconfirmed; the user
+            // needs to know it didn't take.
             if case let .error(error) = result {
-                self?.presentPrivacyChangeFailure(makePrivate: makePrivate, error: error)
+                self?.presentProtectionChangeFailure(makeProtected: makeProtected, error: error)
             }
         }
     }
 
-    private func presentPrivacyChangeFailure(makePrivate: Bool, error: IntentError) {
+    private func presentProtectionChangeFailure(makeProtected: Bool, error: IntentError) {
         let alert = NSAlert()
-        alert.messageText = makePrivate
-            ? "Couldn’t make this tab private"
-            : "Couldn’t make this tab public"
+        alert.messageText = makeProtected
+            ? "Couldn’t protect this tab"
+            : "Couldn’t unprotect this tab"
         alert.informativeText = error.hint
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
@@ -1142,7 +1142,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // it was clicked on.
             title.menu = makeTabStripContextMenu(
                 for: tab.id,
-                isEffectivelyHidden: tab.isEffectivelyHidden,
+                isEffectivelyProtected: tab.isEffectivelyProtected,
                 isOnlyTab: tabs.count == 1,
                 isLastTab: idx == tabs.count - 1,
                 target: self
@@ -1287,16 +1287,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             Self.applyAccessibilityIdentifiers(
                 pill: button, close: cell.closeButton, shortId: tab.primaryTerminal.shortId
             )
-            // Rebuild the per-tab context menu so privacy toggle title
-            // ("Set Private" ↔ "Set Public"), check state, and the
+            // Rebuild the per-tab context menu so protection toggle title
+            // ("Protect Tab" ↔ "Unprotect Tab"), check state, and the
             // enable bits for Close Others / Close to the Right
             // reflect the current TabState. `rebuildStrip` only fires
             // when the tab-ID list changes; same-tabs-different-state
-            // paths (privacy toggle, position-driven last-tab flip)
+            // paths (protection toggle, position-driven last-tab flip)
             // land here.
             button.menu = makeTabStripContextMenu(
                 for: tab.id,
-                isEffectivelyHidden: tab.isEffectivelyHidden,
+                isEffectivelyProtected: tab.isEffectivelyProtected,
                 isOnlyTab: tabs.count == 1,
                 isLastTab: idx == tabs.count - 1,
                 target: self

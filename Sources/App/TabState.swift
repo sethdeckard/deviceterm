@@ -24,30 +24,31 @@
 
 import DaemonProtocol
 
-/// A tab's privacy as two axes collapsed into one value: what the daemon
+/// A tab's protection as two axes collapsed into one value: what the daemon
 /// has *committed* (confirmed on the wire) and what the tab *presents*
-/// right now. Keeping them separate is what lets a privacy transition be
+/// right now. Keeping them separate is what lets a protection transition be
 /// fail-closed without lying about the committed state:
 ///
-///  - `.publicVisible`: committed public, no transition; the only
+///  - `.unprotected`: committed unprotected, no transition; the only
 ///    non-hidden state.
-///  - `.privateHidden`: committed private (also the resting state of a
-///    private→public transition, which stays hidden until its ack).
-///  - `.pendingPrivate`: hidden but not committed: either a public→private
-///    transition is in flight (hidden immediately, fail-closed, commits to
-///    `.privateHidden` only on the ack), or a reconciliation left the tab
-///    hidden-and-unresolved (a mixed / unfenced / membership-changed
-///    `session.privacySnapshot`). The tab is never exposed from this state
-///    except by an authoritative signal: a fenced uniform-public snapshot
-///    or the owning transition's highest-key make-public ack.
+///  - `.protected`: committed protected (also the resting state of a
+///    protected→unprotected transition, which stays hidden until its ack).
+///  - `.pendingProtected`: hidden but not committed: either an
+///    unprotected→protected transition is in flight (hidden immediately,
+///    fail-closed, commits to `.protected` only on the ack), or a
+///    reconciliation left the tab hidden-and-unresolved (a mixed /
+///    unfenced / membership-changed `session.protectionSnapshot`). The tab
+///    is never exposed from this state except by an authoritative signal: a
+///    fenced uniform-unprotected snapshot or the owning transition's
+///    highest-key unprotect ack.
 ///
-/// `isEffectivelyHidden` (absolute) drives tab chrome and the privacy a
+/// `isEffectivelyProtected` (absolute) drives tab chrome and the protection a
 /// new terminal inherits; `externallyAccessible` (caller-relative, in
 /// `IntentResolver`) drives what an external caller may reach.
-enum TabPrivacyState: Equatable, Sendable {
-    case publicVisible
-    case privateHidden
-    case pendingPrivate
+enum TabProtectionState: Equatable, Sendable {
+    case unprotected
+    case protected
+    case pendingProtected
 }
 
 struct SimPaneState: MirroredPaneState, Equatable, Sendable {
@@ -171,26 +172,26 @@ struct TabState: Identifiable, Equatable, Sendable {
     ///    compact at mutation time);
     ///  - `extents.count == children.count` for every `.split`.
     var paneTree: PaneNode
-    /// Privacy as a committed-vs-presentation state (see
-    /// `TabPrivacyState`). The Router drives transitions through it; the
-    /// resolver and tab chrome read the derived `isPrivate` /
-    /// `isEffectivelyHidden` below. Mirror of the daemon's per-session
-    /// privacy, kept GUI-side for fast tab-strip + Route lookups.
-    var privacyState: TabPrivacyState
+    /// Protection as a committed-vs-presentation state (see
+    /// `TabProtectionState`). The Router drives transitions through it; the
+    /// resolver and tab chrome read the derived `isProtected` /
+    /// `isEffectivelyProtected` below. Mirror of the daemon's per-session
+    /// protection, kept GUI-side for fast tab-strip + Route lookups.
+    var protectionState: TabProtectionState
 
-    /// The *committed* privacy the daemon has confirmed. True only when
-    /// the tab has actually landed private. A public→private transition
-    /// still in flight reads `false` here (it hasn't committed) even
-    /// though the tab is already hidden. Drives the context-menu title
-    /// and the daemon-mirror invariant.
-    var isPrivate: Bool { privacyState == .privateHidden }
+    /// The *committed* protection the daemon has confirmed. True only when
+    /// the tab has actually landed protected. An unprotected→protected
+    /// transition still in flight reads `false` here even though the tab is
+    /// already hidden: `isEffectivelyProtected` is the axis presentation and
+    /// the context-menu title read.
+    var isProtected: Bool { protectionState == .protected }
 
     /// Whether the tab is hidden *right now*: absolute, no caller and no
-    /// owner exception. False only when fully public. This is the
-    /// fail-closed axis: a public→private transition flips it before the
-    /// daemon confirms. Drives tab chrome and the privacy a newly-added
-    /// terminal inherits (`session.create` `initialPrivate`).
-    var isEffectivelyHidden: Bool { privacyState != .publicVisible }
+    /// owner exception. False only when fully unprotected. This is the
+    /// fail-closed axis: an unprotected→protected transition flips it before the
+    /// daemon confirms. Drives tab chrome and the protection a newly-added
+    /// terminal inherits (`session.create` `initialProtected`).
+    var isEffectivelyProtected: Bool { protectionState != .unprotected }
     /// Most-recently-focused terminal in this tab. Updated by the
     /// terminal pane wrapper's responder-chain hook every time
     /// libghostty's surface gains first responder. Read by
@@ -212,7 +213,7 @@ struct TabState: Identifiable, Equatable, Sendable {
         simPanes: [SimPaneState],
         devicePanes: [DevicePaneState] = [],
         role: SessionRole = .agent,
-        isPrivate: Bool = false
+        isProtected: Bool = false
     ) {
         precondition(!terminals.isEmpty, "TabState must have at least one terminal pane")
         self.id = id
@@ -221,7 +222,7 @@ struct TabState: Identifiable, Equatable, Sendable {
         self.simPanes = simPanes
         self.devicePanes = devicePanes
         self.pendingPanes = []
-        self.privacyState = isPrivate ? .privateHidden : .publicVisible
+        self.protectionState = isProtected ? .protected : .unprotected
         self.lastFocusedTerminal = nil
         // Seed the layout tree: primary terminal as a single leaf,
         // then sibling-append every other terminal and every sim along

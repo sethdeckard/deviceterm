@@ -156,7 +156,7 @@ public struct RestoreSessionEntry: Sendable {
     public let shortId: String
     public let role: SessionRole
     public let name: String?
-    public let isPrivate: Bool
+    public let isProtected: Bool
 
     public init(
         id: UUID,
@@ -164,14 +164,14 @@ public struct RestoreSessionEntry: Sendable {
         shortId: String,
         role: SessionRole,
         name: String?,
-        isPrivate: Bool
+        isProtected: Bool
     ) {
         self.id = id
         self.capability = capability
         self.shortId = shortId
         self.role = role
         self.name = name
-        self.isPrivate = isPrivate
+        self.isProtected = isProtected
     }
 }
 
@@ -228,14 +228,14 @@ public actor SessionManager {
     private static let restoreOrderStep: TimeInterval = 0.000001
 
     private var sessions: [UUID: SessionState] = [:]
-    /// Sessions whose tab carries the privacy flag. Kept in memory for the
+    /// Sessions whose tab carries the protection flag. Kept in memory for the
     /// session's lifetime; reset when a session is closed. A separate
     /// set rather than a field on `SessionState` keeps `SessionState`
     /// immutable (the documented invariant) and avoids re-keying
     /// every consumer that builds session payloads from snapshots.
-    private var privateSessions: Set<UUID> = []
+    private var protectedSessions: Set<UUID> = []
     /// Live display title per session, as last pushed by the GUI. A side
-    /// map for the same reason `privateSessions` is one: `SessionState` is
+    /// map for the same reason `protectedSessions` is one: `SessionState` is
     /// immutable by design and this value churns as the shell retitles.
     /// Derived state, deliberately memory-only: after a
     /// daemon restart it is empty until the GUI republishes, which is
@@ -254,16 +254,16 @@ public actor SessionManager {
     /// rather than daemon-wide so two GUI instances, each publishing its own
     /// sessions, can't starve each other.
     private var displayTitleWriters: [UUID: UInt64] = [:]
-    /// Last-applied privacy ordering key per session. The daemon is the
-    /// authority for last-write-wins: a `setPrivateBatch` applies only
+    /// Last-applied protection ordering key per session. The daemon is the
+    /// authority for last-write-wins: a `setProtectedBatch` applies only
     /// when its `(epoch, revision)` key strictly dominates the stored key
     /// of every target session; otherwise it is stale and mutates
     /// nothing. Cleared with the session in `closeSession`. Empty for a
     /// session never touched by a batch (any key dominates), which is why
-    /// `initialPrivate` need not seed it. Cleared with the session in
+    /// `initialProtected` need not seed it. Cleared with the session in
     /// `removeSessionMaps`, which both the close path and `restoreBatch`'s
     /// ghost reconciliation run.
-    private var privacyOrdering: [UUID: PrivacyOrderingKey] = [:]
+    private var protectionOrdering: [UUID: ProtectionOrderingKey] = [:]
     /// The ordering key that most recently asserted each session's existence.
     /// stamped by `session.create` (`.liveAuthority` tier) or by the
     /// `restoreBatch` that carried it (`.restoreBaseline` tier). `restoreBatch`
@@ -277,15 +277,15 @@ public actor SessionManager {
     /// same-connection retry that drops a session actually reap it (a higher
     /// restore revision dominates the earlier one that asserted it). Cleared with
     /// the session in `removeSessionMaps`.
-    private var sessionAssertionKey: [UUID: PrivacyOrderingKey] = [:]
+    private var sessionAssertionKey: [UUID: ProtectionOrderingKey] = [:]
     /// Highest `(epoch, revision)` key of any `restoreBatch` applied so far. A
     /// strictly older restore key is rejected; an equal key may replay
     /// idempotently. A rejected batch (a dead/older connection's late batch, or
     /// a same-connection retry that lost the race) mutates nothing and does not
-    /// release the barrier, so it can neither revert privacy nor resurrect a
+    /// release the barrier, so it can neither revert protection nor resurrect a
     /// reconciled ghost. The `revision` half is what lets same-connection
     /// retries (equal epoch) order: each carries a strictly-higher revision.
-    private var lastRestorationKey: PrivacyOrderingKey?
+    private var lastRestorationKey: ProtectionOrderingKey?
     /// Session ids that a `restoreBatch` could resurrect: every session created
     /// by the validated GUI (`createSession`'s `restorable`) or restored (all
     /// restored sessions are GUI-supplied). ONLY these can appear in a GUI
@@ -486,14 +486,14 @@ public actor SessionManager {
     /// from disk. The batch is an `(epoch, tier, revision)`-fenced, all-or-none
     /// transaction (`epoch` = connection id, rising across reconnects; `tier` =
     /// the `restore` tier, which sits below the `live` tier of any
-    /// `session.create`/`session.setPrivateBatch` at the same epoch; `revision` =
+    /// `session.create`/`session.setProtectedBatch` at the same epoch; `revision` =
     /// the GUI's monotonic per-send counter, rising across same-connection
     /// retries):
     ///
     /// 0. **Staleness fence.** `epoch` is the issuing connection id, monotonic
     ///    across reconnects. A restore strictly older than the last applied one
     ///    is rejected without mutating anything or releasing the barrier, so a
-    ///    dead/older connection's late batch can neither revert privacy nor
+    ///    dead/older connection's late batch can neither revert protection nor
     ///    resurrect a reconciled ghost.
     /// 1. **Validate** the whole batch (in-batch dedup, short-id syntax,
     ///    verifier/metadata agreement for a live session, short-id collision).
@@ -502,13 +502,13 @@ public actor SessionManager {
     ///    key and releases the barrier up front (reserved before any
     ///    suspension, so a restore interleaving during the async tail sees it
     ///    and bails at step 0 unless it is genuinely newer): insert every ABSENT
-    ///    session (privacy seeded fail-closed in-turn) except one still
+    ///    session (protection seeded fail-closed in-turn) except one still
     ///    tombstoned from a recent `session.close`, which a stale captured
     ///    inventory must not resurrect, and for a live session
-    ///    re-apply its authoritative privacy under this batch's `(epoch,
+    ///    re-apply its authoritative protection under this batch's `(epoch,
     ///    .restoreBaseline, revision)` key, so a NEWER restore (even a
-    ///    same-connection retry with a higher revision) corrects a stale privacy
-    ///    value, while a live `setPrivateBatch` the user issued after the restore
+    ///    same-connection retry with a higher revision) corrects a stale protection
+    ///    value, while a live `setProtectedBatch` the user issued after the restore
     ///    still wins (it carries the higher `.liveAuthority` tier). Immutable
     ///    metadata (role/short id) is validated to match and left untouched.
     ///    Every in-batch session's assertion key is refreshed to this batch.
@@ -548,18 +548,18 @@ public actor SessionManager {
         epoch: UInt64,
         revision: Int
     ) async throws -> SessionRestoreBatchResult {
-        // ONE key governs staleness, privacy, AND membership for this batch:
+        // ONE key governs staleness, protection, AND membership for this batch:
         // `(epoch, .restoreBaseline, revision)`. The `.restoreBaseline` tier is
         // what keeps a reconnect restore's inventory value BELOW any live user
-        // action at the same epoch: a `setPrivateBatch`/`privacySnapshot`
+        // action at the same epoch: a `setProtectedBatch`/`protectionSnapshot`
         // (`.liveAuthority`) the user issues after the restore always wins, and a
         // live `session.create` membership stamp (`.liveAuthority`) is never
         // reaped by a same-connection restore that merely raced it. Within the
         // `.restoreBaseline` tier the `revision` orders same-connection retries
         // against each other, so a higher retry can both correct a present
-        // session's privacy and reap one an earlier retry asserted but this one
+        // session's protection and reap one an earlier retry asserted but this one
         // drops. Across reconnects the epoch (compared first) still dominates.
-        let restoreKey = PrivacyOrderingKey(epoch: epoch, revision: revision, tier: .restoreBaseline)
+        let restoreKey = ProtectionOrderingKey(epoch: epoch, revision: revision, tier: .restoreBaseline)
         // 0. Staleness fence over `restoreKey`. A batch whose key does not
         //    dominate the last applied one is stale and is rejected WITHOUT
         //    mutating anything or releasing the barrier. This includes a late
@@ -641,8 +641,8 @@ public actor SessionManager {
                     owner: owner
                 )
                 sessions[entry.id] = state
-                if entry.isPrivate { privateSessions.insert(entry.id) }
-                privacyOrdering[entry.id] = restoreKey
+                if entry.isProtected { protectedSessions.insert(entry.id) }
+                protectionOrdering[entry.id] = restoreKey
                 // Allocate the incarnation and enqueue its registration on the
                 // id's lane. If a predecessor teardown of this UUID is still in
                 // flight, `enqueueRegistration` sets `.pendingRegistration(n+1)`
@@ -653,16 +653,16 @@ public actor SessionManager {
                 let incarnation = allocateIncarnation()
                 let registration = enqueueRegistration(entry.id, incarnation)
                 insertedRegistrations[entry.id] = (incarnation, registration)
-            } else if privacyDominates(restoreKey, over: privacyOrdering[entry.id]) {
+            } else if protectionDominates(restoreKey, over: protectionOrdering[entry.id]) {
                 // Present session, re-asserted by this inventory: apply its
-                // authoritative privacy ONLY when this key dominates the stored
+                // authoritative protection ONLY when this key dominates the stored
                 // one, so a NEWER restore (higher revision, even same
                 // connection) corrects an older restore value, while a live
-                // `setPrivateBatch` the user made after the restore keeps its
+                // `setProtectedBatch` the user made after the restore keeps its
                 // higher-tier win. Immutable metadata is validated to match, so
                 // it is left untouched.
-                if entry.isPrivate { privateSessions.insert(entry.id) } else { privateSessions.remove(entry.id) }
-                privacyOrdering[entry.id] = restoreKey
+                if entry.isProtected { protectedSessions.insert(entry.id) } else { protectedSessions.remove(entry.id) }
+                protectionOrdering[entry.id] = restoreKey
             }
             // Every in-batch session is re-asserted as live by this batch, so a
             // later reconciliation keeps it (and a same-connection retry that
@@ -962,10 +962,10 @@ public actor SessionManager {
         closeTombstones.formIntersection(keep)
     }
 
-    /// Whether `key` strictly dominates the `existing` privacy-ordering key,
-    /// the same last-write-wins rule `setPrivateBatch` uses (`key <= existing`
+    /// Whether `key` strictly dominates the `existing` protection-ordering key,
+    /// the same last-write-wins rule `setProtectedBatch` uses (`key <= existing`
     /// is stale). A nil `existing` (never touched) is dominated by any key.
-    private func privacyDominates(_ key: PrivacyOrderingKey, over existing: PrivacyOrderingKey?) -> Bool {
+    private func protectionDominates(_ key: ProtectionOrderingKey, over existing: ProtectionOrderingKey?) -> Bool {
         guard let existing else { return true }
         return !(key <= existing)
     }
@@ -1005,7 +1005,7 @@ public actor SessionManager {
         name: String? = nil,
         role: SessionRole = .agent,
         owner: OwnerProcessIdentity? = nil,
-        initialPrivate: Bool = false,
+        initialProtected: Bool = false,
         epoch: UInt64 = 0,
         restorable: Bool = false
     ) async throws -> CreatedSession {
@@ -1027,21 +1027,22 @@ public actor SessionManager {
             owner: owner
         )
         sessions[id] = state
-        // Seed privacy in the SAME actor turn as `sessions[id]`, before ANY
-        // `await` below. A terminal joining a private tab must never be
-        // observable as public: the store registration and the publish are all
-        // `await`s, and a `tabs.list` racing any of those suspensions (actor
-        // reentrancy) would see a public row for it if privacy were seeded
+        // Seed protection in the SAME actor turn as `sessions[id]`, before ANY
+        // `await` below. A terminal joining a protected tab must never be
+        // observable as unprotected: the store registration and the publish are
+        // all `await`s, and a `tabs.list` racing any of those suspensions
+        // (actor reentrancy) would see an unprotected row for it if
+        // protection were seeded
         // later. Inserting before the first await closes that window.
-        if initialPrivate {
-            privateSessions.insert(id)
+        if initialProtected {
+            protectedSessions.insert(id)
         }
         // Stamp the assertion key at the `.liveAuthority` tier so an
         // authoritative `restoreBatch` reconciliation can tell this live session
         // apart from an abandoned ghost, and can't reap it from a same-epoch
         // restore that merely raced the create. Same actor turn as the insert,
         // before any await.
-        sessionAssertionKey[id] = PrivacyOrderingKey(epoch: epoch, revision: 0, tier: .liveAuthority)
+        sessionAssertionKey[id] = ProtectionOrderingKey(epoch: epoch, revision: 0, tier: .liveAuthority)
         // Track a GUI-minted session as restorable, so its later close leaves a
         // tombstone that fences a stale restore from resurrecting it. Non-GUI
         // sessions never appear in a GUI inventory, so they are not tracked.
@@ -1149,20 +1150,20 @@ public actor SessionManager {
     /// map. Safe to call from an await-free segment.
     private func removeSessionMaps(_ sessionId: UUID) {
         sessions.removeValue(forKey: sessionId)
-        privateSessions.remove(sessionId)
+        protectedSessions.remove(sessionId)
         displayTitles.removeValue(forKey: sessionId)
         displayTitleWriters.removeValue(forKey: sessionId)
-        privacyOrdering.removeValue(forKey: sessionId)
+        protectionOrdering.removeValue(forKey: sessionId)
         sessionAssertionKey.removeValue(forKey: sessionId)
         restorableSessions.remove(sessionId)
     }
 
-    /// Atomically set the privacy flag for a set of sessions: the
+    /// Atomically set the protection flag for a set of sessions: the
     /// terminal-pane sessions of one tab. Validates that **every** id
     /// names a live session FIRST; if any is unknown it throws
     /// `SessionError.notFound` for that id and mutates nothing, so a
     /// partial batch can never leave the daemon holding a mixed
-    /// private/public set the GUI's single tab boolean can't represent.
+    /// protected/unprotected set the GUI's single tab boolean can't represent.
     /// After validation it flips the whole set in one synchronous actor turn
     /// (no interior `await`, so no other actor message interleaves between
     /// validation and application). Nothing is written to disk; the daemon
@@ -1180,91 +1181,91 @@ public actor SessionManager {
     /// returns `applied: false` without mutating anything. This is what
     /// lets the GUI stop serializing sends: an older write arriving late
     /// (even across an XPC reconnect, or a GUI restart replaying low
-    /// revisions) loses because its key does not dominate. `isPrivate` is
+    /// revisions) loses because its key does not dominate. `isProtected` is
     /// the desired absolute state, so a re-applied winning batch is a
     /// no-op.
     @discardableResult
-    public func setPrivateBatch(
+    public func setProtectedBatch(
         sessionIds: [UUID],
-        isPrivate: Bool,
+        isProtected: Bool,
         revision: Int,
         epoch: UInt64
-    ) throws -> SessionSetPrivateBatchResult {
+    ) throws -> SessionSetProtectedBatchResult {
         for id in sessionIds where sessions[id] == nil {
             throw SessionError.notFound(sessionId: id)
         }
-        let key = PrivacyOrderingKey(epoch: epoch, revision: revision)
+        let key = ProtectionOrderingKey(epoch: epoch, revision: revision)
         // Stale iff the key fails to strictly dominate ANY target
         // session's last-applied key. All-or-none: one stale member
         // rejects the whole batch, so a tab's sessions never split.
         let isStale = sessionIds.contains { id in
-            if let existing = privacyOrdering[id] { return key <= existing }
+            if let existing = protectionOrdering[id] { return key <= existing }
             return false
         }
         if isStale {
-            return SessionSetPrivateBatchResult(
+            return SessionSetProtectedBatchResult(
                 applied: false,
                 revision: revision,
-                isPrivate: isPrivate
+                isProtected: isProtected
             )
         }
         for id in sessionIds {
-            if isPrivate {
-                privateSessions.insert(id)
+            if isProtected {
+                protectedSessions.insert(id)
             } else {
-                privateSessions.remove(id)
+                protectedSessions.remove(id)
             }
-            privacyOrdering[id] = key
+            protectionOrdering[id] = key
         }
-        return SessionSetPrivateBatchResult(
+        return SessionSetProtectedBatchResult(
             applied: true,
             revision: revision,
-            isPrivate: isPrivate
+            isProtected: isProtected
         )
     }
 
-    /// Ordering-fenced authoritative privacy snapshot. In one actor turn:
+    /// Ordering-fenced authoritative protection snapshot. In one actor turn:
     /// snapshot every requested session (explicit `.missing` for an unknown
     /// id) and, if `(epoch, revision)` strictly dominates every LIVE requested
     /// session's current key, advance them all to that key
-    /// without changing privacy. Advancing is the fence: a delayed older
+    /// without changing protection. Advancing is the fence: a delayed older
     /// write now fails the dominance check and returns `applied: false`, so
     /// the snapshot the GUI receives can't already be obsolete. `fenced` is
     /// false (and nothing is advanced) when a newer authority already
     /// exists on some session; the GUI treats that as unresolved.
-    public func privacySnapshot(
+    public func protectionSnapshot(
         sessionIds: [UUID],
         revision: Int,
         epoch: UInt64
-    ) -> SessionPrivacySnapshotResult {
-        let key = PrivacyOrderingKey(epoch: epoch, revision: revision)
+    ) -> SessionProtectionSnapshotResult {
+        let key = ProtectionOrderingKey(epoch: epoch, revision: revision)
         let fenced = !sessionIds.contains { id in
-            guard sessions[id] != nil, let existing = privacyOrdering[id] else { return false }
+            guard sessions[id] != nil, let existing = protectionOrdering[id] else { return false }
             return key <= existing
         }
         if fenced {
             for id in sessionIds where sessions[id] != nil {
-                privacyOrdering[id] = key
+                protectionOrdering[id] = key
             }
         }
-        let entries = sessionIds.map { id -> SessionPrivacyEntry in
+        let entries = sessionIds.map { id -> SessionProtectionEntry in
             guard sessions[id] != nil else {
-                return SessionPrivacyEntry(sessionId: id.uuidString, state: .missing)
+                return SessionProtectionEntry(sessionId: id.uuidString, state: .missing)
             }
-            return SessionPrivacyEntry(
+            return SessionProtectionEntry(
                 sessionId: id.uuidString,
-                state: privateSessions.contains(id) ? .privateState : .publicState
+                state: protectedSessions.contains(id) ? .protectedState : .unprotectedState
             )
         }
-        return SessionPrivacySnapshotResult(fenced: fenced, revision: revision, sessions: entries)
+        return SessionProtectionSnapshotResult(fenced: fenced, revision: revision, sessions: entries)
     }
 
-    /// Whether the session carries the privacy flag. Returns false
+    /// Whether the session carries the protection flag. Returns false
     /// for unknown sessions (no leak: the caller's filter sees the
-    /// session as non-private and the listing path drops it via the
+    /// session as unprotected and the listing path drops it via the
     /// existence check anyway).
-    public func isPrivate(_ sessionId: UUID) -> Bool {
-        privateSessions.contains(sessionId)
+    public func isProtected(_ sessionId: UUID) -> Bool {
+        protectedSessions.contains(sessionId)
     }
 
     /// Cache the tab's live label, or clear it when `title` normalizes to
@@ -1303,9 +1304,9 @@ public actor SessionManager {
     }
 
     /// The session's cached live label, or nil when none was pushed.
-    /// **Unfiltered:** it answers for any session, private or not. Code
+    /// **Unfiltered:** it answers for any session, protected or not. Code
     /// serving a client must go through `sessionsWithDisplayTitles(visibleTo:)`,
-    /// which pairs each title with the privacy-filtered session projection.
+    /// which pairs each title with the protection-filtered session projection.
     func displayTitle(_ sessionId: UUID) -> String? {
         displayTitles[sessionId]
     }
@@ -1324,14 +1325,14 @@ public actor SessionManager {
         sessions[id]
     }
 
-    /// Sessions visible to a caller. Private sessions are filtered
+    /// Sessions visible to a caller. Protected sessions are filtered
     /// out unless the caller is authenticated as that session (the
-    /// owner sees its own private tab). An unauthenticated caller,
-    /// daemon-wide with no creds, gets only non-private sessions.
+    /// owner sees its own protected tab). An unauthenticated caller,
+    /// daemon-wide with no creds, gets only non-protected sessions.
     public func sessions(visibleTo callerSessionId: UUID?) -> [SessionState] {
         sessions.values
             .filter { state in
-                !privateSessions.contains(state.id) || state.id == callerSessionId
+                !protectedSessions.contains(state.id) || state.id == callerSessionId
             }
             .sorted { $0.createdAt < $1.createdAt }
     }
@@ -1339,7 +1340,7 @@ public actor SessionManager {
     /// The `sessions(visibleTo:)` projection paired with each session's
     /// cached display title, in one actor turn so a title can't be read
     /// against a session set the same listing didn't see. Titles ride the
-    /// same privacy filter for free: a private tab's label is exactly as
+    /// same protection filter for free: a protected tab's label is exactly as
     /// visible as the tab itself.
     public func sessionsWithDisplayTitles(
         visibleTo callerSessionId: UUID?

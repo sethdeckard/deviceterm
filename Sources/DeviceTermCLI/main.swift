@@ -377,7 +377,7 @@ func formatPaneInfo(_ payload: PaneInfoPayload) -> String {
 /// `<id>\t<kind>\t<name>\t<model>\t<os>\t<state>\t<attachment>`. `model`
 /// and `os` are physical-device only (sims show `-`) and disambiguate
 /// two connected devices that share a name. The attachment column reads
-/// `attached` (owner hidden by privacy opacity) or `available`; an owner
+/// `attached` (owner hidden by protection opacity) or `available`; an owner
 /// session that the caller may see appears as `attached:<sessionId>`.
 func formatDeviceRoster(_ roster: [DeviceRosterEntry]) -> String {
     roster

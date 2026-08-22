@@ -392,26 +392,26 @@ struct WorkspaceCommandsTests {
     }
 
     @Test
-    func tabSetPrivateAcceptsTrueAndFalse() {
+    func tabSetProtectedAcceptsTrueAndFalse() {
         // Both the positive and negative forms parse cleanly; the
         // boolean lands as the second element of the
-        // `.tabSetPrivate` case.
-        let onCmd = CLICommands.parse(["deviceterm", "tab", "set-private", "true"])
-        if case let .tabSetPrivate(_, isPrivate) = onCmd {
-            #expect(isPrivate == true)
+        // `.tabSetProtected` case.
+        let onCmd = CLICommands.parse(["deviceterm", "tab", "set-protected", "true"])
+        if case let .tabSetProtected(_, isProtected) = onCmd {
+            #expect(isProtected == true)
         } else {
-            Issue.record("expected .tabSetPrivate; got \(onCmd)")
+            Issue.record("expected .tabSetProtected; got \(onCmd)")
         }
-        let offCmd = CLICommands.parse(["deviceterm", "tab", "set-private", "false"])
-        if case let .tabSetPrivate(_, isPrivate) = offCmd {
-            #expect(isPrivate == false)
+        let offCmd = CLICommands.parse(["deviceterm", "tab", "set-protected", "false"])
+        if case let .tabSetProtected(_, isProtected) = offCmd {
+            #expect(isProtected == false)
         } else {
-            Issue.record("expected .tabSetPrivate; got \(offCmd)")
+            Issue.record("expected .tabSetProtected; got \(offCmd)")
         }
     }
 
     @Test
-    func tabSetPrivateAcceptsCommonSynonyms() {
+    func tabSetProtectedAcceptsCommonSynonyms() {
         // The synonyms documented at parse time (yes/no, on/off,
         // 1/0) should all parse cleanly so an agent typing a
         // sloppy shorthand doesn't trip over the verb.
@@ -425,19 +425,19 @@ struct WorkspaceCommandsTests {
         ]
         for (raw, expected) in cases {
             let cmd = CLICommands.parse(
-                ["deviceterm", "tab", "set-private", raw]
+                ["deviceterm", "tab", "set-protected", raw]
             )
-            if case let .tabSetPrivate(_, isPrivate) = cmd {
-                #expect(isPrivate == expected, "for raw=\(raw)")
+            if case let .tabSetProtected(_, isProtected) = cmd {
+                #expect(isProtected == expected, "for raw=\(raw)")
             } else {
-                Issue.record("expected .tabSetPrivate for \(raw); got \(cmd)")
+                Issue.record("expected .tabSetProtected for \(raw); got \(cmd)")
             }
         }
     }
 
     @Test
-    func tabSetPrivateRejectsUnknownBoolean() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "set-private", "maybe"])
+    func tabSetProtectedRejectsUnknownBoolean() {
+        let cmd = CLICommands.parse(["deviceterm", "tab", "set-protected", "maybe"])
         if case .usage = cmd {
             // Expected: non-boolean tokens land at usage.
         } else {
@@ -446,8 +446,8 @@ struct WorkspaceCommandsTests {
     }
 
     @Test
-    func tabSetPrivateRequiresPositional() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "set-private"])
+    func tabSetProtectedRequiresPositional() {
+        let cmd = CLICommands.parse(["deviceterm", "tab", "set-protected"])
         if case .usage = cmd {
             // Expected: the verb has no useful default for the bool.
         } else {
@@ -456,23 +456,23 @@ struct WorkspaceCommandsTests {
     }
 
     @Test
-    func tabSetPrivateForwardsTabRef() {
+    func tabSetProtectedForwardsTabRef() {
         // `--tab <ref>` resolves to the wire-encoded ref; without
         // the flag the ref defaults to `.current`.
         let cmd = CLICommands.parse(
             [
             "deviceterm",
             "tab",
-            "set-private",
+            "set-protected",
             "true",
             "--tab",
             "billing"
             ]
             )
-        if case let .tabSetPrivate(ref, _) = cmd {
+        if case let .tabSetProtected(ref, _) = cmd {
             #expect(ref.value == "billing")
         } else {
-            Issue.record("expected .tabSetPrivate; got \(cmd)")
+            Issue.record("expected .tabSetProtected; got \(cmd)")
         }
     }
 

@@ -51,7 +51,7 @@ extension CLICommands {
             return .usage(
                 message:
                 "deviceterm: 'tab' supports: open, close, rename, select, info, move, "
-                + "send-input, capture, set-private"
+                + "send-input, capture, set-protected"
                 )
         }
         switch sub {
@@ -187,17 +187,17 @@ extension CLICommands {
                 toWindow: toWindow
             )
 
-        case "set-private":
-            // `deviceterm tab set-private <true|false> [--tab <ref>]`:
+        case "set-protected":
+            // `deviceterm tab set-protected <true|false> [--tab <ref>]`:
             // owner-only, enforced GUI-side by the origin gate (the
             // mutation itself rides the validated-GUI batch RPC). The
-            // boolean is the positional after `set-private`; reject
+            // boolean is the positional after `set-protected`; reject
             // anything that isn't a recognized flag value so a typo
             // doesn't silently default.
             guard let raw = pos.dropFirst().first else {
                 return .usage(
                     message:
-                    "usage: deviceterm tab set-private <true|false> [--tab <ref>]"
+                    "usage: deviceterm tab set-protected <true|false> [--tab <ref>]"
                     )
             }
             let parsed: Bool
@@ -211,19 +211,19 @@ extension CLICommands {
             default:
                 return .usage(
                     message:
-                    "deviceterm: 'tab set-private' expects true or false; got '\(raw)'"
+                    "deviceterm: 'tab set-protected' expects true or false; got '\(raw)'"
                     )
             }
-            return .tabSetPrivate(
+            return .tabSetProtected(
                 tab: parseTabRef(flags["tab"]),
-                isPrivate: parsed
+                isProtected: parsed
             )
 
         default:
             return .usage(
                 message:
                 "deviceterm: 'tab' supports: open, close, rename, select, info, move, "
-                + "send-input, capture, set-private"
+                + "send-input, capture, set-protected"
                 )
         }
     }
@@ -646,15 +646,15 @@ extension CLICommands {
         try request(method: .tabCapture, body: AppCommandParams.TabCapture(tab: tab))
     }
 
-    public static func tabSetPrivateRequest(
+    public static func tabSetProtectedRequest(
         tab: Wire.TabRef,
-        isPrivate: Bool
+        isProtected: Bool
     ) throws -> RPCEnvelope {
         try request(
-            method: .tabSetPrivate,
-            body: AppCommandParams.SetTabPrivate(
+            method: .tabSetProtected,
+            body: AppCommandParams.SetTabProtected(
             tab: tab,
-            isPrivate: isPrivate
+            isProtected: isProtected
         )
             )
     }

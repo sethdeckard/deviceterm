@@ -18,7 +18,7 @@ public extension SessionManager {
         name: String? = nil,
         role: SessionRole = .agent,
         ownerPID: pid_t? = nil,
-        initialPrivate: Bool = false
+        initialProtected: Bool = false
     ) async throws -> SessionState {
         // Liveness/orphan tests pin a specific owner pid; the daemon derives
         // `ownerPID` from the captured owner identity, so wrap the test pid in
@@ -32,7 +32,7 @@ public extension SessionManager {
             name: name,
             role: role,
             owner: owner,
-            initialPrivate: initialPrivate
+            initialProtected: initialProtected
         ).state
     }
 }

@@ -38,8 +38,10 @@ public enum SessionRole: String, Codable, Sendable, Equatable, CaseIterable {
     /// metadata, NOT the authorization gate: cross-tab send-input/capture is
     /// authorized by a live automation grant (see `AutomationGrantStore`),
     /// never by this role: a granted `.agent` reaches those verbs and an
-    /// ungranted `.automation` does not. Role escalation, pane linking, and
-    /// privacy toggles are human-only via the GUI for both roles; both roles
-    /// can spawn with `--cmd`.
+    /// ungranted `.automation` does not. Role escalation is human-only;
+    /// cross-tab pane relinking is unsupported; protection changes are
+    /// owner-scoped, and only the validated GUI issues the underlying batch
+    /// RPC. None of that varies by role, and both roles can spawn with
+    /// `--cmd`.
     case automation
 }

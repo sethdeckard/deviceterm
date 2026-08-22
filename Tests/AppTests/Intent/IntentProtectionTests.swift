@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// IntentPrivacyTests. The origin-aware opacity boundary: a foreign
-// private tab is unreachable and unlistable to an external caller,
+// IntentProtectionTests. The origin-aware opacity boundary: a foreign
+// protected tab is unreachable and unlistable to an external caller,
 // across every resolver family (tab / pane / window / listing) and the
-// `set-private` owner gate. In-process callers (the human) see
+// `set-protected` owner gate. In-process callers (the human) see
 // everything.
 //
 // A leak in any one path is as bad as a leak in `capture`, so the suite
@@ -15,7 +15,7 @@ import DaemonProtocol
 import Testing
 
 @MainActor
-struct IntentPrivacyTests {
+struct IntentProtectionTests {
     private struct Harness {
         let dispatcher: IntentDispatcher
         let workspace: WorkspaceViewModel
@@ -28,7 +28,7 @@ struct IntentPrivacyTests {
         id: Int,
         session: String,
         name: String? = nil,
-        isPrivate: Bool = false,
+        isProtected: Bool = false,
         panes: [SimPaneState] = []
     ) -> TabState {
         let primary = TerminalPaneState(
@@ -42,7 +42,7 @@ struct IntentPrivacyTests {
             id: TabID(value: id),
             terminals: [primary],
             simPanes: panes,
-            isPrivate: isPrivate
+            isProtected: isProtected
         )
     }
 
@@ -50,7 +50,7 @@ struct IntentPrivacyTests {
         SimPaneState(paneId: paneId, udid: udid, displayName: "iPhone", family: "iPhone")
     }
 
-    /// One window per element (so a window can hold only a foreign-private
+    /// One window per element (so a window can hold only a foreign-protected
     /// tab and thereby disappear from an external caller's window list).
     private func workspace(windows: [[TabState]], keyIndex: Int = 0) -> WorkspaceViewModel {
         let space = WorkspaceViewModel()
@@ -76,9 +76,9 @@ struct IntentPrivacyTests {
     // MARK: - Tab resolution
 
     @Test
-    func foreignPrivateTabIsNotFoundBySessionID() {
+    func foreignProtectedTabIsNotFoundBySessionID() {
         let pub = tab(id: 1, session: "S-pub")
-        let priv = tab(id: 2, session: "S-priv", isPrivate: true)
+        let priv = tab(id: 2, session: "S-priv", isProtected: true)
         let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub"))
         #expect(throws: IntentError.self) {
             try res.resolveTab(.sessionId("S-priv"))
@@ -86,29 +86,29 @@ struct IntentPrivacyTests {
     }
 
     @Test
-    func ownerReachesOwnPrivateTab() throws {
+    func ownerReachesOwnProtectedTab() throws {
         let pub = tab(id: 1, session: "S-pub")
-        let priv = tab(id: 2, session: "S-priv", isPrivate: true)
+        let priv = tab(id: 2, session: "S-priv", isProtected: true)
         let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-priv"))
         let resolved = try res.resolveTab(.sessionId("S-priv"))
         #expect(resolved.tabID == TabID(value: 2))
     }
 
     @Test
-    func inProcessSeesPrivateTab() throws {
-        let priv = tab(id: 2, session: "S-priv", isPrivate: true)
+    func inProcessSeesProtectedTab() throws {
+        let priv = tab(id: 2, session: "S-priv", isProtected: true)
         let res = resolver(workspace(windows: [[priv]]), .inProcess)
         let resolved = try res.resolveTab(.sessionId("S-priv"))
         #expect(resolved.tabID == TabID(value: 2))
     }
 
     @Test
-    func ambiguousNameDoesNotLeakForeignPrivateTab() throws {
-        // A name shared by a visible tab and a foreign-private tab must
+    func ambiguousNameDoesNotLeakForeignProtectedTab() throws {
+        // A name shared by a visible tab and a foreign-protected tab must
         // resolve to the visible one, never `.ambiguous`, which would
-        // reveal the private tab and a match count.
+        // reveal the protected tab and a match count.
         let pub = tab(id: 1, session: "S-pub", name: "shared")
-        let priv = tab(id: 2, session: "S-priv", name: "shared", isPrivate: true)
+        let priv = tab(id: 2, session: "S-priv", name: "shared", isProtected: true)
         let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub"))
         let resolved = try res.resolveTab(.name("shared"))
         #expect(resolved.tabID == TabID(value: 1))
@@ -128,12 +128,12 @@ struct IntentPrivacyTests {
     // MARK: - Pane resolution
 
     @Test
-    func foreignPrivateTabPaneIsNotFound() {
+    func foreignProtectedTabPaneIsNotFound() {
         let pub = tab(id: 1, session: "S-pub")
         let priv = tab(
             id: 2,
             session: "S-priv",
-            isPrivate: true,
+            isProtected: true,
             panes: [pane(paneId: "P-priv", udid: "U-priv")]
         )
         let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub"))
@@ -144,11 +144,11 @@ struct IntentPrivacyTests {
     // MARK: - Window resolution
 
     @Test
-    func windowWithOnlyForeignPrivateTabDisappearsFromIndex() throws {
-        // Window 2 holds only a foreign-private tab, so it isn't counted
+    func windowWithOnlyForeignProtectedTabDisappearsFromIndex() throws {
+        // Window 2 holds only a foreign-protected tab, so it isn't counted
         // in an external caller's index space.
         let winA = [tab(id: 1, session: "S-pub")]
-        let winB = [tab(id: 2, session: "S-priv", isPrivate: true)]
+        let winB = [tab(id: 2, session: "S-priv", isProtected: true)]
         let res = resolver(workspace(windows: [winA, winB]), .external(sessionID: "S-pub"))
         let first = try res.resolveWindow(.index(1))
         #expect(first == WindowID(value: 1))
@@ -167,7 +167,7 @@ struct IntentPrivacyTests {
         #expect(current == WindowID(value: 2))
     }
 
-    // MARK: - Dispatcher: set-private owner gate + windows.list
+    // MARK: - Dispatcher: set-protected owner gate + windows.list
 
     private func makeHarness(_ windows: [[TabState]]) -> Harness {
         let space = workspace(windows: windows)
@@ -182,12 +182,12 @@ struct IntentPrivacyTests {
     }
 
     @Test
-    func setTabPrivateExternalNonOwnerRefused() async {
+    func setTabProtectedExternalNonOwnerRefused() async {
         let pub = tab(id: 1, session: "S-pub")
-        let priv = tab(id: 2, session: "S-priv", isPrivate: true)
+        let priv = tab(id: 2, session: "S-priv", isProtected: true)
         let harness = makeHarness([[pub, priv]])
         let result = await harness.dispatcher.dispatch(
-            .setTabPrivate(.sessionId("S-priv"), isPrivate: false),
+            .setTabProtected(.sessionId("S-priv"), isProtected: false),
             origin: .external(sessionID: "S-pub")
         )
         await settle()
@@ -195,42 +195,42 @@ struct IntentPrivacyTests {
             Issue.record("expected notFound; got \(result)"); return
         }
         #expect(error.code == "intent.notFound")
-        #expect(harness.fake.setPrivateBatchCalls.isEmpty)
+        #expect(harness.fake.setProtectedBatchCalls.isEmpty)
     }
 
     @Test
-    func setTabPrivateExternalNilSessionRefused() async {
+    func setTabProtectedExternalNilSessionRefused() async {
         let harness = makeHarness([[tab(id: 1, session: "S-A")]])
         let result = await harness.dispatcher.dispatch(
-            .setTabPrivate(.sessionId("S-A"), isPrivate: true),
+            .setTabProtected(.sessionId("S-A"), isProtected: true),
             origin: .external(sessionID: nil)
         )
         await settle()
         guard case .error = result else {
             Issue.record("expected error; got \(result)"); return
         }
-        #expect(harness.fake.setPrivateBatchCalls.isEmpty)
+        #expect(harness.fake.setProtectedBatchCalls.isEmpty)
     }
 
     @Test
-    func setTabPrivateInProcessCommitsAndReportsCommitted() async {
+    func setTabProtectedInProcessCommitsAndReportsCommitted() async {
         // The dispatch awaits the transition and reports the daemon's real
         // outcome: a successful batch resolves to `committed: true`.
         let harness = makeHarness([[tab(id: 1, session: "S-A")]])
         let result = await harness.dispatcher.dispatch(
-            .setTabPrivate(.sessionId("S-A"), isPrivate: true),
+            .setTabProtected(.sessionId("S-A"), isProtected: true),
             origin: .inProcess
         )
-        #expect(harness.fake.setPrivateBatchCalls.count == 1)
-        guard case let .data(.tabSetPrivate(outcome)) = result else {
+        #expect(harness.fake.setProtectedBatchCalls.count == 1)
+        guard case let .data(.tabSetProtected(outcome)) = result else {
             Issue.record("expected committed data; got \(result)"); return
         }
         #expect(outcome.committed)
-        #expect(outcome.isPrivate)
+        #expect(outcome.isProtected)
     }
 
     @Test
-    func setTabPrivateReportsErrorOnDefiniteRefusal() async {
+    func setTabProtectedReportsErrorOnDefiniteRefusal() async {
         // A DEFINITE daemon rejection (validated and refused before the
         // atomic mutation, so it definitely never committed) is a terminal
         // failure, reported as an `.error`, not pending. Retrying can't
@@ -238,11 +238,11 @@ struct IntentPrivacyTests {
         // reconciles the presentation from the authoritative daemon state
         // rather than a request-time snapshot.
         let harness = makeHarness([[tab(id: 1, session: "S-A")]])
-        harness.fake.setPrivateBatchFailures = [
+        harness.fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_602, message: "refused")
         ]
         let result = await harness.dispatcher.dispatch(
-            .setTabPrivate(.sessionId("S-A"), isPrivate: true),
+            .setTabProtected(.sessionId("S-A"), isProtected: true),
             origin: .inProcess
         )
         guard case .error = result else {
@@ -251,30 +251,30 @@ struct IntentPrivacyTests {
     }
 
     @Test
-    func setTabPrivateReportsPendingOnIndeterminateLoss() async {
+    func setTabProtectedReportsPendingOnIndeterminateLoss() async {
         // An indeterminate transport loss reports pending (converging),
         // not a false confirmation.
         let harness = makeHarness([[tab(id: 1, session: "S-A")]])
-        harness.fake.setPrivateBatchFailures = [
+        harness.fake.setProtectedBatchFailures = [
             DaemonClientError.transport("dropped")
         ]
         let result = await harness.dispatcher.dispatch(
-            .setTabPrivate(.sessionId("S-A"), isPrivate: true),
+            .setTabProtected(.sessionId("S-A"), isProtected: true),
             origin: .inProcess
         )
-        guard case let .data(.tabSetPrivate(outcome)) = result else {
+        guard case let .data(.tabSetProtected(outcome)) = result else {
             Issue.record("expected pending data; got \(result)"); return
         }
         #expect(outcome.committed == false)
     }
 
     @Test
-    func windowCloseRefusedWhenWindowHoldsForeignPrivateTab() async {
-        // Window 1 hosts the caller's tab AND a foreign-private tab. An
-        // external close would tear down the private tab, so it fails
+    func windowCloseRefusedWhenWindowHoldsForeignProtectedTab() async {
+        // Window 1 hosts the caller's tab AND a foreign-protected tab. An
+        // external close would tear down the protected tab, so it fails
         // closed rather than closing the window.
         let mine = tab(id: 1, session: "S-A")
-        let foreign = tab(id: 2, session: "S-priv", isPrivate: true)
+        let foreign = tab(id: 2, session: "S-priv", isProtected: true)
         let harness = makeHarness([[mine, foreign]])
         let result = await harness.dispatcher.dispatch(
             .closeWindow(.current, mode: .detach),
@@ -286,16 +286,16 @@ struct IntentPrivacyTests {
     }
 
     @Test
-    func paneAttachDoesNotLeakForeignPrivateTabUDID() async {
+    func paneAttachDoesNotLeakForeignProtectedTabUDID() async {
         // An external caller attaching a UDID that lives in a foreign
-        // private tab must not receive the differentiated "already
+        // protected tab must not receive the differentiated "already
         // attached to a different tab" error (which would confirm the
         // UDID's existence there). The scan is origin-scoped, so the
         // foreign pane is invisible and the attach proceeds.
         let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
         let foreignPane = pane(paneId: "P", udid: udid)
         let mine = tab(id: 1, session: "S-pub")
-        let priv = tab(id: 2, session: "S-priv", isPrivate: true, panes: [foreignPane])
+        let priv = tab(id: 2, session: "S-priv", isProtected: true, panes: [foreignPane])
         let harness = makeHarness([[mine, priv]])
         let result = await harness.dispatcher.dispatch(
             .paneAttach(udid: udid),
@@ -306,9 +306,9 @@ struct IntentPrivacyTests {
     }
 
     @Test
-    func devicePaneRelinkDoesNotDetachForeignPrivateTab() async {
+    func devicePaneRelinkDoesNotDetachForeignProtectedTab() async {
         // The shim relink path (`relinkExisting: true`) must not detach a
-        // device mirrored in a foreign private tab, the origin-scoped
+        // device mirrored in a foreign protected tab, the origin-scoped
         // scan doesn't see it, so no detach is dispatched.
         let deviceId = "dev-1"
         let foreignDevice = DevicePaneState(
@@ -328,7 +328,7 @@ struct IntentPrivacyTests {
             terminals: [primary],
             simPanes: [],
             devicePanes: [foreignDevice],
-            isPrivate: true
+            isProtected: true
         )
         let harness = makeHarness([[mine, priv]])
         _ = await harness.dispatcher.dispatch(
@@ -336,14 +336,14 @@ struct IntentPrivacyTests {
             origin: .external(sessionID: "S-pub")
         )
         await settle()
-        // No detach of the foreign-private tab's device.
+        // No detach of the foreign-protected tab's device.
         #expect(harness.fake.closePaneCalls.isEmpty)
     }
 
     @Test
-    func windowsListOmitsForeignPrivateWindow() async {
+    func windowsListOmitsForeignProtectedWindow() async {
         let winA = [tab(id: 1, session: "S-pub")]
-        let winB = [tab(id: 2, session: "S-priv", isPrivate: true)]
+        let winB = [tab(id: 2, session: "S-priv", isProtected: true)]
         let harness = makeHarness([winA, winB])
         let result = await harness.dispatcher.dispatch(
             .windowsList(all: true),
@@ -352,7 +352,7 @@ struct IntentPrivacyTests {
         guard case .data(.windowsList(let payload)) = result else {
             Issue.record("expected windowsList; got \(result)"); return
         }
-        // Only the public window is visible; the private-only window is
+        // Only the unprotected window is visible; the protected-only window is
         // absent from the count and index space.
         #expect(payload.count == 1)
         #expect(payload[0].tabCount == 1)

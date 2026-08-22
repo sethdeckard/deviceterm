@@ -31,7 +31,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let label: String?
         let name: String?
         let role: SessionRole
-        let initialPrivate: Bool
+        let initialProtected: Bool
     }
     struct CloseSessionCall: Equatable {
         let sessionId: String
@@ -80,12 +80,12 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             self.attachment = attachment
         }
     }
-    struct SetPrivateBatchCall: Equatable {
+    struct SetProtectedBatchCall: Equatable {
         let sessionIds: [String]
-        let isPrivate: Bool
+        let isProtected: Bool
         let revision: Int
     }
-    struct PrivacySnapshotCall: Equatable {
+    struct ProtectionSnapshotCall: Equatable {
         let sessionIds: [String]
         let revision: Int
     }
@@ -214,7 +214,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// a test script "transient transport fail, then succeed" or a terminal
     /// daemon failure.
     var subscribePaneFailures: [Error?] = []
-    private(set) var setPrivateBatchCalls: [SetPrivateBatchCall] = []
+    private(set) var setProtectedBatchCalls: [SetProtectedBatchCall] = []
     /// Every `session.restoreBatch` the client sent, in order: one array of
     /// `RestoredSession`s per call. A reconnect test asserts the inventory the
     /// coordinator pushed (and that it landed before terminal rebinds).
@@ -282,42 +282,42 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// Attaches begun, across both verbs. Counts invocations, not
     /// completions, so a suspended attach is already numbered.
     private(set) var attachCallCount = 0
-    /// Errors to throw from `setPrivateBatch`, consumed one per call from
+    /// Errors to throw from `setProtectedBatch`, consumed one per call from
     /// the front. A `nil` entry (or an empty queue) yields a successful
     /// reply. Lets a transition test script "transport-fail then ack"
     /// (indeterminate retry) or a definite daemon rejection.
-    var setPrivateBatchFailures: [Error?] = []
-    /// Scripted `applied` flags for `setPrivateBatch` replies, consumed one
+    var setProtectedBatchFailures: [Error?] = []
+    /// Scripted `applied` flags for `setProtectedBatch` replies, consumed one
     /// per (non-throwing) call from the front; an empty queue yields
     /// `applied: true`. Queue `false` to simulate a stale write that lost
     /// the daemon-side `(epoch, revision)` race.
-    var setPrivateBatchApplied: [Bool] = []
-    private(set) var privacySnapshotCalls: [PrivacySnapshotCall] = []
-    /// `fenced` flag returned by `privacySnapshot` (default true).
-    var privacySnapshotFenced = true
+    var setProtectedBatchApplied: [Bool] = []
+    private(set) var protectionSnapshotCalls: [ProtectionSnapshotCall] = []
+    /// `fenced` flag returned by `protectionSnapshot` (default true).
+    var protectionSnapshotFenced = true
     /// Per-session snapshot state; sessions not listed default to
-    /// `.publicState`. Lets a reconciliation test script mixed / missing /
-    /// private snapshots.
-    var privacySnapshotStates: [String: SessionPrivacyMembership] = [:]
-    /// Errors thrown by `privacySnapshot`, one per call from the front (a
+    /// `.unprotectedState`. Lets a reconciliation test script mixed / missing /
+    /// protected snapshots.
+    var protectionSnapshotStates: [String: SessionProtectionMembership] = [:]
+    /// Errors thrown by `protectionSnapshot`, one per call from the front (a
     /// `nil` entry or empty queue = success). Models a lost authoritative read
     /// so the reconcile-retry can be exercised.
-    var privacySnapshotFailures: [Error?] = []
+    var protectionSnapshotFailures: [Error?] = []
     /// Scripted `fenced` flags, one per call from the front; empty queue falls
-    /// back to `privacySnapshotFenced`. Lets a test drive "unfenced then
+    /// back to `protectionSnapshotFenced`. Lets a test drive "unfenced then
     /// fenced" so the retry converges.
-    var privacySnapshotFencedQueue: [Bool] = []
-    /// Confirmed daemon privacy, mutated by applied `setPrivateBatch` calls
-    /// so `privacySnapshot` returns a realistic state without per-test setup.
-    private var fakePrivateSessions: Set<String> = []
+    var protectionSnapshotFencedQueue: [Bool] = []
+    /// Confirmed daemon protection, mutated by applied `setProtectedBatch` calls
+    /// so `protectionSnapshot` returns a realistic state without per-test setup.
+    private var fakeProtectedSessions: Set<String> = []
     /// Per-session last-applied ordering revision (epoch is stable in the
     /// fake's single connection), so the fake models the daemon's fence: a
-    /// `setPrivateBatch` whose revision doesn't dominate returns
-    /// `applied: false`, and a `privacySnapshot` advances it. Bypassed when a
-    /// test explicitly scripts `setPrivateBatchApplied` / the fenced queue.
+    /// `setProtectedBatch` whose revision doesn't dominate returns
+    /// `applied: false`, and a `protectionSnapshot` advances it. Bypassed when a
+    /// test explicitly scripts `setProtectedBatchApplied` / the fenced queue.
     private var fakeSessionKey: [String: Int] = [:]
-    private var privacySnapshotGateArmed = false
-    private var privacySnapshotContinuations: [CheckedContinuation<Void, Never>] = []
+    private var protectionSnapshotGateArmed = false
+    private var protectionSnapshotContinuations: [CheckedContinuation<Void, Never>] = []
     private var deviceListGateArmed = false
     private var deviceListContinuations: [CheckedContinuation<Void, Never>] = []
     /// Scripted return value for `paneAxPoint` calls. Default
@@ -372,15 +372,15 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private var closeSessionFirstSkipped = false
     private var closeSessionContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var closeSessionsWaiting = 0
-    /// Barrier for `setPrivateBatch` so a privacy-transition test can
+    /// Barrier for `setProtectedBatch` so a protection-transition test can
     /// observe the fail-closed pending state before the daemon acks.
-    private var setPrivateBatchGateArmed = false
-    private var setPrivateBatchFirstOnly = false
-    private var setPrivateBatchFirstParked = false
-    private var setPrivateBatchContinuations: [CheckedContinuation<Void, Never>] = []
-    private(set) var setPrivateBatchesWaiting = 0
+    private var setProtectedBatchGateArmed = false
+    private var setProtectedBatchFirstOnly = false
+    private var setProtectedBatchFirstParked = false
+    private var setProtectedBatchContinuations: [CheckedContinuation<Void, Never>] = []
+    private(set) var setProtectedBatchesWaiting = 0
     /// Barrier for `createSession` so a test can suspend a terminal's
-    /// session mint mid-flight and land a privacy transition's commit
+    /// session mint mid-flight and land a protection transition's commit
     /// during that await (the create-during-transition race).
     private var createSessionGateArmed = false
     private var createSessionContinuations: [CheckedContinuation<Void, Never>] = []
@@ -476,49 +476,49 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         await withCheckedContinuation { createSessionContinuations.append($0) }
     }
 
-    func armSetPrivateBatchBarrier() {
-        setPrivateBatchGateArmed = true
-        setPrivateBatchFirstOnly = false
-        setPrivateBatchFirstParked = false
+    func armSetProtectedBatchBarrier() {
+        setProtectedBatchGateArmed = true
+        setProtectedBatchFirstOnly = false
+        setProtectedBatchFirstParked = false
     }
 
-    /// Stall only the *first* `setPrivateBatch` call; later calls pass
+    /// Stall only the *first* `setProtectedBatch` call; later calls pass
     /// through immediately. Models a permanently stalled predecessor while
     /// a successor completes. The successor must still be able to commit.
-    func armSetPrivateBatchStallFirstOnly() {
-        setPrivateBatchGateArmed = true
-        setPrivateBatchFirstOnly = true
-        setPrivateBatchFirstParked = false
+    func armSetProtectedBatchStallFirstOnly() {
+        setProtectedBatchGateArmed = true
+        setProtectedBatchFirstOnly = true
+        setProtectedBatchFirstParked = false
     }
 
-    func releaseSetPrivateBatch() {
-        setPrivateBatchGateArmed = false
-        setPrivateBatchFirstOnly = false
-        setPrivateBatchFirstParked = false
-        let continuations = setPrivateBatchContinuations
-        setPrivateBatchContinuations.removeAll()
-        setPrivateBatchesWaiting = 0
+    func releaseSetProtectedBatch() {
+        setProtectedBatchGateArmed = false
+        setProtectedBatchFirstOnly = false
+        setProtectedBatchFirstParked = false
+        let continuations = setProtectedBatchContinuations
+        setProtectedBatchContinuations.removeAll()
+        setProtectedBatchesWaiting = 0
         for continuation in continuations { continuation.resume() }
     }
 
-    /// Release only the FIRST parked `setPrivateBatch` continuation, leaving
+    /// Release only the FIRST parked `setProtectedBatch` continuation, leaving
     /// the gate armed so later sends stay parked. Models an older send's
     /// reply landing while a newer one is still in flight.
-    func releaseFirstSetPrivateBatch() {
-        guard !setPrivateBatchContinuations.isEmpty else { return }
-        let first = setPrivateBatchContinuations.removeFirst()
-        setPrivateBatchesWaiting = max(0, setPrivateBatchesWaiting - 1)
+    func releaseFirstSetProtectedBatch() {
+        guard !setProtectedBatchContinuations.isEmpty else { return }
+        let first = setProtectedBatchContinuations.removeFirst()
+        setProtectedBatchesWaiting = max(0, setProtectedBatchesWaiting - 1)
         first.resume()
     }
 
-    private func awaitSetPrivateBatchGate() async {
-        guard setPrivateBatchGateArmed else { return }
-        if setPrivateBatchFirstOnly {
-            if setPrivateBatchFirstParked { return }
-            setPrivateBatchFirstParked = true
+    private func awaitSetProtectedBatchGate() async {
+        guard setProtectedBatchGateArmed else { return }
+        if setProtectedBatchFirstOnly {
+            if setProtectedBatchFirstParked { return }
+            setProtectedBatchFirstParked = true
         }
-        setPrivateBatchesWaiting += 1
-        await withCheckedContinuation { setPrivateBatchContinuations.append($0) }
+        setProtectedBatchesWaiting += 1
+        await withCheckedContinuation { setProtectedBatchContinuations.append($0) }
     }
 
     // MARK: - SessionControlling
@@ -527,10 +527,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         label: String?,
         name: String?,
         role: SessionRole,
-        initialPrivate: Bool
+        initialProtected: Bool
     ) async -> SessionCreateResponse {
         createSessionCalls.append(
-            .init(label: label, name: name, role: role, initialPrivate: initialPrivate)
+            .init(label: label, name: name, role: role, initialProtected: initialProtected)
         )
         await awaitCreateSessionGate()
         if !sessionSequence.isEmpty {
@@ -550,41 +550,41 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         await awaitCloseSessionGate()
     }
 
-    func setPrivateBatch(
+    func setProtectedBatch(
         sessionIds: [String],
-        isPrivate: Bool,
+        isProtected: Bool,
         revision: Int
-    ) async throws -> SessionSetPrivateBatchResult {
-        setPrivateBatchCalls.append(
-            .init(sessionIds: sessionIds, isPrivate: isPrivate, revision: revision)
+    ) async throws -> SessionSetProtectedBatchResult {
+        setProtectedBatchCalls.append(
+            .init(sessionIds: sessionIds, isProtected: isProtected, revision: revision)
         )
-        await awaitSetPrivateBatchGate()
-        if !setPrivateBatchFailures.isEmpty, let error = setPrivateBatchFailures.removeFirst() {
+        await awaitSetProtectedBatchGate()
+        if !setProtectedBatchFailures.isEmpty, let error = setProtectedBatchFailures.removeFirst() {
             throw error
         }
         // `applied` defaults to true (the daemon committed); a test queues
-        // `false` in `setPrivateBatchApplied` to simulate a stale write that
+        // `false` in `setProtectedBatchApplied` to simulate a stale write that
         // lost the `(epoch, revision)` race.
         // `applied`: a scripted flag if queued, else the daemon fence: apply
         // only when this revision dominates every target session's last key.
         let applied: Bool
-        if setPrivateBatchApplied.isEmpty {
+        if setProtectedBatchApplied.isEmpty {
             applied = sessionIds.allSatisfy { revision > (fakeSessionKey[$0] ?? 0) }
         } else {
-            applied = setPrivateBatchApplied.removeFirst()
+            applied = setProtectedBatchApplied.removeFirst()
         }
-        // Track confirmed state + advance keys so `privacySnapshot` reflects
+        // Track confirmed state + advance keys so `protectionSnapshot` reflects
         // reality (an applied batch mutates + advances; a stale one doesn't).
         if applied {
             for id in sessionIds {
                 fakeSessionKey[id] = revision
-                if isPrivate { fakePrivateSessions.insert(id) } else { fakePrivateSessions.remove(id) }
+                if isProtected { fakeProtectedSessions.insert(id) } else { fakeProtectedSessions.remove(id) }
             }
         }
-        return SessionSetPrivateBatchResult(
+        return SessionSetProtectedBatchResult(
             applied: applied,
             revision: revision,
-            isPrivate: isPrivate
+            isProtected: isProtected
         )
     }
 
@@ -605,41 +605,41 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         )
     }
 
-    func privacySnapshot(
+    func protectionSnapshot(
         sessionIds: [String],
         revision: Int
-    ) async throws -> SessionPrivacySnapshotResult {
-        privacySnapshotCalls.append(.init(sessionIds: sessionIds, revision: revision))
+    ) async throws -> SessionProtectionSnapshotResult {
+        protectionSnapshotCalls.append(.init(sessionIds: sessionIds, revision: revision))
         // Capture fenced + states at CALL time, BEFORE the barrier, so a
         // *delayed* response reflects the daemon state when the snapshot was
         // taken, not when released. That's what lets a test simulate a reply
         // that arrives after a newer write has since committed. A test can
-        // override any session via `privacySnapshotStates` (mixed / missing /
+        // override any session via `protectionSnapshotStates` (mixed / missing /
         // …); otherwise it reflects the tracked applied state.
         // `fenced`: a scripted flag if queued, else the daemon fence:
         // fenced only when this revision dominates every session's last key.
         let fenced: Bool
-        if privacySnapshotFencedQueue.isEmpty {
-            fenced = privacySnapshotFenced
+        if protectionSnapshotFencedQueue.isEmpty {
+            fenced = protectionSnapshotFenced
                 && sessionIds.allSatisfy { revision > (fakeSessionKey[$0] ?? 0) }
         } else {
-            fenced = privacySnapshotFencedQueue.removeFirst()
+            fenced = protectionSnapshotFencedQueue.removeFirst()
         }
-        let entries = sessionIds.map { id -> SessionPrivacyEntry in
-            let state = privacySnapshotStates[id]
-                ?? (fakePrivateSessions.contains(id) ? .privateState : .publicState)
-            return SessionPrivacyEntry(sessionId: id, state: state)
+        let entries = sessionIds.map { id -> SessionProtectionEntry in
+            let state = protectionSnapshotStates[id]
+                ?? (fakeProtectedSessions.contains(id) ? .protectedState : .unprotectedState)
+            return SessionProtectionEntry(sessionId: id, state: state)
         }
         // Fencing advances the key (at capture/daemon-processing time, before
         // the reply delay), so a delayed older write subsequently loses.
         if fenced {
             for id in sessionIds { fakeSessionKey[id] = revision }
         }
-        await awaitPrivacySnapshotGate()
-        if !privacySnapshotFailures.isEmpty, let error = privacySnapshotFailures.removeFirst() {
+        await awaitProtectionSnapshotGate()
+        if !protectionSnapshotFailures.isEmpty, let error = protectionSnapshotFailures.removeFirst() {
             throw error
         }
-        return SessionPrivacySnapshotResult(
+        return SessionProtectionSnapshotResult(
             fenced: fenced,
             revision: revision,
             sessions: entries
@@ -663,18 +663,18 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         await withCheckedContinuation { deviceListContinuations.append($0) }
     }
 
-    func armPrivacySnapshotBarrier() { privacySnapshotGateArmed = true }
+    func armProtectionSnapshotBarrier() { protectionSnapshotGateArmed = true }
 
-    func releasePrivacySnapshot() {
-        privacySnapshotGateArmed = false
-        let continuations = privacySnapshotContinuations
-        privacySnapshotContinuations.removeAll()
+    func releaseProtectionSnapshot() {
+        protectionSnapshotGateArmed = false
+        let continuations = protectionSnapshotContinuations
+        protectionSnapshotContinuations.removeAll()
         for continuation in continuations { continuation.resume() }
     }
 
-    private func awaitPrivacySnapshotGate() async {
-        guard privacySnapshotGateArmed else { return }
-        await withCheckedContinuation { privacySnapshotContinuations.append($0) }
+    private func awaitProtectionSnapshotGate() async {
+        guard protectionSnapshotGateArmed else { return }
+        await withCheckedContinuation { protectionSnapshotContinuations.append($0) }
     }
 
     // MARK: - DeviceControlling

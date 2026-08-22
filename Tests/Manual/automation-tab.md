@@ -50,7 +50,7 @@ the daemon's own code signature.
 |---|--------|----------|
 | 3.1 | Send a raw `session.create` with `role: "automation"` over the daemon socket (see below) | Error `-32011`, message `automation sessions can only be minted from the GUI`. |
 | 3.2 | Repeat with `role: "agent"` | Succeeds: proves the socket path works and only the role is refused. |
-| 3.3 | `deviceterm tab capture` inside an automation tab (against a second, non-private tab: `deviceterm tab capture --tab <shortId>`) | **Succeeds**: prints the target tab's visible text. The GUI granted this tab's session after its terminal bound, and the CLI authenticates over UDS via the bound terminal, so the live-grant scope check admits it. |
+| 3.3 | `deviceterm tab capture` inside an automation tab (against a second, unprotected tab: `deviceterm tab capture --tab <shortId>`) | **Succeeds**: prints the target tab's visible text. The GUI granted this tab's session after its terminal bound, and the CLI authenticates over UDS via the bound terminal, so the live-grant scope check admits it. |
 | 3.4 | The same `deviceterm tab capture` inside a **regular agent tab** | Fails with `-32011`, "this session has no live automation grant…". An agent tab is never granted, so the elevated verbs stay refused. |
 
 ## 3a. Grant lifecycle: reconnect and close

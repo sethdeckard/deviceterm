@@ -338,10 +338,8 @@ public enum AgentsText {
         against the daemon's own. There is no CLI verb for it and
         constructing the raw request by hand does not work.
 
-      Human-only actions
-        Three things route through the GUI rather than a CLI verb.
-        The first is a convention the CLI follows; the other two the
-        daemon enforces:
+      Authority boundaries
+        These operations use different enforcement paths:
         - Linkage-mutation (moving a pane to a different tab) —
           not supported by any path. `deviceterm device attach
           <ref>` naming a device already attached elsewhere is
@@ -354,11 +352,12 @@ public enum AgentsText {
         - Role escalation (agent → automation) — Shell → Open
           Automation Tab. The daemon refuses an automation mint
           over the CLI socket outright.
-        - Privacy-mutation for someone else — a `tab set-private`
-          only touches a tab the caller owns a terminal in. The GUI
-          enforces that owner gate, and the atomic batch RPC behind
-          it is accepted only from the signature-validated GUI peer,
-          never a raw CLI socket. Automation is not special-cased.
+        - Protection-mutation for someone else — a
+          `tab set-protected` only touches a tab the caller owns a
+          terminal in. The GUI enforces that owner gate, and the
+          atomic batch RPC behind it is accepted only from the
+          signature-validated GUI peer, never a raw CLI socket.
+          Automation is not special-cased.
 
       Pane reach
         Panes are linked to an owning session, and the daemon

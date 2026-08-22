@@ -123,7 +123,7 @@ final class IntentDispatcher {
         case let .closeWindow(ref, mode):
             let id = try resolver.resolveWindow(ref)
             // An external caller may not close a window that hosts a tab
-            // it can't see: that would tear down a foreign private tab.
+            // it can't see: that would tear down a foreign protected tab.
             // Fail closed, indistinguishable from an unknown window.
             if windowHoldsForeignTab(id, origin: origin) {
                 throw IntentError.notFound(kind: "window", ref: "close")
@@ -236,7 +236,7 @@ final class IntentDispatcher {
                     )
                 }
                 // Map the caller's visible-projection index into the raw
-                // model so a foreign-private tab in the destination can't
+                // model so a foreign-protected tab in the destination can't
                 // shift where the moved tab lands; a nil index appends.
                 let atIndex = toIndex
                     .map { rawTabIndex(visibleIndex: $0, in: destWindowID, origin: origin) }
@@ -365,7 +365,7 @@ final class IntentDispatcher {
             // Scope the cross-tab scan to tabs the caller may see. An
             // external caller must not learn (via the differentiated
             // "already attached to a different tab" error) that a UDID
-            // lives in a foreign private tab.
+            // lives in a foreign protected tab.
             let attachedElsewhere = visibleTabs(for: origin).contains { tab in
                 tab.simPanes.contains {
                     $0.udid.caseInsensitiveCompare(canonicalUDID) == .orderedSame
@@ -418,7 +418,7 @@ final class IntentDispatcher {
                 return .ok
             }
             // Only consider tabs the caller may see: a device mirrored in
-            // a foreign private tab is invisible here, so an external
+            // a foreign protected tab is invisible here, so an external
             // caller can neither probe it via the reject error nor detach
             // it via the shim relink path.
             let owningTabID = visibleTabs(for: origin).first {
@@ -499,11 +499,11 @@ final class IntentDispatcher {
             }
             return .data(.tabCapture(TabCapturePayload(text: text)))
 
-        case let .setTabPrivate(ref, isPrivate):
+        case let .setTabProtected(ref, isProtected):
             let resolved = try resolver.resolveTab(ref)
             // Owner gate by origin. In-process (the human at the keyboard)
             // always passes: the resolver already refused a foreign
-            // private tab. An external caller may flip privacy only on a
+            // protected tab. An external caller may flip protection only on a
             // tab it owns a terminal in; a nil-session external caller
             // (no authority) is refused. This is the one gate that must
             // key on *source*, not session-presence: the human toggling
@@ -517,33 +517,33 @@ final class IntentDispatcher {
                     resolved.tab.terminals.contains { $0.sessionId == sid }
                 } ?? false
                 guard isOwner else {
-                    throw IntentError.notFound(kind: "tab", ref: "set-private")
+                    throw IntentError.notFound(kind: "tab", ref: "set-protected")
                 }
             }
             // Await the transition's first decisive outcome so the caller
             // learns the daemon's real state, not an optimistic echo: an ack
-            // is committed. Pending means the requested privacy state has not
+            // is committed. Pending means the requested protection state has not
             // yet been confirmed; definite refusal or opposite-state
             // supersession returns failure.
-            let outcome = await router.applyTabPrivacy(
+            let outcome = await router.applyTabProtection(
                 tab: resolved.tabID,
-                isPrivate: isPrivate
+                isProtected: isProtected
             )
             switch outcome {
             case .committed:
-                return .data(.tabSetPrivate(
-                    TabSetPrivateResult(isPrivate: isPrivate, committed: true)
+                return .data(.tabSetProtected(
+                    TabSetProtectedResult(isProtected: isProtected, committed: true)
                 ))
 
             case .pending:
-                return .data(.tabSetPrivate(
-                    TabSetPrivateResult(isPrivate: isPrivate, committed: false)
+                return .data(.tabSetProtected(
+                    TabSetProtectedResult(isProtected: isProtected, committed: false)
                 ))
 
             case .rejected:
                 return .error(.internalError(
-                    "tab set-private was rejected (daemon refused it, "
-                    + "or a newer privacy change superseded it)"
+                    "tab set-protected was rejected (daemon refused it, "
+                    + "or a newer protection change superseded it)"
                 ))
             }
         }
@@ -618,7 +618,7 @@ final class IntentDispatcher {
     /// `includeAll == true` returns the visible-window projection;
     /// `includeAll == false` scopes to the caller's window. Counts,
     /// indices, and selected short ids are all computed over the tabs the
-    /// caller may see: a window holding only foreign-private tabs
+    /// caller may see: a window holding only foreign-protected tabs
     /// disappears entirely (no entry, no index, no count), and the
     /// selected short id is never a tab the caller can't see. In-process
     /// callers see everything.
@@ -662,7 +662,7 @@ final class IntentDispatcher {
                     // Projected key window: mark the frontmost window as key
                     // only when it's in the caller's visible set. For the
                     // interactive human, their key window always contains a
-                    // tab they own, so `*` still shows; a private-only key
+                    // tab they own, so `*` still shows; a protected-only key
                     // window (visible to nobody but its owner) simply isn't
                     // marked for others. This keeps the documented `*`
                     // semantics working while never exposing which
@@ -699,7 +699,7 @@ final class IntentDispatcher {
     /// The tabs the origin may see: the same rule the resolver enforces.
     /// Direct workspace scans (the attach ownership checks) must use this
     /// instead of walking `workspace.windows` so an external caller can't
-    /// probe or mutate a sim/device inside a foreign private tab.
+    /// probe or mutate a sim/device inside a foreign protected tab.
     private func visibleTabs(for origin: IntentOrigin) -> [TabState] {
         let all = workspace.windows.flatMap(\.tabs.tabs)
         guard origin.restrictsToVisibleTabs else { return all }
@@ -709,7 +709,7 @@ final class IntentDispatcher {
     }
 
     /// Map an external caller's visible-projection tab index in a window
-    /// to a raw `tabs` index, so a foreign-private tab can't shift where
+    /// to a raw `tabs` index, so a foreign-protected tab can't shift where
     /// the caller's index lands. In-process indices pass through
     /// unchanged; an index at/after the visible end maps to the raw end.
     private func rawTabIndex(visibleIndex: Int, in windowID: WindowID, origin: IntentOrigin) -> Int {
@@ -733,10 +733,10 @@ final class IntentDispatcher {
     /// Always false for `.inProcess` (the human owns the workspace).
     ///
     /// This gates `window.close`: closing a shared window would tear down
-    /// a co-hosted foreign private tab. The refuse-vs-succeed difference is
+    /// a co-hosted foreign protected tab. The refuse-vs-succeed difference is
     /// a *minor* 1-bit oracle ("this visible window also holds a hidden
     /// tab"), deliberately accepted as far less harmful than letting an
-    /// external caller destroy another session's private tab. (A perfectly
+    /// external caller destroy another session's protected tab. (A perfectly
     /// oracle-free fix (partial close of only the caller's tabs) is out
     /// of scope for the rare cross-session co-hosting case.)
     private func windowHoldsForeignTab(_ windowID: WindowID, origin: IntentOrigin) -> Bool {

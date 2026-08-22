@@ -183,8 +183,9 @@ A role such as `"automation"` is descriptive metadata. Cross-tab input and
 capture require a live grant, not the role string alone. Only the GUI issues
 a grant; see [`AUTOMATION.md`](AUTOMATION.md#drive-other-tabs).
 
-Private sessions remain opaque to other callers. Lists omit private sessions,
-panes, and ownership annotations unless the caller owns that private tab.
+Protected sessions remain opaque to other callers. Lists omit protected
+sessions, panes, and ownership annotations unless the caller owns that
+protected tab.
 
 ## Surface Matrix
 
@@ -206,7 +207,7 @@ panes, and ownership annotations unless the caller owns that private tab.
 | `pane open --terminal`, `pane close` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
 | `device attach --json` | Device attachment receipt | Session | GUI accepted the attachment; rendering may still be pending | Stable-additive |
 | `window open`, `window close`, `window focus` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
-| `tab set-private --json` | Privacy receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
+| `tab set-protected --json` | Protection receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
 | `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
 | `tab capture --json` | `{text}` | Automation | Visible viewport captured | Stable-additive |
 | `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper; best-effort node |
@@ -337,9 +338,9 @@ unavailable.
 `tabs list` returns one row per live terminal session, not one row per GUI tab.
 A tab with split terminal panes can produce several rows.
 
-Public sessions are visible to every caller. A private session is visible only
-to its owner. An out-of-tab caller sees public sessions and every row has
-`current: false`.
+Unprotected sessions are visible to every caller. A protected session is
+visible only to its owner. An out-of-tab caller sees unprotected sessions and
+every row has `current: false`.
 
 `name` is creation-time session metadata. `tab rename` changes the GUI title
 but does not mutate this field.
@@ -455,7 +456,7 @@ The roster is not a replacement for `simctl list` or `devicectl list`. It
 excludes shutdown and never-booted Simulators, and externally booted Simulators
 remain absent until DeviceTerm claims them.
 
-When another caller owns a private attachment, the entry reports
+When another caller owns a protected attachment, the entry reports
 `attached: false` and omits `ownerSessionId`. This is intentionally
 indistinguishable from an unattached device.
 
@@ -481,7 +482,7 @@ Without `--all`, an in-tab caller receives its own window. An out-of-tab caller
 receives an empty array.
 
 With `--all`, DeviceTerm returns the caller-visible window projection. Windows
-containing only foreign private tabs are omitted, and indices and counts are
+containing only foreign protected tabs are omitted, and indices and counts are
 computed after that filtering.
 
 ### Tab Information
@@ -739,7 +740,7 @@ Workspace receipts echo the requested tab, pane, or window reference.
 | `window close` | `{ok, window, mode}` |
 | `window focus` | `{ok, window}` |
 | `tab send-input` | `{ok, tab, bytes, typeDelayMillis?}` |
-| `tab set-private` | `{ok, tab, isPrivate, committed}` |
+| `tab set-protected` | `{ok, tab, isProtected, committed}` |
 
 Optional destination or name keys are omitted when the corresponding option is
 absent.
@@ -963,12 +964,12 @@ include scrollback.
 The JSON string preserves the captured content. DeviceTerm adds only the
 newline that terminates the outer JSON document.
 
-### Set Privacy
+### Set Protection
 
 Run:
 
 ```sh
-deviceterm tab set-private true --json
+deviceterm tab set-protected true --json
 ```
 
 Confirmed result:
@@ -976,7 +977,7 @@ Confirmed result:
 ```json
 {
   "committed": true,
-  "isPrivate": true,
+  "isProtected": true,
   "ok": true,
   "tab": "current"
 }
@@ -987,7 +988,7 @@ Unconfirmed result:
 ```json
 {
   "committed": false,
-  "isPrivate": true,
+  "isProtected": true,
   "ok": true,
   "tab": "current"
 }
@@ -1000,8 +1001,8 @@ still be converging.
 A definite rejection is a command failure, not a receipt with
 `committed: false`.
 
-Privacy behavior, including what other callers can no longer see or do, is
-described in [`AUTOMATION.md`](AUTOMATION.md#make-a-tab-private).
+Protection behavior, including what other callers can no longer see or do, is
+described in [`AUTOMATION.md`](AUTOMATION.md#protect-a-tab).
 
 ### Run a Child With a Pane Target
 

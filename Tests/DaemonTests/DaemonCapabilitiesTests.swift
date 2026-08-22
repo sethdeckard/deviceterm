@@ -136,9 +136,9 @@ func capabilitiesWithAutomationCredsReturnsAutomationRole() async throws {
     // it, and this path has no such peer.
     #expect(!response.allowedMethods.contains(RPCMethod.appCommands.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.appCommandResult.rawValue))
-    // Same for the `.validatedGUI` privacy-batch write: a credentialed
+    // Same for the `.validatedGUI` protection-batch write: a credentialed
     // CLI caller (even an automation) never sees it advertised.
-    #expect(!response.allowedMethods.contains(RPCMethod.sessionSetPrivateBatch.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.sessionSetProtectedBatch.rawValue))
 }
 
 @Test
@@ -155,7 +155,7 @@ func capabilitiesWithAgentCredsOmitsAutomationMethods() async throws {
     #expect(response.role == .agent)
     #expect(!response.allowedMethods.contains(RPCMethod.tabCapture.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.tabSendInput.rawValue))
-    #expect(!response.allowedMethods.contains(RPCMethod.sessionSetPrivateBatch.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.sessionSetProtectedBatch.rawValue))
 }
 
 @Test

@@ -35,8 +35,8 @@ enum IntentResponse: Sendable, Equatable {
     case paneInfo(PaneInfoPayload)
     case windowsList([WindowInfoPayload])
     case tabCapture(TabCapturePayload)
-    /// Awaited outcome of `tab set-private`: committed vs still
+    /// Awaited outcome of `tab set-protected`: committed vs still
     /// converging (`committed == false`). A definite rejection is an
     /// `.error`, not this.
-    case tabSetPrivate(TabSetPrivateResult)
+    case tabSetProtected(TabSetProtectedResult)
 }

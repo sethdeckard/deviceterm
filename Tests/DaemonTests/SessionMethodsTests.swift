@@ -488,18 +488,18 @@ func tabsListIsEmptyOnFreshManager() async throws {
 }
 
 @Test
-func tabsListHidesPrivateFromUnauthenticatedCaller() async throws {
-    // Private session: no auth on the connection → the daemon
-    // filters it out. This is the locked design's "private tab is
+func tabsListHidesProtectedFromUnauthenticatedCaller() async throws {
+    // Protected session: no auth on the connection → the daemon
+    // filters it out. This is the locked design's "protected tab is
     // opaque to other principals" rule applied to the
     // out-of-tab / stock-terminal case.
     let manager = SessionManager()
     let priv = try await manager.makeSessionState(
         label: nil,
-        name: "private"
+        name: "protected"
     )
-    try await manager.setPrivateBatch(sessionIds: [priv.id], isPrivate: true, revision: 1, epoch: 1)
-    _ = try await manager.makeSessionState(label: nil, name: "public")
+    try await manager.setProtectedBatch(sessionIds: [priv.id], isProtected: true, revision: 1, epoch: 1)
+    _ = try await manager.makeSessionState(label: nil, name: "unprotected")
     let envelope = RPCEnvelope(
         id: 1,
         type: .request,
@@ -513,13 +513,13 @@ func tabsListHidesPrivateFromUnauthenticatedCaller() async throws {
         as: [SessionMethods.TabsListEntry].self
     )
         )
-    #expect(tabs.map(\.name) == ["public"])
+    #expect(tabs.map(\.name) == ["unprotected"])
 }
 
 @Test
-func tabsListShowsOwnPrivateToAuthenticatedOwner() async throws {
-    // The owning session DOES see its own private tab when
-    // authenticated on the connection. Sibling-private sessions
+func tabsListShowsOwnProtectedToAuthenticatedOwner() async throws {
+    // The owning session DOES see its own protected tab when
+    // authenticated on the connection. Sibling-protected sessions
     // stay hidden.
     let manager = SessionManager()
     let created = try await manager.createSession(
@@ -527,12 +527,12 @@ func tabsListShowsOwnPrivateToAuthenticatedOwner() async throws {
         name: "owner"
     )
     let owner = created.state
-    try await manager.setPrivateBatch(sessionIds: [owner.id], isPrivate: true, revision: 1, epoch: 1)
+    try await manager.setProtectedBatch(sessionIds: [owner.id], isProtected: true, revision: 1, epoch: 1)
     let other = try await manager.makeSessionState(
         label: nil,
         name: "other"
     )
-    try await manager.setPrivateBatch(sessionIds: [other.id], isPrivate: true, revision: 1, epoch: 1)
+    try await manager.setProtectedBatch(sessionIds: [other.id], isProtected: true, revision: 1, epoch: 1)
     let envelope = RPCEnvelope(
         id: 1,
         type: .request,
@@ -602,27 +602,27 @@ func tabsListCarriesTheLiveDisplayTitle() async throws {
 }
 
 @Test
-func setPrivateBatchRefusedOverUDS() async throws {
-    // `session.setPrivateBatch` is `.validatedGUI`-scoped: the peer's
+func setProtectedBatchRefusedOverUDS() async throws {
+    // `session.setProtectedBatch` is `.validatedGUI`-scoped: the peer's
     // audit token is the authority. UDS carries no audit token, so the
     // dispatcher's scope gate refuses the method outright (even on an
     // authenticated connection) before the handler runs. Nothing
-    // mutates. The cap-readable UDS path can never flip a tab's privacy;
+    // mutates. The cap-readable UDS path can never flip a tab's protection;
     // only the signature-validated GUI peer can.
     let manager = SessionManager()
     let created = try await manager.createSession(label: nil, name: nil)
     let state = created.state
     let body = try JSONEncoder().encode(
-        SessionSetPrivateBatchParams(
+        SessionSetProtectedBatchParams(
         sessionIds: [state.id.uuidString],
-        isPrivate: true,
+        isProtected: true,
         revision: 1
     )
         )
     let envelope = RPCEnvelope(
         id: 1,
         type: .request,
-        method: "session.setPrivateBatch",
+        method: "session.setProtectedBatch",
         body: .params(body)
     )
     let response = try await roundTrip(
@@ -631,9 +631,9 @@ func setPrivateBatchRefusedOverUDS() async throws {
         authenticatedAs: created
     )
     guard case let .error(error) = response.body else {
-        Issue.record("expected .error body for UDS setPrivateBatch; got \(response.body)")
+        Issue.record("expected .error body for UDS setProtectedBatch; got \(response.body)")
         return
     }
     #expect(error.code == RPCMethodError.scopeViolationCode)
-    #expect(await manager.isPrivate(state.id) == false)
+    #expect(await manager.isProtected(state.id) == false)
 }

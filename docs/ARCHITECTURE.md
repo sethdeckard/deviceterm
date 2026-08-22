@@ -771,7 +771,7 @@ DoS. Ordinary daemon lifecycle still uses idle exit, not this method.
 
 #### `session.create`
 
-- Params: `{label?, name?, role?, initialPrivate?}`
+- Params: `{label?, name?, role?, initialProtected?}`
 - Result: `{sessionId, capability, shortId, name?, role}`
 - Scope: daemon-wide
 
@@ -803,10 +803,11 @@ human GUI mints it, so the human-only escalation property is enforced by
 the daemon, not by convention. UDS agent creates carry no GUI validation
 and are unaffected.
 
-`initialPrivate` (default false) seeds the privacy flag in the same actor
-turn the session is inserted. The GUI passes `true` for a terminal joining
-an already-private tab, so the new session is never observable as public
-on `tabs.list`; a follow-up toggle would race the create's own publish.
+`initialProtected` (default false) seeds the protection flag in the same
+actor turn the session is inserted. The GUI passes `true` for a terminal
+joining an already-protected tab, so the new session is never observable as
+unprotected on `tabs.list`; a follow-up toggle would race the create's own
+publish.
 
 #### `session.authenticate`
 
@@ -893,7 +894,7 @@ simulator to a session whose close is already in flight.
 
 #### `session.restoreBatch`
 
-- Params: `{sessions: [{sessionId, capability, shortId, role, name?, isPrivate}], revision}`
+- Params: `{sessions: [{sessionId, capability, shortId, role, name?, isProtected}], revision}`
 - Result: `{restoredCount, sessionIds}`
 - Scope: validated GUI
 
@@ -914,7 +915,7 @@ The batch is authoritative, `(epoch, tier, revision)`-fenced, and
 all-or-none. The connection id is the epoch and the GUI's monotonic
 `revision` orders same-connection retries; a restore carries the lower
 `restore` tier, which sits below the `live` tier of any `session.create`
-membership stamp or `session.setPrivateBatch` at the same epoch. A
+membership stamp or `session.setProtectedBatch` at the same epoch. A
 strictly older restore key is rejected; an equal key may replay
 idempotently.
 
@@ -927,9 +928,9 @@ is reconciled away as an abandoned ghost (a lost `session.close`) when
 this batch's key strictly dominates the key that last asserted it, so a
 session that a newer connection or a higher-revision same-connection retry
 drops is reaped, while a live `session.create` (higher tier) that merely
-raced this restore survives. A live session's privacy is updated under
+raced this restore survives. A live session's protection is updated under
 this batch's key, so a newer restore corrects it while a
-`session.setPrivateBatch` the user made after the restore still wins by
+`session.setProtectedBatch` the user made after the restore still wins by
 its higher tier.
 
 A session closed since the inventory was captured is not resurrected: a
@@ -968,28 +969,28 @@ synced watermark that advances only on a verified echo, a forced follow-up
 after a mutation mid-batch, failures that stay dirty and retry, and
 steady-state syncs that fire no terminal rebinding.
 
-Privacy is seeded fail-closed in the same actor turn, so a mid-transition
-tab restores private, never briefly public. Entry order defines the
-restored set's `tabs.list` order. Processing any non-stale batch,
+Protection is seeded fail-closed in the same actor turn, so a
+mid-transition tab restores protected, never briefly unprotected. Entry
+order defines the restored set's `tabs.list` order. Processing any non-stale batch,
 including an empty one, releases the restoration barrier (see
 `session.authenticate` and "State recovery"). The GUI re-sends its whole
 inventory with a fresh revision on every reconnect. The bearer cap is
 never logged or interpolated into an error.
 
-#### `session.setPrivateBatch`
+#### `session.setProtectedBatch`
 
-- Params: `{sessionIds, isPrivate, revision}`
-- Result: `{applied, revision, isPrivate}`
+- Params: `{sessionIds, isProtected, revision}`
+- Result: `{applied, revision, isProtected}`
 - Scope: validated GUI
 
 The peer's audit token is the authority: no `(sessionId, cap)` handshake
 rides on the wire, and a UDS caller is refused with
 `error.scope_violation`.
 
-Atomically flips the privacy flag for every session backing one tab. The
+Atomically flips the protection flag for every session backing one tab. The
 daemon validates that all ids name live sessions before mutating, then
 applies the whole set in one actor turn, so a multi-terminal tab can never
-end up torn, some private and some public.
+end up torn, some protected and some unprotected.
 
 The daemon is the ordering authority for last-write-wins. It pairs the
 client's `revision` with a server-derived epoch (the monotonic XPC
@@ -1000,30 +1001,30 @@ GUI stop serializing sends: an older write arriving late, even across an
 XPC reconnect or a GUI restart replaying low revision numbers (which the
 higher epoch defeats), loses.
 
-`isPrivate` is the desired absolute state, idempotent on retry. A returned
+`isProtected` is the desired absolute state, idempotent on retry. A returned
 `applied: false` (stale) is not an ordinary success: the GUI commits
 presentation only from an `applied: true` reply and reconciles ambiguous
-outcomes via `session.privacySnapshot`, never from a request-time
+outcomes via `session.protectionSnapshot`, never from a request-time
 snapshot.
 
-A private session disappears from `tabs.list` for every caller except the
+A protected session disappears from `tabs.list` for every caller except the
 owner; the daemon's `sessions(visibleTo:)` filter reads the dispatcher's
 `originatingSessionId` task-local. The GUI is the only legitimate caller:
 it resolves a tab to its session set and applies the owner check GUI-side
 before building the batch.
 
-#### `session.privacySnapshot`
+#### `session.protectionSnapshot`
 
 - Params: `{sessionIds, revision}`
 - Result: `{fenced, revision, sessions: [{sessionId, state}]}`
 - Scope: validated GUI
 
-An ordering-fenced authoritative read of tab privacy, under the same
-audit-token authority as `session.setPrivateBatch`. In one actor turn the
-daemon snapshots each session's confirmed state (`"public"`, `"private"`,
-or `"missing"`) and, iff the request's `(epoch, revision)` key strictly
-dominates every live requested session's key, advances them all to that
-key without changing privacy.
+An ordering-fenced authoritative read of tab protection, under the same
+audit-token authority as `session.setProtectedBatch`. In one actor turn the
+daemon snapshots each session's confirmed state (`"unprotected"`,
+`"protected"`, or `"missing"`) and, iff the request's `(epoch, revision)`
+key strictly dominates every live requested session's key, advances them all
+to that key without changing protection.
 
 That advance is the fence: a delayed older write now fails the dominance
 check and returns `applied: false`, so the snapshot the GUI receives
@@ -1031,8 +1032,8 @@ cannot already be obsolete. `fenced: false` (a newer authority already
 exists on some session) means the states may be about to change, so the
 GUI treats the result as unresolved.
 
-Read-only: privacy is never mutated. The GUI reconciles tab presentation
-from a fenced, uniform-public result (else the tab stays hidden and
+Read-only: protection is never mutated. The GUI reconciles tab presentation
+from a fenced, uniform-unprotected result (else the tab stays hidden and
 unresolved) after a definite rejection, a stale `applied: false`, or a
 superseded indeterminate send.
 
@@ -1127,14 +1128,14 @@ GUI has pushed one (including after a daemon restart, until the GUI
 republishes), when the tab's label carries nothing beyond `name` (the
 label is the name, or the GUI's generic fallback for a tab with no name,
 no title, and no known directory), and for the non-primary terminals of a
-split tab. For a non-private session it is public metadata: a program
+split tab. For an unprotected session it is public metadata: a program
 that emits an OSC title is publishing that string to every observer that
 can see the tab.
 
 A fresh daemon starts with no sessions (nothing is rehydrated from disk);
 the list is populated by `session.create` and by the validated GUI's
 `session.restoreBatch` after a daemon-only restart, so it never
-accumulates a cross-restart graveyard. Private sessions are visible only
+accumulates a cross-restart graveyard. Protected sessions are visible only
 to their owner.
 
 #### `panes.list`
@@ -1305,8 +1306,8 @@ Not a mirror-capability probe: `available` is always `true` today (every
 connected device is selectable), and mirror capability is judged at
 attach. `available`/`unavailableReason` are the forward slot for a future
 picker that pre-greys rows via an async per-device probe. Feeds the GUI
-"Mirror Physical Device…" picker. Device availability leaks nothing
-tab-private, hence daemon-wide.
+"Mirror Physical Device…" picker. Device availability leaks nothing a
+protected tab hides, hence daemon-wide.
 
 #### `physicalDevice.attach`
 
@@ -1346,9 +1347,9 @@ connected devices that share a name.
 
 Not a `simctl list` or `devicectl list` clone: it never enumerates
 shutdown or never-booted sims; the value added is the pane and ownership
-layer. The `ownerSessionId` annotation obeys the same private-tab opacity
-rule as `tabs.list`: a device attached only in a private session the
-caller doesn't own reads as `attached: false`. Backs
+layer. The `ownerSessionId` annotation obeys the same protected-tab
+opacity rule as `tabs.list`: a device attached only in a protected session
+the caller doesn't own reads as `attached: false`. Backs
 `deviceterm devices list`.
 
 ### Pane lifecycle
@@ -2202,24 +2203,24 @@ relocation moves the tab's live view controller,
 so the GUI performs it in the AppDelegate transfer coordinator rather
 than the Router.
 
-#### `tab.setPrivate`
+#### `tab.setProtected`
 
-- Params: `{tab, isPrivate}`
-- Result: `{isPrivate, committed}` or an error
+- Params: `{tab, isProtected}`
+- Result: `{isProtected, committed}` or an error
 - Scope: session
 
 Owner-only on the GUI side: the `IntentDispatcher` handler for
-`RouteIntent.setTabPrivate` rejects when the resolved tab's terminals
+`RouteIntent.setTabProtected` rejects when the resolved tab's terminals
 don't include the caller's session id, judged by origin, so the human
 menu always passes and an external caller must own a terminal in the
 tab. The rejection is `intent.notFound` rather than anything that leaks
 the tab's existence.
 
-The GUI drives an awaited, fail-closed transition: a public-to-private
-request hides the tab immediately, before any round-trip, while a
-private-to-public one stays hidden until the daemon acks. The GUI
-converges the daemon via `session.setPrivateBatch` (with a post-ack
-membership recheck) and returns the real outcome.
+The GUI drives an awaited, fail-closed transition: an
+unprotected-to-protected request hides the tab immediately, before any
+round-trip, while a protected-to-unprotected one stays hidden until the
+daemon acks. The GUI converges the daemon via `session.setProtectedBatch`
+(with a post-ack membership recheck) and returns the real outcome.
 `committed: true` means the daemon applied it. `committed: false` means
 the requested state remains unconfirmed: a deadline, an indeterminate
 transport loss, a same-state supersession, or tab disappearance. A
@@ -2230,15 +2231,15 @@ Ordering is daemon-enforced by the batch's `(epoch, revision)` key, so
 the GUI does not serialize sends and a stalled or reconnected send can
 never reorder. Presentation is fail-closed and driven only by
 authoritative signals: a tab is exposed only by the owning transition's
-highest-key make-public `applied: true` or a fenced uniform-public
-`session.privacySnapshot`; a definite rejection or a stale
+highest-key unprotect `applied: true` or a fenced uniform-unprotected
+`session.protectionSnapshot`; a definite rejection or a stale
 `applied: false` triggers a fenced-snapshot reconcile (the tab stays
-hidden unless that snapshot is fenced and uniform-public) rather than
+hidden unless that snapshot is fenced and uniform-unprotected) rather than
 any local guess.
 
-New terminals added to a private tab via `Route.openTerminalPane`
-inherit the privacy bit atomically at creation (`session.create` with
-`initialPrivate: true`), never a follow-up toggle.
+New terminals added to a protected tab via `Route.openTerminalPane`
+inherit the protection bit atomically at creation (`session.create` with
+`initialProtected: true`), never a follow-up toggle.
 
 #### `pane.openTerminal`
 
@@ -2315,7 +2316,7 @@ Opens a new window.
 
 Closes the resolved window. Refused if the target window also holds a
 tab the caller can't see, so it can't tear down a co-hosted foreign
-private tab. `mode` is `"detach"` or `"shutdown"`.
+protected tab. `mode` is `"detach"` or `"shutdown"`.
 
 #### `window.focus`
 
@@ -2332,10 +2333,10 @@ Focuses the resolved window.
 - Scope: daemon-wide
 
 Defaults to the caller's window; `all: true` returns every window in the
-caller-visible projection. Windows and tabs private to another session
-are omitted, and indices and counts cover only the visible ones. An
-out-of-tab caller gets an empty list by default and the public
-caller-visible projection with `all`.
+caller-visible projection. Windows and tabs another session protects are
+omitted, and indices and counts cover only the visible ones. An
+out-of-tab caller gets an empty list by default and the caller-visible
+projection with `all`.
 
 ### Automation
 
@@ -2734,9 +2735,9 @@ Three properties hold for physical panes:
   honored only for the validated GUI peer (which spans tabs over one
   shared connection) and ignored from UDS. It does NOT copy the legacy
   sim `device.attach({udid, sessionId, cap})` credential shape.
-- **Private-tab opacity.** `devices.list`'s ownership annotation reuses
+- **Protected-tab opacity.** `devices.list`'s ownership annotation reuses
   the `tabs.list` opacity predicate verbatim: a device attached only in a
-  private session the caller can't see reads as unattached.
+  protected session the caller can't see reads as unattached.
 
 ## GUI command back-channel
 
@@ -3143,11 +3144,12 @@ events remain legitimately readable.
 Two further accepted limitations sit alongside these: `device.shutdown` is
 `.daemonWide` and unattributed (parity with `xcrun simctl shutdown`; UDS is
 user-scoped, so a same-uid caller can shut down any sim, a device-lifecycle
-action rather than tab-private state); and the back-channel's cross-session
-reach to any *public* tab (`tab.close/select/move/rename`, `windows.list`) is
-the deliberate public/private split. `tab.sendInput`/`tab.capture` still
-additionally require an automation grant, and private tabs stay owner-scoped
-and opaque.
+action rather than per-tab protection state); and the back-channel's
+cross-session reach to any *unprotected* tab
+(`tab.close/select/move/rename`, `windows.list`) is the deliberate
+protected/unprotected split. `tab.sendInput`/`tab.capture` still
+additionally require an automation grant, and protected tabs stay
+owner-scoped and opaque.
 
 ## UI framework boundaries
 

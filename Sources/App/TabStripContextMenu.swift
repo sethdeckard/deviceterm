@@ -4,7 +4,7 @@
 //
 // Provides the standard per-tab right-click actions: renaming,
 // lifecycle (close / close others / close to the right),
-// duplication, privacy toggle, and the automation-tab escape
+// duplication, protection toggle, and the automation-tab escape
 // hatch. Each item gets an EXPLICIT `target` (the strip VC) rather
 // than a nil-targeted responder-chain dispatch. The strip VC is a
 // sibling of the focused pane's VC, not an ancestor, so a chain walk
@@ -31,7 +31,7 @@ import AppKit
 @MainActor
 func makeTabStripContextMenu(
     for tabID: TabID,
-    isEffectivelyHidden: Bool,
+    isEffectivelyProtected: Bool,
     isOnlyTab: Bool,
     isLastTab: Bool,
     target: AnyObject? = nil
@@ -53,18 +53,18 @@ func makeTabStripContextMenu(
     )
     menu.addItem(rename)
 
-    // Title toggles between "Set Private" and "Set Public" based on what
-    // the tab shows right now (effective-hidden, so a tab mid-transition
-    // to private already reads "Set Public"); per-tab so the toggle
-    // reflects this row.
-    let privacy = menuItem(
-        title: isEffectivelyHidden ? "Set Public" : "Set Private",
-        action: #selector(TabStripViewController.togglePrivacyFromMenu(_:)),
+    // Title toggles between "Protect Tab" and "Unprotect Tab" based on
+    // what the tab shows right now (effective-hidden, so a tab
+    // mid-transition to protected already reads "Unprotect Tab"); per-tab
+    // so the toggle reflects this row.
+    let protection = menuItem(
+        title: isEffectivelyProtected ? "Unprotect Tab" : "Protect Tab",
+        action: #selector(TabStripViewController.toggleProtectionFromMenu(_:)),
         for: tabID,
         target: target
     )
-    privacy.state = isEffectivelyHidden ? .on : .off
-    menu.addItem(privacy)
+    protection.state = isEffectivelyProtected ? .on : .off
+    menu.addItem(protection)
 
     menu.addItem(.separator())
     menu.addItem(

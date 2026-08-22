@@ -40,14 +40,14 @@ public enum SessionMethods {
         /// signature-validated peer. Optional on the wire for skew
         /// tolerance against pre-role clients.
         public let role: SessionRole?
-        /// When true, the session is born with the privacy flag set,
+        /// When true, the session is born with the protection flag set,
         /// atomically at create time. The GUI passes this for a terminal
-        /// joining a tab that is already private (or mid-transition to
-        /// private) so the new session is never observable as public on
-        /// `tabs.list`: a follow-up privacy toggle would race the
+        /// joining a tab that is already protected (or mid-transition to
+        /// protected) so the new session is never observable as unprotected on
+        /// `tabs.list`: a follow-up protection toggle would race the
         /// create's own persist/publish suspension points. Optional on
-        /// the wire; absent/false is the ordinary public session.
-        public let initialPrivate: Bool?
+        /// the wire; absent/false is the ordinary unprotected session.
+        public let initialProtected: Bool?
 
         /// Defaults preserve backward compatibility with call sites
         /// that don't carry the optional fields; `role` defaults to
@@ -56,12 +56,12 @@ public enum SessionMethods {
             label: String?,
             name: String? = nil,
             role: SessionRole? = nil,
-            initialPrivate: Bool? = nil
+            initialProtected: Bool? = nil
         ) {
             self.label = label
             self.name = name
             self.role = role
-            self.initialPrivate = initialPrivate
+            self.initialProtected = initialProtected
         }
     }
 
@@ -168,7 +168,7 @@ public enum SessionMethods {
                     name: params.name,
                     role: requestedRole,
                     owner: owner,
-                    initialPrivate: params.initialPrivate ?? false,
+                    initialProtected: params.initialProtected ?? false,
                     epoch: epoch,
                     restorable: restorable
                 )
@@ -295,12 +295,12 @@ public enum SessionMethods {
             // the wire shape matches the canonical schema and any
             // client following the docs decodes cleanly.
             //
-            // Privacy filter: a private session is visible only to
+            // Protection filter: a protected session is visible only to
             // its owner. The originating session id comes from the
             // task-local `SessionDispatchContext.originatingSessionId`
             // bound by the dispatcher before this handler runs;
             // unauthenticated callers (no creds in env) have a nil
-            // value and therefore never see private sessions.
+            // value and therefore never see protected sessions.
             let callerId = SessionDispatchContext.originatingSessionId
                 .flatMap(UUID.init(uuidString:))
             let entries = await manager.sessionsWithDisplayTitles(visibleTo: callerId).map {
@@ -366,8 +366,8 @@ public enum SessionMethods {
         }
     }
 
-    /// `session.setPrivateBatch({sessionIds, isPrivate, revision})
-    /// → {applied, revision, isPrivate}`. Atomically flip the privacy
+    /// `session.setProtectedBatch({sessionIds, isProtected, revision})
+    /// → {applied, revision, isProtected}`. Atomically flip the protection
     /// flag for every session backing one tab, subject to daemon-side
     /// last-write-wins ordering. `.validatedGUI`-scoped, so the peer's
     /// audit token is the authority: no `(sessionId, cap)` handshake,
@@ -378,28 +378,28 @@ public enum SessionMethods {
     /// batch.
     ///
     /// Validation runs BEFORE any mutation: each id is parsed to a UUID
-    /// here (malformed → `invalidParams`), then `setPrivateBatch`
+    /// here (malformed → `invalidParams`), then `setProtectedBatch`
     /// verifies every one names a live session and that the request's
     /// `(epoch, revision)` key dominates every target before flipping the
     /// set. A thrown error is a definite pre-mutation rejection (nothing
     /// committed); a returned `applied: false` means the batch was stale
     /// (a newer write already won) and, again, nothing changed: the GUI
     /// commits only from an `applied: true` reply.
-    public static func setPrivateBatch(using manager: SessionManager) -> MethodRegistry.Handler {
+    public static func setProtectedBatch(using manager: SessionManager) -> MethodRegistry.Handler {
         { paramsJSON in
             // A malformed payload is a *definite* pre-mutation rejection:
             // map it to `invalidParams` (not the dispatcher's catch-all
             // serverError) so the GUI's transition recovery can tell "the
             // daemon refused, nothing committed" apart from an
             // indeterminate transport loss.
-            let params: SessionSetPrivateBatchParams
+            let params: SessionSetProtectedBatchParams
             do {
                 params = try JSONDecoder().decode(
-                    SessionSetPrivateBatchParams.self,
+                    SessionSetProtectedBatchParams.self,
                     from: paramsJSON
                 )
             } catch {
-                throw RPCMethodError.invalidParams("malformed session.setPrivateBatch params")
+                throw RPCMethodError.invalidParams("malformed session.setProtectedBatch params")
             }
             var ids: [UUID] = []
             for raw in params.sessionIds {
@@ -413,12 +413,12 @@ public enum SessionMethods {
             // A `.validatedGUI` dispatch always carries a peer context; its
             // absence is a wiring bug, not a caller condition.
             guard let epoch = DispatchPeerContext.current?.connectionId else {
-                throw RPCMethodError.invalidParams("no connection context for setPrivateBatch")
+                throw RPCMethodError.invalidParams("no connection context for setProtectedBatch")
             }
             do {
-                let result = try await manager.setPrivateBatch(
+                let result = try await manager.setProtectedBatch(
                     sessionIds: ids,
-                    isPrivate: params.isPrivate,
+                    isProtected: params.isProtected,
                     revision: params.revision,
                     epoch: epoch
                 )
@@ -442,7 +442,7 @@ public enum SessionMethods {
     /// mutated; the manager then applies the conflict-checked, all-or-none,
     /// `(epoch, tier, revision)`-fenced authoritative reconcile: inserting
     /// absent sessions (but never resurrecting one closed since the inventory was
-    /// captured), correcting a present session's privacy, and reconciling away a
+    /// captured), correcting a present session's protection, and reconciling away a
     /// live session this complete inventory omits. The `restore` tier keeps a
     /// reconnect's inventory below any live user action at the same epoch. The
     /// supplied capability is never logged or interpolated into an error string.
@@ -473,14 +473,14 @@ public enum SessionMethods {
                         shortId: wire.shortId,
                         role: wire.role,
                         name: wire.name,
-                        isPrivate: wire.isPrivate
+                        isProtected: wire.isProtected
                     )
                 )
             }
             // Owner from the validated XPC peer (never the wire) so the restored
             // session is owned by the live GUI: the exact-owner arm then
             // authenticates it and `isAlive` tracks the GUI. The connection id
-            // is the server-derived privacy-ordering epoch, so restore seeds a
+            // is the server-derived protection-ordering epoch, so restore seeds a
             // last-write-wins baseline a stale older-connection write can't beat.
             // A `.validatedGUI` dispatch always carries a peer context; its
             // absence is a wiring bug, not a caller condition.
@@ -502,21 +502,21 @@ public enum SessionMethods {
         }
     }
 
-    /// `session.privacySnapshot({sessionIds, revision})
+    /// `session.protectionSnapshot({sessionIds, revision})
     /// → {fenced, revision, sessions}`. Ordering-fenced authoritative read
-    /// (see `SessionManager.privacySnapshot`). `.validatedGUI`-scoped, same
-    /// audit-token authority as `setPrivateBatch`; malformed params →
-    /// `invalidParams`. Reads and fences only, never changes privacy.
-    public static func privacySnapshot(using manager: SessionManager) -> MethodRegistry.Handler {
+    /// (see `SessionManager.protectionSnapshot`). `.validatedGUI`-scoped, same
+    /// audit-token authority as `setProtectedBatch`; malformed params →
+    /// `invalidParams`. Reads and fences only, never changes protection.
+    public static func protectionSnapshot(using manager: SessionManager) -> MethodRegistry.Handler {
         { paramsJSON in
-            let params: SessionPrivacySnapshotParams
+            let params: SessionProtectionSnapshotParams
             do {
                 params = try JSONDecoder().decode(
-                    SessionPrivacySnapshotParams.self,
+                    SessionProtectionSnapshotParams.self,
                     from: paramsJSON
                 )
             } catch {
-                throw RPCMethodError.invalidParams("malformed session.privacySnapshot params")
+                throw RPCMethodError.invalidParams("malformed session.protectionSnapshot params")
             }
             var ids: [UUID] = []
             for raw in params.sessionIds {
@@ -526,9 +526,9 @@ public enum SessionMethods {
                 ids.append(id)
             }
             guard let epoch = DispatchPeerContext.current?.connectionId else {
-                throw RPCMethodError.invalidParams("no connection context for privacySnapshot")
+                throw RPCMethodError.invalidParams("no connection context for protectionSnapshot")
             }
-            let result = await manager.privacySnapshot(
+            let result = await manager.protectionSnapshot(
                 sessionIds: ids,
                 revision: params.revision,
                 epoch: epoch

@@ -202,14 +202,14 @@ enum Route: Sendable {
     /// if the attach later returns a pane id, the Task closes it so the
     /// daemon pane + IOSurface stream don't leak.
     case cancelPendingPane(tab: TabID, pendingId: PendingPaneID, mode: PaneCloseMode)
-    /// Toggle the tab's privacy flag. The handler flips every terminal
-    /// session in the tab in one atomic `session.setPrivateBatch` so the
-    /// daemon can never hold a torn private/public set; the GUI mirror
+    /// Toggle the tab's protection flag. The handler flips every terminal
+    /// session in the tab in one atomic `session.setProtectedBatch` so the
+    /// daemon can never hold a torn protected/unprotected set; the GUI mirror
     /// updates only on a successful ack.
-    case setTabPrivate(
+    case setTabProtected(
         tab:
         TabID,
-        isPrivate: Bool
+        isProtected: Bool
         )
     /// Same-window tab reorder: move `tab` to `toIndex` in its
     /// window's strip. The tab-strip drag destination (same-window

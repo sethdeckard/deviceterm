@@ -260,12 +260,12 @@ public enum DaemonMethods {
                         await deviceCoordinator.noteSessionClosing(sessionId, mode: mode)
                     }
                 ),
-            RPCMethod.sessionSetPrivateBatch.rawValue:
-                .validatedGUI(SessionMethods.setPrivateBatch(using: sessionManager)),
+            RPCMethod.sessionSetProtectedBatch.rawValue:
+                .validatedGUI(SessionMethods.setProtectedBatch(using: sessionManager)),
             RPCMethod.sessionRestoreBatch.rawValue:
                 .validatedGUI(SessionMethods.restoreBatch(using: sessionManager)),
-            RPCMethod.sessionPrivacySnapshot.rawValue:
-                .validatedGUI(SessionMethods.privacySnapshot(using: sessionManager)),
+            RPCMethod.sessionProtectionSnapshot.rawValue:
+                .validatedGUI(SessionMethods.protectionSnapshot(using: sessionManager)),
             RPCMethod.sessionSetDisplayTitle.rawValue:
                 .validatedGUI(SessionMethods.setDisplayTitle(using: sessionManager)),
             RPCMethod.automationGrant.rawValue:
@@ -545,12 +545,12 @@ public enum DaemonMethods {
                 )
             ),
             // Session-scoped: owner-only enforcement happens GUI-side
-            // (IntentDispatcher's setTabPrivate gate). Auth is still
+            // (IntentDispatcher's setTabProtected gate). Auth is still
             // required so an unauthenticated wire caller can't bypass
             // the GUI gate by guessing a TabRef.
-            RPCMethod.tabSetPrivate.rawValue: .session(
+            RPCMethod.tabSetProtected.rawValue: .session(
                 AppCommandMethods.publishVerb(
-                    kind: .tabSetPrivate,
+                    kind: .tabSetProtected,
                     coordinator: appCommandCoordinator
                 )
             )

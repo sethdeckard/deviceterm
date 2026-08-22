@@ -15,14 +15,14 @@
 //   - `.external(sessionID:)` (the CLI back-channel) resolves `.current`
 //     against the caller's own session (never the human's key window),
 //     and every enumeration restricts to tabs the caller can legitimately
-//     see. A foreign private tab is opaque: it resolves `notFound`,
+//     see. A foreign protected tab is opaque: it resolves `notFound`,
 //     indistinguishable from a tab that doesn't exist, and never leaks as
 //     `.ambiguous`.
 //
 // The accessibility check is ANDed **into** each enumeration predicate,
 // not applied as a post-filter, so a name shared by a visible tab and a
-// foreign-private tab resolves to the visible one rather than throwing
-// `.ambiguous` (which would reveal the private tab and a match count).
+// foreign-protected tab resolves to the visible one rather than throwing
+// `.ambiguous` (which would reveal the protected tab and a match count).
 
 import Foundation
 
@@ -39,10 +39,10 @@ struct IntentResolver {
 
     /// Whether an external caller may see/reach `tab`: a hidden tab is
     /// reachable only by a caller that owns a terminal in it. A fully
-    /// public tab is reachable by anyone. This is the caller-relative
-    /// axis; `TabState.isEffectivelyHidden` is the absolute one.
+    /// unprotected tab is reachable by anyone. This is the caller-relative
+    /// axis; `TabState.isEffectivelyProtected` is the absolute one.
     static func externallyAccessible(_ tab: TabState, callerSessionID: String?) -> Bool {
-        guard tab.isEffectivelyHidden else { return true }
+        guard tab.isEffectivelyProtected else { return true }
         guard let callerSessionID else { return false }
         return tab.terminals.contains { $0.sessionId == callerSessionID }
     }
@@ -56,7 +56,7 @@ struct IntentResolver {
 
     /// Windows an external caller may observe: those with at least one
     /// accessible tab. In-process sees the raw window list. A window that
-    /// holds only foreign-private tabs disappears entirely, so it never
+    /// holds only foreign-protected tabs disappears entirely, so it never
     /// occupies an index or a count an external caller can observe.
     private func visibleWindows() -> [WindowState] {
         guard origin.restrictsToVisibleTabs else { return workspace.windows }
@@ -68,7 +68,7 @@ struct IntentResolver {
     // MARK: - Tab
 
     /// Resolve a `TabRef` to a `ResolvedTab`. Throws `IntentError.notFound`
-    /// or `.ambiguous` per the matrix in `IntentError`. A foreign private
+    /// or `.ambiguous` per the matrix in `IntentError`. A foreign protected
     /// tab always resolves `notFound`.
     func resolveTab(_ ref: TabRef) throws -> ResolvedTab {
         switch ref {
@@ -129,7 +129,7 @@ struct IntentResolver {
 
     /// Resolve a `PaneRef` to a `ResolvedPane`. `current` requires the
     /// caller's tab to host exactly one sim pane. A pane inside a foreign
-    /// private tab resolves `notFound`.
+    /// protected tab resolves `notFound`.
     func resolveSimPane(_ ref: PaneRef) throws -> ResolvedPane {
         switch ref {
         case .current:
@@ -180,7 +180,7 @@ struct IntentResolver {
     /// Resolve a `WindowRef` to a `WindowID`, origin-aware. An external
     /// caller's `.current` is *its own* window (the one containing its
     /// session's tab), not the key window; `.index` counts only the
-    /// visible-window projection, so a window holding only foreign-private
+    /// visible-window projection, so a window holding only foreign-protected
     /// tabs never occupies a position an external caller can target.
     func resolveWindow(_ ref: WindowRef) throws -> WindowID {
         switch ref {
@@ -266,7 +266,7 @@ struct IntentResolver {
     ) throws -> ResolvedTab {
         var matches: [ResolvedTab] = []
         for window in workspace.windows {
-            // Accessibility is ANDed into the predicate: a foreign-private
+            // Accessibility is ANDed into the predicate: a foreign-protected
             // tab is invisible to the match, so it can neither be resolved
             // nor inflate an `.ambiguous` count.
             for tab in window.tabs.tabs where accessible(tab) && predicate(tab) {

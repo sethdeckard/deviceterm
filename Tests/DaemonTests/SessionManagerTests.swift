@@ -237,13 +237,13 @@ func isAliveReturnsFalseForExitedProcess() async throws {
 }
 
 @Test
-func createSessionInitialPrivateSeedsFlagAtCreate() async throws {
-    // `initialPrivate: true` must make the session private the instant
-    // it exists: a terminal joining a private tab is never observable
-    // as public. Both the direct reader and the visibility filter agree.
+func createSessionInitialProtectedSeedsFlagAtCreate() async throws {
+    // `initialProtected: true` must make the session protected the instant
+    // it exists: a terminal joining a protected tab is never observable
+    // as unprotected. Both the direct reader and the visibility filter agree.
     let manager = SessionManager()
-    let priv = try await manager.makeSessionState(label: nil, initialPrivate: true)
-    #expect(await manager.isPrivate(priv.id) == true)
+    let priv = try await manager.makeSessionState(label: nil, initialProtected: true)
+    #expect(await manager.isProtected(priv.id) == true)
     // Hidden from an unauthenticated (nil) caller; visible to itself.
     let toStranger = await manager.sessions(visibleTo: nil).map(\.id)
     #expect(!toStranger.contains(priv.id))
@@ -252,83 +252,83 @@ func createSessionInitialPrivateSeedsFlagAtCreate() async throws {
 }
 
 @Test
-func setPrivateBatchAppliesToTheWholeSetAllOrNone() async throws {
+func setProtectedBatchAppliesToTheWholeSetAllOrNone() async throws {
     // The batch flips every listed session atomically and applies the
-    // desired absolute state (idempotent); a later public batch for a
-    // subset frees only those, leaving the rest private.
+    // desired absolute state (idempotent); a later unprotected batch for a
+    // subset frees only those, leaving the rest protected.
     let manager = SessionManager()
     let alpha = try await manager.makeSessionState(label: nil)
     let beta = try await manager.makeSessionState(label: nil)
     let gamma = try await manager.makeSessionState(label: nil)
-    try await manager.setPrivateBatch(
+    try await manager.setProtectedBatch(
         sessionIds: [alpha.id, beta.id, gamma.id],
-        isPrivate: true,
+        isProtected: true,
         revision: 1,
         epoch: 1
     )
-    #expect(await manager.isPrivate(alpha.id))
-    #expect(await manager.isPrivate(beta.id))
-    #expect(await manager.isPrivate(gamma.id))
-    try await manager.setPrivateBatch(
+    #expect(await manager.isProtected(alpha.id))
+    #expect(await manager.isProtected(beta.id))
+    #expect(await manager.isProtected(gamma.id))
+    try await manager.setProtectedBatch(
         sessionIds: [alpha.id, beta.id],
-        isPrivate: false,
+        isProtected: false,
         revision: 2,
         epoch: 1
     )
-    #expect(await manager.isPrivate(alpha.id) == false)
-    #expect(await manager.isPrivate(beta.id) == false)
-    #expect(await manager.isPrivate(gamma.id) == true)
+    #expect(await manager.isProtected(alpha.id) == false)
+    #expect(await manager.isProtected(beta.id) == false)
+    #expect(await manager.isProtected(gamma.id) == true)
 }
 
 @Test
-func setPrivateBatchStaleRevisionIsIgnored() async throws {
+func setProtectedBatchStaleRevisionIsIgnored() async throws {
     // Old write arriving after a newer one: the daemon orders by
     // (epoch, revision) and rejects the stale batch WITHOUT mutating, so
     // last-write-wins holds regardless of arrival order.
     let manager = SessionManager()
     let session = try await manager.makeSessionState(label: nil)
-    let newer = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: true, revision: 5, epoch: 1
+    let newer = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: true, revision: 5, epoch: 1
     )
     #expect(newer.applied)
-    #expect(await manager.isPrivate(session.id))
-    // A public write that raced in late with a lower revision (same epoch).
-    let older = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: false, revision: 3, epoch: 1
+    #expect(await manager.isProtected(session.id))
+    // An unprotected write that raced in late with a lower revision (same epoch).
+    let older = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: false, revision: 3, epoch: 1
     )
     #expect(older.applied == false)             // rejected as stale
-    #expect(await manager.isPrivate(session.id)) // still private; no mutation
+    #expect(await manager.isProtected(session.id)) // still protected; no mutation
 }
 
 @Test
-func setPrivateBatchHigherEpochDominatesLowerRevision() async throws {
+func setProtectedBatchHigherEpochDominatesLowerRevision() async throws {
     // XPC reconnect / GUI restart: a fresh connection's higher epoch wins
     // even with a LOWER revision, and a late request from the OLD
     // connection loses however high its revision. This is exactly why the
     // key is (epoch, revision) and not a bare revision.
     let manager = SessionManager()
     let session = try await manager.makeSessionState(label: nil)
-    // Old connection set it public at a high revision.
-    _ = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: false, revision: 9, epoch: 1
+    // Old connection set it unprotected at a high revision.
+    _ = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: false, revision: 9, epoch: 1
     )
     // New connection (higher epoch), revision 1: dominates.
-    let fresh = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: true, revision: 1, epoch: 2
+    let fresh = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: true, revision: 1, epoch: 2
     )
     #expect(fresh.applied)
-    #expect(await manager.isPrivate(session.id))
+    #expect(await manager.isProtected(session.id))
     // A straggler from the OLD connection (epoch 1) arrives with an even
     // higher revision: still loses to the newer epoch.
-    let late = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: false, revision: 99, epoch: 1
+    let late = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: false, revision: 99, epoch: 1
     )
     #expect(late.applied == false)
-    #expect(await manager.isPrivate(session.id)) // stays private
+    #expect(await manager.isProtected(session.id)) // stays protected
 }
 
 @Test
-func setPrivateBatchStaleForAnyMemberRejectsWholeBatch() async throws {
+func setProtectedBatchStaleForAnyMemberRejectsWholeBatch() async throws {
     // All-or-none dominance: if the key fails to dominate even ONE target
     // session, the whole batch is stale and nothing mutates; a tab's
     // sessions never split.
@@ -336,85 +336,85 @@ func setPrivateBatchStaleForAnyMemberRejectsWholeBatch() async throws {
     let alpha = try await manager.makeSessionState(label: nil)
     let beta = try await manager.makeSessionState(label: nil)
     // beta already at revision 5; alpha untouched.
-    _ = try await manager.setPrivateBatch(
-        sessionIds: [beta.id], isPrivate: true, revision: 5, epoch: 1
+    _ = try await manager.setProtectedBatch(
+        sessionIds: [beta.id], isProtected: true, revision: 5, epoch: 1
     )
     // Batch over both at revision 3: dominates alpha (unset) but not beta.
-    let result = try await manager.setPrivateBatch(
-        sessionIds: [alpha.id, beta.id], isPrivate: true, revision: 3, epoch: 1
+    let result = try await manager.setProtectedBatch(
+        sessionIds: [alpha.id, beta.id], isProtected: true, revision: 3, epoch: 1
     )
     #expect(result.applied == false)
-    #expect(await manager.isPrivate(alpha.id) == false) // not partially applied
-    #expect(await manager.isPrivate(beta.id))            // unchanged
+    #expect(await manager.isProtected(alpha.id) == false) // not partially applied
+    #expect(await manager.isProtected(beta.id))            // unchanged
 }
 
 @Test
-func privacySnapshotFencesOutDelayedOlderWrite() async throws {
+func protectionSnapshotFencesOutDelayedOlderWrite() async throws {
     // The fence is the point of the snapshot: taking it at revision 5
     // advances the session's ordering key, so a delayed OLDER write
     // (revision 3) subsequently loses; the "authoritative" read can't be
     // obsolete by the time the GUI acts on it.
     let manager = SessionManager()
     let session = try await manager.makeSessionState(label: nil)
-    let snap = await manager.privacySnapshot(sessionIds: [session.id], revision: 5, epoch: 1)
+    let snap = await manager.protectionSnapshot(sessionIds: [session.id], revision: 5, epoch: 1)
     #expect(snap.fenced)
-    #expect(snap.sessions.first?.state == .publicState)
-    let delayedOlder = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: true, revision: 3, epoch: 1
+    #expect(snap.sessions.first?.state == .unprotectedState)
+    let delayedOlder = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: true, revision: 3, epoch: 1
     )
     #expect(delayedOlder.applied == false)           // fenced out
-    #expect(await manager.isPrivate(session.id) == false) // unchanged
+    #expect(await manager.isProtected(session.id) == false) // unchanged
 }
 
 @Test
-func privacySnapshotUnfencedWhenNewerAuthorityExists() async throws {
+func protectionSnapshotUnfencedWhenNewerAuthorityExists() async throws {
     // A snapshot whose key can't dominate an existing newer authority is
     // NOT fenced: it still reports the current state, but the GUI must
     // treat it as unresolved (it may be about to change).
     let manager = SessionManager()
     let session = try await manager.makeSessionState(label: nil)
-    _ = try await manager.setPrivateBatch(
-        sessionIds: [session.id], isPrivate: true, revision: 10, epoch: 1
+    _ = try await manager.setProtectedBatch(
+        sessionIds: [session.id], isProtected: true, revision: 10, epoch: 1
     )
-    let snap = await manager.privacySnapshot(sessionIds: [session.id], revision: 5, epoch: 1)
+    let snap = await manager.protectionSnapshot(sessionIds: [session.id], revision: 5, epoch: 1)
     #expect(snap.fenced == false)
-    #expect(snap.sessions.first?.state == .privateState)
+    #expect(snap.sessions.first?.state == .protectedState)
 }
 
 @Test
-func privacySnapshotReportsMissingSession() async throws {
+func protectionSnapshotReportsMissingSession() async throws {
     // An unknown id is reported explicitly as `.missing` (so the GUI sees a
     // membership change) and does not block fencing the live sessions.
     let manager = SessionManager()
     let session = try await manager.makeSessionState(label: nil)
     let ghost = UUID()
-    let snap = await manager.privacySnapshot(
+    let snap = await manager.protectionSnapshot(
         sessionIds: [session.id, ghost], revision: 1, epoch: 1
     )
     #expect(snap.fenced)
     let byId = Dictionary(uniqueKeysWithValues: snap.sessions.map { ($0.sessionId, $0.state) })
-    #expect(byId[session.id.uuidString] == .publicState)
+    #expect(byId[session.id.uuidString] == .unprotectedState)
     #expect(byId[ghost.uuidString] == .missing)
 }
 
 @Test
-func setPrivateBatchRejectsUnknownIdWithoutMutatingAnything() async throws {
+func setProtectedBatchRejectsUnknownIdWithoutMutatingAnything() async throws {
     // Validation is all-or-none and runs before any mutation: an
     // unknown id in the batch throws and flips nothing, so a partial
-    // batch can never leave a torn private/public set for a tab.
+    // batch can never leave a torn protected/unprotected set for a tab.
     let manager = SessionManager()
     let alpha = try await manager.makeSessionState(label: nil)
     let beta = try await manager.makeSessionState(label: nil)
     await #expect(throws: SessionError.self) {
-        try await manager.setPrivateBatch(
+        try await manager.setProtectedBatch(
             sessionIds: [alpha.id, beta.id, UUID()],
-            isPrivate: true,
+            isProtected: true,
             revision: 1,
             epoch: 1
         )
     }
-    #expect(await manager.isPrivate(alpha.id) == false)
-    #expect(await manager.isPrivate(beta.id) == false)
+    #expect(await manager.isProtected(alpha.id) == false)
+    #expect(await manager.isProtected(beta.id) == false)
 }
 
 private func spawnDeadChildAndReap() throws -> pid_t {

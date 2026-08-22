@@ -773,7 +773,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// closure, so it reads every terminal's `sessionId` on each pass (the
     /// observation contract); the `lastInventorySessionIDs` guard suppresses
     /// re-supply on changes that don't move the session set (window geometry,
-    /// selection, a privacy toggle, which `session.setPrivateBatch` owns).
+    /// selection, a protection toggle, which `session.setProtectedBatch` owns).
     private func markInventoryDirtyIfChanged() {
         let current = Set(
             workspace.windows.flatMap(\.tabs.tabs)

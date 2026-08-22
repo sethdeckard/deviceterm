@@ -70,12 +70,12 @@ struct DaemonRoleProtocolTests {
             label: "x",
             name: "n",
             role: .agent,
-            initialPrivate: false
+            initialProtected: false
         )
         #expect(session.sessionId == "sess")
         #expect(
             fake.createSessionCalls == [
-            .init(label: "x", name: "n", role: .agent, initialPrivate: false)
+            .init(label: "x", name: "n", role: .agent, initialProtected: false)
             ]
             )
 

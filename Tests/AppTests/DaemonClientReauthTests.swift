@@ -116,7 +116,7 @@ struct DaemonClientReauthTests {
                 }
                 return try JSONEncoder().encode([DeviceListEntry]())
 
-            case RPCMethod.sessionSetPrivateBatch.rawValue:
+            case RPCMethod.sessionSetProtectedBatch.rawValue:
                 // Always -32001 (unknown session in the batch), the case
                 // the reauth-exclusion test exercises.
                 throw DaemonClientError.daemon(
@@ -209,8 +209,8 @@ struct DaemonClientReauthTests {
     }
 
     @Test
-    func setPrivateBatchUnauthorizedIsNotTransparentlyRetried() async throws {
-        // `session.setPrivateBatch` must be EXCLUDED from the reconnect
+    func setProtectedBatchUnauthorizedIsNotTransparentlyRetried() async throws {
+        // `session.setProtectedBatch` must be EXCLUDED from the reconnect
         // reauth retry: its -32001 means "unknown session" (never a lost
         // connection, it's `.validatedGUI`, not session-authed), and a
         // transparent retry would resend the SAME encoded `revision`,
@@ -223,13 +223,13 @@ struct DaemonClientReauthTests {
             $0 == RPCMethod.sessionAuthenticate.rawValue
         }.count
         await #expect(throws: DaemonClientError.self) {
-            _ = try await client.setPrivateBatch(
-                sessionIds: ["S"], isPrivate: true, revision: 7
+            _ = try await client.setProtectedBatch(
+                sessionIds: ["S"], isProtected: true, revision: 7
             )
         }
         // Sent exactly once: no transparent retry.
         #expect(transport.methods.filter {
-            $0 == RPCMethod.sessionSetPrivateBatch.rawValue
+            $0 == RPCMethod.sessionSetProtectedBatch.rawValue
         }.count == 1)
         // No extra session.authenticate for a retry.
         #expect(transport.methods.filter {

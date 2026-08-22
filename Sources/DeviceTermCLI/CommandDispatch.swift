@@ -560,29 +560,29 @@ func run(
         case let .tabCapture(tabRef):
             return try handleTabCapture(tabRef: tabRef, transport: transport, output: output)
 
-        case let .tabSetPrivate(tabRef, isPrivate):
-            // The GUI drives privacy as an awaited transition, so the
+        case let .tabSetProtected(tabRef, isProtected):
+            // The GUI drives protection as an awaited transition, so the
             // result reports the daemon's real state: a definite rejection
             // throws here (surfaced as a failure), while a committed or
             // still-converging (`committed == false`) outcome comes back as
-            // a `TabSetPrivateResult` we render honestly.
+            // a `TabSetProtectedResult` we render honestly.
             let data = try transport.send(
-                try CLICommands.tabSetPrivateRequest(tab: tabRef, isPrivate: isPrivate)
+                try CLICommands.tabSetProtectedRequest(tab: tabRef, isProtected: isProtected)
             )
-            let result = try JSONDecoder().decode(TabSetPrivateResult.self, from: data)
+            let result = try JSONDecoder().decode(TabSetProtectedResult.self, from: data)
             let label = CLICommands.echoLabel(tabRef)
             switch output {
             case .human:
                 let line = result.committed
-                    ? "ok tab=\(label) private=\(result.isPrivate)"
-                    : "pending tab=\(label) private=\(result.isPrivate) (unconfirmed)"
+                    ? "ok tab=\(label) protected=\(result.isProtected)"
+                    : "pending tab=\(label) protected=\(result.isProtected) (unconfirmed)"
                 return .stdout(line + "\n")
 
             case .json:
                 return .stdout(try encodeJSONReceipt(
-                    Receipt.TabSetPrivate(
+                    Receipt.TabSetProtected(
                         tab: label,
-                        isPrivate: result.isPrivate,
+                        isProtected: result.isProtected,
                         committed: result.committed
                     )
                 ))

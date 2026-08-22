@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// SessionSetPrivateBatchParams: wire shape for `session.setPrivateBatch`.
+// SessionSetProtectedBatchParams: wire shape for `session.setProtectedBatch`.
 //
-// Atomically flip the privacy flag for every session backing one tab.
+// Atomically flip the protection flag for every session backing one tab.
 // A tab holds N terminal panes, each with its own daemon session; a
 // per-session toggle applied in a loop can tear (session 1 flips,
-// session 2 fails) and leave the daemon holding a mixed private/public
+// session 2 fails) and leave the daemon holding a mixed protected/unprotected
 // set the GUI's single tab boolean can't represent. This batch is
 // all-or-none: the daemon validates every id first, then mutates the
 // whole set in one actor turn, so a partial application is impossible
@@ -20,7 +20,7 @@
 // authenticates as whichever tab it opened last and could not replay
 // every tab's cap.
 //
-// `isPrivate` is the *desired absolute state*, not a toggle, so a retry
+// `isProtected` is the *desired absolute state*, not a toggle, so a retry
 // re-applying the same batch is a no-op: the property the GUI's
 // retry-until-ack recovery depends on.
 //
@@ -38,14 +38,14 @@
 // GUI restart replaying low revision numbers: a fresh connection's
 // higher epoch dominates any prior connection's revisions.
 
-public struct SessionSetPrivateBatchParams: Codable, Sendable, Equatable {
+public struct SessionSetProtectedBatchParams: Codable, Sendable, Equatable {
     public let sessionIds: [String]
-    public let isPrivate: Bool
+    public let isProtected: Bool
     public let revision: Int
 
-    public init(sessionIds: [String], isPrivate: Bool, revision: Int) {
+    public init(sessionIds: [String], isProtected: Bool, revision: Int) {
         self.sessionIds = sessionIds
-        self.isPrivate = isPrivate
+        self.isProtected = isProtected
         self.revision = revision
     }
 }

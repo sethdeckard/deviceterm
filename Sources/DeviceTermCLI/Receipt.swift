@@ -268,16 +268,16 @@ public enum Receipt {
         }
     }
 
-    /// Receipt for `deviceterm tab set-private`. Reports the resolved tab
-    /// label, the new privacy state, and whether the daemon *committed* it.
+    /// Receipt for `deviceterm tab set-protected`. Reports the resolved tab
+    /// label, the new protection state, and whether the daemon *committed* it.
     /// `committed == false` means the requested state is not yet confirmed
     /// and the GUI may still be converging; it does not prove daemon
     /// acceptance. A definite rejection surfaces as a command failure,
     /// never this receipt.
-    public struct TabSetPrivate: Encodable, Sendable {
+    public struct TabSetProtected: Encodable, Sendable {
         public let ok = true
         public let tab: String
-        public let isPrivate: Bool
+        public let isProtected: Bool
         public let committed: Bool
     }
 }

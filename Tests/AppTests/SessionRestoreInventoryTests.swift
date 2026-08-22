@@ -6,8 +6,8 @@ import Testing
 
 // SessionRestoreInventory: the pure mapping from the live GUI model to the
 // daemon's `session.restoreBatch` inventory. Pins: one entry per terminal
-// session, tab-wide role, privacy derived FAIL-CLOSED from effective-hidden
-// (not committed `isPrivate`), correct exclusion of un-provisioned terminals,
+// session, tab-wide role, protection derived FAIL-CLOSED from effective-hidden
+// (not committed `isProtected`), correct exclusion of un-provisioned terminals,
 // a nil (fail-don't-partial) result when a live terminal is malformed, and
 // order preservation (which defines the restored set's `tabs.list` order).
 
@@ -30,10 +30,10 @@ private func tab(
     _ id: Int,
     terminals: [TerminalPaneState],
     role: SessionRole = .agent,
-    privacy: TabPrivacyState = .publicVisible
+    protection: TabProtectionState = .unprotected
 ) -> TabState {
     var state = TabState(id: TabID(value: id), terminals: terminals, simPanes: [], role: role)
-    state.privacyState = privacy
+    state.protectionState = protection
     return state
 }
 
@@ -54,23 +54,23 @@ func emitsOneEntryPerTerminalCarryingTabRoleAndTerminalFields() throws {
     #expect(inventory[0].shortId == "aaa111")
     #expect(inventory[0].name == "one")
     #expect(inventory[0].role == .automation)   // role is tab-wide
-    #expect(inventory[0].isPrivate == false)
+    #expect(inventory[0].isProtected == false)
     #expect(inventory[1].sessionId == "S2")
     #expect(inventory[1].name == nil)
 }
 
 @Test
-func privacyIsFailClosedFromEffectiveHiddenNotCommitted() throws {
-    let hidden = tab(1, terminals: [terminal(1, sessionId: "S", shortId: "aaa111")], privacy: .privateHidden)
-    let pending = tab(2, terminals: [terminal(2, sessionId: "T", shortId: "bbb222")], privacy: .pendingPrivate)
-    let publicTab = tab(3, terminals: [terminal(3, sessionId: "U", shortId: "ccc333")], privacy: .publicVisible)
+func protectionIsFailClosedFromEffectiveProtectedNotCommitted() throws {
+    let hidden = tab(1, terminals: [terminal(1, sessionId: "S", shortId: "aaa111")], protection: .protected)
+    let pending = tab(2, terminals: [terminal(2, sessionId: "T", shortId: "bbb222")], protection: .pendingProtected)
+    let unprotectedTab = tab(3, terminals: [terminal(3, sessionId: "U", shortId: "ccc333")], protection: .unprotected)
 
-    let inventory = try #require(SessionRestoreInventory.build(from: [hidden, pending, publicTab]))
-    // A mid-transition (`.pendingPrivate`) tab restores PRIVATE: never briefly
-    // exposed as public.
-    #expect(inventory[0].isPrivate == true)   // privateHidden
-    #expect(inventory[1].isPrivate == true)   // pendingPrivate
-    #expect(inventory[2].isPrivate == false)  // publicVisible
+    let inventory = try #require(SessionRestoreInventory.build(from: [hidden, pending, unprotectedTab]))
+    // A mid-transition (`.pendingProtected`) tab restores PROTECTED: never briefly
+    // exposed as unprotected.
+    #expect(inventory[0].isProtected == true)   // protected
+    #expect(inventory[1].isProtected == true)   // pendingProtected
+    #expect(inventory[2].isProtected == false)  // unprotected
 }
 
 @Test

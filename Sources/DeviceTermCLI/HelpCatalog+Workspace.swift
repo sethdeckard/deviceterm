@@ -54,16 +54,16 @@ extension HelpCatalog {
                   Example: deviceterm tab move --to 0
                   Example: deviceterm tab move --tab abc123 --to-window 2
 
-              tab set-private <true|false> [--tab <ref>]
+              tab set-protected <true|false> [--tab <ref>]
                   Hide the named tab from other sessions, or unhide it. A
-                  private tab and its panes drop out of every other
+                  protected tab and its panes drop out of every other
                   session's `tabs list` and `windows list`, can't be reached
                   by their refs, and are refused to `tab send-input` /
                   `tab capture` even from an automation tab. Your own
                   views are unchanged. Only a tab you own a terminal in can
                   be flipped. Default --tab is the caller's current tab; the
                   value takes true/false, yes/no, on/off, or 1/0.
-                  Example: deviceterm tab set-private true
+                  Example: deviceterm tab set-protected true
 
               tab send-input [--tab <ref>] [--type-delay <ms>] <text>
                   Requires a live automation grant. Write <text> into the
@@ -182,8 +182,8 @@ extension HelpCatalog {
                   a space otherwise. --json emits a `WindowInfoPayload`
                   array. Default: only your own window (the one containing
                   the calling tab). --all returns every window you can see,
-                  the caller-visible projection: windows and tabs that are
-                  private to another session are omitted, and indices count
+                  the caller-visible projection: windows and tabs that
+                  another session protects are omitted, and indices count
                   only the visible ones. Out-of-tab callers without --all
                   see an empty list. Boot a tab first or pass --all.
                   Example: deviceterm windows list --all

@@ -109,15 +109,16 @@ func agentsDocumentationCarriesPermissionsAndLinkageSection() {
     #expect(documentation.contains("PERMISSIONS AND LINKAGE"))
     #expect(documentation.contains("The trust boundary is the terminal session"))
     #expect(documentation.contains("Roles"))
-    // The three human-only authority axes. An agent hitting one
-    // needs to know the GUI is the path rather than retrying with
-    // different arguments. They are not equally strong (role
-    // escalation and privacy are refused by the daemon, linkage
-    // only by the CLI verb) and the guide says so; this pins that
-    // all three stay documented, not that they share a mechanism.
+    // The three authority boundaries an agent can hit. It needs to
+    // know which path applies rather than retrying with different
+    // arguments. These boundaries use different enforcement: role
+    // escalation is refused daemon-side; pane relinking is refused by
+    // the CLI and GUI; cross-owner protection is GUI-gated, and direct
+    // batch writes are validated-GUI-only. This pins that all three
+    // stay documented, not that they share a mechanism.
     #expect(documentation.contains("Linkage-mutation"))
     #expect(documentation.contains("Role escalation"))
-    #expect(documentation.contains("Privacy-mutation"))
+    #expect(documentation.contains("Protection-mutation"))
     // No roadmap framing: the guide states what holds now.
     #expect(!documentation.contains("Coming soon"))
 }

@@ -40,7 +40,7 @@ struct DaemonClientRestoreBatchTests {
                 shortId: "aaa111",
                 role: .agent,
                 name: "one",
-                isPrivate: false
+                isProtected: false
             ),
             RestoredSession(
                 sessionId: "S2",
@@ -48,7 +48,7 @@ struct DaemonClientRestoreBatchTests {
                 shortId: "bbb222",
                 role: .automation,
                 name: nil,
-                isPrivate: true
+                isProtected: true
             )
         ]
         transport.reply = try JSONEncoder().encode(

@@ -67,7 +67,7 @@ enum VerbCatalog {
             valuedFlags: ["tab", "window", "mode", "cwd", "cmd", "to", "to-window", "type-delay"],
             subVerbs: [
                 "open", "close", "rename", "select", "info", "move",
-                "send-input", "capture", "set-private"
+                "send-input", "capture", "set-protected"
             ]
         ),
         Verb(

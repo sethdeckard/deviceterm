@@ -13,14 +13,14 @@ import Testing
 @MainActor
 struct TabStripContextMenuTests {
     private func menu(
-        isPrivate: Bool = false,
+        isProtected: Bool = false,
         isOnlyTab: Bool = false,
         isLastTab: Bool = false,
         target: AnyObject? = nil
     ) -> NSMenu {
         makeTabStripContextMenu(
             for: TabID(value: 42),
-            isEffectivelyHidden: isPrivate,
+            isEffectivelyProtected: isProtected,
             isOnlyTab: isOnlyTab,
             isLastTab: isLastTab,
             target: target
@@ -44,7 +44,7 @@ struct TabStripContextMenuTests {
         let titles = menu().items.map(\.title)
         #expect(titles == [
             "Rename Tab…",
-            "Set Private",
+            "Protect Tab",
             "",  // separator
             "Duplicate Tab",
             "",  // separator
@@ -93,7 +93,7 @@ struct TabStripContextMenuTests {
     func itemsRouteToTabStripViewControllerSelectors() {
         let expected: [(String, Selector)] = [
             ("Rename Tab…", #selector(TabStripViewController.renameTabFromMenu(_:))),
-            ("Set Private", #selector(TabStripViewController.togglePrivacyFromMenu(_:))),
+            ("Protect Tab", #selector(TabStripViewController.toggleProtectionFromMenu(_:))),
             ("Duplicate Tab", #selector(TabStripViewController.duplicateTabFromMenu(_:))),
             ("New Tab", #selector(TabStripViewController.newTabFromMenu(_:))),
             (
@@ -121,19 +121,19 @@ struct TabStripContextMenuTests {
     }
 
     @Test
-    func privacyItemTitleFlipsWhenAlreadyPrivate() {
-        let menu = menu(isPrivate: true)
+    func protectionItemTitleFlipsWhenAlreadyProtected() {
+        let menu = menu(isProtected: true)
         let titles = menu.items.map(\.title)
-        #expect(titles.contains("Set Public"))
-        #expect(!titles.contains("Set Private"))
-        let privacyItem = menu.items.first { $0.title == "Set Public" }
-        #expect(privacyItem?.state == .on)
+        #expect(titles.contains("Unprotect Tab"))
+        #expect(!titles.contains("Protect Tab"))
+        let protectionItem = menu.items.first { $0.title == "Unprotect Tab" }
+        #expect(protectionItem?.state == .on)
     }
 
     @Test
-    func privacyItemIsOffWhenTabIsPublic() {
-        let privacyItem = menu(isPrivate: false).items.first { $0.title == "Set Private" }
-        #expect(privacyItem?.state == .off)
+    func protectionItemIsOffWhenTabIsUnprotected() {
+        let protectionItem = menu(isProtected: false).items.first { $0.title == "Protect Tab" }
+        #expect(protectionItem?.state == .off)
     }
 
     @Test

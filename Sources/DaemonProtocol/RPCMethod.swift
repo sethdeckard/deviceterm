@@ -45,20 +45,20 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// "terminal" provenance arm that lets a non-owner in-tab process
     /// authenticate as the session while an out-of-tab cap thief cannot.
     case sessionBindTerminal = "session.bindTerminal"
-    /// `session.setPrivateBatch({sessionIds, isPrivate, revision})
-    /// → {applied, revision, isPrivate}`. Atomically flip the privacy flag
+    /// `session.setProtectedBatch({sessionIds, isProtected, revision})
+    /// → {applied, revision, isProtected}`. Atomically flip the protection flag
     /// for every session backing one tab, subject to daemon-side
     /// `(epoch, revision)` last-write-wins (a stale batch returns
     /// `applied: false` without mutating). `.validatedGUI`-scoped: the
     /// peer's audit token is the
     /// authority, so no `(sessionId, cap)` handshake rides on the wire.
     /// All-or-none: the daemon validates every id before mutating, so a
-    /// multi-terminal tab can never be left in a torn private/public
-    /// state. `isPrivate` is the desired absolute state (idempotent on
-    /// retry). A private session disappears from `tabs.list` for every
-    /// caller except the owner: the "private tab is opaque to other
+    /// multi-terminal tab can never be left in a torn protected/unprotected
+    /// state. `isProtected` is the desired absolute state (idempotent on
+    /// retry). A protected session disappears from `tabs.list` for every
+    /// caller except the owner: the "protected tab is opaque to other
     /// principals" rule.
-    case sessionSetPrivateBatch = "session.setPrivateBatch"
+    case sessionSetProtectedBatch = "session.setProtectedBatch"
     /// `session.restoreBatch({sessions: [RestoredSession]})
     /// → {restoredCount, sessionIds}`. A live, signature-validated GUI
     /// re-supplies its COMPLETE session inventory. This is BOTH restart
@@ -77,7 +77,7 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// reconciled away as an abandoned ghost when this batch's key dominates the
     /// one that asserted it (so a newer connection or a higher-revision
     /// same-connection retry can reap it); a batch updates a live session's
-    /// privacy under the same rule; and a session closed since the inventory was
+    /// protection under the same rule; and a session closed since the inventory was
     /// captured is NOT resurrected. A
     /// malformed / duplicate / verifier-conflicting batch is rejected in full.
     /// Processing any non-stale batch (even empty)
@@ -85,16 +85,16 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// `session.authenticate` is retryable `notReady`; after it, terminal
     /// `unauthorized`.
     case sessionRestoreBatch = "session.restoreBatch"
-    /// `session.privacySnapshot({sessionIds, revision})
+    /// `session.protectionSnapshot({sessionIds, revision})
     /// → {fenced, revision, sessions: [{sessionId, state}]}`. An
-    /// ordering-fenced authoritative read of tab privacy: in one actor turn
+    /// ordering-fenced authoritative read of tab protection: in one actor turn
     /// the daemon snapshots every requested session AND advances each live
     /// one's `(epoch, revision)` key to this request's key, so a delayed
     /// older write subsequently loses (`applied: false`). Only a
     /// `fenced: true` result is authoritative. `.validatedGUI`-scoped. The
     /// GUI reconciles tab presentation from this after a rejection, a stale
     /// `applied: false`, or a superseded indeterminate send.
-    case sessionPrivacySnapshot = "session.privacySnapshot"
+    case sessionProtectionSnapshot = "session.protectionSnapshot"
     /// `session.setDisplayTitle({sessionId, title}) → {ok: true}`. Publish
     /// the tab's live label (shell OSC 0/2 title, manual rename, whichever
     /// won the GUI's title precedence) so `tabs.list` can serve it in place
@@ -141,7 +141,7 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
 
     // physicalDevice.* / devices.*: physically-connected iPhone/iPad.
     /// `physicalDevice.list`: connected physical devices (daemon-wide;
-    /// device *availability* leaks nothing tab-private). Feeds the GUI
+    /// device *availability* reveals no protected-tab state). Feeds the GUI
     /// "Mirror Physical Device…" picker.
     case physicalDeviceList = "physicalDevice.list"
     /// `physicalDevice.attach`: mount one physical device as a pane.
@@ -152,7 +152,7 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// `devices.list`: the aggregate live roster (booted sims +
     /// connected physical devices) annotated with pane/ownership state.
     /// Session-scoped because the annotation reuses the `tabs.list`
-    /// private-tab opacity rules. Backs the CLI `deviceterm devices list`.
+    /// protected-tab opacity rules. Backs the CLI `deviceterm devices list`.
     case devicesList = "devices.list"
 
     // pane.* (lifecycle)
@@ -330,15 +330,15 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// the GUI reads via `IntentActionDelegate.captureTab` and
     /// returns a `TabCapturePayload` in `app.commandResult.data`.
     case tabCapture = "tab.capture"
-    /// `tab.setPrivate`: toggle the resolved tab's privacy flag.
+    /// `tab.setProtected`: toggle the resolved tab's protection flag.
     /// Session-scoped (auth required) but owner-only enforcement
     /// happens GUI-side in the IntentDispatcher: it gates the
     /// dispatch when the resolved tab's terminals don't include
     /// the caller's session id, returning `intent.notFound` rather
     /// than leaking the tab's existence. The GUI resolves the tab to
     /// its terminal-pane sessions and flips them atomically via the
-    /// daemon's `session.setPrivateBatch`.
-    case tabSetPrivate = "tab.setPrivate"
+    /// daemon's `session.setProtectedBatch`.
+    case tabSetProtected = "tab.setProtected"
     /// `automation.grant`: issue live automation grants for a tab's
     /// sessions. `.validatedGUI`-scoped: only a signature-validated GUI
     /// peer over XPC may call it, and the grant is attributed to that

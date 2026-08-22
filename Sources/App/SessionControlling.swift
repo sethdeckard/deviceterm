@@ -22,16 +22,16 @@ protocol SessionControlling: AnyObject {
     /// product-UI path that passes `.automation`; no CLI verb emits
     /// the request, and the daemon refuses an automation mint
     /// that doesn't arrive over XPC from a signature-validated peer.
-    /// `initialPrivate` seeds the session's privacy flag atomically at
+    /// `initialProtected` seeds the session's protection flag atomically at
     /// create time: passed `true` for a terminal joining a tab that is
-    /// already private (or mid-transition to private) so the new session
-    /// is never observable as public on `tabs.list`. The standard
+    /// already protected (or mid-transition to protected) so the new
+    /// session is never observable as unprotected on `tabs.list`. The standard
     /// tab-open path passes `false`.
     func createSession(
         label: String?,
         name: String?,
         role: SessionRole,
-        initialPrivate: Bool
+        initialProtected: Bool
     ) async throws -> SessionCreateResponse
     /// `session.close`: `mode` is `.detach` (sims keep running) or
     /// `.shutdown`. The witness may default `mode`; the requirement
@@ -41,7 +41,7 @@ protocol SessionControlling: AnyObject {
         capability: String,
         mode: PaneCloseMode
     ) async throws
-    /// `session.setPrivateBatch`: atomically flip the privacy flag for
+    /// `session.setProtectedBatch`: atomically flip the protection flag for
     /// every session backing one tab, subject to daemon-side ordering.
     /// `.validatedGUI`-scoped, so no cap rides on the wire (the GUI's
     /// audit token is the authority). The daemon validates every id and
@@ -50,11 +50,11 @@ protocol SessionControlling: AnyObject {
     /// GUI applies the owner check before building the batch. `revision`
     /// is a fresh, monotonically increasing value per send attempt; the
     /// reply's `applied` says whether the daemon actually committed it.
-    func setPrivateBatch(
+    func setProtectedBatch(
         sessionIds: [String],
-        isPrivate: Bool,
+        isProtected: Bool,
         revision: Int
-    ) async throws -> SessionSetPrivateBatchResult
+    ) async throws -> SessionSetProtectedBatchResult
 
     /// `session.restoreBatch`: re-supply the daemon's COMPLETE session
     /// inventory after a daemon-only restart, the sole path by which sessions
@@ -63,14 +63,14 @@ protocol SessionControlling: AnyObject {
     /// the verifier from. Called once per reconnect, before terminals rebind.
     func restoreBatch(sessions: [RestoredSession]) async throws -> SessionRestoreBatchResult
 
-    /// `session.privacySnapshot`: ordering-fenced authoritative read of the
-    /// sessions' confirmed privacy. `.validatedGUI`-scoped. `revision` is a
-    /// fresh value from the same monotonic counter as `setPrivateBatch`; the
+    /// `session.protectionSnapshot`: ordering-fenced authoritative read of the
+    /// sessions' confirmed protection. `.validatedGUI`-scoped. `revision` is a
+    /// fresh value from the same monotonic counter as `setProtectedBatch`; the
     /// daemon advances the sessions' ordering key to it so a delayed older
     /// write loses, keeping the returned snapshot authoritative. Only a
     /// `fenced: true` reply is authoritative.
-    func privacySnapshot(
+    func protectionSnapshot(
         sessionIds: [String],
         revision: Int
-    ) async throws -> SessionPrivacySnapshotResult
+    ) async throws -> SessionProtectionSnapshotResult
 }

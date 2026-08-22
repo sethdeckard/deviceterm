@@ -47,7 +47,7 @@ enum RouteIntent: Sendable, Equatable {
     /// Read-only: list the workspace's windows, restricted to what the
     /// origin may see. `all == false` returns just the caller's own
     /// window; `all == true` returns every window in the caller-visible
-    /// projection: windows/tabs private to another session are omitted
+    /// projection: windows/tabs another session protects are omitted
     /// and indices count only the visible ones. In-process callers see
     /// the raw workspace.
     case windowsList(
@@ -186,16 +186,16 @@ enum RouteIntent: Sendable, Equatable {
     /// payload the CLI prints to stdout.
     case captureTab(TabRef)
 
-    /// Toggle the resolved tab's privacy flag. CLI verb is
-    /// `deviceterm tab set-private <true|false>`. Ownership is enforced
+    /// Toggle the resolved tab's protection flag. CLI verb is
+    /// `deviceterm tab set-protected <true|false>`. Ownership is enforced
     /// GUI-side by the origin/owner gate in `IntentDispatcher`: an
     /// external caller can only target a tab whose terminal sessions
-    /// include its own. The mutation itself rides the `.validatedGUI`
-    /// `session.setPrivateBatch`, so no raw CLI socket can flip a tab's
-    /// privacy: only the signature-validated GUI peer.
-    case setTabPrivate(
+    /// include its own. The CLI requests the transition through
+    /// `tab.setProtected`; only the validated GUI can issue the underlying
+    /// `.validatedGUI` `session.setProtectedBatch` that performs it.
+    case setTabProtected(
         TabRef,
-        isPrivate:
+        isProtected:
         Bool
         )
 }

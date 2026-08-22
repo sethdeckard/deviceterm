@@ -55,7 +55,7 @@ struct RouterTests {
         #expect(workspace.windows.first?.tabs.tabs.count == 1)
         #expect(
             fake.createSessionCalls == [
-            .init(label: nil, name: nil, role: .agent, initialPrivate: false)
+            .init(label: nil, name: nil, role: .agent, initialProtected: false)
             ]
             )
     }
@@ -73,7 +73,7 @@ struct RouterTests {
         await settle()
         #expect(
             fake.createSessionCalls == [
-            .init(label: nil, name: "feature-branch", role: .agent, initialPrivate: false)
+            .init(label: nil, name: "feature-branch", role: .agent, initialProtected: false)
             ]
             )
     }
@@ -1019,9 +1019,9 @@ struct RouterTests {
     }
 
     @Test
-    func setTabPrivateBatchesAllTerminalsAndMirrorsState() async {
-        // Multi-terminal tab: setTabPrivate flips every terminal
-        // session in ONE atomic `session.setPrivateBatch` (not a
+    func setTabProtectedBatchesAllTerminalsAndMirrorsState() async {
+        // Multi-terminal tab: setTabProtected flips every terminal
+        // session in ONE atomic `session.setProtectedBatch` (not a
         // per-terminal loop), and the GUI mirror updates only on a
         // successful ack.
         let fake = FakeDaemonClient()
@@ -1034,23 +1034,23 @@ struct RouterTests {
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         // Exactly one batch, carrying both terminal sessions.
-        #expect(fake.setPrivateBatchCalls.count == 1)
-        #expect(Set(fake.setPrivateBatchCalls.first?.sessionIds ?? []) == ["S1", "S2"])
-        #expect(fake.setPrivateBatchCalls.first?.isPrivate == true)
+        #expect(fake.setProtectedBatchCalls.count == 1)
+        #expect(Set(fake.setProtectedBatchCalls.first?.sessionIds ?? []) == ["S1", "S2"])
+        #expect(fake.setProtectedBatchCalls.first?.isProtected == true)
         #expect(
             workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isPrivate == true
+            .tabs.tab(id: TabID(value: 1))?.isProtected == true
             )
     }
 
     @Test
-    func openTerminalPaneInheritsTabPrivacyAtCreate() async {
-        // Adding a terminal to a private tab must seed the new
-        // session's privacy atomically at create time via
-        // `initialPrivate: true`, not a follow-up toggle, which
+    func openTerminalPaneInheritsTabProtectionAtCreate() async {
+        // Adding a terminal to a protected tab must seed the new
+        // session's protection atomically at create time via
+        // `initialProtected: true`, not a follow-up toggle, which
         // would race the create's own persist/publish and leave the
         // new session briefly visible on `tabs.list`.
         let fake = FakeDaemonClient()
@@ -1061,23 +1061,23 @@ struct RouterTests {
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
         // The toggle batched only the primary (S1): the second
         // terminal didn't exist yet.
-        #expect(fake.setPrivateBatchCalls.count == 1)
-        #expect(fake.setPrivateBatchCalls.first?.sessionIds == ["S1"])
-        // The added terminal (S2) was created private at the source;
+        #expect(fake.setProtectedBatchCalls.count == 1)
+        #expect(fake.setProtectedBatchCalls.first?.sessionIds == ["S1"])
+        // The added terminal (S2) was created protected at the source;
         // no second batch fired for it.
-        #expect(fake.createSessionCalls.last?.initialPrivate == true)
+        #expect(fake.createSessionCalls.last?.initialProtected == true)
     }
 
     @Test
-    func openTerminalPaneCreatesPublicOnPublicTab() async {
-        // A public tab adding a terminal creates the new session
-        // public (`initialPrivate: false`) and emits NO privacy
+    func openTerminalPaneCreatesUnprotectedOnUnprotectedTab() async {
+        // An unprotected tab adding a terminal creates the new session
+        // unprotected (`initialProtected: false`) and emits NO protection
         // batch: the inheritance is gated on the tab's own state.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
@@ -1089,77 +1089,77 @@ struct RouterTests {
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
-        #expect(fake.setPrivateBatchCalls.isEmpty)
-        #expect(fake.createSessionCalls.last?.initialPrivate == false)
+        #expect(fake.setProtectedBatchCalls.isEmpty)
+        #expect(fake.createSessionCalls.last?.initialProtected == false)
     }
 
-    private func privacyState(
+    private func protectionState(
         _ workspace: WorkspaceViewModel,
         tab: TabID = TabID(value: 1)
-    ) -> TabPrivacyState? {
-        workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tab)?.privacyState
+    ) -> TabProtectionState? {
+        workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tab)?.protectionState
     }
 
     @Test
-    func setTabPrivateHidesImmediatelyBeforeAck() async {
-        // Fail-closed: a public→private transition hides the tab the
+    func setTabProtectedHidesImmediatelyBeforeAck() async {
+        // Fail-closed: an unprotected→protected transition hides the tab the
         // instant the user acts: before the daemon confirms. The tab is
-        // `.pendingPrivate` (effectively hidden, not yet committed) while
-        // the batch is in flight, and commits to `.privateHidden` on ack.
+        // `.pendingProtected` (effectively hidden, not yet committed) while
+        // the batch is in flight, and commits to `.protected` on ack.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        // Hidden before the ack, but not yet committed private.
-        #expect(privacyState(workspace) == .pendingPrivate)
+        // Hidden before the ack, but not yet committed protected.
+        #expect(protectionState(workspace) == .pendingProtected)
         #expect(
             workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true
             )
-        #expect(fake.setPrivateBatchCalls.count == 1)
-        fake.releaseSetPrivateBatch()
+        #expect(fake.setProtectedBatchCalls.count == 1)
+        fake.releaseSetProtectedBatch()
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
+        #expect(protectionState(workspace) == .protected)
     }
 
     @Test
-    func setTabPrivateDefiniteRejectionReconcilesToConfirmedPublic() async {
+    func setTabProtectedDefiniteRejectionReconcilesToConfirmedUnprotected() async {
         // A standalone DEFINITE pre-commit rejection means this batch never
         // mutated the daemon. The rejection itself doesn't confirm the state.
         // The reconcile SNAPSHOT establishes it: here it finds the daemon
-        // still public, so the GUI reconciles the `.pendingPrivate` tab back
-        // to public (honest) and reports the failure, rather than leaving a
-        // misleading "private" façade. It does not retry, and this is NOT a
+        // still unprotected, so the GUI reconciles the `.pendingProtected` tab back
+        // to unprotected (honest) and reports the failure, rather than leaving a
+        // misleading "protected" façade. It does not retry, and this is NOT a
         // request-time snapshot restore: the daemon's state is read, not
         // guessed.
         let fake = FakeDaemonClient()
-        fake.setPrivateBatchFailures = [
+        fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_001, message: "nope")
         ]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 200_000_000)
-        #expect(privacyState(workspace) == .publicVisible)
+        #expect(protectionState(workspace) == .unprotected)
         #expect(
             workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == false
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == false
             )
-        #expect(fake.setPrivateBatchCalls.count == 1)  // no retry
+        #expect(fake.setProtectedBatchCalls.count == 1)  // no retry
     }
 
     @Test
-    func terminalCreatedDuringPrivateToPublicIsMintedPrivate() async {
+    func terminalCreatedDuringProtectedToUnprotectedIsMintedProtected() async {
         // Inverse of `transitionWaitsForInFlightTerminalCreate`: a terminal
-        // opened while a private→public transition is pending must be minted
-        // PRIVATE (fail-closed from the still-hidden tab), not declassified
-        // to the transition's public target: otherwise it would be
-        // daemon-public and exposed via tabs.list before the tab commits.
+        // opened while a protected→unprotected transition is pending must be minted
+        // PROTECTED (fail-closed from the still-hidden tab), not declassified
+        // to the transition's unprotected target: otherwise it would be
+        // daemon-unprotected and exposed via tabs.list before the tab commits.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S1", capability: "C1"),
@@ -1168,77 +1168,78 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        // Commit private first.
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // Commit protected first.
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        // Begin a private→public transition, held so it stays pending.
-        fake.armSetPrivateBatchBarrier()
-        async let outcome = router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: false)
+        #expect(protectionState(workspace) == .protected)
+        // Begin a protected→unprotected transition, held so it stays pending.
+        fake.armSetProtectedBatchBarrier()
+        async let outcome = router.applyTabProtection(tab: TabID(value: 1), isProtected: false)
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)  // still hidden, unacked
+        #expect(protectionState(workspace) == .protected)  // still hidden, unacked
         // Open a terminal while pending: it inherits the hidden state.
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
-        #expect(fake.createSessionCalls.last?.initialPrivate == true)  // NOT declassified
-        fake.releaseSetPrivateBatch()
+        #expect(fake.createSessionCalls.last?.initialProtected == true)  // NOT declassified
+        fake.releaseSetProtectedBatch()
         _ = await outcome
         await settle()
-        // Everything publicizes together only once the transition commits.
-        #expect(privacyState(workspace) == .publicVisible)
+        // Every session becomes unprotected together only once the
+        // transition commits.
+        #expect(protectionState(workspace) == .unprotected)
     }
 
     @Test
-    func idempotentSetPrivateRejectionKeepsTabPrivate() async {
-        // A redundant set-private true on an already-private tab that is
+    func idempotentSetProtectedRejectionKeepsTabProtected() async {
+        // A redundant set-protected true on an already-protected tab that is
         // definitely rejected must revert to the ACTUAL prior state
-        // (private), never toggle toward public, so the tab stays hidden.
+        // (protected), never toggle toward unprotected, so the tab stays hidden.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        fake.setPrivateBatchFailures = [
+        #expect(protectionState(workspace) == .protected)
+        fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_602, message: "bad"),
             DaemonClientError.daemon(code: -32_602, message: "bad")
         ]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        // Reverted toward the prior committed state (private), stayed hidden.
-        #expect(privacyState(workspace) == .privateHidden)
+        // Reverted toward the prior committed state (protected), stayed hidden.
+        #expect(protectionState(workspace) == .protected)
     }
 
     @Test
-    func definiteRejectionFromPublicReconcilesToPublic() async {
+    func definiteRejectionFromUnprotectedReconcilesToUnprotected() async {
         // A definite rejection (invalidParams, the daemon is reachable and
-        // validated, but refused this batch) of a standalone public→private
+        // validated, but refused this batch) of a standalone unprotected→protected
         // request. The rejection alone doesn't confirm the state; the reconcile
-        // SNAPSHOT does: it finds the daemon still public (the refused mutation
-        // never landed) and reconciles the tab back to public, reporting the
-        // failure, instead of a misleading `.pendingPrivate`. (Smoke, where
+        // SNAPSHOT does: it finds the daemon still unprotected (the refused mutation
+        // never landed) and reconciles the tab back to unprotected, reporting the
+        // failure, instead of a misleading `.pendingProtected`. (Smoke, where
         // the snapshot ALSO scopeViolations, is covered separately by
         // `signatureRejectionLeavesTabFailClosedHidden`.)
         let fake = FakeDaemonClient()
-        fake.setPrivateBatchFailures = [
+        fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_602, message: "bad")
         ]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         let tab = workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 1))
-        #expect(privacyState(workspace) == .publicVisible)
-        #expect(tab?.isEffectivelyHidden == false)
-        #expect(tab?.isPrivate == false)
+        #expect(protectionState(workspace) == .unprotected)
+        #expect(tab?.isEffectivelyProtected == false)
+        #expect(tab?.isProtected == false)
     }
 
     @Test
-    func definiteRejectionMultiTerminalReconcilesToPublic() async {
+    func definiteRejectionMultiTerminalReconcilesToUnprotected() async {
         // Same on a multi-terminal tab: a standalone definite refusal
-        // reconciles the whole tab to public.
+        // reconciles the whole tab to unprotected.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S1", capability: "C1"),
@@ -1249,15 +1250,15 @@ struct RouterTests {
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
-        fake.setPrivateBatchFailures = [
+        fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_602, message: "bad")
         ]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         let tab = workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 1))
-        #expect(privacyState(workspace) == .publicVisible)
-        #expect(tab?.isEffectivelyHidden == false)
-        #expect(tab?.isPrivate == false)
+        #expect(protectionState(workspace) == .unprotected)
+        #expect(tab?.isEffectivelyProtected == false)
+        #expect(tab?.isProtected == false)
     }
 
     @Test
@@ -1266,7 +1267,7 @@ struct RouterTests {
         // while `openTerminalPane` is suspended in `createSession`. The fresh
         // session must not be stranded: if the tab is gone when the create
         // returns, the Router closes the orphaned session rather than leaking
-        // a live, unreferenced session the privacy fence never covers.
+        // a live, unreferenced session the protection fence never covers.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S-primary", capability: "C1"),
@@ -1291,7 +1292,7 @@ struct RouterTests {
 
     @Test
     func oppositeSupersessionReportsRejectedNotConverging() async {
-        // An awaited set-private that's superseded by the OPPOSITE toggle
+        // An awaited set-protected that's superseded by the OPPOSITE toggle
         // before it resolves reports `.rejected` (its requested state was
         // abandoned) rather than a misleading "converging toward your
         // value."
@@ -1299,88 +1300,88 @@ struct RouterTests {
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        // The faithful fake fences by (epoch, revision): the make-public (sent
-        // second, higher revision) applies; the stalled make-private, released
+        // The faithful fake fences by (epoch, revision): the unprotect (sent
+        // second, higher revision) applies; the stalled protect, released
         // later, is stale → applied:false.
-        // Stall only the make-private send; the opposite make-public passes,
-        // COMMITS, and CLEARS its transition first. The superseded make-private
+        // Stall only the protect send; the opposite unprotect passes,
+        // COMMITS, and CLEARS its transition first. The superseded protect
         // must still report `.rejected` (not `.pending`): its outcome comes
         // from the target recorded at supersession, not the now-cleared
         // winner. This is the winner-clears-first ordering the earlier test
         // avoided.
-        fake.armSetPrivateBatchStallFirstOnly()
-        async let outcomeTask = router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
-        await settle()  // make-private suspended on the barrier
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
-        await settle()  // make-public supersedes, commits, and clears
-        fake.releaseSetPrivateBatch()  // now let the superseded make-private resolve
+        fake.armSetProtectedBatchStallFirstOnly()
+        async let outcomeTask = router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
+        await settle()  // protect suspended on the barrier
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
+        await settle()  // unprotect supersedes, commits, and clears
+        fake.releaseSetProtectedBatch()  // now let the superseded protect resolve
         let outcome = await outcomeTask
         #expect(outcome == .rejected)
     }
 
     @Test
-    func rejectedSuccessorReconcilesToPublicAfterPredecessorCommitted() async {
-        // A make-public predecessor commits (daemon public), then a
-        // make-private successor is DEFINITELY rejected. With no older send
-        // still in flight, the GUI reconciles to public (the confirmed
+    func rejectedSuccessorReconcilesToUnprotectedAfterPredecessorCommitted() async {
+        // An unprotect predecessor commits (daemon unprotected), then a
+        // protect successor is DEFINITELY rejected. With no older send
+        // still in flight, the GUI reconciles to unprotected (the confirmed
         // daemon state) and reports the failure: it does not leave a
-        // misleading `.pendingPrivate` while the daemon exposes the tab.
+        // misleading `.pendingProtected` while the daemon exposes the tab.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: false)
+        #expect(protectionState(workspace) == .protected)
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: false)
         await settle()
-        #expect(privacyState(workspace) == .publicVisible)   // predecessor committed
-        // Successor: make private, definitely rejected.
-        fake.setPrivateBatchFailures = [
+        #expect(protectionState(workspace) == .unprotected)   // predecessor committed
+        // Successor: protect the tab, definitely rejected.
+        fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_602, message: "bad")
         ]
-        let outcome = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        let outcome = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         await settle()
         #expect(outcome == .rejected)                        // failure reported
-        #expect(privacyState(workspace) == .publicVisible)   // reconciled, honest
+        #expect(protectionState(workspace) == .unprotected)   // reconciled, honest
     }
 
     @Test
-    func stalledPredecessorMakePublicIsFencedOutBySnapshot() async {
-        // A make-public predecessor stalls in flight; a make-private successor
+    func stalledPredecessorMakeUnprotectedIsFencedOutBySnapshot() async {
+        // An unprotect predecessor stalls in flight; a protect successor
         // is then definitely rejected, and its reconcile snapshot fences the
         // sessions' ordering key. When the stalled predecessor finally arrives
         // at the daemon it is STALE (its revision no longer dominates the
         // fence) → `applied: false`, so it can't expose the tab. The GUI stays
-        // at the reconciled state (private, the daemon never went public),
+        // at the reconciled state (protected, the daemon never went unprotected),
         // and the stale reply's superseded revision is below the last commit,
         // so it schedules no reconcile.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        // Predecessor make-public parks in flight.
-        fake.armSetPrivateBatchStallFirstOnly()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        #expect(protectionState(workspace) == .protected)
+        // Predecessor unprotect parks in flight.
+        fake.armSetProtectedBatchStallFirstOnly()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         await settle()
-        // Successor make-private passes the gate and is definitely rejected;
+        // Successor protect passes the gate and is definitely rejected;
         // its reconcile snapshot fences the key.
-        fake.setPrivateBatchFailures = [
+        fake.setProtectedBatchFailures = [
             DaemonClientError.daemon(code: -32_602, message: "bad")
         ]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(privacyState(workspace) == .privateHidden)
+        #expect(protectionState(workspace) == .protected)
         // The stalled predecessor arrives: now stale (fenced out), so it
-        // can't override the reconciled private state.
-        fake.releaseSetPrivateBatch()
+        // can't override the reconciled protected state.
+        fake.releaseSetProtectedBatch()
         await settle()
         try? await Task.sleep(nanoseconds: 200_000_000)
-        #expect(privacyState(workspace) == .privateHidden)
+        #expect(protectionState(workspace) == .protected)
     }
 
     @Test
@@ -1390,16 +1391,16 @@ struct RouterTests {
         // look stale to the daemon) converging to committed once a send
         // acks.
         let fake = FakeDaemonClient()
-        fake.setPrivateBatchFailures = [DaemonClientError.transport("dropped")]
+        fake.setProtectedBatchFailures = [DaemonClientError.transport("dropped")]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 400_000_000)      // let the retry land
-        #expect(privacyState(workspace) == .privateHidden)   // converged
-        #expect(fake.setPrivateBatchCalls.count >= 2)         // retried
-        let revisions = fake.setPrivateBatchCalls.map(\.revision)
+        #expect(protectionState(workspace) == .protected)   // converged
+        #expect(fake.setProtectedBatchCalls.count >= 2)         // retried
+        let revisions = fake.setProtectedBatchCalls.map(\.revision)
         #expect(Set(revisions).count == revisions.count)      // all distinct
     }
 
@@ -1417,17 +1418,17 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchBarrier()                     // hold the first batch
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()                     // hold the first batch
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))  // expand membership
         await settle()
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
         await settle()
         try? await Task.sleep(nanoseconds: 200_000_000)
-        #expect(privacyState(workspace) == .privateHidden)
-        #expect(fake.setPrivateBatchCalls.last.map { Set($0.sessionIds) } == Set(["S1", "S2"]))
-        let revisions = fake.setPrivateBatchCalls.map(\.revision)
+        #expect(protectionState(workspace) == .protected)
+        #expect(fake.setProtectedBatchCalls.last.map { Set($0.sessionIds) } == Set(["S1", "S2"]))
+        let revisions = fake.setProtectedBatchCalls.map(\.revision)
         #expect(Set(revisions).count == revisions.count)      // fresh revision per send
     }
 
@@ -1442,75 +1443,75 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchStallFirstOnly()              // only the 1st send parks
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchStallFirstOnly()              // only the 1st send parks
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        #expect(fake.setPrivateBatchCalls.count == 1)         // predecessor stalled
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        #expect(fake.setProtectedBatchCalls.count == 1)         // predecessor stalled
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         await settle()
         try? await Task.sleep(nanoseconds: 200_000_000)
-        // Successor committed public despite the predecessor being stuck.
-        #expect(privacyState(workspace) == .publicVisible)
-        #expect(fake.setPrivateBatchCalls.count == 2)
-        fake.releaseSetPrivateBatch()                         // clean up the parked one
+        // Successor committed unprotected despite the predecessor being stuck.
+        #expect(protectionState(workspace) == .unprotected)
+        #expect(fake.setProtectedBatchCalls.count == 2)
+        fake.releaseSetProtectedBatch()                         // clean up the parked one
     }
 
     @Test
-    func makePublicAckWhileMakePrivatePendingDoesNotExpose() async {
-        // The over-correction guard: an older make-public reply that applies
-        // while a NEWER make-private is still pending must NOT expose the tab
+    func makeUnprotectedAckWhileMakeProtectedPendingDoesNotExpose() async {
+        // The over-correction guard: an older unprotect reply that applies
+        // while a NEWER protect is still pending must NOT expose the tab
         // (it commits nothing, superseded). The tab stays fail-closed hidden
-        // until the make-private resolves.
+        // until the protect resolves.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)  // private
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)  // protected
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))  // predecessor parks
+        #expect(protectionState(workspace) == .protected)
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))  // predecessor parks
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))   // successor parks
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))   // successor parks
         await settle()
-        fake.releaseFirstSetPrivateBatch()   // predecessor make-public applies
+        fake.releaseFirstSetProtectedBatch()   // predecessor unprotect applies
         await settle()
         try? await Task.sleep(nanoseconds: 150_000_000)
-        // Not exposed: the newer make-private is still pending.
-        #expect(privacyState(workspace) == .privateHidden)
+        // Not exposed: the newer protect is still pending.
+        #expect(protectionState(workspace) == .protected)
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
-        fake.releaseSetPrivateBatch()        // successor make-private applies
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
+        fake.releaseSetProtectedBatch()        // successor protect applies
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(privacyState(workspace) == .privateHidden)   // make-private won
+        #expect(protectionState(workspace) == .protected)   // protect won
     }
 
     @Test
-    func rejectionReconcilesToPrivateWhenSnapshotIsPrivate() async {
-        // A make-public rejected while the daemon is actually PRIVATE (an
-        // older make-private committed): the fenced snapshot reports private,
+    func rejectionReconcilesToProtectedWhenSnapshotIsProtected() async {
+        // An unprotect rejected while the daemon is actually PROTECTED (an
+        // older protect committed): the fenced snapshot reports protected,
         // so the tab reconciles to hidden, not exposed.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        // Make public, definitely rejected. Daemon stays private → snapshot
-        // (reflecting the fake's applied state) is private → stays hidden.
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: false)
+        #expect(protectionState(workspace) == .protected)
+        // Unprotect the tab, definitely rejected. Daemon stays protected → snapshot
+        // (reflecting the fake's applied state) is protected → stays hidden.
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: false)
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(privacyState(workspace) == .privateHidden)   // reconciled private
-        #expect(fake.privacySnapshotCalls.isEmpty == false)  // reconcile ran
+        #expect(protectionState(workspace) == .protected)   // reconciled protected
+        #expect(fake.protectionSnapshotCalls.isEmpty == false)  // reconcile ran
     }
 
     @Test
     func reconcileMixedSnapshotStaysHidden() async {
-        // A fenced but MIXED snapshot (one session public, one private) is
+        // A fenced but MIXED snapshot (one session unprotected, one protected) is
         // unresolved: the tab stays hidden, never exposed.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
@@ -1522,83 +1523,84 @@ struct RouterTests {
         await settle()
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
-        // Snapshot will report S1 public, S2 private → mixed.
-        fake.privacySnapshotStates = ["S1": .publicState, "S2": .privateState]
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // Snapshot will report S1 unprotected, S2 protected → mixed.
+        fake.protectionSnapshotStates = ["S1": .unprotectedState, "S2": .protectedState]
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 150_000_000)
         // Mixed → unresolved → hidden (never exposed).
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
     }
 
     @Test
-    func staleSnapshotResponseDoesNotExposeAfterNewerMakePrivate() async {
-        // Finding: a reconcile snapshot captures public, but a newer
-        // make-private commits (and clears) before the delayed snapshot
+    func staleSnapshotResponseDoesNotExposeAfterNewerMakeProtected() async {
+        // Finding: a reconcile snapshot captures unprotected, but a newer
+        // protect commits (and clears) before the delayed snapshot
         // response arrives. The stale snapshot (older revision) must be
-        // discarded by the revision guard: never expose the now-private tab.
+        // discarded by the revision guard: never expose the now-protected tab.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        // Make-public on the (public) tab is rejected → triggers a reconcile;
+        // Unprotecting the (already unprotected) tab is rejected → triggers a
+        // reconcile;
         // hold its snapshot in flight.
-        fake.armPrivacySnapshotBarrier()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        fake.armProtectionSnapshotBarrier()
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        // A newer make-private completes while the snapshot is parked.
-        _ = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        // A newer protect completes while the snapshot is parked.
+        _ = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         await settle()
-        #expect(privacyState(workspace) == .privateHidden)
-        fake.releasePrivacySnapshot()   // stale public snapshot (older rev) returns
+        #expect(protectionState(workspace) == .protected)
+        fake.releaseProtectionSnapshot()   // stale unprotected snapshot (older rev) returns
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        // Discarded: the tab stays private, not re-exposed.
-        #expect(privacyState(workspace) == .privateHidden)
+        // Discarded: the tab stays protected, not re-exposed.
+        #expect(protectionState(workspace) == .protected)
     }
 
     @Test
     func reconcileRetriesAfterSnapshotTransportFailure() async {
         // Finding: a lost snapshot reply must not abandon reconciliation. It
         // retries with a fresh revision until authoritative. The daemon is
-        // public here (the make-private was rejected), so it reconciles to
-        // public once a read succeeds.
+        // unprotected here (the protect was rejected), so it reconciles to
+        // unprotected once a read succeeds.
         let fake = FakeDaemonClient()
-        fake.privacySnapshotFailures = [DaemonClientError.transport("dropped")]
+        fake.protectionSnapshotFailures = [DaemonClientError.transport("dropped")]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 500_000_000)  // past the first backoff
-        #expect(privacyState(workspace) == .publicVisible)   // retried past the loss
-        #expect(fake.privacySnapshotCalls.count >= 2)
+        #expect(protectionState(workspace) == .unprotected)   // retried past the loss
+        #expect(fake.protectionSnapshotCalls.count >= 2)
     }
 
     @Test
     func reconcileRetriesUnfencedUntilFenced() async {
         // Finding: an unfenced result (not yet authoritative) keeps the tab
         // hidden AND retries: it doesn't abandon the tab. Once a snapshot
-        // fences, it reconciles (public here, the make-private was rejected).
+        // fences, it reconciles (unprotected here, the protect was rejected).
         let fake = FakeDaemonClient()
-        fake.privacySnapshotFencedQueue = [false, false]  // then default true
+        fake.protectionSnapshotFencedQueue = [false, false]  // then default true
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         // Hidden while unfenced.
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
         try? await Task.sleep(nanoseconds: 900_000_000)  // past two backoffs → fenced
-        #expect(privacyState(workspace) == .publicVisible)
-        #expect(fake.privacySnapshotCalls.count >= 3)
+        #expect(protectionState(workspace) == .unprotected)
+        #expect(fake.protectionSnapshotCalls.count >= 3)
     }
 
     @Test
@@ -1609,48 +1611,48 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        // Make-private rejected → triggers a reconcile; hold the snapshot.
-        fake.armPrivacySnapshotBarrier()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // Protect rejected → triggers a reconcile; hold the snapshot.
+        fake.armProtectionSnapshotBarrier()
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        // A newer make-private starts while the snapshot is parked.
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // A newer protect starts while the snapshot is parked.
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        fake.releasePrivacySnapshot()        // stale snapshot returns, discarded
+        fake.releaseProtectionSnapshot()        // stale snapshot returns, discarded
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        // The newer transition drives; tab is hidden (make-private).
+        // The newer transition drives; tab is hidden (protect).
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
     }
 
     @Test
-    func stalePredecessorReplyDoesNotDemoteCommittedPublicTab() async {
+    func stalePredecessorReplyDoesNotDemoteCommittedUnprotectedTab() async {
         // Fix for the regression the synchronous mark introduced: a superseded
         // predecessor's late reply must NOT schedule a reconcile (which would
-        // synchronously demote to `.pendingPrivate`) once a newer transition
+        // synchronously demote to `.pendingProtected`) once a newer transition
         // committed a higher-revision state. The reply's revision is below the
         // last commit, so it's ignored.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        // A make-private predecessor parks in flight.
-        fake.armSetPrivateBatchStallFirstOnly()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // A protect predecessor parks in flight.
+        fake.armSetProtectedBatchStallFirstOnly()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        // A make-public successor commits at a higher revision.
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        // An unprotect successor commits at a higher revision.
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         await settle()
-        #expect(privacyState(workspace) == .publicVisible)
+        #expect(protectionState(workspace) == .unprotected)
         // The stale predecessor arrives: superseded and below the last
         // commit → no reconcile, no demote.
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
         await settle()
         try? await Task.sleep(nanoseconds: 150_000_000)
-        #expect(privacyState(workspace) == .publicVisible)
+        #expect(protectionState(workspace) == .unprotected)
     }
 
     @Test
@@ -1720,17 +1722,17 @@ struct RouterTests {
         // must NOT retry-storm; the tab stays fail-closed hidden and unresolved.
         // (The transient, retryable outcome is -32002, tested separately.)
         let fake = FakeDaemonClient()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_011, message: "no")]
-        fake.privacySnapshotFailures = [DaemonClientError.daemon(code: -32_011, message: "no")]
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_011, message: "no")]
+        fake.protectionSnapshotFailures = [DaemonClientError.daemon(code: -32_011, message: "no")]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 400_000_000)
-        #expect(privacyState(workspace) == .pendingPrivate)   // fail-closed hidden
-        #expect(fake.setPrivateBatchCalls.count == 1)          // terminal: no retry
-        #expect(fake.privacySnapshotCalls.count == 1)          // reconcile, no storm
+        #expect(protectionState(workspace) == .pendingProtected)   // fail-closed hidden
+        #expect(fake.setProtectedBatchCalls.count == 1)          // terminal: no retry
+        #expect(fake.protectionSnapshotCalls.count == 1)          // reconcile, no storm
     }
 
     @Test
@@ -1738,7 +1740,7 @@ struct RouterTests {
         // A tab closed in window 1 but relocated to window 2 during its
         // teardown awaits must be removed from its LIVE window (2), not the
         // stale captured source: else it survives with its sessions closed
-        // and, once the tombstone drops, a late privacy reply resurrects a
+        // and, once the tombstone drops, a late protection reply resurrects a
         // reconcile there.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
@@ -1750,9 +1752,9 @@ struct RouterTests {
         await settle()
         router.dispatch(.openWindow())   // window 2, tab 2 (S2)
         await settle()
-        // Tab 1: a make-private batch parks in flight.
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // Tab 1: a protect batch parks in flight.
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         // Close tab 1, stalling closeSession so its teardown lingers.
         fake.armCloseSessionBarrier()
@@ -1764,23 +1766,23 @@ struct RouterTests {
             workspace.window(id: WindowID(value: 2))?.tabs.insert(state, at: 0)
         }
         // Let the teardown finish → the close re-resolves and removes tab 1
-        // from window 2. Then the parked privacy reply returns (tombstone now
+        // from window 2. Then the parked protection reply returns (tombstone now
         // dropped).
         fake.releaseCloseSession()
         await settle()
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
         // Removed from its live window, not left a zombie, and no reconcile.
         #expect(workspace.window(id: WindowID(value: 2))?.tabs.tab(id: TabID(value: 1)) == nil)
-        #expect(fake.privacySnapshotCalls.isEmpty)
+        #expect(fake.protectionSnapshotCalls.isEmpty)
     }
 
     @Test
     func lateReplyDuringMultiTabWindowCloseDoesNotResurrectReconcile() async {
         // Multi-tab window close: tab 1's teardown completes (its tombstone
         // dropped) while tab 2's teardown is still stalled. Tab 1 must already
-        // be removed from the workspace, or its late privacy reply (arriving
+        // be removed from the workspace, or its late protection reply (arriving
         // during tab 2's stall) would resurrect a reconcile.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
@@ -1792,9 +1794,9 @@ struct RouterTests {
         await settle()
         router.dispatch(.newTab(WindowID(value: 1)))   // tab 2 (S2)
         await settle()
-        // Tab 1: a make-private batch parks in flight.
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        // Tab 1: a protect batch parks in flight.
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         // Close the WINDOW; tab 1's closeSession passes, tab 2's stalls, so
         // tab 1 is fully torn down (and removed) while tab 2 lingers.
@@ -1802,17 +1804,17 @@ struct RouterTests {
         router.dispatch(.closeWindow(WindowID(value: 1), mode: .shutdown))
         await settle()
         // Tab 1's parked batch returns while tab 2's close is stalled.
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(fake.privacySnapshotCalls.isEmpty)  // no reconcile resurrected
+        #expect(fake.protectionSnapshotCalls.isEmpty)  // no reconcile resurrected
         fake.releaseCloseSession()                   // let tab 2's close finish
         await settle()
     }
 
     @Test
     func lateReplyDuringTabCloseDoesNotResurrectReconcile() async {
-        // Close-in-progress window: `closeTabRecords` cancels privacy work then
+        // Close-in-progress window: `closeTabRecords` cancels protection work then
         // awaits daemon teardown (here a stalled `closeSession`) while the tab
         // is STILL in the workspace. A cancelled transition's late reply during
         // that window must not resurrect a reconcile: the closing tombstone
@@ -1821,8 +1823,8 @@ struct RouterTests {
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         // Close the tab, stalling closeSession so the tab lingers in the
         // workspace through the teardown awaits.
@@ -1830,10 +1832,10 @@ struct RouterTests {
         router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .shutdown))
         await settle()
         // The parked batch returns during the close (cancelled transition).
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(fake.privacySnapshotCalls.isEmpty)  // no reconcile resurrected
+        #expect(fake.protectionSnapshotCalls.isEmpty)  // no reconcile resurrected
         fake.releaseCloseSession()                   // let the close complete
         await settle()
     }
@@ -1847,35 +1849,35 @@ struct RouterTests {
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         await router.shutdown()          // cancels the transition, sets the tombstone
-        fake.releaseSetPrivateBatch()    // the parked batch returns post-shutdown
+        fake.releaseSetProtectedBatch()    // the parked batch returns post-shutdown
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(fake.privacySnapshotCalls.isEmpty)  // no reconcile resurrected
+        #expect(fake.protectionSnapshotCalls.isEmpty)  // no reconcile resurrected
     }
 
     @Test
     func appliedFalseMarksTabPendingSynchronously() async {
-        // An idempotent make-public returning applied:false (a higher key
-        // won, the daemon may now be private) must fail-closed SYNCHRONOUSLY,
-        // not stay `.publicVisible` until the async snapshot responds. Hold
+        // An idempotent unprotect returning applied:false (a higher key
+        // won, the daemon may now be protected) must fail-closed SYNCHRONOUSLY,
+        // not stay `.unprotected` until the async snapshot responds. Hold
         // the snapshot and assert the tab is already hidden.
         let fake = FakeDaemonClient()
-        fake.setPrivateBatchApplied = [false]  // make-public loses the race
-        fake.armPrivacySnapshotBarrier()        // hold the reconcile snapshot
+        fake.setProtectedBatchApplied = [false]  // unprotect loses the race
+        fake.armProtectionSnapshotBarrier()        // hold the reconcile snapshot
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        #expect(privacyState(workspace) == .publicVisible)
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        #expect(protectionState(workspace) == .unprotected)
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         await settle()
         // Marked pending synchronously, before the held snapshot responds.
-        #expect(privacyState(workspace) == .pendingPrivate)
+        #expect(protectionState(workspace) == .pendingProtected)
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
-        fake.releasePrivacySnapshot()
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
+        fake.releaseProtectionSnapshot()
     }
 
     @Test
@@ -1883,33 +1885,33 @@ struct RouterTests {
         // `-32002` is the TRANSIENT validation-unavailable outcome (distinct
         // from the terminal `-32011` signature rejection). The reconcile must
         // retry it (two transient failures then a success), never stranding the
-        // tab; here the daemon is public, so it converges to public.
+        // tab; here the daemon is unprotected, so it converges to unprotected.
         let fake = FakeDaemonClient()
-        fake.privacySnapshotFailures = [
+        fake.protectionSnapshotFailures = [
             DaemonClientError.daemon(code: -32_002, message: "unavailable"),
             DaemonClientError.daemon(code: -32_002, message: "unavailable")
         ]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         // Hidden while the transient failures retry.
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
         try? await Task.sleep(nanoseconds: 900_000_000)  // past two backoffs
-        #expect(privacyState(workspace) == .publicVisible)   // converged, not stranded
-        #expect(fake.privacySnapshotCalls.count >= 3)
+        #expect(protectionState(workspace) == .unprotected)   // converged, not stranded
+        #expect(fake.protectionSnapshotCalls.count >= 3)
     }
 
     @Test
-    func addingTerminalToPendingPrivateTabDoesNotReveal() async {
-        // A tab left hidden-but-unresolved (`.pendingPrivate`, no active
+    func addingTerminalToPendingProtectedTabDoesNotReveal() async {
+        // A tab left hidden-but-unresolved (`.pendingProtected`, no active
         // transition) must not be revealed by adding a split terminal. The
         // openTerminalPane reconcile compares EFFECTIVE-hidden (not committed
-        // `isPrivate`), so a hidden tab matches a terminal minted hidden and
-        // is not kicked toward public.
+        // `isProtected`), so a hidden tab matches a terminal minted hidden and
+        // is not kicked toward unprotected.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S1", capability: "C1"),
@@ -1918,27 +1920,27 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        // Make-private rejected → tab left `.pendingPrivate` with the
+        // Protect rejected → tab left `.pendingProtected` with the
         // reconcile snapshot held, so no transition is active.
-        fake.armPrivacySnapshotBarrier()
-        fake.setPrivateBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armProtectionSnapshotBarrier()
+        fake.setProtectedBatchFailures = [DaemonClientError.daemon(code: -32_602, message: "bad")]
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
         try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(privacyState(workspace) == .pendingPrivate)
+        #expect(protectionState(workspace) == .pendingProtected)
         // Add a split terminal: must NOT reveal the hidden tab.
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
         #expect(workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.isEffectivelyHidden == true)
-        fake.releasePrivacySnapshot()
+            .tabs.tab(id: TabID(value: 1))?.isEffectivelyProtected == true)
+        fake.releaseProtectionSnapshot()
     }
 
     @Test
     func supersededSendDoesNotBlockOnStalledPredecessor() async {
         // Daemon-side `(epoch, revision)` ordering: the GUI sends the
         // successor immediately; daemon ordering fences a stalled
-        // predecessor. A later privacy change sends its own batch immediately
+        // predecessor. A later protection change sends its own batch immediately
         // even while a predecessor's batch is stalled in flight. The stale
         // predecessor loses the race daemon-side, so it can't reorder, and a
         // permanently stalled predecessor can never wedge the successor.
@@ -1946,38 +1948,38 @@ struct RouterTests {
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchBarrier()                 // stall every batch
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()                 // stall every batch
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        #expect(fake.setPrivateBatchCalls.count == 1)    // first batch in flight
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        #expect(fake.setProtectedBatchCalls.count == 1)    // first batch in flight
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         try? await Task.sleep(nanoseconds: 200_000_000)
         // The successor sent its own batch without waiting for the stalled
         // predecessor: no wedge.
-        #expect(fake.setPrivateBatchCalls.count == 2)
-        fake.releaseSetPrivateBatch()
+        #expect(fake.setProtectedBatchCalls.count == 2)
+        fake.releaseSetProtectedBatch()
     }
 
     @Test
-    func stalledPrivacyRPCReportsPendingWithoutBlocking() async {
-        // A stalled setPrivateBatch must not wedge the command drain: the
+    func stalledProtectionRPCReportsPendingWithoutBlocking() async {
+        // A stalled setProtectedBatch must not wedge the command drain: the
         // awaited outcome reports `.pending` at the deadline while the
         // transition keeps converging in the background.
         let fake = FakeDaemonClient()
         let (router, _) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.privacyOutcomeDeadlineNanos = 50_000_000  // 50ms
-        fake.armSetPrivateBatchBarrier()                 // stall forever
-        let outcome = await router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        router.protectionOutcomeDeadlineNanos = 50_000_000  // 50ms
+        fake.armSetProtectedBatchBarrier()                 // stall forever
+        let outcome = await router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         #expect(outcome == .pending)
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
     }
 
     @Test
     func terminalAddedDuringTransitionIsReconciled() async {
-        // A terminal created while a private transition's batch is in
-        // flight is folded in: it's created private (from the still-hidden
+        // A terminal created while a protected transition's batch is in
+        // flight is folded in: it's created protected (from the still-hidden
         // tab), and the transition reconverges over the new membership so
         // the committed batch covers both sessions: no session is left in
         // the opposite daemon state when the tab commits.
@@ -1990,21 +1992,21 @@ struct RouterTests {
         router.dispatch(.openWindow())
         await settle()
         // Hold the first batch so a terminal can be added mid-flight.
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        #expect(privacyState(workspace) == .pendingPrivate)
+        #expect(protectionState(workspace) == .pendingProtected)
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
-        // The added terminal was created private at the source.
-        #expect(fake.createSessionCalls.last?.initialPrivate == true)
-        fake.releaseSetPrivateBatch()
+        // The added terminal was created protected at the source.
+        #expect(fake.createSessionCalls.last?.initialProtected == true)
+        fake.releaseSetProtectedBatch()
         await settle()
         // Converged: a batch covering both sessions acked, and the tab is
-        // committed private.
-        #expect(privacyState(workspace) == .privateHidden)
-        let coveredBoth = fake.setPrivateBatchCalls.contains {
-            Set($0.sessionIds) == ["S1", "S2"] && $0.isPrivate
+        // committed protected.
+        #expect(protectionState(workspace) == .protected)
+        let coveredBoth = fake.setProtectedBatchCalls.contains {
+            Set($0.sessionIds) == ["S1", "S2"] && $0.isProtected
         }
         #expect(coveredBoth)
     }
@@ -2013,11 +2015,11 @@ struct RouterTests {
     func transitionWaitsForInFlightTerminalCreate() async {
         // The exposure race, closed by per-tab ordering: a terminal create
         // is suspended in `createSession` (its session id unknown) when a
-        // public→private transition begins off the route drain (via
-        // `applyTabPrivacy`). The transition must WAIT for that create
+        // unprotected→protected transition begins off the route drain (via
+        // `applyTabProtection`). The transition must WAIT for that create
         // rather than batch over {S1} alone: otherwise the new session
-        // would be minted public and stranded exposed under a
-        // committed-private tab until a later reconcile.
+        // would be minted unprotected and stranded exposed under a
+        // committed-protected tab until a later reconcile.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S1", capability: "C1"),
@@ -2030,50 +2032,50 @@ struct RouterTests {
         router.dispatch(.openTerminalPane(tab: TabID(value: 1)))
         await settle()
         #expect(fake.createSessionsWaiting == 1)  // S2 mint suspended, in flight
-        // Privacy change begins off-drain while the create is in flight.
-        async let outcome = router.applyTabPrivacy(tab: TabID(value: 1), isPrivate: true)
+        // Protection change begins off-drain while the create is in flight.
+        async let outcome = router.applyTabProtection(tab: TabID(value: 1), isProtected: true)
         await settle()
         // Fail-closed hidden while waiting, but NO premature batch.
-        #expect(privacyState(workspace) == .pendingPrivate)
-        #expect(fake.setPrivateBatchCalls.isEmpty)
+        #expect(protectionState(workspace) == .pendingProtected)
+        #expect(fake.setProtectedBatchCalls.isEmpty)
         // Let the create finish; the transition's batch now covers both.
         fake.releaseCreateSession()
         let result = await outcome
         await settle()
         #expect(result == .committed)
-        #expect(privacyState(workspace) == .privateHidden)
-        #expect(fake.setPrivateBatchCalls.contains {
-            Set($0.sessionIds) == ["S1", "S2"] && $0.isPrivate
+        #expect(protectionState(workspace) == .protected)
+        #expect(fake.setProtectedBatchCalls.contains {
+            Set($0.sessionIds) == ["S1", "S2"] && $0.isProtected
         })
         // Never committed over {S1} alone (which would have exposed S2).
-        #expect(!fake.setPrivateBatchCalls.contains {
-            Set($0.sessionIds) == ["S1"] && $0.isPrivate
+        #expect(!fake.setProtectedBatchCalls.contains {
+            Set($0.sessionIds) == ["S1"] && $0.isProtected
         })
     }
 
     @Test
-    func setTabPrivateRetriesIndeterminateThenCommits() async {
+    func setTabProtectedRetriesIndeterminateThenCommits() async {
         // An indeterminate transport loss is retried with the same
         // idempotent batch until it acks: the tab stays hidden across the
         // retry and only commits once the daemon answers.
         let fake = FakeDaemonClient()
-        fake.setPrivateBatchFailures = [
+        fake.setProtectedBatchFailures = [
             DaemonClientError.transport("dropped")
         ]
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         // First attempt throws transport; the loop backs off ~200ms then
         // retries and acks. Wait past that.
         try? await Task.sleep(nanoseconds: 400_000_000)
-        #expect(fake.setPrivateBatchCalls.count >= 2)
-        #expect(privacyState(workspace) == .privateHidden)
+        #expect(fake.setProtectedBatchCalls.count >= 2)
+        #expect(protectionState(workspace) == .protected)
     }
 
     @Test
-    func setTabPrivateLastTransitionWins() async {
-        // Ordering: a rapid private→public converges on the last requested
+    func setTabProtectedLastTransitionWins() async {
+        // Ordering: a rapid protected→unprotected converges on the last requested
         // state, and the superseded transition's late resolution can't
         // resurrect the opposite one. Ordering is daemon-enforced by
         // `(epoch, revision)` last-write-wins, not GUI serialization: a
@@ -2082,18 +2084,18 @@ struct RouterTests {
         let (router, workspace) = makeRouter(fake)
         router.dispatch(.openWindow())
         await settle()
-        fake.armSetPrivateBatchBarrier()
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: true))
+        fake.armSetProtectedBatchBarrier()
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: true))
         await settle()
-        // Supersede with a public transition while the private one is
+        // Supersede with an unprotected transition while the protected one is
         // still suspended on the barrier.
-        router.dispatch(.setTabPrivate(tab: TabID(value: 1), isPrivate: false))
+        router.dispatch(.setTabProtected(tab: TabID(value: 1), isProtected: false))
         await settle()
-        fake.releaseSetPrivateBatch()
+        fake.releaseSetProtectedBatch()
         await settle()
-        #expect(privacyState(workspace) == .publicVisible)
-        #expect(fake.setPrivateBatchCalls.count == 2)
-        #expect(fake.setPrivateBatchCalls.last?.isPrivate == false)
+        #expect(protectionState(workspace) == .unprotected)
+        #expect(fake.setProtectedBatchCalls.count == 2)
+        #expect(fake.setProtectedBatchCalls.last?.isProtected == false)
     }
 
     // MARK: - Pending panes (optimistic insert / failure / retry / cancel)

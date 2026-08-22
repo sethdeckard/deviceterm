@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// TabSetPrivateResult: the outcome of an *awaited* `tab set-private`.
+// TabSetProtectedResult: the outcome of an *awaited* `tab set-protected`.
 //
-// The GUI drives tab privacy as an asynchronous, fail-closed transition
+// The GUI drives tab protection as an asynchronous, fail-closed transition
 // (hide immediately, converge the daemon via an idempotent batch). So the
 // CLI reports the daemon's actual outcome rather than an optimistic echo:
 //
@@ -16,12 +16,12 @@
 // A *definite* rejection (the daemon validated and refused) surfaces as an
 // error result, not this payload.
 
-public struct TabSetPrivateResult: Codable, Sendable, Equatable {
-    public let isPrivate: Bool
+public struct TabSetProtectedResult: Codable, Sendable, Equatable {
+    public let isProtected: Bool
     public let committed: Bool
 
-    public init(isPrivate: Bool, committed: Bool) {
-        self.isPrivate = isPrivate
+    public init(isProtected: Bool, committed: Bool) {
+        self.isProtected = isProtected
         self.committed = committed
     }
 }

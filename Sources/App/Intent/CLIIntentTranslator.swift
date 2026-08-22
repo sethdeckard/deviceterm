@@ -200,14 +200,14 @@ enum CLIIntentTranslator {
             )
             return .captureTab(decodeTabRef(params.tab))
 
-        case .tabSetPrivate:
+        case .tabSetProtected:
             let params = try decoder.decode(
-                AppCommandParams.SetTabPrivate.self,
+                AppCommandParams.SetTabProtected.self,
                 from: command.params
             )
-            return .setTabPrivate(
+            return .setTabProtected(
                 decodeTabRef(params.tab),
-                isPrivate: params.isPrivate
+                isProtected: params.isProtected
             )
         }
     }

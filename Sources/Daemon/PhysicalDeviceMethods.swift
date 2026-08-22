@@ -31,7 +31,8 @@ public enum PhysicalDeviceMethods {
     }
 
     /// `physicalDevice.list`: connected physical devices for the GUI
-    /// picker. Daemon-wide: device *availability* leaks nothing tab-private.
+    /// picker. Daemon-wide: device *availability* reveals no protected-tab
+    /// state.
     /// Empty when no device is plugged in / trusted.
     ///
     /// Deliberately cheap: a plain `devicectl list devices` enumeration,
@@ -314,8 +315,8 @@ public enum PhysicalDeviceMethods {
     /// `devices.list`: the aggregate live roster, booted (owned) sims +
     /// connected physical devices, each annotated with the owning
     /// session of a live pane that mirrors it. The annotation obeys the
-    /// `tabs.list` private-tab opacity rule: a device attached only in
-    /// a private session the caller can't see reads as unattached.
+    /// `tabs.list` protected-tab opacity rule: a device attached only in
+    /// a protected session the caller can't see reads as unattached.
     public static func devicesList(
         deviceCoordinator: DeviceCoordinator,
         physicalDeviceCoordinator: PhysicalDeviceCoordinator,

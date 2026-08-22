@@ -8,7 +8,7 @@ import Testing
 
 // The daemon-side half of the live tab label: a memory-only cache keyed by
 // session, normalized on receipt, dropped with the session, and filtered by
-// the same privacy rule as the tab itself.
+// the same protection rule as the tab itself.
 
 @Test
 func cachesAndClearsTheDisplayTitle() async throws {
@@ -116,16 +116,16 @@ func closingASessionDropsItsDisplayTitle() async throws {
 
 @Test
 func displayTitlesRideTheSameVisibilityFilterAsTheirTabs() async throws {
-    // A private tab's label is exactly as visible as the tab itself: the
+    // A protected tab's label is exactly as visible as the tab itself: the
     // pairing is computed from the already-filtered projection.
     let manager = SessionManager()
     let mine = try await manager.makeSessionState(name: "mine")
     let theirs = try await manager.makeSessionState(name: "theirs")
     try await manager.setDisplayTitle(sessionId: mine.id, title: "my title", fromConnection: 1)
     try await manager.setDisplayTitle(sessionId: theirs.id, title: "their secret", fromConnection: 1)
-    try await manager.setPrivateBatch(
+    try await manager.setProtectedBatch(
         sessionIds: [theirs.id],
-        isPrivate: true,
+        isProtected: true,
         revision: 1,
         epoch: 1
     )

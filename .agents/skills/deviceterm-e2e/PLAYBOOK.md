@@ -162,11 +162,11 @@ The single most trustworthy assertion the harness exists for:
 If the number, the AX tree, and the pixels disagree, that is a real bug — report
 it with all three observations.
 
-**One thing voids the ⇔: privacy.** Both CLI listings are filtered to what the
-*calling* session may see; AX is not filtered at all. A tab another session
-marked private is missing from your `tabCount` and your `tabs list`, while its
-pill is still in the strip and still in the dump. Run the cross-check on an
-all-public workspace, or expect AX to exceed the CLI by exactly the tabs you
+**One thing voids the ⇔: protection.** Both CLI listings are filtered to what
+the *calling* session may see; AX is not filtered at all. A tab another session
+protected is missing from your `tabCount` and your `tabs list`, while its pill
+is still in the strip and still in the dump. Run the cross-check on a workspace
+with no protected tabs, or expect AX to exceed the CLI by exactly the tabs you
 cannot see.
 
 **Count pills by identifier, never by role.** A pill is a node whose
@@ -374,7 +374,7 @@ not from the receipt.
   **They also count different things.** `tabs list` returns one row per
   caller-visible terminal *session*, `tabCount` counts caller-visible GUI
   *tabs*, and the pills show every tab in the window whether you can see it via
-  the CLI or not. On an all-public workspace a split tab is therefore several
+  the CLI or not. With no protected tabs a split tab is therefore several
   session rows, one `tabCount`, and one pill, with all three correct. Use
   `tabCount` and the pills when you mean tabs.
 - **Observe:** `.agents/skills/deviceterm-e2e/helpers/tab-pills.sh

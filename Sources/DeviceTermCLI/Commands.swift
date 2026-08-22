@@ -313,7 +313,7 @@ public enum CLICommand: Equatable, Sendable {
     /// `deviceterm windows list [--all]`: list the visible windows.
     /// Default scopes to the caller's window; `--all` returns every
     /// window the caller may see (the dispatcher scopes by the intent's
-    /// origin, filtering out windows that hold only foreign-private
+    /// origin, filtering out windows that hold only foreign-protected
     /// tabs). `--all` is not role-gated: any caller can widen the scope.
     case windowsList(
         all:
@@ -340,14 +340,15 @@ public enum CLICommand: Equatable, Sendable {
         tab:
         Wire.TabRef
         )
-    /// `deviceterm tab set-private <true|false> [--tab <ref>]`:
-    /// toggle the resolved tab's privacy flag. Defaults to the
-    /// caller's tab. Owner-only on the daemon side (cap-validated);
-    /// automation can't flip another tab's privacy bit.
-    case tabSetPrivate(
+    /// `deviceterm tab set-protected <true|false> [--tab <ref>]`:
+    /// toggle the resolved tab's protection flag. Defaults to the
+    /// caller's tab. Owner-only through the GUI's origin gate; the
+    /// underlying batch RPC is restricted to the validated GUI, and
+    /// automation can't flip another tab's protection bit.
+    case tabSetProtected(
         tab:
         Wire.TabRef,
-        isPrivate: Bool
+        isProtected: Bool
         )
 
     /// Anything else: caller prints usage to stderr and exits 1.

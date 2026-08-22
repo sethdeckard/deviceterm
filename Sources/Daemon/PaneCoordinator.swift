@@ -3289,7 +3289,7 @@ public actor PaneCoordinator {
 
     /// Ownership of every live pane, keyed by device target, the
     /// reverse of `panesForSession`. Backs the `devices.list` roster's
-    /// attachment annotation, which then applies private-tab opacity on
+    /// attachment annotation, which then applies protected-tab opacity on
     /// the returned `sessionId`s. Includes shutdown/failed records so a
     /// device the GUI still shows a (dead) pane for reads as attached.
     public func liveOwnerships() -> [PaneOwnership] {

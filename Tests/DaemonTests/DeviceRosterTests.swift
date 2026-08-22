@@ -45,9 +45,9 @@ func rosterAnnotatesOwnerVisibleToCaller() {
 }
 
 @Test
-func rosterHidesOwnerInPrivateSessionViaOpacity() {
+func rosterHidesOwnerInProtectedSessionViaOpacity() {
     let hiddenOwner = UUID()
-    // The caller can't see `hiddenOwner` (a private session it doesn't
+    // The caller can't see `hiddenOwner` (a protected session it doesn't
     // own), so the device must read as unattached, exactly the
     // tabs.list opacity rule.
     let roster = DeviceRoster.build(

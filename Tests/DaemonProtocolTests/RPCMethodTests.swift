@@ -84,10 +84,10 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.windowsList, "windows.list"),
     (RPCMethod.tabSendInput, "tab.sendInput"),
     (RPCMethod.tabCapture, "tab.capture"),
-    (RPCMethod.sessionSetPrivateBatch, "session.setPrivateBatch"),
-    (RPCMethod.sessionPrivacySnapshot, "session.privacySnapshot"),
+    (RPCMethod.sessionSetProtectedBatch, "session.setProtectedBatch"),
+    (RPCMethod.sessionProtectionSnapshot, "session.protectionSnapshot"),
     (RPCMethod.sessionSetDisplayTitle, "session.setDisplayTitle"),
-    (RPCMethod.tabSetPrivate, "tab.setPrivate")
+    (RPCMethod.tabSetProtected, "tab.setProtected")
     ]
     )
 func rpcMethodRawValue(method: RPCMethod, wire: String) {

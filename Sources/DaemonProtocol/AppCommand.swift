@@ -57,13 +57,13 @@ public enum AppCommandKind: String, Codable, Sendable, CaseIterable {
     /// IntentDispatcher reads via `IntentActionDelegate.captureTab` and
     /// returns the text as a `TabCapturePayload` on the back-channel result.
     case tabCapture = "tab.capture"
-    /// `deviceterm tab set-private`: toggle the resolved tab's privacy
+    /// `deviceterm tab set-protected`: toggle the resolved tab's protection
     /// flag. Ownership is enforced GUI-side by the origin/owner gate (an
-    /// external caller may only target a tab it owns a terminal in); the
-    /// mutation rides the `.validatedGUI` `session.setPrivateBatch`, so no
-    /// raw CLI socket can flip it. When set, the tab disappears from
-    /// `tabs.list` for every caller except the owner.
-    case tabSetPrivate = "tab.setPrivate"
+    /// external caller may only target a tab it owns a terminal in). A CLI
+    /// socket can request the transition, but only the validated GUI can
+    /// call the `session.setProtectedBatch` that performs it. When set, the
+    /// tab disappears from `tabs.list` for every caller except the owner.
+    case tabSetProtected = "tab.setProtected"
 }
 
 /// The wire envelope. `params` is the kind-specific Codable struct,
@@ -85,7 +85,7 @@ public struct AppCommand: Codable, Sendable, Equatable {
     /// verbs). The GUI builds the intent's
     /// `IntentOrigin.external(sessionID:)` from this, so
     /// `--tab current` / `--pane current` mean "the calling tab's
-    /// tab/pane" and a foreign private tab stays opaque to the caller.
+    /// tab/pane" and a foreign protected tab stays opaque to the caller.
     public let originatingSessionId: String?
 
     /// Kind-specific params, encoded as a JSON object. The GUI side
@@ -340,13 +340,13 @@ public enum AppCommandParams {
         public init(tab: Wire.TabRef) { self.tab = tab }
     }
 
-    public struct SetTabPrivate: Codable, Sendable, Equatable {
+    public struct SetTabProtected: Codable, Sendable, Equatable {
         public let tab: Wire.TabRef
-        public let isPrivate: Bool
+        public let isProtected: Bool
 
-        public init(tab: Wire.TabRef, isPrivate: Bool) {
+        public init(tab: Wire.TabRef, isProtected: Bool) {
             self.tab = tab
-            self.isPrivate = isPrivate
+            self.isProtected = isProtected
         }
     }
 }

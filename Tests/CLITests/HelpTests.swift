@@ -311,7 +311,7 @@ func helpListsEveryUserFacingVerb() {
         "tab select",
         "tab info",
         "tab move",
-        "tab set-private",
+        "tab set-protected",
         "tab send-input",
         "tab capture",
         "pane open --terminal [--tab <ref>]",

@@ -57,12 +57,12 @@ private struct DeferredDetach: Hashable {
     let attachment: UInt64?
 }
 
-/// One in-flight tab-privacy transition. `generation` is monotonic per
+/// One in-flight tab-protection transition. `generation` is monotonic per
 /// Router so a superseded transition's late resolution can't overwrite a
-/// newer one (a rapid private→public→private converges on the last
+/// newer one (a rapid protected→unprotected→protected converges on the last
 /// requested state). `task` is held so a supersede / tab-close / quit can
 /// cancel it.
-private struct PrivacyTransition {
+private struct ProtectionTransition {
     let generation: Int
     /// The state being converged toward. A membership re-kick reconverges
     /// toward this same target.
@@ -70,30 +70,30 @@ private struct PrivacyTransition {
     let task: Task<Void, Never>
 }
 
-/// First decisive outcome of an awaited tab-privacy transition, reported
-/// to the intent layer so `tab set-private` reflects the daemon's real
+/// First decisive outcome of an awaited tab-protection transition, reported
+/// to the intent layer so `tab set-protected` reflects the daemon's real
 /// state. `.pending` means the requested state remains unconfirmed because
 /// of a deadline, indeterminate transport loss, same-state supersession, or
 /// tab disappearance.
-enum TabPrivacyOutcome: Sendable, Equatable {
+enum TabProtectionOutcome: Sendable, Equatable {
     case committed
     case rejected
     case pending
 }
 
-/// One-shot resolver for an awaited privacy outcome: whichever fires
+/// One-shot resolver for an awaited protection outcome: whichever fires
 /// first (the transition's `onFirstOutcome` callback or the deadline)
 /// wins; later calls are ignored.
 @MainActor
-private final class PrivacyOutcomeGate {
+private final class ProtectionOutcomeGate {
     private var resumed = false
-    private let continuation: CheckedContinuation<TabPrivacyOutcome, Never>
+    private let continuation: CheckedContinuation<TabProtectionOutcome, Never>
 
-    init(_ continuation: CheckedContinuation<TabPrivacyOutcome, Never>) {
+    init(_ continuation: CheckedContinuation<TabProtectionOutcome, Never>) {
         self.continuation = continuation
     }
 
-    func resolve(_ outcome: TabPrivacyOutcome) {
+    func resolve(_ outcome: TabProtectionOutcome) {
         guard !resumed else { return }
         resumed = true
         continuation.resume(returning: outcome)
@@ -102,19 +102,19 @@ private final class PrivacyOutcomeGate {
 
 @MainActor
 final class Router {
-    /// Wire codes for a *definite* pre-commit privacy rejection: the
+    /// Wire codes for a *definite* pre-commit protection rejection: the
     /// daemon validated and refused **before** the atomic mutation, so this
     /// batch never committed. These are **terminal**: the transition reports
     /// failure and stops (retry can't succeed), then reconciles presentation
-    /// from a fenced `session.privacySnapshot`, never a local guess, since
-    /// the daemon's actual state may be public OR private (an older send may
+    /// from a fenced `session.protectionSnapshot`, never a local guess, since
+    /// the daemon's actual state may be unprotected OR protected (an older send
     /// have committed). Everything *not* in this set (a catch-all
     /// serverError (-32000), a dropped connection) is an indeterminate
     /// transport loss that may have landed *after* the mutation, so it stays
     /// fail-closed hidden and retries with a fresh revision. A since-closed
     /// session in the batch is caught earlier by the membership re-read
     /// (reapply over the live set), before this classification runs.
-    private static let definitePrivacyRejectionCodes: Set<Int> = [
+    private static let definiteProtectionRejectionCodes: Set<Int> = [
         -32_602,  // invalidParams (malformed batch / bad UUID)
         -32_001,  // unauthorized (unknown session in the batch)
         -32_011   // scopeViolation (not the validated GUI peer, e.g. --smoke UDS)
@@ -178,18 +178,18 @@ final class Router {
     /// outlives that wait is made harmless by its admission id instead. See
     /// `detach`.
     private var detachTasks: [PaneTarget: Task<Void, Never>] = [:]
-    /// In-flight tab-privacy transitions, keyed by tab. The retry-until-ack
+    /// In-flight tab-protection transitions, keyed by tab. The retry-until-ack
     /// loop that keeps the daemon and GUI converged lives off the serial
     /// drain (like `attachTasks`) so a lost response doesn't wedge
     /// navigation. Unlike an attach these hold no daemon identity worth
     /// recovering, so supersede / close / quit all cancel them outright.
-    private var privacyTransitions: [TabID: PrivacyTransition] = [:]
-    /// GUI-side supersession identity, one per `setTabPrivate` call. It
+    private var protectionTransitions: [TabID: ProtectionTransition] = [:]
+    /// GUI-side supersession identity, one per `setTabProtected` call. It
     /// decides which transition *owns* the tab (cancel-previous, report
     /// the outcome, clear the record); it is NOT the wire ordering key.
     /// the daemon orders by `(epoch, revision)`, so GUI generations never
     /// cross the wire.
-    private var nextPrivacyGeneration = 1
+    private var nextProtectionGeneration = 1
     /// Superseding target per superseded generation: when a new transition
     /// replaces an in-flight one, its target is recorded here against the old
     /// generation, so the old transition's `defer` reports `.rejected` vs
@@ -198,21 +198,21 @@ final class Router {
     /// `defer`.
     private var supersededTargets: [Int: Bool] = [:]
     /// The client half of the wire ordering key. Monotonic per Router; a
-    /// fresh value is stamped on every actual `setPrivateBatch` *send*
+    /// fresh value is stamped on every actual `setProtectedBatch` *send*
     /// (including retries and membership-expanded re-sends), never by a
     /// superseded task. The daemon pairs it with the connection epoch and
     /// rejects any send whose key doesn't dominate.
-    private var nextPrivacyRevision = 1
+    private var nextProtectionRevision = 1
     /// Highest revision whose `applied: true` reply has been committed to
     /// tab presentation, per tab. Guards against a late lower-revision ack
     /// (from a send that already lost to a newer write) reverting the tab:
     /// the GUI commits a reply only when its revision advances this.
-    private var lastCommittedPrivacyRevision: [TabID: Int] = [:]
+    private var lastCommittedProtectionRevision: [TabID: Int] = [:]
     /// One in-flight snapshot-reconciliation task per tab. It retries
     /// (fresh revision, backoff) until an authoritative fenced result or a
     /// newer transition takes ownership, so a lost/unfenced reply can't
     /// abandon the tab pending forever. A new transition cancels it.
-    private var privacyReconcileTasks: [TabID: Task<Void, Never>] = [:]
+    private var protectionReconcileTasks: [TabID: Task<Void, Never>] = [:]
     /// Set once `shutdown()` begins: a tombstone so a cancelled transition's
     /// late RPC reply can't resurrect a reconcile task after cleanup.
     private var isShutdown = false
@@ -229,10 +229,10 @@ final class Router {
     /// over it.
     private var closingWindows: Set<WindowID> = []
     /// Terminal-session creations currently in flight, per tab, keyed by a
-    /// monotonic token. A privacy transition beginning while a create is in
+    /// monotonic token. A protection transition beginning while a create is in
     /// flight waits for it before snapshotting session ids, so the batch
     /// can't miss a session minted in the pre-transition state and leave it
-    /// exposed under a newly-private tab. Creates that *start* after a
+    /// exposed under a newly-protected tab. Creates that *start* after a
     /// transition inherit its target instead (no wait).
     private var inFlightCreates: [TabID: Set<Int>] = [:]
     private var nextCreateToken = 1
@@ -272,11 +272,11 @@ final class Router {
     var restoreRetryBaseNanos: UInt64 = 200_000_000
     var restoreRetryCapNanos: UInt64 = 2_000_000_000
     var restoreWindow: Duration = .seconds(30)
-    /// Deadline for an awaited `applyTabPrivacy` to report `.pending` when
+    /// Deadline for an awaited `applyTabProtection` to report `.pending` when
     /// the daemon is slow, so a stalled RPC can't wedge the serial command
     /// drain. Kept below the daemon's 5s back-channel timeout; tests
     /// shorten it.
-    var privacyOutcomeDeadlineNanos: UInt64 = 3_000_000_000
+    var protectionOutcomeDeadlineNanos: UInt64 = 3_000_000_000
 
     init(
         workspace: WorkspaceViewModel,
@@ -343,10 +343,10 @@ final class Router {
             for task in batch.values { task.cancel() }
         }
         orphanBatchTasks.removeAll()
-        for transition in privacyTransitions.values { transition.task.cancel() }
-        privacyTransitions.removeAll()
-        for task in privacyReconcileTasks.values { task.cancel() }
-        privacyReconcileTasks.removeAll()
+        for transition in protectionTransitions.values { transition.task.cancel() }
+        protectionTransitions.removeAll()
+        for task in protectionReconcileTasks.values { task.cancel() }
+        protectionReconcileTasks.removeAll()
         ownershipRestoreTask?.cancel()
         ownershipRestoreTask = nil
         ownedSimDiscovery.shutdown()
@@ -376,7 +376,7 @@ final class Router {
             defer { closingWindows.remove(windowID) }
             guard let window = workspace.window(id: windowID) else { return }
             // Close ONLY the membership authorized at enqueue time
-            // (`IntentDispatcher` checked it for foreign-private tabs). The
+            // (`IntentDispatcher` checked it for foreign-protected tabs). The
             // Router is self-authoritative here: a tab that arrives later must
             // never be torn down without authority. Two layers protect this:
             // `closingWindows` freezes the window (from accept) so the transfer
@@ -455,7 +455,7 @@ final class Router {
             // drain by the AppDelegate transfer coordinator) can relocate it
             // during the teardown awaits, making the captured `window` stale.
             // Remove it from wherever it now lives, else it survives with its
-            // sessions closed and a late privacy reply could resurrect it once
+            // sessions closed and a late protection reply could resurrect it once
             // the closing tombstone drops.
             workspace.windowContaining(tab: tabID)?.tabs.removeTab(id: tabID)
 
@@ -472,8 +472,8 @@ final class Router {
         case let .closeTerminalPane(tabID, terminalID, mode):
             await closeTerminalPane(tab: tabID, terminal: terminalID, mode: mode)
 
-        case let .setTabPrivate(tabID, isPrivate):
-            setTabPrivate(tab: tabID, isPrivate: isPrivate)
+        case let .setTabProtected(tabID, isProtected):
+            setTabProtected(tab: tabID, isProtected: isProtected)
 
         case let .attachSimPane(tabID, udid, displayName, family, atIndex, anchor):
             attachPaneOptimistically(
@@ -895,13 +895,13 @@ final class Router {
             // than the requested one so the tab's recorded role
             // matches what's actually on the wire.
             let name = detectWorktreeName()
-            // A freshly-opened tab is always public; a private tab is only
-            // ever reached by toggling privacy after it exists.
+            // A freshly-opened tab is always unprotected; a protected tab is only
+            // ever reached by toggling protection after it exists.
             let session = try await daemon.createSession(
                 label: nil,
                 name: name,
                 role: role,
-                initialPrivate: false
+                initialProtected: false
             )
             let primary = TerminalPaneState(
                 id: allocateTerminalPaneID(),
@@ -1053,16 +1053,16 @@ final class Router {
         guard let window = workspace.windowContaining(tab: tabID),
             let tab = window.tabs.tab(id: tabID) else { return }
         // Mint the fresh session fail-closed from the tab's *current
-        // effective-hidden* state: private whenever the tab is hidden,
+        // effective-hidden* state: protected whenever the tab is hidden,
         // including mid-transition in EITHER direction. Never inherit a
-        // transition's target: a private→public target would declassify the
-        // new session (born daemon-public) while the tab is deliberately
-        // still private until the daemon acks. The transition's membership
-        // recheck then publicizes every session together only when it
-        // commits. Register the create as in-flight first so a privacy
+        // transition's target: a protected→unprotected target would declassify the
+        // new session (born daemon-unprotected) while the tab is deliberately
+        // still protected until the daemon acks. The transition's membership
+        // recheck then unprotects every session together only when it
+        // commits. Register the create as in-flight first so a protection
         // transition beginning while this is suspended in `createSession`
         // waits for its session id before batching.
-        let createdPrivate = tab.isEffectivelyHidden
+        let createdProtected = tab.isEffectivelyProtected
         let createToken = nextCreateToken
         nextCreateToken += 1
         inFlightCreates[tabID, default: []].insert(createToken)
@@ -1075,7 +1075,7 @@ final class Router {
                 label: nil,
                 name: nil,
                 role: tab.role,
-                initialPrivate: createdPrivate
+                initialProtected: createdProtected
             )
             // Re-resolve the tab's window after the await: a cross-window
             // `tab move` runs on the main actor outside the route drain and
@@ -1083,7 +1083,7 @@ final class Router {
             // suspended. The `window` captured above would then be stale, so
             // `addTerminal` would silently no-op against the old window,
             // stranding a live daemon session that no pane references and that
-            // a concurrent privacy batch never covers. If the tab is gone,
+            // a concurrent protection batch never covers. If the tab is gone,
             // close the orphaned session rather than leak it.
             guard let liveWindow = workspace.windowContaining(tab: tabID),
                 liveWindow.tabs.tab(id: tabID) != nil else {
@@ -1117,15 +1117,15 @@ final class Router {
             // here would only supersede (and mis-report) the awaited
             // transition. So only reconcile when NO transition is in flight
             // and the tab's EFFECTIVE state changed while `createSession`
-            // awaited (the terminal was minted with stale privacy). Compare
-            // against `isEffectivelyHidden`, NOT committed `isPrivate`: a
-            // `.pendingPrivate` (hidden-but-unresolved) tab is effectively
+            // awaited (the terminal was minted with stale protection). Compare
+            // against `isEffectivelyProtected`, NOT committed `isProtected`: a
+            // `.pendingProtected` (hidden-but-unresolved) tab is effectively
             // hidden, matching a terminal minted from a hidden tab, so it is
-            // NOT re-kicked toward public, which would reveal a tab mid-hide.
-            if privacyTransitions[tabID] == nil,
+            // NOT re-kicked toward unprotected, which would reveal a tab mid-hide.
+            if protectionTransitions[tabID] == nil,
                 let liveTab = liveWindow.tabs.tab(id: tabID),
-                liveTab.isEffectivelyHidden != createdPrivate {
-                setTabPrivate(tab: tabID, isPrivate: liveTab.isEffectivelyHidden)
+                liveTab.isEffectivelyProtected != createdProtected {
+                setTabProtected(tab: tabID, isProtected: liveTab.isEffectivelyProtected)
             }
         } catch {
             logError("session.create failed: \(error)")
@@ -1163,32 +1163,33 @@ final class Router {
         // Re-kick any in-flight transition so its next batch drops the
         // now-closed session (a stale id would make the daemon reject the
         // batch); the generation guard makes the superseded batch harmless.
-        reconvergePrivacyIfTransitioning(tab: tabID)
+        reconvergeProtectionIfTransitioning(tab: tabID)
     }
 
-    /// Begin (or supersede) a tab-privacy transition. Fail-closed and
+    /// Begin (or supersede) a tab-protection transition. Fail-closed and
     /// acknowledged:
     ///
-    ///  - A public→private transition hides the tab **immediately**
-    ///    (`.pendingPrivate`), before any daemon round-trip, and only
-    ///    commits to `.privateHidden` on the ack. A private→public stays
-    ///    hidden (its committed-private state) until the ack.
-    ///  - `runPrivacyTransition` commits presentation only from authoritative
+    ///  - An unprotected→protected transition hides the tab **immediately**
+    ///    (`.pendingProtected`), before any daemon round-trip, and only
+    ///    commits to `.protected` on the ack. A protected→unprotected stays
+    ///    hidden (its committed-protected state) until the ack.
+    ///  - `runProtectionTransition` commits presentation only from authoritative
     ///    daemon signals: a tab is EXPOSED only by the owning transition's
-    ///    highest-key make-public `applied: true` or a fenced uniform-public
-    ///    `session.privacySnapshot`. An indeterminate loss retries; a definite
+    ///    highest-key unprotect `applied: true` or a fenced uniform-unprotected
+    ///    `session.protectionSnapshot`. An indeterminate loss retries; a definite
     ///    rejection or a stale `applied: false` reconciles via a fenced
     ///    snapshot (never a local guess).
     ///  - Ordering is DAEMON-enforced by `(epoch, revision)` last-write-wins,
     ///    so the GUI does not serialize: a superseded send still in flight
     ///    simply loses (its key can't dominate). A rapid
-    ///    private→public→private converges on the last requested state, and a
+    ///    protected→unprotected→protected converges on the last requested state,
+///    and a
     ///    stale send (even one arriving after an XPC reconnect) can never
     ///    overwrite a newer one daemon-side.
-    private func setTabPrivate(
+    private func setTabProtected(
         tab tabID: TabID,
-        isPrivate: Bool,
-        onFirstOutcome: (@MainActor (TabPrivacyOutcome) -> Void)? = nil
+        isProtected: Bool,
+        onFirstOutcome: (@MainActor (TabProtectionOutcome) -> Void)? = nil
     ) {
         guard let window = workspace.windowContaining(tab: tabID),
             let liveTab = window.tabs.tab(id: tabID) else {
@@ -1201,13 +1202,13 @@ final class Router {
         // after this point are minted fail-closed from the (now hidden)
         // effective state and need no wait.
         let awaitedCreates = inFlightCreates[tabID] ?? []
-        let generation = nextPrivacyGeneration
-        nextPrivacyGeneration += 1
+        let generation = nextProtectionGeneration
+        nextProtectionGeneration += 1
         // Fail-closed hide happens now, synchronously, before the first
-        // suspension: a public→private is hidden the instant the user
+        // suspension: an unprotected→protected is hidden the instant the user
         // acts even though the daemon hasn't confirmed.
-        if isPrivate, liveTab.privacyState == .publicVisible {
-            window.tabs.setPrivacyState(.pendingPrivate, id: tabID)
+        if isProtected, liveTab.protectionState == .unprotected {
+            window.tabs.setProtectionState(.pendingProtected, id: tabID)
         }
         // Supersede any in-flight transition, but do NOT wait for it: the
         // daemon is the ordering authority now (last-write-wins by
@@ -1220,54 +1221,54 @@ final class Router {
         // against the superseder even after this transition commits and
         // clears: reading only the live transition would misreport an
         // abandoned request as `.pending`.
-        if let previous = privacyTransitions[tabID] {
-            supersededTargets[previous.generation] = isPrivate
+        if let previous = protectionTransitions[tabID] {
+            supersededTargets[previous.generation] = isProtected
             previous.task.cancel()
         }
         // A new transition takes ownership: cancel any snapshot reconcile
         // still retrying for this tab; the transition drives it now.
-        privacyReconcileTasks[tabID]?.cancel()
-        privacyReconcileTasks[tabID] = nil
+        protectionReconcileTasks[tabID]?.cancel()
+        protectionReconcileTasks[tabID] = nil
         let task = Task { @MainActor [weak self] in
             guard let self else {
                 // Router torn down. never leave an awaiter hanging.
                 onFirstOutcome?(.pending)
                 return
             }
-            await self.runPrivacyTransition(
+            await self.runProtectionTransition(
                 tab: tabID,
-                isPrivate: isPrivate,
+                isProtected: isProtected,
                 generation: generation,
                 awaitedCreates: awaitedCreates,
                 onFirstOutcome: onFirstOutcome
             )
         }
-        privacyTransitions[tabID] = PrivacyTransition(
+        protectionTransitions[tabID] = ProtectionTransition(
             generation: generation,
-            target: isPrivate,
+            target: isProtected,
             task: task
         )
     }
 
-    /// Awaited privacy transition for the intent layer. Begins (or
+    /// Awaited protection transition for the intent layer. Begins (or
     /// supersedes) the transition and resolves on its first decisive
     /// outcome: `.committed` (daemon applied it), `.rejected` (definitely
     /// refused, or abandoned by an opposite-state supersede), or `.pending`
     /// (unconfirmed because of a deadline, indeterminate transport loss,
     /// same-state supersession, or tab disappearance). Lets
-    /// `tab set-private` report the daemon's real state instead of an
+    /// `tab set-protected` report the daemon's real state instead of an
     /// optimistic echo.
-    func applyTabPrivacy(tab tabID: TabID, isPrivate: Bool) async -> TabPrivacyOutcome {
+    func applyTabProtection(tab tabID: TabID, isProtected: Bool) async -> TabProtectionOutcome {
         await withCheckedContinuation { continuation in
-            let gate = PrivacyOutcomeGate(continuation)
-            setTabPrivate(tab: tabID, isPrivate: isPrivate) { outcome in
+            let gate = ProtectionOutcomeGate(continuation)
+            setTabProtected(tab: tabID, isProtected: isProtected) { outcome in
                 gate.resolve(outcome)
             }
             // Bound the wait so one slow/unresponsive daemon can't wedge the
             // serial command drain: report `.pending` after the deadline
             // while the transition keeps converging in the background. Kept
             // below the daemon's 5s back-channel command timeout.
-            let deadline = privacyOutcomeDeadlineNanos
+            let deadline = protectionOutcomeDeadlineNanos
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: deadline)
                 gate.resolve(.pending)
@@ -1275,33 +1276,34 @@ final class Router {
         }
     }
 
-    /// Drive one privacy transition, then reconcile presentation ONLY from
+    /// Drive one protection transition, then reconcile presentation ONLY from
     /// authoritative daemon signals, never a local heuristic. Fail-closed:
     /// hiding is immediate, revealing needs proof.
     ///
-    ///  - A tab is EXPOSED (`.publicVisible`) only by the OWNING transition's
-    ///    highest-key make-public `applied: true`, or by a fenced,
-    ///    uniform-public `session.privacySnapshot`. Never from a superseded
-    ///    reply, an in-flight counter, or a "pending-implies-public" guess.
+    ///  - A tab is EXPOSED (`.unprotected`) only by the OWNING transition's
+    ///    highest-key unprotect `applied: true`, or by a fenced,
+    ///    uniform-unprotected `session.protectionSnapshot`. Never from a
+///    superseded
+    ///    reply, an in-flight counter, or a "pending-implies-unprotected" guess.
     ///  - `applied: true` (owning, membership match, revision advances):
-    ///    commit `.privateHidden` / `.publicVisible`; report `.committed`.
+    ///    commit `.protected` / `.unprotected`; report `.committed`.
     ///  - `applied: false` (a higher key won, possibly another connection's)
     ///    or a **definite rejection**: clear and reconcile via a fenced
-    ///    snapshot; the tab reveals only on a fenced uniform-public result,
+    ///    snapshot; the tab reveals only on a fenced uniform-unprotected result,
     ///    else stays hidden and unresolved.
     ///  - **indeterminate transport loss**: retry with a fresh revision.
     ///  - A SUPERSEDED reply commits nothing; the superseding transition (or
     ///    its own terminal reconcile) drives the tab.
     ///
-    /// Membership recheck still applies: a terminal created (fail-closed
-    /// private) while a batch is in flight is folded in by reapplying over
+    /// Membership recheck still applies: a terminal created fail-closed as
+    /// protected while a batch is in flight is folded in by reapplying over
     /// the new session set before committing.
-    private func runPrivacyTransition(
+    private func runProtectionTransition(
         tab tabID: TabID,
-        isPrivate desiredPrivate: Bool,
+        isProtected desiredProtected: Bool,
         generation: Int,
         awaitedCreates: Set<Int> = [],
-        onFirstOutcome: (@MainActor (TabPrivacyOutcome) -> Void)? = nil
+        onFirstOutcome: (@MainActor (TabProtectionOutcome) -> Void)? = nil
     ) async {
         var backoffMs = 200
         // Report the first decisive outcome exactly once to an awaiting
@@ -1309,7 +1311,7 @@ final class Router {
         // already report (supersede, tab-gone) resolves as `.pending` so
         // an awaiter never hangs.
         var fired = false
-        func fire(_ outcome: TabPrivacyOutcome) {
+        func fire(_ outcome: TabProtectionOutcome) {
             guard !fired else { return }
             fired = true
             onFirstOutcome?(outcome)
@@ -1325,9 +1327,9 @@ final class Router {
             // only the live transition would race and misreport. Fall back to
             // the live transition for a tab-gone exit with no recorded
             // superseder.
-            let superseder = supersededTargets[generation] ?? privacyTransitions[tabID]?.target
+            let superseder = supersededTargets[generation] ?? protectionTransitions[tabID]?.target
             supersededTargets[generation] = nil
-            if let superseder, superseder != desiredPrivate {
+            if let superseder, superseder != desiredProtected {
                 fire(.rejected)
             } else {
                 fire(.pending)
@@ -1337,43 +1339,43 @@ final class Router {
         // transition began: their sessions were minted in the
         // pre-transition state, so the batch must cover them. The tab is
         // already fail-closed hidden while we wait (set synchronously in
-        // `setTabPrivate`). Bails if a newer transition supersedes.
+        // `setTabProtected`). Bails if a newer transition supersedes.
         while !awaitedCreates.isDisjoint(with: inFlightCreates[tabID] ?? []) {
-            guard privacyTransitions[tabID]?.generation == generation else { return }
+            guard protectionTransitions[tabID]?.generation == generation else { return }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         while !Task.isCancelled {
-            guard privacyTransitions[tabID]?.generation == generation else { return }
+            guard protectionTransitions[tabID]?.generation == generation else { return }
             guard let tab = workspace.windowContaining(tab: tabID)?.tabs.tab(id: tabID) else {
                 // Tab closed mid-transition: nothing to converge.
-                clearPrivacyTransition(tabID, generation: generation)
+                clearProtectionTransition(tabID, generation: generation)
                 return
             }
             let sentIds = tab.terminals.map(\.sessionId)
             // Fresh revision per send: the daemon rejects a stale key, so
             // reusing one across attempts would make an idempotent retry
             // look stale. A superseded task never reaches here (guard above).
-            let revision = nextPrivacyRevision
-            nextPrivacyRevision += 1
+            let revision = nextProtectionRevision
+            nextProtectionRevision += 1
             do {
-                let result = try await daemon.setPrivateBatch(
+                let result = try await daemon.setProtectedBatch(
                     sessionIds: sentIds,
-                    isPrivate: desiredPrivate,
+                    isProtected: desiredProtected,
                     revision: revision
                 )
                 // A SUPERSEDED reply commits nothing itself. But it may have
-                // changed the daemon (an older make-public that finally
+                // changed the daemon (an older unprotect that finally
                 // applied), so if NO transition is active to drive the tab,
                 // reconcile from an authoritative snapshot; if a newer one is
                 // active, it drives.
-                guard privacyTransitions[tabID]?.generation == generation else {
+                guard protectionTransitions[tabID]?.generation == generation else {
                     // Reconcile ONLY if this reply is newer than the last
                     // committed revision. A newer transition that already
                     // committed (lastCommitted advanced past our revision) is
                     // authoritative: scheduling a reconcile would
-                    // synchronously demote its correct state to `.pendingPrivate`.
-                    if privacyTransitions[tabID] == nil,
-                        revision > (lastCommittedPrivacyRevision[tabID] ?? 0) {
+                    // synchronously demote its correct state to `.pendingProtected`.
+                    if protectionTransitions[tabID] == nil,
+                        revision > (lastCommittedProtectionRevision[tabID] ?? 0) {
                         scheduleReconcile(tab: tabID)
                     }
                     return
@@ -1382,13 +1384,13 @@ final class Router {
                     // A higher-key write won daemon-side, possibly another
                     // connection's, whose state we can't infer locally. Clear
                     // and reconcile from an authoritative fenced snapshot.
-                    clearPrivacyTransition(tabID, generation: generation)
+                    clearProtectionTransition(tabID, generation: generation)
                     scheduleReconcile(tab: tabID)
                     return
                 }
                 guard let window = workspace.windowContaining(tab: tabID),
                     let liveTab = window.tabs.tab(id: tabID) else {
-                    clearPrivacyTransition(tabID, generation: generation)
+                    clearProtectionTransition(tabID, generation: generation)
                     return
                 }
                 if Set(liveTab.terminals.map(\.sessionId)) != Set(sentIds) {
@@ -1398,36 +1400,36 @@ final class Router {
                     continue
                 }
                 // Owning + applied + membership match. This is the one place a
-                // make-public may REVEAL the tab (the highest-key public
+                // unprotect may REVEAL the tab (the highest-key unprotect
                 // write acknowledgement) and hiding is always safe. The
                 // revision guard stops a late lower-key ack from overriding a
                 // newer commit (e.g. a snapshot reconcile that already ran).
-                if revision > (lastCommittedPrivacyRevision[tabID] ?? 0) {
-                    lastCommittedPrivacyRevision[tabID] = revision
-                    window.tabs.setPrivacyState(
-                        result.isPrivate ? .privateHidden : .publicVisible,
+                if revision > (lastCommittedProtectionRevision[tabID] ?? 0) {
+                    lastCommittedProtectionRevision[tabID] = revision
+                    window.tabs.setProtectionState(
+                        result.isProtected ? .protected : .unprotected,
                         id: tabID
                     )
                 }
-                clearPrivacyTransition(tabID, generation: generation)
+                clearProtectionTransition(tabID, generation: generation)
                 fire(.committed)
                 return
             } catch {
                 if Task.isCancelled { return }
-                guard privacyTransitions[tabID]?.generation == generation else {
+                guard protectionTransitions[tabID]?.generation == generation else {
                     // Superseded. An indeterminate loss may have committed the
                     // daemon; reconcile only if nothing is left to drive the
                     // tab AND this reply is newer than the last commit (else a
                     // newer transition already set the authoritative state).
-                    if privacyTransitions[tabID] == nil,
-                        revision > (lastCommittedPrivacyRevision[tabID] ?? 0) {
+                    if protectionTransitions[tabID] == nil,
+                        revision > (lastCommittedProtectionRevision[tabID] ?? 0) {
                         scheduleReconcile(tab: tabID)
                     }
                     return
                 }
                 guard let liveTab = workspace.windowContaining(tab: tabID)?
                     .tabs.tab(id: tabID) else {
-                    clearPrivacyTransition(tabID, generation: generation)
+                    clearProtectionTransition(tabID, generation: generation)
                     return
                 }
                 // Self-heal a concurrently-changed membership before
@@ -1442,7 +1444,7 @@ final class Router {
                 // daemon validated and refused before mutating) is terminal:
                 // report the failure, then reconcile presentation from a
                 // fenced snapshot, never a local guess (the daemon may be
-                // public OR private, e.g. an older send committed). Only an
+                // unprotected OR protected, e.g. an older send committed). Only an
                 // INDETERMINATE transport loss retries with a fresh revision,
                 // reported as `.pending`. (`.rejected` also covers an opposite
                 // supersede, see the `defer` above.) `scopeViolation` (-32011)
@@ -1453,12 +1455,12 @@ final class Router {
                 // (-32002), which the client's `request()` retries internally,
                 // so it never surfaces here as a definite rejection.
                 if case let DaemonClientError.daemon(code, message) = error,
-                    Self.definitePrivacyRejectionCodes.contains(code) {
+                    Self.definiteProtectionRejectionCodes.contains(code) {
                     logError(
-                        "session.setPrivateBatch refused for tab "
+                        "session.setProtectedBatch refused for tab "
                         + "\(tabID.value): \(code) \(message)"
                     )
-                    clearPrivacyTransition(tabID, generation: generation)
+                    clearProtectionTransition(tabID, generation: generation)
                     fire(.rejected)
                     scheduleReconcile(tab: tabID)
                     return
@@ -1470,14 +1472,14 @@ final class Router {
         }
     }
 
-    /// Present a tab as hidden-and-UNRESOLVED (`.pendingPrivate`) when a
+    /// Present a tab as hidden-and-UNRESOLVED (`.pendingProtected`) when a
     /// reconcile can't get an authoritative answer. Demotes BOTH a
-    /// `.publicVisible` and a `.privateHidden` tab: leaving a `.privateHidden`
-    /// tab as-is would falsely classify it committed-private while its real
+    /// `.unprotected` and a `.protected` tab: leaving a `.protected`
+    /// tab as-is would falsely classify it committed-protected while its real
     /// daemon state is unknown. Idempotent (no-op if already pending).
-    private func markPrivacyUnresolved(tab tabID: TabID, window: WindowState) {
-        guard window.tabs.tab(id: tabID)?.privacyState != .pendingPrivate else { return }
-        window.tabs.setPrivacyState(.pendingPrivate, id: tabID)
+    private func markProtectionUnresolved(tab tabID: TabID, window: WindowState) {
+        guard window.tabs.tab(id: tabID)?.protectionState != .pendingProtected else { return }
+        window.tabs.setProtectionState(.pendingProtected, id: tabID)
     }
 
     /// Schedule (or restart) the snapshot reconciliation for a tab after a
@@ -1489,40 +1491,40 @@ final class Router {
         // tab is gone, a late reply must not resurrect a reconcile task.
         guard !isShutdown, !closingTabs.contains(tabID),
             let window = workspace.windowContaining(tab: tabID) else { return }
-        privacyReconcileTasks[tabID]?.cancel()
+        protectionReconcileTasks[tabID]?.cancel()
         // Fail-closed SYNCHRONOUSLY, before the async snapshot task runs: the
         // triggering outcome (an `applied: false`, a rejection, a superseded
-        // reply) means the tab's true daemon privacy is now unknown. Leaving
-        // it `.publicVisible` would expose it to foreign callers, and leaving
-        // it `.privateHidden` would falsely present it as committed-private,
+        // reply) means the tab's true daemon protection is now unknown. Leaving
+        // it `.unprotected` would expose it to foreign callers, and leaving
+        // it `.protected` would falsely present it as committed-protected,
         // for the whole (possibly stalled) read window. Mark it unresolved
         // now; the reconcile resolves it to an authoritative state.
-        markPrivacyUnresolved(tab: tabID, window: window)
-        privacyReconcileTasks[tabID] = Task { @MainActor [weak self] in
-            await self?.runPrivacyReconcile(tab: tabID)
+        markProtectionUnresolved(tab: tabID, window: window)
+        protectionReconcileTasks[tabID] = Task { @MainActor [weak self] in
+            await self?.runProtectionReconcile(tab: tabID)
         }
     }
 
-    /// Drive a tab's presentation to the daemon's authoritative privacy via a
-    /// fenced `session.privacySnapshot`, retrying (fresh revision, backoff)
+    /// Drive a tab's presentation to the daemon's authoritative protection via a
+    /// fenced `session.protectionSnapshot`, retrying (fresh revision, backoff)
     /// until it gets an authoritative fenced result, a newer transition takes
     /// ownership, or a newer authoritative commit supersedes it. so a lost
     /// or unfenced reply never abandons the tab pending forever. Fail-closed:
-    /// exposes the tab ONLY on a fenced uniform-public result with unchanged
+    /// exposes the tab ONLY on a fenced uniform-unprotected result with unchanged
     /// membership *and* a revision that still leads the last commit; anything
     /// else stays hidden (and, when not yet authoritative, retries).
-    private func runPrivacyReconcile(tab tabID: TabID) async {
+    private func runProtectionReconcile(tab tabID: TabID) async {
         var backoffMs = 200
         while !Task.isCancelled {
             // A transition owns the tab now: it drives; stop reconciling.
-            guard privacyTransitions[tabID] == nil,
+            guard protectionTransitions[tabID] == nil,
                 let tab = workspace.windowContaining(tab: tabID)?.tabs.tab(id: tabID) else { return }
             let sessionIds = tab.terminals.map(\.sessionId)
-            let revision = nextPrivacyRevision
-            nextPrivacyRevision += 1
-            let result: SessionPrivacySnapshotResult
+            let revision = nextProtectionRevision
+            nextProtectionRevision += 1
+            let result: SessionProtectionSnapshotResult
             do {
-                result = try await daemon.privacySnapshot(sessionIds: sessionIds, revision: revision)
+                result = try await daemon.protectionSnapshot(sessionIds: sessionIds, revision: revision)
             } catch {
                 // A `scopeViolation` (-32011) is a definite/terminal signature
                 // rejection on BOTH transports: the `--smoke` UDS structural
@@ -1541,57 +1543,57 @@ final class Router {
                 continue
             }
             if Task.isCancelled { return }
-            guard privacyTransitions[tabID] == nil,
+            guard protectionTransitions[tabID] == nil,
                 let window = workspace.windowContaining(tab: tabID),
                 let liveTab = window.tabs.tab(id: tabID) else { return }
             // A newer authoritative commit already set the correct state while
             // we were reading. this snapshot is stale; NEVER apply a state
             // older than what's committed (this is the exposure guard: it
             // gates the presentation write itself, not just the counter).
-            guard revision > (lastCommittedPrivacyRevision[tabID] ?? 0) else { return }
+            guard revision > (lastCommittedProtectionRevision[tabID] ?? 0) else { return }
             let membershipUnchanged = Set(liveTab.terminals.map(\.sessionId)) == Set(sessionIds)
             if result.fenced, membershipUnchanged {
-                lastCommittedPrivacyRevision[tabID] = revision
-                if result.sessions.allSatisfy({ $0.state == .publicState }) {
-                    window.tabs.setPrivacyState(.publicVisible, id: tabID)
+                lastCommittedProtectionRevision[tabID] = revision
+                if result.sessions.allSatisfy({ $0.state == .unprotectedState }) {
+                    window.tabs.setProtectionState(.unprotected, id: tabID)
                     return
                 }
-                if result.sessions.allSatisfy({ $0.state == .privateState }) {
-                    window.tabs.setPrivacyState(.privateHidden, id: tabID)
+                if result.sessions.allSatisfy({ $0.state == .protectedState }) {
+                    window.tabs.setProtectionState(.protected, id: tabID)
                     return
                 }
                 // Fenced but MIXED: authoritative yet non-uniform (only a new
                 // write resolves a genuine split). Present as
                 // hidden-and-unresolved; a later transition reconciles.
                 // Terminal: retrying can't change a genuine split.
-                markPrivacyUnresolved(tab: tabID, window: window)
+                markProtectionUnresolved(tab: tabID, window: window)
                 return
             }
             // Unfenced or membership-changed → not yet authoritative. Present
             // as hidden-and-unresolved (fail-closed) and retry until it
             // settles, never leave a stale committed classification.
-            markPrivacyUnresolved(tab: tabID, window: window)
+            markProtectionUnresolved(tab: tabID, window: window)
             try? await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
             backoffMs = min(backoffMs * 2, 5_000)
         }
     }
 
-    /// Re-kick an in-flight privacy transition after a tab's terminal set
+    /// Re-kick an in-flight protection transition after a tab's terminal set
     /// changed, so the newly-added (or removed) session is folded into a
     /// fresh batch over the current membership. A no-op when no transition
     /// is in flight: a terminal added to a stable tab already inherits
-    /// the right privacy at `session.create`.
-    private func reconvergePrivacyIfTransitioning(tab tabID: TabID) {
-        guard let transition = privacyTransitions[tabID] else { return }
+    /// the right protection at `session.create`.
+    private func reconvergeProtectionIfTransitioning(tab tabID: TabID) {
+        guard let transition = protectionTransitions[tabID] else { return }
         // Reconverge toward the transition's target over the new membership.
-        setTabPrivate(tab: tabID, isPrivate: transition.target)
+        setTabProtected(tab: tabID, isProtected: transition.target)
     }
 
     /// Drop the transition record iff it's still the one identified by
     /// `generation` (a newer supersede may have replaced it).
-    private func clearPrivacyTransition(_ tabID: TabID, generation: Int) {
-        if privacyTransitions[tabID]?.generation == generation {
-            privacyTransitions[tabID] = nil
+    private func clearProtectionTransition(_ tabID: TabID, generation: Int) {
+        if protectionTransitions[tabID]?.generation == generation {
+            protectionTransitions[tabID] = nil
         }
     }
 
@@ -2136,7 +2138,7 @@ final class Router {
         for terminal in tab.terminals {
             bootClaims.sessionClosed(terminal.sessionId, mode: mode)
         }
-        // Closing tombstone: this method cancels privacy work but then
+        // Closing tombstone: this method cancels protection work but then
         // `await`s several daemon teardown RPCs while the tab is STILL in the
         // workspace (removal happens synchronously at the call site after we
         // return). A cancelled transition's late reply arriving during those
@@ -2163,12 +2165,12 @@ final class Router {
         if let batch = orphanBatchTasks.removeValue(forKey: tab.id) {
             for task in batch.values { task.cancel() }
         }
-        // Cancel any in-flight privacy transition or snapshot reconcile for
+        // Cancel any in-flight protection transition or snapshot reconcile for
         // the closing tab so neither outlives it.
-        privacyTransitions[tab.id]?.task.cancel()
-        privacyTransitions[tab.id] = nil
-        privacyReconcileTasks[tab.id]?.cancel()
-        privacyReconcileTasks[tab.id] = nil
+        protectionTransitions[tab.id]?.task.cancel()
+        protectionTransitions[tab.id] = nil
+        protectionReconcileTasks[tab.id]?.cancel()
+        protectionReconcileTasks[tab.id] = nil
         for pane in tab.simPanes {
             do {
                 try await daemon.closePane(

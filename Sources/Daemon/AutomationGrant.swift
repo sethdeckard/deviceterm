@@ -3,7 +3,7 @@
 import Foundation
 
 /// Daemon-internal ordering key for automation grants, mirroring
-/// `PrivacyOrderingKey`. Lexicographic `(epoch, revision)`: `epoch` is
+/// `ProtectionOrderingKey`. Lexicographic `(epoch, revision)`: `epoch` is
 /// server-derived from the issuing XPC connection id (monotonic, so a
 /// reconnected GUI always dominates an older one and a client can't forge
 /// or rewind it); `revision` orders successive requests within one

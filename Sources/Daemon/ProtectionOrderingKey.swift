@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// PrivacyOrderingKey: the daemon-internal ordering key for tab-privacy
+// ProtectionOrderingKey: the daemon-internal ordering key for tab-protection
 // last-write-wins AND for reconnect membership reconciliation. Never crosses
-// the wire (only its `revision` half does, in `SessionSetPrivateBatchParams`);
+// the wire (only its `revision` half does, in `SessionSetProtectedBatchParams`);
 // the `epoch` half is server-derived from the caller's monotonic XPC
 // connection id, so a client can neither forge nor rewind it.
 //
@@ -12,7 +12,7 @@
 //     or a stale request arriving after a reconnect.
 //   - `tier`: at ONE epoch, a reconnect restore establishes a `.restoreBaseline`
 //     that any live user action on the same connection (`.liveAuthority`)
-//     outranks. So a `setPrivateBatch`/`privacySnapshot` the user issues AFTER a
+//     outranks. So a `setProtectedBatch`/`protectionSnapshot` the user issues AFTER a
 //     reconnect restore always wins over the restore's inventory value, while two
 //     restores on one connection still order by their `revision`, and a live
 //     `session.create` membership assertion is never reaped by a same-connection
@@ -20,15 +20,15 @@
 //     connection's restore still dominates any older-connection live action.
 //   - `revision`: within one epoch and tier, the client's monotonically
 //     increasing `revision` orders successive sends (restore retries against
-//     each other; privacy writes against each other).
+//     each other; protection writes against each other).
 //
 // A batch/assertion applies only when its key strictly dominates the stored key
 // of every target.
-struct PrivacyOrderingKey: Comparable, Sendable, Equatable {
+struct ProtectionOrderingKey: Comparable, Sendable, Equatable {
     /// Ordering tier within one epoch. `.restoreBaseline` is a reconnect
     /// restore's inventory assertion; `.liveAuthority` is a live user action (a
-    /// `session.create` membership stamp, a `setPrivateBatch`, or a
-    /// `privacySnapshot` fence). Live authority outranks the restore baseline at
+    /// `session.create` membership stamp, a `setProtectedBatch`, or a
+    /// `protectionSnapshot` fence). Live authority outranks the restore baseline at
     /// the same epoch: see the file header.
     enum Tier: Int, Comparable, Sendable {
         case restoreBaseline = 0
@@ -41,8 +41,8 @@ struct PrivacyOrderingKey: Comparable, Sendable, Equatable {
     let tier: Tier
     let revision: Int
 
-    /// `tier` defaults to `.liveAuthority` so the privacy call sites
-    /// (`setPrivateBatch`, `privacySnapshot`) that build a key from a user
+    /// `tier` defaults to `.liveAuthority` so the protection call sites
+    /// (`setProtectedBatch`, `protectionSnapshot`) that build a key from a user
     /// action need not name it; only `restoreBatch` passes `.restoreBaseline`.
     init(epoch: UInt64, revision: Int, tier: Tier = .liveAuthority) {
         self.epoch = epoch
@@ -50,7 +50,7 @@ struct PrivacyOrderingKey: Comparable, Sendable, Equatable {
         self.revision = revision
     }
 
-    static func < (lhs: PrivacyOrderingKey, rhs: PrivacyOrderingKey) -> Bool {
+    static func < (lhs: ProtectionOrderingKey, rhs: ProtectionOrderingKey) -> Bool {
         if lhs.epoch != rhs.epoch { return lhs.epoch < rhs.epoch }
         if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
         return lhs.revision < rhs.revision

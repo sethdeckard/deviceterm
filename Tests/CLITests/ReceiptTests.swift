@@ -417,9 +417,9 @@ func tabSendInputReceiptJSONShapeAndOptionalOmission() throws {
 }
 
 @Test
-func tabSetPrivateReceiptJSONShape() throws {
+func tabSetProtectedReceiptJSONShape() throws {
     #expect(
-        try encode(Receipt.TabSetPrivate(tab: "current", isPrivate: true, committed: false))
-            == #"{"committed":false,"isPrivate":true,"ok":true,"tab":"current"}"#
+        try encode(Receipt.TabSetProtected(tab: "current", isProtected: true, committed: false))
+            == #"{"committed":false,"isProtected":true,"ok":true,"tab":"current"}"#
     )
 }

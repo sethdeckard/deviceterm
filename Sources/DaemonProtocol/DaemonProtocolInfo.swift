@@ -21,7 +21,14 @@ public enum DaemonProtocolInfo {
     /// and `automation.revoke` issue and revoke grants, and `SessionRole`
     /// encodes its second case as `"automation"` on `session.create`,
     /// `session.restoreBatch`, `tabs.list`, and `daemon.capabilities`, and in
-    /// the `DEVICETERM_SESSION_ROLE` the GUI injects. Every process speaking
-    /// this version ships and updates in the same bundle.
+    /// the `DEVICETERM_SESSION_ROLE` the GUI injects. It carries the
+    /// protected-tab vocabulary too: `tab.setProtected` and
+    /// `session.setProtectedBatch` flip a tab's protection under the
+    /// `isProtected` key, which `session.restoreBatch` also carries and
+    /// `session.create` seeds as `initialProtected`;
+    /// `session.protectionSnapshot` reads protection back, reporting each
+    /// session's state as `"unprotected"`, `"protected"`, or `"missing"`.
+    /// Every process speaking this version ships and updates in the same
+    /// bundle.
     public static let wireVersion = "0.3.0"
 }

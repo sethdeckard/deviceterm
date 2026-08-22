@@ -12,7 +12,7 @@ import Darwin
 // SessionManager.restoreBatch: the epoch-fenced, authoritative, all-or-none
 // inventory restore. A validated GUI re-supplies its live session set to a
 // fresh daemon; nothing is rehydrated from disk. These pin the semantics: atomic validation, verifier re-derivation,
-// idempotent replay, fail-closed privacy seeded in-turn, short-id preservation +
+// idempotent replay, fail-closed protection seeded in-turn, short-id preservation +
 // collision rejection, owner capture, batch ordering, barrier release, stale/
 // superseded-batch rejection via the `(epoch, revision)` fence, ghost
 // reconciliation, and concurrent-restore linearizability.
@@ -53,7 +53,7 @@ private func entry(
     shortId: String = ShortID.generate(),
     role: SessionRole = .agent,
     name: String? = nil,
-    isPrivate: Bool = false
+    isProtected: Bool = false
 ) -> RestoreSessionEntry {
     RestoreSessionEntry(
         id: id,
@@ -61,7 +61,7 @@ private func entry(
         shortId: shortId,
         role: role,
         name: name,
-        isPrivate: isPrivate
+        isProtected: isProtected
     )
 }
 
@@ -173,20 +173,20 @@ func replayOfTheSameSetIsAnIdempotentNoOp() async throws {
 }
 
 @Test
-func sameVerifierReplayDoesNotRewriteNewerPrivacy() async throws {
+func sameVerifierReplayDoesNotRewriteNewerProtection() async throws {
     let manager = SessionManager(startsPendingRestoration: true)
     let cap = try Capability.random()
-    let item = entry(capability: cap, isPrivate: false)
+    let item = entry(capability: cap, isProtected: false)
     _ = try await manager.restoreBatch([item], owner: nil, epoch: 1, revision: 1)
-    // A newer authoritative privacy mutation flips the session private.
-    _ = try await manager.setPrivateBatch(
-        sessionIds: [item.id], isPrivate: true, revision: 5, epoch: 1
+    // A newer authoritative protection mutation flips the session protected.
+    _ = try await manager.setProtectedBatch(
+        sessionIds: [item.id], isProtected: true, revision: 5, epoch: 1
     )
-    #expect(await manager.isPrivate(item.id) == true)
-    // Replaying the ORIGINAL (public) restore must NOT revert privacy: its
+    #expect(await manager.isProtected(item.id) == true)
+    // Replaying the ORIGINAL (unprotected) restore must NOT revert protection: its
     // lower-tier baseline key can't dominate the newer live-authority write.
     _ = try await manager.restoreBatch([item], owner: nil, epoch: 1, revision: 1)
-    #expect(await manager.isPrivate(item.id) == true)
+    #expect(await manager.isProtected(item.id) == true)
 }
 
 @Test
@@ -296,12 +296,12 @@ func sameVerifierWithDifferentMetadataReportsMismatch() async throws {
 }
 
 @Test
-func privateSessionIsSeededInTurnAndHiddenFromTabsList() async throws {
+func protectedSessionIsSeededInTurnAndHiddenFromTabsList() async throws {
     let manager = SessionManager(startsPendingRestoration: true)
-    let item = entry(capability: try Capability.random(), isPrivate: true)
+    let item = entry(capability: try Capability.random(), isProtected: true)
     _ = try await manager.restoreBatch([item], owner: nil, epoch: 1, revision: 1)
-    #expect(await manager.isPrivate(item.id) == true)
-    // An unauthenticated (nil) caller never sees the private restored session.
+    #expect(await manager.isProtected(item.id) == true)
+    // An unauthenticated (nil) caller never sees the protected restored session.
     let visible = await manager.sessions(visibleTo: nil).map(\.id)
     #expect(visible.contains(item.id) == false)
     // Its owner sees it.
@@ -328,28 +328,28 @@ func ownerIsCapturedAndDrivesLiveness() async throws {
 }
 
 @Test
-func restoreEstablishesPrivacyOrderingBaselineAStaleWriteCannotBeat() async throws {
+func restoreEstablishesProtectionOrderingBaselineAStaleWriteCannotBeat() async throws {
     let manager = SessionManager(startsPendingRestoration: true)
-    // Restore a PRIVATE session on a NEW connection (high epoch = the
+    // Restore a PROTECTED session on a NEW connection (high epoch = the
     // reconnecting GUI). Restore seeds the ordering baseline (epoch 100, rev 0).
-    let item = entry(capability: try Capability.random(), isPrivate: true)
+    let item = entry(capability: try Capability.random(), isProtected: true)
     _ = try await manager.restoreBatch([item], owner: nil, epoch: 100, revision: 1)
-    #expect(await manager.isPrivate(item.id) == true)
+    #expect(await manager.isProtected(item.id) == true)
 
-    // A delayed make-public write from an OLDER connection (lower epoch) must
-    // LOSE to the baseline: the just-restored-private tab stays private.
-    let stale = try await manager.setPrivateBatch(
-        sessionIds: [item.id], isPrivate: false, revision: 999, epoch: 50
+    // A delayed unprotect write from an OLDER connection (lower epoch) must
+    // LOSE to the baseline: the just-restored-protected tab stays protected.
+    let stale = try await manager.setProtectedBatch(
+        sessionIds: [item.id], isProtected: false, revision: 999, epoch: 50
     )
     #expect(stale.applied == false)
-    #expect(await manager.isPrivate(item.id) == true)
+    #expect(await manager.isProtected(item.id) == true)
 
     // A write on the SAME (restoring) connection with any revision > 0 wins.
-    let fresh = try await manager.setPrivateBatch(
-        sessionIds: [item.id], isPrivate: false, revision: 1, epoch: 100
+    let fresh = try await manager.setProtectedBatch(
+        sessionIds: [item.id], isProtected: false, revision: 1, epoch: 100
     )
     #expect(fresh.applied == true)
-    #expect(await manager.isPrivate(item.id) == false)
+    #expect(await manager.isProtected(item.id) == false)
 }
 
 @Test
@@ -385,26 +385,26 @@ func newerRestoreReconcilesAwayAnOmittedGhost() async throws {
 }
 
 @Test
-func newerRestoreUpdatesAPresentSessionsPrivacy() async throws {
+func newerRestoreUpdatesAPresentSessionsProtection() async throws {
     let manager = SessionManager(startsPendingRestoration: true)
     let sessionId = UUID()
     let cap = try Capability.random()
     _ = try await manager.restoreBatch(
-        [entry(capability: cap, id: sessionId, shortId: "aaa111", isPrivate: false)],
+        [entry(capability: cap, id: sessionId, shortId: "aaa111", isProtected: false)],
         owner: nil,
         epoch: 100,
         revision: 1
     )
-    #expect(await manager.isPrivate(sessionId) == false)
-    // A newer restore (higher epoch) carrying the authoritative privacy updates
+    #expect(await manager.isProtected(sessionId) == false)
+    // A newer restore (higher epoch) carrying the authoritative protection updates
     // a matching live session: a newer inventory corrects an older value.
     _ = try await manager.restoreBatch(
-        [entry(capability: cap, id: sessionId, shortId: "aaa111", isPrivate: true)],
+        [entry(capability: cap, id: sessionId, shortId: "aaa111", isProtected: true)],
         owner: nil,
         epoch: 200,
         revision: 1
     )
-    #expect(await manager.isPrivate(sessionId) == true)
+    #expect(await manager.isProtected(sessionId) == true)
 }
 
 @Test
@@ -478,52 +478,52 @@ func aHigherRevisionRetryReapsASessionAnEarlierRetryAsserted() async throws {
 }
 
 @Test
-func aHigherRevisionRetryCorrectsAPresentSessionsPrivacy() async throws {
+func aHigherRevisionRetryCorrectsAPresentSessionsProtection() async throws {
     let manager = SessionManager(startsPendingRestoration: true)
     let sessionId = UUID()
     let cap = try Capability.random()
-    // rev1 asserts the session public.
+    // rev1 asserts the session unprotected.
     _ = try await manager.restoreBatch(
-        [entry(capability: cap, id: sessionId, shortId: "aaa111", isPrivate: false)],
+        [entry(capability: cap, id: sessionId, shortId: "aaa111", isProtected: false)],
         owner: nil,
         epoch: 100,
         revision: 1
     )
-    #expect(await manager.isPrivate(sessionId) == false)
+    #expect(await manager.isProtected(sessionId) == false)
     // A corrected retry on the SAME connection (higher revision) flips it
-    // private: the revision participates in the privacy-ordering scheme, so a
+    // protected: the revision participates in the protection-ordering scheme, so a
     // same-connection correction is not collapsed to an unchangeable baseline.
     _ = try await manager.restoreBatch(
-        [entry(capability: cap, id: sessionId, shortId: "aaa111", isPrivate: true)],
+        [entry(capability: cap, id: sessionId, shortId: "aaa111", isProtected: true)],
         owner: nil,
         epoch: 100,
         revision: 2
     )
-    #expect(await manager.isPrivate(sessionId) == true)
+    #expect(await manager.isProtected(sessionId) == true)
 }
 
 @Test
-func aLiveSetPrivateBatchBeatsASameConnectionRestoreRegardlessOfRevision() async throws {
+func aLiveSetProtectedBatchBeatsASameConnectionRestoreRegardlessOfRevision() async throws {
     let manager = SessionManager(startsPendingRestoration: true)
     let sessionId = UUID()
     let cap = try Capability.random()
     // A restore retry drives the RESTORE revision high (5) on connection 100.
     _ = try await manager.restoreBatch(
-        [entry(capability: cap, id: sessionId, shortId: "aaa111", isPrivate: false)],
+        [entry(capability: cap, id: sessionId, shortId: "aaa111", isProtected: false)],
         owner: nil,
         epoch: 100,
         revision: 5
     )
-    // A user privacy toggle on the SAME connection carries a LOWER numeric
+    // A user protection toggle on the SAME connection carries a LOWER numeric
     // revision (1) from its own independent counter, yet must WIN: a restore is
     // a lower ordering TIER than a live user action at one epoch, so the two
     // counters never collide and a post-restore toggle is never mistaken for a
     // stale write.
-    let result = try await manager.setPrivateBatch(
-        sessionIds: [sessionId], isPrivate: true, revision: 1, epoch: 100
+    let result = try await manager.setProtectedBatch(
+        sessionIds: [sessionId], isProtected: true, revision: 1, epoch: 100
     )
     #expect(result.applied == true)
-    #expect(await manager.isPrivate(sessionId) == true)
+    #expect(await manager.isProtected(sessionId) == true)
 }
 
 @Test
@@ -820,7 +820,7 @@ func aValidatedInventoryConfirmsAnExistingSessionAsRestorable() async throws {
         shortId: created.state.shortId,
         role: .agent,
         name: nil,
-        isPrivate: false
+        isProtected: false
     )
     _ = try await manager.restoreBatch([listed], owner: nil, epoch: 100, revision: 1)
 
@@ -883,7 +883,7 @@ func aRestorableCreatedSessionTombstonesOnCloseAndFences() async throws {
         shortId: created.state.shortId,
         role: .agent,
         name: nil,
-        isPrivate: false
+        isProtected: false
     )
     let result = try await manager.restoreBatch([stale], owner: nil, epoch: 100, revision: 1)
     #expect(await manager.contains(sessionId) == false)

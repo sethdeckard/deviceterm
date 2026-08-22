@@ -295,14 +295,14 @@ final class TabListViewModel {
         tabs[index].lastFocusedTerminal = terminalID
     }
 
-    /// Set a tab's presentation privacy state. The Router drives the
+    /// Set a tab's presentation protection state. The Router drives the
     /// transition machine (fail-closed hide, commit on ack, revert on a
     /// definite rejection, generation ordering) and calls this to move
-    /// the tab between `TabPrivacyState` values; the strip and resolver
-    /// read the derived `isPrivate` / `isEffectivelyHidden`.
-    func setPrivacyState(_ state: TabPrivacyState, id tabID: TabID) {
+    /// the tab between `TabProtectionState` values; the strip and resolver
+    /// read the derived `isProtected` / `isEffectivelyProtected`.
+    func setProtectionState(_ state: TabProtectionState, id tabID: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
-        tabs[index].privacyState = state
+        tabs[index].protectionState = state
     }
 
     /// `atIndex` restores resurrect-in-original-slot among existing sim

@@ -25,16 +25,16 @@ promises behind every command here are defined in
 ## Understand Tabs, Sessions, and Authority
 
 Authority has three tiers. Device panes are contained to the session that
-currently owns them. Workspace commands reach any public tab the caller can
-see.
+currently owns them. Workspace commands reach any unprotected tab the caller
+can see.
 Reading another tab's contents or typing into it requires a live
 automation grant that only the GUI can issue.
 
 The grant sits where it does because capture and input reach another
 session's contents: what its terminal shows and what runs in it. Workspace
 commands touch arrangement and lifecycle, never contents, and the structure
-of public tabs is deliberately shared. A tab that should be untouchable opts
-out of every tier with [`tab set-private`](#make-a-tab-private).
+of unprotected tabs is deliberately shared. A tab that should be untouchable
+opts out of every tier with [`tab set-protected`](#protect-a-tab).
 
 ### Know Your Session
 
@@ -133,10 +133,10 @@ window. `tab close` and `window close` take `--mode <detach|shutdown>` to
 decide what happens to owned Simulators, the same decision the GUI close
 prompt offers.
 
-These verbs reach any public tab visible to the caller, not only your own. A
-`tab close --tab <ref>` naming another session's public tab closes it,
-ending whatever was running there; mark a tab private when other sessions
-should not be able to touch it.
+These verbs reach any unprotected tab visible to the caller, not only your
+own. A `tab close --tab <ref>` naming another session's unprotected tab
+closes it, ending whatever was running there; protect a tab when other
+sessions should not be able to touch it.
 
 `pane close` and `pane info` resolve Simulator panes only. Close a
 physical-device pane in the GUI.
@@ -160,7 +160,8 @@ deviceterm devices list
 ```
 
 `tabs list` returns one row per live terminal session, so a split tab
-produces several rows. It shows public sessions plus your own private ones.
+produces several rows. It shows unprotected sessions plus your own protected
+ones.
 `tabs current` prints only the caller's row.
 
 `panes list` returns the device panes owned by the calling session.
@@ -240,24 +241,23 @@ is not included. Human output is the raw text, so a redirect saves the
 screen; `--json` wraps it as `{text}`. See
 [capture a viewport](INTEGRATION.md#capture-a-viewport).
 
-### Make a Tab Private
+### Protect a Tab
 
-Mark the current tab private when other sessions should not see or control
-it:
+Protect the current tab when other sessions should not see or control it:
 
 ```sh
-deviceterm tab set-private true
+deviceterm tab set-protected true
 ```
 
 Every terminal session in the tab changes together. Other sessions cannot
-list the private tab or its panes, resolve its references, capture it, or
+list the protected tab or its panes, resolve its references, capture it, or
 send input to it; your own sessions keep access. Automation grants do not
-bypass privacy, so an automation tab cannot capture or type into a tab
-after that target becomes private.
+bypass protection, so an automation tab cannot capture or type into a tab
+once that target is protected.
 
 Only a tab the caller owns a terminal in can be flipped. The receipt's
 `committed` field distinguishes a confirmed change from one the GUI is still
-converging on; see [set privacy](INTEGRATION.md#set-privacy).
+converging on; see [set protection](INTEGRATION.md#set-protection).
 
 ## Wait on Events
 

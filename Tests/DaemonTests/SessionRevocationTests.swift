@@ -604,7 +604,7 @@ func restoreReincarnationThroughAdmission() async throws {
         shortId: created.state.shortId,
         role: created.state.role,
         name: nil,
-        isPrivate: false
+        isProtected: false
     )
     _ = try await manager.restoreBatch([entry], owner: nil, epoch: 2, revision: 0)
     guard case let .ready(secondInc) = await manager.admission(for: sessionA),

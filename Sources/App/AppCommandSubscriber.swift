@@ -186,7 +186,7 @@ final class AppCommandSubscriber {
             case let .tabCapture(capture):
                 payload = (try? JSONEncoder().encode(capture)) ?? Data("{}".utf8)
 
-            case let .tabSetPrivate(result):
+            case let .tabSetProtected(result):
                 payload = (try? JSONEncoder().encode(result)) ?? Data("{}".utf8)
             }
             return .data(commandId: commandId, payload: payload)
