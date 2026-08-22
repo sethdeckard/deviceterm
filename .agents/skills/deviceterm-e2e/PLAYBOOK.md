@@ -276,12 +276,13 @@ observers don't agree on "which window" the way you'd expect:
 
 - The **harness** (capture, AX dump, drive) always acts on the **AppKit frontmost
   window** — what the user is looking at.
-- `windows list --all`'s **`isKey:true`** is *not* that window. It is deviceterm's
-  **Router-selected** window (`workspace.selectedWindowID`), which moves only when
-  a route acts on a *window* (opening, closing, or focusing one), not on plain
-  focus changes — so after you click a different window, `isKey` still points at
-  the old one. Tab-level routes leave it alone entirely: selecting a tab does not
-  make its window key.
+- `windows list --all`'s **`isKey:true`** reads `workspace.selectedWindowID`,
+  deviceterm's own record of the selected window, not a live window-server query.
+  AppKit key changes sync into it, but a notification behind, and structural
+  mutations (opening or closing a window, moving a tab across windows) set it
+  outright. Either way a row sampled just after a change can disagree with the
+  window the harness drives. Tab-level routes never move it: selecting a tab does
+  not make its window key.
 
 With one window the distinction vanishes. If you must run multi-window, don't
 trust `isKey` to name the captured window — reconcile by identity instead

@@ -172,7 +172,8 @@ extension HelpCatalog {
 
               window focus [--window <ref>]
                   Requires a live automation grant, including for your own
-                  window. Bring the named window forward. --window current
+                  window. Bring the named window forward, activating
+                  DeviceTerm if another app is in front. --window current
                   is your own window (the caller's), not the human's key
                   window.
                   Example: deviceterm window focus --window 2

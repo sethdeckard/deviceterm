@@ -69,6 +69,14 @@ protocol IntentActionDelegate: AnyObject {
     /// view controller), so the CLI `deviceterm tab move --to-window`
     /// path hops through the AppDelegate transfer coordinator here.
     func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int)
+
+    /// Bring a window to the front, make it key, and activate the app.
+    /// The `WindowController` map lives on the AppDelegate and the
+    /// Router has no AppKit access, so `window.focus` hops through here
+    /// instead of routing. Silently no-ops unless a live window
+    /// controller is registered for the id: the window may be closing,
+    /// or newly added and not yet reconciled.
+    func raiseWindow(_ window: WindowID)
 }
 
 @MainActor
@@ -133,13 +141,23 @@ final class IntentDispatcher {
 
         case let .focusWindow(ref):
             let id = try resolver.resolveWindow(ref)
-            // No foreign-tab guard here: focusing is non-destructive (it
-            // only changes the human's frontmost window, not data visible
-            // to the external caller), so a differential refuse would be a
-            // pure private-state oracle with nothing to protect. The
-            // origin-aware resolver already prevents targeting a window the
-            // caller can't see at all.
-            router.dispatch(.selectWindow(id))
+            guard let delegate = actionDelegate else {
+                throw IntentError.internalError(
+                    "no IntentActionDelegate wired for focusWindow"
+                )
+            }
+            // No foreign-tab guard here. That guard withholds what a
+            // caller could otherwise learn, and a raise discloses
+            // nothing: resolution has already refused any window with
+            // no caller-visible tab in it. The disruption is the real
+            // cost, and the automation grant is what gates it.
+            //
+            // No `Route.selectWindow` alongside the raise, either.
+            // `windowDidBecomeKey` records what AppKit does with it,
+            // whereas a route waits on the serial drain and can land
+            // after the human has clicked elsewhere, overwriting the
+            // newer key window with this stale request.
+            delegate.raiseWindow(id)
             return .ok
 
         case let .windowsList(all):
@@ -195,6 +213,14 @@ final class IntentDispatcher {
 
         case let .selectTab(ref):
             let resolved = try resolver.resolveTab(ref)
+            // Selects within the host window and deliberately does not
+            // raise it. `window focus` is the verb that brings a window
+            // forward; keeping the two separate lets a granted caller
+            // stage a background window's tab without taking the
+            // human's attention, and composes into the same result when
+            // it does want both. The trade is that `tab select` on a
+            // background window shows nothing until something focuses
+            // that window.
             router.dispatch(.selectTab(resolved.windowID, resolved.tabID))
             return .ok
 

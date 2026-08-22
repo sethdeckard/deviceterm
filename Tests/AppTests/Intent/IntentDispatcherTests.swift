@@ -213,6 +213,111 @@ struct IntentDispatcherTests {
     }
 
     @Test
+    func selectTabDoesNotRaiseItsWindow() async {
+        // The deliberate split between the two selection verbs: `tab
+        // select` moves the selection inside its window and leaves
+        // window order alone, so a granted caller can stage a
+        // background window's tab without taking the human's
+        // attention. `window focus` is the verb that raises.
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+            )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 2),
+            sessionId: "S-B"
+            )
+        let result = await harness.dispatcher.dispatch(
+            .selectTab(.sessionId("S-A")), origin: .inProcess
+        )
+        await settle()
+        #expect(result == .ok)
+        #expect(harness.actionDelegate.raises.isEmpty)
+        #expect(harness.workspace.selectedWindowID == WindowID(value: 2))
+    }
+
+    @Test
+    func focusWindowRaisesTheResolvedWindow() async {
+        // The raise is the whole verb: the dispatcher writes no
+        // selection of its own. The recording delegate raises nothing,
+        // so no `windowDidBecomeKey` follows it and the workspace stays
+        // on window 2 where `appendTab` left it. What that pins is the
+        // absence of a second write here, not what the real AppKit
+        // mirror does with the raise.
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+            )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 2),
+            sessionId: "S-B"
+            )
+        let result = await harness.dispatcher.dispatch(
+            .focusWindow(.index(1)), origin: .inProcess
+        )
+        await settle()
+        #expect(result == .ok)
+        #expect(harness.actionDelegate.raises == [WindowID(value: 1)])
+        #expect(harness.workspace.selectedWindowID == WindowID(value: 2))
+    }
+
+    @Test
+    func focusWindowRaisesNothingWhenTheRefDoesNotResolve() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+            )
+        let result = await harness.dispatcher.dispatch(
+            .focusWindow(.index(9)), origin: .inProcess
+        )
+        await settle()
+        guard case let .error(error) = result else {
+            Issue.record("expected error; got \(result)"); return
+        }
+        #expect(error.code == "intent.notFound")
+        #expect(harness.actionDelegate.raises.isEmpty)
+    }
+
+    @Test
+    func focusWindowRaisesTheExternalCallersOwnWindow() async {
+        // `.current` for an external caller is its own window, never
+        // the human's key one, so the raise follows the session rather
+        // than whatever is frontmost.
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+            )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 2),
+            sessionId: "S-B"
+            )
+        let result = await harness.dispatcher.dispatch(
+            .focusWindow(.current), origin: .external(sessionID: "S-A")
+        )
+        await settle()
+        #expect(result == .ok)
+        #expect(harness.actionDelegate.raises == [WindowID(value: 1)])
+    }
+
+    @Test
     func openPaneTerminalAddsTerminalToNamedTab() async {
         // The Intent layer's openPaneTerminal verb now dispatches the
         // real Route.openTerminalPane (replacing the prior newTab
@@ -946,6 +1051,7 @@ private final class RecordingActionDelegate: IntentActionDelegate {
     private(set) var sendInputs: [SendInput] = []
     private(set) var captures: [Capture] = []
     private(set) var moves: [MoveAcross] = []
+    private(set) var raises: [WindowID] = []
     /// When set, the next `sendInput` call throws this error instead
     /// of recording. Lets tests pin the dispatcher's error-relay
     /// path.
@@ -991,5 +1097,9 @@ private final class RecordingActionDelegate: IntentActionDelegate {
 
     func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int) {
         moves.append(MoveAcross(tab: tab, from: from, destination: destination, atIndex: atIndex))
+    }
+
+    func raiseWindow(_ window: WindowID) {
+        raises.append(window)
     }
 }

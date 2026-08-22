@@ -395,10 +395,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     //
     // Each user-input verb constructs a `RouteIntent` and dispatches
     // through `IntentDispatcher`. `WindowRef.windowID(self.windowID)`
-    // pins the action to THIS strip's window: `.current` would
-    // resolve via `workspace.selectedWindowID`, which only moves on
-    // Router routes, not AppKit focus changes (so a +/⌘T click in a
-    // background window would land in the wrong window otherwise).
+    // pins the action to THIS strip's window: `.current` would resolve
+    // through the workspace selection, which can still name another
+    // window at the instant a +/⌘T click lands in this one.
     // `TabRef.sessionId` is the unambiguous handle for per-tab
     // buttons (we hold the tabID, we look up the sessionId on the
     // way to the dispatcher). Dispatching through the intent layer

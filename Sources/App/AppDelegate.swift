@@ -1166,6 +1166,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return false
     }
 
+    /// AppKit made one of the workspace's windows key: mirror that into
+    /// `selectedWindowID`. Nothing else observes a plain focus change,
+    /// so without this the field goes stale the moment the human clicks
+    /// another window: `windows.list` marks `isKey` on the window they
+    /// left, and an in-process `.current` resolves against a window
+    /// nobody is looking at.
+    ///
+    /// Recording the raise here is also why `focusWindow` doesn't
+    /// enqueue a selection route: a route waits on the Router's serial
+    /// drain and can land after a later click, overwriting a fresher
+    /// answer. Structural paths do still set the selection directly
+    /// (opening or closing a window, and a cross-window tab move
+    /// choosing its destination), so this is the mirror for focus, not
+    /// the field's only writer.
+    ///
+    /// The `windowControllerByID` lookup is also the filter: the
+    /// welcome, About, settings-prompt, and device-picker windows aren't
+    /// in the map, so one of them taking key doesn't move the workspace
+    /// selection to nothing.
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+            let entry = windowControllerByID.first(where: { $0.value.window === window }),
+            workspace.selectedWindowID != entry.key
+        else { return }
+        workspace.select(id: entry.key)
+    }
+
     /// Window is definitely closing now. Drop the WC from the map
     /// *synchronously* (so a Dock reopen during the Router's async
     /// teardown sees an empty app) and dispatch closeWindow with the
@@ -1272,13 +1299,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// attribution the daemon honors.
     ///
     /// The target **window** is resolved from the key `NSWindow` here,
-    /// at menu-invocation time, not `workspace.selectedWindowID`, which
-    /// only tracks Router `selectWindow` routes, not AppKit focus, so a
-    /// menu action from a non-routed-selection window would otherwise
-    /// attach to the wrong window when several are open. It must be
-    /// captured now, before the picker opens and steals key. The
-    /// **tab** within that window is resolved at *selection* time so it
-    /// stays current if the user switches tabs while the picker is up.
+    /// at menu-invocation time, and must be captured now, before the
+    /// picker opens and steals key. `workspace.selectedWindowID` is the
+    /// fallback for when no window in the map holds key; it carries the
+    /// workspace selection, which focus changes mirror in but
+    /// structural ones set outright, so the live `NSApp.keyWindow` read
+    /// stays the primary. The **tab** within that window is resolved at
+    /// *selection* time so it stays current if the user switches tabs
+    /// while the picker is up.
     @objc
     func mirrorPhysicalDevice(_ sender: Any?) {
         let targetWindowID = windowControllerByID
@@ -1607,6 +1635,20 @@ extension AppDelegate: IntentActionDelegate {
             )
         }
         return try strip.captureTab(id: tabID)
+    }
+
+    func raiseWindow(_ windowID: WindowID) {
+        // No live controller for the id: the window is closing, or it
+        // was just added and reconcile hasn't built one yet. Silent
+        // no-op either way.
+        guard let window = windowControllerByID[windowID]?.window else { return }
+        window.makeKeyAndOrderFront(nil)
+        // `makeKeyAndOrderFront` only orders within the app, and a
+        // window in a background app can't take key at all, so without
+        // the activation the raise would stay invisible until the user
+        // clicked back into DeviceTerm. Same pair `reconcileWindows`
+        // runs on a window it just created.
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int) {

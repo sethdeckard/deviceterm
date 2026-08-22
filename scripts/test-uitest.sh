@@ -77,11 +77,11 @@ swift build >/dev/null
 # Deliberately the workspace total, not one window's count. ⌘T adds a tab
 # to the frontmost window and ⌘W removes it, so the total moves by ±1
 # whichever window is frontmost — and we never have to identify that
-# window. That matters because `isKey` here is deviceterm's Router-selected
-# window (`workspace.selectedWindowID`), which is NOT the AppKit key/
-# frontmost window the harness actually drives; the two diverge when a
-# window is focused without a Router route, so keying off a single row
-# would validate against the wrong window.
+# window. That matters because `isKey` here is derived from
+# `workspace.selectedWindowID`, not a live window-server read: a focus
+# change reaches it a notification later, and structural mutations set it
+# outright, so a sampled row can disagree with the window the harness
+# drives.
 total_tabs() {
     python3 - "$1" <<'PY'
 import json, sys

@@ -3,10 +3,13 @@
 // WorkspaceViewModel: the single "what's open" representation:
 // every window (each with its TabListViewModel) plus the selected
 // window. AppDelegate reconciles its WindowControllers to this.
-// Mutated by the Router and, for the GUI-only live-tab relocation the
-// Router can't perform (it has no AppKit access), by the AppDelegate
-// tab-transfer coordinator, which calls `addWindow` for a tear-off
-// window after relocating the dragged tab's live view controller.
+// Mutated by the Router and, for what the Router can't do itself (it
+// has no AppKit access), by the AppDelegate: the tab-transfer
+// coordinator calls `addWindow` for a tear-off window and `select` for
+// a cross-window move, and `windowDidBecomeKey` calls `select` to
+// mirror in whichever window AppKit made key. So the selection follows
+// AppKit for a plain focus change and is chosen outright by the
+// structural ones.
 
 import Observation
 

@@ -43,12 +43,14 @@ enum PaneRef: Sendable, Equatable {
 
 /// External handle for a window. Resolves to a `WindowID`.
 enum WindowRef: Sendable, Equatable {
-    /// Key window per the workspace's `selectedWindowID`. Note that
-    /// `selectedWindowID` only moves with Router routes
-    /// (`selectWindow`), NOT with AppKit focus changes, so a menu
-    /// action in a strip whose window is not the routed selection
-    /// will hit the wrong window. Strips that know their concrete
-    /// `WindowID` should use `.windowID(_)` below.
+    /// The current window for the dispatch origin: an in-process caller
+    /// gets `workspace.selectedWindowID`, an external one the window
+    /// holding its own session's tab (never the human's).
+    /// `selectedWindowID` is deviceterm's own state rather than a live
+    /// window-server read: the AppDelegate mirrors focus changes into
+    /// it through `windowDidBecomeKey`, a notification behind. Strips
+    /// that know their concrete `WindowID` should use `.windowID(_)`
+    /// below rather than depend on being key when their action fires.
     case current
     /// Position in the workspace's ordered window list, 1-indexed
     /// to match `⌘1` / `⌘2` mental model.
