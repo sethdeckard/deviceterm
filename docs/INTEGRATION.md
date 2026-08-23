@@ -193,7 +193,7 @@ protected tab.
 |---|---|---|---|---|
 | `tabs list --json` | Array of tab rows | Daemon-wide | Current visible session snapshot | Stable-additive |
 | `tabs current --json` | One tab row | Current session environment | Matching live session found | Stable-additive |
-| `panes list --json` | Array of pane rows | Session | Current panes owned by the session | Stable-additive |
+| `panes list --json` | Array of pane rows | Session | Current device panes of the caller's tab | Stable-additive |
 | `devices list --json` | Array of device roster rows | Session | Current owned-Simulator and connected-device snapshot | Stable-additive |
 | `windows list --json` | Array of window rows | Daemon-wide | Current caller-visible window projection | Stable-additive |
 | `tab info --json` | Tab information object | Session | Current GUI workspace snapshot | Stable-additive |
@@ -354,7 +354,7 @@ Do not use it as a `--tab` reference.
 
 ### Pane Rows
 
-`panes list --json` returns the current session's device panes:
+`panes list --json` returns the calling tab's device panes:
 
 ```jsonc
 {
@@ -1129,7 +1129,7 @@ The stream requires an authenticated, live DeviceTerm tab session.
 
 A session-scoped subscriber receives:
 
-- `pane.stateChanged` for panes owned by that session;
+- `pane.stateChanged` for its tab's device panes;
 - its own `session.closed` as the final session event;
 - its own session lifecycle events when they occur after subscription; and
 - every Simulator `device.booted` and `device.shutdown` event.

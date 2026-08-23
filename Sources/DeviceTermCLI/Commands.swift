@@ -8,9 +8,9 @@
 //
 // Grammar (locked): required operands are positional, optional modifiers
 // are flags, and `--pane <ref>` is the shared targeting selector that
-// picks among the session's device panes. A `<ref>` resolves a shortId,
+// picks among the tab's device panes. A `<ref>` resolves a shortId,
 // name, pane UUID prefix, sim UDID, or physical deviceId (omit it when
-// the session owns a single device pane).
+// the tab shows a single device pane).
 // `--duration <ms>` and `--velocity <v>` are the only other flags.
 
 import DaemonProtocol

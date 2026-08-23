@@ -116,9 +116,10 @@ struct DaemonClientReauthTests {
                 }
                 return try JSONEncoder().encode([DeviceListEntry]())
 
-            case RPCMethod.sessionSetProtectedBatch.rawValue:
-                // Always -32001 (unknown session in the batch), the case
-                // the reauth-exclusion test exercises.
+            case RPCMethod.sessionSetProtectedBatch.rawValue,
+                RPCMethod.sessionSetCohort.rawValue:
+                // Always -32001 (unknown session named), the case the
+                // reauth-exclusion tests exercise.
                 throw DaemonClientError.daemon(
                     code: -32_001,
                     message: "unknown session in batch"
@@ -230,6 +231,39 @@ struct DaemonClientReauthTests {
         // Sent exactly once: no transparent retry.
         #expect(transport.methods.filter {
             $0 == RPCMethod.sessionSetProtectedBatch.rawValue
+        }.count == 1)
+        // No extra session.authenticate for a retry.
+        #expect(transport.methods.filter {
+            $0 == RPCMethod.sessionAuthenticate.rawValue
+        }.count == authBefore)
+    }
+
+    @Test
+    func setCohortUnauthorizedIsNotTransparentlyRetried() async throws {
+        // `session.setCohort` shares `setProtectedBatch`'s exclusion: it is
+        // `.validatedGUI` (no session auth to lose on reconnect) and carries
+        // a fresh-per-send `revision`, so a transparent retry would replay a
+        // stale key. The -32001 must propagate so the Router owns any retry.
+        let transport = ScriptedRequestTransport()
+        let client = DaemonClient(injecting: transport)
+        _ = try await client.createSession(label: nil, name: nil, role: .agent)
+        let authBefore = transport.methods.filter {
+            $0 == RPCMethod.sessionAuthenticate.rawValue
+        }.count
+        await #expect(throws: DaemonClientError.self) {
+            _ = try await client.setCohort(
+                SessionSetCohortParams(
+                    operation: .reconcile,
+                    cohortId: UUID().uuidString,
+                    revision: 7,
+                    members: ["S"],
+                    representative: "S"
+                )
+            )
+        }
+        // Sent exactly once: no transparent retry.
+        #expect(transport.methods.filter {
+            $0 == RPCMethod.sessionSetCohort.rawValue
         }.count == 1)
         // No extra session.authenticate for a retry.
         #expect(transport.methods.filter {

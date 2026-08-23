@@ -23,6 +23,7 @@
 // discovery snapshot).
 
 import DaemonProtocol
+import Foundation
 
 /// A tab's protection as two axes collapsed into one value: what the daemon
 /// has *committed* (confirmed on the wire) and what the tab *presents*
@@ -118,6 +119,13 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
 
 struct TabState: Identifiable, Equatable, Sendable {
     let id: TabID
+    /// The daemon-side session cohort standing for this tab: the id under
+    /// which the Router reconciles the tab's terminal sessions so siblings
+    /// may drive its device panes. Minted here, opaque to the daemon, and
+    /// stable for the tab's whole life, across daemon restarts included;
+    /// the emptied cohort record daemon-side stays revivable under the same
+    /// id, which is what a restore's re-reconcile relies on.
+    let cohortId: UUID
     /// Non-empty list of terminal panes. Index 0 is the primary
     /// terminal, the one created when the tab opened and the
     /// fallback target for tab-scoped operations (tab-info `sessionId`,
@@ -217,6 +225,7 @@ struct TabState: Identifiable, Equatable, Sendable {
     ) {
         precondition(!terminals.isEmpty, "TabState must have at least one terminal pane")
         self.id = id
+        self.cohortId = UUID()
         self.terminals = terminals
         self.role = role
         self.simPanes = simPanes

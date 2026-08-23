@@ -473,6 +473,191 @@ struct PaneCohortAuthorityTests {
         )
     }
 
+    // MARK: - Auto-bind at admission
+
+    @Test("a create binds the pane to its owner's cohort in the same turn")
+    func createBindsToTheOwnersCohortAtAdmission() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob])
+        let transition = await coordinator.reconcileCohort(
+            cohortId: cohort,
+            members: [alice, bob],
+            representative: alice.sessionId,
+            replaces: nil,
+            requested: [],
+            key: key(1)
+        )
+        #expect(transition.applied)
+
+        // No binding request anywhere: the create itself must bind, so a
+        // sibling can drive the pane before any reconcile carries it.
+        let created = try await pane(
+            coordinator,
+            udid: "udid-autobind",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        #expect(
+            await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: bob.sessionId,
+                incarnation: bob.incarnation
+            )
+        )
+    }
+
+    @Test("a create whose owner is in no cohort stays unbound")
+    func createStaysUnboundWhenOwnerIsNoMember() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let carol = member(UUID(), 3)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob, carol])
+        _ = await coordinator.reconcileCohort(
+            cohortId: cohort,
+            members: [alice, bob],
+            representative: alice.sessionId,
+            replaces: nil,
+            requested: [],
+            key: key(1)
+        )
+
+        // Carol is live but belongs to no cohort, so her pane takes the
+        // own-session compatibility path: hers alone, nothing borrowed from
+        // the cohort that happens to exist beside her.
+        let created = try await pane(
+            coordinator,
+            udid: "udid-nonmember",
+            owner: carol.sessionId,
+            incarnation: carol.incarnation
+        )
+        #expect(
+            await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: carol.sessionId,
+                incarnation: carol.incarnation
+            )
+        )
+        #expect(
+            !(await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: alice.sessionId,
+                incarnation: alice.incarnation
+            ))
+        )
+    }
+
+    @Test("adoption rebinds the pane to the adopter's cohort")
+    func adoptionRebindsToTheAdoptersCohort() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let carol = member(UUID(), 3)
+        let oldCohort = UUID()
+        let newCohort = UUID()
+        await activate(coordinator, [alice, bob, carol])
+        let created = try await pane(
+            coordinator,
+            udid: "udid-adopt",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(
+            coordinator,
+            cohortId: oldCohort,
+            members: [alice],
+            created: created
+        )
+        _ = await coordinator.reconcileCohort(
+            cohortId: newCohort,
+            members: [bob, carol],
+            representative: bob.sessionId,
+            replaces: nil,
+            requested: [],
+            key: key(1)
+        )
+
+        // Alice is dead; bob adopts her orphan. The cohort must ride with
+        // the ownership: carol (bob's sibling) drives it, alice's cohort
+        // does not reach it any more.
+        let adopted = try await coordinator.createPane(
+            target: .sim(udid: "udid-adopt"),
+            sessionId: bob.sessionId,
+            ownerIncarnation: bob.incarnation,
+            isOwnerSessionAlive: { _ in false },
+            acquire: {
+                PaneCoordinator.AcquiredBackend(
+                    backend: MockDeviceBackend(),
+                    family: "phone",
+                    deviceType: "iPhone"
+                )
+            }
+        )
+        #expect(adopted.paneId == created.paneId)
+        #expect(
+            await coordinator.canSessionDrive(
+                paneId: adopted.paneId,
+                session: carol.sessionId,
+                incarnation: carol.incarnation
+            )
+        )
+        #expect(
+            !(await coordinator.canSessionDrive(
+                paneId: adopted.paneId,
+                session: alice.sessionId,
+                incarnation: alice.incarnation
+            ))
+        )
+    }
+
+    @Test("adoption revokes the outgoing cohort's already-open streams")
+    func adoptionRevokesTheOutgoingCohortsStreams() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let carol = member(UUID(), 3)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob, carol])
+        let created = try await pane(
+            coordinator,
+            udid: "udid-adopt-sweep",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: cohort, members: [alice, bob], created: created)
+        let bobSub = try await coordinator.subscribe(
+            paneId: created.paneId,
+            as: .session(bob.sessionId, incarnation: bob.incarnation)
+        )
+        #expect(await coordinator.subscriberCount(paneId: created.paneId) == 1)
+
+        // Alice is dead and carol, a member of no cohort, adopts her orphan.
+        // Bob's admission came from the outgoing cohort; authorization
+        // already refuses his next request, and his already-open stream must
+        // not keep receiving frames across the cohort change either.
+        let adopted = try await coordinator.createPane(
+            target: .sim(udid: "udid-adopt-sweep"),
+            sessionId: carol.sessionId,
+            ownerIncarnation: carol.incarnation,
+            isOwnerSessionAlive: { _ in false },
+            acquire: {
+                PaneCoordinator.AcquiredBackend(
+                    backend: MockDeviceBackend(),
+                    family: "phone",
+                    deviceType: "iPhone"
+                )
+            }
+        )
+        #expect(adopted.paneId == created.paneId)
+        // Drains to completion only because the adoption sweep finished it.
+        for await _ in bobSub.stream {}
+        #expect(await coordinator.subscriberCount(paneId: created.paneId) == 0)
+    }
+
     // MARK: - Close verdicts and device effects
 
     /// Wire a capturing sink, returning the box the coordinator emits into.

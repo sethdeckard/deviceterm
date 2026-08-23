@@ -95,8 +95,8 @@ glyph.
 
 | # | Action | Expected |
 |---|---|---|
-| 4.1 | With the watch pane as your session's only device pane, run `deviceterm crown 20` without `--pane`. | The command selects the sole device pane and scrolls it. |
-| 4.2 | Boot a second Simulator from the same terminal, then run `deviceterm crown 20`. | The command fails with `multiple panes in this session; pass --pane <ref>`. |
+| 4.1 | With the watch pane as your tab's only device pane, run `deviceterm crown 20` without `--pane`. | The command selects the sole device pane and scrolls it. |
+| 4.2 | Boot a second Simulator from the same terminal, then run `deviceterm crown 20`. | The command fails with `multiple panes in this tab; pass --pane <ref>`. |
 | 4.3 | Run `deviceterm crown 20 --pane <watch-udid>`. | The command selects the watch pane and scrolls it. |
 | 4.4 | From inside a DeviceTerm tab, run `env -u DEVICETERM_SESSION -u DEVICETERM_SESSION_CAP deviceterm crown 20`. | The command reports that it is not inside a DeviceTerm tab because the two session credential variables are unset. |
 

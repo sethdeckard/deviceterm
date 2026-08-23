@@ -73,4 +73,14 @@ protocol SessionControlling: AnyObject {
         sessionIds: [String],
         revision: Int
     ) async throws -> SessionProtectionSnapshotResult
+
+    /// `session.setCohort`: reconcile a tab's cohort membership, or commit a
+    /// close verdict for members that are leaving (`beginClose`).
+    /// `.validatedGUI`-scoped, so no cap rides on the wire. `params.revision`
+    /// is a fresh, monotonically increasing value per send attempt; the
+    /// daemon pairs it with its own connection epoch, so a stale write
+    /// loses and a GUI restart replaying low revisions is harmless. The
+    /// reply's `applied` says whether the daemon committed (or, for a
+    /// retried `beginClose`, replayed its journalled verdict).
+    func setCohort(_ params: SessionSetCohortParams) async throws -> SessionSetCohortResult
 }

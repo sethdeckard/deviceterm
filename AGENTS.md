@@ -558,9 +558,11 @@ core rules to keep in hand at PR time:
   symbol.
 - **Provenance.** A valid `(sessionId, cap)` is **necessary but not
   sufficient**; see the Trust boundary above for what joins it. Pane-targeted
-  calls are additionally authorized per-request against the caller's pane
-  ownership (`PaneCoordinator.authorize`): a session reaches only its own
-  panes, the validated GUI peer spans sessions, and a foreign paneId is a hard
+  calls are additionally authorized per-request against the pane's session
+  cohort (`PaneCoordinator.authorize`): a cohort-bound pane admits every
+  member of its cohort, each at its own verified incarnation; a pane with no
+  cohort falls back to its own session; a pane naming a retired cohort admits
+  nobody; the validated GUI peer spans sessions. A foreign paneId is a hard
   reject indistinguishable from an unknown one. No cap logged either way.
   Tab-targeted calls are likewise authorized per-request, in the GUI, against
   the caller's tab ownership (`WorkspaceAuthorityDecision`): without a live

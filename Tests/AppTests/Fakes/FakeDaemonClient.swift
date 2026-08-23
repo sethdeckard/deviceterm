@@ -215,6 +215,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// daemon failure.
     var subscribePaneFailures: [Error?] = []
     private(set) var setProtectedBatchCalls: [SetProtectedBatchCall] = []
+    /// Every `session.setCohort` send, recorded as the full wire params so a
+    /// test can assert membership order, representative, bindings, and
+    /// revision monotonicity in one place.
+    private(set) var setCohortCalls: [SessionSetCohortParams] = []
     /// Every `session.restoreBatch` the client sent, in order: one array of
     /// `RestoredSession`s per call. A reconnect test asserts the inventory the
     /// coordinator pushed (and that it landed before terminal rebinds).
@@ -292,6 +296,27 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// `applied: true`. Queue `false` to simulate a stale write that lost
     /// the daemon-side `(epoch, revision)` race.
     var setProtectedBatchApplied: [Bool] = []
+    /// Errors to throw from `setCohort`, consumed one per call from the
+    /// front. A `nil` entry (or an empty queue) yields a successful reply.
+    /// Lets a close test script "transport-fail then ack" (indeterminate
+    /// retry with the same transitionId).
+    var setCohortFailures: [Error?] = []
+    /// Scripted `applied` flags for `setCohort` replies, consumed one per
+    /// (non-throwing) call from the front; an empty queue yields
+    /// `applied: true`. Queue `false` to simulate the reap race (a
+    /// `beginClose` naming sessions the daemon already tore down) or a
+    /// rejected reconcile.
+    var setCohortApplied: [Bool] = []
+    /// Scripted `beginClose` outcomes, consumed one per applied `beginClose`
+    /// reply from the front. An empty queue derives the terminal outcome
+    /// from the request's mode, the daemon's answer for a cohort closing its
+    /// whole membership; queue `.promote` for a survivor case.
+    var setCohortOutcomes: [CohortCloseOutcome] = []
+    /// Pane ids to refuse (`bound: false`) per applied reconcile reply,
+    /// consumed one set per reconcile from the front; an empty queue binds
+    /// everything. Models the daemon's add-mode shape: the commit stands,
+    /// individual bindings are refused, and the GUI is the retry side.
+    var setCohortRefusedBindings: [Set<String>] = []
     private(set) var protectionSnapshotCalls: [ProtectionSnapshotCall] = []
     /// `fenced` flag returned by `protectionSnapshot` (default true).
     var protectionSnapshotFenced = true
@@ -379,6 +404,11 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private var setProtectedBatchFirstParked = false
     private var setProtectedBatchContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var setProtectedBatchesWaiting = 0
+    /// Barrier for `setCohort` so a test can observe a reconcile or
+    /// `beginClose` in flight before the daemon acks.
+    private var setCohortGateArmed = false
+    private var setCohortContinuations: [CheckedContinuation<Void, Never>] = []
+    private(set) var setCohortsWaiting = 0
     /// Barrier for `createSession` so a test can suspend a terminal's
     /// session mint mid-flight and land a protection transition's commit
     /// during that await (the create-during-transition race).
@@ -521,6 +551,23 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         await withCheckedContinuation { setProtectedBatchContinuations.append($0) }
     }
 
+    func armSetCohortBarrier() { setCohortGateArmed = true }
+
+    /// Resume every suspended `setCohort` and disarm. Idempotent.
+    func releaseSetCohort() {
+        setCohortGateArmed = false
+        let continuations = setCohortContinuations
+        setCohortContinuations.removeAll()
+        setCohortsWaiting = 0
+        for continuation in continuations { continuation.resume() }
+    }
+
+    private func awaitSetCohortGate() async {
+        guard setCohortGateArmed else { return }
+        setCohortsWaiting += 1
+        await withCheckedContinuation { setCohortContinuations.append($0) }
+    }
+
     // MARK: - SessionControlling
 
     func createSession(
@@ -586,6 +633,51 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             revision: revision,
             isProtected: isProtected
         )
+    }
+
+    func setCohort(_ params: SessionSetCohortParams) async throws -> SessionSetCohortResult {
+        setCohortCalls.append(params)
+        await awaitSetCohortGate()
+        if !setCohortFailures.isEmpty, let error = setCohortFailures.removeFirst() {
+            throw error
+        }
+        let applied = setCohortApplied.isEmpty ? true : setCohortApplied.removeFirst()
+        switch params.operation {
+        case .reconcile:
+            // An applied reconcile binds everything except the pane ids a
+            // test queued in `setCohortRefusedBindings`, matching the
+            // daemon's add-mode shape (commit stands, refusals are per-pane).
+            let refused = setCohortRefusedBindings.isEmpty
+                ? []
+                : setCohortRefusedBindings.removeFirst()
+            let bindings = (params.bindings ?? []).map {
+                SessionCohortBindingResult(
+                    paneId: $0.paneId,
+                    bound: applied && !refused.contains($0.paneId)
+                )
+            }
+            return SessionSetCohortResult(
+                applied: applied,
+                revision: params.revision,
+                bindings: applied ? bindings : nil
+            )
+
+        case .beginClose:
+            guard applied else {
+                return SessionSetCohortResult(applied: false, revision: params.revision)
+            }
+            let outcome: CohortCloseOutcome
+            if setCohortOutcomes.isEmpty {
+                outcome = params.mode == .shutdown ? .shutdown : .detach
+            } else {
+                outcome = setCohortOutcomes.removeFirst()
+            }
+            return SessionSetCohortResult(
+                applied: true,
+                revision: params.revision,
+                outcome: outcome
+            )
+        }
     }
 
     func setDisplayTitle(sessionId: String, title: String?) async throws {

@@ -1317,6 +1317,13 @@ public actor PaneCoordinator {
         // Pin the pane to the creating owner's incarnation (nil for a
         // validated-GUI create, which is un-pinned).
         record.acceptedIncarnation = ownerIncarnation
+        // Bind to the owner's cohort in the same turn the record is
+        // admitted, so no window exists where a sibling's request against a
+        // freshly created pane falls back to the own-session path. An owner
+        // in no cohort, or an un-pinned create, stays unbound.
+        record.cohortId = ownerIncarnation.flatMap {
+            cohortState.cohortId(forMember: CohortMember(sessionId: sessionId, incarnation: $0))
+        }
         panes[paneId] = record
 
         // Stand up the per-pane ordered surface pump before starting
@@ -1999,6 +2006,37 @@ public actor PaneCoordinator {
         record.sessionId = newOwner
         record.ownerRevoked = false
         record.acceptedIncarnation = newOwnerIncarnation
+        // The cohort rides with the ownership: rebind to the adopter's
+        // cohort, or to none. Leaving the prior owner's binding standing
+        // would keep that cohort's sessions authorized on a pane that now
+        // belongs to another.
+        record.cohortId = newOwnerIncarnation.flatMap {
+            cohortState.cohortId(forMember: CohortMember(sessionId: newOwner, incarnation: $0))
+        }
+        // The outgoing cohort's siblings were admitted to this record's
+        // streams while it was theirs, and step (3) revoked only the prior
+        // owner. Authorization refuses their next request; this tears down
+        // what they already hold, the same non-member invariant sweep a
+        // reconcile runs, or their surface callbacks would keep flowing
+        // across the cohort change. `.guiPeer` is spared, and the sweep runs
+        // under the still-set `transferring` fence so no new `.session`
+        // setup can slip in behind it.
+        let admitted: Set<UUID>
+        if let cohortId = record.cohortId {
+            admitted = Set(cohortState.members(ofCohort: cohortId).map(\.sessionId))
+        } else {
+            admitted = [newOwner]
+        }
+        let stale = Set(
+            record.subscribers.values.compactMap { subscriber -> UUID? in
+                guard case let .session(sessionId, _) = subscriber.principal,
+                    !admitted.contains(sessionId) else { return nil }
+                return sessionId
+            }
+        )
+        for sessionId in stale {
+            await revokeSessionSubscribers(record: record, target: sessionId)
+        }
         // The prior owner's location claim does not follow the pane to its
         // new owner: it describes a write the new owner never made. Drop it
         // here rather than sending a `clear`, since the device's actual

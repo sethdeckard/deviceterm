@@ -70,6 +70,19 @@ private struct ProtectionTransition {
     let task: Task<Void, Never>
 }
 
+/// What one cohort reconcile send concluded.
+private enum CohortReconcileAttempt {
+    case applied
+    /// Rejected, or the reply was lost. Either way the next send is
+    /// computed from the tab's live state, which is the whole recovery:
+    /// it absorbs a member that closed mid-flight, a stale key, and a
+    /// refused binding alike.
+    case retry
+    /// The tab is gone, closing, or the daemon refused the method
+    /// structurally; nothing left to converge.
+    case abandoned
+}
+
 /// First decisive outcome of an awaited tab-protection transition, reported
 /// to the intent layer so `tab set-protected` reflects the daemon's real
 /// state. `.pending` means the requested state remains unconfirmed because
@@ -213,6 +226,19 @@ final class Router {
     /// newer transition takes ownership, so a lost/unfenced reply can't
     /// abandon the tab pending forever. A new transition cancels it.
     private var protectionReconcileTasks: [TabID: Task<Void, Never>] = [:]
+    /// The client half of the cohort wire ordering key. A separate counter
+    /// from the protection revision: the daemon fences each cohort on its
+    /// own stored `(epoch, revision)` key, so the two method families never
+    /// order against each other. Fresh value per actual send, retries
+    /// included.
+    private var nextCohortRevision = 1
+    /// One in-flight cohort reconcile per tab, cancel-and-replace on every
+    /// trigger. No generation guard: unlike protection there is no A/B
+    /// target to misreport, the target is always the tab's current
+    /// membership, and each loop pass re-derives it from live state.
+    /// Entries are replaced on reschedule and cancelled on tab close and
+    /// shutdown; a completed task's stale entry is harmless to cancel.
+    private var cohortReconcileTasks: [TabID: Task<Void, Never>] = [:]
     /// Set once `shutdown()` begins: a tombstone so a cancelled transition's
     /// late RPC reply can't resurrect a reconcile task after cleanup.
     private var isShutdown = false
@@ -277,6 +303,12 @@ final class Router {
     /// drain. Kept below the daemon's 5s back-channel timeout; tests
     /// shorten it.
     var protectionOutcomeDeadlineNanos: UInt64 = 3_000_000_000
+    /// How long a close gesture waits for `beginClose`'s authoritative
+    /// verdict before proceeding on the binary tombstone fallback. Bounded
+    /// so a stalled daemon can't wedge a tab close; the daemon still
+    /// converges its own side through the `session.close` seam. Tests
+    /// shorten it.
+    var cohortCloseDeadlineNanos: UInt64 = 3_000_000_000
 
     init(
         workspace: WorkspaceViewModel,
@@ -347,6 +379,8 @@ final class Router {
         protectionTransitions.removeAll()
         for task in protectionReconcileTasks.values { task.cancel() }
         protectionReconcileTasks.removeAll()
+        for task in cohortReconcileTasks.values { task.cancel() }
+        cohortReconcileTasks.removeAll()
         ownershipRestoreTask?.cancel()
         ownershipRestoreTask = nil
         ownedSimDiscovery.shutdown()
@@ -938,6 +972,10 @@ final class Router {
                 role: session.role ?? role
             )
             window.tabs.append(tab)
+            // Install the tab's cohort eagerly, so a device pane attached
+            // later is born with a cohort to auto-bind to rather than
+            // waiting on a reconcile raced in behind the attach.
+            scheduleCohortReconcile(tab: tab.id)
             for orphan in reattach {
                 startOrphanReattach(orphan, tab: tab.id)
             }
@@ -1129,6 +1167,11 @@ final class Router {
                 axis: axis,
                 side: side
             )
+            // Fold the new session into the tab's cohort so it can drive
+            // (and discover) the tab's device panes. Until this applies
+            // daemon-side, the new terminal's scoped calls are refused; the
+            // CLI contract documents that brief window as caller-retried.
+            scheduleCohortReconcile(tab: tabID)
             // Defense in depth. A transition in flight already covers this
             // session: it either waited for this create (in-flight when it
             // began) or this create inherited its target, and its
@@ -1152,10 +1195,10 @@ final class Router {
     }
 
     /// Close one terminal pane in a tab. Refuses to drop the only
-    /// remaining terminal. the caller should `closeTab` instead.
-    /// The cap-authenticated `session.close` runs first, then the
-    /// scratch dir is wiped on `.shutdown`; the nav-state removal
-    /// drops the entry so reconcile tears the VC down.
+    /// remaining terminal; the caller should `closeTab` instead.
+    /// An awaited `beginClose` attempt precedes the cap-authenticated
+    /// `session.close`. The scratch dir is then wiped on `.shutdown`, and
+    /// nav-state removal drops the entry so reconciliation tears the VC down.
     private func closeTerminalPane(
         tab tabID: TabID,
         terminal terminalID: TerminalPaneID,
@@ -1169,7 +1212,21 @@ final class Router {
         // tab. The Intent layer translates this into a callable error
         // when invoked from the CLI.
         guard tab.terminals.count > 1 else { return }
-        bootClaims.sessionClosed(terminal.sessionId, mode: mode)
+        // Commit the daemon's verdict first, so the tombstone below records
+        // the same answer the daemon acts on: siblings remain, so an applied
+        // verdict is a promotion and the leaving terminal's boot claims
+        // follow the successor. If `beginClose` is refused (the reap race)
+        // or unanswered, the fallback records the disposition from `mode`.
+        let verdict = await cohortBeginClose(
+            cohortId: tab.cohortId,
+            leaving: [terminal.sessionId],
+            mode: mode
+        )
+        if let verdict {
+            bootClaims.sessionClosed(terminal.sessionId, outcome: verdict)
+        } else {
+            bootClaims.sessionClosed(terminal.sessionId, mode: mode)
+        }
         try? await daemon.closeSession(
             sessionId: terminal.sessionId,
             capability: terminal.capability,
@@ -1616,6 +1673,197 @@ final class Router {
         }
     }
 
+    /// Converge one tab's daemon cohort onto its live membership, retrying
+    /// with backoff until the daemon applies it, the task is cancelled, the
+    /// tab becomes unavailable, or a structural scope failure prevents retry.
+    private func runCohortReconcile(tab tabID: TabID) async {
+        var backoffMs = 200
+        while !Task.isCancelled {
+            switch await attemptCohortReconcile(tab: tabID) {
+            case .applied, .abandoned:
+                return
+
+            case .retry:
+                try? await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
+                backoffMs = min(backoffMs * 2, 5_000)
+            }
+        }
+    }
+
+    /// One `session.setCohort` reconcile computed from the tab's live state:
+    /// complete ordered membership (array order is the daemon's inheritance
+    /// order, so it must equal the GUI's own `terminals[0]` promotion rule),
+    /// the primary terminal as representative, and every mounted device
+    /// pane's `(paneId, attachment)` as a binding backstop for anything the
+    /// admission-time auto-bind raced.
+    private func attemptCohortReconcile(tab tabID: TabID) async -> CohortReconcileAttempt {
+        guard !isShutdown, !closingTabs.contains(tabID),
+            let tab = workspace.windowContaining(tab: tabID)?.tabs.tab(id: tabID) else {
+            return .abandoned
+        }
+        let revision = nextCohortRevision
+        nextCohortRevision += 1
+        let params = SessionSetCohortParams(
+            operation: .reconcile,
+            cohortId: tab.cohortId.uuidString,
+            revision: revision,
+            members: tab.terminals.map(\.sessionId),
+            representative: tab.primaryTerminal.sessionId,
+            bindings: cohortBindings(for: tab)
+        )
+        do {
+            let result = try await daemon.setCohort(params)
+            guard result.applied else { return .retry }
+            // An applied add-mode reply can still refuse individual bindings
+            // (the pane's attachment moved, or the record was briefly
+            // absent), and the wire contract makes the GUI the retry side.
+            // Treat a refused binding as not-yet-converged: the next send
+            // re-derives the pane set, and its fence value, from live state.
+            let refused = (result.bindings ?? []).contains { !$0.bound }
+            return refused ? .retry : .applied
+        } catch {
+            // `scopeViolation` (-32011) is a definite/terminal signature
+            // rejection on both transports (the `--smoke` UDS structural
+            // refusal, or a genuine XPC signature mismatch); retrying can't
+            // succeed. Everything else, a definite rejection included, is
+            // retried from re-derived live state: an `invalidParams` here
+            // usually names a session that closed mid-flight, and the next
+            // send no longer carries it.
+            if case let DaemonClientError.daemon(code, _) = error, code == -32_011 {
+                return .abandoned
+            }
+            return .retry
+        }
+    }
+
+    /// The tab's mounted device panes as cohort bindings. A pane whose
+    /// attach response predates the attachment field can't be fenced and is
+    /// skipped; the admission-time auto-bind is what covers it.
+    private func cohortBindings(for tab: TabState) -> [SessionCohortBinding] {
+        let sims = tab.simPanes.compactMap { pane in
+            pane.attachment.map {
+                SessionCohortBinding(paneId: pane.paneId, expectedAttachment: $0)
+            }
+        }
+        let devices = tab.devicePanes.compactMap { pane in
+            pane.attachment.map {
+                SessionCohortBinding(paneId: pane.paneId, expectedAttachment: $0)
+            }
+        }
+        return sims + devices
+    }
+
+    /// Schedule (or restart) a tab's cohort reconcile after its membership
+    /// changed. Cancel-and-replace: the superseded task's next send would
+    /// carry stale membership, and the replacement re-derives everything.
+    private func scheduleCohortReconcile(tab tabID: TabID) {
+        guard !isShutdown, !closingTabs.contains(tabID) else { return }
+        cohortReconcileTasks[tabID]?.cancel()
+        cohortReconcileTasks[tabID] = Task { @MainActor [weak self] in
+            await self?.runCohortReconcile(tab: tabID)
+        }
+    }
+
+    /// Try one cohort reinstall per tab against the connection that just
+    /// synced before pane recovery re-attaches. An applied attempt lets a
+    /// recovered pane auto-bind at admission; a retryable failure hands off
+    /// to the background loop rather than holding recovery up.
+    func reconcileAllCohorts() async {
+        for window in workspace.windows {
+            for tab in window.tabs.tabs {
+                cohortReconcileTasks[tab.id]?.cancel()
+                cohortReconcileTasks[tab.id] = nil
+                if await attemptCohortReconcile(tab: tab.id) == .retry {
+                    scheduleCohortReconcile(tab: tab.id)
+                }
+            }
+        }
+    }
+
+    /// Commit a close verdict for the leaving terminals ahead of their
+    /// session closes, returning the daemon's authoritative outcome.
+    ///
+    /// Nil means the close proceeds on the binary tombstone fallback: the
+    /// daemon answered `applied: false` (a reap already tore the named
+    /// sessions down, so aborting would wedge the close against sessions
+    /// that no longer exist), refused definitively, or never answered
+    /// inside the deadline. The daemon converges its own side through the
+    /// `session.close` seam either way; only the GUI tombstone degrades,
+    /// bounded by the boot-claim lease.
+    ///
+    /// One `transitionId` per close gesture, held across retries, so a
+    /// retry after a lost reply replays the journalled verdict instead of
+    /// deciding (and promoting) again. Revisions stay fresh per send.
+    private func cohortBeginClose(
+        cohortId: UUID,
+        leaving: [String],
+        mode: PaneCloseMode
+    ) async -> CohortCloseOutcome? {
+        let transitionId = UUID().uuidString
+        let deadline = DispatchTime.now().uptimeNanoseconds
+            .addingReportingOverflow(cohortCloseDeadlineNanos)
+        guard !deadline.overflow else { return nil }
+        var backoffMs = 200
+        while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline.partialValue else { return nil }
+            let revision = nextCohortRevision
+            nextCohortRevision += 1
+            let params = SessionSetCohortParams(
+                operation: .beginClose,
+                cohortId: cohortId.uuidString,
+                revision: revision,
+                transitionId: transitionId,
+                leaving: leaving,
+                mode: mode
+            )
+            do {
+                // The deadline bounds the WAIT, not the request: a silent
+                // helper would otherwise hold the serial route drain for the
+                // client's own, longer request bound, once per tab on a
+                // window close. The request is never cancelled, and a late
+                // reply needs no reconciliation: the daemon journalled the
+                // verdict under this transitionId, and the GUI has already
+                // recorded the fallback tombstone by then.
+                let result = try await Deadline.wait(
+                    nanos: deadline.partialValue - now,
+                    expired: DaemonClientError.timedOut(
+                        method: RPCMethod.sessionSetCohort.rawValue
+                    ),
+                    late: { _ in },
+                    work: { [weak self] in
+                        guard let self else { throw CancellationError() }
+                        return try await self.daemon.setCohort(params)
+                    }
+                )
+                guard result.applied, let outcome = result.outcome else { return nil }
+                return outcome
+            } catch {
+                // A definite pre-commit rejection is terminal for the
+                // gesture; retrying replays the refusal. Anything else is
+                // an indeterminate loss: the verdict may be journalled
+                // daemon-side, so retry the same transitionId until the
+                // deadline and let the journal answer.
+                if case let DaemonClientError.daemon(code, _) = error,
+                    Self.definiteProtectionRejectionCodes.contains(code) {
+                    return nil
+                }
+                let afterFailure = DispatchTime.now().uptimeNanoseconds
+                guard afterFailure < deadline.partialValue else { return nil }
+                // The backoff respects the same budget as the waits: an
+                // uncapped sleep after a near-deadline failure would overrun
+                // the advertised bound by most of a backoff step.
+                try? await Task.sleep(
+                    nanoseconds: min(
+                        UInt64(backoffMs) * 1_000_000,
+                        deadline.partialValue - afterFailure
+                    )
+                )
+                backoffMs = min(backoffMs * 2, 1_000)
+            }
+        }
+    }
+
     private func simAttachSpec(
         tab tabID: TabID,
         udid: String,
@@ -1845,6 +2093,13 @@ final class Router {
                 return false
             }
             spec.mount(window, pendingId, response, resolvedName)
+            // A pane can mount into the window where the cohort install
+            // raced it: the reconcile snapshotted no panes, and auto-bind at
+            // admission saw no cohort yet. Re-kick the tab's reconcile so
+            // the mounted pane's binding rides the next send; on the common
+            // path (cohort already installed, pane auto-bound) the send is a
+            // cheap confirmation.
+            scheduleCohortReconcile(tab: tabID)
             await reconcileDeferredDetaches(for: spec.target)
             return true
         } catch {
@@ -2154,11 +2409,8 @@ final class Router {
     /// terminal session for ownership because sims may be linked to
     /// non-primary terminals.
     private func closeTabRecords(_ tab: TabState, mode: PaneCloseMode) async {
-        for terminal in tab.terminals {
-            bootClaims.sessionClosed(terminal.sessionId, mode: mode)
-        }
-        // Closing tombstone: this method cancels protection work but then
-        // `await`s several daemon teardown RPCs while the tab is STILL in the
+        // Closing tombstone: this method cancels protection and cohort work
+        // but then `await`s several daemon RPCs while the tab is STILL in the
         // workspace (removal happens synchronously at the call site after we
         // return). A cancelled transition's late reply arriving during those
         // awaits would otherwise pass `scheduleReconcile`'s guards (not
@@ -2166,8 +2418,32 @@ final class Router {
         // tombstone blocks that; the `defer` drops it just before the
         // synchronous `removeTab` (no `await` between, so no reply can slip
         // into the gap, and after removal the workspace check takes over).
+        // Inserted before the `beginClose` await below, which is the first
+        // suspension the tombstone must already cover.
         closingTabs.insert(tab.id)
         defer { closingTabs.remove(tab.id) }
+        // Cancel the tab's cohort reconcile before deciding the close: a
+        // send computed from pre-close membership would only be refused by
+        // the daemon's closed-member interlock, so stop issuing them.
+        cohortReconcileTasks[tab.id]?.cancel()
+        cohortReconcileTasks[tab.id] = nil
+        // One verdict for the whole membership. Every terminal is leaving,
+        // so an applied verdict is terminal (never a promotion) and each
+        // session records the same answer. If `beginClose` is refused (the
+        // reap race: the daemon already tore the sessions down) or unanswered,
+        // the fallback records each disposition directly from `mode`.
+        let verdict = await cohortBeginClose(
+            cohortId: tab.cohortId,
+            leaving: tab.terminals.map(\.sessionId),
+            mode: mode
+        )
+        for terminal in tab.terminals {
+            if let verdict {
+                bootClaims.sessionClosed(terminal.sessionId, outcome: verdict)
+            } else {
+                bootClaims.sessionClosed(terminal.sessionId, mode: mode)
+            }
+        }
         // In-flight attaches for this tab are left to finish, for the reason
         // `cancelPendingPane` spells out: cancelling throws away the paneId
         // the cleanup needs. A reply that beats the attach deadline is

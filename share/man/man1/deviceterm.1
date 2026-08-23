@@ -23,12 +23,12 @@ is a macOS-native terminal application in which Apple-platform devices —
 booted simulators (iOS, watchOS, iPadOS, tvOS) and physically-connected
 iPhones/iPads — attach as first-class panes inside the tab. The
 .B deviceterm
-CLI runs inside a tab and drives its terminal session's device pane: touch,
+CLI runs inside a tab and drives the tab's device panes: touch,
 hardware buttons, keyboard, rotation, the watchOS Digital Crown, and
 accessibility inspection. Pass
 .B --pane
 .I ref
-to disambiguate when the session owns more than one device pane (resolving a
+to disambiguate when the tab shows more than one device pane (resolving a
 shortId, name, sim UDID, physical deviceId, or paneId).
 .SH COMMANDS
 Grouped below in the order
@@ -127,7 +127,7 @@ This is the only explicit-attach verb; there is no
 .BR "pane attach" .
 .TP
 .B panes list
-List the current session's device panes.
+List the calling tab's device panes.
 .SS Manage the workspace
 Back-channel verbs.
 .TP

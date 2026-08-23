@@ -185,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // then fire the terminal-rebind observers.
                 await self.closeGhostSessions(restored: inventory)
                 self.router.resumeBootClaimsAfterSessionRestore()
+                // Cohorts live only in the helper's memory too. Attempt each
+                // reinstall before firing the rebind observers; retryable
+                // failures continue in the background, and each recovered
+                // pane mount schedules another reconcile with its binding.
+                await self.router.reconcileAllCohorts()
                 self.daemonClient.notifyReconnect()
                 // Pane records live only in the helper's memory. This
                 // connection may have reached a replacement holding none of

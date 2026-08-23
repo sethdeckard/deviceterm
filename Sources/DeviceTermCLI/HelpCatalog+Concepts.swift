@@ -30,9 +30,9 @@ extension HelpCatalog {
     /// command list's usage line, so this is where they learn the
     /// selector exists at all.
     static let paneTargetNote = """
-      These commands drive a device pane, resolved automatically when your
-      session owns one. Pass --pane <ref> when it owns more than one. See
-      `deviceterm help targeting`.
+      These commands drive a device pane in your tab, resolved automatically
+      when the tab shows one. Pass --pane <ref> when it shows more than one.
+      See `deviceterm help targeting`.
     """
 
     static let conceptTopics: [HelpTopic] = [
@@ -41,14 +41,15 @@ extension HelpCatalog {
             .concept,
             summary: "How a command picks which device pane to drive",
             detail: """
-              This CLI runs inside a deviceterm tab and drives your terminal
-              session's device pane: touch, hardware buttons, keyboard,
-              rotation, watchOS Digital Crown, and accessibility inspection.
-              A pane booted from a sibling terminal split belongs to that
-              split's session and is not yours to drive.
+              This CLI runs inside a deviceterm tab and drives the tab's
+              device panes: touch, hardware buttons, keyboard, rotation,
+              watchOS Digital Crown, and accessibility inspection. Every
+              terminal in the tab reaches them, whichever terminal booted or
+              attached the device; a pane in another tab is not yours to
+              drive.
 
               All input + AX commands resolve a device pane automatically when
-              your session owns one. Pass --pane <ref> when it owns more than
+              the tab shows one. Pass --pane <ref> when it shows more than
               one device pane; the CLI lists the candidates (with a type
               column) if it can't disambiguate. <ref> resolves a shortId,
               name, sim UDID, physical deviceId, or paneId prefix.
@@ -81,7 +82,7 @@ extension HelpCatalog {
             summary: "What to check when a command seems broken",
             detail: """
               Pane attachment is a precondition. If you get
-              `no device pane in this session`, boot a sim from this
+              `no device pane in this tab`, boot a sim from this
               terminal with `xcrun simctl boot <UDID>`. The deviceterm shim
               intercepts the boot and creates the pane. Custom helpers that
               bypass `xcrun simctl boot` won't create a pane; claim such a

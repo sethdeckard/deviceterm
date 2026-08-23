@@ -1289,6 +1289,18 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         return try decode(SessionProtectionSnapshotResult.self, data)
     }
 
+    /// `session.setCohort`: reconcile a tab's cohort membership or commit a
+    /// close verdict for leaving members. `.validatedGUI`-scoped, so no cap
+    /// on the wire; over the `--smoke` UDS fallback the daemon refuses it
+    /// with `scopeViolation`. The Router allocates the revision (fresh per
+    /// send) and mints the `beginClose` transition id, so this is a plain
+    /// pass-through.
+    func setCohort(_ params: SessionSetCohortParams) async throws -> SessionSetCohortResult {
+        let encoded = try JSONEncoder().encode(params)
+        let data = try await request(method: .sessionSetCohort, params: encoded)
+        return try decode(SessionSetCohortResult.self, data)
+    }
+
     /// `device.list`: `scope` is "owned" or "all". Existing daemon
     /// method; no schema change. Returns the bare-array result.
     func deviceList(scope: DeviceListScope) async throws -> [DeviceListEntry] {
@@ -1941,6 +1953,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             && method != .sessionProtectionSnapshot
             && method != .sessionRestoreBatch
             && method != .sessionSetDisplayTitle
+            && method != .sessionSetCohort
             && method != .automationGrant {
             // The connection was re-established (daemon respawn / XPC
             // interruption) so the daemon-side `RPCConnection` is fresh
@@ -1963,7 +1976,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             // resend the SAME encoded `revision`, violating the
             // fresh-revision-per-send ordering invariant. Let the `-32001`
             // propagate so the Router allocates a fresh revision for any
-            // retry.
+            // retry. `session.setCohort` is excluded for the same reason.
             //
             // `automation.grant` is excluded for the same reason: it is
             // `.validatedGUI` and carries a monotonic `revision`, so a silent

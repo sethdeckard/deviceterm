@@ -26,7 +26,7 @@ Run before any release that touches `Sources/DeviceTermCLI/main.swift`'s
 | 1.1 | `deviceterm panes list` — copy the UDID. Run `deviceterm with-pane <UDID> deviceterm tap 0.5 0.5`. | Tap fires on the sim. Receipt printed: `ok udid=<UDID> pane=<shortId> x=0.5 y=0.5`. |
 | 1.2 | Copy the shortId (e.g. `phn001`). Run `deviceterm with-pane phn001 deviceterm tap 0.5 0.5`. | Same as 1.1. |
 | 1.3 | Copy the first 4-8 chars of the paneId UUID. Run `deviceterm with-pane <prefix> deviceterm tap 0.5 0.5`. | Same as 1.1. |
-| 1.4 | `deviceterm with-pane no-such-thing bash`. | Stderr: `deviceterm: no device pane matching 'no-such-thing' in this session`, then a hint to run `deviceterm panes list`; exit 1. |
+| 1.4 | `deviceterm with-pane no-such-thing bash`. | Stderr: `deviceterm: no device pane matching 'no-such-thing' in this tab`, then a hint to run `deviceterm panes list`; exit 1. |
 
 ## 2. Env injection
 

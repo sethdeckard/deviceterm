@@ -27,7 +27,7 @@
 // `tabs.list` and `session.create` responses for display/diagnostics.
 
 public enum SessionRole: String, Codable, Sendable, Equatable, CaseIterable {
-    /// Default. Read/write on its own linked panes only; cross-session
+    /// Default. Read/write on its tab's linked panes only; cross-tab
     /// *pane* access is never conferred by a grant. The cross-tab *terminal*
     /// verbs (`tab send-input`/`capture`) are a separate axis, gated by a
     /// live automation grant, not by this role, so a *granted* agent

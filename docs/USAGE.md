@@ -534,13 +534,14 @@ The measured response curves and environment are recorded in
 
 ### Select a Device Pane
 
-Input and accessibility commands resolve against the panes your session
-owns, normally the ones booted or attached from your terminal pane. When
-your session owns exactly one device pane, commands select it automatically;
-when it owns several, pass `--pane`.
+Input and accessibility commands resolve against your tab's device panes:
+every terminal in the tab reaches them, whichever terminal booted or
+attached the device. When the tab shows exactly one device pane, commands
+select it automatically; when it shows several, pass `--pane`. A sibling
+attaching a second device makes the bare default ambiguous, so a script
+that must survive a busy tab should pass `--pane` from the start.
 
-A sibling terminal split's pane belongs to that split's session and is not
-yours to drive, even inside the same tab; see
+A pane in another tab is not yours to drive; see
 [Know Your Session](AUTOMATION.md#know-your-session).
 
 Input and accessibility references accept a pane short ID, pane name,
@@ -1034,11 +1035,11 @@ DeviceTerm reports a restart it could not perform rather than claiming one.
 
 | Symptom | Likely Cause | Next Action |
 |---|---|---|
-| `no device pane in this session` | Your session owns no attached device pane, or the command is running outside the owning terminal pane. | Boot a Simulator from this terminal, mirror a physical device, or attach one explicitly. |
+| `no device pane in this tab` | Your tab shows no attached device pane. | Boot a Simulator from this tab, mirror a physical device, or attach one explicitly. |
 | `xcrun simctl boot` succeeds but no pane appears | The command bypassed DeviceTerm's per-session `xcrun` shim, or it did not produce a new boot transition. | Run `deviceterm doctor` and check the shim result; see [Understand the xcrun Shim](#understand-the-xcrun-shim). Attach an already booted Simulator by UDID. |
 | A Simulator was booted from Xcode or Simulator.app | External boots are not claimed automatically. | Find the Simulator with `xcrun simctl list devices booted` and pass its UDID to `deviceterm device attach`. |
 | Attaching an external Simulator by name fails | `devices list` contains only owned booted Simulators, so it cannot resolve an unclaimed external name. | Use the Simulator UDID rather than its name. |
-| `multiple panes in this session; pass --pane <ref>` | Your session owns more than one device pane. | Run `deviceterm panes list`, pass a pane reference with `--pane`, or use `with-pane`. |
+| `multiple panes in this tab; pass --pane <ref>` | Your tab shows more than one device pane. | Run `deviceterm panes list`, pass a pane reference with `--pane`, or use `with-pane`. |
 | No physical devices appear in the picker | The device is disconnected, locked, untrusted, or was connected after the picker opened. | Connect and unlock it, trust the Mac, then choose **Refresh**. |
 | A physical device appears but attachment fails | Enumeration succeeded, but a required tunnel, display, or input service did not. | Read the attachment error, unlock and trust the device, then retry. A device with unsupported services cannot be mirrored by this build. |
 | The GUI and CLI disagree after an upgrade | The live daemon wire version differs from the bundled RPC wire version, or the version probe failed. | Run `deviceterm version --json` and compare `daemon` with `rpcWire`; see [the version report](INTEGRATION.md#version-report). Quit and reopen DeviceTerm. |

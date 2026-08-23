@@ -37,7 +37,7 @@ public enum AgentsText {
       empty even after the sim is fully booted.
 
       If `deviceterm tap` / `swipe` / `crown` returns
-      `no device pane in this session`, run the diagnostic recipe:
+      `no device pane in this tab`, run the diagnostic recipe:
 
         env | grep DEVICETERM     # confirms the tab's env is wired
         which xcrun            # confirms the shim is on PATH
@@ -114,7 +114,7 @@ public enum AgentsText {
       all input commands (tap, swipe, long-press, pinch, button,
       key, text, rotate, crown)
         - Pane attachment is a precondition. If the command
-          returns `no device pane in this session` (or
+          returns `no device pane in this tab` (or
           `error.notFound` on the daemon side), see "Getting a
           sim into your tab" above; the most common cause is a
           boot that bypassed the shim.
@@ -374,16 +374,19 @@ public enum AgentsText {
           Automation is not special-cased.
 
       Pane reach
-        Panes are linked to an owning session, and the daemon
-        authorizes every pane-targeted call against the current
-        ownership. Your session reaches only its own panes; a paneId
-        owned by another session is refused with the same error as
-        an unknown one, so a sibling terminal pane's sim is not
-        yours to drive even inside your own tab. Only the GUI spans
-        sessions. That gets you separated pane authority between two
-        agents in separate terminal panes, and nothing more: they
-        still share a uid, a filesystem, and every other process on
-        the machine.
+        Device panes are scoped to the tab through a session
+        cohort the GUI keeps in sync with the tab's terminals.
+        Every terminal session in the tab reaches the tab's
+        panes, whichever of them attached the device; a paneId
+        in another tab is refused with the same error as an
+        unknown one. Only the GUI spans tabs. Closing one
+        terminal of a split hands its panes to the survivors,
+        and a freshly split terminal can see a brief refusal
+        before the GUI registers it with the daemon; retry.
+        That gets you per-tab pane authority between agents in
+        separate tabs, and nothing more: they still share a
+        uid, a filesystem, and every other process on the
+        machine.
 
     KNOWN GOTCHAS
 

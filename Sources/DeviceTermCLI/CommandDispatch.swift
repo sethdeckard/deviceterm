@@ -41,7 +41,7 @@ func jsonOutcome(_ value: some Encodable) -> CommandOutcome {
 /// Map a thrown error to its stderr/exit shape. `.daemon` gets
 /// `daemon error <code>: <message>`; `.notInTab` and `.transport`
 /// surface their message verbatim (the wording the docs and help pages
-/// quote, e.g. `no device pane in this session`); anything else prints
+/// quote, e.g. `no device pane in this tab`); anything else prints
 /// the Swift error description. This wording is what `--json`-less
 /// consumers parse, so it is a contract.
 func errorOutcome(_ error: Error) -> CommandOutcome {
@@ -629,7 +629,7 @@ func run(
 /// Resolve the target device pane (sim or physical) over `transport`.
 /// Resolution order: explicit `--pane <ref>` (tiered `PaneRefResolver`),
 /// then the `DEVICETERM_TARGET_PANE` env key exported by `with-pane`
-/// (exact key match, no tier shadowing), then the session's sole pane.
+/// (exact key match, no tier shadowing), then the tab's sole pane.
 /// Throws `CLIError.notInTab` out-of-tab and `.transport` on
 /// ambiguity / no match, so the driver surfaces a clear error.
 func resolvePane(
@@ -649,13 +649,13 @@ func resolvePane(
 
         case let .ambiguous(hits):
             throw CLIError.transport(
-                "'\(refValue)' is ambiguous in this session; matches:\n"
+                "'\(refValue)' is ambiguous in this tab; matches:\n"
                 + paneRosterLines(hits)
             )
 
         case .sentinel, .notFound:
             throw CLIError.transport(
-                "no pane matching '\(refValue)' in this session; "
+                "no pane matching '\(refValue)' in this tab; "
                 + "run `deviceterm panes list`"
             )
         }
@@ -672,20 +672,20 @@ func resolvePane(
         !envKey.isEmpty {
         guard let pane = PaneRefResolver.exactKeyMatch(envKey, in: panes) else {
             throw CLIError.transport(
-                "no pane for exported target \(envKey) in this session"
+                "no pane for exported target \(envKey) in this tab"
             )
         }
         return ResolvedPane(paneId: pane.paneId, udid: pane.udid, shortId: pane.shortId)
     }
-    // 3. No ref anywhere → the session's sole pane, else a clear error.
+    // 3. No ref anywhere → the tab's sole pane, else a clear error.
     guard panes.count <= 1 else {
         throw CLIError.transport(
-            "multiple panes in this session; pass --pane <ref>:\n"
+            "multiple panes in this tab; pass --pane <ref>:\n"
             + paneRosterLines(panes)
         )
     }
     guard let pane = panes.first else {
-        throw CLIError.transport("no device pane in this session")
+        throw CLIError.transport("no device pane in this tab")
     }
     return ResolvedPane(paneId: pane.paneId, udid: pane.udid, shortId: pane.shortId)
 }

@@ -634,7 +634,7 @@ func withPaneExec(ref: String, cmd: [String]) -> Never {
             withPaneKey = entry.udid
 
         case .sentinel, .notFound:
-            writeStderr("deviceterm: no device pane matching '\(ref)' in this session\n")
+            writeStderr("deviceterm: no device pane matching '\(ref)' in this tab\n")
             writeStderr("  run `deviceterm panes list` to see available panes\n")
             exit(1)
 

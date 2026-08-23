@@ -74,10 +74,17 @@ A terminal split is its own session. The GUI treats the tab as one workspace,
 but each terminal pane carries a separate CLI identity with its own
 credential.
 
-Device panes are linked to an owning session, and every pane-targeted
-command is authorized against the current ownership. Your session drives
-only its own panes; a pane owned by a sibling terminal pane is refused with
-the same error as an unknown pane, even inside your own tab.
+Device panes are scoped to the tab. Every terminal session in a tab drives
+and lists the tab's device panes, whichever of them booted or attached the
+device; sharing a tab is the consent gesture. A pane in another tab is
+refused with the same error as an unknown pane.
+
+Closing one terminal of a split tab hands its device panes to the surviving
+terminals instead of orphaning them.
+
+The GUI registers a new split's session with the daemon a moment after the
+session exists, so a device command racing that window can see a brief
+refusal. Retry it.
 
 The session's role is readable without a daemon round-trip:
 
@@ -211,7 +218,7 @@ produces several rows. It shows unprotected sessions plus your own protected
 ones.
 `tabs current` prints only the caller's row.
 
-`panes list` returns the device panes owned by the calling session.
+`panes list` returns the device panes of the caller's tab.
 `windows list` returns the caller's own window; add `--all` for every window
 visible to the caller.
 

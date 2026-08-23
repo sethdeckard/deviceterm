@@ -29,7 +29,7 @@ final class BootClaimCoordinator {
     }
 
     private struct ClosedSession {
-        let mode: PaneCloseMode
+        let outcome: CohortCloseOutcome
         let expiresAtNanoseconds: UInt64
     }
 
@@ -142,29 +142,74 @@ final class BootClaimCoordinator {
         closedSessions = [:]
     }
 
-    /// Preserve the user's close choice for a boot that has not promoted yet.
+    /// Preserve the user's close choice for a boot that has not promoted
+    /// yet, when no daemon verdict stands in front of the close: the
+    /// compatibility arm, and the fallback when `beginClose` was refused or
+    /// went unanswered.
     func sessionClosed(_ sessionId: String, mode: PaneCloseMode) {
+        sessionClosed(sessionId, outcome: mode == .shutdown ? .shutdown : .detach)
+    }
+
+    /// Preserve the daemon's authoritative close verdict for a boot that
+    /// has not promoted yet. A promotion keeps the claim attached, re-homed
+    /// on the successor; a terminal verdict strips the session and stamps
+    /// the disposition. The same rewrite the daemon applies to its own
+    /// claims, so both tombstone layers record one answer.
+    func sessionClosed(_ sessionId: String, outcome: CohortCloseOutcome) {
         let now = clock()
         closedSessions = closedSessions.filter { $0.value.expiresAtNanoseconds > now }
         let closeDeadline = now.addingReportingOverflow(
             BootClaimEvidence.maximumLeaseMilliseconds * 1_000_000
         )
         closedSessions[sessionId] = ClosedSession(
-            mode: mode,
+            outcome: outcome,
             expiresAtNanoseconds: closeDeadline.overflow ? UInt64.max : closeDeadline.partialValue
         )
+        let resolved = resolvedOutcome(from: sessionId, at: now)
         for attemptId in Array(claims.keys) where claims[attemptId]?.sessionId == sessionId {
             guard var pending = claims[attemptId] else { continue }
-            pending.sessionId = nil
-            pending.evidence = evidence(
-                from: pending,
-                disposition: mode == .shutdown ? .shutdown : .detach
-            )
+            if case let .promote(successor) = resolved {
+                pending.sessionId = successor
+                pending.evidence = evidence(from: pending, disposition: .attach)
+            } else {
+                pending.sessionId = nil
+                pending.evidence = evidence(
+                    from: pending,
+                    disposition: resolved == .shutdown ? .shutdown : .detach
+                )
+            }
             claims[attemptId] = pending
             if pending.phase != .prepared {
                 schedule(attemptId: attemptId)
             }
         }
+    }
+
+    /// Follow a closed session's verdict through any promotion chain: A
+    /// handed to B, B later closed toward C, so a claim naming A must reach
+    /// C. The same walk the daemon runs over its own tombstones:
+    /// path-compresses what it walks, is cycle-protected, a successor with
+    /// no tombstone of its own is still live and ends the walk, and a
+    /// terminal link stops the chain.
+    private func resolvedOutcome(from sessionId: String, at now: UInt64) -> CohortCloseOutcome {
+        guard var current = closedSessions[sessionId]?.outcome else { return .detach }
+        var visited: Set<String> = [sessionId]
+        var walked: [String] = [sessionId]
+        while case let .promote(successor) = current {
+            guard let next = closedSessions[successor],
+                next.expiresAtNanoseconds > now else { break }
+            guard visited.insert(successor).inserted else { break }
+            walked.append(successor)
+            current = next.outcome
+        }
+        for id in walked {
+            guard let existing = closedSessions[id] else { continue }
+            closedSessions[id] = ClosedSession(
+                outcome: current,
+                expiresAtNanoseconds: existing.expiresAtNanoseconds
+            )
+        }
+        return current
     }
 
     private func insert(
@@ -193,16 +238,29 @@ final class BootClaimCoordinator {
         )
         let now = clock()
         closedSessions = closedSessions.filter { $0.value.expiresAtNanoseconds > now }
-        let closed = sessionId.flatMap { closedSessions[$0] }
-        let effectiveSessionId = closed == nil ? sessionId : nil
+        // A claim naming a closed session takes that session's recorded
+        // verdict, followed through any chain of promotions. A promotion
+        // keeps the claim attached to the successor; a terminal verdict
+        // strips the session and stamps the disposition.
+        var effectiveSessionId = sessionId
+        var terminalOutcome: CohortCloseOutcome?
+        if let sessionId, closedSessions[sessionId] != nil {
+            let resolved = resolvedOutcome(from: sessionId, at: now)
+            if case let .promote(successor) = resolved {
+                effectiveSessionId = successor
+            } else {
+                effectiveSessionId = nil
+                terminalOutcome = resolved
+            }
+        }
         let effectiveClaim: BootClaimEvidence
-        if let closed {
+        if let terminalOutcome {
             effectiveClaim = BootClaimEvidence(
                 attemptId: normalizedAttemptId,
                 udid: normalizedUDID,
                 source: normalizedClaim.source,
                 observedState: normalizedClaim.observedState,
-                disposition: closed.mode == .shutdown ? .shutdown : .detach,
+                disposition: terminalOutcome == .shutdown ? .shutdown : .detach,
                 remainingLeaseMilliseconds: claim.remainingLeaseMilliseconds
             )
         } else {

@@ -729,8 +729,10 @@ linkage-policy changes; nothing consumes it yet.
 - Result: `{ok}`, then a stream of `daemon.event` frames
 - Scope: session
 
-Session-scoped event subscription: the caller sees its own session's pane
-state changes and session lifecycle, plus device boot/shutdown events,
+Session-scoped event subscription: the caller sees pane state changes for
+the panes it may drive (fanned to the pane's cohort members, or to the
+pane's own session when it has no cohort), its own session lifecycle, and
+device boot/shutdown events,
 which go to everyone (a udid leaks nothing `device.list` doesn't). The
 audience is filtered daemon-side by an internal `EventAudience`, never on
 the wire; the validated GUI peer spans sessions and sees every event. An
@@ -1188,8 +1190,12 @@ record and key: it
 admits nobody, but the same id reconciled under a dominating key comes back,
 because the GUI retains one cohort id per tab across restores.
 
-Pane records reference a cohort, and a refused binding means different
-things to the two request shapes. Adding panes to a live cohort reports
+Pane records reference a cohort, and most acquire it at admission: a create
+or an adoption binds the record to its owner's cohort in the same turn the
+commit lands, so a sibling can drive a fresh pane without waiting for a
+reconcile. The `bindings` a reconcile carries are the convergence backstop
+for a pane that raced that window. A refused binding means different things
+to the two request shapes. Adding panes to a live cohort reports
 per-pane results and commits the rest, so a pane whose attachment moved
 under a racing re-attach is retried on the next reconcile. A binding can
 take a pane that is unbound, already this cohort's, or inherited from the
@@ -1247,14 +1253,15 @@ to their owner.
 - Result: bare array `[{paneId, udid, state, family, shortId, name?, capabilities, target}]`
 - Scope: session
 
-The session's panes. The payload `(sessionId, cap)` is provenance-checked
+The panes the session may drive: its cohort's, plus its own unbound ones.
+The payload `(sessionId, cap)` is provenance-checked
 and must name the connection's own session; the validated GUI peer is the
 sole cross-session exception. `family` is the coarse device
 class; `capabilities` and `target` are as in `pane.create`.
 
 Backs `deviceterm panes list` and the CLI's pane resolution: input
 commands resolve their target paneId through this (default is the
-session's sole device pane, `--pane` to disambiguate).
+tab's sole device pane, `--pane` to disambiguate).
 
 ### Devices
 
@@ -1553,8 +1560,8 @@ the CLI does, having no admission to name.
 
 Every input verb is session-scoped and pane-targeted: the paneId is
 authorized per request through `PaneCoordinator.authorize`, so a session
-reaches only its own panes and a foreign paneId is a hard reject
-indistinguishable from an unknown one.
+reaches its cohort's panes (its own, for a pane with no cohort) and a
+foreign paneId is a hard reject indistinguishable from an unknown one.
 
 Three verbs are live streams of contact events driven by the GUI
 (`touch`, `multitouch`, `edgeTouch`). `key` sends discrete key-down and
@@ -2994,13 +3001,13 @@ and creates the pane, then `pane.subscribe(paneId)` starts the
   **Shut Down All & Quit**.
 - **CLI scope:** the `DEVICETERM_SESSION` env var inside a terminal
   pane's shell scopes `deviceterm` commands to that pane's session.
-  `deviceterm panes list` shows the calling
-  session's own panes; there is no daemon-wide pane view over the CLI, because
-  panes are owner-scoped: `PaneCoordinator.authorize` admits a `.session`
-  principal only to panes whose `Record.sessionId` matches (the validated GUI
-  peer alone spans sessions), and a foreign paneId is indistinguishable from an
-  unknown one (both `error.not_found`), so a leaked UUID names nothing
-  reachable.
+  `deviceterm panes list` shows the calling tab's panes; there is no
+  daemon-wide pane view over the CLI, because panes are cohort-scoped:
+  `PaneCoordinator.authorize` admits a `.session` principal only to a pane
+  whose cohort membership contains it (or, for a pane with no cohort, whose
+  `Record.sessionId` matches; the validated GUI peer alone spans tabs), and a
+  foreign paneId is indistinguishable from an unknown one
+  (both `error.not_found`), so a leaked UUID names nothing reachable.
 - **Cross-tab attach: explicit is refused, shim relink moves.**
   `deviceterm device attach <ref>` naming a device already attached
   elsewhere is rejected rather than relinked, and the GUI's pane drag

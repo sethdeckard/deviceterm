@@ -2,8 +2,8 @@
 //
 /// One entry of the bare-array `panes.list` result. Mirrors
 /// `PaneMethods.PanesListEntry` (the daemon's encoder shape). The CLI
-/// resolves a target pane through this (default = the session's sole
-/// sim pane, `--pane <ref>` to disambiguate).
+/// resolves a target pane through this (default = the tab's sole
+/// device pane, `--pane <ref>` to disambiguate).
 ///
 /// `shortId` + `name` are the three-layer identifier model that rides
 /// alongside the always-present `paneId` (UUID string). Both are

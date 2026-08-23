@@ -38,10 +38,10 @@ extension HelpCatalog {
         HelpTopic(
             "panes",
             .command(.devices),
-            summary: "List the device panes your session owns",
+            summary: "List the device panes in your tab",
             detail: """
               panes list
-                  List the current session's device panes.
+                  List the calling tab's device panes.
                   Columns: <paneId>  <udid>  <state>  <family>  <type>
             """
         )

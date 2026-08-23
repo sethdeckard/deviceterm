@@ -3,13 +3,15 @@
 The Router tests cover the in-process path: the Router handles
 `Route.openAutomationTab` by creating a session with `role: .automation`,
 and the tab state records the granted role. This checklist covers the
-*end-to-end UX*: the menu item, the tab-strip marker, and the env-var
-propagation into the automation tab's shell.
+*end-to-end UX* for automation tabs and tab-scoped device panes: menu and
+tab-strip presentation, shell env propagation, sibling pane control,
+protected-tab visibility, and terminal-close promotion.
 
 Run before any release that touches `MainMenu`, `TabStripViewController`,
 `Route.openAutomationTab` or its Router handler, `IntentDispatcher`,
-or the daemon's
-`session.create` handler.
+the daemon's `session.create` handler, the Router's cohort machinery,
+`PaneCoordinator`'s cohort authority, or the daemon's `session.setCohort`
+handler.
 
 ## Preconditions
 
@@ -104,6 +106,22 @@ accepted, an ad-hoc re-sign rejected) is covered by
 
 ---
 
+## 5. Tab-scoped device panes
+
+The daemon scopes device-pane control to the tab through a session cohort
+the GUI keeps reconciled with the tab's terminals. Needs one bootable
+Simulator.
+
+| # | Action | Expected |
+|---|--------|----------|
+| 5.1 | Split a plain tab twice (`deviceterm pane open --terminal`, twice), then in the **last** terminal run `xcrun simctl boot <udid>` | The sim pane mounts in this tab. |
+| 5.2 | Still in that last terminal: `deviceterm tap 0.5 0.5` | Lands. The booting terminal drives the sim even though it is not the tab's primary terminal (attribution reads the primary; authority reads membership). |
+| 5.3 | From a different terminal in the same tab: `deviceterm panes list`, then the same `tap` | The pane is listed and the tap lands: siblings drive the tab's panes. |
+| 5.4 | `deviceterm tab set-protected true`, then from a non-primary terminal: `deviceterm devices list` | The tab's sim shows as attached. Protection hides the tab from other sessions, not from its own terminals. |
+| 5.5 | Exit the shell in the terminal that booted the sim (closing that terminal pane) | The sim pane stays mounted and rendering, and the surviving terminals still drive it: the close promoted the pane to them. |
+
+---
+
 ## Pass criteria
 
 - §1: menu item present, opens a tab, wand icon visible only on the
@@ -120,3 +138,6 @@ accepted, an ad-hoc re-sign rejected) is covered by
   once the tab holds a second terminal; an Automation Tab does all of it.
 - §4: automation-tab menu survives quit/relaunch and supports
   multiple concurrent automation tabs.
+- §5: siblings list and drive the tab's sim, protection doesn't hide a
+  tab's own device from its own terminals, and closing the booting
+  terminal leaves the pane with the survivors.

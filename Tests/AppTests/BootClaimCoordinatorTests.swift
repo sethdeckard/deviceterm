@@ -269,6 +269,107 @@ func relayDeliveryAfterSessionCloseKeepsTheClosePolicy() async {
 
 @MainActor
 @Test
+func promotedCloseRehomesAPendingClaimToTheSuccessor() async {
+    let fake = FakeDaemonClient()
+    fake.reconcileBootClaimStatus = .pending
+    let leaving = UUID().uuidString
+    let successor = UUID().uuidString
+    let coordinator = BootClaimCoordinator(daemon: fake, didPromote: { _, _, _ in })
+    coordinator.accept(sessionId: leaving, claim: shimClaim())
+    coordinator.sessionClosed(leaving, outcome: .promote(successor: successor))
+    try? await Task.sleep(nanoseconds: 30_000_000)
+
+    // The claim stays attached, re-homed on the successor, matching the
+    // rewrite the daemon applies to its own copy of the claim.
+    let sent = fake.reconcileBootClaimCalls.last
+    #expect(sent?.sessionId == successor)
+    #expect(sent?.claim.disposition == .attach)
+}
+
+@MainActor
+@Test
+func relayDeliveryAfterPromotedCloseFollowsTheSuccessor() async {
+    let fake = FakeDaemonClient()
+    fake.reconcileBootClaimStatus = .pending
+    let leaving = UUID().uuidString
+    let successor = UUID().uuidString
+    let coordinator = BootClaimCoordinator(daemon: fake, didPromote: { _, _, _ in })
+
+    coordinator.sessionClosed(leaving, outcome: .promote(successor: successor))
+    coordinator.accept(sessionId: leaving, claim: shimClaim())
+    try? await Task.sleep(nanoseconds: 30_000_000)
+
+    let sent = fake.reconcileBootClaimCalls.last
+    #expect(sent?.sessionId == successor)
+    #expect(sent?.claim.disposition == .attach)
+}
+
+@MainActor
+@Test
+func retriedInsertAfterPromotedCloseKeepsTheSuccessor() async {
+    let fake = FakeDaemonClient()
+    fake.reconcileBootClaimStatus = .pending
+    let leaving = UUID().uuidString
+    let successor = UUID().uuidString
+    let coordinator = BootClaimCoordinator(daemon: fake, didPromote: { _, _, _ in })
+    let claim = shimClaim()
+
+    coordinator.sessionClosed(leaving, outcome: .promote(successor: successor))
+    coordinator.accept(sessionId: leaving, claim: claim)
+    // A relay redelivery re-inserts the same attempt naming the closed
+    // session; the successor must survive it.
+    coordinator.accept(sessionId: leaving, claim: claim)
+    try? await Task.sleep(nanoseconds: 30_000_000)
+
+    let sent = fake.reconcileBootClaimCalls.last
+    #expect(sent?.sessionId == successor)
+    #expect(sent?.claim.disposition == .attach)
+}
+
+@MainActor
+@Test
+func promotionChainResolvesToTheFinalSuccessor() async {
+    let fake = FakeDaemonClient()
+    fake.reconcileBootClaimStatus = .pending
+    let first = UUID().uuidString
+    let second = UUID().uuidString
+    let third = UUID().uuidString
+    let coordinator = BootClaimCoordinator(daemon: fake, didPromote: { _, _, _ in })
+
+    // A handed to B, B later handed to C: a claim naming A must reach C.
+    coordinator.sessionClosed(first, outcome: .promote(successor: second))
+    coordinator.sessionClosed(second, outcome: .promote(successor: third))
+    coordinator.accept(sessionId: first, claim: shimClaim())
+    try? await Task.sleep(nanoseconds: 30_000_000)
+
+    let sent = fake.reconcileBootClaimCalls.last
+    #expect(sent?.sessionId == third)
+    #expect(sent?.claim.disposition == .attach)
+}
+
+@MainActor
+@Test
+func terminalLinkStopsThePromotionChain() async {
+    let fake = FakeDaemonClient()
+    fake.reconcileBootClaimStatus = .pending
+    let first = UUID().uuidString
+    let second = UUID().uuidString
+    let coordinator = BootClaimCoordinator(daemon: fake, didPromote: { _, _, _ in })
+
+    // A handed to B, but B's whole tab then shut down: A's claim takes
+    // B's terminal verdict rather than resurrecting the simulator.
+    coordinator.sessionClosed(first, outcome: .promote(successor: second))
+    coordinator.sessionClosed(second, outcome: .shutdown)
+    coordinator.accept(sessionId: first, claim: shimClaim())
+    try? await Task.sleep(nanoseconds: 30_000_000)
+
+    let sent = fake.reconcileBootClaimCalls.last
+    #expect(sent?.sessionId == nil)
+    #expect(sent?.claim.disposition == .shutdown)
+}
+
+@MainActor
+@Test
 func relayDeadlineDoesNotRestartOnMainActorDelivery() async {
     let fake = FakeDaemonClient()
     let clock = BootClaimCoordinatorClock(now: 2_000_000)

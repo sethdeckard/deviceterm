@@ -18,9 +18,10 @@
 // that on every scoped request. See `ProvenanceMatcher`.
 // Pane-targeted calls are **not** trusted by paneId alone: each is
 // authorized against the caller's identity by `PaneCoordinator.authorize`:
-// a session reaches only its own panes, the validated GUI peer spans
-// sessions, and a foreign paneId is indistinguishable from an unknown one
-// (both `notFound`). See `PaneAccessPrincipal`.
+// a session reaches its cohort's panes (its own, for a pane with no
+// cohort), the validated GUI peer spans sessions, and a foreign paneId is
+// indistinguishable from an unknown one (both `notFound`). See
+// `PaneAccessPrincipal`.
 //
 // Four values:
 //   - `.daemonWide`: useful regardless of context. Includes
@@ -30,11 +31,11 @@
 //     validate `(sessionId, cap)` directly (`panes.list`,
 //     `device.attach`, `session.close`, `shim.event`); the pane-
 //     targeted ones (`pane.input.*`, `pane.ax.*`, `pane.close`,
-//     `pane.subscribe`) are authorized by the caller's session
-//     ownership of the pane (`PaneCoordinator.authorize`), not by the
+//     `pane.subscribe`) are authorized by the caller's cohort
+//     membership on the pane (`PaneCoordinator.authorize`), not by the
 //     paneId alone. The tag exists so `daemon.capabilities` correctly
 //     filters the no-session subset: calling these without env creds
-//     is pointless (no owned pane to reach), so they don't appear in
+//     is pointless (no reachable pane), so they don't appear in
 //     an out-of-tab caller's `allowedMethods`.
 //   - `.automationTab`: requires valid creds AND a **live
 //     automation grant** for the session, checked against the
@@ -63,8 +64,8 @@
 //     `app.commandResult`) carries this scope; the dispatcher admits a
 //     validated XPC peer and rejects everyone else.
 //
-// Per-pane authorization (a session drives only its own panes; the
-// validated GUI peer spans sessions) is enforced by
+// Per-pane authorization (a session drives its cohort's panes, or its
+// own unbound ones; the validated GUI peer spans sessions) is enforced by
 // `PaneCoordinator.authorize`, orthogonally to scope. Scope decides
 // "is this method meaningful from your context"; authorization decides
 // "may you touch *this* pane".
