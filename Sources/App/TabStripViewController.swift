@@ -143,32 +143,6 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         )
     }
 
-    /// SF Symbol prepended to automation-role tabs in the strip. The
-    /// marker signals the automation role was minted by a human menu
-    /// action, so the affordance is visible without being loud. Returns
-    /// nil for `.agent` (the default).
-    private static func automationMarker(role: SessionRole) -> NSImageView? {
-        guard role == .automation else { return nil }
-        // `wand.and.rays` is the platform's own automation vocabulary. A
-        // key would read as "this opens something", which is backwards:
-        // an automation grant is exactly what a protected tab refuses.
-        // Subtle accent tint keeps it from competing with the title.
-        let image = NSImage(
-            systemSymbolName: "wand.and.rays",
-            accessibilityDescription: "Automation tab"
-        )
-        let view = NSImageView()
-        view.image = image
-        view.contentTintColor = .controlAccentColor
-        view.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 12,
-            weight: .regular
-        )
-        view.setContentHuggingPriority(.required, for: .horizontal)
-        view.toolTip = "Automation tab (opened from the menu)"
-        return view
-    }
-
     override func loadView() {
         // Root reports mouseDownCanMoveWindow = true so the empty area
         // beside the strip (with one tab, the strip stays at intrinsic
@@ -1166,13 +1140,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // Reserve space always but fade alpha 0 → 1 on hover so
             // entering the cell doesn't reflow the layout.
 
-            var otherViews: [NSView] = [title]
-            if let marker = Self.automationMarker(role: tab.role) {
-                // Marker sits between the close and the title.
-                otherViews.insert(marker, at: 0)
-            }
             let cell = TabPillCell(frame: .zero)
-            cell.install(close: close, otherViews: otherViews)
+            cell.install(close: close, title: title)
+            applyMarkers(to: cell, tab: tab)
             cell.onHoverChange = { [weak self] in self?.applySeparators() }
             // The whole pill is the drag image.
             title.snapshotSource = cell
@@ -1275,6 +1245,22 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         }
     }
 
+    /// Drive a pill's markers from the tab's current state.
+    ///
+    /// Called from the rebuild AND from the same-tabs path, because protection
+    /// flips while the tab-ID list is unchanged and only the same-tabs path
+    /// sees that. Automation rides the same call so marker selection has one
+    /// home rather than two; a tab's role is a `let`, so the entry it
+    /// contributes is stable and `setMarkers` skips the remount.
+    private func applyMarkers(to cell: TabPillCell, tab: TabState) {
+        cell.setMarkers(
+            TabMarkerDecision.markers(
+                role: tab.role,
+                isEffectivelyProtected: tab.isEffectivelyProtected
+            )
+        )
+    }
+
     private func updateStripLabels(for tabs: [TabState]) {
         for (idx, tab) in tabs.enumerated() {
             // Look up by TabID rather than array index: same reasoning
@@ -1283,6 +1269,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 let button = cell.titleButton,
                 let tabContent = tabContentByID[tab.id] else { continue }
             button.title = tabContent.displayTitle
+            applyMarkers(to: cell, tab: tab)
             Self.applyAccessibilityIdentifiers(
                 pill: button, close: cell.closeButton, shortId: tab.primaryTerminal.shortId
             )
@@ -1780,7 +1767,7 @@ final class NewTabButton: NSControl {
 ///     window's ghostty bg color (5% track → 10% hover → 16% selected),
 ///     giving clean, predictable contrast that NSVisualEffectView
 ///     materials would warm with dark-mode tints
-///   - lays out `[✕, marker?, title]` as a horizontal NSStackView, with
+///   - lays out `[✕, marker…, title]` as a horizontal NSStackView, with
 ///     the close ✕ leftmost and the title filling the rest of the width
 ///   - reserves space for the close button always (alpha-fades it on
 ///     hover rather than `isHidden`-toggling) so the layout doesn't
@@ -1805,7 +1792,7 @@ private final class TabPillCell: NSView {
     }
 
     /// Title button accessor: always the LAST arranged subview after
-    /// `install` (close is leftmost; an optional marker sits between).
+    /// `install` (close is leftmost; any markers sit between).
     /// Used by the strip VC's TabID-keyed lookup.
     var titleButton: NSButton? {
         stack.arrangedSubviews.last as? NSButton
@@ -1814,6 +1801,11 @@ private final class TabPillCell: NSView {
     private let background = NSView()
     private let stack = NSStackView()
     private let trailingSeparator = TabSeparatorView()
+    /// The markers currently mounted, in stack order, so `setMarkers` can
+    /// return early on an unchanged list. The same-tabs render path calls it
+    /// on every pass, and OSC title updates make those continuous.
+    private var installedMarkers: [TabPillMarker] = []
+    private var markerViews: [NSView] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1867,14 +1859,76 @@ private final class TabPillCell: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-    /// Mount the subviews. The caller passes [marker?, title]; the close
-    /// button is added leftmost separately so it has a stable position.
-    func install(close: NSButton, otherViews: [NSView]) {
+    /// The image view for one marker. Both are 12pt and accent-tinted, so
+    /// they read at a glance without competing with the title.
+    ///
+    /// `wand.and.rays` is the platform's own automation vocabulary. A key
+    /// would read as "this opens something", which is backwards: an
+    /// automation grant is exactly what a protected tab refuses.
+    ///
+    /// Neither carries an accessibility *identifier*. Consumers collect the
+    /// strip's named controls by the `deviceterm.tab.` prefix and count the
+    /// result as pills, so publishing one here would inflate that count. The
+    /// image carries a description instead, which names the marker without
+    /// putting it in that set.
+    private static func markerView(for marker: TabPillMarker) -> NSImageView {
+        let symbolName: String
+        let describedAs: String
+        let hoverText: String
+        switch marker {
+        case .automation:
+            symbolName = "wand.and.rays"
+            describedAs = "Automation tab"
+            hoverText = "Automation tab (opened from the menu)"
+
+        case .protection:
+            symbolName = "lock.fill"
+            describedAs = "Protected tab"
+            hoverText = "Protected tab (hidden from other sessions)"
+        }
+        let view = NSImageView()
+        view.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: describedAs
+        )
+        view.contentTintColor = .controlAccentColor
+        view.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 12,
+            weight: .regular
+        )
+        view.setContentHuggingPriority(.required, for: .horizontal)
+        view.toolTip = hoverText
+        return view
+    }
+
+    /// Mount the pill's fixed subviews: the close ✕ leftmost so it has a
+    /// stable position, the title filling the rest. Markers go on afterwards
+    /// through `setMarkers`, which inserts them between the two.
+    func install(close: NSButton, title: NSView) {
         for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+        installedMarkers = []
+        markerViews = []
         closeButton = close
         close.alphaValue = 0
         stack.addArrangedSubview(close)
-        for view in otherViews { stack.addArrangedSubview(view) }
+        stack.addArrangedSubview(title)
+    }
+
+    /// Reconcile the pill's markers against `markers`, in that order, between
+    /// the close ✕ and the title. Idempotent, so the caller can hand it the
+    /// tab's current state on every render pass. Runs after `install`, which
+    /// is what puts the two anchors it inserts between into the stack.
+    func setMarkers(_ markers: [TabPillMarker]) {
+        guard markers != installedMarkers else { return }
+        for view in markerViews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        markerViews = markers.map { Self.markerView(for: $0) }
+        for (offset, view) in markerViews.enumerated() {
+            stack.insertArrangedSubview(view, at: 1 + offset)
+        }
+        installedMarkers = markers
     }
 
     override func updateTrackingAreas() {

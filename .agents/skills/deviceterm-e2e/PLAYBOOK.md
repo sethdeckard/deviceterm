@@ -258,10 +258,12 @@ The pill roles are worth knowing for assertions other than counting:
 pill including the selected one, so a `focused` predicate silently matches
 nothing.
 
-**Your own pill carries an automation badge.** Every automation-role tab's pill
+**Pills carry markers, and your own has one.** An automation-role tab's pill
 shows a `wand.and.rays` marker that agent-role tabs don't have, and you run from
-one. The badge publishes no `deviceterm.tab.` identifier, so counting is
-unaffected, but a pixel comparison of the strip will show it.
+one. A tab that is protected right now shows `lock.fill`. Both appear together
+on a protected automation tab, wand first, between the pill's ✕ and its title.
+Neither publishes a `deviceterm.tab.` identifier, so counting is unaffected, but
+a pixel comparison of the strip will show them.
 
 **Don't cross-check a pill's `title` against the CLI's `displayTitle`.** They
 are not the same value and are not read at the same moment, so they disagree for

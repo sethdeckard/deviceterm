@@ -28,7 +28,7 @@ handler.
 | 1.1 | Shell menu → look for "Open Automation Tab" | Item present with the ⌘⇧T shortcut (⌘T stays the muscle-memory default for a plain tab, so an automation tab isn't opened by accident). |
 | 1.2 | Click it | A new tab opens with a live shell, as with regular New Tab. |
 | 1.3 | Inspect the new tab's title in the tab strip | A small accent-colored wand icon (SF Symbol `wand.and.rays`, 12pt) appears immediately to the left of the title. |
-| 1.4 | Mouse-hover the icon | Tooltip reads "Automation tab (opened from the menu)" (the text lives in `TabStripViewController.automationMarker`). |
+| 1.4 | Mouse-hover the icon | Tooltip reads "Automation tab (opened from the menu)" (the text lives in `TabPillCell.markerView`). |
 | 1.5 | Open a second regular tab (⌘T) | The new tab has NO wand icon: only automation tabs are marked. |
 
 ## 2. Automation role visible to the CLI
@@ -122,6 +122,22 @@ Simulator.
 
 ---
 
+## 6. Tab-strip markers
+
+Both markers are tab chrome with no CLI surface, so nothing but the eye
+checks them.
+
+| # | Action | Expected |
+|---|--------|----------|
+| 6.1 | Open two plain tabs. In the first, run `deviceterm tab set-protected true` | A small accent-colored padlock (SF Symbol `lock.fill`, 12pt) appears immediately to the left of that tab's title. Nothing was closed, opened, or reordered, which is the render path a protection toggle actually takes. |
+| 6.2 | Mouse-hover the padlock | Tooltip reads "Protected tab (hidden from other sessions)" (the text lives in `TabPillCell.markerView`). |
+| 6.3 | Look at the second tab | No padlock: only protected tabs are marked. |
+| 6.4 | `deviceterm tab set-protected false` in the first tab | Prints `ok tab=… protected=false`, and the padlock goes. A `pending … (unconfirmed)` line instead means the tab is still hidden, and the padlock stays on until reconciliation confirms the unprotect: fail-closed, not a stuck marker. |
+| 6.5 | Open an Automation Tab (⇧⌘T), then run `deviceterm tab set-protected true` in it | Both markers show: wand leftmost, then padlock, then the title. |
+| 6.6 | Right-click that tab and choose "Unprotect Tab" | Once the unprotect is confirmed the padlock goes and the wand keeps its position. The menu path is fail-closed the same way: a rejection raises an alert and the padlock stays on. |
+
+---
+
 ## Pass criteria
 
 - §1: menu item present, opens a tab, wand icon visible only on the
@@ -141,3 +157,6 @@ Simulator.
 - §5: siblings list and drive the tab's sim, protection doesn't hide a
   tab's own device from its own terminals, and closing the booting
   terminal leaves the pane with the survivors.
+- §6: the padlock follows whether the tab is hidden right now, without
+  the tab being closed or reordered, and on an automation tab the wand
+  stays leftmost.

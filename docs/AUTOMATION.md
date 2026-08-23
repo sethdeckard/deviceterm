@@ -317,6 +317,12 @@ Only a tab the caller owns a terminal in can be flipped. The receipt's
 `committed` field distinguishes a confirmed change from one the GUI is still
 converging on; see [set protection](INTEGRATION.md#set-protection).
 
+A protected tab's pill carries a lock in the tab strip, beside the wand if the
+tab is also an automation tab. The lock follows what is hidden right now rather
+than what the daemon has confirmed: it appears the moment you protect a tab,
+and it stays on through an unprotect the daemon hasn't confirmed, so it can
+disagree with the receipt's `committed` field while a change converges.
+
 ## Wait on Events
 
 ### Choose Polling or Events
