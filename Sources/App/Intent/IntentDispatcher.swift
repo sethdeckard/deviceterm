@@ -99,7 +99,8 @@ final class IntentDispatcher {
     /// both what `.current` means and which tabs the caller may reach.
     /// There is deliberately no default: a source layer must name
     /// `.inProcess` (menu / tab strip, full authority) or
-    /// `.external(sessionID:)` (the CLI back-channel, restricted), so no
+    /// `.external(sessionID:hasAutomationGrant:)` (the CLI
+    /// back-channel, restricted), so no
     /// path can silently obtain unrestricted resolution by omitting an
     /// argument.
     func dispatch(
@@ -136,7 +137,27 @@ final class IntentDispatcher {
             if windowHoldsForeignTab(id, origin: origin) {
                 throw IntentError.notFound(kind: "window", ref: "close")
             }
-            router.dispatch(.closeWindow(id, mode: mode))
+            // Closing a window closes every tab in it, so it needs what
+            // closing each of those tabs would need. The guard above has
+            // already made a window holding an invisible tab opaque, so
+            // everything reaching this is a tab the caller can name and
+            // a plain refusal discloses nothing new.
+            let held = workspace.window(id: id)?.tabs.tabs ?? []
+            for tab in held {
+                try requireAuthority(
+                    "window close",
+                    over: tab,
+                    requirement: .soleTerminal,
+                    origin: origin
+                )
+            }
+            router.dispatch(
+                .closeWindow(
+                    id,
+                    mode: mode,
+                    authorizedTerminals: authorizedTerminals(held, origin: origin)
+                )
+            )
             return .ok
 
         case let .focusWindow(ref):
@@ -188,17 +209,37 @@ final class IntentDispatcher {
 
         case let .closeTab(ref, mode):
             let resolved = try resolver.resolveTab(ref)
+            // Closing your own single-terminal tab is `exit` by another
+            // name, so it stays free. A split tab holds other sessions
+            // and closing it ends their work, which is the same
+            // cross-session destruction as closing a foreign tab.
+            try requireAuthority(
+                "tab close",
+                over: resolved.tab,
+                requirement: .soleTerminal,
+                origin: origin
+            )
             router.dispatch(
                 .closeTab(
                 resolved.windowID,
                 resolved.tabID,
-                mode: mode
+                mode: mode,
+                authorizedTerminals: authorizedTerminals(
+                [resolved.tab],
+                origin: origin
+            )
             )
                 )
             return .ok
 
         case let .renameTab(ref, name):
             let resolved = try resolver.resolveTab(ref)
+            try requireAuthority(
+                "tab rename",
+                over: resolved.tab,
+                requirement: .ownership,
+                origin: origin
+            )
             guard let delegate = actionDelegate else {
                 throw IntentError.internalError(
                     "no IntentActionDelegate wired for renameTab"
@@ -298,6 +339,14 @@ final class IntentDispatcher {
             // is the intended `tab open` shape, not `pane open`.
             if let ref = tabRef {
                 let resolved = try resolver.resolveTab(ref)
+                // With `--tab` omitted the resolver returns the caller's
+                // own tab, so only the named form can land outside it.
+                try requireAuthority(
+                    "pane open",
+                    over: resolved.tab,
+                    requirement: .ownership,
+                    origin: origin
+                )
                 router.dispatch(
                     .openTerminalPane(tab: resolved.tabID, cwd: cwd, cmd: cmd)
                 )
@@ -315,6 +364,23 @@ final class IntentDispatcher {
 
         case let .closePane(ref, mode):
             let resolved = try resolver.resolveSimPane(ref)
+            // Gated on the host tab, and that is the whole of it. The
+            // daemon's pane-ownership check binds a session calling
+            // `pane.closeById` directly, but the Router reaches that
+            // method as the validated GUI, a principal that spans
+            // sessions by design, so nothing downstream re-checks who
+            // owns this pane: a co-tenant of the tab can close a pane
+            // it can't drive. A pane whose host tab vanished between
+            // resolution and here is a refusal, not a bypass.
+            guard let host = hostTab(of: resolved) else {
+                throw IntentError.notFound(kind: "pane", ref: "close")
+            }
+            try requireAuthority(
+                "pane close",
+                over: host,
+                requirement: .ownership,
+                origin: origin
+            )
             router.dispatch(
                 .detachSimPane(
                 tab: resolved.tabID,
@@ -538,7 +604,7 @@ final class IntentDispatcher {
             case .inProcess:
                 break
 
-            case let .external(sessionID):
+            case let .external(sessionID, _):
                 let isOwner = sessionID.map { sid in
                     resolved.tab.terminals.contains { $0.sessionId == sid }
                 } ?? false
@@ -739,7 +805,7 @@ final class IntentDispatcher {
     /// the caller's index lands. In-process indices pass through
     /// unchanged; an index at/after the visible end maps to the raw end.
     private func rawTabIndex(visibleIndex: Int, in windowID: WindowID, origin: IntentOrigin) -> Int {
-        guard case let .external(sessionID) = origin,
+        guard case let .external(sessionID, _) = origin,
             let window = workspace.window(id: windowID) else { return visibleIndex }
         // Clamp to the front like `TabListViewModel.move` does, so a
         // negative visible index lands at position 0 rather than appending.
@@ -755,6 +821,63 @@ final class IntentDispatcher {
         return window.tabs.tabs.count
     }
 
+    /// A resolved tab reduced to what `WorkspaceAuthorityDecision`
+    /// needs. Ownership is per *session*, not per tab: a split tab's
+    /// terminals each carry their own session, so the caller owns the
+    /// tab only when one of them is its own.
+    private func authorityTarget(
+        for tab: TabState,
+        origin: IntentOrigin
+    ) -> WorkspaceAuthorityTarget {
+        let owns = origin.sessionID.map { sessionID in
+            tab.terminals.contains { $0.sessionId == sessionID }
+        } ?? false
+        return WorkspaceAuthorityTarget(
+            callerOwnsIt: owns,
+            terminalCount: tab.terminals.count
+        )
+    }
+
+    /// Refuse unless the caller may act on `tab`. Every cross-tab verb
+    /// calls this **after** resolution, so a foreign protected tab has
+    /// already failed as `notFound` and can't be distinguished here.
+    private func requireAuthority(
+        _ verb: String,
+        over tab: TabState,
+        requirement: WorkspaceAuthorityRequirement,
+        origin: IntentOrigin
+    ) throws {
+        let decision = WorkspaceAuthorityDecision.decide(
+            origin: origin,
+            requirement: requirement,
+            target: authorityTarget(for: tab, origin: origin)
+        )
+        guard decision == .allowed else {
+            throw IntentError.automationRequired(verb: verb)
+        }
+    }
+
+    /// The membership an authorization was computed over, handed to the
+    /// Router so it can confirm nothing moved before the close runs.
+    /// Nil when authority doesn't depend on membership: the human at the
+    /// keyboard, or a caller holding a live grant. Only an ungranted
+    /// external caller is cleared *because* of which sessions the tabs
+    /// hold, so only it needs the re-check.
+    private func authorizedTerminals(
+        _ tabs: [TabState],
+        origin: IntentOrigin
+    ) -> Set<String>? {
+        guard case let .external(_, hasAutomationGrant) = origin,
+            !hasAutomationGrant else { return nil }
+        return Set(tabs.flatMap { $0.terminals.map(\.sessionId) })
+    }
+
+    /// The tab hosting a resolved pane, for the pane verbs that gate on
+    /// their host tab's ownership.
+    private func hostTab(of pane: ResolvedPane) -> TabState? {
+        workspace.window(id: pane.windowID)?.tabs.tab(id: pane.tabID)
+    }
+
     /// Whether `windowID` hosts any tab the external caller can't see.
     /// Always false for `.inProcess` (the human owns the workspace).
     ///
@@ -766,7 +889,7 @@ final class IntentDispatcher {
     /// oracle-free fix (partial close of only the caller's tabs) is out
     /// of scope for the rare cross-session co-hosting case.)
     private func windowHoldsForeignTab(_ windowID: WindowID, origin: IntentOrigin) -> Bool {
-        guard case let .external(sessionID) = origin,
+        guard case let .external(sessionID, _) = origin,
             let window = workspace.window(id: windowID) else { return false }
         return window.tabs.tabs.contains {
             !IntentResolver.externallyAccessible($0, callerSessionID: sessionID)

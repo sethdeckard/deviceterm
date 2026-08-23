@@ -442,97 +442,113 @@ public enum DaemonMethods {
             RPCMethod.tabOpen.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabOpen,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.tabClose.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .tabClose,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.tabRename.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .tabRename,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.tabSelect.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabSelect,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.tabInfo.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .tabInfo,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.tabMove.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabMove,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.paneOpenTerminal.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .paneOpenTerminal,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.paneClose.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .paneClose,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.paneRename.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .paneRename,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.paneInfo.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .paneInfo,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.paneMove.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .paneMove,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.paneAttach.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .paneAttach,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.windowOpen.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .windowOpen,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.windowClose.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .windowClose,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.windowFocus.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .windowFocus,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.windowsList.rawValue: .daemonWide(
                 AppCommandMethods.publishVerb(
                     kind: .windowsList,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
 
@@ -544,13 +560,15 @@ public enum DaemonMethods {
             RPCMethod.tabSendInput.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabSendInput,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             RPCMethod.tabCapture.rawValue: .automationTab(
                 AppCommandMethods.publishVerb(
                     kind: .tabCapture,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             ),
             // Session-scoped: owner-only enforcement happens GUI-side
@@ -560,7 +578,8 @@ public enum DaemonMethods {
             RPCMethod.tabSetProtected.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .tabSetProtected,
-                    coordinator: appCommandCoordinator
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
                 )
             )
         ]

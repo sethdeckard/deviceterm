@@ -203,11 +203,12 @@ protected tab.
 | `dump-config --json` | Configuration report | Local | Configuration file parsed | Stable-additive |
 | `tap`, `swipe`, `app-switcher`, `long-press`, `pinch` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `button`, `key`, `text`, `rotate`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
-| `tab close`, `tab rename` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `tab rename` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
+| `tab close` with `--json` | Workspace receipt | Session and sole-terminal tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab open`, `tab select`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
-| `pane open --terminal`, `pane close` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `pane open --terminal`, `pane close` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `device attach --json` | Device attachment receipt | Session | GUI accepted the attachment; rendering may still be pending | Stable-additive |
-| `window close` with `--json` | Workspace receipt | Session | GUI returned success for the requested mutation | Stable-additive |
+| `window close` with `--json` | Workspace receipt | Session and sole-terminal ownership of every tab in the window, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `window open`, `window focus` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab set-protected --json` | Protection receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
 | `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
@@ -901,6 +902,20 @@ Seven commands require a live automation grant, checked for each request:
 `tab send-input`, and `tab capture`. A caller without one receives
 `error.scope_violation`, including a caller whose environment still says its
 role is `"automation"`.
+
+Five more commands are authorized per target rather than by scope:
+`tab close`, `window close`, `tab rename`, `pane open --terminal`, and
+`pane close`. They stay session-scoped, so `daemon.capabilities` keeps
+advertising them; the GUI checks the resolved target and refuses there. A
+refusal arrives as daemon error `-32011`, the same code the scope check
+returns, with a message beginning `intent.automationRequired`.
+
+Two requirements, and the difference matters. `tab rename`,
+`pane open --terminal`, and `pane close` need **ownership**: a terminal of
+yours in the target tab. `tab close` and `window close` need **sole-terminal
+ownership**, meaning you hold the tab's only terminal, and for a window
+every tab in it must satisfy that. A live automation grant satisfies either
+one.
 
 Only the GUI issues a grant, and the CLI cannot grant authority to itself.
 The grant lifecycle is described in

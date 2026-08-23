@@ -127,17 +127,34 @@ public enum AppCommandMethods {
     /// `RPCConnection.dispatch` binds before invoking the handler.
     /// `nil` for daemon-wide / unauthenticated callers (e.g.
     /// `windows.list` run from a stock terminal).
+    ///
+    /// `automationGrant` is the registry's store, the same one the scope
+    /// check and capability advertising consult. It is read here rather
+    /// than carried on a second task-local beside the session id: that
+    /// one is bound at six sites across the two transports, and a
+    /// seventh binding missed on any of them would silently refuse a
+    /// real automation caller on whichever path it was missed. Nil store
+    /// or an unparseable session id means no grant, so a registry built
+    /// without automation fails closed.
     public static func publishVerb(
         kind: AppCommandKind,
-        coordinator: AppCommandCoordinator
+        coordinator: AppCommandCoordinator,
+        automationGrant: AutomationGrantStore?
     ) -> MethodRegistry.Handler {
         { paramsJSON in
             let originatingSessionId =
                 SessionDispatchContext.originatingSessionId
+            let sessionUUID = originatingSessionId
+                .flatMap { UUID(uuidString: $0) }
+            var hasGrant = false
+            if let automationGrant, let sessionUUID {
+                hasGrant = await automationGrant.hasGrant(sessionUUID)
+            }
             let outcome = await coordinator.publishAndAwait(
                 kind: kind,
                 originatingSessionId: originatingSessionId,
-                params: paramsJSON
+                params: paramsJSON,
+                originAutomationGrant: hasGrant
             )
             switch outcome {
             case .ok:
@@ -147,6 +164,17 @@ public enum AppCommandMethods {
                 return payload
 
             case let .error(code, message):
+                // One number for "this needs a grant", whichever layer
+                // refused. The dispatcher's own scope check already
+                // answers `scopeViolationCode` for the flat verbs; a
+                // GUI-side per-target refusal would otherwise arrive as
+                // the generic -32099 with the reason buried in a
+                // message string, leaving agents to substring-match to
+                // tell two forms of the same answer apart. Every other
+                // intent error keeps riding -32099 unchanged.
+                if code == IntentErrorCode.automationRequired {
+                    throw RPCMethodError.scopeViolation("\(code): \(message)")
+                }
                 throw RPCMethodError(code: -32_099, message: "\(code): \(message)")
             }
         }

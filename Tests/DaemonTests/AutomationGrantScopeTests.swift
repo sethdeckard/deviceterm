@@ -28,7 +28,11 @@ private func automationServer(
             RPCMethod.automationRevoke.rawValue:
                 .validatedGUI(AutomationMethods.revoke(store: grants)),
             RPCMethod.tabCapture.rawValue:
-                .automationTab(AppCommandMethods.publishVerb(kind: .tabCapture, coordinator: coordinator))
+                .automationTab(AppCommandMethods.publishVerb(
+                    kind: .tabCapture,
+                    coordinator: coordinator,
+                    automationGrant: grants
+                ))
         ],
         provenance: TestPeerIdentity.xpcProvenance(manager),
         automationGrant: grants

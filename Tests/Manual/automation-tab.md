@@ -1,13 +1,15 @@
 # Automation Tab Manual Checklist
 
-The Router tests cover the in-process path:
-`Route.openAutomationTab` mints a session with `role: .automation`
+The Router tests cover the in-process path: the Router handles
+`Route.openAutomationTab` by creating a session with `role: .automation`,
 and the tab state records the granted role. This checklist covers the
 *end-to-end UX*: the menu item, the tab-strip marker, and the env-var
 propagation into the automation tab's shell.
 
 Run before any release that touches `MainMenu`, `TabStripViewController`,
-`Router.openAutomationTab`, or the daemon's `session.create` handler.
+`Route.openAutomationTab` or its Router handler, `IntentDispatcher`,
+or the daemon's
+`session.create` handler.
 
 ## Preconditions
 
@@ -80,6 +82,19 @@ The GUI's XPC side of the same gate (a Developer-ID-signed build
 accepted, an ad-hoc re-sign rejected) is covered by
 `launchd-xpc-coexistence.md` §4, which needs a real signed bundle.
 
+## 3b. Cross-tab reach without a grant
+
+| # | Action | Expected |
+|---|--------|----------|
+| 3b.1 | From a plain agent tab, `deviceterm tab close` with no `--tab` | Closes that tab. It's the caller's own and holds one terminal. |
+| 3b.2 | Open a second plain tab. From the first, `deviceterm tab rename --tab <second> x` | Refused, `-32011`, message names `intent.automationRequired`. |
+| 3b.3 | Split a tab with `pane open --terminal`, then from one pane run `deviceterm tab close` | Refused: the tab now holds two sessions. |
+| 3b.4 | Close the split back to one terminal, retry `deviceterm tab close` | Closes. |
+| 3b.5 | Repeat 3b.2 from an Automation Tab | Succeeds. |
+| 3b.6 | From a plain tab, `deviceterm pane open --terminal --tab <other>` | Refused, `-32011`. |
+
+---
+
 ## 4. GUI menu under stress
 
 | # | Action | Expected |
@@ -101,5 +116,7 @@ accepted, an ad-hoc re-sign rejected) is covered by
   is refused (`-32011`) from an agent tab.
 - §3a: cross-tab authority is restored after a daemon respawn, because
   the GUI reissues the grant on reconnect, and is gone after the tab closes.
+- §3b: a plain tab closes and renames only itself, and `tab close` refuses
+  once the tab holds a second terminal; an Automation Tab does all of it.
 - §4: automation-tab menu survives quit/relaunch and supports
   multiple concurrent automation tabs.

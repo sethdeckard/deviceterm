@@ -26,14 +26,18 @@ extension HelpCatalog {
 
               tab close [--tab <ref>] [--mode <detach|shutdown>]
                   Close the named tab. Default --tab is the caller's current
-                  tab. --mode controls what happens to any linked sims
+                  tab. Without a live automation grant this reaches only your
+                  own tab, and only while it holds that tab's single terminal:
+                  closing a split tab ends the other panes' sessions.
+                  --mode controls what happens to any linked sims
                   (detach leaves them booted as orphans; shutdown shuts them
                   down).
                   Example: deviceterm tab close --mode shutdown
 
               tab rename [--tab <ref>] [<name>]
                   Apply a manual title. Omit <name> to restore the automatic
-                  title (CWD / OSC / session name).
+                  title (CWD / OSC / session name). Without a live automation
+                  grant this reaches only a tab you own a terminal in.
                   Example: deviceterm tab rename "auth-feature"
 
               tab select [--tab <ref>]
@@ -132,14 +136,17 @@ extension HelpCatalog {
                   panes, splitting the tab rather than opening a new one.
                   --cwd / --cmd carry the same semantics as `tab open`: a
                   startup directory plus a single command typed into the
-                  shell after attach.
+                  shell after attach. Omitting --tab splits your own tab;
+                  naming another one needs a live automation grant.
                   Example: deviceterm pane open --terminal
                   Example: deviceterm pane open --terminal --cwd ~/work --cmd 'make test'
 
               pane close [--pane <ref>] [--mode <detach|shutdown>]
                   Detach or shut down the named sim pane. --pane accepts a
                   shortId or paneId (UUID). --pane resolves sim panes only;
-                  closing a physical-device pane is a GUI action.
+                  closing a physical-device pane is a GUI action. Without a
+                  live automation grant this reaches only panes in a tab you
+                  own a terminal in.
                   Example: deviceterm pane close --pane abc123
 
               pane info [--pane <ref>]
@@ -166,8 +173,10 @@ extension HelpCatalog {
                   window (the one holding the calling tab), not the human's
                   key window, so a stray `window close` can't reach across
                   to another window. A window that also holds a tab you
-                  can't see is refused. --mode mirrors `tab close`'s
-                  semantics for every tab the window holds.
+                  can't see is refused, as is one holding a tab you don't
+                  solely own, unless you hold a live automation grant.
+                  --mode mirrors `tab close`'s semantics for every tab the
+                  window holds.
                   Example: deviceterm window close
 
               window focus [--window <ref>]

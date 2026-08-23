@@ -2143,6 +2143,14 @@ Most verbs here are session-scoped. `windows.list` stays daemon-wide, and
 need an automation grant, because they affect workspace structure or focus
 rather than anything inside the caller's own tab.
 
+Scope is not the whole authorization story for the rest of them.
+`tab.close`, `tab.rename`, `pane.openTerminal`, `pane.close`, and
+`window.close` stay session-scoped because a caller really can invoke them
+on its own tab. The GUI then authorizes the resolved target and refuses
+anything outside the caller's own tab without a live grant.
+`daemon.capabilities` advertises scope only, so it is deliberately the
+coarser of the two, the same way pane ownership already works.
+
 #### `tab.open`
 
 - Params: `{window?, role, cwd?, cmd?}`
@@ -2166,7 +2174,10 @@ automation tab.
 - Scope: session
 
 Closes the resolved tab. `mode` is `"detach"` (keep sims running) or
-`"shutdown"` (close panes and shut down sims).
+`"shutdown"` (close panes and shut down sims). Without a live automation
+grant the caller reaches only a tab it owns, and only while it holds that
+tab's single terminal; a split tab holds other sessions. Refused with
+`intent.automationRequired`.
 
 #### `tab.rename`
 
@@ -2176,7 +2187,8 @@ Closes the resolved tab. `mode` is `"detach"` (keep sims running) or
 
 Renames the resolved tab. For actions that don't fit the Route shape,
 rename included, the GUI's `IntentDispatcher` calls an injected
-`IntentActionDelegate`.
+`IntentActionDelegate`. Without a live automation grant the caller reaches
+only a tab it owns a terminal in.
 
 #### `tab.select`
 
@@ -2264,7 +2276,9 @@ Opens a terminal split in the resolved tab; unlike the tab verbs, the
 `tab` ref itself is optional here. The new terminal is its own session.
 With no `tab` and no current tab, the GUI opens a fresh window and tab
 instead, and `cwd`/`cmd` are dropped on that fallback because the
-open-window route has no surface for them.
+open-window route has no surface for them. An omitted `tab` resolves to the
+caller's own tab, so only the named form can land elsewhere, and that needs
+a live automation grant.
 
 #### `pane.close`
 
@@ -2276,7 +2290,15 @@ The user-facing `deviceterm pane close`, flowing through the
 back-channel so the ref is resolved against the GUI's live workspace.
 The lower-level `pane.closeById` is the daemon-internal primitive the
 Router uses for tab and window close fan-out; both coexist deliberately.
-`mode` is `"detach"` or `"shutdown"`.
+`mode` is `"detach"` or `"shutdown"`. Authorized against the pane's host
+tab: without a live automation grant the caller reaches only panes in a tab
+it owns a terminal in.
+
+The host tab is the whole of it on this path. The daemon's pane-ownership
+check (`PaneCoordinator.authorize`) constrains a session calling
+`pane.closeById` directly, but the GUI reaches it as the validated peer, a
+`.guiPeer` principal that spans sessions by design. So a second terminal in
+a shared tab can close a pane the tab's primary session owns.
 
 #### `pane.rename`, `pane.move`
 
@@ -2329,7 +2351,10 @@ Opens a new window.
 
 Closes the resolved window. Refused if the target window also holds a
 tab the caller can't see, so it can't tear down a co-hosted foreign
-protected tab. `mode` is `"detach"` or `"shutdown"`.
+protected tab. `mode` is `"detach"` or `"shutdown"`. It also refuses a
+window holding any tab the caller doesn't solely own, unless the caller
+holds a live automation grant, because closing the window closes those
+tabs.
 
 #### `window.focus`
 

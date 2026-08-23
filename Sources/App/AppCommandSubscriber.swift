@@ -157,7 +157,10 @@ final class AppCommandSubscriber {
         }
         let result = await dispatcher.dispatch(
             intent,
-            origin: .external(sessionID: command.originatingSessionId)
+            origin: .external(
+                sessionID: command.originatingSessionId,
+                hasAutomationGrant: command.originAutomationGrant
+            )
         )
         let wire = encode(result: result, commandId: command.commandId)
         await sendResult(wire)

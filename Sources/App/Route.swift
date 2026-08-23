@@ -31,10 +31,16 @@ enum Route: Sendable {
     /// Close every tab in the window then drop it. `mode` is `.detach`
     /// (sims keep running) or `.shutdown` (sims stop + scratch dirs are
     /// cleaned); the quit path uses the user-chosen mode here.
+    ///
+    /// `authorizedTerminals` carries the terminal sessions the caller was
+    /// authorized over, for a caller whose authority depends on which
+    /// sessions the window holds. Nil means unconditional (the human, or
+    /// a caller holding an automation grant). See `closeTab`.
     case closeWindow(
         WindowID,
         mode:
-        PaneCloseMode = .detach
+        PaneCloseMode = .detach,
+        authorizedTerminals: Set<String>? = nil
         )
     case selectWindow(WindowID)
     /// Add a tab to an existing window; `reattach` mounts orphan sims.
@@ -88,11 +94,25 @@ enum Route: Sendable {
     /// `reorderTab` remains the absolute form the drag handler and the
     /// `tab.move` RPC use.
     case moveTabRelative(WindowID, TabID, delta: Int)
+    /// `authorizedTerminals` is the set of terminal session ids the
+    /// authorization was computed over, or nil for a caller whose
+    /// authority doesn't depend on them (the human at the keyboard, or a
+    /// caller holding an automation grant).
+    ///
+    /// Authorization runs on the main actor when the verb arrives; this
+    /// runs later, on the drain. An `openTerminalPane` already suspended
+    /// in `createSession` appends its terminal in between, so a caller
+    /// authorized to close its own sole-terminal tab would otherwise
+    /// destroy a session that arrived after it was cleared. The Router
+    /// compares this against the tab's live membership and abandons the
+    /// close if it moved, which fails closed on the authorization rather
+    /// than on the unrelated open.
     case closeTab(
         WindowID,
         TabID,
         mode:
-        PaneCloseMode
+        PaneCloseMode,
+        authorizedTerminals: Set<String>? = nil
         )
     /// Add an additional terminal pane to an existing tab. Mints a
     /// fresh daemon session whose role inherits the tab's role; the

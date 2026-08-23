@@ -84,7 +84,7 @@ struct IntentResolverTests {
             )
         let resolver = IntentResolver(
             workspace: workspace,
-            origin: .external(sessionID: "S-B")
+            origin: .external(sessionID: "S-B", hasAutomationGrant: false)
         )
         let resolved = try resolver.resolveTab(.current)
         #expect(resolved.tabID == TabID(value: 2))
@@ -233,7 +233,7 @@ struct IntentResolverTests {
             )
         let resolver = IntentResolver(
             workspace: workspace,
-            origin: .external(sessionID: "S-added")
+            origin: .external(sessionID: "S-added", hasAutomationGrant: false)
         )
         let resolved = try resolver.resolveTab(.current)
         #expect(resolved.tabID == TabID(value: 7))
@@ -257,7 +257,7 @@ struct IntentResolverTests {
             )
         let resolver = IntentResolver(
             workspace: workspace,
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         let resolved = try resolver.resolveSimPane(.current)
         #expect(resolved.pane.paneId == "P1")
@@ -278,7 +278,7 @@ struct IntentResolverTests {
             )
         let resolver = IntentResolver(
             workspace: workspace,
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         #expect(throws: (any Error).self) {
             try resolver.resolveSimPane(.current)

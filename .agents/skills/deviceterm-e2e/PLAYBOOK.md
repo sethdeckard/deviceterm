@@ -9,8 +9,14 @@ point here; this is the single source of truth.
 An ordinary tab is not enough. The scenarios open, select, and move tabs and
 windows, and those verbs require a live automation grant that only the GUI
 issues, when a person opens an Automation Tab (Shell > Open Automation Tab,
-⇧⌘T). Closing a tab or window still needs no grant. Preflight checks for the
-grant, so you will find out before a scenario does.
+⇧⌘T). Preflight checks for the grant, so you will find out before a scenario
+does.
+
+The grant also decides how far the *other* verbs reach. Without one, a tab
+closes, renames, and opens panes only in itself, and `tab close` even there
+only while it holds the tab's single terminal. That is why a scenario that
+closes or renames the tab it just opened needs the same grant as one that
+selects it: the target is another session's tab either way.
 
 ## The mental model
 

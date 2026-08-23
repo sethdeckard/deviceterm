@@ -13,6 +13,16 @@ import Foundation
 // the caller can actually invoke, so the advertised set has to agree
 // with what the dispatcher will accept.
 //
+// That agreement is about **scope**. `daemon.capabilities` describes
+// method scope, not per-target authorization: a method can be advertised
+// and still refuse a particular *target*. `tab.close` and `tab.rename`
+// stay session-scoped
+// because the caller really can invoke them on its own tab, while the
+// GUI refuses the same verb aimed at a tab the caller neither owns nor
+// holds a grant for. Per-target authorization is a separate layer, like
+// `PaneCoordinator.authorize`. Advertising is deliberately the coarser of
+// the two.
+//
 // The dispatcher itself still decides in `RPCConnection.scopeCheck`
 // and `XPCConnection.scopeCheck`, which need to distinguish *why* a
 // call was refused so they can say so. This predicate answers the

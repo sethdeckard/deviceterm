@@ -562,3 +562,10 @@ core rules to keep in hand at PR time:
   ownership (`PaneCoordinator.authorize`): a session reaches only its own
   panes, the validated GUI peer spans sessions, and a foreign paneId is a hard
   reject indistinguishable from an unknown one. No cap logged either way.
+  Tab-targeted calls are likewise authorized per-request, in the GUI, against
+  the caller's tab ownership (`WorkspaceAuthorityDecision`): without a live
+  automation grant a session reaches only tabs it owns a terminal in, and
+  `tab close` only its sole-terminal tab. Unlike the pane path that refusal is
+  deliberately distinguishable (`intent.automationRequired`), because
+  resolution runs first and a foreign protected tab has already failed as
+  `notFound`.

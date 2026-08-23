@@ -316,7 +316,7 @@ final class Router {
         // and move a foreign tab in, which the handler's snapshot would then
         // destroy. Marking it now freezes membership from the instant the
         // close is accepted; the handler clears it when done.
-        if case let .closeWindow(windowID, _) = route {
+        if case let .closeWindow(windowID, _, _) = route {
             closingWindows.insert(windowID)
         }
         continuation?.yield(route)
@@ -370,11 +370,21 @@ final class Router {
                 command: command
             )
 
-        case let .closeWindow(windowID, mode):
+        case let .closeWindow(windowID, mode, authorizedTerminals):
             // Reserved synchronously in `dispatch`; always release it, even on
             // the guard's early return, so an absent window isn't left frozen.
             defer { closingWindows.remove(windowID) }
             guard let window = workspace.window(id: windowID) else { return }
+            // Same re-check as `closeTab`, over every terminal the window
+            // holds. `closingWindows` freezes transfers from the moment
+            // the close was accepted, but a tab or terminal creation
+            // already suspended in `createSession` when that happened
+            // lands afterwards, and the caller was never cleared for it.
+            if let authorizedTerminals,
+                Set(window.tabs.tabs.flatMap { $0.terminals.map(\.sessionId) })
+                    != authorizedTerminals {
+                return
+            }
             // Close ONLY the membership authorized at enqueue time
             // (`IntentDispatcher` checked it for foreign-protected tabs). The
             // Router is self-authoritative here: a tab that arrives later must
@@ -447,9 +457,18 @@ final class Router {
                 tabs.tabs.indices.contains(index) else { return }
             tabs.select(id: tabs.tabs[index].id)
 
-        case let .closeTab(windowID, tabID, mode):
+        case let .closeTab(windowID, tabID, mode, authorizedTerminals):
             guard let window = workspace.window(id: windowID),
                 let tab = window.tabs.tab(id: tabID) else { return }
+            // Membership the caller was cleared over, re-checked here
+            // because authorization ran before this reached the drain.
+            // Any change abandons the close: a terminal that arrived
+            // since is a session nobody authorized destroying, and one
+            // that left makes the decision moot.
+            if let authorizedTerminals,
+                Set(tab.terminals.map(\.sessionId)) != authorizedTerminals {
+                return
+            }
             await closeTabRecords(tab, mode: mode)
             // Re-resolve the tab's window: a cross-window move (run outside the
             // drain by the AppDelegate transfer coordinator) can relocate it

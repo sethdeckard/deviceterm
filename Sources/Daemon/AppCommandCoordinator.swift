@@ -169,6 +169,7 @@ public actor AppCommandCoordinator {
         kind: AppCommandKind,
         originatingSessionId: String?,
         params: Data,
+        originAutomationGrant: Bool = false,
         timeoutMs: Int = AppCommandCoordinator.defaultTimeoutMs
     ) async -> CommandOutcome {
         guard let subscriber = subscriberContinuation else {
@@ -184,7 +185,8 @@ public actor AppCommandCoordinator {
             commandId: commandId,
             kind: kind,
             originatingSessionId: originatingSessionId,
-            params: params
+            params: params,
+            originAutomationGrant: originAutomationGrant
         )
         return await withCheckedContinuation { (cont: CheckedContinuation<CommandOutcome, Never>) in
             // Spin a timeout task BEFORE yielding to the GUI so a

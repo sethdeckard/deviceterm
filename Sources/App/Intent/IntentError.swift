@@ -8,6 +8,7 @@
 // includes in the JSON receipt (json mode); UI surfaces translate
 // it into a sheet body.
 
+import DaemonProtocol
 import Foundation
 
 enum IntentError: Error, Sendable, Equatable {
@@ -43,6 +44,15 @@ enum IntentError: Error, Sendable, Equatable {
     /// already cancelled the route; the dispatcher just relays.
     case userCancelled
 
+    /// The caller lacks authority over the resolved target and holds no
+    /// live automation grant. Deliberately distinguishable from `notFound`,
+    /// unlike the protection gate: resolution runs first, so a foreign
+    /// protected tab is already `notFound` before this can fire.
+    /// Anything that gets here is a tab the caller can already see in
+    /// `tabs list`, so naming the reason leaks nothing and a `notFound`
+    /// would be a confusing lie. Carries the verb for the hint.
+    case automationRequired(verb: String)
+
     /// Internal invariant broken. Surfaces as a bug message
     /// pointing at the source-layer caller. Wraps an underlying
     /// description.
@@ -63,6 +73,11 @@ enum IntentError: Error, Sendable, Equatable {
 
         case .userCancelled:
             return "intent.userCancelled"
+
+        case .automationRequired:
+            // Shared with the daemon, which remaps this one code onto
+            // its own numeric scope refusal; the rest it only relays.
+            return IntentErrorCode.automationRequired
 
         case .internalError:
             return "intent.internalError"
@@ -86,6 +101,10 @@ enum IntentError: Error, Sendable, Equatable {
 
         case .userCancelled:
             return "cancelled by user"
+
+        case let .automationRequired(verb):
+            return "\(verb) needs a live automation grant for this "
+                + "target; run it from an Automation Tab"
 
         case let .internalError(description):
             return "internal: \(description)"

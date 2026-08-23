@@ -12,12 +12,15 @@
 // `.current` means and which tabs are reachable:
 //   - `.inProcess` (menu / tab strip) has full authority: `.current`
 //     borrows the key window and every tab is visible.
-//   - `.external(sessionID:)` (the CLI back-channel) resolves `.current`
-//     against the caller's own session (never the human's key window),
-//     and every enumeration restricts to tabs the caller can legitimately
-//     see. A foreign protected tab is opaque: it resolves `notFound`,
-//     indistinguishable from a tab that doesn't exist, and never leaks as
-//     `.ambiguous`.
+//   - `.external(sessionID:hasAutomationGrant:)` (the CLI back-channel)
+//     resolves `.current` against the caller's own session (never the
+//     human's key window), and every enumeration restricts to tabs the
+//     caller can legitimately see. A foreign protected tab is opaque: it
+//     resolves `notFound`, indistinguishable from a tab that doesn't
+//     exist, and never leaks as `.ambiguous`. The grant half of that
+//     origin is not read here at all: it widens *authority* to mutate a
+//     resolved target (`WorkspaceAuthorityDecision`), never visibility,
+//     so a granted caller sees exactly what an ungranted one sees.
 //
 // The accessibility check is ANDed **into** each enumeration predicate,
 // not applied as a post-filter, so a name shared by a visible tab and a
@@ -116,7 +119,7 @@ struct IntentResolver {
             }
             return ResolvedTab(windowID: windowID, tabID: tab.id, tab: tab)
 
-        case let .external(sessionID):
+        case let .external(sessionID, _):
             guard let sessionID, let hit = findBySession(sessionID) else {
                 throw IntentError.notFound(kind: "tab", ref: "current")
             }
@@ -195,7 +198,7 @@ struct IntentResolver {
                 }
                 return id
 
-            case let .external(sessionID):
+            case let .external(sessionID, _):
                 guard let sessionID, let hit = findBySession(sessionID) else {
                     throw IntentError.notFound(
                         kind: "window",

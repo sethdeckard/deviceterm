@@ -144,14 +144,16 @@ the user is left at an interactive prompt.
 .B tab close " " [\fB--tab\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
 Close the named tab. Default
 .B --tab
-is the caller's current tab.
+is the caller's current tab. Without a live automation grant, reaches only
+your own tab, and only while it holds that tab's single terminal.
 .B --mode
 controls what happens to any linked sims.
 .TP
 .B tab rename " " [\fB--tab\fR \fIref\fR] " " [\fIname\fR]
 Apply a manual title; omit
 .I name
-to restore the automatic title.
+to restore the automatic title. Without a live automation grant, reaches
+only a tab you own a terminal in.
 .TP
 .B tab select " " [\fB--tab\fR \fIref\fR]
 Requires a live automation grant, including for the caller's own tab.
@@ -229,7 +231,9 @@ Print the caller's own tab row.
 .TP
 .B pane open --terminal " " [\fB--tab\fR \fIref\fR] " " [\fB--cwd\fR \fIpath\fR] " " [\fB--cmd\fR \fIcmd\fR]
 Open a fresh terminal pane alongside the tab's existing panes, splitting
-the tab rather than opening a new one.
+the tab rather than opening a new one. Naming another tab with
+.B --tab
+requires a live automation grant.
 .B --cwd
 and
 .B --cmd
@@ -237,7 +241,8 @@ carry the same meaning as on
 .BR "tab open" .
 .TP
 .B pane close " " [\fB--pane\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
-Detach or shut down the named sim pane.
+Detach or shut down the named sim pane. Without a live automation grant,
+reaches only panes in a tab you own a terminal in.
 .TP
 .B pane info " " [\fB--pane\fR \fIref\fR]
 Print a structured description of the named sim pane.
@@ -255,7 +260,9 @@ Requires a live automation grant. Mint a new window with one fresh
 agent-role tab.
 .TP
 .B window close " " [\fB--window\fR \fIref\fR] " " [\fB--mode\fR \fIdetach\fR|\fIshutdown\fR]
-Close the named window.
+Close the named window. Refuses a window holding a tab you can't see, or
+one holding a tab you don't solely own, unless you hold a live automation
+grant.
 .TP
 .B window focus " " [\fB--window\fR \fIref\fR]
 Requires a live automation grant, including for the caller's own window.

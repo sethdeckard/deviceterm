@@ -26,16 +26,28 @@ promises behind every command here are defined in
 
 Authority has three levels.
 
-An **ordinary tab** reads the workspace and mutates what it can already
-reach: its own device panes, and any unprotected tab visible to it.
+An **ordinary tab** reads its caller-visible workspace and mutates only
+itself: its own device panes, its own title, its own splits. It sees every
+unprotected tab, which it needs in order to find its own things, and it can
+touch none of them.
+
+One exception, and it belongs to the shim rather than to you. Running
+`devicectl install` or `launch` in a tab moves that device's mirror to it,
+out of whichever unprotected tab was showing it, on the reasoning that the
+device context followed your command. `deviceterm device attach` refuses
+the same move and tells you to drag the pane across instead.
 
 Opening an **automation tab** causes the GUI to issue that tab a live grant.
 Its role stays descriptive if the grant is missing or revoked, so the tab keeps
 its name and its badge while holding no authority.
 
-The grant adds two groups: creating and arranging surfaces (`tab open`,
-`tab select`, `tab move`, `window open`, `window focus`), and reading or
-typing into another tab (`tab capture`, `tab send-input`).
+The grant adds three groups: creating and arranging surfaces (`tab open`,
+`tab select`, `tab move`, `window open`, `window focus`), reading or typing
+into another tab (`tab capture`, `tab send-input`), and the workspace verbs
+whose ownership requirement you don't meet (`tab close`, `window close`,
+`tab rename`, `pane open --terminal`, `pane close`). That last group covers
+a tab that isn't yours, and it covers closing one of your own that a second
+terminal shares.
 
 A **protected tab** is invisible to other sessions, and a grant does not
 reach it. Opt a tab out of everything above with
@@ -125,7 +137,8 @@ runs once and the shell stays interactive.
 
 `tab open` and `window open` need a live automation grant, and an ordinary
 tab is refused with `error.scope_violation`. `pane open --terminal` doesn't,
-because it splits the tab the caller is already in.
+because it splits the tab the caller is already in. Naming another tab with
+`--tab` does need one.
 
 A success receipt means the GUI accepted the mutation for asynchronous
 processing; it does not prove the change completed, and it does not return
@@ -155,13 +168,22 @@ prompt offers.
 including when the target is your own tab. An ordinary tab is refused with
 `error.scope_violation`.
 
-`tab rename` and `tab close` don't, and they reach any unprotected tab visible
-to the caller, not only your own. A `tab close --tab <ref>` naming another
-session's unprotected tab closes it, ending whatever was running there; protect
-a tab when other sessions should not be able to touch it.
+`tab rename` needs one only to leave your own tab. Without a grant you can
+retitle a tab you own a terminal in, and nothing else.
 
-`window close` needs no grant either, but it refuses a window holding a tab you
-can't see, so it can't tear down a co-hosted protected tab.
+`tab close` asks for more. Without a grant it reaches only a tab you own
+*and* hold the single terminal of, because closing a split tab ends whatever
+is running in the other panes, and those are other sessions. That is the
+same outcome as closing someone else's tab, reached by a different route.
+
+Either refusal arrives as daemon error `-32011`, with a message starting
+`intent.automationRequired`, which is what separates a permission refusal
+from a tab that isn't there.
+
+`window close` inherits both rules, since it closes every tab in the window.
+It refuses a window holding a tab you can't see, so it can't tear down a
+co-hosted protected tab, and it refuses one holding any tab you don't
+solely own.
 
 `pane close` and `pane info` resolve Simulator panes only. Close a
 physical-device pane in the GUI.

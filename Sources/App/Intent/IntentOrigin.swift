@@ -15,16 +15,24 @@
 //    surfaces. Full authority: the human at the keyboard is the
 //    workspace's owner, so `.current` borrows the key window and
 //    resolution sees every tab.
-//  - `.external(sessionID:)`: the CLI back-channel (and any future
-//    deep-link / AppleScript source). The visibility rule restricts to
-//    tabs the caller can legitimately see, and `.current` is resolved
-//    relative to the caller's own session, never the human's focus.
+//  - `.external(sessionID:hasAutomationGrant:)`: the CLI back-channel.
+//    The visibility rule restricts to tabs the caller can legitimately
+//    see, and `.current` is
+//    resolved relative to the caller's own session, never the human's focus.
 //    `sessionID == nil` means **no authority**; never "skip the check":
 //    a nil-session external caller owns no tab, so every non-unprotected tab
 //    is inaccessible to it and protection mutation is denied.
+//
+// `hasAutomationGrant` is the daemon's per-request answer, stamped onto
+// the `AppCommand` it publishes, never a role and never anything the
+// caller supplies. `WorkspaceAuthorityDecision` reads it when a mutation
+// fails its ownership requirement; it widens no visibility, so a grant
+// still cannot see or touch a foreign protected tab. A missing `originAutomationGrant` decodes as `false`, so
+// incomplete input fails closed: the cost is a refusal a legitimate
+// caller can retry, not authority handed to an ungranted one.
 enum IntentOrigin: Sendable, Equatable {
     case inProcess
-    case external(sessionID: String?)
+    case external(sessionID: String?, hasAutomationGrant: Bool)
 
     /// Every external tab/pane/window enumeration restricts to
     /// externally-accessible tabs; in-process never does.
@@ -43,7 +51,7 @@ enum IntentOrigin: Sendable, Equatable {
         case .inProcess:
             return nil
 
-        case let .external(sessionID):
+        case let .external(sessionID, _):
             return sessionID
         }
     }

@@ -79,7 +79,7 @@ struct IntentProtectionTests {
     func foreignProtectedTabIsNotFoundBySessionID() {
         let pub = tab(id: 1, session: "S-pub")
         let priv = tab(id: 2, session: "S-priv", isProtected: true)
-        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub"))
+        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub", hasAutomationGrant: false))
         #expect(throws: IntentError.self) {
             try res.resolveTab(.sessionId("S-priv"))
         }
@@ -89,7 +89,7 @@ struct IntentProtectionTests {
     func ownerReachesOwnProtectedTab() throws {
         let pub = tab(id: 1, session: "S-pub")
         let priv = tab(id: 2, session: "S-priv", isProtected: true)
-        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-priv"))
+        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-priv", hasAutomationGrant: false))
         let resolved = try res.resolveTab(.sessionId("S-priv"))
         #expect(resolved.tabID == TabID(value: 2))
     }
@@ -109,7 +109,7 @@ struct IntentProtectionTests {
         // reveal the protected tab and a match count.
         let pub = tab(id: 1, session: "S-pub", name: "shared")
         let priv = tab(id: 2, session: "S-priv", name: "shared", isProtected: true)
-        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub"))
+        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub", hasAutomationGrant: false))
         let resolved = try res.resolveTab(.name("shared"))
         #expect(resolved.tabID == TabID(value: 1))
     }
@@ -119,7 +119,7 @@ struct IntentProtectionTests {
         // An external caller with no session must not borrow the key
         // window's selected tab: `.current` resolves nothing.
         let only = tab(id: 1, session: "S-A")
-        let res = resolver(workspace(windows: [[only]]), .external(sessionID: nil))
+        let res = resolver(workspace(windows: [[only]]), .external(sessionID: nil, hasAutomationGrant: false))
         #expect(throws: IntentError.self) {
             try res.resolveTab(.current)
         }
@@ -136,7 +136,7 @@ struct IntentProtectionTests {
             isProtected: true,
             panes: [pane(paneId: "P-priv", udid: "U-priv")]
         )
-        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub"))
+        let res = resolver(workspace(windows: [[pub, priv]]), .external(sessionID: "S-pub", hasAutomationGrant: false))
         #expect(throws: IntentError.self) { try res.resolveSimPane(.paneId("P-priv")) }
         #expect(throws: IntentError.self) { try res.resolveSimPane(.udid("U-priv")) }
     }
@@ -149,7 +149,7 @@ struct IntentProtectionTests {
         // in an external caller's index space.
         let winA = [tab(id: 1, session: "S-pub")]
         let winB = [tab(id: 2, session: "S-priv", isProtected: true)]
-        let res = resolver(workspace(windows: [winA, winB]), .external(sessionID: "S-pub"))
+        let res = resolver(workspace(windows: [winA, winB]), .external(sessionID: "S-pub", hasAutomationGrant: false))
         let first = try res.resolveWindow(.index(1))
         #expect(first == WindowID(value: 1))
         #expect(throws: IntentError.self) { try res.resolveWindow(.index(2)) }
@@ -162,7 +162,7 @@ struct IntentProtectionTests {
         let winA = [tab(id: 1, session: "S-A")]
         let winB = [tab(id: 2, session: "S-B")]
         let space = workspace(windows: [winA, winB], keyIndex: 0)
-        let res = resolver(space, .external(sessionID: "S-B"))
+        let res = resolver(space, .external(sessionID: "S-B", hasAutomationGrant: false))
         let current = try res.resolveWindow(.current)
         #expect(current == WindowID(value: 2))
     }
@@ -188,7 +188,7 @@ struct IntentProtectionTests {
         let harness = makeHarness([[pub, priv]])
         let result = await harness.dispatcher.dispatch(
             .setTabProtected(.sessionId("S-priv"), isProtected: false),
-            origin: .external(sessionID: "S-pub")
+            origin: .external(sessionID: "S-pub", hasAutomationGrant: false)
         )
         await settle()
         guard case let .error(error) = result else {
@@ -203,7 +203,7 @@ struct IntentProtectionTests {
         let harness = makeHarness([[tab(id: 1, session: "S-A")]])
         let result = await harness.dispatcher.dispatch(
             .setTabProtected(.sessionId("S-A"), isProtected: true),
-            origin: .external(sessionID: nil)
+            origin: .external(sessionID: nil, hasAutomationGrant: false)
         )
         await settle()
         guard case .error = result else {
@@ -278,7 +278,7 @@ struct IntentProtectionTests {
         let harness = makeHarness([[mine, foreign]])
         let result = await harness.dispatcher.dispatch(
             .closeWindow(.current, mode: .detach),
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         guard case .error = result else {
             Issue.record("expected close refusal; got \(result)"); return
@@ -299,7 +299,7 @@ struct IntentProtectionTests {
         let harness = makeHarness([[mine, priv]])
         let result = await harness.dispatcher.dispatch(
             .paneAttach(udid: udid),
-            origin: .external(sessionID: "S-pub")
+            origin: .external(sessionID: "S-pub", hasAutomationGrant: false)
         )
         await settle()
         #expect(result == .ok)
@@ -333,7 +333,7 @@ struct IntentProtectionTests {
         let harness = makeHarness([[mine, priv]])
         _ = await harness.dispatcher.dispatch(
             .devicePaneAttach(deviceId: deviceId, relinkExisting: true),
-            origin: .external(sessionID: "S-pub")
+            origin: .external(sessionID: "S-pub", hasAutomationGrant: false)
         )
         await settle()
         // No detach of the foreign-protected tab's device.
@@ -347,7 +347,7 @@ struct IntentProtectionTests {
         let harness = makeHarness([winA, winB])
         let result = await harness.dispatcher.dispatch(
             .windowsList(all: true),
-            origin: .external(sessionID: "S-pub")
+            origin: .external(sessionID: "S-pub", hasAutomationGrant: false)
         )
         guard case .data(.windowsList(let payload)) = result else {
             Issue.record("expected windowsList; got \(result)"); return

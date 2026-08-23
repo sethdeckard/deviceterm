@@ -310,7 +310,7 @@ struct IntentDispatcherTests {
             sessionId: "S-B"
             )
         let result = await harness.dispatcher.dispatch(
-            .focusWindow(.current), origin: .external(sessionID: "S-A")
+            .focusWindow(.current), origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         await settle()
         #expect(result == .ok)
@@ -367,7 +367,7 @@ struct IntentDispatcherTests {
             )
         let result = await harness.dispatcher.dispatch(
             .openPaneTerminal(inTab: nil, cwd: nil, cmd: nil),
-            origin: .external(sessionID: "S-caller")
+            origin: .external(sessionID: "S-caller", hasAutomationGrant: false)
         )
         await settle()
         #expect(result == .ok)
@@ -512,7 +512,7 @@ struct IntentDispatcherTests {
             )
         let ownResult = await harness.dispatcher.dispatch(
             .tabInfo(.sessionId("S-A")),
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         guard case .data(.tabInfo(let own)) = ownResult else {
             Issue.record("expected own tabInfo"); return
@@ -520,7 +520,7 @@ struct IntentDispatcherTests {
         #expect(own.isCurrent)
         let otherResult = await harness.dispatcher.dispatch(
             .tabInfo(.sessionId("S-B")),
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         guard case .data(.tabInfo(let other)) = otherResult else {
             Issue.record("expected other tabInfo"); return
@@ -545,7 +545,7 @@ struct IntentDispatcherTests {
             )
         let result = await harness.dispatcher.dispatch(
             .windowsList(all: false),
-            origin: .external(sessionID: "S-B")
+            origin: .external(sessionID: "S-B", hasAutomationGrant: false)
         )
         guard case .data(.windowsList(let payload)) = result else {
             Issue.record("expected .data(.windowsList); got \(result)"); return
@@ -571,7 +571,7 @@ struct IntentDispatcherTests {
             )
         let result = await harness.dispatcher.dispatch(
             .windowsList(all: true),
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         guard case .data(.windowsList(let payload)) = result else {
             Issue.record("expected .data(.windowsList); got \(result)"); return
@@ -679,14 +679,14 @@ struct IntentDispatcherTests {
         appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 2), sessionId: "S-B")
         _ = await harness.dispatcher.dispatch(
             .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         await settle()
         #expect(harness.fake.attachPhysicalDeviceCalls.count == 1)
 
         let result = await harness.dispatcher.dispatch(
             .devicePaneAttach(deviceId: "fd00::1", relinkExisting: true),
-            origin: .external(sessionID: "S-B")
+            origin: .external(sessionID: "S-B", hasAutomationGrant: false)
         )
         await settle()
         #expect(result == .ok)
@@ -709,14 +709,14 @@ struct IntentDispatcherTests {
         appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 2), sessionId: "S-B")
         _ = await harness.dispatcher.dispatch(
             .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
-            origin: .external(sessionID: "S-A")
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
         await settle()
         #expect(harness.fake.attachPhysicalDeviceCalls.count == 1)
 
         let result = await harness.dispatcher.dispatch(
             .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
-            origin: .external(sessionID: "S-B")
+            origin: .external(sessionID: "S-B", hasAutomationGrant: false)
         )
         await settle()
         guard case let .error(error) = result else {
