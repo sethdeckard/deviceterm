@@ -268,6 +268,13 @@ public enum DaemonMethods {
                 .validatedGUI(SessionMethods.protectionSnapshot(using: sessionManager)),
             RPCMethod.sessionSetDisplayTitle.rawValue:
                 .validatedGUI(SessionMethods.setDisplayTitle(using: sessionManager)),
+            RPCMethod.sessionSetCohort.rawValue:
+                .validatedGUI(
+                    SessionCohortMethods.setCohort(
+                        paneCoordinator: paneCoordinator,
+                        sessionManager: sessionManager
+                    )
+                ),
             RPCMethod.automationGrant.rawValue:
                 .validatedGUI(AutomationMethods.grant(store: automationGrantStore)),
             RPCMethod.automationRevoke.rawValue:

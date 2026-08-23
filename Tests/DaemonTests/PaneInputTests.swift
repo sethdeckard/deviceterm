@@ -518,3 +518,54 @@ func paneLongPressRejectsNegativeDuration() async throws {
     #expect(rpcError.code == RPCMethodError.invalidParamsCode)
     #expect(rpcError.message.contains("non-negative"))
 }
+
+// MARK: - panes.list incarnation pinning
+
+@Test
+func panesListPinsTheCallerToItsDispatchCapturedIncarnation() async throws {
+    let manager = SessionManager()
+    let created = try await manager.createSession(label: nil)
+    let sessionId = created.state.id
+    let incarnation = try #require(await manager.incarnation(of: sessionId))
+    let coordinator = PaneCoordinator()
+    await coordinator.noteSessionActive(sessionId, incarnation: incarnation)
+    _ = try await coordinator.createPane(
+        target: .sim(udid: "udid-pin"),
+        sessionId: sessionId,
+        ownerIncarnation: incarnation,
+        acquire: {
+            PaneCoordinator.AcquiredBackend(
+                backend: MockDeviceBackend(),
+                family: "phone",
+                deviceType: "iPhone"
+            )
+        }
+    )
+    let handler = PaneMethods.panesList(paneCoordinator: coordinator, sessionManager: manager)
+    let params = try JSONEncoder().encode(
+        PanesListParams(sessionId: sessionId.uuidString, cap: created.capability.token)
+    )
+    func list(pinnedTo captured: UInt64?) async throws -> [PaneMethods.PanesListEntry] {
+        let context = DispatchPeerContext(
+            transport: .uds,
+            connectionId: 1,
+            authenticatedSession: created.state,
+            sessionIncarnation: captured
+        )
+        let data = try await DispatchPeerContext.$current.withValue(context) {
+            try await handler(params)
+        }
+        return try JSONDecoder().decode([PaneMethods.PanesListEntry].self, from: data)
+    }
+
+    #expect(try await list(pinnedTo: incarnation).count == 1)
+    // A request admitted under an earlier incarnation can resume after the
+    // same UUID was reaped and restored. Its dispatch-captured pin no longer
+    // matches, so the restored session's panes stay invisible to it; a fresh
+    // manager read here would hand the old caller the new authority instead.
+    #expect(try await list(pinnedTo: incarnation &+ 7).isEmpty)
+    // No captured pin means an un-incarnation-pinned caller (a manager that
+    // doesn't track incarnations), listed by UUID owner match exactly as its
+    // control calls would authorize.
+    #expect(try await list(pinnedTo: nil).count == 1)
+}

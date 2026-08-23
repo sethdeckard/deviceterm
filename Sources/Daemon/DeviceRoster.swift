@@ -31,7 +31,8 @@ enum DeviceRoster {
         sims: [SimEntry],
         physical: [PhysicalDeviceInfo],
         ownerships: [PaneOwnership],
-        visibleSessionIds: Set<UUID>
+        visibleSessionIds: Set<UUID>,
+        callerIncarnations: [UUID: UInt64] = [:]
     ) -> [DeviceRosterEntry] {
         // Key by the full `PaneTarget` (already `Hashable`), not the bare
         // id string: a sim `.sim(udid)` and a physical `.device(deviceId)`
@@ -50,10 +51,26 @@ enum DeviceRoster {
             osVersion: String? = nil
         ) -> DeviceRosterEntry {
             let target: PaneTarget = kind == .sim ? .sim(udid: id) : .device(deviceId: id)
-            // Opacity: annotate the owner only when the caller can see
-            // that session; otherwise the device reads as unattached,
-            // exactly as `tabs.list` hides a protected tab from non-owners.
-            if let owner = ownerByTarget[target], visibleSessionIds.contains(owner.sessionId) {
+            // Opacity: annotate the owner only when the caller can see one of
+            // the sessions controlling the pane; otherwise the device reads as
+            // unattached, exactly as `tabs.list` hides a protected tab from
+            // non-owners.
+            //
+            // The test is over every controlling member, not the record's own
+            // session. `sessions(visibleTo:)` is per-session with no grouping,
+            // so in a protected tab a sibling terminal cannot see the terminal
+            // that attached: keying on that one session alone made a caller's
+            // own tab's device read as unattached to it.
+            //
+            // Matched on the member's incarnation where the caller supplied
+            // one, so a restored session cannot read a previous incarnation's
+            // device as attached to it.
+            let visibleToCaller = ownerByTarget[target]?.controllingMembers.contains { member in
+                guard visibleSessionIds.contains(member.sessionId) else { return false }
+                guard let known = callerIncarnations[member.sessionId] else { return true }
+                return known == member.incarnation
+            } ?? false
+            if let owner = ownerByTarget[target], visibleToCaller {
                 return DeviceRosterEntry(
                     id: id,
                     kind: kind,

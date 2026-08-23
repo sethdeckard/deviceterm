@@ -342,11 +342,28 @@ public enum PhysicalDeviceMethods {
             }
             let physical = await physicalDeviceCoordinator.enumerate()
             let ownerships = await paneCoordinator.liveOwnerships()
+            // The caller's own incarnation, so a restored session cannot read a
+            // previous incarnation's device as attached to it. Only the caller
+            // is pinned: other members are matched by id, since the caller has
+            // no way to know their incarnations and protection already governs
+            // whether it may see them at all.
+            //
+            // The pin is the DISPATCH-CAPTURED incarnation, not a fresh
+            // manager read: the awaits above mean a request admitted under
+            // incarnation G can resume after its session was reaped and
+            // restored, and a manager read would pin it to G+1's roster
+            // authority instead of refusing the stale view.
+            var callerIncarnations: [UUID: UInt64] = [:]
+            if let callerId,
+                let incarnation = DispatchPeerContext.current?.sessionIncarnation {
+                callerIncarnations[callerId] = incarnation
+            }
             let roster = DeviceRoster.build(
                 sims: sims,
                 physical: physical,
                 ownerships: ownerships,
-                visibleSessionIds: visible
+                visibleSessionIds: visible,
+                callerIncarnations: callerIncarnations
             )
             return try JSONEncoder().encode(roster)
         }

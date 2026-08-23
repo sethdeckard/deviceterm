@@ -184,6 +184,16 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         await sessionManager.setPaneRevoker { sessionId in
             await paneCoordinator.revokeSubscriptions(forSession: sessionId)
         }
+        // Cohort teardown runs for EVERY teardown reason, not only an explicit
+        // `session.close`: a restore-batch reap removes sessions through the
+        // same path, and without it a dead session would linger in every
+        // sibling's membership. It also clears the coordinator's producer-local
+        // active incarnation in the same actor turn, which is what the
+        // reconcile handler's commit-time liveness check reads.
+        await SessionCohortMethods.installCohortWiring(
+            sessionManager: sessionManager,
+            paneCoordinator: paneCoordinator
+        )
         // The paired activation seam: a session reaching ready pushes its active
         // incarnation to the pane coordinator, whose synchronous ownership-commit
         // check reads it to refuse a stale-incarnation create/re-attach/adopt.
@@ -261,6 +271,13 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         precondition(
             revokerInstalled,
             "pane-subscription revoker must be installed before the RPC servers accept connections"
+        )
+        // Same fail-closed rule for the cohort seam: a teardown that skipped
+        // it would leave the dead session in every sibling's membership.
+        let cohortRevokerInstalled = await sessionManager.hasCohortRevoker
+        precondition(
+            cohortRevokerInstalled,
+            "cohort revoker must be installed before the RPC servers accept connections"
         )
         let server = RPCServer(
             socketPath: socketPath,

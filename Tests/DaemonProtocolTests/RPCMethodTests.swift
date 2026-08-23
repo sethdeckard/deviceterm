@@ -11,8 +11,8 @@ import Testing
 // see both modules.
 
 @Test
-func rpcMethodCaseCountIs70() {
-    #expect(RPCMethod.allCases.count == 70)
+func rpcMethodCaseCountIs71() {
+    #expect(RPCMethod.allCases.count == 71)
 }
 
 @Test
@@ -87,6 +87,7 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.sessionSetProtectedBatch, "session.setProtectedBatch"),
     (RPCMethod.sessionProtectionSnapshot, "session.protectionSnapshot"),
     (RPCMethod.sessionSetDisplayTitle, "session.setDisplayTitle"),
+    (RPCMethod.sessionSetCohort, "session.setCohort"),
     (RPCMethod.tabSetProtected, "tab.setProtected")
     ]
     )

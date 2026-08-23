@@ -868,7 +868,43 @@ public enum PaneMethods {
             // a session's panes: a stolen payload cap must not enumerate a
             // victim's panes.
             try SessionMethods.requirePayloadMatchesConnection(sessionId)
-            let entries = await paneCoordinator.panesForSession(sessionId).map {
+            // Scoped to the caller's exact incarnation. A restored session
+            // keeps its UUID, and listing by id alone would show it the panes
+            // of the incarnation it replaced, which every control call then
+            // correctly refuses.
+            //
+            // For a `.session` caller the pin is the DISPATCH-CAPTURED
+            // incarnation, not a fresh manager read: this handler has
+            // suspended since admission, and a request admitted under
+            // incarnation G that resumes after its session was reaped and
+            // restored would otherwise read G+1 and list the restored
+            // session's panes to the old caller. That is the same ABA hole
+            // `PaneAccessPrincipal` closes for control calls, and a nil
+            // capture means the same thing here as there: an
+            // un-incarnation-pinned caller (a manager that doesn't track
+            // incarnations), listed by UUID owner match exactly as its taps
+            // would authorize. Production always pins: scoped dispatch
+            // requires `.ready` admission, which carries the incarnation.
+            //
+            // The validated GUI spans sessions and captures no incarnation,
+            // so it pins to the target's current one; nil there means the
+            // session closed mid-request, and unpinned listing would fall
+            // back to UUID alone. Refused instead.
+            let incarnation: UInt64?
+            let context = DispatchPeerContext.current
+            if let context, context.transport == .xpc, context.validatedGUIPeer {
+                guard let current = await sessionManager.incarnation(of: sessionId) else {
+                    throw SessionMethods.mapSessionError(.notFound(sessionId: sessionId))
+                }
+                incarnation = current
+            } else {
+                incarnation = context?.sessionIncarnation
+            }
+            let panes = await paneCoordinator.panesForSession(
+                sessionId,
+                incarnation: incarnation
+            )
+            let entries = panes.map {
                 PanesListEntry(
                     paneId: $0.paneId.uuidString,
                     udid: $0.udid,

@@ -126,7 +126,19 @@ public struct PaneInfo: Sendable, Equatable {
 /// never cross-annotated.
 public struct PaneOwnership: Sendable, Equatable {
     public let target: PaneTarget
+    /// The record's own owning session: what `ownerSessionId` reported before
+    /// cohorts, and still the adoption/transfer anchor. Attribution, not
+    /// authority.
     public let sessionId: UUID
+    /// Every member permitted to drive the pane. The roster's visibility test
+    /// runs against this, so a caller sharing a protected tab with the
+    /// attaching terminal still sees its own tab's device as attached.
+    ///
+    /// Carries incarnations rather than bare ids, matching authorization,
+    /// events and `panes.list`. Reducing to ids here would let a restored
+    /// session see a previous incarnation's device as attached and read its
+    /// owner annotation, even though it can neither list nor drive that pane.
+    public let controllingMembers: Set<CohortMember>
     public let paneShortId: String
     public let paneId: UUID
 
@@ -134,9 +146,17 @@ public struct PaneOwnership: Sendable, Equatable {
     /// `panes.list`. Kind-qualified matching keys on `target`, not this.
     public var targetKey: String { target.key }
 
-    public init(target: PaneTarget, sessionId: UUID, paneShortId: String, paneId: UUID) {
+    public init(
+        target: PaneTarget,
+        sessionId: UUID,
+        paneShortId: String,
+        paneId: UUID,
+        controllingMembers: Set<CohortMember>? = nil
+    ) {
         self.target = target
         self.sessionId = sessionId
+        self.controllingMembers = controllingMembers
+            ?? [CohortMember(sessionId: sessionId, incarnation: 0)]
         self.paneShortId = paneShortId
         self.paneId = paneId
     }
@@ -459,6 +479,19 @@ public actor PaneCoordinator {
         /// the bridge handles. See `createSim`'s cross-session
         /// branch.
         var sessionId: UUID
+        /// The session cohort permitted to drive this pane, or nil for a pane
+        /// that never received one.
+        ///
+        /// **This, not `sessionId`, is the authorization path.** `sessionId`
+        /// remains the record's own owning session: it anchors adoption,
+        /// ownership transfer, and the revocation sweep, and it seeds the
+        /// compatibility fallback for a pane with no cohort. It is not who is
+        /// allowed to drive the pane, and it is not what `ownerSessionId`
+        /// reports once a cohort exists.
+        ///
+        /// Nil and "names a cohort nobody can find" are deliberately different
+        /// answers: see `authorize`.
+        var cohortId: UUID?
         /// Identifies THIS admission of the record, so a close issued against
         /// one admission can't retire a later one. Advanced by a fresh create,
         /// a revisioned same-owner re-attach, and an ownership transfer. Deliberately not the session incarnation
@@ -897,6 +930,11 @@ public actor PaneCoordinator {
     /// value is unique to one admission of one record and a stale close can
     /// never coincide with a live admission.
     private var nextAttachment: UInt64 = 1
+    /// Cohort membership, owned here rather than in its own actor because it
+    /// and the pane records form one consistency domain: a membership change
+    /// decides who may drive a pane and rebinds records, and those have to be
+    /// visible together. See `SessionCohortState`.
+    private var cohortState = SessionCohortState()
     /// PRODUCER-LOCAL active incarnation per session, pushed by `SessionManager`
     /// as a session reaches `.ready` (`noteSessionActive`) and CLEARED when its
     /// close sweep runs (`revokeSubscriptions(forSession:)`). Every pane
@@ -1344,7 +1382,7 @@ public actor PaneCoordinator {
             udid: record.target.key,
             state: record.state.rawValue
         ),
-            to: .session(record.sessionId)
+            to: .sessions(controllers(of: record))
         )
         return resultFor(record)
     }
@@ -2074,7 +2112,7 @@ public actor PaneCoordinator {
                 udid: record.target.key,
                 state: state.rawValue
             ),
-            to: .session(record.sessionId)
+            to: .sessions(controllers(of: record))
         )
         finishTerminalStatePublication(record, revision: terminalPublicationRevision)
     }
@@ -3290,26 +3328,70 @@ public actor PaneCoordinator {
     /// Ownership of every live pane, keyed by device target, the
     /// reverse of `panesForSession`. Backs the `devices.list` roster's
     /// attachment annotation, which then applies protected-tab opacity on
-    /// the returned `sessionId`s. Includes shutdown/failed records so a
+    /// the returned session ids. Includes shutdown/failed records so a
     /// device the GUI still shows a (dead) pane for reads as attached.
+    ///
+    /// Reports **every** session that may drive the pane, not just the record's
+    /// own. The roster tests "can the caller see any of these", and a caller
+    /// that shares a protected tab with the attaching terminal cannot see that
+    /// terminal's session: `SessionManager.sessions(visibleTo:)` is per-session
+    /// with no grouping, so a protected sibling would read its own tab's device
+    /// as unattached.
     public func liveOwnerships() -> [PaneOwnership] {
         panes.values.map {
             PaneOwnership(
                 target: $0.target,
-                sessionId: $0.sessionId,
+                sessionId: attributedSession(of: $0),
                 paneShortId: $0.shortId,
-                paneId: $0.id
+                paneId: $0.id,
+                controllingMembers: controllers(of: $0)
             )
         }
     }
 
-    /// Panes belonging to a session, which backs `panes.list` and the CLI's
+    /// The sessions permitted to drive `record`: its cohort's members, or just
+    /// its own session when it has none. A record naming a cohort that cannot
+    /// be resolved reports none, matching `cohortAdmits`.
+    private func controllers(of record: Record) -> Set<CohortMember> {
+        switch resolveCohort(record.cohortId) {
+        case .unbound:
+            return [
+                CohortMember(
+                    sessionId: record.sessionId,
+                    incarnation: record.acceptedIncarnation ?? 0
+                )
+            ]
+
+        case let .live(members, _):
+            return Set(members)
+
+        case .denied:
+            return []
+        }
+    }
+
+    /// The session a cohort-bound pane is *attributed* to, which is its
+    /// cohort's representative rather than whichever session happened to
+    /// attach it. Keeping one source for this is what stops `ownerSessionId`
+    /// drifting after the daemon reattributes a representative the GUI has
+    /// not reconciled yet.
+    private func attributedSession(of record: Record) -> UUID {
+        guard let cohortId = record.cohortId,
+            case let .live(_, representative) = resolveCohort(cohortId) else { return record.sessionId }
+        return representative
+    }
+
+    /// Panes a session may drive, which backs `panes.list` and the CLI's
     /// pane resolution. Every pane's identity is reported via its target key
     /// (a sim UDID or a physical device id). Sorted by paneId for stable
     /// output.
-    public func panesForSession(_ sessionId: UUID) -> [PaneInfo] {
+    ///
+    /// Cohort-scoped, so a sibling terminal sees the tab's panes rather than an
+    /// empty list. This is the discovery half of tab-scoped control: without
+    /// it a sibling could drive a pane it had no way to name.
+    public func panesForSession(_ sessionId: UUID, incarnation: UInt64? = nil) -> [PaneInfo] {
         panes.values
-            .filter { $0.sessionId == sessionId }
+            .filter { cohortAdmits(record: $0, sessionId: sessionId, requestIncarnation: incarnation) }
             .map { PaneInfo(
                 paneId: $0.id,
                 udid: $0.target.key,
@@ -3383,7 +3465,7 @@ public actor PaneCoordinator {
                     udid: record.target.key,
                     state: PaneLifecycle.rendering.rawValue
                 ),
-                audience: .session(record.sessionId)
+                audience: .sessions(controllers(of: record))
             )
         } else {
             statePublication = nil
@@ -3493,21 +3575,214 @@ public actor PaneCoordinator {
             return record
 
         case let .session(sessionId, requestIncarnation):
-            // Require an owner match, no active transfer, no owner revocation,
-            // and matching incarnations when both sides carry one. A pane whose session
-            // was closed (subscriptions swept) stays unreachable to `.session`
+            // No active transfer, no owner revocation, and matching
+            // incarnations when both sides carry one. A pane whose session was
+            // closed (subscriptions swept) stays unreachable to `.session`
             // principals until re-owned, so a subscribe that slipped past the
             // dispatch scope check and resumed post-close mints nothing; and a
             // request authorized under one incarnation can't reach a pane
             // re-owned by the same UUID at a different incarnation.
-            guard record.sessionId == sessionId,
-                !record.transferring,
+            guard !record.transferring,
                 !record.ownerRevoked,
-                incarnationAdmits(record: record, requestIncarnation: requestIncarnation) else {
+                cohortAdmits(
+                    record: record,
+                    sessionId: sessionId,
+                    requestIncarnation: requestIncarnation
+                ) else {
                 throw PaneError.notFound(paneId: paneId)
             }
             return record
         }
+    }
+
+    /// Test-only: the panes currently bound to a cohort.
+    func panesBound(toCohort cohortId: UUID) -> [UUID] {
+        panes.values.filter { $0.cohortId == cohortId }.map(\.id)
+    }
+
+    /// The cohort a record names, as of now.
+    private func resolveCohort(_ cohortId: UUID?) -> CohortResolution {
+        cohortState.resolve(cohortId: cohortId)
+    }
+
+    /// Whether `sessionId` is permitted to drive `record`, which is a
+    /// three-state question and not a two-state one:
+    ///
+    /// | `record.cohortId` | admits |
+    /// |---|---|
+    /// | nil | the record's own `sessionId`, the compatibility fallback |
+    /// | an installed cohort | that cohort's members |
+    /// | a retired or never-installed cohort | nobody |
+    ///
+    /// The third row is the one worth stating outright. Writing this as
+    /// "members if we have them, else the owner" would collapse it into the
+    /// first, so retiring a cohort or rejecting a replacement would silently
+    /// hand the pane back to whichever single session happened to attach it —
+    /// the exact behaviour cohorts exist to replace. A pane in that state is
+    /// driven by nobody and still rendered by the GUI, the same shape an
+    /// orphan already has.
+    private func cohortAdmits(
+        record: Record,
+        sessionId: UUID,
+        requestIncarnation: UInt64?
+    ) -> Bool {
+        guard let cohortId = record.cohortId else {
+            return record.sessionId == sessionId
+                && incarnationAdmits(record: record, requestIncarnation: requestIncarnation)
+        }
+        guard case let .live(members, _) = resolveCohort(cohortId),
+            let member = members.first(where: { $0.sessionId == sessionId }) else {
+            return false
+        }
+        // The ABA gate for a cohort-bound pane is the MEMBER'S own incarnation,
+        // not the pane creator's. `acceptedIncarnation` records whichever
+        // session attached the device, and incarnations are daemon-global, so
+        // judging a sibling against it rejects every session in the cohort
+        // except the one that happened to attach. The cohort already carries a
+        // verified incarnation per member, which is the value a restored
+        // same-UUID session must fail against.
+        guard let requestIncarnation else { return true }
+        return member.incarnation == requestIncarnation
+    }
+
+    /// Test-only: ask the ownership gate the question every input and AX
+    /// handler asks it, without needing a backend to drive.
+    func canSessionDrive(paneId: UUID, session: UUID, incarnation: UInt64?) -> Bool {
+        (try? authorize(
+            paneId: paneId,
+            as: .session(session, incarnation: incarnation),
+            gatesInput: false
+        )) != nil
+    }
+
+    /// Install or replace a cohort, binding pane records in the same turn.
+    ///
+    /// The whole transition commits synchronously: liveness is a local read,
+    /// binding feasibility is checked before anything mutates, and membership
+    /// and bindings land together. There is no window between deciding and
+    /// committing for a competing transition to occupy, which is what the
+    /// previous split-actor design needed a mirror, a fence and a rollback to
+    /// approximate. The suspensions below the commit only tear down streams
+    /// whose authorization the commit already withdrew.
+    func reconcileCohort(
+        cohortId: UUID,
+        members: [CohortMember],
+        representative: UUID,
+        replaces: UUID?,
+        requested: [SessionCohortBinding],
+        key: ProtectionOrderingKey
+    ) async -> CohortTransition {
+        let isReplacement = replaces != nil && replaces != cohortId
+        var planned: [(paneId: UUID, attachment: UInt64)] = []
+        var malformed: [SessionCohortBindingResult] = []
+        var seen: Set<UUID> = []
+        for binding in requested {
+            guard let paneId = UUID(uuidString: binding.paneId) else {
+                malformed.append(SessionCohortBindingResult(paneId: binding.paneId, bound: false))
+                continue
+            }
+            seen.insert(paneId)
+            planned.append((paneId: paneId, attachment: binding.expectedAttachment))
+        }
+        // A replacement sweeps every pane still naming the outgoing cohort, not
+        // just the ones the request listed: the GUI's snapshot can be missing a
+        // pane that attached while the reconcile was in flight, and leaving one
+        // behind strands it naming a cohort that no longer exists.
+        if let replaces, isReplacement {
+            for record in panes.values where record.cohortId == replaces && !seen.contains(record.id) {
+                planned.append((paneId: record.id, attachment: record.attachment))
+            }
+        }
+        // The cross-cohort fence. A binding may take a pane that is unbound,
+        // already this cohort's, or inherited from the cohort this request
+        // replaces — never one a different live cohort holds. Panes do not
+        // move between live cohorts (cross-tab pane movement is a human-only
+        // GUI gesture, and it does not exist yet), and the attachment cannot
+        // fence it: binding does not advance the attachment, so a delayed
+        // reconcile for cohort A, ordered only against A's own key, would
+        // otherwise pass both checks and steal back a pane a newer reconcile
+        // had just bound elsewhere.
+        func bindable(_ record: Record) -> Bool {
+            record.cohortId == nil || record.cohortId == cohortId || record.cohortId == replaces
+        }
+        let feasible = malformed.isEmpty && planned.allSatisfy { plan in
+            guard let record = panes[plan.paneId] else { return false }
+            return record.attachment == plan.attachment && bindable(record)
+        }
+        var transition = cohortState.reconcile(
+            cohortId: cohortId,
+            members: members,
+            representative: representative,
+            replaces: replaces,
+            key: key,
+            isLive: { [activeIncarnation] member in
+                activeIncarnation[member.sessionId] == member.incarnation
+            },
+            bindingsSucceed: feasible
+        )
+        guard transition.applied else {
+            transition.bindings = malformed + planned.map {
+                SessionCohortBindingResult(paneId: $0.paneId.uuidString, bound: false)
+            }
+            return transition
+        }
+        var results = malformed
+        for plan in planned {
+            guard let record = panes[plan.paneId], record.attachment == plan.attachment,
+                bindable(record) else {
+                results.append(SessionCohortBindingResult(paneId: plan.paneId.uuidString, bound: false))
+                continue
+            }
+            record.cohortId = cohortId
+            results.append(SessionCohortBindingResult(paneId: plan.paneId.uuidString, bound: true))
+        }
+        transition.bindings = results
+        // On a cohort-bound pane the only legitimate `.session` subscribers
+        // are the cohort's current members, so restore that invariant rather
+        // than chasing deltas: revoke every subscriber whose session the
+        // commit left outside the membership. One rule covers a member this
+        // reconcile removed, a replaced cohort's member, and a bound-in
+        // pane's non-member owner. The commit above already refuses them
+        // per-request; this tears down the streams they were admitted to
+        // earlier, which would otherwise keep receiving frames. No quiescence
+        // dance: the commit and a subscribe's final re-authorization run on
+        // this same actor, so an in-flight subscribe either landed in
+        // `subscribers` before the commit turn (this sweep catches it) or
+        // re-authorizes after it and is refused — the same reasoning as the
+        // foreign-owned stray arm of `revokeSessionSubscriptionsOnRecord`.
+        // `.guiPeer` is spared.
+        let memberIds = Set(members.map(\.sessionId))
+        for record in panes.values.filter({ $0.cohortId == cohortId }) {
+            let stale = Set(
+                record.subscribers.values.compactMap { subscriber -> UUID? in
+                    guard case let .session(sessionId, _) = subscriber.principal,
+                        !memberIds.contains(sessionId) else { return nil }
+                    return sessionId
+                }
+            )
+            for sessionId in stale {
+                await revokeSessionSubscribers(record: record, target: sessionId)
+            }
+        }
+        return transition
+    }
+
+    /// Tear a session out of its cohort, in one synchronous actor turn, before
+    /// any asynchronous subscription cleanup runs.
+    ///
+    /// Clears the producer-local active incarnation here rather than leaving
+    /// it to the subscription sweep that follows: a reconcile whose handler
+    /// resolved this incarnation before the close could otherwise commit
+    /// between the two and reinstall the departing member. With the entry
+    /// cleared in the same turn as the membership removal, that reconcile
+    /// either commits first (and this exact-member removal evicts what it
+    /// installed) or fails its commit-time liveness check. The equality guard
+    /// keeps a restored session's newer entry intact.
+    func tearDownSession(_ sessionId: UUID, incarnation: UInt64) {
+        if activeIncarnation[sessionId] == incarnation {
+            activeIncarnation[sessionId] = nil
+        }
+        cohortState.tearDown(member: CohortMember(sessionId: sessionId, incarnation: incarnation))
     }
 
     /// Whether a request's incarnation may reach `record`: an un-pinned pane

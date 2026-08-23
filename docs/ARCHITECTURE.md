@@ -1108,6 +1108,74 @@ wrote that session's title is dropped: handler tasks are not FIFO, so a
 push admitted on a connection the GUI has already replaced could
 otherwise resume after its successor's and reinstate a superseded label.
 
+#### `session.setCohort`
+
+- Params: `{cohortId, revision, members, representative, replaces?,
+  bindings?}`
+- Result: `{applied, revision, bindings?}`
+- Scope: validated GUI
+
+The peer's audit token is the authority; no capability rides on the wire,
+and a UDS caller is refused as a scope violation. That refusal carries more
+weight here than on the neighbouring methods: membership decides who may
+drive another session's pane, so a caller able to curate it could hand
+itself a device it never owned.
+
+A cohort is the set of sessions that jointly control a device pane, which is
+how pane authority reaches every terminal in a tab instead of only the
+terminal that attached the device. The daemon never learns that a cohort is
+a tab. It stores an opaque id the GUI mints, an ordered membership of
+verified session incarnations, and one representative used for attribution;
+nothing on the wire identifies a tab. The order of `members` is the GUI's
+nomination sequence: when the representative is torn down before the GUI can
+renominate, attribution falls to the first surviving member in order.
+
+Each request installs a complete membership, replacing rather than
+amending. The daemon resolves each member's incarnation itself instead of
+trusting the wire, so a stale GUI can't pin a member at an incarnation its
+session has already moved past. It refuses a representative that isn't
+among the submitted members, and refuses a member that already belongs to
+another cohort unless the request names that cohort in `replaces`, in which
+case the retirement and the placement commit together. A retired id is dead
+for good: the daemon tombstones it, so a delayed request naming it is
+refused rather than quietly rebuilding the cohort its replacement retired.
+
+Ordering follows `session.setProtectedBatch`. The client's `revision` pairs
+with a server-derived epoch (the monotonic XPC connection id), and a request
+applies only when its key strictly dominates the cohort's stored key. A
+cohort whose members have all been torn down keeps its record and key: it
+admits nobody, but the same id reconciled under a dominating key comes back,
+because the GUI retains one cohort id per tab across restores.
+
+Pane records reference a cohort, and a refused binding means different
+things to the two request shapes. Adding panes to a live cohort reports
+per-pane results and commits the rest, so a pane whose attachment moved
+under a racing re-attach is retried on the next reconcile. A binding can
+take a pane that is unbound, already this cohort's, or inherited from the
+cohort named in `replaces`, never one a different live cohort holds:
+panes do not move between live cohorts, and a delayed request is ordered
+only against its own cohort's history, so nothing else would fence the
+theft. Replacing a cohort is all-or-nothing: if any pane referencing the
+outgoing cohort can't be rebound, the whole request is refused. A partial
+replacement would leave a pane naming a cohort that no longer exists,
+which refuses every session correctly but leaves a live pane nobody can
+drive.
+
+A pane naming a retired or never-installed cohort admits nobody. That is
+deliberately different from a pane with no cohort at all, which still
+answers to its own session for compatibility. Collapsing the two would hand
+a pane back to whichever single session attached it the moment a cohort was
+retired.
+
+Membership governs control only. What happens to a closing session's
+devices is untouched by this method: a session close takes exactly the path
+it took before cohorts, so closing the terminal that attached a device
+still orphans its pane even when siblings remain.
+
+The GUI does not create cohorts yet. The daemon side is complete and
+enforced, so every pane currently has no cohort and takes the compatibility
+path; the unused call path isn't dead code.
+
 #### `tabs.list`
 
 - Params: `{}` (body ignored)

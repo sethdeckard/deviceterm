@@ -230,3 +230,69 @@ func devicesListReportsCoreSimulatorEnumerationTimeout() async throws {
         Issue.record("expected RPCMethodError, got \(error)")
     }
 }
+
+@Test
+func devicesListPinsTheCallerToItsDispatchCapturedIncarnation() async throws {
+    let manager = SessionManager()
+    let created = try await manager.createSession(label: nil)
+    let callerId = created.state.id
+    let incarnation = try #require(await manager.incarnation(of: callerId))
+    let paneCoordinator = PaneCoordinator()
+    await paneCoordinator.noteSessionActive(callerId, incarnation: incarnation)
+    _ = try await paneCoordinator.createPane(
+        target: .device(deviceId: "dev-pin"),
+        sessionId: callerId,
+        ownerIncarnation: incarnation,
+        acquire: {
+            PaneCoordinator.AcquiredBackend(
+                backend: MockDeviceBackend(),
+                family: DeviceFamily.unknown.rawValue,
+                deviceType: nil
+            )
+        }
+    )
+    let handler = PhysicalDeviceMethods.devicesList(
+        deviceCoordinator: DeviceCoordinator(),
+        physicalDeviceCoordinator: PhysicalDeviceCoordinator(listDevices: {
+            [
+                DeviceCtlDevice(
+                    udid: "dev-pin",
+                    name: "enceladus",
+                    model: nil,
+                    osVersion: nil,
+                    transportType: nil,
+                    tunnelState: nil,
+                    tunnelIPAddress: nil
+                )
+            ]
+        }),
+        paneCoordinator: paneCoordinator,
+        sessionManager: manager
+    )
+    func roster(pinnedTo captured: UInt64?) async throws -> [DeviceRosterEntry] {
+        let context = DispatchPeerContext(
+            transport: .uds,
+            connectionId: 1,
+            authenticatedSession: created.state,
+            sessionIncarnation: captured
+        )
+        let data = try await SessionDispatchContext.$originatingSessionId.withValue(
+            callerId.uuidString
+        ) {
+            try await DispatchPeerContext.$current.withValue(context) {
+                try await handler(Data())
+            }
+        }
+        return try JSONDecoder().decode([DeviceRosterEntry].self, from: data)
+    }
+
+    let pinned = try await roster(pinnedTo: incarnation)
+    #expect(pinned.first { $0.id == "dev-pin" }?.attached == true)
+    // A request admitted under an earlier incarnation can resume after the
+    // same UUID was reaped and restored. Its dispatch-captured pin no longer
+    // matches the pane's controller, so the device reads as unattached; a
+    // fresh manager read here would pin the old caller to the restored
+    // session's roster authority instead.
+    let stale = try await roster(pinnedTo: incarnation &+ 7)
+    #expect(stale.first { $0.id == "dev-pin" }?.attached == false)
+}

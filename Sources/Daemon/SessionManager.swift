@@ -348,6 +348,9 @@ public actor SessionManager {
     /// hermetic tests that stand up no `PaneCoordinator` (there are no
     /// subscriptions to revoke); production is fail-closed by the startup assert.
     private var paneRevoker: (@Sendable (UUID) async -> Void)?
+    /// Cohort-store teardown, installed alongside `paneRevoker`. Runs for every
+    /// teardown reason so a reaped session cannot linger as a cohort member.
+    private var cohortRevoker: (@Sendable (UUID, UInt64) async -> Void)?
     /// Late-bound pane-producer activation seam (`PaneCoordinator.noteSessionActive`).
     /// Called from a registration transition when a session reaches `.ready`, so
     /// the pane coordinator's local active-incarnation map, which its
@@ -438,6 +441,11 @@ public actor SessionManager {
     /// before binding the RPC servers, so a closed session's subscriptions can
     /// never be silently skipped in production.
     public var hasPaneRevoker: Bool { paneRevoker != nil }
+
+    /// Whether the cohort revoker seam is installed, asserted the same way:
+    /// without it a torn-down session would silently linger in every
+    /// sibling's cohort membership.
+    public var hasCohortRevoker: Bool { cohortRevoker != nil }
 
     /// Whether the restoration barrier has been released. True once any
     /// `restoreBatch` (even empty) has been processed, or immediately for a
@@ -750,6 +758,11 @@ public actor SessionManager {
         paneRevoker = revoker
     }
 
+    /// Install the cohort-store teardown (see `cohortRevoker`).
+    func setCohortRevoker(_ revoker: @escaping @Sendable (UUID, UInt64) async -> Void) {
+        cohortRevoker = revoker
+    }
+
     /// Install the pane-producer activation seam (see `paneActivator`) and
     /// REPLAY every currently-ready session into it. Production wires this before
     /// any session exists, so the replay is empty; but a caller (a test harness)
@@ -906,6 +919,11 @@ public actor SessionManager {
         if let hook = transitionEntryHook { await hook() }
         await automationGrantStore.revokeForRemovedSession(id)
         await terminalAnchorStore.revokeForRemovedSession(id)
+        // Every teardown reaches the cohort store, not just an explicit
+        // `session.close`. A restore-batch reap removes sessions through this
+        // same path, and a member the store still believed live would keep a
+        // dead session in every sibling's membership.
+        await cohortRevoker?(id, incarnation)
         await paneRevoker?(id)
         await eventBroker?.finishSession(id, withFinalEvent: .sessionClosed(sessionId: id.uuidString))
         if case .tearingDown(incarnation) = sessionPhase[id] {
