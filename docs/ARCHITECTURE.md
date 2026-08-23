@@ -1110,16 +1110,17 @@ otherwise resume after its successor's and reinstate a superseded label.
 
 #### `session.setCohort`
 
-- Params: `{cohortId, revision, members, representative, replaces?,
-  bindings?}`
-- Result: `{applied, revision, bindings?}`
+- Params: `{operation, cohortId, revision, …}`; the remaining fields depend
+  on the operation
+- Result: `{applied, revision, outcome?, bindings?}`
 - Scope: validated GUI
 
 The peer's audit token is the authority; no capability rides on the wire,
 and a UDS caller is refused as a scope violation. That refusal carries more
 weight here than on the neighbouring methods: membership decides who may
-drive another session's pane, so a caller able to curate it could hand
-itself a device it never owned.
+drive another session's pane, and a close verdict decides who inherits its
+simulator, so a caller able to curate either could hand itself a device it
+never owned.
 
 A cohort is the set of sessions that jointly control a device pane, which is
 how pane authority reaches every terminal in a tab instead of only the
@@ -1127,23 +1128,63 @@ terminal that attached the device. The daemon never learns that a cohort is
 a tab. It stores an opaque id the GUI mints, an ordered membership of
 verified session incarnations, and one representative used for attribution;
 nothing on the wire identifies a tab. The order of `members` is the GUI's
-nomination sequence: when the representative is torn down before the GUI can
-renominate, attribution falls to the first surviving member in order.
+nomination sequence: when a member closes before the GUI can renominate,
+the first surviving member in order inherits.
 
-Each request installs a complete membership, replacing rather than
-amending. The daemon resolves each member's incarnation itself instead of
-trusting the wire, so a stale GUI can't pin a member at an incarnation its
-session has already moved past. It refuses a representative that isn't
-among the submitted members, and refuses a member that already belongs to
-another cohort unless the request names that cohort in `replaces`, in which
-case the retirement and the placement commit together. A retired id is dead
-for good: the daemon tombstones it, so a delayed request naming it is
-refused rather than quietly rebuilding the cohort its replacement retired.
+Two operations share the method because they mutate the same cohort and have
+to order against each other on one revision sequence.
+
+`reconcile` carries `{members, representative, replaces?, bindings?}` and
+installs a complete membership, replacing rather than amending. The daemon
+resolves each member's incarnation itself instead of trusting the wire, so a
+stale GUI can't pin a member at an incarnation its session has already moved
+past. It refuses a representative that isn't among the submitted members,
+and refuses a member that already belongs to another cohort unless the
+request names that cohort in `replaces`, in which case the retirement and
+the placement commit together. A retired id is dead for good: the daemon
+tombstones it, so a delayed request naming it is refused rather than quietly
+rebuilding the cohort its replacement retired. A member a reconcile removes
+is still alive, so its panes change hands as a targeted transfer: the named
+devices, and the claims for them present when the transfer applies, move to
+the new representative, and nothing else about the dropped session is
+touched. A matching claim still in flight at that moment stays the dropped
+member's and can win ownership back; that race is accepted until claims
+carry causal identity.
+
+`beginClose` carries `{transitionId, leaving, mode}` and returns the
+authoritative `outcome`: `promote(successor)` when siblings remain, or
+`detach`/`shutdown` when none do. The GUI records that verdict in its own
+boot-claim tombstone before it closes the sessions, so both layers act on
+one decision instead of each deriving its own. The outcome is journalled
+under `transitionId` before the reply is sent, so a retry carrying the same
+id returns the identical verdict even after the cohort has lost those
+members, and promotes exactly once; the journal entry is retained for the
+boot-claim lease. `mode` is required rather than
+defaulted: it only matters when nothing remains, which is exactly when a
+silent default would contradict the user's shutdown choice.
+
+A verdict is decided once per member, by whichever path reaches it first:
+a `beginClose`, an explicit `session.close` (which derives the same verdict
+server-side; no wire field lets a session name its own successor), or the
+teardown of a reaped session. The device consequences are emitted when the
+verdict is recorded, in commit order, so a close can never be re-decided
+against a cohort it has already left. A whole-tab close is one `beginClose`
+naming every member: the terminal verdicts commit together, and there is no
+window where a partially closed tab promotes. Verdicts are keyed to exact
+incarnations; a session closed and restored inside the boot-claim lease is
+not dispositioned by its predecessor's close. One sharp edge is deliberate:
+a session reaped without an explicit close dispositions no devices (only an
+explicit close carries a user's choice, and GUI recovery owns the rest),
+while a reaped member of a still-live tab hands its panes and devices to
+the survivors.
 
 Ordering follows `session.setProtectedBatch`. The client's `revision` pairs
-with a server-derived epoch (the monotonic XPC connection id), and a request
-applies only when its key strictly dominates the cohort's stored key. A
-cohort whose members have all been torn down keeps its record and key: it
+with a server-derived epoch (the monotonic XPC connection id), and a new
+transition against an existing cohort applies only when its key strictly
+dominates the stored key; an exact `beginClose` retry replays the journalled
+verdict instead, for as long as the journal entry is retained (the
+boot-claim lease). A cohort whose members have all been torn down keeps its
+record and key: it
 admits nobody, but the same id reconciled under a dominating key comes back,
 because the GUI retains one cohort id per tab across restores.
 
@@ -1167,14 +1208,8 @@ answers to its own session for compatibility. Collapsing the two would hand
 a pane back to whichever single session attached it the moment a cohort was
 retired.
 
-Membership governs control only. What happens to a closing session's
-devices is untouched by this method: a session close takes exactly the path
-it took before cohorts, so closing the terminal that attached a device
-still orphans its pane even when siblings remain.
-
-The GUI does not create cohorts yet. The daemon side is complete and
-enforced, so every pane currently has no cohort and takes the compatibility
-path; the unused call path isn't dead code.
+Cohorts take effect once the GUI calls `session.setCohort`; a pane with no
+cohort answers to its own session, the compatibility path.
 
 #### `tabs.list`
 

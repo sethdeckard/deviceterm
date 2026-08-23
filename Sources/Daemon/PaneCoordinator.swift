@@ -119,16 +119,16 @@ public struct PaneInfo: Sendable, Equatable {
     public let target: PaneTarget
 }
 
-/// Which session owns the live pane mirroring a given device. Backs the
-/// `devices.list` aggregate roster's attachment annotation. Carries the
-/// full `PaneTarget` (not just its `.key` string) so the roster matches
-/// on **kind + id**: a sim and a physical device that share id text are
-/// never cross-annotated.
+/// Attribution and controller membership for the live pane mirroring a
+/// given device. Backs the `devices.list` aggregate roster's attachment
+/// annotation. Carries the full `PaneTarget` (not just its `.key` string)
+/// so the roster matches on **kind + id**: a sim and a physical device that
+/// share id text are never cross-annotated.
 public struct PaneOwnership: Sendable, Equatable {
     public let target: PaneTarget
-    /// The record's own owning session: what `ownerSessionId` reported before
-    /// cohorts, and still the adoption/transfer anchor. Attribution, not
-    /// authority.
+    /// The session attributed to this pane: its live cohort's
+    /// representative, or the record's own session when unbound.
+    /// Attribution, not authority.
     public let sessionId: UUID
     /// Every member permitted to drive the pane. The roster's visibility test
     /// runs against this, so a caller sharing a protected tab with the
@@ -935,6 +935,19 @@ public actor PaneCoordinator {
     /// decides who may drive a pane and rebinds records, and those have to be
     /// visible together. See `SessionCohortState`.
     private var cohortState = SessionCohortState()
+    /// Where cohort transitions send their device consequences: the effect
+    /// pump's synchronous enqueue, installed by `installCohortWiring`.
+    /// Yielded inside the commit turn, so emission order is this actor's
+    /// commit order and the pump's single consumer applies effects to
+    /// `DeviceCoordinator` in exactly that order. Out-of-order application
+    /// is structurally impossible, with no sequence numbers to compare and
+    /// no dedup to get wrong. `main.swift` asserts installation before the
+    /// RPC servers bind; a nil sink outside tests would silently drop a
+    /// transfer or a tombstone.
+    private var deviceEffectSink: (@Sendable (CohortDeviceEffect) -> Void)?
+    /// Whether the effect sink is installed. `main.swift` asserts this before
+    /// binding the RPC servers, the same fail-closed rule as the revokers.
+    public var hasDeviceEffectSink: Bool { deviceEffectSink != nil }
     /// PRODUCER-LOCAL active incarnation per session, pushed by `SessionManager`
     /// as a session reaches `.ready` (`noteSessionActive`) and CLEARED when its
     /// close sweep runs (`revokeSubscriptions(forSession:)`). Every pane
@@ -954,8 +967,9 @@ public actor PaneCoordinator {
     /// path without depending on RNG luck.
     private let mintShortID: @Sendable () -> String
     /// Optional event broker. When non-nil, state transitions are published
-    /// to it for the owning session, so that session's `deviceterm events`
-    /// subscribers (and the GUI peer) see pane lifecycle. Frame-driven
+    /// to it for the sessions currently permitted to drive the pane, so
+    /// their `deviceterm events` subscribers (and the GUI peer) see pane
+    /// lifecycle. Frame-driven
     /// transitions are awaited by the per-pane pump after their synchronous
     /// coordinator commit. Nil in tests that don't care about the broker,
     /// which keeps the existing test surface terse.
@@ -1374,8 +1388,9 @@ public actor PaneCoordinator {
         }
         // Publish the pane's initial state (booting or already-
         // rendering on attach-to-booted-device) to the event stream,
-        // scoped to the owning session. Subsequent transitions get their
-        // own publishes in handleSurfaceCallback / shutdown.
+        // scoped to the sessions permitted to drive the pane. Subsequent
+        // transitions get their own publishes in handleSurfaceCallback /
+        // shutdown.
         await eventBroker?.publish(
             .paneStateChanged(
             paneId: paneId.uuidString,
@@ -2104,8 +2119,9 @@ public actor PaneCoordinator {
         for subscriber in record.subscribers.values {
             subscriber.continuation.yield(.stateChanged(paneId: record.id, state: state))
         }
-        // Publish to the event stream (scoped to the owning session) so the
-        // session's `deviceterm events` subscribers see pane lifecycle.
+        // Publish to the event stream, scoped to the sessions permitted to
+        // drive the pane, so their `deviceterm events` subscribers see pane
+        // lifecycle.
         await eventBroker?.publish(
             .paneStateChanged(
                 paneId: record.id.uuidString,
@@ -3325,11 +3341,11 @@ public actor PaneCoordinator {
 
     // MARK: - Query
 
-    /// Ownership of every live pane, keyed by device target, the
-    /// reverse of `panesForSession`. Backs the `devices.list` roster's
-    /// attachment annotation, which then applies protected-tab opacity on
-    /// the returned session ids. Includes shutdown/failed records so a
-    /// device the GUI still shows a (dead) pane for reads as attached.
+    /// Attribution and controller membership for every live pane, keyed by
+    /// device target. Backs the `devices.list` roster's attachment
+    /// annotation, which then applies protected-tab opacity on the returned
+    /// session ids. Includes shutdown/failed records so a device the GUI
+    /// still shows a (dead) pane for reads as attached.
     ///
     /// Reports **every** session that may drive the pane, not just the record's
     /// own. The roster tests "can the caller see any of these", and a caller
@@ -3453,8 +3469,9 @@ public actor PaneCoordinator {
             for (_, subscriber) in record.subscribers {
                 subscriber.continuation.yield(.stateChanged(paneId: paneId, state: .rendering))
             }
-            // Publish the booting→rendering transition to the
-            // event stream (scoped to the owning session). Boot-wait
+            // Publish the booting→rendering transition to the event
+            // stream, scoped to the sessions permitted to drive the
+            // pane. Boot-wait
             // callers (`deviceterm events | jq 'select(.state=="rendering")'`)
             // pick up here.
             statePublication = SurfacePublishWork.StatePublication(
@@ -3542,9 +3559,10 @@ public actor PaneCoordinator {
     // MARK: - Helpers
 
     /// Ownership gate for every pane-targeted operation. A `.session`
-    /// principal reaches only panes whose `Record.sessionId` matches; the
-    /// validated `.guiPeer` spans every session. Returns the authorized
-    /// record.
+    /// principal reaches an unbound pane owned by that session, or a
+    /// cohort-bound pane whose membership contains its session (matched on
+    /// incarnation too when the request carries a pin); the validated
+    /// `.guiPeer` spans every session. Returns the authorized record.
     ///
     /// A pane that does not exist and a pane owned by another session
     /// throw the **same** `notFound`; a distinct "forbidden" result
@@ -3614,11 +3632,10 @@ public actor PaneCoordinator {
     /// | an installed cohort | that cohort's members |
     /// | a retired or never-installed cohort | nobody |
     ///
-    /// The third row is the one worth stating outright. Writing this as
-    /// "members if we have them, else the owner" would collapse it into the
-    /// first, so retiring a cohort or rejecting a replacement would silently
-    /// hand the pane back to whichever single session happened to attach it —
-    /// the exact behaviour cohorts exist to replace. A pane in that state is
+    /// Keep the third row distinct from unbound, so a missing cohort never
+    /// falls back to the record's own session. Writing this as "members if
+    /// we have them, else the owner" would collapse it into the first row
+    /// the moment a cohort was retired or a replacement rejected. A pane in the third row is
     /// driven by nobody and still rendered by the GUI, the same shape an
     /// orphan already has.
     private func cohortAdmits(
@@ -3659,11 +3676,10 @@ public actor PaneCoordinator {
     ///
     /// The whole transition commits synchronously: liveness is a local read,
     /// binding feasibility is checked before anything mutates, and membership
-    /// and bindings land together. There is no window between deciding and
-    /// committing for a competing transition to occupy, which is what the
-    /// previous split-actor design needed a mirror, a fence and a rollback to
-    /// approximate. The suspensions below the commit only tear down streams
-    /// whose authorization the commit already withdrew.
+    /// and bindings land together, with no window between deciding and
+    /// committing for a competing transition to occupy. The suspensions
+    /// below the commit only tear down streams whose authorization the
+    /// commit already withdrew.
     func reconcileCohort(
         cohortId: UUID,
         members: [CohortMember],
@@ -3695,13 +3711,12 @@ public actor PaneCoordinator {
         }
         // The cross-cohort fence. A binding may take a pane that is unbound,
         // already this cohort's, or inherited from the cohort this request
-        // replaces — never one a different live cohort holds. Panes do not
-        // move between live cohorts (cross-tab pane movement is a human-only
-        // GUI gesture, and it does not exist yet), and the attachment cannot
-        // fence it: binding does not advance the attachment, so a delayed
-        // reconcile for cohort A, ordered only against A's own key, would
-        // otherwise pass both checks and steal back a pane a newer reconcile
-        // had just bound elsewhere.
+        // replaces, never one a different live cohort holds: a move between
+        // live cohorts must replace or retire the current cohort first. The
+        // attachment cannot fence it, because binding does not advance the
+        // attachment, so a delayed reconcile for cohort A, ordered only
+        // against A's own key, would otherwise pass both checks and steal
+        // back a pane a newer reconcile had just bound elsewhere.
         func bindable(_ record: Record) -> Bool {
             record.cohortId == nil || record.cohortId == cohortId || record.cohortId == replaces
         }
@@ -3737,21 +3752,47 @@ public actor PaneCoordinator {
             results.append(SessionCohortBindingResult(paneId: plan.paneId.uuidString, bound: true))
         }
         transition.bindings = results
-        // On a cohort-bound pane the only legitimate `.session` subscribers
-        // are the cohort's current members, so restore that invariant rather
-        // than chasing deltas: revoke every subscriber whose session the
-        // commit left outside the membership. One rule covers a member this
-        // reconcile removed, a replaced cohort's member, and a bound-in
-        // pane's non-member owner. The commit above already refuses them
-        // per-request; this tears down the streams they were admitted to
-        // earlier, which would otherwise keep receiving frames. No quiescence
-        // dance: the commit and a subscribe's final re-authorization run on
-        // this same actor, so an in-flight subscribe either landed in
-        // `subscribers` before the commit turn (this sweep catches it) or
-        // re-authorizes after it and is refused — the same reasoning as the
-        // foreign-owned stray arm of `revokeSessionSubscriptionsOnRecord`.
-        // `.guiPeer` is spared.
-        let memberIds = Set(members.map(\.sessionId))
+        // A removed member is still alive, so its panes change hands as a
+        // targeted transfer rather than a close: re-home the records it owns
+        // in this cohort to the incoming representative, and tell the device
+        // layer to move exactly those devices and their matching boot claims.
+        // No tombstone and no wider sweep; its unrelated devices and late
+        // claims stay its own.
+        if let successorMember = members.first(where: { $0.sessionId == representative }) {
+            for dropped in transition.removed where dropped.sessionId != successorMember.sessionId {
+                let moved = rehome(from: dropped.sessionId, to: successorMember, cohortId: cohortId)
+                guard !moved.isEmpty else { continue }
+                emit(
+                    .transfer(
+                        CohortTransferEffect(
+                            previousOwner: dropped,
+                            successor: successorMember,
+                            targets: moved
+                        )
+                    )
+                )
+            }
+        }
+        await sweepNonMemberSubscribers(cohortId: cohortId)
+        return transition
+    }
+
+    /// Restore the subscription invariant after a membership transition: on a
+    /// cohort-bound pane the only legitimate `.session` subscribers are the
+    /// cohort's current members, so revoke every subscriber the commit left
+    /// outside the membership rather than chasing deltas. One rule covers a
+    /// member a reconcile removed, a replaced cohort's member, a bound-in
+    /// pane's non-member owner, and a `beginClose`'s leaving members. The
+    /// commit already refuses them per-request; this tears down the streams
+    /// they were admitted to earlier, which would otherwise keep receiving
+    /// frames. No quiescence dance: the commit and a subscribe's final
+    /// re-authorization run on this same actor, so an in-flight subscribe
+    /// either landed in `subscribers` before the commit turn (this sweep
+    /// catches it) or re-authorizes after it and is refused, the same
+    /// reasoning as the foreign-owned stray arm of
+    /// `revokeSessionSubscriptionsOnRecord`. `.guiPeer` is spared.
+    private func sweepNonMemberSubscribers(cohortId: UUID) async {
+        let memberIds = Set(cohortState.members(ofCohort: cohortId).map(\.sessionId))
         for record in panes.values.filter({ $0.cohortId == cohortId }) {
             let stale = Set(
                 record.subscribers.values.compactMap { subscriber -> UUID? in
@@ -3764,7 +3805,37 @@ public actor PaneCoordinator {
                 await revokeSessionSubscribers(record: record, target: sessionId)
             }
         }
-        return transition
+    }
+
+    /// Hand a device consequence to the effect pump, inside the commit turn
+    /// that decided it.
+    private func emit(_ effect: CohortDeviceEffect) {
+        deviceEffectSink?(effect)
+    }
+
+    /// Install the effect pump's enqueue (see `deviceEffectSink`).
+    func setDeviceEffectSink(_ sink: @escaping @Sendable (CohortDeviceEffect) -> Void) {
+        deviceEffectSink = sink
+    }
+
+    /// Point every record owned by `previous` and bound to `cohortId` at the
+    /// inheriting member, and report the device targets that moved.
+    ///
+    /// Without this the record keeps naming the departed (or dropped)
+    /// session, and the close sweep (`revokeSessionSubscriptionsOnRecord`)
+    /// still sees it as owned by a closing session and raises `ownerRevoked`,
+    /// which refuses every principal; the inheritor would receive a pane it
+    /// is then forbidden to drive. Scoped to the one cohort, so a record the
+    /// same session owns in some other cohort is left alone.
+    @discardableResult
+    private func rehome(from previous: UUID, to successor: CohortMember, cohortId: UUID) -> [PaneTarget] {
+        var moved: [PaneTarget] = []
+        for record in panes.values where record.sessionId == previous && record.cohortId == cohortId {
+            record.sessionId = successor.sessionId
+            record.acceptedIncarnation = successor.incarnation
+            moved.append(record.target)
+        }
+        return moved
     }
 
     /// Tear a session out of its cohort, in one synchronous actor turn, before
@@ -3782,7 +3853,113 @@ public actor PaneCoordinator {
         if activeIncarnation[sessionId] == incarnation {
             activeIncarnation[sessionId] = nil
         }
-        cohortState.tearDown(member: CohortMember(sessionId: sessionId, incarnation: incarnation))
+        let member = CohortMember(sessionId: sessionId, incarnation: incarnation)
+        let cohortId = cohortState.cohortId(forMember: member)
+        switch cohortState.tearDown(member: member, now: DispatchTime.now().uptimeNanoseconds) {
+        case .alreadyDecided, .terminal:
+            // Already decided: an explicit close or a `beginClose` emitted the
+            // consequences when it recorded the verdict. Terminal: a reap of a
+            // last-or-only member dispositions nothing, because only an
+            // explicit close carries a user's choice, and GUI recovery owns
+            // the rest.
+            return
+
+        case let .promoted(successor):
+            // A reaped member of a live tab: the survivors inherit its panes
+            // and devices, or a sibling's pane would be `ownerRevoked` by the
+            // subscription sweep that runs next.
+            if let cohortId {
+                rehome(from: sessionId, to: successor, cohortId: cohortId)
+            }
+            emit(
+                .close(
+                    CohortCloseEffect(
+                        sessionId: sessionId,
+                        incarnation: incarnation,
+                        outcome: .promote(successor: successor.sessionId.uuidString)
+                    )
+                )
+            )
+        }
+    }
+
+    /// Decide and record the close verdict for a session whose explicit close
+    /// is in flight, before the session is removed.
+    ///
+    /// Runs from the `session.close` handler's pre-removal seam. One
+    /// synchronous turn decides the verdict, removes the membership, re-homes
+    /// the records, and emits the device consequence; the teardown that
+    /// follows removal finds the verdict recorded and owes nothing. A member
+    /// outside any cohort takes the requested terminal arm.
+    func recordCloseVerdict(sessionId: UUID, incarnation: UInt64, mode: PaneCloseMode) {
+        let member = CohortMember(sessionId: sessionId, incarnation: incarnation)
+        let cohortId = cohortState.cohortId(forMember: member)
+        switch cohortState.recordCloseVerdict(
+            member: member,
+            mode: mode,
+            now: DispatchTime.now().uptimeNanoseconds
+        ) {
+        case .alreadyRecorded:
+            return
+
+        case let .decided(outcome, successor):
+            if let successor, let cohortId {
+                rehome(from: sessionId, to: successor, cohortId: cohortId)
+            }
+            emit(
+                .close(
+                    CohortCloseEffect(
+                        sessionId: sessionId,
+                        incarnation: incarnation,
+                        outcome: outcome
+                    )
+                )
+            )
+        }
+    }
+
+    /// Commit a close verdict for some of a cohort's members, returning the
+    /// authoritative outcome the GUI records before it closes them.
+    ///
+    /// The commit is one synchronous turn (verdicts, membership removal,
+    /// re-homing, and emission together), followed by the subscription sweep,
+    /// which is part of the transition's completion: the commit withdraws the
+    /// leaving members' authorization per-request, and the sweep tears down
+    /// the streams they were admitted to earlier, before the reply.
+    func beginCohortClose(
+        cohortId: UUID,
+        transitionId: UUID,
+        leaving: [UUID],
+        mode: PaneCloseMode,
+        key: ProtectionOrderingKey
+    ) async -> CohortCloseCommit {
+        let commit = cohortState.beginClose(
+            cohortId: cohortId,
+            transitionId: transitionId,
+            leaving: leaving,
+            mode: mode,
+            key: key,
+            now: DispatchTime.now().uptimeNanoseconds
+        )
+        guard commit.applied, let outcome = commit.outcome, !commit.closed.isEmpty else {
+            return commit
+        }
+        for member in commit.closed {
+            if let successor = commit.successor {
+                rehome(from: member.sessionId, to: successor, cohortId: cohortId)
+            }
+            emit(
+                .close(
+                    CohortCloseEffect(
+                        sessionId: member.sessionId,
+                        incarnation: member.incarnation,
+                        outcome: outcome
+                    )
+                )
+            )
+        }
+        await sweepNonMemberSubscribers(cohortId: cohortId)
+        return commit
     }
 
     /// Whether a request's incarnation may reach `record`: an un-pinned pane

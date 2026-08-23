@@ -142,8 +142,8 @@ struct PaneCohortAuthorityTests {
             incarnation: alice.incarnation
         )
         // Refused on the representative, which is checked before anything
-        // commits. Binding first and deciding afterwards is what used to leave
-        // a pane pointing at a cohort that was never installed.
+        // commits. Validate before binding: binding first would leave a pane
+        // pointing at a cohort that was never installed.
         let transition = await coordinator.reconcileCohort(
             cohortId: cohort,
             members: [alice],
@@ -271,8 +271,8 @@ struct PaneCohortAuthorityTests {
             owner: alice.sessionId,
             incarnation: alice.incarnation
         )
-        // Alice subscribes while the pane is unbound, on her legacy-owner
-        // authority.
+        // Alice subscribes while the pane is unbound, on her own-session
+        // compatibility authority.
         let aliceSub = try await coordinator.subscribe(
             paneId: created.paneId,
             as: .session(alice.sessionId, incarnation: alice.incarnation)
@@ -471,5 +471,295 @@ struct PaneCohortAuthorityTests {
                 incarnation: nil
             ))
         )
+    }
+
+    // MARK: - Close verdicts and device effects
+
+    /// Wire a capturing sink, returning the box the coordinator emits into.
+    /// Emission is synchronous inside the coordinator's commit turns, so once
+    /// an operation returns, its effects are all here.
+    private func captureEffects(_ coordinator: PaneCoordinator) async -> EffectBox {
+        let box = EffectBox()
+        await coordinator.setDeviceEffectSink { box.append($0) }
+        return box
+    }
+
+    @Test("a close decided by beginClose is emitted once, and the successor survives the sweeps")
+    func beginCloseEmitsOnceAcrossEveryClosePath() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob])
+        let box = await captureEffects(coordinator)
+        let created = try await pane(
+            coordinator,
+            udid: "udid-close-a",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: cohort, members: [alice, bob], created: created)
+
+        let commit = await coordinator.beginCohortClose(
+            cohortId: cohort,
+            transitionId: UUID(),
+            leaving: [alice.sessionId],
+            mode: .shutdown,
+            key: key(2)
+        )
+        #expect(commit.outcome == .promote(successor: bob.sessionId.uuidString))
+        // The explicit close and the teardown both follow, as they do in
+        // production. Neither may decide again: deciding fresh here is the
+        // shape that once demoted a committed promotion to detach/shutdown.
+        await coordinator.recordCloseVerdict(
+            sessionId: alice.sessionId,
+            incarnation: alice.incarnation,
+            mode: .shutdown
+        )
+        await coordinator.tearDownSession(alice.sessionId, incarnation: alice.incarnation)
+        await coordinator.revokeSubscriptions(forSession: alice.sessionId)
+
+        #expect(box.effects.count == 1)
+        guard case let .close(close) = box.effects.first else {
+            Issue.record("expected a close effect, got \(box.effects)")
+            return
+        }
+        #expect(close.sessionId == alice.sessionId)
+        #expect(close.incarnation == alice.incarnation)
+        #expect(close.outcome == .promote(successor: bob.sessionId.uuidString))
+        // The re-homing is what keeps bob able to drive the pane he
+        // inherited: the revocation sweep raises `ownerRevoked` on records
+        // still naming the departed session.
+        #expect(
+            await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: bob.sessionId,
+                incarnation: bob.incarnation
+            )
+        )
+        #expect(
+            !(await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: alice.sessionId,
+                incarnation: alice.incarnation
+            ))
+        )
+    }
+
+    @Test("beginClose tears down the leaving member's stream before replying")
+    func beginCloseRevokesTheLeavingMembersStream() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob])
+        let created = try await pane(
+            coordinator,
+            udid: "udid-close-b",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: cohort, members: [alice, bob], created: created)
+        let aliceSub = try await coordinator.subscribe(
+            paneId: created.paneId,
+            as: .session(alice.sessionId, incarnation: alice.incarnation)
+        )
+        let bobSub = try await coordinator.subscribe(
+            paneId: created.paneId,
+            as: .session(bob.sessionId, incarnation: bob.incarnation)
+        )
+        _ = await coordinator.beginCohortClose(
+            cohortId: cohort,
+            transitionId: UUID(),
+            leaving: [alice.sessionId],
+            mode: .detach,
+            key: key(2)
+        )
+        // Drains to completion only because the revocation finished it.
+        for await _ in aliceSub.stream {}
+        #expect(await coordinator.subscriberCount(paneId: created.paneId) == 1)
+        await coordinator.unsubscribe(paneId: created.paneId, subscriptionId: bobSub.subscriptionId)
+    }
+
+    @Test("a reaped member of a live tab hands its pane to the survivor")
+    func reapWithSurvivorPromotes() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob])
+        let box = await captureEffects(coordinator)
+        let created = try await pane(
+            coordinator,
+            udid: "udid-reap-a",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: cohort, members: [alice, bob], created: created)
+        // A restore-batch reap: no beginClose, no explicit close. The
+        // teardown seam is the only thing standing between bob and an
+        // `ownerRevoked` pane.
+        await coordinator.tearDownSession(alice.sessionId, incarnation: alice.incarnation)
+        await coordinator.revokeSubscriptions(forSession: alice.sessionId)
+        #expect(box.effects.count == 1)
+        guard case let .close(close) = box.effects.first else {
+            Issue.record("expected a close effect, got \(box.effects)")
+            return
+        }
+        #expect(close.outcome == .promote(successor: bob.sessionId.uuidString))
+        #expect(
+            await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: bob.sessionId,
+                incarnation: bob.incarnation
+            )
+        )
+    }
+
+    @Test("a terminal reap dispositions nothing")
+    func terminalReapEmitsNoEffect() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let cohort = UUID()
+        await activate(coordinator, [alice])
+        let box = await captureEffects(coordinator)
+        let created = try await pane(
+            coordinator,
+            udid: "udid-reap-b",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: cohort, members: [alice], created: created)
+        // Only an explicit close carries a user's choice; a reap of the last
+        // member leaves device state to GUI recovery.
+        await coordinator.tearDownSession(alice.sessionId, incarnation: alice.incarnation)
+        #expect(box.effects.isEmpty)
+    }
+
+    @Test("an explicit close outside any cohort emits the terminal verdict")
+    func nonCohortCloseEmitsTerminalEffect() async {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        await activate(coordinator, [alice])
+        let box = await captureEffects(coordinator)
+        await coordinator.recordCloseVerdict(
+            sessionId: alice.sessionId,
+            incarnation: alice.incarnation,
+            mode: .shutdown
+        )
+        #expect(box.effects.count == 1)
+        guard case let .close(close) = box.effects.first else {
+            Issue.record("expected a close effect, got \(box.effects)")
+            return
+        }
+        #expect(close.outcome == .shutdown)
+        #expect(close.incarnation == alice.incarnation)
+    }
+
+    @Test("a close-decided member cannot be reconciled back to the pane")
+    func closedMemberCannotBeReconciledBackToThePane() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let cohort = UUID()
+        await activate(coordinator, [alice, bob])
+        let created = try await pane(
+            coordinator,
+            udid: "udid-revive",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: cohort, members: [alice, bob], created: created)
+        _ = await coordinator.beginCohortClose(
+            cohortId: cohort,
+            transitionId: UUID(),
+            leaving: [alice.sessionId],
+            mode: .detach,
+            key: key(2)
+        )
+        // Alice is still live (her session.close is in flight) and her active
+        // incarnation still resolves, so a dominating reconcile listing her
+        // would otherwise revive the authorization the close withdrew.
+        let revived = await coordinator.reconcileCohort(
+            cohortId: cohort,
+            members: [alice, bob],
+            representative: bob.sessionId,
+            replaces: nil,
+            requested: [],
+            key: key(3)
+        )
+        #expect(revived.rejection == .memberClosed)
+        #expect(
+            !(await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: alice.sessionId,
+                incarnation: alice.incarnation
+            ))
+        )
+    }
+
+    @Test("a replacement's dropped member produces a targeted transfer")
+    func replacementEmitsATargetedTransfer() async throws {
+        let coordinator = PaneCoordinator()
+        let alice = member(UUID(), 1)
+        let bob = member(UUID(), 2)
+        let old = UUID()
+        let new = UUID()
+        await activate(coordinator, [alice, bob])
+        let box = await captureEffects(coordinator)
+        let created = try await pane(
+            coordinator,
+            udid: "udid-transfer",
+            owner: alice.sessionId,
+            incarnation: alice.incarnation
+        )
+        _ = await installCohort(coordinator, cohortId: old, members: [alice, bob], created: created)
+        // The replacement drops alice while she is still alive. Only the pane
+        // she actually held may change hands; a close-shaped sweep of
+        // everything she owns is broader than this authorizes.
+        let transition = await coordinator.reconcileCohort(
+            cohortId: new,
+            members: [bob],
+            representative: bob.sessionId,
+            replaces: old,
+            requested: [],
+            key: key(2)
+        )
+        #expect(transition.applied)
+        #expect(box.effects.count == 1)
+        guard case let .transfer(transfer) = box.effects.first else {
+            Issue.record("expected a transfer effect, got \(box.effects)")
+            return
+        }
+        #expect(transfer.previousOwner == alice)
+        #expect(transfer.successor == bob)
+        #expect(transfer.targets == [.sim(udid: "udid-transfer")])
+        // The record moved with the membership, so bob drives what he now
+        // owns.
+        #expect(
+            await coordinator.canSessionDrive(
+                paneId: created.paneId,
+                session: bob.sessionId,
+                incarnation: bob.incarnation
+            )
+        )
+    }
+}
+
+/// Effects captured off the coordinator's synchronous sink.
+private final class EffectBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [CohortDeviceEffect] = []
+
+    var effects: [CohortDeviceEffect] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func append(_ effect: CohortDeviceEffect) {
+        lock.lock()
+        storage.append(effect)
+        lock.unlock()
     }
 }

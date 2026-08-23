@@ -15,8 +15,10 @@
 //
 // `pane.create` validates session creds; subsequent pane-targeted ops
 // are authorized against the caller's identity (`requirePrincipal` →
-// `PaneCoordinator.authorize`): a session reaches only its own panes,
-// the validated GUI peer spans sessions, and a foreign paneId is
+// `PaneCoordinator.authorize`): a session reaches an unbound pane it
+// owns or a cohort-bound pane whose membership contains its session
+// (matched on incarnation too when the request carries a pin), the
+// validated GUI peer spans sessions, and a foreign paneId is
 // indistinguishable from an unknown one.
 //
 // Initial-frame delivery: `pane.create` doesn't carry an
@@ -986,8 +988,10 @@ public enum PaneMethods {
     /// pane-targeted handler (the 16 input/AX ops, `pane.subscribe`, and
     /// `pane.closeById`) calls this and threads the result into the
     /// coordinator, which gates ownership on it: a `.session` principal
-    /// reaches only its own panes; the validated `.guiPeer` spans
-    /// sessions. Throws `unauthorized` when there is no authenticated
+    /// reaches an unbound pane it owns or a cohort-bound pane whose
+    /// membership contains its session (matched on incarnation too when the
+    /// request carries a pin); the validated `.guiPeer`
+    /// spans sessions. Throws `unauthorized` when there is no authenticated
     /// caller (no session and not the validated GUI): a pane operation
     /// must name a principal.
     static func requirePrincipal() throws -> PaneAccessPrincipal {

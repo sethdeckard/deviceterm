@@ -3,9 +3,10 @@
 // DeviceRoster: pure builder for the `devices.list` aggregate.
 //
 // Combines booted sims + connected physical devices and annotates each
-// with the owning session of a live pane that mirrors it, but only
-// when that session is visible to the caller, so a device attached to a
-// protected tab the caller doesn't own reads as unattached. That reuses
+// with its pane's attributed session, but only when at least one of the
+// pane's controlling members is visible to the caller, so a device
+// attached to a protected tab the caller doesn't own reads as
+// unattached. That reuses
 // the exact `tabs.list` opacity rule (the caller passes the set of
 // session ids visible to them; an owner-hidden protected session simply
 // isn't in it). Pure, so the opacity logic is unit-tested without a

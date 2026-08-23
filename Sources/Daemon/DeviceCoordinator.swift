@@ -134,8 +134,19 @@ public actor DeviceCoordinator {
         var status: BootClaimStatus
     }
 
+    /// What a closed session's devices should become.
+    ///
+    /// A bare `PaneCloseMode` can only say detach or shut down, which cannot
+    /// express the case a shared tab creates: the session is leaving but
+    /// siblings remain, so the device changes hands instead of going away.
+    /// The incarnation the verdict was recorded for rides along so a claim
+    /// from the same UUID restored at a newer incarnation is not
+    /// dispositioned by its predecessor's close. An incarnation-less
+    /// tombstone (the compatibility arm) applies to every claim naming the
+    /// session, whatever its incarnation.
     private struct ClosedBootSession {
-        let mode: PaneCloseMode
+        let outcome: CohortCloseOutcome
+        let incarnation: UInt64?
         let expiresAtNanoseconds: UInt64
     }
 
@@ -697,6 +708,7 @@ public actor DeviceCoordinator {
     public func reconcileBootClaim(
         _ evidence: BootClaimEvidence,
         sessionId: UUID?,
+        currentIncarnation: UInt64? = nil,
         inspectCurrentState: Bool = true,
         activateImmediately: Bool = true
     ) async throws -> DeviceReconcileBootClaimResult {
@@ -708,10 +720,25 @@ public actor DeviceCoordinator {
         expireBootClaims(now: now)
         var effectiveSessionId = evidence.disposition == .attach ? sessionId : nil
         var effectiveDisposition = evidence.disposition
+        // A claim naming a closed session takes that session's recorded
+        // verdict, followed through any chain of promotions: A handed to B, B
+        // later handed to C, and a claim for A landing inside the lease has
+        // to reach C. A terminal link stops the chain. A later promotion
+        // must not resurrect a device its own tab already gave up.
+        //
+        // `currentIncarnation` is the claim session's live incarnation as the
+        // handler resolved it. A session live at a NEWER incarnation than the
+        // tombstone's has been restored since the close, and its fresh claims
+        // are its own; without the comparison the old tombstone would
+        // disposition them for the rest of its lease.
         if let sessionId, let closed = closedBootSessions[sessionId],
-            closed.expiresAtNanoseconds > now {
-            effectiveSessionId = nil
-            effectiveDisposition = closed.mode == .shutdown ? .shutdown : .detach
+            closed.expiresAtNanoseconds > now,
+            tombstoneApplies(closed, currentIncarnation: currentIncarnation) {
+            let resolved = resolvedCloseOutcome(from: sessionId, at: now)
+            effectiveSessionId = resolved.successor.flatMap { UUID(uuidString: $0) }
+            effectiveDisposition = effectiveSessionId == nil
+                ? terminalDisposition(for: resolved)
+                : .attach
         }
         let submittedEvidence = BootClaimEvidence(
             attemptId: evidence.attemptId,
@@ -795,44 +822,204 @@ public actor DeviceCoordinator {
         return bootClaimResult(attemptId: attemptId, record: settled)
     }
 
-    /// Apply the terminal's close choice before its session is removed. This
-    /// closes the window where a Booted notification could otherwise promote
-    /// an attach claim to a session whose close is already in flight.
+    /// Apply the terminal's close choice before its session is removed,
+    /// without a cohort verdict in front of it: the compatibility arm, and
+    /// the fallback when incarnation resolution races session removal.
     public func noteSessionClosing(_ sessionId: UUID, mode: PaneCloseMode) async {
+        await applyCohortEffect(
+            .close(
+                CohortCloseEffect(
+                    sessionId: sessionId,
+                    incarnation: nil,
+                    outcome: mode == .shutdown ? .shutdown : .detach
+                )
+            )
+        )
+    }
+
+    /// Apply one cohort device effect, delivered by the effect pump in the
+    /// order the cohort transitions committed.
+    func applyCohortEffect(_ effect: CohortDeviceEffect) async {
+        switch effect {
+        case let .close(close):
+            await applyClose(close)
+
+        case let .transfer(transfer):
+            applyTransfer(transfer)
+        }
+    }
+
+    /// A genuine session close. Records the tombstone, then converges the
+    /// session's claims and ownership on the verdict.
+    ///
+    /// The pump delivers this asynchronously to the close that decided it, so
+    /// the convergence is deliberate: a Booted notification that promotes an
+    /// attach claim between the verdict and this application is swept here,
+    /// re-homed to the successor or dispositioned, exactly as one that
+    /// promoted before the close.
+    ///
+    /// On a promotion, every ownership entry the member holds moves to the
+    /// successor together with its claims. The tab is still open and only
+    /// one of its terminals left, so taking the detach or shutdown arm would
+    /// kill a simulator the tab still wants, or strand it attributed to
+    /// nobody. A terminal verdict touches ownership only through the
+    /// session's promoted claims; everything else it owned stays for GUI
+    /// recovery.
+    private func applyClose(_ close: CohortCloseEffect) async {
         let now = deviceSnapshotClock()
         expireBootClaims(now: now)
         let deadline = now.addingReportingOverflow(
             BootClaimEvidence.maximumLeaseMilliseconds * 1_000_000
         )
-        closedBootSessions[sessionId] = ClosedBootSession(
-            mode: mode,
+        closedBootSessions[close.sessionId] = ClosedBootSession(
+            outcome: close.outcome,
+            incarnation: close.incarnation,
             expiresAtNanoseconds: deadline.overflow ? UInt64.max : deadline.partialValue
         )
         ensureClosedBootSessionCleaner()
+        let successor = close.outcome.successor.flatMap { UUID(uuidString: $0) }
         var promotedShutdowns: Set<String> = []
         for attemptId in Array(bootClaims.keys) {
-            guard var record = bootClaims[attemptId], record.sessionId == sessionId,
+            guard var record = bootClaims[attemptId], record.sessionId == close.sessionId,
                 record.status == .pending || record.status == .promoted else { continue }
-            record.sessionId = nil
+            // A promotion keeps the claim attached, re-homed on the
+            // successor; a terminal verdict clears the claim's session and
+            // stamps the terminal disposition.
+            record.sessionId = successor
             record.evidence = BootClaimEvidence(
                 attemptId: record.evidence.attemptId,
                 udid: record.evidence.udid,
                 source: record.evidence.source,
                 observedState: record.evidence.observedState,
-                disposition: mode == .shutdown ? .shutdown : .detach,
+                disposition: successor == nil ? terminalDisposition(for: close.outcome) : .attach,
                 remainingLeaseMilliseconds: record.evidence.remainingLeaseMilliseconds
             )
             bootClaims[attemptId] = record
             guard record.status == .promoted, owns(record.evidence.udid),
-                owner(of: record.evidence.udid) == sessionId else { continue }
-            if mode == .shutdown {
+                owner(of: record.evidence.udid) == close.sessionId else { continue }
+            if let successor {
+                ownership[record.evidence.udid] = successor
+            } else if case .shutdown = close.outcome {
                 promotedShutdowns.insert(record.evidence.udid)
             } else {
                 ownership[record.evidence.udid] = UUID?.none
             }
         }
+        // Simulators the session owned without a converging claim change
+        // hands too, or a tab that keeps its device loses the attribution its
+        // close prompts and `device.list` read from.
+        if let successor {
+            for (udid, owner) in ownership where owner == close.sessionId {
+                ownership[udid] = successor
+            }
+            invalidateDeviceSnapshot()
+        }
         for udid in promotedShutdowns {
             try? await shutdown(udid: udid)
+        }
+    }
+
+    /// A targeted transfer: a reconcile dropped a still-live member, so only
+    /// the named devices and their matching claims move. No tombstone and no
+    /// wider sweep. The session is alive, and its unrelated devices and late
+    /// claims stay its own.
+    ///
+    /// **Accepted race.** A matching claim issued by the dropped member
+    /// before the transfer but delivered after it stays attributed to that
+    /// member and can promote ownership of the same udid back, against the
+    /// committed transfer. This needs all three of: a cohort replacement
+    /// dropping a live pane owner, a matching claim concurrently in flight,
+    /// and delivery after the transfer. The consequence is not confined to
+    /// attribution: if the dropped member later closes, its regained
+    /// ownership takes that close's disposition, so the transferred
+    /// simulator can be detached or shut down out from under the cohort that
+    /// holds its pane. An ordinary same-cohort reconcile does not repair it
+    /// (no member is newly removed, so no transfer is emitted); only another
+    /// ownership-changing attach or transfer does. Closing it properly needs
+    /// causal identity on the claim wire, a topology generation or similar,
+    /// so a pre-transfer claim redirects to the successor while a genuinely
+    /// new claim wins. A lease-wide `(owner, udid)` redirect cannot express
+    /// that: it would misdirect new intent for the whole lease to close a
+    /// narrower window.
+    private func applyTransfer(_ transfer: CohortTransferEffect) {
+        let udids = Set(
+            transfer.targets.compactMap { target -> String? in
+                guard case let .sim(udid) = target else { return nil }
+                return udid.lowercased()
+            }
+        )
+        guard !udids.isEmpty else { return }
+        var moved = false
+        for udid in udids where owner(of: udid) == transfer.previousOwner.sessionId {
+            ownership[udid] = transfer.successor.sessionId
+            moved = true
+        }
+        for attemptId in Array(bootClaims.keys) {
+            guard var record = bootClaims[attemptId],
+                record.sessionId == transfer.previousOwner.sessionId,
+                udids.contains(record.evidence.udid.lowercased()),
+                record.status == .pending || record.status == .promoted else { continue }
+            record.sessionId = transfer.successor.sessionId
+            bootClaims[attemptId] = record
+        }
+        if moved { invalidateDeviceSnapshot() }
+    }
+
+    /// Whether a tombstone still governs claims naming its session: yes,
+    /// unless the session is live at a newer incarnation than the one the
+    /// verdict was recorded for. A tombstone recorded without one (the
+    /// compatibility arm) applies unconditionally.
+    private func tombstoneApplies(
+        _ closed: ClosedBootSession,
+        currentIncarnation: UInt64?
+    ) -> Bool {
+        guard let recorded = closed.incarnation, let current = currentIncarnation else {
+            return true
+        }
+        return current <= recorded
+    }
+
+    /// Follow a closed session's verdict through any promotion chain.
+    ///
+    /// Path-compresses what it walks, so a long chain costs one hop next
+    /// time, and is cycle-protected: two records pointing at each other must
+    /// answer, not hang the reconcile path. A successor with no tombstone of
+    /// its own is still live, and the walk ends there.
+    private func resolvedCloseOutcome(from sessionId: UUID, at now: UInt64) -> CohortCloseOutcome {
+        guard var current = closedBootSessions[sessionId]?.outcome else { return .detach }
+        var visited: Set<UUID> = [sessionId]
+        var walked: [UUID] = [sessionId]
+        while case let .promote(successor) = current {
+            guard let successorId = UUID(uuidString: successor),
+                let next = closedBootSessions[successorId],
+                next.expiresAtNanoseconds > now else { break }
+            guard visited.insert(successorId).inserted else { break }
+            walked.append(successorId)
+            current = next.outcome
+        }
+        for id in walked {
+            guard let existing = closedBootSessions[id] else { continue }
+            closedBootSessions[id] = ClosedBootSession(
+                outcome: current,
+                incarnation: existing.incarnation,
+                expiresAtNanoseconds: existing.expiresAtNanoseconds
+            )
+        }
+        return current
+    }
+
+    /// The boot-claim disposition a terminal outcome reduces to. Callers
+    /// branch on the promotion case first; a promoted claim stays `.attach`.
+    private func terminalDisposition(for outcome: CohortCloseOutcome) -> BootClaimDisposition {
+        switch outcome {
+        case .promote:
+            return .attach
+
+        case .detach:
+            return .detach
+
+        case .shutdown:
+            return .shutdown
         }
     }
 

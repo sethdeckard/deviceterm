@@ -28,6 +28,10 @@ public enum DaemonProtocolInfo {
     /// `session.create` seeds as `initialProtected`;
     /// `session.protectionSnapshot` reads protection back, reporting each
     /// session's state as `"unprotected"`, `"protected"`, or `"missing"`.
+    /// And it carries `session.setCohort`, the validated-GUI method curating
+    /// the session cohort that jointly controls a device pane: `reconcile`
+    /// installs a membership, `beginClose` returns the `CohortCloseOutcome`
+    /// verdict for members about to close.
     /// Every process speaking this version ships and updates in the same
     /// bundle.
     public static let wireVersion = "0.3.0"

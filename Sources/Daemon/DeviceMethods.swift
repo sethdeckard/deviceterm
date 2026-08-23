@@ -173,10 +173,26 @@ public enum DeviceMethods {
                     claim.udid.caseInsensitiveCompare(params.udid) == .orderedSame else {
                     throw RPCMethodError.invalidParams("claim does not match device.boot")
                 }
+                // The claim session's incarnation rides along so a closed
+                // predecessor's tombstone cannot disposition a restored
+                // session's fresh boot. `ownerIncarnation`'s rule: the
+                // dispatch capture only when the caller IS the claim session,
+                // a manager resolve otherwise. The validated GUI's
+                // connection is authenticated as one session while booting on
+                // behalf of another.
+                var currentIncarnation: UInt64?
+                if let owningSession {
+                    currentIncarnation = await PaneAccessPrincipal.ownerIncarnation(
+                        for: owningSession
+                    ) {
+                        await sessionManager.incarnation(of: owningSession)
+                    }
+                }
                 do {
                     _ = try await coordinator.reconcileBootClaim(
                         claim,
                         sessionId: owningSession,
+                        currentIncarnation: currentIncarnation,
                         inspectCurrentState: false,
                         activateImmediately: false
                     )
@@ -238,10 +254,20 @@ public enum DeviceMethods {
                     )
                 }
             }
+            // The session's live incarnation rides along so the coordinator's
+            // closed-session tombstone can tell a mid-close claim (same
+            // incarnation, verdict applies) from one issued by the same UUID
+            // restored since the close (newer incarnation, its claims are its
+            // own).
+            var currentIncarnation: UInt64?
+            if let sessionId {
+                currentIncarnation = await sessionManager.incarnation(of: sessionId)
+            }
             do {
                 let result = try await coordinator.reconcileBootClaim(
                     params.claim,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    currentIncarnation: currentIncarnation
                 )
                 return try JSONEncoder().encode(result)
             } catch let error as DeviceError {

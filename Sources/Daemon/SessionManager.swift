@@ -351,6 +351,11 @@ public actor SessionManager {
     /// Cohort-store teardown, installed alongside `paneRevoker`. Runs for every
     /// teardown reason so a reaped session cannot linger as a cohort member.
     private var cohortRevoker: (@Sendable (UUID, UInt64) async -> Void)?
+    /// Awaited before a registering incarnation becomes admissible: drains the
+    /// cohort effect pump, so a prior incarnation's close consequences are
+    /// applied to the device layer before this one can create state a late
+    /// effect would sweep. Installed by `installCohortWiring`.
+    private var registrationBarrier: (@Sendable () async -> Void)?
     /// Late-bound pane-producer activation seam (`PaneCoordinator.noteSessionActive`).
     /// Called from a registration transition when a session reaches `.ready`, so
     /// the pane coordinator's local active-incarnation map, which its
@@ -446,6 +451,11 @@ public actor SessionManager {
     /// without it a torn-down session would silently linger in every
     /// sibling's cohort membership.
     public var hasCohortRevoker: Bool { cohortRevoker != nil }
+
+    /// Whether the pre-admission barrier is installed. `installCohortWiring`
+    /// installs it together with the revoker and the effect sink; the wiring
+    /// test asserts all three.
+    public var hasRegistrationBarrier: Bool { registrationBarrier != nil }
 
     /// Whether the restoration barrier has been released. True once any
     /// `restoreBatch` (even empty) has been processed, or immediately for a
@@ -763,6 +773,11 @@ public actor SessionManager {
         cohortRevoker = revoker
     }
 
+    /// Install the pre-admission barrier (see `registrationBarrier`).
+    func setRegistrationBarrier(_ barrier: @escaping @Sendable () async -> Void) {
+        registrationBarrier = barrier
+    }
+
     /// Install the pane-producer activation seam (see `paneActivator`) and
     /// REPLAY every currently-ready session into it. Production wires this before
     /// any session exists, so the replay is empty; but a caller (a test harness)
@@ -875,6 +890,17 @@ public actor SessionManager {
     /// revokes any store write this made.
     private func runRegistration(_ id: UUID, _ incarnation: UInt64) async {
         if let hook = transitionEntryHook { await hook() }
+        guard case .pendingRegistration(incarnation) = sessionPhase[id] else { return }
+        // Drain the cohort effect pump before this incarnation can become
+        // admissible. A prior incarnation's close effects are enqueued before
+        // its teardown, and the lane serializes that teardown before this
+        // registration, so waiting here guarantees the device layer has
+        // applied every earlier era's consequences before this session can
+        // register a claim or take ownership. Without it, a close effect for
+        // the same UUID could arrive late and sweep state the new incarnation
+        // just created. The wait is bounded by the queue, which is empty
+        // outside an in-flight close.
+        await registrationBarrier?()
         guard case .pendingRegistration(incarnation) = sessionPhase[id] else { return }
         await automationGrantStore.registerSession(id)
         await terminalAnchorStore.registerSession(id)

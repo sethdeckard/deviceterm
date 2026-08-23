@@ -148,9 +148,20 @@ public enum ShimMethods {
                                 "boot claim does not match shim event"
                             )
                         }
+                        // The claim session's incarnation, so a restored
+                        // session's fresh boot is not dispositioned by its
+                        // closed predecessor's tombstone. `ownerIncarnation`
+                        // takes the dispatch capture only when the caller IS
+                        // the claim session (the shim's ordinary shape) and
+                        // resolves otherwise.
                         _ = try await deviceCoordinator.reconcileBootClaim(
                             claim,
-                            sessionId: sessionId
+                            sessionId: sessionId,
+                            currentIncarnation: PaneAccessPrincipal.ownerIncarnation(
+                                for: sessionId
+                            ) {
+                                await sessionManager.incarnation(of: sessionId)
+                            }
                         )
                     } else {
                         // MIGRATION: Claimless events remain valid for test

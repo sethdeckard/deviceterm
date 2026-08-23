@@ -257,7 +257,12 @@ public enum DaemonMethods {
             RPCMethod.sessionClose.rawValue:
                 .session(
                     SessionMethods.close(using: sessionManager) { sessionId, mode in
-                        await deviceCoordinator.noteSessionClosing(sessionId, mode: mode)
+                        await SessionCohortMethods.noteSessionClosing(
+                            sessionId: sessionId,
+                            mode: mode,
+                            paneCoordinator: paneCoordinator,
+                            sessionManager: sessionManager
+                        )
                     }
                 ),
             RPCMethod.sessionSetProtectedBatch.rawValue:

@@ -13,10 +13,12 @@
 // returns by default).
 //
 // Audience filtering mirrors the pane gate: a `.session` principal sees
-// only its own session's events plus `.everyone`; the validated GUI peer
-// (`.guiPeer`) spans sessions and sees every event. "May you drive this
-// pane" and "may you see its events" have the same answer for the same
-// reason, so the principal type is shared rather than duplicated.
+// `.everyone`, its own `.session` audience, and any `.sessions` audience
+// containing its session id (and, when the subscriber is pinned, its
+// incarnation); the validated GUI peer (`.guiPeer`) spans sessions and sees
+// every event. "May you drive this pane" and "may you
+// see its events" have the same answer for the same reason, so the
+// principal type is shared rather than duplicated.
 //
 // Subscriber registration is `actor`-isolated per AGENTS.md's "shared
 // daemon state lives behind actors" rule. The continuation's
@@ -81,8 +83,10 @@ public actor EventBroker {
     public init() {}
 
     /// The audience rule: deliver iff the principal is the validated GUI
-    /// peer, the audience is `.everyone`, or the subscriber's session
-    /// matches the event's session.
+    /// peer, the audience is `.everyone`, the audience is the subscriber's
+    /// own `.session`, or a `.sessions` audience contains the subscriber's
+    /// session id (matched on incarnation too when the subscriber is
+    /// pinned).
     private static func delivers(to principal: PaneAccessPrincipal, audience: EventAudience) -> Bool {
         switch principal {
         case .guiPeer:

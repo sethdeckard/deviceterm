@@ -186,13 +186,14 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         }
         // Cohort teardown runs for EVERY teardown reason, not only an explicit
         // `session.close`: a restore-batch reap removes sessions through the
-        // same path, and without it a dead session would linger in every
-        // sibling's membership. It also clears the coordinator's producer-local
-        // active incarnation in the same actor turn, which is what the
-        // reconcile handler's commit-time liveness check reads.
+        // same path, and a reaped member of a live tab must hand its panes and
+        // devices to the survivors before the subscription sweep can orphan
+        // them. This also installs the effect pump, the ordered channel that
+        // carries cohort device consequences into `DeviceCoordinator`.
         await SessionCohortMethods.installCohortWiring(
             sessionManager: sessionManager,
-            paneCoordinator: paneCoordinator
+            paneCoordinator: paneCoordinator,
+            deviceCoordinator: deviceCoordinator
         )
         // The paired activation seam: a session reaching ready pushes its active
         // incarnation to the pane coordinator, whose synchronous ownership-commit
@@ -278,6 +279,14 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         precondition(
             cohortRevokerInstalled,
             "cohort revoker must be installed before the RPC servers accept connections"
+        )
+        // And for the effect pump: without a sink, a cohort close would
+        // silently drop the tombstone and transfer its verdict owes the
+        // device layer.
+        let effectSinkInstalled = await paneCoordinator.hasDeviceEffectSink
+        precondition(
+            effectSinkInstalled,
+            "cohort effect sink must be installed before the RPC servers accept connections"
         )
         let server = RPCServer(
             socketPath: socketPath,

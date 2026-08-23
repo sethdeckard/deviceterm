@@ -108,21 +108,29 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// normalized (controls and bidi controls stripped, bounded) on both
     /// sides of the wire.
     case sessionSetDisplayTitle = "session.setDisplayTitle"
-    /// `session.setCohort({cohortId, revision, members, representative,
-    /// replaces?, bindings?}) → {applied, revision, bindings?}`. Installs or
-    /// replaces the complete membership of the session cohort that jointly
-    /// controls a device pane, which is how pane authority reaches every
-    /// terminal in a tab instead of only the one that attached. The daemon
-    /// never learns the cohort is a tab: it stores verified session
-    /// incarnations, an ordered membership, and a representative, all under
-    /// an opaque GUI-minted id. Ordered on one `(epoch, revision)` sequence;
-    /// a request applies only when its key strictly dominates the cohort's
-    /// stored key. Optionally names a prior cohort it replaces (retired for
-    /// good in the same commit) and binds pane records at an expected
-    /// attachment.
+    /// `session.setCohort({operation, cohortId, revision, …})
+    /// → {applied, revision, outcome?, bindings?}`. Curates the session
+    /// cohort that jointly controls a device pane, which is how pane
+    /// authority reaches every terminal in a tab instead of only the one
+    /// that attached. The daemon never learns the cohort is a tab: it stores
+    /// verified session incarnations, an ordered membership, and a
+    /// representative, all under an opaque GUI-minted id.
+    ///
+    /// Two operations share the method because they mutate the same cohort
+    /// and must order against each other on one `(epoch, revision)`
+    /// sequence. `reconcile` installs a complete membership, optionally
+    /// replacing a named prior cohort (retired for good in the same commit)
+    /// and binding pane records at an expected attachment. `beginClose`
+    /// commits a close verdict for the named members and returns the
+    /// authoritative `CohortCloseOutcome` the GUI records before closing
+    /// them; it is idempotent under its GUI-minted `transitionId`, journalled
+    /// before the reply, so a retry after a lost reply returns the identical
+    /// verdict rather than promoting twice, for as long as the journal entry
+    /// is retained (the boot-claim lease).
     ///
     /// `.validatedGUI`-scoped. A UDS caller must never reach it: membership
-    /// decides who may drive another session's pane.
+    /// decides who may drive another session's pane, and a close verdict
+    /// decides who inherits its simulator.
     case sessionSetCohort = "session.setCohort"
     case tabsList = "tabs.list"
     case panesList = "panes.list"

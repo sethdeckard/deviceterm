@@ -34,8 +34,9 @@ public struct SessionCohortBinding: Codable, Sendable, Equatable {
 /// wholesale if any binding is refused. See `SessionSetCohortResult`.
 public struct SessionCohortBindingResult: Codable, Sendable, Equatable {
     public let paneId: String
-    /// True when the record is now bound to the cohort. False means its
-    /// attachment had advanced; the GUI retries from a fresh snapshot.
+    /// True when the record is now bound to the cohort. False means the
+    /// pane was unavailable, its attachment did not match, or it already
+    /// named another cohort; the GUI retries from a fresh snapshot.
     public let bound: Bool
 
     public init(paneId: String, bound: Bool) {
