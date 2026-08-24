@@ -19,11 +19,6 @@ import Foundation
 import Darwin
 #endif
 
-public enum RPCServerError: Error, Equatable, Sendable {
-    case alreadyStarted
-    case notStarted
-}
-
 public actor RPCServer {
     private let socketPath: String
     private let methods: MethodRegistry

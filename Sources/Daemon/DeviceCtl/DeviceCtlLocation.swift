@@ -24,125 +24,6 @@
 import DaemonProtocol
 import Foundation
 
-/// One `devicectl device simulate location` invocation.
-enum DeviceCtlLocationCommand: Equatable, Sendable {
-    case coordinate(latitude: Double, longitude: Double)
-    case scenario(name: String)
-    /// `routePath` is a file this type wrote, holding the JSON
-    /// `--route-file` expects.
-    case route(routePath: String)
-    case list
-    case clear
-}
-
-enum DeviceCtlLocationError: Error, Equatable {
-    /// A non-zero exit not classified as `unknownScenario`. Carries
-    /// devicectl's own stderr when it wrote any. A spawn failure arrives
-    /// here too, as status `-1` with the launch error as the message, so
-    /// there is no separate launch case.
-    case commandFailed(status: Int32, message: String)
-    /// devicectl rejected the scenario name. Split out from
-    /// `commandFailed` because it is the one location failure the *caller*
-    /// can fix, so it reaches the wire as `invalidParams` rather than a
-    /// generic server error, matching how the simulator backend answers
-    /// the same mistake.
-    case unknownScenario(name: String)
-    /// Exit 0 but no readable `--json-output` payload.
-    case missingOutput
-    /// Exit 0 with a payload that isn't the expected shape.
-    case malformedOutput
-    /// The route file couldn't be written, so `devicectl` was never run.
-    /// A full or unwritable temp directory is the realistic cause.
-    case routeFileUnwritable(message: String)
-}
-
-/// The `--route-file` document, in devicectl's own documented schema
-/// rather than deviceterm's wire shape.
-///
-/// Kept as an explicit `Encodable` rather than re-encoding `RouteSpec`,
-/// because the two disagree deliberately: devicectl flattens the mode
-/// into a `"mode"` string plus a sibling field, while the wire type
-/// makes the pairing unrepresentable. Writing the translation out is
-/// what lets a test pin the tool's format.
-struct DeviceCtlRouteFile: Encodable, Equatable {
-    struct Waypoint: Encodable, Equatable {
-        let latitude: Double
-        let longitude: Double
-    }
-
-    let mode: String
-    /// Present only in distance mode; devicectl requires the field that
-    /// matches `mode` and ignores the other.
-    let distance: Double?
-    /// Present only in interval mode.
-    let interval: Double?
-    let speed: Double
-    let waypoints: [Waypoint]
-
-    init(_ spec: RouteSpec) {
-        switch spec.mode {
-        case let .distance(meters):
-            mode = "distance"
-            distance = meters
-            interval = nil
-
-        case let .interval(seconds):
-            mode = "interval"
-            distance = nil
-            interval = seconds
-        }
-        speed = spec.speed
-        waypoints = spec.waypoints.map {
-            Waypoint(latitude: $0.latitude, longitude: $0.longitude)
-        }
-    }
-}
-
-// The failure half of a devicectl `--json-output` payload. Only the
-// fields needed to classify the failure; devicectl writes many more.
-private struct DeviceCtlErrorOutput: Decodable {
-    let error: DeviceCtlErrorBody
-}
-
-private struct DeviceCtlErrorBody: Decodable {
-    let code: Int
-    let domain: String
-}
-
-// Decoded `devicectl device simulate location list --json-output`
-// payload. File-scope to stay inside the 2-level type-nesting limit.
-private struct DeviceCtlLocationOutput: Decodable {
-    let result: DeviceCtlLocationResult
-}
-
-private struct DeviceCtlLocationResult: Decodable {
-    /// The key is `availableScenarios`, not `scenarios` (devicectl
-    /// 629.3, `jsonVersion` 4). The test fixture is a sanitized capture
-    /// of that output.
-    ///
-    /// **Deliberately non-optional.** An optional here would turn a
-    /// missing or renamed key into an empty list, reporting every device
-    /// as having no trips without erroring anywhere. Requiring the key
-    /// means a shape change fails the decode and surfaces as
-    /// `malformedOutput`, while a device that genuinely has no scenarios
-    /// says so with `"availableScenarios": []`.
-    let availableScenarios: [DeviceCtlLocationScenario]
-}
-
-private struct DeviceCtlLocationScenario: Decodable {
-    let name: String?
-    let localizedName: String?
-}
-
-/// What one `devicectl` invocation produced: its exit status, the
-/// contents of the `--json-output` file (nil when it wrote none), and
-/// whatever it put on stderr.
-struct DeviceCtlRun: Sendable {
-    let status: Int32
-    let json: Data?
-    let stderr: String
-}
-
 struct DeviceCtlLocation: DeviceLocationSimulating {
     /// Spawn seam so tests can drive the pure argv/parse halves without
     /// running the real tool. Returns the process exit status, the
@@ -151,6 +32,46 @@ struct DeviceCtlLocation: DeviceLocationSimulating {
         _ arguments: [String],
         _ jsonPath: String
     ) async -> DeviceCtlRun
+
+    // MARK: - Decoded payloads
+
+    // The failure half of a devicectl `--json-output` payload. Only the
+    // fields needed to classify the failure; devicectl writes many more.
+    private struct ErrorOutput: Decodable {
+        let error: ErrorBody
+    }
+
+    private struct ErrorBody: Decodable {
+        let code: Int
+        let domain: String
+    }
+
+    // Decoded `devicectl device simulate location list --json-output`
+    // payload. Siblings rather than a nested chain, so the deepest of them
+    // sits one level inside this type and stays inside the 2-level
+    // type-nesting limit.
+    private struct ListOutput: Decodable {
+        let result: ListResult
+    }
+
+    private struct ListResult: Decodable {
+        /// The key is `availableScenarios`, not `scenarios` (devicectl
+        /// 629.3, `jsonVersion` 4). The test fixture is a sanitized capture
+        /// of that output.
+        ///
+        /// **Deliberately non-optional.** An optional here would turn a
+        /// missing or renamed key into an empty list, reporting every device
+        /// as having no trips without erroring anywhere. Requiring the key
+        /// means a shape change fails the decode and surfaces as
+        /// `malformedOutput`, while a device that genuinely has no scenarios
+        /// says so with `"availableScenarios": []`.
+        let availableScenarios: [Scenario]
+    }
+
+    private struct Scenario: Decodable {
+        let name: String?
+        let localizedName: String?
+    }
 
     /// CoreDevice reports an unknown scenario with domain
     /// `com.apple.dt.CoreDeviceError`, code 20001, written to the
@@ -261,7 +182,7 @@ struct DeviceCtlLocation: DeviceLocationSimulating {
     /// report. The `localizedName` fallback is kept, so a payload
     /// carrying only that still decodes.
     static func parseScenarios(_ data: Data) throws -> [String] {
-        guard let output = try? JSONDecoder().decode(DeviceCtlLocationOutput.self, from: data) else {
+        guard let output = try? JSONDecoder().decode(ListOutput.self, from: data) else {
             throw DeviceCtlLocationError.malformedOutput
         }
         return try output.result.availableScenarios.map { entry in
@@ -294,7 +215,7 @@ struct DeviceCtlLocation: DeviceLocationSimulating {
     /// Whether a failure payload says the scenario name was rejected.
     static func isUnknownScenarioFailure(_ data: Data?) -> Bool {
         guard let data,
-            let output = try? JSONDecoder().decode(DeviceCtlErrorOutput.self, from: data) else {
+            let output = try? JSONDecoder().decode(ErrorOutput.self, from: data) else {
             return false
         }
         return output.error.code == scenarioNotFoundCode

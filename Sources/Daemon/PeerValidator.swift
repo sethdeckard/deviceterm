@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// PeerValidating: the injectable seam that produces the GUI-peer
+// PeerValidator: the injectable seam that produces the GUI-peer
 // verdict, and the single production implementation.
 //
 // `PeerIdentity.validateGUIPeer` walks the peer's signature via

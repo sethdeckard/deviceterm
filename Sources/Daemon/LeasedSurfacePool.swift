@@ -28,56 +28,6 @@ import CoreVideo
 import Foundation
 import IOSurface
 
-/// Who holds a slot. A slot returns to the free list when its holder set
-/// empties. At most once per holder: a token never legitimately holds one
-/// generation twice, so the set needs no counting.
-enum SurfaceHolder: Hashable, Sendable {
-    case daemonCurrent
-    case subscription(UUID)
-}
-
-/// Per-token lifecycle. Only `active` admits new grants; acks are honored
-/// while `draining`/`orphaned` so outstanding leases can drain.
-enum SurfaceTokenState: Sendable {
-    case active
-    case draining
-    case orphaned
-    case closed
-}
-
-/// Outcome of a controlled recovery attempt from sustained exhaustion. At
-/// most one retirement is ever attempted per pool.
-enum RecoveryOutcome: Sendable, Equatable {
-    /// The active epoch was retired; the *next* `acquire` allocates the
-    /// replacement epoch (recovery itself doesn't allocate).
-    case recovered
-    /// Recovery was unavailable: already consumed once, or `retireAll`
-    /// failed (the quarantine budget is full). The pane must fail.
-    case exhausted
-}
-
-/// A delinquent hold surfaced by `diagnoseDelinquent`. Diagnosis only,
-/// never a reclaim signal.
-struct DelinquentHold: Sendable, Equatable {
-    let epoch: UInt64
-    let generation: UInt64
-    let token: UUID
-    let ageNanoseconds: UInt64
-}
-
-/// Pool counters for telemetry. Never an authority for correctness.
-struct SurfacePoolCounters: Sendable, Equatable {
-    var exhaustionDrops = 0
-    var rejectedUnknownToken = 0
-    var rejectedWrongConnection = 0
-    var rejectedUnknownEpoch = 0
-    var rejectedAtMostOnce = 0
-    var rejectedBelowFrontier = 0
-    var delinquentObserved = 0
-    var quarantineBudgetExceeded = 0
-    var reuseWhileInUse = 0
-}
-
 actor LeasedSurfacePool {
     private final class PhysicalSlot {
         let surface: IOSurfaceRef

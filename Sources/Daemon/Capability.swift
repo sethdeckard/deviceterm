@@ -73,10 +73,3 @@ extension Capability: Equatable {
         return accumulator == 0
     }
 }
-
-public enum CapabilityError: Error, Equatable, Sendable {
-    case randomGenerationFailed(
-        status:
-        Int
-        )
-}

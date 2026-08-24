@@ -20,57 +20,46 @@
 
 import Foundation
 
-/// One physically-connected device as `devicectl list devices` reports it.
-/// `udid` is the stable CoreDevice identifier (the `--device` argument).
-/// `tunnelState` / `tunnelIPAddress` are populated only while a tunnel is
-/// up; with it down they are `"disconnected"` / `nil` but the device is
-/// still listed (the whole point: selectable without Device Hub).
-struct DeviceCtlDevice: Sendable, Equatable {
-    let udid: String
-    let name: String?
-    let model: String?
-    let osVersion: String?
-    let transportType: String?
-    let tunnelState: String?
-    let tunnelIPAddress: String?
-}
-
-// Decoded `devicectl list devices --json-output` payload, keeping only the
-// fields the daemon needs. File-scope (not nested) to stay within the
-// 2-level type-nesting limit. Pure: `DeviceCtl.parse` is fixture-tested.
-private struct DeviceCtlOutput: Decodable {
-    let result: DeviceCtlResult
-}
-
-private struct DeviceCtlResult: Decodable {
-    let devices: [DeviceCtlRawDevice]
-}
-
-private struct DeviceCtlRawDevice: Decodable {
-    let identifier: String
-    let deviceProperties: DeviceCtlDeviceProperties?
-    let hardwareProperties: DeviceCtlHardwareProperties?
-    let connectionProperties: DeviceCtlConnectionProperties?
-}
-
-private struct DeviceCtlDeviceProperties: Decodable {
-    let name: String?
-    let osVersionNumber: String?
-}
-
-private struct DeviceCtlHardwareProperties: Decodable {
-    let reality: String?
-    let productType: String?
-    let marketingName: String?
-}
-
-private struct DeviceCtlConnectionProperties: Decodable {
-    let transportType: String?
-    let tunnelState: String?
-    let tunnelIPAddress: String?
-}
-
 enum DeviceCtl {
+    // MARK: - Decoded payload
+
+    // The `devicectl list devices --json-output` payload, keeping only the
+    // fields the daemon needs. Siblings rather than a nested chain, so the
+    // deepest of them sits one level inside `DeviceCtl` and the whole shape
+    // stays within the 2-level type-nesting limit. Pure: `DeviceCtl.parse`
+    // is fixture-tested.
+    private struct Output: Decodable {
+        let result: ListResult
+    }
+
+    private struct ListResult: Decodable {
+        let devices: [RawDevice]
+    }
+
+    private struct RawDevice: Decodable {
+        let identifier: String
+        let deviceProperties: DeviceProperties?
+        let hardwareProperties: HardwareProperties?
+        let connectionProperties: ConnectionProperties?
+    }
+
+    private struct DeviceProperties: Decodable {
+        let name: String?
+        let osVersionNumber: String?
+    }
+
+    private struct HardwareProperties: Decodable {
+        let reality: String?
+        let productType: String?
+        let marketingName: String?
+    }
+
+    private struct ConnectionProperties: Decodable {
+        let transportType: String?
+        let tunnelState: String?
+        let tunnelIPAddress: String?
+    }
+
     private static let processQueue = BlockingWorkQueue(
         label: "com.deviceterm.daemon.devicectl-list"
     )
@@ -80,7 +69,7 @@ enum DeviceCtl {
     /// simulators. Pure and total. Throws only on a structurally-invalid
     /// payload (not valid devicectl JSON).
     static func parse(_ data: Data) throws -> [DeviceCtlDevice] {
-        let output = try JSONDecoder().decode(DeviceCtlOutput.self, from: data)
+        let output = try JSONDecoder().decode(Output.self, from: data)
         return output.result.devices.compactMap { device in
             guard device.hardwareProperties?.reality == "physical" else { return nil }
             let hardware = device.hardwareProperties

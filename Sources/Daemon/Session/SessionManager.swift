@@ -26,201 +26,26 @@
 import DaemonProtocol
 import Foundation
 
-/// The result of minting a session: the in-memory `state` (which holds only
-/// a non-recoverable `CapabilityVerifier`) plus the one-time bearer
-/// `capability`. The plaintext is returned here and **only** here. The
-/// caller hands it to the client in the `session.create` response and keeps
-/// no copy; the daemon retains just the verifier on the `state`.
-public struct CreatedSession: Sendable {
-    public let state: SessionState
-    public let capability: Capability
-
-    public init(state: SessionState, capability: Capability) {
-        self.state = state
-        self.capability = capability
-    }
-}
-
-public struct SessionState: Sendable, Equatable {
-    public let id: UUID
-    /// Non-recoverable verifier for this session's capability. The daemon
-    /// stores this rather than the bearer token so in-memory state can't be
-    /// replayed and no credential is ever written to disk; `validate`
-    /// re-derives the verifier from a presented capability and compares. The
-    /// plaintext capability is returned once at create time (`CreatedSession`)
-    /// and never held here. On a daemon restart the validated GUI re-supplies
-    /// the bearer cap via `restoreBatch` and the daemon re-derives this.
-    public let capabilityVerifier: CapabilityVerifier
-    /// Crockford base32 short_id (lowercased, 6 chars). Daemon-minted
-    /// at create time via `ShortID.generate(...)` with collision retry
-    /// against the live session set. Immutable for the session's
-    /// lifetime so an agent printing `deviceterm tabs current` after a
-    /// rename doesn't see the handle move.
-    public let shortId: String
-    public let label: String?
-    /// Optional name, taken from the `session.create` request and
-    /// never rewritten (`deviceterm tab rename` retitles the tab in
-    /// the GUI without touching this). `nil` when the request carried
-    /// none. Distinct from `label`, which is the internal
-    /// classification (default `nil`; debugging surfaces use it).
-    /// Visible on `tabs.list` rows.
-    public let name: String?
-    /// Role the daemon assigned at create time (descriptive metadata, not
-    /// an authorization gate). Defaults to
-    /// `.agent` when `session.create` omits the field. Immutable for
-    /// the session's lifetime. The GUI's "Open Automation Tab"
-    /// menu is the intended product-UI path for minting a fresh
-    /// `.automation` session (no CLI verb emits the request).
-    /// The daemon enforces that: an automation mint is refused
-    /// outright over UDS, and over XPC only after the peer's audit
-    /// token validates against the daemon's own signature.
-    public let role: SessionRole
-    /// Process id of the process that minted this session, for orphan
-    /// recovery (`SessionManager.isAlive`'s `kill(pid, 0)` liveness ping; also
-    /// mirrored to the session dir's `owner.pid` marker cold-start recovery
-    /// reads). Derived server-side from `owner` (`owner?.pid`), not a
-    /// caller-supplied wire field, so a caller can't name a pid it doesn't
-    /// own. Nil only for a session the daemon couldn't attribute to a live
-    /// peer (a test/tooling constructor); `isAlive` treats nil as "assume
-    /// alive". A session restored via `restoreBatch` captures the live GUI as
-    /// its owner, so it is NOT nil. It drives orphan recovery, not authority.
-    public let ownerPID: pid_t?
-    /// Kernel identity of the process that created this session, captured
-    /// server-side from the transport peer at `session.create` (the audit
-    /// token on XPC or the `LOCAL_PEERTOKEN` identity on UDS), never from a
-    /// caller-supplied field. It is the "exact owner" provenance arm: the
-    /// creating process (the GUI, including its UDS smoke fallback)
-    /// authenticates as this session without a terminal anchor. Matched on
-    /// `(pid, pidVersion, euid)`.
-    ///
-    /// Nil only for a session the daemon can't attribute to a live peer (a
-    /// test/tooling constructor that omits it). A session restored via
-    /// `restoreBatch` captures the validated GUI's identity as its owner
-    /// (identical to `session.create` over XPC), so the exact-owner arm
-    /// authenticates it and `isAlive` tracks the GUI. A nil owner simply means
-    /// the owner arm never matches; the terminal and validated-GUI arms still
-    /// authorize.
-    public let owner: OwnerProcessIdentity?
-    public let createdAt: Date
-
-    public init(
-        id: UUID,
-        capabilityVerifier: CapabilityVerifier,
-        shortId: String,
-        label: String?,
-        name: String?,
-        createdAt: Date,
-        role: SessionRole = .agent,
-        ownerPID: pid_t? = nil,
-        owner: OwnerProcessIdentity? = nil
-    ) {
-        self.id = id
-        self.capabilityVerifier = capabilityVerifier
-        self.shortId = shortId
-        self.label = label
-        self.name = name
-        self.role = role
-        self.ownerPID = ownerPID
-        self.owner = owner
-        self.createdAt = createdAt
-    }
-}
-
-public enum SessionError: Error, Equatable, Sendable {
-    case notFound(
-        sessionId:
-        UUID
-        )
-    case invalidCapability(
-        sessionId:
-        UUID
-        )
-    /// `ShortID.maxMintAttempts` tries all collided with live
-    /// short_ids. Vanishingly improbable at this scale (32^6 ≈ 1B
-    /// values, expected concurrent sessions in the tens), present so
-    /// a buggy RNG or pathological saturation surfaces as a clean
-    /// error rather than an infinite mint loop. Surfaced to the
-    /// client as `serverError`.
-    case shortIDExhausted
-}
-
-/// One validated, parsed entry in a `session.restoreBatch`. The handler
-/// decodes the wire `RestoredSession`, parses each field (a malformed
-/// UUID / capability / role / short id rejects the whole batch before this
-/// is built), and hands the typed set to `SessionManager.restoreBatch`,
-/// which derives the verifier and performs the atomic conflict-checked
-/// insert.
-public struct RestoreSessionEntry: Sendable {
-    public let id: UUID
-    public let capability: Capability
-    public let shortId: String
-    public let role: SessionRole
-    public let name: String?
-    public let isProtected: Bool
-
-    public init(
-        id: UUID,
-        capability: Capability,
-        shortId: String,
-        role: SessionRole,
-        name: String?,
-        isProtected: Bool
-    ) {
-        self.id = id
-        self.capability = capability
-        self.shortId = shortId
-        self.role = role
-        self.name = name
-        self.isProtected = isProtected
-    }
-}
-
-/// Why a `restoreBatch` was rejected in full. Every case leaves the manager
-/// unmutated (validation runs before any insert). Mapped to `invalidParams`
-/// at the RPC boundary; the offending id/short id is for daemon-side
-/// diagnostics only and is never echoed with the supplied capability.
-public enum RestoreBatchError: Error, Equatable, Sendable {
-    /// The same session id appears twice in the batch.
-    case duplicateSessionId(UUID)
-    /// The same short id appears twice in the batch.
-    case duplicateShortId(String)
-    /// A short id is not well-formed (wrong length / alphabet).
-    case malformedShortId(String)
-    /// The id names a live session, but the supplied capability derives a
-    /// different verifier: a stale cap must not rebind a live session.
-    case verifierConflict(UUID)
-    /// The id names a live session with a matching verifier but disagreeing
-    /// immutable metadata (short id / role); restore never rewrites it.
-    case metadataConflict(UUID)
-    /// A new session's short id collides with a different live session's.
-    case shortIdCollision(String)
-    /// The batch's epoch is strictly older than the last applied restore. This
-    /// is a late batch from an older connection and mutates nothing.
-    case staleBatch(epoch: UInt64)
-}
-
-/// A session id's ordered lifecycle phase, carrying its incarnation. File-scope
-/// (not nested in the actor) only to satisfy the type-member ordering lint;
-/// it is used exclusively by `SessionManager`.
-private enum SessionPhase {
-    case pendingRegistration(UInt64)
-    case ready(UInt64)
-    case tearingDown(UInt64)
-}
-
-/// Why a session is being torn down. Diagnostics only, since both paths run
-/// the same teardown, but the distinction is the reason to log it. An explicit
-/// `session.close` is caller-requested (the method is `.session`-scoped, so any
-/// authenticated caller can close its own session). A reap is daemon-side
-/// reconciliation against an authoritative restore batch that omitted the
-/// session, which also revokes that session's pane subscriptions.
-/// File-scope for the same lint reason `SessionPhase` is.
-private enum TeardownReason: String {
-    case sessionClose = "session.close"
-    case reapedByRestoreBatch = "reaped-by-restore-batch"
-}
-
 public actor SessionManager {
+    /// A session id's ordered lifecycle phase, carrying its incarnation.
+    private enum Phase {
+        case pendingRegistration(UInt64)
+        case ready(UInt64)
+        case tearingDown(UInt64)
+    }
+
+    /// Why a session is being torn down. Diagnostics only, since both paths run
+    /// the same teardown, but the distinction is the reason to log it. An
+    /// explicit `session.close` is caller-requested (the method is
+    /// `.session`-scoped, so any authenticated caller can close its own
+    /// session). A reap is daemon-side reconciliation against an authoritative
+    /// restore batch that omitted the session, which also revokes that
+    /// session's pane subscriptions.
+    private enum TeardownReason: String {
+        case sessionClose = "session.close"
+        case reapedByRestoreBatch = "reaped-by-restore-batch"
+    }
+
     /// Strictly-increasing `createdAt` step for restored sessions, so a batch's
     /// entry order is preserved by the `createdAt`-sorted `tabs.list`. The
     /// one-microsecond step preserves deterministic order within the restored
@@ -371,7 +196,7 @@ public actor SessionManager {
     /// pass a later incarnation's gate after the same UUID was closed and
     /// restored at G+1.
     private var incarnationCounter: UInt64 = 0
-    /// Per-id ordered lifecycle phase (see the file-scope `SessionPhase`).
+    /// Per-id ordered lifecycle phase (see the nested `Phase`).
     /// `.pendingRegistration(n)` means inserted but not yet registered, so it
     /// is not admissible and `.session(id)` gets retryable `notReady`.
     /// `.ready(n)` is admissible. `.tearingDown(n)` means a destructive finalize
@@ -379,7 +204,7 @@ public actor SessionManager {
     /// allocates each `n`; the entry is DROPPED when the id settles
     /// fully-absent (no pending reinsertion), so no per-UUID map grows for the
     /// daemon's lifetime.
-    private var sessionPhase: [UUID: SessionPhase] = [:]
+    private var sessionPhase: [UUID: Phase] = [:]
     /// Injected clock: tests pin `createdAt` to a fixed instant so
     /// ordering assertions don't depend on real-time scheduling.
     /// Production callers use the default (`Date.init`).

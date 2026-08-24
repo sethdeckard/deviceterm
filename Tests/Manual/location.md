@@ -15,7 +15,7 @@ surfaces no automated test in this repo opens.
 
 Run before any release that touches `Sources/App/Location*`,
 `Sources/App/GPX*`, `Sources/App/RouteFile*`,
-`Sources/Daemon/DeviceCtlLocation.swift`,
+`Sources/Daemon/DeviceCtl/`,
 `Sources/CoreSimulatorBridge/SimLocation.m`, or
 `Sources/CoreSimulatorBridge/include/SimLocation.h`.
 

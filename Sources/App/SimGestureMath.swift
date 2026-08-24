@@ -117,8 +117,8 @@ enum SimGestureMath {
     /// screen). Same orientation-aware letterbox math as
     /// `normalizedPoint`, but never returns nil and never clamps, since
     /// the daemon's HID contract already accepts out-of-range
-    /// coords as off-screen gestures (`Sources/Daemon/PaneMethods
-    /// .swift` TapParams/SwipeParams).
+    /// coords as off-screen gestures
+    /// (`Sources/Daemon/Pane/PaneMethods.swift` TapParams/SwipeParams).
     ///
     /// This is the path the iOS app-switcher swipe rides on:
     /// pressing the bezel just below the screen produces a touch

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// GesturePacer: the clock a paced `pane.input.*` gesture sleeps against.
+// GesturePacing: the clock a paced `pane.input.*` gesture sleeps against.
 //
 // Sleeping a nominal interval per step and counting the nominal value as
 // time spent lets every step's scheduler leeway compound, so a long hold
@@ -24,20 +24,4 @@ protocol GesturePacing: Sendable {
     /// cancelled gesture still reaches the checkpoint after its sleep and can
     /// release the contact it holds. A throwing sleep would skip that release.
     func sleep(until deadline: ContinuousClock.Instant) async
-}
-
-/// The production pacer: a real continuous clock, slept against with no
-/// tolerance.
-///
-/// `Task.sleep(nanoseconds:)` accepts scheduler leeway by default. Zero
-/// tolerance declines that added slack; the task can still wake late for
-/// reasons the pacer has no say over.
-struct SystemGesturePacer: GesturePacing {
-    func now() -> ContinuousClock.Instant {
-        ContinuousClock.now
-    }
-
-    func sleep(until deadline: ContinuousClock.Instant) async {
-        try? await Task.sleep(until: deadline, tolerance: .zero, clock: .continuous)
-    }
 }

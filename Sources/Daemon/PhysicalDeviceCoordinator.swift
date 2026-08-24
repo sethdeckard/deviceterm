@@ -35,60 +35,6 @@ import InteractionRelay
 import MirrorPipeline
 import os
 
-/// A connected physical device as the daemon's roster sees it. `deviceId`
-/// is the device's real CoreDevice **UDID** (the `devicectl --device`
-/// argument), stable across reconnects, unlike the ephemeral tunnel
-/// address. Tunnel coordinates are intentionally absent here: they aren't
-/// known until a tunnel is up, which the attach path arranges on demand.
-public struct PhysicalDeviceInfo: Sendable, Equatable {
-    public let deviceId: String
-    public let name: String?
-    public let model: String?
-    public let osVersion: String?
-
-    public init(
-        deviceId: String,
-        name: String? = nil,
-        model: String? = nil,
-        osVersion: String? = nil
-    ) {
-        self.deviceId = deviceId
-        self.name = name
-        self.model = model
-        self.osVersion = osVersion
-    }
-
-    init(from device: DeviceCtlDevice) {
-        self.deviceId = device.udid
-        self.name = device.name
-        self.model = device.model
-        self.osVersion = device.osVersion
-    }
-}
-
-/// Why a physical-device attach couldn't be set up. All map to clean
-/// RPC errors, so the attach path never crashes when a device is absent
-/// or not serving the expected services.
-public enum PhysicalDeviceError: Error, Equatable, Sendable {
-    /// No connected device matches the requested `deviceId` (unplugged or
-    /// untrusted, i.e. not in the `devicectl` roster).
-    case notConnected(deviceId: String)
-    /// The keepalive ran but no `utun` came up for the device within the
-    /// poll window (locked, or the tunnel never established).
-    case tunnelBringUpFailed(deviceId: String)
-    /// Channel bootstrap couldn't complete, or the required human-input channel
-    /// couldn't be established (the tunnel is up but the device isn't serving its
-    /// directory, or a needed connection failed).
-    case serviceCatalogUnavailable(deviceId: String)
-    /// The channels bootstrapped but lack a role the pane requires (the
-    /// human-input role); `service` carries its human-facing name.
-    case missingService(deviceId: String, service: String)
-    /// The channels vend no mirror role: the device's iOS is too old to mirror.
-    /// Distinct from `missingService` so the attach path can surface a user-facing
-    /// "needs a newer iOS" message rather than a raw service name.
-    case tooOldToMirror(deviceId: String)
-}
-
 public actor PhysicalDeviceCoordinator {
     /// Lists connected physical devices. Defaults to `devicectl`; injectable
     /// so hermetic tests provide a fixed roster without shelling out.

@@ -10,12 +10,6 @@
 import CoreSimulatorBridge
 import Foundation
 
-struct CoreSimulatorDeviceReadFailure: Error, CustomStringConvertible, Equatable, Sendable {
-    let message: String
-
-    var description: String { message }
-}
-
 typealias CoreSimulatorDeviceReadResult = Result<[CSBDeviceInfo], CoreSimulatorDeviceReadFailure>
 
 /// `@unchecked Sendable`: both stored properties are immutable, `readDevices`

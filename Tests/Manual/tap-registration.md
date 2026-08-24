@@ -11,7 +11,9 @@ a working tap. A `UISwitch` is the case to watch: dragging its thumb works
 either way, so the pane keeps feeling half functional.
 
 Run before any release that touches `Sources/Daemon/SimInputSynthesis.swift`,
-`Sources/Daemon/GesturePacer.swift`, `Sources/Daemon/PaneCoordinator.swift`,
+`Sources/Daemon/GesturePacing.swift`,
+`Sources/Daemon/SystemGesturePacer.swift`,
+`Sources/Daemon/Pane/PaneCoordinator.swift`,
 `Sources/App/SimulatorContentView.swift`, or
 `Sources/CoreSimulatorBridge/SimHIDClient.m`.
 

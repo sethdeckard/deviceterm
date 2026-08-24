@@ -32,19 +32,6 @@ import IOSurface
 import MirrorPipeline
 import SurfaceTrace
 
-/// Errors specific to a physical-device backend, surfaced to the coordinator's
-/// generic bridge-error path (wrapped as `bridgeFailed`).
-enum RealDeviceBackendError: Error, CustomStringConvertible {
-    case unsupported(verb: String)
-
-    var description: String {
-        switch self {
-        case let .unsupported(verb):
-            return "\(verb) is not supported on physical devices yet"
-        }
-    }
-}
-
 // The touch and key witnesses are `throws` (the protocol requires it) but only
 // enqueue, so they never throw; the unneeded-throws rule is a false positive on
 // them. The unsupported verbs under the same suppression do throw.

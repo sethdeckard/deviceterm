@@ -25,16 +25,6 @@ import Foundation
 import Darwin
 #endif
 
-/// Standard JSON-RPC-ish error codes for daemon-side responses.
-public enum RPCErrorCode {
-    /// Method requested isn't in the registry.
-    public static let methodNotFound = -32_601
-    /// Caller's payload was syntactically invalid JSON / frame.
-    public static let invalidRequest = -32_600
-    /// Method handler threw an arbitrary error not otherwise typed.
-    public static let serverError = -32_000
-}
-
 /// Validates `(sessionId, capability)` against the session manager.
 /// Lives as a closure so `RPCConnection` doesn't have to import or
 /// hold a reference to `SessionManager` directly. `RPCServer`
@@ -54,45 +44,6 @@ public typealias AuthValidator = @Sendable (
 /// (tests / a server not gated on restoration), preserving the plain
 /// unknown → unauthorized behavior.
 public typealias RestorationGate = @Sendable () async -> Bool
-
-/// Whether a session id is admissible right now, and (when it is) the live
-/// incarnation the request is authorized under. `.ready(incarnation:)` admits
-/// the session; a `nil` incarnation means "admissible, unpinned" for a manager
-/// that tracks no incarnation or for a test lookup. `.notReady` blocks with the
-/// retryable code while the id is mid-registration or mid-teardown.
-/// `.absent` means the id is gone (terminal). Derived from
-/// `SessionManager.admission(for:)`.
-public enum SessionAdmission: Sendable, Equatable {
-    case ready(incarnation: UInt64?)
-    case notReady
-    case absent
-}
-
-/// A per-request provenance snapshot for a session: its captured owner, its
-/// current terminal anchor, and its lifecycle admission. Returned by
-/// `SessionProvenanceLookup` and fed to the `ProvenanceMatcher`. Keeping them
-/// together means the authenticate gate and per-request scope re-check share
-/// one lookup. `admission` gates a request *before* the provenance verdict:
-/// a `.notReady` id is retryable regardless of provenance, and a `.ready`
-/// id's incarnation rides into the principal so a parked request can't pass a
-/// later incarnation's producer gate. Defaults to `.ready(incarnation: nil)`
-/// so a synthetic test snapshot is admissible and un-pinned unless it says
-/// otherwise.
-public struct SessionProvenanceSnapshot: Sendable, Equatable {
-    public let owner: OwnerProcessIdentity?
-    public let anchor: TerminalAnchor?
-    public let admission: SessionAdmission
-
-    public init(
-        owner: OwnerProcessIdentity?,
-        anchor: TerminalAnchor?,
-        admission: SessionAdmission = .ready(incarnation: nil)
-    ) {
-        self.owner = owner
-        self.anchor = anchor
-        self.admission = admission
-    }
-}
 
 /// Resolves a session's current provenance inputs, or nil when the session is
 /// no longer live (closed or never existed). Injected so a connection can run

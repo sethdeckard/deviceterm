@@ -13,7 +13,7 @@
 
 public enum DaemonProtocolInfo {
     /// The RPC wire-version string. Must equal the daemon's
-    /// `DaemonInfo.version` (`Sources/Daemon/DaemonMethods.swift`).
+    /// `DaemonInfo.version` (`Sources/Daemon/DaemonInfo.swift`).
     /// 0.3.0 adds convergent boot claims: `device.boot` carries an attempt,
     /// `shim.event` can relay the same attempt after a local-relay failure,
     /// and `device.reconcileBootClaim` retries attribution across daemon

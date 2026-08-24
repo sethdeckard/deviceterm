@@ -28,13 +28,6 @@
 
 import Foundation
 
-/// A live keepalive subprocess. `Process` conforms in production; tests
-/// substitute a fake to exercise ref-counting without spawning anything.
-protocol KeepaliveHandle: AnyObject {
-    var isRunning: Bool { get }
-    func interrupt()
-}
-
 extension Process: KeepaliveHandle {}
 
 public final class TunnelKeepalive: @unchecked Sendable {
