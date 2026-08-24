@@ -63,6 +63,7 @@ opt_in_rules:
   - async_without_await
   - attributes
   - file_header
+  - file_name
   - closure_end_indentation
   - closure_spacing
   - collection_alignment
@@ -100,6 +101,7 @@ opt_in_rules:
   - multiline_parameters
   - multiline_parameters_brackets
   - number_separator
+  - one_declaration_per_file
   - operator_usage_whitespace
   - optional_enum_case_matching
   - overridden_super_call

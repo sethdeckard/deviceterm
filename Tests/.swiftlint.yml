@@ -1,0 +1,17 @@
+# SwiftLint configuration for the test tree.
+#
+# Nested configurations MERGE with the root .swiftlint.yml rather than
+# replacing it, so everything the root turns on still applies here; these
+# two lines subtract from that set and change nothing else.
+#
+# Test files intentionally colocate related suites, fixtures, fakes, and
+# parameterized argument types. Enforcing the production source-layout
+# rules here would split cohesive test files without improving
+# discoverability. Nearly every file file_name objects to declares no
+# suite type at all, only free `@Test` functions plus local fakes, so the
+# rule would demand each be renamed after one of those fakes
+# (LeasedSurfacePoolTests.swift after ClockBox, and so on).
+
+disabled_rules:
+  - file_name
+  - one_declaration_per_file

@@ -103,10 +103,19 @@ reviewers can decide whether the trade-off is worth it.
 - External type conformances live in `Type+Protocol.swift` files (e.g.
   `String+Codable.swift`, `Data+Base64.swift`) so the conformance is
   discoverable from the file name.
-- One public *owned* type per file (SHOULD, not a hard rule): a public
-  struct/enum gets its own file named for it, so concurrent work doesn't
-  collide on "hot files". Tiny, tightly-coupled support types MAY share a
-  file when that genuinely reads better.
+- Each source file has at most one top-level nominal declaration.
+  `one_declaration_per_file` enforces that limit; `file_name` requires the
+  filename to match a declared type or extension. Together they keep
+  concurrent work from colliding on "hot files" and keep a type findable
+  from its name. Both apply under `Sources/`, so a second top-level type
+  fails `make lint`. Extension-focused files use
+  `ExtendedType+Purpose.swift`. Nested types, extensions, typealiases,
+  functions and constants may share the file. A private helper that wants
+  to stay private nests inside its owner, or sits in a `private extension
+  Owner` block at the foot of the file when nesting it directly would push
+  it above the owner's own members. Tests are exempt
+  (`Tests/.swiftlint.yml`): a test file colocates related suites, fixtures,
+  and fakes by design.
 - Finite wire values are shared `DaemonProtocol` enums, defined once, never
   re-typed as a raw string literal at a call site. The canonical RPC method
   set is `RPCMethod` (`Sources/DaemonProtocol/RPCMethod.swift`); a
