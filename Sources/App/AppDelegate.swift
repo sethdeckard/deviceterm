@@ -211,8 +211,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     )
 
     /// Decides when to propose restarting the helper, and runs the restart.
-    /// Both the automatic prompt (a streak of unanswered calls) and the menu
-    /// item land here, so the two paths can't drift.
+    /// Both the automatic prompt (an unanswered call whose follow-up ping went
+    /// unanswered too) and the menu item land here, so the two paths can't
+    /// drift.
     private lazy var helperRecovery = HelperRecoveryCoordinator(
         HelperRecoveryCoordinator.Dependencies(
             prompt: { [weak self] reason in
@@ -223,7 +224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     ?? .alreadyGone
             },
             reconnect: { [weak self] in await self?.daemonClient.reconnect() },
-            report: { [weak self] outcome in self?.reportHelperRestartFailure(outcome) }
+            report: { [weak self] outcome in self?.reportHelperRestartFailure(outcome) },
+            rearmDetection: { [weak self] in self?.daemonClient.rearmUnresponsiveDetection() }
         )
     )
 
@@ -503,8 +505,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Quitting is the design, not a shortfall. A fresh process IS the
     /// connection reset, so nothing here has to coordinate with the machinery a
     /// second in-process attempt would wake: no reconnect callback fires on a
-    /// replacement peer, no second bounded ping lands on the unresponsive
-    /// streak and races `HelperRecoveryCoordinator`'s own restart prompt, and no
+    /// replacement peer, no second bounded ping expires into a health probe
+    /// that races `HelperRecoveryCoordinator`'s own restart prompt, and no
     /// peer left installed by a timed-out handshake can be silently reused. It
     /// also matches the remediation the version-mismatch path already gives.
     ///

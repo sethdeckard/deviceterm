@@ -595,20 +595,43 @@ close. Past it the outcome is unknown, so every close the GUI issues also
 carries `expectedAttachment`: a close whose admission has been superseded is
 refused daemon-side, which is what makes a late one harmless.
 
-**Expiries are also the detection signal.** `DaemonClient` counts consecutive
-ones and reports the daemon unresponsive from the second in a row onward, with
-any reply (including a refusal, which is still a reply) resetting the count.
-One expiry is not evidence: a call can legitimately outlast its bound, and the
-bounds are not uniform, so two in a row is the heuristic rather than a proof of
-a wedge. The Router's attach deadline is not one of the two: it is raised in
-the Router and never reaches the client, so an attach that expires doesn't
-lengthen the streak, though its eventual reply still clears it. What is counted
-reports a condition rather than an edge, on every unanswered call past the
-threshold: a
-daemon that never answers again produces nothing else, so signalling only the
-first would give the GUI one chance to act on something still true minutes
-later. The count changes nothing about what the client does; it keeps issuing
-and bounding calls either way.
+**An expiry starts the detection; it doesn't decide it.** A call reaching its
+deadline says something went unanswered, which a call running long for its own
+reasons also produces, and two landing together says only that two things were
+slow at once. So `DaemonClient` asks rather than infers: the expiry sends one
+`daemon.ping` on the same connection under the ordinary bound, and only that
+going unanswered too reports the daemon unresponsive. A reply to the ping counts
+even when it's a refusal, because a daemon that rejects a request is answering.
+
+A wedged daemon is reported about thirty seconds after it stops answering, since
+the owned-sim roster poll keeps an ordinary call in flight without the user
+doing anything.
+
+Three fences on the probe, each closing a different way of being wrong. One
+probe runs at a time, so concurrent expiries ask once instead of voting, and the
+probe's own expiry is absorbed by that fence rather than starting a probe of its
+own. The verdict is dropped if the connection generation moved while the ping
+was in flight, so a replacement daemon is never blamed for the one it replaced.
+It's dropped too if any other call replied in that window, because that is the
+answer the probe was sent for.
+
+A connection reported silent isn't probed again. A daemon that never answers
+keeps producing expiries, and re-asking a settled question would stack prompts
+on a user who already has one open, so the GUI says when it wants the next
+verdict.
+
+Only control-lane request outcomes feed any of this. The pane peer is a separate
+connection with its own generation and retry loop, so its replies cannot call
+off a probe of the control peer, and its expiries cannot start one.
+
+The ping rides the control lane, so a daemon backlogged enough to starve that
+lane fails the probe the way a wedged one does. It's a cheaper question, not a
+different one: the bounds can't tell busy from wedged either.
+
+The Router's attach deadline enters none of this. It's raised in the Router and
+never reaches the client, so an attach that expires starts no probe, though its
+eventual reply still counts as one. Detection changes nothing about what the
+client does either way: it keeps issuing and bounding calls.
 
 GUI RPC timings go to Apple unified logging under the `rpc-performance`
 category. Debug attempt records contain method, lane, outcome, and elapsed
@@ -629,14 +652,21 @@ and `pane.subscribe` are separate attempts. This prevents an outer timeout
 from appearing as an inner cancellation or an authentication stall from being
 attributed to a subscribe request that was never sent.
 
-The GUI decides when to act on the repeats, because only it knows what is
-already on screen. It raises a prompt offering **Restart Helper** or **Keep
-Waiting**, and carries a permanent **Restart Helper…** item in its app menu so
-recovery never depends on the prompt being up at the right moment. Answering
-the prompt either way quiets the detector for two minutes: long enough that a
-user who chose to wait isn't asked again while they wait, or that a replacement
-gets a chance to come up, and short enough that either of them being wrong
-doesn't strand the user. Restarting takes the
+The GUI decides what to do with a verdict, because only it knows what's already
+on screen. It raises a prompt offering **Restart Helper** or **Keep Waiting**,
+and carries a permanent **Restart Helper…** item in its app menu so recovery
+never depends on the prompt being up at the right moment. Answering either way
+quiets the automatic prompt for two minutes: long enough that a user who chose
+to wait isn't asked again while they wait, or that a replacement gets a chance
+to come up, and short enough that either of them being wrong doesn't strand the
+user.
+
+Because the client reports a silent connection once, a verdict the GUI declines
+has to be handed back or nothing asks again. It rearms when a prompt sequence
+ends and when it drops a verdict for the quiet window, so a helper still wedged
+when the window lapses gets a fresh prompt instead of silence.
+
+Restarting takes the
 pid from `xpc_connection_get_pid` on the live peer, never from an RPC reply (a
 daemon that has stopped answering sends none), and reads the peer and signals
 it in one actor turn, so the GUI can't swap its own connection underneath the

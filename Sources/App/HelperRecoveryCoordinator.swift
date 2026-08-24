@@ -35,6 +35,10 @@ final class HelperRecoveryCoordinator {
         var reconnect: @MainActor () async -> Void
         /// Surface an outcome that didn't confirm the helper was stopped.
         var report: @MainActor (HelperTerminationOutcome) -> Void
+        /// Ask the detector to diagnose this connection again. It reports a
+        /// silent connection once, so every verdict this coordinator doesn't
+        /// act on has to be handed back or nothing asks again.
+        var rearmDetection: @MainActor () -> Void = {}
         var now: @MainActor () -> Date = { Date() }
         /// How long the automatic prompt stays quiet after Keep Waiting or a
         /// restart attempt. Long enough that a user who decided
@@ -48,10 +52,10 @@ final class HelperRecoveryCoordinator {
 
     private let deps: Dependencies
     /// True from the moment a prompt is raised until its sequence finishes.
-    /// A helper that has stopped answering reports every unanswered call from
-    /// the threshold on, so without this the prompt would stack on itself
-    /// within seconds; the restart is several awaits long on top of however
-    /// long the user takes to read.
+    /// The sequence rearms the detector when it ends, so without this a
+    /// verdict arriving mid-sequence would stack a second prompt on the first;
+    /// the restart is several awaits long on top of however long the user
+    /// takes to read.
     private var isPrompting = false
     /// When the detector may propose a restart again.
     private var quietUntil: Date?
@@ -71,9 +75,17 @@ final class HelperRecoveryCoordinator {
     /// Reading it would be an actor hop, and the diagnosed connection can be
     /// replaced across one, which would aim the kill at a peer nothing was
     /// ever diagnosed about.
+    ///
+    /// A verdict declined for the quiet window is handed straight back, so the
+    /// helper is diagnosed again a moment later and the window ends in a fresh
+    /// prompt rather than in silence. A verdict declined because a sequence is
+    /// already running needs no hand-back: that sequence rearms when it ends.
     func helperStoppedAnswering(connection: Int) {
         guard !isPrompting else { return }
-        if let quietUntil, deps.now() < quietUntil { return }
+        if let quietUntil, deps.now() < quietUntil {
+            deps.rearmDetection()
+            return
+        }
         begin(reason: .unresponsive, connection: connection)
     }
 
@@ -99,7 +111,15 @@ final class HelperRecoveryCoordinator {
     /// it because the connection changed since the menu opened would just fail
     /// what the user asked for.
     private func run(reason: HelperRestartReason, connection: Int?) async {
-        defer { isPrompting = false }
+        // The detector reports a silent connection once, and this sequence
+        // consumed that report. Hand it back on the way out so a helper that is
+        // still wedged can be diagnosed again, whichever way the user answered:
+        // the quiet window is what decides when the next verdict becomes a
+        // prompt, not whether one is ever made.
+        defer {
+            isPrompting = false
+            deps.rearmDetection()
+        }
         switch deps.prompt(reason) {
         case .keepWaiting:
             quietUntil = deps.now().addingTimeInterval(deps.quietSeconds)

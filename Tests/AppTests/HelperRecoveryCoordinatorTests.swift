@@ -3,12 +3,12 @@
 // HelperRecoveryCoordinatorTests: when a restart is proposed, and what
 // running it actually does.
 //
-// The interesting behavior here is all about restraint. The client reports a
-// helper that has stopped answering on every unanswered call, so the
-// coordinator is the thing that has to not keep asking; a user who says
-// they'll wait has made a judgement that should outlast the next few seconds
-// of silence; and a restart aimed at one wedged helper must not land on its
-// healthy replacement.
+// The interesting behavior here is all about restraint, and about who holds
+// the thread. The client reports a silent connection once and then waits to be
+// asked again, so every verdict this coordinator doesn't act on has to be
+// handed back or nothing ever asks; a user who says they'll wait has made a
+// judgement that should outlast the next few seconds of silence; and a restart
+// aimed at one wedged helper must not land on its healthy replacement.
 
 @testable import App
 import Foundation
@@ -28,6 +28,7 @@ struct HelperRecoveryCoordinatorTests {
         private(set) var terminations: [Int?] = []
         private(set) var reconnects = 0
         private(set) var reports: [HelperTerminationOutcome] = []
+        private(set) var rearms = 0
 
         func makeCoordinator(
             quietSeconds: TimeInterval = 120
@@ -44,6 +45,7 @@ struct HelperRecoveryCoordinatorTests {
                     },
                     reconnect: { [self] in reconnects += 1 },
                     report: { [self] outcome in reports.append(outcome) },
+                    rearmDetection: { [self] in rearms += 1 },
                     now: { [self] in clock },
                     quietSeconds: quietSeconds
                 )
@@ -90,10 +92,11 @@ struct HelperRecoveryCoordinatorTests {
 
     @Test
     func keepWaitingHoldsOffTheNextSignalAndThenAsksAgain() async {
-        // A helper that has stopped answering signals on every unanswered
-        // call, so without the quiet window the user's answer would survive
-        // seconds. It has to lapse, too: the same silence is what asks again,
-        // and a window that never ended would leave only the menu item.
+        // A helper that has stopped answering is diagnosed again as soon as
+        // the verdict is handed back, so without the quiet window the user's
+        // answer would survive seconds. It has to lapse, too: the same silence
+        // is what asks again, and a window that never ended would leave only
+        // the menu item.
         let harness = Harness()
         harness.answer = .keepWaiting
         let coordinator = harness.makeCoordinator(quietSeconds: 120)
@@ -175,9 +178,10 @@ struct HelperRecoveryCoordinatorTests {
 
     @Test
     func aSecondSignalDoesNotStackAPromptOnTheOneOnScreen() async {
-        // A helper answering nothing signals on every unanswered call, and the
-        // restart is several awaits long on top of however long the user takes
-        // to read, so more signals arrive while the first prompt is up.
+        // The restart is several awaits long on top of however long the user
+        // takes to read, and the menu item stays live throughout, so a second
+        // signal can arrive while the first prompt is up. It needs no hand-back
+        // either: the sequence rearms when it ends.
         let harness = Harness()
         let coordinator = harness.makeCoordinator()
         coordinator.helperStoppedAnswering(connection: harness.generation)
@@ -185,6 +189,39 @@ struct HelperRecoveryCoordinatorTests {
         coordinator.restartRequested()
         await settle()
         #expect(harness.prompts == [.unresponsive])
+    }
+
+    @Test
+    func aVerdictDeclinedInsideTheQuietWindowIsHandedBack() async {
+        // The detector reports a silent connection once. A verdict this
+        // coordinator drops for the quiet window is therefore the last one it
+        // gets unless it says otherwise, and the window would end in silence
+        // rather than in the prompt it promised.
+        let harness = Harness()
+        harness.answer = .keepWaiting
+        let coordinator = harness.makeCoordinator(quietSeconds: 120)
+        coordinator.helperStoppedAnswering(connection: harness.generation)
+        await settle()
+        #expect(harness.rearms == 1, "the sequence hands back the verdict it consumed")
+
+        harness.clock = harness.clock.addingTimeInterval(60)
+        coordinator.helperStoppedAnswering(connection: harness.generation)
+        await settle()
+        #expect(harness.prompts.count == 1, "still inside the quiet window")
+        #expect(harness.rearms == 2, "declined, not consumed")
+    }
+
+    @Test
+    func aRestartSequenceHandsTheVerdictBackWhenItEnds() async {
+        // Whichever way the user answered, and whatever the termination
+        // reported, the helper may still be wedged. Nothing about the sequence
+        // ending says otherwise, so it must leave the detector able to say so.
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+        coordinator.helperStoppedAnswering(connection: harness.generation)
+        await settle()
+        #expect(harness.terminations == [7])
+        #expect(harness.rearms == 1)
     }
 
     @Test

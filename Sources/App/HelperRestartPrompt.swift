@@ -12,7 +12,8 @@
 
 /// Who raised the restart, which decides the copy and the second button.
 enum HelperRestartReason: Sendable, Equatable {
-    /// Consecutive calls went unanswered, so the app is proposing this.
+    /// A call went unanswered and so did the ping sent after it, so the app is
+    /// proposing this.
     case unresponsive
     /// The user asked for it from the menu.
     case requested

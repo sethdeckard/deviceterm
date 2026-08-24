@@ -211,6 +211,55 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         let pid: Int32
     }
 
+    /// The health probe in flight: the connection generation it is judging, the
+    /// reply count it started from, and the task running it.
+    ///
+    /// Both numbers are captured when the probe starts rather than read when it
+    /// finishes, because both can move underneath it. A reconnect makes the
+    /// verdict belong to a helper that no longer exists, and a reply arriving
+    /// from any other call answers the question the probe was asking.
+    private struct HealthProbe {
+        let generation: Int
+        let replyEpoch: UInt64
+        let task: Task<Void, Never>
+    }
+
+    /// What one call's outcome says about whether the helper is answering.
+    ///
+    /// Shared by the ordinary call paths and by the probe judging its own ping,
+    /// so the two cannot disagree about what counts as an answer.
+    private enum HelperHealthVote {
+        case answered
+        case silent
+        case indeterminate
+
+        init(_ error: any Error) {
+            guard let error = error as? DaemonClientError else {
+                // A cancellation, or an encoding fault on the way out: neither
+                // says anything about whether the helper is answering.
+                self = .indeterminate
+                return
+            }
+            switch error {
+            case .timedOut:
+                self = .silent
+
+            // A reply came back, even though it was a refusal or something
+            // this client couldn't decode. Treating a prompt rejection as
+            // silence would diagnose a helper that is plainly answering.
+            case .daemon, .decode, .versionMismatch:
+                self = .answered
+
+            // Neither silence nor an answer. A transport loss says the
+            // connection went away, which recovers on the next send. A
+            // shutdown timeout reaches here through `bounded`. A negative ack
+            // is decoded afterward and never reaches this classifier.
+            case .transport, .shutdownNotAcknowledged, .shutdownTimedOut:
+                self = .indeterminate
+            }
+        }
+    }
+
     /// `true` when the GUI was launched with `--smoke` *and* a UDS
     /// override path is in the environment. The smoke harness sets
     /// both; production never does.
@@ -266,22 +315,6 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         .deviceAttach,
         .physicalDeviceAttach
     ]
-    /// Unanswered calls in a row before the helper is declared unresponsive.
-    ///
-    /// Two consecutive unanswered calls, with any reply resetting the count.
-    ///
-    /// A heuristic, not proof of a wedge. One call can legitimately outlast
-    /// its bound, and the bounds are not uniform (the lifecycle methods carry
-    /// a much larger one), so a single expiry says too little to interrupt
-    /// anyone over. Two in a row with nothing answered between them is worth
-    /// offering a restart for, which is a question rather than an action.
-    ///
-    /// A silent helper reaches the threshold without user action: the app-wide
-    /// coordinator issues serial `device.list` calls under the ordinary bound,
-    /// so the second expiry arrives after roughly half a minute regardless of
-    /// tab count.
-    static let unresponsiveTimeoutThreshold = 2
-
     /// Ordinary app RPCs and the low-rate app-command stream. Its generation
     /// is the daemon-client generation used by version checks and recovery.
     private let xpcConnection: XPCDaemonConnection
@@ -380,21 +413,37 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     /// When nil the client still attempts the shutdown but has no surface to
     /// report it.
     var onVersionMismatch: (@MainActor (VersionMismatchOutcome) -> Void)?
-    /// Invoked (main actor) once `unresponsiveTimeoutThreshold` calls in a row
-    /// have gone unanswered, and on every unanswered call after that until one
-    /// is answered. It reports a condition rather than an edge: a helper that
-    /// never answers again produces nothing but expiries, so an observer told
-    /// only about the first would have one chance to act on something that is
-    /// still true minutes later. Deciding when to act on repeats is the
-    /// observer's job, because only it knows what it is already showing. Set
-    /// by `AppDelegate` to raise the restart prompt. Reporting changes nothing
-    /// about request execution: the client keeps issuing and bounding calls.
+    /// Invoked (main actor) when a call went unanswered and a `daemon.ping`
+    /// sent afterward went unanswered too, on the same connection, with nothing
+    /// replying in between. Set by `AppDelegate` to raise the restart prompt.
+    /// Reporting changes nothing about request execution: the client keeps
+    /// issuing and bounding calls.
+    ///
+    /// Fires at most once per silent connection. A helper that never answers
+    /// again keeps producing expiries, but re-probing a connection already
+    /// judged silent asks a question that has been answered. Whoever wants to
+    /// be told again says so with `rearmUnresponsiveDetection()`, because only
+    /// the observer knows what it is already showing and whether it was
+    /// recently told to leave it alone.
+    ///
     /// Carries the transport connection the unanswered calls were going to, so
     /// a restart raised from it can be fenced to that connection rather than
     /// to whatever is current by the time the user answers a prompt.
     var onUnresponsive: (@MainActor (Int) -> Void)?
-    /// Calls that have reached their deadline with no answer in between.
-    private var consecutiveTimeouts = 0
+    /// Replies seen from the helper, counted so a probe can tell whether
+    /// anything answered while it was in flight. Only ever compared for
+    /// equality against a value captured earlier; the number itself means
+    /// nothing.
+    private var helperReplyEpoch: UInt64 = 0
+    /// The probe in flight, or nil when none is. Non-nil is also what keeps a
+    /// second probe from starting, which is what collapses concurrent expiries
+    /// onto one health check and what stops the probe's own expiry from
+    /// starting a probe of its own.
+    private var healthProbe: HealthProbe?
+    /// The connection a silent verdict has already been reported for, so the
+    /// same one isn't probed and re-reported for every later expiry. Cleared by
+    /// a reply, by a reconnect, and by `rearmUnresponsiveDetection()`.
+    private var reportedSilentGeneration: Int?
     /// Local-only release diagnostics. Per-call detail is debug level; persisted
     /// logs contain only severe replies, timeouts, and periodic aggregates.
     let rpcPerformance: RPCPerformanceDiagnostics
@@ -570,17 +619,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             await xpcConnection.setReconnectHandler { [weak self] connection in
                 Task { @MainActor in
                     guard let self else { return }
-                    // The transport's own generation, as of the connection
-                    // being installed. Held so a call that goes unanswered can
-                    // name the connection it was talking to without an actor
-                    // hop, which is the whole point: reading it back later
-                    // returns whatever is current then, not what was
-                    // diagnosed.
-                    self.connectionGeneration = connection
-                    // Bump the generation so a restore still retrying from an
-                    // earlier reconnect can observe that it was superseded and
-                    // bail.
-                    self.reconnectGeneration += 1
+                    self.adoptReconnectedConnection(connection)
                     // Logged to make a superseded handshake cycle visible.
                     // Correlate timelines on the transport's
                     // `connectionGeneration` instead: this counter trails it by
@@ -608,6 +647,29 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         // AppDelegate catches the mismatch and runs the recovery ladder, which
         // surfaces UI only if it cannot replace the helper.
         try await startupVersionHandshake()
+    }
+
+    /// Take up the bookkeeping a freshly installed peer invalidates.
+    ///
+    /// `connection` is the transport's own generation as of the install. Held
+    /// so a call that goes unanswered can name the connection it was talking to
+    /// without an actor hop, which is the whole point: reading it back later
+    /// returns whatever is current then, not what was diagnosed.
+    ///
+    /// A health verdict about the peer that just went away says nothing about
+    /// this one, so any probe in flight is dropped and any verdict already
+    /// reported stops suppressing. The reconnect generation bumps too, so a
+    /// restore still retrying from an earlier reconnect can observe that it was
+    /// superseded and bail.
+    ///
+    /// Internal for the same reason `runReconnectHandshake(generation:)` is: a
+    /// hermetic test can drive a reconnect without a live transport.
+    func adoptReconnectedConnection(_ connection: Int) {
+        connectionGeneration = connection
+        healthProbe?.task.cancel()
+        healthProbe = nil
+        reportedSilentGeneration = nil
+        reconnectGeneration += 1
     }
 
     /// Re-run the wire-version handshake after a transport reconnect. An
@@ -846,6 +908,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         // capability, and it is dropping it here.
         let data: Data
         let startedAt = rpcPerformance.now()
+        let sentOn = connectionGeneration
         do {
             data = try await Deadline.wait(
                 nanos: requestDeadlineNanos,
@@ -873,7 +936,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 error: error,
                 severeDelayNanoseconds: 10_000_000_000
             )
-            noteHelperFailure(error)
+            noteHelperFailure(error, sentOn: sentOn)
             throw error
         }
         let response = try decode(SessionCreateResponse.self, data)
@@ -2009,13 +2072,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         guard !Self.selfReconcilingMethods.contains(method) else {
             // Their caller owns the deadline, late-result cleanup, and timing.
             // A reply is still proof the helper is alive, whether it succeeded
-            // or was refused, so it must clear an unanswered-call streak here.
+            // or was refused, so it must count here.
+            let sentOn = connectionGeneration
             do {
                 let answer = try await transportRequest(method: method, params: params)
                 noteHelperAnswered()
                 return answer
             } catch {
-                noteHelperFailure(error)
+                noteHelperFailure(error, sentOn: sentOn)
                 throw error
             }
         }
@@ -2024,66 +2088,139 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         }
     }
 
-    /// Record that the helper answered, ending any streak in progress. Only
-    /// *consecutive* unanswered calls say it has stopped answering, so one
-    /// reply is enough to clear the count however long the streak was.
-    private func noteHelperAnswered() {
-        consecutiveTimeouts = 0
-    }
-
-    /// Record a call that reached its deadline unanswered, and report once the
-    /// streak has reached the threshold.
+    /// Record that the helper answered.
     ///
-    /// Every expiry at or past the threshold reports, not just the one that
-    /// crosses it. A helper that never answers again produces nothing but
-    /// expiries, so reporting only the crossing would leave the observer with
-    /// exactly one signal for the whole condition: whoever it told could
-    /// choose to wait, and then never hear about it again. Suppressing the
-    /// repeats is the observer's call, because only it knows whether it is
-    /// already showing something or was recently told to leave it alone.
-    /// A startup recovery stands this signal down while it runs. Its ladder
-    /// deliberately pings a helper it just asked to stop, several times, on a
-    /// short bound; those expiries reach the threshold easily and would raise
-    /// the restart prompt in the middle of a launch that is supposed to be
-    /// silent. Worse, the prompt's own termination path would race the ladder
-    /// for the same helper. Recovery reports its own outcome when it finishes.
-    private func noteHelperSilent() {
-        guard recoveryTarget == nil else { return }
-        consecutiveTimeouts += 1
-        guard consecutiveTimeouts >= Self.unresponsiveTimeoutThreshold else { return }
-        onUnresponsive?(connectionGeneration)
+    /// Counting the reply is what lets a probe already in flight discover that
+    /// its question was answered by someone else. Clearing the report is what
+    /// rearms detection after a recovery: a helper that answers again has
+    /// earned a fresh verdict if it goes quiet later.
+    private func noteHelperAnswered() {
+        helperReplyEpoch &+= 1
+        reportedSilentGeneration = nil
     }
 
-    /// Fold a failed call into the streak.
+    /// Ask the helper directly whether it is still there, after a call reached
+    /// its deadline unanswered.
+    ///
+    /// An expiry alone is not evidence of a wedge. Calls can legitimately
+    /// outlast their bound, the bounds are not uniform, and two of them landing
+    /// together says only that two things were slow at once. So the expiry
+    /// starts a question rather than answering one: a `daemon.ping` on the same
+    /// connection, which is the cheapest thing the daemon can answer and the
+    /// last thing a wedged one will.
+    ///
+    /// A silent helper reaches this without user action: the app-wide
+    /// coordinator issues serial `device.list` calls under the ordinary bound,
+    /// so the first expiry arrives within about fifteen seconds regardless of
+    /// tab count, and the probe's verdict about fifteen after that.
+    ///
+    /// Three guards, and each is doing different work:
+    ///
+    /// A startup recovery stands the whole signal down. Its ladder deliberately
+    /// pings a helper it just asked to stop, several times, on a short bound;
+    /// those expiries would raise the restart prompt in the middle of a launch
+    /// that is supposed to be silent, and the prompt's own termination path
+    /// would then race the ladder for the same helper. Recovery reports its own
+    /// outcome when it finishes.
+    ///
+    /// A probe already in flight absorbs this expiry instead of starting a
+    /// second one. That is what collapses concurrent expiries onto one health
+    /// check, and it is also what keeps the probe's own expiry from recursing:
+    /// that expiry arrives here while the probe is still recorded.
+    ///
+    /// A connection already reported silent is not asked again. The observer
+    /// decides when it wants to hear about it a second time.
+    ///
+    /// `generation` is the connection the expired call was sent to, not
+    /// whatever is current now. A reconnect can land while a call is in flight,
+    /// and its expiry afterward says the old peer never answered, which is
+    /// already known and says nothing about the new one. Probing on the current
+    /// generation there would diagnose a connection no call of ours has yet
+    /// gone unanswered on.
+    private func noteHelperSilent(sentOn generation: Int) {
+        guard recoveryTarget == nil else { return }
+        guard generation == connectionGeneration else { return }
+        guard healthProbe == nil else { return }
+        guard reportedSilentGeneration != generation else { return }
+        let replyEpoch = helperReplyEpoch
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await runHealthProbe(generation: generation, replyEpoch: replyEpoch)
+        }
+        healthProbe = HealthProbe(
+            generation: generation,
+            replyEpoch: replyEpoch,
+            task: task
+        )
+    }
+
+    /// Put one `daemon.ping` to the connection an expiry was diagnosed against,
+    /// and report it unresponsive only if that goes unanswered too.
+    ///
+    /// The ping goes down the control lane like any other call, so a daemon
+    /// backlogged enough to starve that lane fails the probe the same way a
+    /// wedged one does. The bound can't tell busy from wedged either; this
+    /// asks a cheaper question, not a different one.
+    ///
+    /// The ping carries no deadline of its own, so `bounded` gives it the
+    /// ordinary `requestDeadlineNanos`. It also runs through the ordinary
+    /// accounting, which is deliberate: a ping that answers or is refused
+    /// records a reply like any other call, and that reply is what the epoch
+    /// check below then sees.
+    private func runHealthProbe(generation: Int, replyEpoch: UInt64) async {
+        let vote: HelperHealthVote
+        do {
+            _ = try await ping()
+            vote = .answered
+        } catch {
+            vote = HelperHealthVote(error)
+        }
+        // A reconnect already dropped this probe, so its verdict belongs to a
+        // helper that is no longer on the other end.
+        guard healthProbe?.generation == generation else { return }
+        healthProbe = nil
+        guard vote == .silent else { return }
+        // The connection moved between the ping being sent and it expiring. A
+        // replacement daemon must not be blamed for the old one's silence.
+        guard generation == connectionGeneration else { return }
+        // Something answered while the ping was in flight, which is the answer
+        // the probe was asking for. The successful or refused ping itself
+        // arrives here the same way, through `noteHelperAnswered`.
+        guard replyEpoch == helperReplyEpoch else { return }
+        reportedSilentGeneration = generation
+        onUnresponsive?(generation)
+    }
+
+    /// Let the next expiry on this connection probe and report again.
+    ///
+    /// The report fires once per silent connection, so an observer that chose
+    /// to leave a verdict alone has to say when it wants the next one. Called
+    /// by `HelperRecoveryCoordinator` when its prompt sequence ends and when it
+    /// declines a verdict it isn't ready to act on.
+    func rearmUnresponsiveDetection() {
+        reportedSilentGeneration = nil
+    }
+
+    /// Route a failed control-lane call to the health accounting.
     ///
     /// `bounded` and `createSession` both classify through here so the call
     /// that bounds itself can't drift from the ones `bounded` wraps. The
     /// Router's attach deadline does not: that bound is raised in the Router
-    /// and never reaches this client, so an attach that expires doesn't
-    /// lengthen the streak. Its reply still clears it when one arrives, since
-    /// that comes back through `rawRequest`.
-    private func noteHelperFailure(_ error: any Error) {
-        guard let error = error as? DaemonClientError else {
-            // A cancellation, or an encoding fault on the way out: neither
-            // says anything about whether the helper is answering.
-            return
-        }
-        switch error {
-        case .timedOut:
-            noteHelperSilent()
+    /// and never reaches this client, so an attach that expires starts no
+    /// probe. Its reply still counts when one arrives, since that comes back
+    /// through `rawRequest`.
+    ///
+    /// `sentOn` is the connection the call was going to, which only the expiry
+    /// case uses; a reply is a reply whichever peer generation produced it.
+    private func noteHelperFailure(_ error: any Error, sentOn generation: Int) {
+        switch HelperHealthVote(error) {
+        case .silent:
+            noteHelperSilent(sentOn: generation)
 
-        // A reply came back, even though it was a refusal or something this
-        // client couldn't decode. The streak counts the absence of replies, so
-        // any of these ends it; treating a prompt rejection as silence would
-        // diagnose a helper that is plainly answering.
-        case .daemon, .decode, .versionMismatch:
+        case .answered:
             noteHelperAnswered()
 
-        // Neither silence nor an answer. A transport loss says the connection
-        // went away, which recovers on the next send. A shutdown timeout
-        // reaches here through `bounded` but does not affect the streak. A
-        // negative ack is decoded afterward and never reaches this classifier.
-        case .transport, .shutdownNotAcknowledged, .shutdownTimedOut:
+        case .indeterminate:
             break
         }
     }
@@ -2178,6 +2315,11 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             : requestDeadlineNanos)
         let expiry = timeoutError ?? DaemonClientError.timedOut(method: method.rawValue)
         let startedAt = rpcPerformance.now()
+        // The connection this call is going to, read now rather than when it
+        // finishes. A reconnect can land while the call is in flight, and an
+        // expiry that arrives afterward is evidence about the peer that went
+        // away, not about the one that replaced it.
+        let sentOn = connectionGeneration
         do {
             let value = try await withThrowingTaskGroup(of: T.self) { group in
                 group.addTask { try await operation() }
@@ -2197,7 +2339,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 startedAt: startedAt,
                 error: nil
             )
-            noteHelperAnswered()
+            if lane == .control {
+                noteHelperAnswered()
+            }
             return value
         } catch {
             recordRPCPerformance(
@@ -2206,7 +2350,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 startedAt: startedAt,
                 error: error
             )
-            noteHelperFailure(error)
+            if lane == .control {
+                noteHelperFailure(error, sentOn: sentOn)
+            }
             throw error
         }
     }

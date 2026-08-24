@@ -5,10 +5,11 @@
 //
 // A bounded call that expires says something went unanswered; it does not say
 // the helper has stopped answering, because a single call can run long for
-// reasons of its own. What separates the two is *consecutive* expiries with no
-// reply in between, and these pin that distinction: what raises the signal,
-// what counts as the reply that clears it, and that a helper answering nothing
-// keeps raising it rather than reporting the condition once and going quiet.
+// reasons of its own, and two of them landing together says only that two
+// things were slow at once. So an expiry asks rather than concludes: it sends a
+// `daemon.ping` to the same connection, and only silence there is reported.
+// These pin what the probe is fenced to (one connection, one in flight, one
+// verdict), what counts as the reply that calls it off, and what rearms it.
 
 @testable import App
 import DaemonProtocol
@@ -17,24 +18,32 @@ import Testing
 
 @MainActor
 struct DaemonClientUnresponsiveTests {
-    /// A peer that answers or stays silent per call, scripted from the front
-    /// of a queue so a test can spell out a streak and its interruptions.
+    /// A peer that answers or stays silent per call, scripted from the front of
+    /// a queue so a test can spell out an expiry and what the probe behind it
+    /// meets. `daemon.ping` draws from its own queue, because the probe is the
+    /// thing under test and scripting it positionally would make every test
+    /// depend on how many calls the client happened to make.
     ///
-    /// `@unchecked Sendable` invariant: one instance per test, its queue
-    /// written on the main actor before the calls run and read only from
-    /// inside them.
-    private final class ScriptedTransport: DaemonRequestTransport, @unchecked Sendable {
+    /// An actor rather than a lock: one test drives three calls concurrently,
+    /// and consuming the queue from several of them at once is a data race the
+    /// isolation removes outright.
+    private actor ScriptedTransport: DaemonRequestTransport {
         /// What one call gets. `refuses` is a reply as much as `answers` is,
-        /// which is the distinction two of these tests turn on.
+        /// which is the distinction several of these tests turn on, and `fails`
+        /// is neither: a transport loss says the connection went away.
         enum Reply {
             case answers
             case refuses
             case silent
+            case fails
         }
 
-        /// One entry per call, consumed from the front. An empty queue
+        /// One entry per non-ping call, consumed from the front. An empty queue
         /// answers, so a test only writes the part it cares about.
-        var script: [Reply] = []
+        private var script: [Reply] = []
+        /// The same, for `daemon.ping`.
+        private var pingScript: [Reply] = []
+        private var pingCount = 0
 
         /// Just enough of a reply for the caller to decode; these tests are
         /// about the accounting, so any well-formed result will do.
@@ -62,13 +71,38 @@ struct DaemonClientUnresponsiveTests {
             }
         }
 
+        func script(_ replies: [Reply]) {
+            script = replies
+        }
+
+        func scriptPing(_ replies: [Reply]) {
+            pingScript = replies
+        }
+
+        /// Pings seen so far. How "concurrent expiries share one probe" is
+        /// checked: the reports alone can't tell one probe from three that
+        /// happened to agree.
+        func pingsSeen() -> Int {
+            pingCount
+        }
+
         func request(method: String, params: Data?) async throws -> Data {
-            switch script.isEmpty ? .answers : script.removeFirst() {
+            let reply: Reply
+            if RPCMethod(rawValue: method) == .daemonPing {
+                pingCount += 1
+                reply = pingScript.isEmpty ? .answers : pingScript.removeFirst()
+            } else {
+                reply = script.isEmpty ? .answers : script.removeFirst()
+            }
+            switch reply {
             case .answers:
                 return Self.reply(for: method)
 
             case .refuses:
                 throw DaemonClientError.daemon(code: -32_602, message: "refused")
+
+            case .fails:
+                throw DaemonClientError.transport("connection went away")
 
             case .silent:
                 // Silent, not uncooperative: the bound cancels the loser of
@@ -80,11 +114,32 @@ struct DaemonClientUnresponsiveTests {
         }
     }
 
+    /// The pane peer, which is a separate connection with its own generation.
+    /// Answers or stays silent for the whole test; the pane-lane tests only
+    /// need one subscribe each.
+    private actor ScriptedSubscribeTransport: DaemonSubscribeTransport {
+        private let isSilent: Bool
+
+        init(silent: Bool) {
+            isSilent = silent
+        }
+
+        func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+            if isSilent {
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+            }
+            return AsyncStream { $0.finish() }
+        }
+    }
+
     /// A client whose bound expires almost immediately, so a silent call costs
-    /// milliseconds rather than the production fifteen seconds.
-    private func makeClient() -> (DaemonClient, ScriptedTransport) {
+    /// milliseconds rather than the production fifteen seconds. The probe takes
+    /// the same bound, so a full expiry-then-probe sequence is about forty.
+    private func makeClient(
+        paneSubscribe: ScriptedSubscribeTransport? = nil
+    ) -> (DaemonClient, ScriptedTransport) {
         let transport = ScriptedTransport()
-        let client = DaemonClient(injecting: transport)
+        let client = DaemonClient(injecting: transport, subscribe: paneSubscribe)
         client.requestDeadlineNanos = 20_000_000
         return (client, transport)
     }
@@ -95,87 +150,230 @@ struct DaemonClientUnresponsiveTests {
         _ = try? await client.deviceList(scope: .all)
     }
 
+    /// Long enough for a probe started by the last call to have finished. Used
+    /// where a test asserts that nothing was reported, which otherwise passes
+    /// for the wrong reason.
+    private func waitOutTheProbe() async {
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+
     @Test
-    func aStreakOfUnansweredCallsReportsTheHelperUnresponsive() async {
+    func anUnansweredCallProbesBeforeAnythingIsReported() async {
+        // The point of the change: one expiry is a question, not a verdict. It
+        // costs a ping to answer, and the ping answering means nothing is
+        // reported at all.
         let (client, transport) = makeClient()
-        transport.script = [.silent, .silent]
+        await transport.script([.silent])
+        await transport.scriptPing([.answers])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
         await call(client)
-        #expect(reports == 0, "one expiry is not evidence on its own")
+        await waitOutTheProbe()
+        #expect(reports == 0, "the helper answered the ping, so it is answering")
+        #expect(await transport.pingsSeen() == 1)
+    }
+
+    @Test
+    func anExpiryWhoseProbeGoesUnansweredReportsTheHelper() async {
+        let (client, transport) = makeClient()
+        await transport.script([.silent])
+        await transport.scriptPing([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
         await call(client)
+        await waitOutTheProbe()
         #expect(reports == 1)
     }
 
     @Test
-    func anAnswerBetweenTwoExpiriesBreaksTheStreak() async {
-        // The condition is a helper that has stopped answering, so a reply in
-        // the middle means it hasn't: two expiries around one are two
-        // isolated slow calls, which is a different thing and not one a user
-        // should be interrupted about.
+    func aRefusedProbeIsStillAReply() async {
+        // A helper that rejects the ping is answering it. Counting a refusal as
+        // silence would diagnose a helper the user can plainly see responding.
         let (client, transport) = makeClient()
-        transport.script = [.silent, .answers, .silent]
+        await transport.script([.silent])
+        await transport.scriptPing([.refuses])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
-        for _ in 0..<3 { await call(client) }
+        await call(client)
+        await waitOutTheProbe()
         #expect(reports == 0)
     }
 
     @Test
-    func aRefusalBreaksTheStreakTooBecauseItIsStillAReply() async {
-        // A helper that rejects a request is answering. Counting a refusal as
-        // silence would let an expiry, a prompt rejection, and another expiry
-        // diagnose a helper the user can plainly see responding.
+    func aProbeLostToTheTransportDecidesNothing() async {
+        // Neither silence nor an answer: the connection went away, which the
+        // next send recovers. Reporting here would blame a wedge for what is
+        // about to fix itself.
         let (client, transport) = makeClient()
-        transport.script = [.silent, .refuses, .silent]
+        await transport.script([.silent])
+        await transport.scriptPing([.fails])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
-        for _ in 0..<3 { await call(client) }
+        await call(client)
+        await waitOutTheProbe()
         #expect(reports == 0)
     }
 
     @Test
-    func aPermanentlySilentHelperKeepsReporting() async {
-        // The reported case: nothing answers again, so expiries are the only
-        // events left. Reporting just the first would give the observer one
-        // signal for the whole condition, and a user who chose to wait would
-        // never be asked again. Suppressing the repeats belongs to the
-        // observer, which knows what it is already showing.
+    func concurrentExpiriesShareOneProbe() async {
+        // The false-prompt case that motivated the probe. Three calls expiring
+        // together used to be three votes toward a verdict; now they are three
+        // callers asking the same question, which is worth asking once.
         let (client, transport) = makeClient()
-        transport.script = [.silent, .silent, .silent, .silent, .silent]
+        await transport.script([.silent, .silent, .silent])
+        await transport.scriptPing([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        async let first: Void = call(client)
+        async let second: Void = call(client)
+        async let third: Void = call(client)
+        _ = await (first, second, third)
+        await waitOutTheProbe()
+        #expect(await transport.pingsSeen() == 1, "one health check, not one per expiry")
+        #expect(reports == 1)
+    }
+
+    @Test
+    func aReplyThatLandsDuringTheProbeCallsItOff() async {
+        // The probe asks whether anything is coming back. Something did, from
+        // another call, while it was still waiting. That answers the question
+        // it was sent to ask, so its own silence is no longer evidence.
+        let (client, transport) = makeClient()
+        await transport.script([.silent, .answers])
+        await transport.scriptPing([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        await call(client)
+        await call(client)
+        await waitOutTheProbe()
+        #expect(reports == 0)
+    }
+
+    @Test
+    func aPermanentlySilentHelperIsReportedOnceForItsConnection() async {
+        // Nothing answers again, so expiries are the only events left. The
+        // first is probed and reported; re-probing the same connection would
+        // ask a question already answered, and re-reporting would stack
+        // prompts on a user who has one open.
+        let (client, transport) = makeClient()
+        await transport.script([.silent, .silent, .silent, .silent, .silent])
+        await transport.scriptPing([.silent, .silent, .silent, .silent, .silent])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
         for _ in 0..<5 { await call(client) }
-        #expect(reports == 4)
+        await waitOutTheProbe()
+        #expect(reports == 1)
+        #expect(await transport.pingsSeen() == 1)
     }
 
     @Test
-    func aSecondStreakAfterRecoveryReportsAgain() async {
-        // The count clears on an answer, so a helper that recovers and then
-        // goes quiet again has to rebuild the streak from zero rather than
-        // reporting off the tail of the old one.
+    func anAnswerRearmsDetection() async {
+        // A helper that comes back has earned a fresh verdict if it goes quiet
+        // later, so the reply clears the report that was suppressing one.
         let (client, transport) = makeClient()
-        transport.script = [.silent, .silent, .answers, .silent]
+        await transport.script([.silent, .answers, .silent])
+        await transport.scriptPing([.silent, .silent])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
-        for _ in 0..<4 { await call(client) }
-        #expect(reports == 1, "the answer reset the count, so the last expiry is only the first")
+        await call(client)
+        await waitOutTheProbe()
+        #expect(reports == 1)
+        await call(client)
+        await call(client)
+        await waitOutTheProbe()
+        #expect(reports == 2, "the answer in between made the second silence its own condition")
     }
 
     @Test
-    func aCallThatSkipsTheSharedBoundStillClearsAStreak() async {
-        // The attaches and `session.create` bound themselves rather than going
-        // through the shared wrapper, because cancelling them would discard
-        // the reply naming what they minted. An attach answering promptly is
-        // as much proof the helper is alive as any other reply, so it has to
-        // clear the count too, or a streak would outlive its cause.
+    func rearmingAsksAgainAboutTheSameConnection() async {
+        // What the recovery coordinator uses when it declines a verdict or
+        // finishes with one: nothing about the helper changed, but the observer
+        // is ready to be told again.
         let (client, transport) = makeClient()
-        transport.script = [.silent]
+        await transport.script([.silent, .silent, .silent])
+        await transport.scriptPing([.silent, .silent])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
         await call(client)
-        _ = try? await client.attachDevice(sessionId: "S", capability: "C", udid: "U")
+        await waitOutTheProbe()
+        #expect(reports == 1)
         await call(client)
+        await waitOutTheProbe()
+        #expect(reports == 1, "the same connection is not re-reported on its own")
+        client.rearmUnresponsiveDetection()
+        await call(client)
+        await waitOutTheProbe()
+        #expect(reports == 2)
+    }
+
+    @Test
+    func aReconnectDuringTheProbeThrowsAwayItsVerdict() async {
+        // A verdict about the peer that went away says nothing about the one
+        // that replaced it. Left standing, it would report a fresh helper
+        // unresponsive and fence a kill to a connection nobody diagnosed.
+        let (client, transport) = makeClient()
+        await transport.script([.silent])
+        await transport.scriptPing([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        await call(client)
+        client.adoptReconnectedConnection(2)
+        await waitOutTheProbe()
+        #expect(reports == 0)
+    }
+
+    @Test
+    func aPaneLaneExpiryDiagnosesNothing() async {
+        // The pane peer is its own connection. A subscribe that goes unanswered
+        // says the pane peer is quiet, which is not what the probe would go on
+        // to ask the control peer about, and the pane peer has its own retry
+        // loop for it.
+        let (client, transport) = makeClient(
+            paneSubscribe: ScriptedSubscribeTransport(silent: true)
+        )
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        _ = try? await client.subscribePane(paneId: "P")
+        await waitOutTheProbe()
+        #expect(await transport.pingsSeen() == 0, "no control-peer question was raised")
+        #expect(reports == 0)
+    }
+
+    @Test
+    func aPaneLaneReplyDoesNotCallOffAControlProbe() async {
+        // The other half of the same separation. A pane peer answering says
+        // nothing about whether the control peer is, so letting it count would
+        // leave a genuinely wedged control connection undiagnosed for as long
+        // as frames kept arriving.
+        let (client, transport) = makeClient(
+            paneSubscribe: ScriptedSubscribeTransport(silent: false)
+        )
+        await transport.script([.silent])
+        await transport.scriptPing([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        await call(client)
+        _ = try? await client.subscribePane(paneId: "P")
+        await waitOutTheProbe()
+        #expect(reports == 1)
+    }
+
+    @Test
+    func anExpiryThatOutlivedItsConnectionDiagnosesNothing() async {
+        // The call was sent to a peer that has since been replaced, so its
+        // expiry only says the old one never answered, which is already known.
+        // Probing on the current generation would diagnose a connection nothing
+        // of ours has gone unanswered on yet.
+        let (client, transport) = makeClient()
+        await transport.script([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        async let expiring: Void = call(client)
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        client.adoptReconnectedConnection(2)
+        await expiring
+        await waitOutTheProbe()
+        #expect(await transport.pingsSeen() == 0)
         #expect(reports == 0)
     }
 
@@ -199,25 +397,45 @@ struct DaemonClientUnresponsiveTests {
         try await client.connect()
         var named: [Int] = []
         client.onUnresponsive = { named.append($0) }
-        transport.script = [.silent, .silent]
+        await transport.script([.silent])
+        await transport.scriptPing([.silent])
         await call(client)
-        await call(client)
+        await waitOutTheProbe()
         #expect(named == [1], "the connection `connect()` established")
     }
 
     @Test
-    func aRefusedSelfBoundCallClearsAStreakToo() async {
+    func aCallThatSkipsTheSharedBoundStillCountsAsAReply() async {
+        // The attaches and `session.create` bound themselves rather than going
+        // through the shared wrapper, because cancelling them would discard
+        // the reply naming what they minted. An attach answering promptly is
+        // as much proof the helper is alive as any other reply, so it has to
+        // call off a probe too.
+        let (client, transport) = makeClient()
+        await transport.script([.silent, .answers])
+        await transport.scriptPing([.silent])
+        var reports = 0
+        client.onUnresponsive = { _ in reports += 1 }
+        await call(client)
+        _ = try? await client.attachDevice(sessionId: "S", capability: "C", udid: "U")
+        await waitOutTheProbe()
+        #expect(reports == 0)
+    }
+
+    @Test
+    func aRefusedSelfBoundCallCountsAsAReplyToo() async {
         // The same rule on the same path: a refused attach is a reply. This is
         // the shape that made classifying failures in one place worth doing,
         // because the self-bound path and the shared bound have to agree and
         // there is nothing in the types to make them.
         let (client, transport) = makeClient()
-        transport.script = [.silent, .refuses, .silent]
+        await transport.script([.silent, .refuses])
+        await transport.scriptPing([.silent])
         var reports = 0
         client.onUnresponsive = { _ in reports += 1 }
         await call(client)
         _ = try? await client.attachDevice(sessionId: "S", capability: "C", udid: "U")
-        await call(client)
+        await waitOutTheProbe()
         #expect(reports == 0)
     }
 }
