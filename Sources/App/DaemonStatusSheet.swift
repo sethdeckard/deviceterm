@@ -17,19 +17,6 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// Lightweight wrapper for opening system URLs. Injected so the
-/// sheet's snapshot test can assert which URL was opened without
-/// actually launching System Settings.
-protocol DaemonSheetOpener: Sendable {
-    func open(_ url: URL)
-}
-
-struct DefaultDaemonSheetOpener: DaemonSheetOpener {
-    func open(_ url: URL) {
-        NSWorkspace.shared.open(url)
-    }
-}
-
 struct DaemonStatusSheet: View {
     /// Deep-link URL into System Settings → Login Items &
     /// Extensions. Stable since macOS 13 (the "Extensions"

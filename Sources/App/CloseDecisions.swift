@@ -39,39 +39,6 @@
 
 import AppKit
 
-enum TabCloseDecision {
-    case detach
-    case shutdown
-    case cancel
-}
-
-enum QuitDecision {
-    case keepSims
-    case shutdownSims
-}
-
-/// Scope qualifier picked alongside "Don't ask again". Each scope maps
-/// to a different storage tier in `CloseSuppressionState`.
-enum SuppressionScope: Sendable {
-    /// This window only, held in-memory as `[WindowID: …]`.
-    case window
-    /// Until DeviceTerm quits, held in an in-memory app-singleton.
-    case session
-    /// Permanent, quit-prompt only. Persisted to file.
-    case appExit
-    /// Permanent across every prompt of the same track. Persisted to
-    /// file; on the sim track it cross-writes both sim keys, on the
-    /// multi-pane track it writes only `tab-close-multi-pane`.
-    case always
-}
-
-/// Carries the prompt-time context the dropdown options/default are
-/// derived from. `windowID` is nil for the quit prompt.
-struct CloseContext: Sendable {
-    let windowID: WindowID?
-    let hasOtherTabsInWindow: Bool
-}
-
 @MainActor
 enum CloseDecisions {
     static let tabCloseKey = "tab-close-default"
@@ -375,64 +342,6 @@ enum CloseDecisions {
     }
 }
 
-/// Accessory view for the close + quit alerts: a checkbox over a popup.
-/// The popup is disabled while the checkbox is off (no scope choice to
-/// make) and enables on toggle. `selectedScope` returns nil when the
-/// checkbox is off so the caller can short-circuit without inspecting
-/// either control.
-@MainActor
-private final class SuppressionAccessory {
-    let view: NSView
-    private let checkbox: NSButton
-    private let popup: NSPopUpButton
-    private let scopes: [SuppressionScope]
-
-    var suppressionEnabled: Bool { checkbox.state == .on }
-    var selectedScope: SuppressionScope? {
-        guard suppressionEnabled, popup.indexOfSelectedItem >= 0 else { return nil }
-        return scopes[popup.indexOfSelectedItem]
-    }
-
-    init(scopes: [SuppressionScope]) {
-        self.scopes = scopes
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        for scope in scopes {
-            popup.addItem(withTitle: scope.menuTitle)
-        }
-        popup.isEnabled = false
-        self.popup = popup
-
-        let checkbox = NSButton(
-            checkboxWithTitle: "Don't ask again",
-            target: nil,
-            action: nil
-        )
-        self.checkbox = checkbox
-
-        let stack = NSStackView(views: [checkbox, popup])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        // NSAlert reads the accessory's `fittingSize` to position it
-        // and grow the panel. Leaving `translatesAutoresizingMaskInto
-        // Constraints = true` (the default for the stack handed off
-        // here) lets NSAlert frame the view directly; if we'd turned
-        // it off, NSAlert would lay the accessory on top of the
-        // informative text. The frame's height is the stack's
-        // intrinsic size; width comes from the alert's panel.
-        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
-        self.view = stack
-
-        checkbox.target = self
-        checkbox.action = #selector(toggleSuppression(_:))
-    }
-
-    @objc
-    private func toggleSuppression(_ sender: NSButton) {
-        popup.isEnabled = sender.state == .on
-    }
-}
-
 private extension SuppressionScope {
     var menuTitle: String {
         switch self {
@@ -449,6 +358,66 @@ private extension SuppressionScope {
 
         case .always:
             return "Always"
+        }
+    }
+}
+
+private extension CloseDecisions {
+    /// Accessory view for the close + quit alerts: a checkbox over a popup.
+    /// The popup is disabled while the checkbox is off (no scope choice to
+    /// make) and enables on toggle. `selectedScope` returns nil when the
+    /// checkbox is off so the caller can short-circuit without inspecting
+    /// either control.
+    @MainActor
+    final class SuppressionAccessory {
+        let view: NSView
+        private let checkbox: NSButton
+        private let popup: NSPopUpButton
+        private let scopes: [SuppressionScope]
+
+        var suppressionEnabled: Bool { checkbox.state == .on }
+        var selectedScope: SuppressionScope? {
+            guard suppressionEnabled, popup.indexOfSelectedItem >= 0 else { return nil }
+            return scopes[popup.indexOfSelectedItem]
+        }
+
+        init(scopes: [SuppressionScope]) {
+            self.scopes = scopes
+            let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+            for scope in scopes {
+                popup.addItem(withTitle: scope.menuTitle)
+            }
+            popup.isEnabled = false
+            self.popup = popup
+
+            let checkbox = NSButton(
+                checkboxWithTitle: "Don't ask again",
+                target: nil,
+                action: nil
+            )
+            self.checkbox = checkbox
+
+            let stack = NSStackView(views: [checkbox, popup])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 4
+            // NSAlert reads the accessory's `fittingSize` to position it
+            // and grow the panel. Leaving `translatesAutoresizingMaskInto
+            // Constraints = true` (the default for the stack handed off
+            // here) lets NSAlert frame the view directly; if we'd turned
+            // it off, NSAlert would lay the accessory on top of the
+            // informative text. The frame's height is the stack's
+            // intrinsic size; width comes from the alert's panel.
+            stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
+            self.view = stack
+
+            checkbox.target = self
+            checkbox.action = #selector(toggleSuppression(_:))
+        }
+
+        @objc
+        private func toggleSuppression(_ sender: NSButton) {
+            popup.isEnabled = sender.state == .on
         }
     }
 }

@@ -14,9 +14,3 @@ struct ResolvedTab {
     let tabID: TabID
     let tab: TabState
 }
-
-struct ResolvedPane {
-    let windowID: WindowID
-    let tabID: TabID
-    let pane: SimPaneState
-}

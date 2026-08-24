@@ -6,10 +6,6 @@
 import DaemonProtocol
 import Foundation
 
-struct OwnedSimDiscoveryObserverToken: Hashable {
-    let id: UUID
-}
-
 @MainActor
 final class OwnedSimDiscoveryCoordinator {
     typealias Observer = @MainActor ([DeviceListEntry]) -> Void

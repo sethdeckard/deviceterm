@@ -9,14 +9,6 @@
 
 import DaemonProtocol
 
-/// A dead-owner session dir the filesystem scan found, with the UDIDs
-/// its `owned-udids.json` manifest named (may be empty).
-struct DeadSessionCandidate: Sendable, Equatable {
-    let sessionId: String
-    let sessionDir: String
-    let manifestUDIDs: [String]
-}
-
 enum OrphanDecision {
     /// Resolve which dead sessions still own Booted sims (→ `live`
     /// orphan records) and which are empty (→ `dead` dir paths to sweep).

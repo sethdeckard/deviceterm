@@ -14,26 +14,6 @@
 // Separating the permission transitions from the framework driving is
 // what makes these timing rules testable on their own.
 
-/// How far a location request has got.
-enum LocationRequestPhase: Equatable, Sendable {
-    /// Nothing is waiting on a permission answer.
-    case idle
-    /// Waiting for the manager's first status report.
-    ///
-    /// A freshly built `CLLocationManager` has not synced with the
-    /// location daemon yet, and until it has, both `authorizationStatus`
-    /// and `requestWhenInUseAuthorization()` are unreliable: the status
-    /// can read `notDetermined` for an app that is already decided, and
-    /// the request can be dropped with no prompt and no callback. That
-    /// first report is the manager saying it is ready, which is why it
-    /// starts a request rather than being filtered out as noise.
-    case awaitingReady
-    /// Waiting for the user to answer the permission prompt.
-    case awaitingAuthorization
-    /// Permission is settled and a position is on its way.
-    case awaitingFix
-}
-
 /// The authorization states the provider distinguishes.
 enum LocationAuthorization: Equatable, Sendable {
     case notDetermined
@@ -118,16 +98,4 @@ enum LocationAuthorization: Equatable, Sendable {
             return waitingStep
         }
     }
-}
-
-/// What the provider should do next.
-enum LocationAuthorizationStep: Equatable, Sendable {
-    /// Ask macOS to show the permission prompt.
-    case requestAuthorization
-    /// Permission is in hand; ask for a position.
-    case requestLocation
-    /// Nothing has been decided. Stay pending.
-    case keepWaiting
-    /// Resolve the request with this outcome.
-    case finish(MacLocationFix)
 }

@@ -94,7 +94,9 @@ final class SimResurrect {
     }
 }
 
-private struct WatchEntry {
-    let displayName: String
-    let resurrect: @MainActor () -> Void
+private extension SimResurrect {
+    struct WatchEntry {
+        let displayName: String
+        let resurrect: @MainActor () -> Void
+    }
 }

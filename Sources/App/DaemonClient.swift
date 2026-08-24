@@ -40,157 +40,6 @@ private let reconnectLog = Logger(subsystem: "com.deviceterm", category: "reconn
 /// notably a session it created but could neither hand to a tab nor close.
 private let sessionLog = Logger(subsystem: "com.deviceterm", category: "session")
 
-/// Decoded events from a `pane.subscribe` stream.
-///
-/// The XPC transport delivers two messages per surface update: the JSON
-/// `surface.changed` evt (carrying `paneId` + `sequence`) and a side-band
-/// surface payload carrying the subscription token, the `leased`/`leaseEpoch`
-/// overlay, and an XPC object that resolves to an `IOSurfaceRef`. The
-/// `XPCDaemonConnection` correlates the pair by `(paneId, sequence, token)`
-/// and synthesizes a single `surfaceChanged(_, SurfaceLease?)` event for the
-/// VM. The lease is nil when the side-band payload was missing (timeout /
-/// reorder); the view holds the previous surface in that case.
-enum PaneEvent: Sendable {
-    /// The lease is nil on a JSON-only frame (timeout / reorder, the view
-    /// keeps its previous surface) and always nil over UDS. A leased device
-    /// frame carries a leased `SurfaceLease` (use-count bumped, released on ARC
-    /// deinit → the daemon frees the slot); an unleased frame (every
-    /// simulator frame, and every device frame when `DEVICETERM_SURFACE_LEASES`
-    /// is off) carries a `SurfaceLease` with no use-count and no ack.
-    case surfaceChanged(SurfaceChangedEvent, SurfaceLease?)
-    case stateChanged(StateChangedEvent)
-    case orientationChanged(OrientationChangedEvent)
-}
-
-enum DaemonClientError: Error, CustomStringConvertible {
-    case transport(String)
-    case daemon(
-        code:
-        Int,
-        message: String
-        )
-    case versionMismatch(
-        client:
-        String,
-        daemon: String
-        )
-    case decode(String)
-    /// `daemon.shutdown` returned without a `{ok: true}` ack: the
-    /// incompatible daemon did not confirm it is terminating.
-    case shutdownNotAcknowledged
-    /// `daemon.shutdown` was sent but no reply arrived within the bound: a
-    /// daemon that answers `ping` but never acks shutdown must not stall
-    /// startup/reconnect. The daemon's state is unknown (indeterminate).
-    case shutdownTimedOut
-    /// The call went out and no answer came back within its bound.
-    ///
-    /// The wait was abandoned, not the work: nothing cancels the daemon's
-    /// handler, so the call may still complete on its side. What happens to
-    /// that late reply depends on which bound raised this.
-    ///
-    /// For an ordinary request the transport was cancelled and the reply is
-    /// discarded. A mutation bounded that way still has an unknown outcome,
-    /// but none of those calls return a one-time identity, so nothing is lost
-    /// that the GUI would need to name what it may have changed.
-    ///
-    /// The calls that *do* return one are bounded by their own caller through
-    /// `Deadline.wait`, which lets the call finish and reconciles what it
-    /// produced: `createSession` attempts to close a session no tab ever
-    /// received, and `Router.runAttach` attempts to detach a pane no window is
-    /// showing. Both are best-effort. Without that,
-    /// a `session.create` reply would strand a session nobody can name (its
-    /// capability leaves the daemon exactly once, and it survives an omitting
-    /// `session.restoreBatch` on the same connection, since a live create's
-    /// assertion deliberately outranks a restore baseline at that epoch), and
-    /// an attach reply would strand a pane holding its device, and for a
-    /// physical device its tunnel.
-    case timedOut(method: String)
-
-    var description: String {
-        switch self {
-        case let .transport(detail):
-            return "transport error: \(detail)"
-
-        case let .daemon(code, message):
-            return "daemon error \(code): \(message)"
-
-        case let .versionMismatch(client, daemon):
-            return "daemon wire version \(daemon) != client \(client)"
-
-        case let .decode(detail):
-            return "decode error: \(detail)"
-
-        case .shutdownNotAcknowledged:
-            return "daemon.shutdown was not acknowledged"
-
-        case .shutdownTimedOut:
-            return "daemon.shutdown timed out awaiting acknowledgement"
-
-        case let .timedOut(method):
-            return "timed out: the deviceterm helper did not answer \(method)"
-        }
-    }
-
-    var isVersionMismatch: Bool {
-        if case .versionMismatch = self { return true }
-        return false
-    }
-
-    /// True for startup failures that can occur before any helper reply has
-    /// established reachability.
-    ///
-    /// A reply of any kind, including an error reply or a version mismatch,
-    /// proves a helper process is running and therefore that its launchd
-    /// registration resolves. The shutdown errors follow a successful ping, so
-    /// reachability is already established; only `shutdownTimedOut` represents
-    /// an unanswered shutdown call. Enumerated rather than defaulted so a new
-    /// case has to declare which side it falls on.
-    var isHelperUnreachable: Bool {
-        switch self {
-        case .transport, .timedOut:
-            return true
-
-        case .daemon, .versionMismatch, .decode, .shutdownNotAcknowledged, .shutdownTimedOut:
-            return false
-        }
-    }
-}
-
-/// The result of handling a definite daemon wire-version mismatch: the GUI tries
-/// to stop the incompatible daemon (so the next launch doesn't reconnect to it)
-/// before surfacing the user-facing remediation.
-struct VersionMismatchOutcome: Sendable {
-    /// The shutdown-request outcome. Deliberately NOT a "stopped" boolean: an
-    /// acknowledgement proves the daemon *accepted* the request (termination is
-    /// imminent, not necessarily already complete), and a lost ack is genuinely
-    /// *unknown*: a transport drop can race an accepted shutdown. So the two
-    /// honest states are "confirmed acceptance" and "indeterminate".
-    enum Shutdown: Sendable {
-        /// The daemon acknowledged the request: it accepted the shutdown.
-        case confirmed
-        /// No acknowledgement arrived (a transport loss that may or may not have
-        /// raced an accepted shutdown, an explicit `{ok:false}`, or a transport
-        /// that structurally can't request one). The daemon's state is unknown.
-        case indeterminate(String)
-    }
-
-    let mismatch: DaemonClientError
-    let shutdown: Shutdown
-}
-
-/// The `daemon.shutdown` reply: the shared `{ok: true}` ack shape.
-private struct DaemonShutdownAck: Decodable {
-    let ok: Bool
-}
-
-/// Internal transport abstraction so `DaemonClient` can route over
-/// XPC (production) or UDS (smoke-mode-only fallback) without
-/// changing its public surface.
-private enum DaemonTransport {
-    case xpc(XPCDaemonConnection)
-    case uds(UDSDaemonConnection)
-}
-
 @MainActor
 final class DaemonClient: SessionControlling, DeviceControlling, AutomationGranting,
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,
@@ -2612,5 +2461,20 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     func sendAppCommandResult(_ result: AppCommandResult) async throws {
         let params = try JSONEncoder().encode(result)
         _ = try await request(method: .appCommandResult, params: params)
+    }
+}
+
+private extension DaemonClient {
+    /// The `daemon.shutdown` reply: the shared `{ok: true}` ack shape.
+    struct DaemonShutdownAck: Decodable {
+        let ok: Bool
+    }
+
+    /// Internal transport abstraction so `DaemonClient` can route over
+    /// XPC (production) or UDS (smoke-mode-only fallback) without
+    /// changing its public surface.
+    enum DaemonTransport {
+        case xpc(XPCDaemonConnection)
+        case uds(UDSDaemonConnection)
     }
 }

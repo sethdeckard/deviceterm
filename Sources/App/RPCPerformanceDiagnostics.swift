@@ -13,29 +13,6 @@ private let rpcPerformanceLog = Logger(
     category: "rpc-performance"
 )
 
-enum RPCPerformanceOutcome: String, Sendable {
-    case reply
-    case replyError
-    case timeout
-    case transport
-    case cancelled
-    case localFailure
-}
-
-struct RPCPerformanceBucket: Equatable {
-    var calls = 0
-    var replies = 0
-    var timeouts = 0
-    var failures = 0
-    var totalMilliseconds: UInt64 = 0
-    var maximumMilliseconds: UInt64 = 0
-}
-
-private struct RPCPerformanceKey: Hashable {
-    let lane: XPCClientLane
-    let method: RPCMethod
-}
-
 @MainActor
 final class RPCPerformanceDiagnostics {
     private let clock: @MainActor () -> UInt64
@@ -222,5 +199,12 @@ final class RPCPerformanceDiagnostics {
         }
         buckets.removeAll(keepingCapacity: true)
         lastSummaryNanoseconds = now
+    }
+}
+
+private extension RPCPerformanceDiagnostics {
+    struct RPCPerformanceKey: Hashable {
+        let lane: XPCClientLane
+        let method: RPCMethod
     }
 }

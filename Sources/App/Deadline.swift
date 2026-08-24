@@ -72,40 +72,42 @@ enum Deadline {
     }
 }
 
-/// The single-resume guard the call, the timer, and cancellation all race for.
-@MainActor
-private final class Claim<T: Sendable> {
-    var timer: Task<Void, Never>?
-    private var continuation: CheckedContinuation<T, Error>?
+private extension Deadline {
+    /// The single-resume guard the call, the timer, and cancellation all race for.
+    @MainActor
+    final class Claim<T: Sendable> {
+        var timer: Task<Void, Never>?
+        private var continuation: CheckedContinuation<T, Error>?
 
-    func install(_ continuation: CheckedContinuation<T, Error>) {
-        self.continuation = continuation
-    }
+        func install(_ continuation: CheckedContinuation<T, Error>) {
+            self.continuation = continuation
+        }
 
-    /// Hand the waiter `value`, and report whether this call is the one that
-    /// resumed it. A `false` tells a caller carrying a value that nobody took
-    /// it, so it's theirs to clean up.
-    func settle(_ value: T) -> Bool {
-        guard let continuation = take() else { return false }
-        continuation.resume(returning: value)
-        return true
-    }
+        /// Hand the waiter `value`, and report whether this call is the one that
+        /// resumed it. A `false` tells a caller carrying a value that nobody took
+        /// it, so it's theirs to clean up.
+        func settle(_ value: T) -> Bool {
+            guard let continuation = take() else { return false }
+            continuation.resume(returning: value)
+            return true
+        }
 
-    /// Fail the waiter, reporting single-resume the same way. Errors need no
-    /// cleanup, so the result is discarded at every call site.
-    @discardableResult
-    func fail(_ error: any Error) -> Bool {
-        guard let continuation = take() else { return false }
-        continuation.resume(throwing: error)
-        return true
-    }
+        /// Fail the waiter, reporting single-resume the same way. Errors need no
+        /// cleanup, so the result is discarded at every call site.
+        @discardableResult
+        func fail(_ error: any Error) -> Bool {
+            guard let continuation = take() else { return false }
+            continuation.resume(throwing: error)
+            return true
+        }
 
-    /// Claim the continuation for this caller, retiring the timer with it.
-    private func take() -> CheckedContinuation<T, Error>? {
-        guard let continuation else { return nil }
-        self.continuation = nil
-        timer?.cancel()
-        timer = nil
-        return continuation
+        /// Claim the continuation for this caller, retiring the timer with it.
+        private func take() -> CheckedContinuation<T, Error>? {
+            guard let continuation else { return nil }
+            self.continuation = nil
+            timer?.cancel()
+            timer = nil
+            return continuation
+        }
     }
 }

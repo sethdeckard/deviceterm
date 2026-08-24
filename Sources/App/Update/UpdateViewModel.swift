@@ -42,17 +42,6 @@ final class UpdateViewModel {
     func reset() { state = .idle }
 }
 
-/// Semantic tint for the pill's icon, resolved to a system color by the
-/// view. The pill background stays neutral in every state; only the icon
-/// carries color, and the accent appears only where there's something to
-/// act on.
-enum UpdateTint: Equatable {
-    case neutral
-    case accent
-    case positive
-    case negative
-}
-
 extension UpdateViewModel.State {
     /// Whether the state clears itself after a short delay (the passive,
     /// non-actionable outcomes) vs. persisting until the user acts.

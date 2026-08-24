@@ -342,23 +342,25 @@ final class SimulatorPaneWrapperView: NSView {
     }
 }
 
-/// Trivial layer-backed NSView used by the wrapper's bezel hosting.
-/// Splitting it out keeps the wrapper's own layer (which carries
-/// the focus border + corner radius) separate from the bezel's
-/// sublayer tree, so a focus-state flip doesn't repaint the bezel
-/// path and vice versa. `isFlipped = true` matches the
-/// `SimulatorContentView` (also flipped) so bezel-rect coords are
-/// directly comparable to content-view view points.
-@MainActor
-private final class LayerBackedView: NSView {
-    override var isFlipped: Bool { true }
-    override var wantsUpdateLayer: Bool { true }
+private extension SimulatorPaneWrapperView {
+    /// Trivial layer-backed NSView used by the wrapper's bezel hosting.
+    /// Splitting it out keeps the wrapper's own layer (which carries
+    /// the focus border + corner radius) separate from the bezel's
+    /// sublayer tree, so a focus-state flip doesn't repaint the bezel
+    /// path and vice versa. `isFlipped = true` matches the
+    /// `SimulatorContentView` (also flipped) so bezel-rect coords are
+    /// directly comparable to content-view view points.
+    @MainActor
+    final class LayerBackedView: NSView {
+        override var isFlipped: Bool { true }
+        override var wantsUpdateLayer: Bool { true }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
     }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 }

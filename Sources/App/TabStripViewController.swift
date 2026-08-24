@@ -1456,534 +1456,386 @@ private extension Array {
     }
 }
 
-/// NSStackView subclass that reports its empty regions as draggable, so
-/// click-and-drag on the strip background moves the window (the same
-/// machinery the standard title bar uses). NSButton subviews (the tab
-/// pills, "✕" close, and "+" add) consume their own clicks via the
-/// normal responder chain; only mouse-downs that miss every button reach
-/// this view, where `mouseDownCanMoveWindow` lets AppKit take over.
-private final class DraggableStackView: NSStackView {
-    /// When set (the cells container), tab-drag callbacks forward to the
-    /// strip VC so it (not the view) owns the reorder/relocate logic.
-    /// The outer strip leaves this nil and never registers dragged types,
-    /// so only the cells lane accepts drops.
-    weak var dropDelegate: TabStripViewController?
-    override var mouseDownCanMoveWindow: Bool { true }
+private extension TabStripViewController {
+    /// NSStackView subclass that reports its empty regions as draggable, so
+    /// click-and-drag on the strip background moves the window (the same
+    /// machinery the standard title bar uses). NSButton subviews (the tab
+    /// pills, "✕" close, and "+" add) consume their own clicks via the
+    /// normal responder chain; only mouse-downs that miss every button reach
+    /// this view, where `mouseDownCanMoveWindow` lets AppKit take over.
+    final class DraggableStackView: NSStackView {
+        /// When set (the cells container), tab-drag callbacks forward to the
+        /// strip VC so it (not the view) owns the reorder/relocate logic.
+        /// The outer strip leaves this nil and never registers dragged types,
+        /// so only the cells lane accepts drops.
+        weak var dropDelegate: TabStripViewController?
+        override var mouseDownCanMoveWindow: Bool { true }
 
-    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        dropDelegate?.stripDraggingEntered(sender) ?? []
+        override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            dropDelegate?.stripDraggingEntered(sender) ?? []
+        }
+
+        override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            dropDelegate?.stripDraggingUpdated(sender) ?? []
+        }
+
+        override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+            dropDelegate?.stripDraggingExited(sender)
+        }
+
+        override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            dropDelegate?.stripPerformDragOperation(sender) ?? false
+        }
+
+        override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { true }
     }
 
-    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        dropDelegate?.stripDraggingUpdated(sender) ?? []
-    }
+    /// A tab pill's title button that doubles as the drag source for tab
+    /// reorder. NSButton's cell runs a modal tracking loop on mouseDown that
+    /// swallows drag detection, so (like the in-file `NewTabButton`) this
+    /// overrides `mouseDown` with a manual event loop: a plain click sends
+    /// the select action; a drag past the threshold begins a tab drag
+    /// session. The ✕ close button and right-click menu are untouched (they
+    /// own their own hits).
+    final class TabTitleButton: NSButton, NSDraggingSource {
+        /// Builds the pasteboard payload at drag start (looks up the tab's
+        /// live index). Returns nil to abort the drag.
+        var makeDragPayload: (() -> TabDragPayload?)?
+        /// View whose snapshot becomes the drag image: the whole pill.
+        weak var snapshotSource: NSView?
+        /// Invoked when the drag ends with no destination consuming it (a
+        /// drop on empty space): the tear-off hook. Receives the screen point.
+        var onTearOff: ((NSPoint) -> Void)?
+        /// Fires on every drag end (drop, cancel, or tear-off) so the strip
+        /// can settle any in-progress live reorder even when no destination
+        /// callback ran (e.g. the user pressed Escape).
+        var onDragEnded: (() -> Void)?
 
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
-        dropDelegate?.stripDraggingExited(sender)
-    }
+        private var mouseDownPoint: CGPoint?
 
-    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        dropDelegate?.stripPerformDragOperation(sender) ?? false
-    }
+        override func mouseDown(with event: NSEvent) {
+            mouseDownPoint = convert(event.locationInWindow, from: nil)
+            var tracking = true
+            var didDrag = false
+            while tracking {
+                guard let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) else {
+                    break
+                }
+                switch next.type {
+                case .leftMouseDragged:
+                    guard let start = mouseDownPoint else { break }
+                    let current = convert(next.locationInWindow, from: nil)
+                    if hypot(current.x - start.x, current.y - start.y) >= 4 {
+                        didDrag = true
+                        tracking = false
+                        beginTabDrag(with: next)
+                    }
 
-    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { true }
-}
-
-/// A tab pill's title button that doubles as the drag source for tab
-/// reorder. NSButton's cell runs a modal tracking loop on mouseDown that
-/// swallows drag detection, so (like the in-file `NewTabButton`) this
-/// overrides `mouseDown` with a manual event loop: a plain click sends
-/// the select action; a drag past the threshold begins a tab drag
-/// session. The ✕ close button and right-click menu are untouched (they
-/// own their own hits).
-private final class TabTitleButton: NSButton, NSDraggingSource {
-    /// Builds the pasteboard payload at drag start (looks up the tab's
-    /// live index). Returns nil to abort the drag.
-    var makeDragPayload: (() -> TabDragPayload?)?
-    /// View whose snapshot becomes the drag image: the whole pill.
-    weak var snapshotSource: NSView?
-    /// Invoked when the drag ends with no destination consuming it (a
-    /// drop on empty space): the tear-off hook. Receives the screen point.
-    var onTearOff: ((NSPoint) -> Void)?
-    /// Fires on every drag end (drop, cancel, or tear-off) so the strip
-    /// can settle any in-progress live reorder even when no destination
-    /// callback ran (e.g. the user pressed Escape).
-    var onDragEnded: (() -> Void)?
-
-    private var mouseDownPoint: CGPoint?
-
-    override func mouseDown(with event: NSEvent) {
-        mouseDownPoint = convert(event.locationInWindow, from: nil)
-        var tracking = true
-        var didDrag = false
-        while tracking {
-            guard let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) else {
-                break
-            }
-            switch next.type {
-            case .leftMouseDragged:
-                guard let start = mouseDownPoint else { break }
-                let current = convert(next.locationInWindow, from: nil)
-                if hypot(current.x - start.x, current.y - start.y) >= 4 {
-                    didDrag = true
+                case .leftMouseUp:
                     tracking = false
-                    beginTabDrag(with: next)
+                    let point = convert(next.locationInWindow, from: nil)
+                    if !didDrag, bounds.contains(point), let action {
+                        _ = sendAction(action, to: target)
+                    }
+
+                default:
+                    break
                 }
-
-            case .leftMouseUp:
-                tracking = false
-                let point = convert(next.locationInWindow, from: nil)
-                if !didDrag, bounds.contains(point), let action {
-                    _ = sendAction(action, to: target)
-                }
-
-            default:
-                break
             }
+            mouseDownPoint = nil
         }
-        mouseDownPoint = nil
-    }
 
-    private func beginTabDrag(with event: NSEvent) {
-        guard let payload = makeDragPayload?(),
-            let data = try? JSONEncoder().encode(payload) else { return }
-        let item = NSPasteboardItem()
-        item.setData(data, forType: NSPasteboard.PasteboardType(TabDragPayload.pasteboardType))
-        let draggingItem = NSDraggingItem(pasteboardWriter: item)
-        let snapshot = renderSnapshot()
-        draggingItem.setDraggingFrame(
-            CGRect(origin: convert(event.locationInWindow, from: nil), size: snapshot.size),
-            contents: snapshot
-        )
-        beginDraggingSession(with: [draggingItem], event: event, source: self)
-    }
-
-    private func renderSnapshot() -> NSImage {
-        let source = snapshotSource ?? self
-        guard let rep = source.bitmapImageRepForCachingDisplay(in: source.bounds) else {
-            return NSImage(size: NSSize(width: 1, height: 1))
+        private func beginTabDrag(with event: NSEvent) {
+            guard let payload = makeDragPayload?(),
+                let data = try? JSONEncoder().encode(payload) else { return }
+            let item = NSPasteboardItem()
+            item.setData(data, forType: NSPasteboard.PasteboardType(TabDragPayload.pasteboardType))
+            let draggingItem = NSDraggingItem(pasteboardWriter: item)
+            let snapshot = renderSnapshot()
+            draggingItem.setDraggingFrame(
+                CGRect(origin: convert(event.locationInWindow, from: nil), size: snapshot.size),
+                contents: snapshot
+            )
+            beginDraggingSession(with: [draggingItem], event: event, source: self)
         }
-        source.cacheDisplay(in: source.bounds, to: rep)
-        let image = NSImage(size: source.bounds.size)
-        image.addRepresentation(rep)
-        return image
-    }
 
-    // MARK: - NSDraggingSource
-
-    func draggingSession(
-        _ session: NSDraggingSession,
-        sourceOperationMaskFor context: NSDraggingContext
-    ) -> NSDragOperation {
-        context == .withinApplication ? .move : []
-    }
-
-    func draggingSession(
-        _ session: NSDraggingSession,
-        endedAt screenPoint: NSPoint,
-        operation: NSDragOperation
-    ) {
-        // No destination consumed the drop → tear the tab off into a new
-        // window at the drop point.
-        if operation.isEmpty {
-            onTearOff?(screenPoint)
-        }
-        // Always let the strip settle a live reorder (idempotent, a
-        // no-op after a committed drop / restored exit).
-        onDragEnded?()
-    }
-}
-
-/// Root view of the strip controller. Reports draggable so the empty
-/// integrated-title-bar region (the band to the right of a single tab's
-/// strip, where the strip is at its intrinsic ~520pt and the rest of
-/// the window width sits beneath the title bar) still drags the window.
-/// Also fires `onEffectiveAppearanceChange` so the strip VC can repaint
-/// the selected pill's CGColor snapshot on a light/dark flip. The
-/// override lives here because `viewDidChangeEffectiveAppearance` is an
-/// `NSResponder`/`NSView` method, not an `NSViewController` one.
-private final class DraggableRootView: NSView {
-    var onEffectiveAppearanceChange: (() -> Void)?
-    override var mouseDownCanMoveWindow: Bool { true }
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        onEffectiveAppearanceChange?()
-    }
-}
-
-/// "+" new tab button: circular and visually tied to the tab strip via
-/// the same three-level white-alpha hierarchy the tab pills use
-/// (track 5% at rest → hover 10% → pressed 16% matching the active
-/// tab). Subclasses `NSControl` rather than `NSButton` so no
-/// `NSButtonCell` participates in layout: image-only NSButtons with
-/// a bezelStyle (or even a default cell) impose their own minimum
-/// height regardless of `intrinsicContentSize` overrides or required
-/// width/height constraints, which forces a vertical-pill shape.
-final class NewTabButton: NSControl {
-    private var hovered = false {
-        didSet { refreshFill() }
-    }
-    private var pressed = false {
-        didSet { refreshFill() }
-    }
-    private let plusImageView = NSImageView()
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: 28, height: 28)
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.masksToBounds = true
-        toolTip = "New Tab"
-        // An NSControl carrying no cell publishes nothing to the
-        // accessibility tree, and AppKit prunes a view that is not an
-        // accessibility element, so the plus image below never surfaces
-        // either. Sidestepping NSButtonCell for layout costs the role and
-        // label a button would have supplied; declare them here instead, or
-        // this affordance is reachable by mouse only.
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel("New Tab")
-        // The label is also the New Tab menu item's exact title, so a search
-        // by label matches two real elements. The identifier is what names
-        // this one.
-        setAccessibilityIdentifier(TabAccessibilityIdentity.newTabButton)
-
-        plusImageView.translatesAutoresizingMaskIntoConstraints = false
-        plusImageView.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
-        plusImageView.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 12,
-            weight: .medium
-        )
-        plusImageView.contentTintColor = .secondaryLabelColor
-        plusImageView.imageScaling = .scaleNone
-        addSubview(plusImageView)
-
-        let widthConstraint = widthAnchor.constraint(equalToConstant: 28)
-        widthConstraint.priority = .required
-        let heightConstraint = heightAnchor.constraint(equalToConstant: 28)
-        heightConstraint.priority = .required
-        let aspect = widthAnchor.constraint(equalTo: heightAnchor)
-        aspect.priority = .required
-
-        NSLayoutConstraint.activate([
-            widthConstraint,
-            heightConstraint,
-            aspect,
-            plusImageView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            plusImageView.centerYAnchor.constraint(equalTo: centerYAnchor)
-        ])
-
-        setContentHuggingPriority(.required, for: .vertical)
-        setContentHuggingPriority(.required, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .vertical)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        refreshFill()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
-
-    override func layout() {
-        super.layout()
-        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-
-    /// Route an accessibility press through the same dispatch the mouse path
-    /// uses. With no cell there is nothing to turn a press into target/action
-    /// on its own, so publishing the button role without this would leave the
-    /// affordance visible to assistive technology and inert.
-    override func accessibilityPerformPress() -> Bool {
-        guard let action else { return false }
-        return sendAction(action, to: target)
-    }
-
-    /// Track press / release manually since there's no NSButtonCell
-    /// driving the click cycle. mouseUp inside bounds fires the
-    /// target/action; `super.sendAction(_:to:)` routes through
-    /// NSControl's standard dispatch.
-    override func mouseDown(with event: NSEvent) {
-        pressed = true
-        var dragging = true
-        while dragging {
-            guard let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) else {
-                break
+        private func renderSnapshot() -> NSImage {
+            let source = snapshotSource ?? self
+            guard let rep = source.bitmapImageRepForCachingDisplay(in: source.bounds) else {
+                return NSImage(size: NSSize(width: 1, height: 1))
             }
-            switch next.type {
-            case .leftMouseDragged:
-                let point = convert(next.locationInWindow, from: nil)
-                pressed = bounds.contains(point)
+            source.cacheDisplay(in: source.bounds, to: rep)
+            let image = NSImage(size: source.bounds.size)
+            image.addRepresentation(rep)
+            return image
+        }
 
-            case .leftMouseUp:
-                let point = convert(next.locationInWindow, from: nil)
-                let inside = bounds.contains(point)
-                dragging = false
-                pressed = false
-                if inside, let action {
-                    _ = sendAction(action, to: target)
-                }
+        // MARK: - NSDraggingSource
 
-            default:
-                break
+        func draggingSession(
+            _ session: NSDraggingSession,
+            sourceOperationMaskFor context: NSDraggingContext
+        ) -> NSDragOperation {
+            context == .withinApplication ? .move : []
+        }
+
+        func draggingSession(
+            _ session: NSDraggingSession,
+            endedAt screenPoint: NSPoint,
+            operation: NSDragOperation
+        ) {
+            // No destination consumed the drop → tear the tab off into a new
+            // window at the drop point.
+            if operation.isEmpty {
+                onTearOff?(screenPoint)
             }
+            // Always let the strip settle a live reorder (idempotent, a
+            // no-op after a committed drop / restored exit).
+            onDragEnded?()
         }
     }
 
-    private func refreshFill() {
-        let alpha: CGFloat
-        if pressed {
-            alpha = 0.16
-        } else if hovered {
-            alpha = 0.10
-        } else {
-            alpha = 0.05
-        }
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(alpha).cgColor
-    }
-}
-
-/// One custom tab cell that:
-///
-///   - paints its background via explicit white-alpha tints over the
-///     window's ghostty bg color (5% track → 10% hover → 16% selected),
-///     giving clean, predictable contrast that NSVisualEffectView
-///     materials would warm with dark-mode tints
-///   - lays out `[✕, marker…, title]` as a horizontal NSStackView, with
-///     the close ✕ leftmost and the title filling the rest of the width
-///   - reserves space for the close button always (alpha-fades it on
-///     hover rather than `isHidden`-toggling) so the layout doesn't
-///     jitter when the cursor enters
-///
-/// Selection comes from the strip controller; the cell tracks hover and
-/// paints both states.
-private final class TabPillCell: NSView {
-    weak var closeButton: NSButton?
-    var isSelected: Bool = false {
-        didSet { refreshMaterial() }
-    }
-    private(set) var isHovered = false {
-        didSet {
-            refreshMaterial()
-            onHoverChange?()
+    /// Root view of the strip controller. Reports draggable so the empty
+    /// integrated-title-bar region (the band to the right of a single tab's
+    /// strip, where the strip is at its intrinsic ~520pt and the rest of
+    /// the window width sits beneath the title bar) still drags the window.
+    /// Also fires `onEffectiveAppearanceChange` so the strip VC can repaint
+    /// the selected pill's CGColor snapshot on a light/dark flip. The
+    /// override lives here because `viewDidChangeEffectiveAppearance` is an
+    /// `NSResponder`/`NSView` method, not an `NSViewController` one.
+    final class DraggableRootView: NSView {
+        var onEffectiveAppearanceChange: (() -> Void)?
+        override var mouseDownCanMoveWindow: Bool { true }
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            onEffectiveAppearanceChange?()
         }
     }
-    var onHoverChange: (() -> Void)?
-    var showsTrailingSeparator = false {
-        didSet { trailingSeparator.isHidden = !showsTrailingSeparator }
-    }
 
-    /// Title button accessor: always the LAST arranged subview after
-    /// `install` (close is leftmost; any markers sit between).
-    /// Used by the strip VC's TabID-keyed lookup.
-    var titleButton: NSButton? {
-        stack.arrangedSubviews.last as? NSButton
-    }
-
-    private let background = NSView()
-    private let stack = NSStackView()
-    private let trailingSeparator = TabSeparatorView()
-    /// The markers currently mounted, in stack order, so `setMarkers` can
-    /// return early on an unchanged list. The same-tabs render path calls it
-    /// on every pass, and OSC title updates make those continuous.
-    private var installedMarkers: [TabPillMarker] = []
-    private var markerViews: [NSView] = []
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        // Matches the tab track's radius, so track + cell are the same
-        // pill shape, just different alpha.
-        layer?.cornerRadius = 14
-        layer?.cornerCurve = .continuous
-        // The background owns the capsule clipping. Leaving the cell itself
-        // unclipped lets its trailing separator render at full height instead
-        // of being reduced to a tiny chord by the rounded trailing edge.
-        layer?.masksToBounds = false
-
-        background.translatesAutoresizingMaskIntoConstraints = false
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 14
-        background.layer?.cornerCurve = .continuous
-        background.layer?.masksToBounds = true
-        background.layer?.backgroundColor = NSColor.clear.cgColor
-        addSubview(background)
-
-        stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.alignment = .centerY
-        stack.distribution = .fill
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-
-        trailingSeparator.translatesAutoresizingMaskIntoConstraints = false
-        trailingSeparator.isHidden = true
-        trailingSeparator.setAccessibilityElement(false)
-        addSubview(trailingSeparator)
-
-        NSLayoutConstraint.activate([
-            background.topAnchor.constraint(equalTo: topAnchor),
-            background.bottomAnchor.constraint(equalTo: bottomAnchor),
-            background.leadingAnchor.constraint(equalTo: leadingAnchor),
-            background.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            trailingSeparator.centerYAnchor.constraint(equalTo: centerYAnchor),
-            trailingSeparator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            trailingSeparator.widthAnchor.constraint(equalToConstant: 1),
-            trailingSeparator.heightAnchor.constraint(equalToConstant: 20)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
-
-    /// The image view for one marker. Both are 12pt and accent-tinted, so
-    /// they read at a glance without competing with the title.
+    /// One custom tab cell that:
     ///
-    /// `wand.and.rays` is the platform's own automation vocabulary. A key
-    /// would read as "this opens something", which is backwards: an
-    /// automation grant is exactly what a protected tab refuses.
+    ///   - paints its background via explicit white-alpha tints over the
+    ///     window's ghostty bg color (5% track → 10% hover → 16% selected),
+    ///     giving clean, predictable contrast that NSVisualEffectView
+    ///     materials would warm with dark-mode tints
+    ///   - lays out `[✕, marker…, title]` as a horizontal NSStackView, with
+    ///     the close ✕ leftmost and the title filling the rest of the width
+    ///   - reserves space for the close button always (alpha-fades it on
+    ///     hover rather than `isHidden`-toggling) so the layout doesn't
+    ///     jitter when the cursor enters
     ///
-    /// Neither carries an accessibility *identifier*. Consumers collect the
-    /// strip's named controls by the `deviceterm.tab.` prefix and count the
-    /// result as pills, so publishing one here would inflate that count. The
-    /// image carries a description instead, which names the marker without
-    /// putting it in that set.
-    private static func markerView(for marker: TabPillMarker) -> NSImageView {
-        let symbolName: String
-        let describedAs: String
-        let hoverText: String
-        switch marker {
-        case .automation:
-            symbolName = "wand.and.rays"
-            describedAs = "Automation tab"
-            hoverText = "Automation tab (opened from the menu)"
-
-        case .protection:
-            symbolName = "lock.fill"
-            describedAs = "Protected tab"
-            hoverText = "Protected tab (hidden from other sessions)"
+    /// Selection comes from the strip controller; the cell tracks hover and
+    /// paints both states.
+    final class TabPillCell: NSView {
+        weak var closeButton: NSButton?
+        var isSelected: Bool = false {
+            didSet { refreshMaterial() }
         }
-        let view = NSImageView()
-        view.image = NSImage(
-            systemSymbolName: symbolName,
-            accessibilityDescription: describedAs
-        )
-        view.contentTintColor = .controlAccentColor
-        view.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 12,
-            weight: .regular
-        )
-        view.setContentHuggingPriority(.required, for: .horizontal)
-        view.toolTip = hoverText
-        return view
-    }
-
-    /// Mount the pill's fixed subviews: the close ✕ leftmost so it has a
-    /// stable position, the title filling the rest. Markers go on afterwards
-    /// through `setMarkers`, which inserts them between the two.
-    func install(close: NSButton, title: NSView) {
-        for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
-        installedMarkers = []
-        markerViews = []
-        closeButton = close
-        close.alphaValue = 0
-        stack.addArrangedSubview(close)
-        stack.addArrangedSubview(title)
-    }
-
-    /// Reconcile the pill's markers against `markers`, in that order, between
-    /// the close ✕ and the title. Idempotent, so the caller can hand it the
-    /// tab's current state on every render pass. Runs after `install`, which
-    /// is what puts the two anchors it inserts between into the stack.
-    func setMarkers(_ markers: [TabPillMarker]) {
-        guard markers != installedMarkers else { return }
-        for view in markerViews {
-            stack.removeArrangedSubview(view)
-            view.removeFromSuperview()
+        private(set) var isHovered = false {
+            didSet {
+                refreshMaterial()
+                onHoverChange?()
+            }
         }
-        markerViews = markers.map { Self.markerView(for: $0) }
-        for (offset, view) in markerViews.enumerated() {
-            stack.insertArrangedSubview(view, at: 1 + offset)
+        var onHoverChange: (() -> Void)?
+        var showsTrailingSeparator = false {
+            didSet { trailingSeparator.isHidden = !showsTrailingSeparator }
         }
-        installedMarkers = markers
-    }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        closeButton?.alphaValue = 1
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        closeButton?.alphaValue = 0
-    }
-
-    /// Three-level white-alpha contrast over the window's ghostty
-    /// background tint, preserving track < hover < active hierarchy:
-    ///   selected → 16% white (active, top of hierarchy)
-    ///   hovered  → 10% white (medium wash, affordance)
-    ///   rest     → transparent (track's 5% shows through)
-    private func refreshMaterial() {
-        let alpha: CGFloat
-        if isSelected {
-            alpha = 0.16
-        } else if isHovered {
-            alpha = 0.10
-        } else {
-            alpha = 0
+        /// Title button accessor: always the LAST arranged subview after
+        /// `install` (close is leftmost; any markers sit between).
+        /// Used by the strip VC's TabID-keyed lookup.
+        var titleButton: NSButton? {
+            stack.arrangedSubviews.last as? NSButton
         }
-        background.layer?.backgroundColor = NSColor.white.withAlphaComponent(alpha).cgColor
+
+        private let background = NSView()
+        private let stack = NSStackView()
+        private let trailingSeparator = TabSeparatorView()
+        /// The markers currently mounted, in stack order, so `setMarkers` can
+        /// return early on an unchanged list. The same-tabs render path calls it
+        /// on every pass, and OSC title updates make those continuous.
+        private var installedMarkers: [TabPillMarker] = []
+        private var markerViews: [NSView] = []
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+            // Matches the tab track's radius, so track + cell are the same
+            // pill shape, just different alpha.
+            layer?.cornerRadius = 14
+            layer?.cornerCurve = .continuous
+            // The background owns the capsule clipping. Leaving the cell itself
+            // unclipped lets its trailing separator render at full height instead
+            // of being reduced to a tiny chord by the rounded trailing edge.
+            layer?.masksToBounds = false
+
+            background.translatesAutoresizingMaskIntoConstraints = false
+            background.wantsLayer = true
+            background.layer?.cornerRadius = 14
+            background.layer?.cornerCurve = .continuous
+            background.layer?.masksToBounds = true
+            background.layer?.backgroundColor = NSColor.clear.cgColor
+            addSubview(background)
+
+            stack.orientation = .horizontal
+            stack.spacing = 4
+            stack.alignment = .centerY
+            stack.distribution = .fill
+            stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(stack)
+
+            trailingSeparator.translatesAutoresizingMaskIntoConstraints = false
+            trailingSeparator.isHidden = true
+            trailingSeparator.setAccessibilityElement(false)
+            addSubview(trailingSeparator)
+
+            NSLayoutConstraint.activate([
+                background.topAnchor.constraint(equalTo: topAnchor),
+                background.bottomAnchor.constraint(equalTo: bottomAnchor),
+                background.leadingAnchor.constraint(equalTo: leadingAnchor),
+                background.trailingAnchor.constraint(equalTo: trailingAnchor),
+                stack.topAnchor.constraint(equalTo: topAnchor),
+                stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+                stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+                stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+                trailingSeparator.centerYAnchor.constraint(equalTo: centerYAnchor),
+                trailingSeparator.trailingAnchor.constraint(equalTo: trailingAnchor),
+                trailingSeparator.widthAnchor.constraint(equalToConstant: 1),
+                trailingSeparator.heightAnchor.constraint(equalToConstant: 20)
+            ])
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+        /// The image view for one marker. Both are 12pt and accent-tinted, so
+        /// they read at a glance without competing with the title.
+        ///
+        /// `wand.and.rays` is the platform's own automation vocabulary. A key
+        /// would read as "this opens something", which is backwards: an
+        /// automation grant is exactly what a protected tab refuses.
+        ///
+        /// Neither carries an accessibility *identifier*. Consumers collect the
+        /// strip's named controls by the `deviceterm.tab.` prefix and count the
+        /// result as pills, so publishing one here would inflate that count. The
+        /// image carries a description instead, which names the marker without
+        /// putting it in that set.
+        private static func markerView(for marker: TabPillMarker) -> NSImageView {
+            let symbolName: String
+            let describedAs: String
+            let hoverText: String
+            switch marker {
+            case .automation:
+                symbolName = "wand.and.rays"
+                describedAs = "Automation tab"
+                hoverText = "Automation tab (opened from the menu)"
+
+            case .protection:
+                symbolName = "lock.fill"
+                describedAs = "Protected tab"
+                hoverText = "Protected tab (hidden from other sessions)"
+            }
+            let view = NSImageView()
+            view.image = NSImage(
+                systemSymbolName: symbolName,
+                accessibilityDescription: describedAs
+            )
+            view.contentTintColor = .controlAccentColor
+            view.symbolConfiguration = NSImage.SymbolConfiguration(
+                pointSize: 12,
+                weight: .regular
+            )
+            view.setContentHuggingPriority(.required, for: .horizontal)
+            view.toolTip = hoverText
+            return view
+        }
+
+        /// Mount the pill's fixed subviews: the close ✕ leftmost so it has a
+        /// stable position, the title filling the rest. Markers go on afterwards
+        /// through `setMarkers`, which inserts them between the two.
+        func install(close: NSButton, title: NSView) {
+            for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+            installedMarkers = []
+            markerViews = []
+            closeButton = close
+            close.alphaValue = 0
+            stack.addArrangedSubview(close)
+            stack.addArrangedSubview(title)
+        }
+
+        /// Reconcile the pill's markers against `markers`, in that order, between
+        /// the close ✕ and the title. Idempotent, so the caller can hand it the
+        /// tab's current state on every render pass. Runs after `install`, which
+        /// is what puts the two anchors it inserts between into the stack.
+        func setMarkers(_ markers: [TabPillMarker]) {
+            guard markers != installedMarkers else { return }
+            for view in markerViews {
+                stack.removeArrangedSubview(view)
+                view.removeFromSuperview()
+            }
+            markerViews = markers.map { Self.markerView(for: $0) }
+            for (offset, view) in markerViews.enumerated() {
+                stack.insertArrangedSubview(view, at: 1 + offset)
+            }
+            installedMarkers = markers
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            for area in trackingAreas { removeTrackingArea(area) }
+            let area = NSTrackingArea(
+                rect: bounds,
+                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(area)
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            isHovered = true
+            closeButton?.alphaValue = 1
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            isHovered = false
+            closeButton?.alphaValue = 0
+        }
+
+        /// Three-level white-alpha contrast over the window's ghostty
+        /// background tint, preserving track < hover < active hierarchy:
+        ///   selected → 16% white (active, top of hierarchy)
+        ///   hovered  → 10% white (medium wash, affordance)
+        ///   rest     → transparent (track's 5% shows through)
+        private func refreshMaterial() {
+            let alpha: CGFloat
+            if isSelected {
+                alpha = 0.16
+            } else if isHovered {
+                alpha = 0.10
+            } else {
+                alpha = 0
+            }
+            background.layer?.backgroundColor = NSColor.white.withAlphaComponent(alpha).cgColor
+        }
     }
-}
 
-/// Adaptive decorative stroke between neighboring inactive tab cells.
-/// It never participates in pointer routing or the accessibility tree.
-private final class TabSeparatorView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    /// Adaptive decorative stroke between neighboring inactive tab cells.
+    /// It never participates in pointer routing or the accessibility tree.
+    final class TabSeparatorView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        NSColor.separatorColor.setFill()
-        NSBezierPath(rect: dirtyRect.intersection(bounds)).fill()
-    }
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+            NSColor.separatorColor.setFill()
+            NSBezierPath(rect: dirtyRect.intersection(bounds)).fill()
+        }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            needsDisplay = true
+        }
     }
 }

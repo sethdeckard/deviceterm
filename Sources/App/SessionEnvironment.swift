@@ -21,11 +21,6 @@ import Foundation
 import Darwin
 #endif
 
-enum SessionEnvironmentError: Error {
-    case shimBinaryNotFound
-    case directorySetupFailed(String)
-}
-
 final class SessionEnvironment {
     let sessionId: String
     let capability: String

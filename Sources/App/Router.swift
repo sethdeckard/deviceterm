@@ -14,105 +14,6 @@
 import DaemonProtocol
 import Foundation
 
-/// The per-backend slice of an optimistic pane attach. The scaffolding
-/// around it is identical for sims and physical devices: insert a
-/// placeholder leaf the instant the user acts, run the (slow) attach RPC
-/// off the serial drain so navigation never freezes, then reconcile with
-/// the same cancel / leak-cleanup guards, the same "Name · Type"
-/// composition, and the same failure rendering. This carries only what
-/// diverges: the resurrect metadata (sim-only), the RPC + its auth model,
-/// the name resolution, and the concrete pane build + mount.
-private struct PendingAttachSpec {
-    let target: PaneTarget
-    let displayName: String?
-    /// Placement metadata: sim-only, and read only at placeholder-insert
-    /// time. Nil for a device attach, whose recovery keeps the existing leaf
-    /// rather than restoring a recorded position.
-    let family: String?
-    let atIndex: Int?
-    let anchor: ResurrectAnchor?
-    /// The wire method `attach` sends, for the deadline error's text.
-    let method: RPCMethod
-    /// The attach RPC, given the tab's primary terminal (the
-    /// ownership/attribution session). Sim uses the cap-authenticated
-    /// `device.attach`; device uses `physicalDevice.attach` (deviceId +
-    /// attribution session, no cap). Both return `PaneCreateResponse`.
-    let attach: @MainActor (TerminalPaneState) async throws -> PaneCreateResponse
-    /// Resolve the bare device name. Sim does an async `device.list` lookup
-    /// when the caller passed no name (the CLI claim path); device reads the
-    /// response's marketing name. Both fall back to a `target`-prefix
-    /// placeholder.
-    let resolveName: @MainActor (PaneCreateResponse) async -> String
-    /// Build the concrete pane state and swap it in for the placeholder.
-    let mount: @MainActor (WindowState, PendingPaneID, PaneCreateResponse, String) -> Void
-    /// Failure-log prefix (`": \(error)"` is appended).
-    let failureLog: String
-}
-
-/// A pane whose detach is waiting for another attach on the same target to
-/// stop waiting. The admission id travels with it so the eventual close is
-/// still fenced to the admission that produced this pane.
-private struct DeferredDetach: Hashable {
-    let paneId: String
-    let attachment: UInt64?
-}
-
-/// One in-flight tab-protection transition. `generation` is monotonic per
-/// Router so a superseded transition's late resolution can't overwrite a
-/// newer one (a rapid protected→unprotected→protected converges on the last
-/// requested state). `task` is held so a supersede / tab-close / quit can
-/// cancel it.
-private struct ProtectionTransition {
-    let generation: Int
-    /// The state being converged toward. A membership re-kick reconverges
-    /// toward this same target.
-    let target: Bool
-    let task: Task<Void, Never>
-}
-
-/// What one cohort reconcile send concluded.
-private enum CohortReconcileAttempt {
-    case applied
-    /// Rejected, or the reply was lost. Either way the next send is
-    /// computed from the tab's live state, which is the whole recovery:
-    /// it absorbs a member that closed mid-flight, a stale key, and a
-    /// refused binding alike.
-    case retry
-    /// The tab is gone, closing, or the daemon refused the method
-    /// structurally; nothing left to converge.
-    case abandoned
-}
-
-/// First decisive outcome of an awaited tab-protection transition, reported
-/// to the intent layer so `tab set-protected` reflects the daemon's real
-/// state. `.pending` means the requested state remains unconfirmed because
-/// of a deadline, indeterminate transport loss, same-state supersession, or
-/// tab disappearance.
-enum TabProtectionOutcome: Sendable, Equatable {
-    case committed
-    case rejected
-    case pending
-}
-
-/// One-shot resolver for an awaited protection outcome: whichever fires
-/// first (the transition's `onFirstOutcome` callback or the deadline)
-/// wins; later calls are ignored.
-@MainActor
-private final class ProtectionOutcomeGate {
-    private var resumed = false
-    private let continuation: CheckedContinuation<TabProtectionOutcome, Never>
-
-    init(_ continuation: CheckedContinuation<TabProtectionOutcome, Never>) {
-        self.continuation = continuation
-    }
-
-    func resolve(_ outcome: TabProtectionOutcome) {
-        guard !resumed else { return }
-        resumed = true
-        continuation.resume(returning: outcome)
-    }
-}
-
 @MainActor
 final class Router {
     /// Wire codes for a *definite* pre-commit protection rejection: the
@@ -2557,5 +2458,95 @@ final class Router {
 
     private func logError(_ message: String) {
         FileHandle.standardError.write(Data("deviceterm: \(message)\n".utf8))
+    }
+}
+
+private extension Router {
+    /// The per-backend slice of an optimistic pane attach. The scaffolding
+    /// around it is identical for sims and physical devices: insert a
+    /// placeholder leaf the instant the user acts, run the (slow) attach RPC
+    /// off the serial drain so navigation never freezes, then reconcile with
+    /// the same cancel / leak-cleanup guards, the same "Name · Type"
+    /// composition, and the same failure rendering. This carries only what
+    /// diverges: the resurrect metadata (sim-only), the RPC + its auth model,
+    /// the name resolution, and the concrete pane build + mount.
+    struct PendingAttachSpec {
+        let target: PaneTarget
+        let displayName: String?
+        /// Placement metadata: sim-only, and read only at placeholder-insert
+        /// time. Nil for a device attach, whose recovery keeps the existing leaf
+        /// rather than restoring a recorded position.
+        let family: String?
+        let atIndex: Int?
+        let anchor: ResurrectAnchor?
+        /// The wire method `attach` sends, for the deadline error's text.
+        let method: RPCMethod
+        /// The attach RPC, given the tab's primary terminal (the
+        /// ownership/attribution session). Sim uses the cap-authenticated
+        /// `device.attach`; device uses `physicalDevice.attach` (deviceId +
+        /// attribution session, no cap). Both return `PaneCreateResponse`.
+        let attach: @MainActor (TerminalPaneState) async throws -> PaneCreateResponse
+        /// Resolve the bare device name. Sim does an async `device.list` lookup
+        /// when the caller passed no name (the CLI claim path); device reads the
+        /// response's marketing name. Both fall back to a `target`-prefix
+        /// placeholder.
+        let resolveName: @MainActor (PaneCreateResponse) async -> String
+        /// Build the concrete pane state and swap it in for the placeholder.
+        let mount: @MainActor (WindowState, PendingPaneID, PaneCreateResponse, String) -> Void
+        /// Failure-log prefix (`": \(error)"` is appended).
+        let failureLog: String
+    }
+
+    /// A pane whose detach is waiting for another attach on the same target to
+    /// stop waiting. The admission id travels with it so the eventual close is
+    /// still fenced to the admission that produced this pane.
+    struct DeferredDetach: Hashable {
+        let paneId: String
+        let attachment: UInt64?
+    }
+
+    /// One in-flight tab-protection transition. `generation` is monotonic per
+    /// Router so a superseded transition's late resolution can't overwrite a
+    /// newer one (a rapid protected→unprotected→protected converges on the last
+    /// requested state). `task` is held so a supersede / tab-close / quit can
+    /// cancel it.
+    struct ProtectionTransition {
+        let generation: Int
+        /// The state being converged toward. A membership re-kick reconverges
+        /// toward this same target.
+        let target: Bool
+        let task: Task<Void, Never>
+    }
+
+    /// What one cohort reconcile send concluded.
+    enum CohortReconcileAttempt {
+        case applied
+        /// Rejected, or the reply was lost. Either way the next send is
+        /// computed from the tab's live state, which is the whole recovery:
+        /// it absorbs a member that closed mid-flight, a stale key, and a
+        /// refused binding alike.
+        case retry
+        /// The tab is gone, closing, or the daemon refused the method
+        /// structurally; nothing left to converge.
+        case abandoned
+    }
+
+    /// One-shot resolver for an awaited protection outcome: whichever fires
+    /// first (the transition's `onFirstOutcome` callback or the deadline)
+    /// wins; later calls are ignored.
+    @MainActor
+    final class ProtectionOutcomeGate {
+        private var resumed = false
+        private let continuation: CheckedContinuation<TabProtectionOutcome, Never>
+
+        init(_ continuation: CheckedContinuation<TabProtectionOutcome, Never>) {
+            self.continuation = continuation
+        }
+
+        func resolve(_ outcome: TabProtectionOutcome) {
+            guard !resumed else { return }
+            resumed = true
+            continuation.resume(returning: outcome)
+        }
     }
 }

@@ -7,24 +7,6 @@
 
 import DaemonProtocol
 
-/// The pane's view-facing state (overlay + surface presentation).
-enum SimulatorPaneState: Equatable {
-    case booting
-    case rendering
-    case shutdown
-    case failed(String)
-}
-
-/// Inputs that can move a sim pane between states.
-enum SimPaneEvent: Equatable {
-    /// A non-nil IOSurface arrived (a surface.changed that looked up).
-    case surfaceAttached
-    /// The daemon reported a lifecycle transition (state.changed).
-    case lifecycle(PaneLifecycle)
-    /// The subscription stream threw / the daemon dropped the pane.
-    case subscriptionFailed(String)
-}
-
 enum SimPaneReducer {
     static func reduce(
         _ state: SimulatorPaneState,

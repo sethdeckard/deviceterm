@@ -15,31 +15,6 @@
 // `notFound` by the time anything gets here, so every target this sees
 // is one the caller can legitimately name.
 
-/// What the caller must satisfy to act on a target without a grant.
-enum WorkspaceAuthorityRequirement: Equatable {
-    /// The caller owns a terminal in the target's tab. `tab rename`,
-    /// `pane open --terminal`, and `pane close` carry this.
-    case ownership
-
-    /// The caller owns the target tab's *only* terminal. `tab close`
-    /// and `window close` carry this: a split tab holds independent
-    /// sessions, so closing it ends someone else's work, which is the
-    /// same cross-session destruction as closing a foreign tab by a
-    /// different route.
-    case soleTerminal
-}
-
-/// The resolved target, reduced to what the decision needs.
-struct WorkspaceAuthorityTarget: Equatable {
-    /// Whether the caller's session holds a terminal in the tab.
-    let callerOwnsIt: Bool
-
-    /// How many terminal sessions the tab holds. A close is self-only
-    /// when `callerOwnsIt` is true and this is one; beyond that, closing
-    /// takes sibling sessions with it.
-    let terminalCount: Int
-}
-
 enum WorkspaceAuthorityDecision: Equatable {
     case allowed
     case requiresAutomation

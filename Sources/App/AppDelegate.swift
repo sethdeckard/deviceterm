@@ -24,16 +24,6 @@ private let registrationLog = Logger(subsystem: "com.deviceterm", category: "reg
 /// common holder is a launch that is merely connecting.
 private let startupRepairLockWaitSeconds: TimeInterval = 10
 
-/// Thrown when the startup recovery ladder could not get a matching helper
-/// answering, carrying what to tell the user.
-///
-/// An error rather than a return value so it unwinds the launch sequence the
-/// same way a connect failure does, leaving one place that decides what a
-/// failed launch shows.
-private struct StartupVersionSurrender: Error {
-    let situation: UpdateRestartSituation
-}
-
 /// Map the mid-session mismatch outcome onto the shared situation vocabulary.
 ///
 /// `.confirmed` becomes "accepted", not "stopped": the daemon acknowledges the
@@ -1746,5 +1736,17 @@ extension AppDelegate: TabTransferCoordinating {
 
     private func strip(for windowID: WindowID) -> TabStripViewController? {
         windowControllerByID[windowID]?.contentViewController as? TabStripViewController
+    }
+}
+
+private extension AppDelegate {
+    /// Thrown when the startup recovery ladder could not get a matching helper
+    /// answering, carrying what to tell the user.
+    ///
+    /// An error rather than a return value so it unwinds the launch sequence the
+    /// same way a connect failure does, leaving one place that decides what a
+    /// failed launch shows.
+    struct StartupVersionSurrender: Error {
+        let situation: UpdateRestartSituation
     }
 }

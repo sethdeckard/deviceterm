@@ -15,13 +15,6 @@
 
 import Foundation
 
-enum MarkdownBlock: Equatable, Sendable {
-    case title(String)
-    case heading(String)
-    case paragraph(String)
-    case verbatim(String)
-}
-
 enum MarkdownDocument {
     static func parse(_ text: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []

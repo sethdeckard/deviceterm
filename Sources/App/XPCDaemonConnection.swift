@@ -59,14 +59,6 @@ import Darwin
 /// correlation token on the wire for a diagnostic.
 private let connectionLog = Logger(subsystem: "com.deviceterm", category: "xpc")
 
-/// Purpose of one GUI XPC peer. The lanes share the daemon's Mach service and
-/// wire protocol, but use different connections so high-rate pane traffic
-/// cannot sit ahead of ordinary request replies in one XPC send queue.
-enum XPCClientLane: String, Sendable {
-    case control
-    case pane
-}
-
 /// A short, log-safe name for an XPC error object.
 ///
 /// Duplicated in the daemon rather than shared: the two live in different
@@ -81,34 +73,6 @@ private func describeXPCError(_ event: xpc_object_t) -> String {
         return "unknown-xpc-error"
     }
     return String(cString: raw)
-}
-
-/// XPC dictionary keys + discriminators on the GUI side. Mirror
-/// `XPCTransportKey` in the daemon so the two ends agree without
-/// re-typing string literals, but the GUI module can't import the
-/// daemon, so the constants are duplicated here.
-enum XPCWireKey {
-    static let type = "type"
-    static let data = "data"
-    static let paneId = "paneId"
-    static let sequence = "sequence"
-    static let surface = "surface"
-
-    static let rpcValue = "rpc"
-    static let surfaceValue = "surface"
-
-    // Correlation token (every XPC pane subscription, sim + device) plus the
-    // device-only lease overlay (leased/leaseEpoch).
-    static let subscriptionToken = "subscriptionToken"
-    static let leased = "leased"
-    static let leaseEpoch = "leaseEpoch"
-}
-
-/// Sendable box for an `xpc_object_t` so it can ride an ingress
-/// `AsyncStream`. XPC objects are reference-counted and thread-safe to pass
-/// across queues, which is why the unchecked conformance holds.
-struct XPCEventBox: @unchecked Sendable {
-    let event: xpc_object_t
 }
 
 actor XPCDaemonConnection: DaemonRequestTransport {

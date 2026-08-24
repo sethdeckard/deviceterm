@@ -191,59 +191,61 @@ struct SimulatorQuitIllustration: View {
     }
 }
 
-/// A rounded rectangle with a downward pointer on its bottom edge, as
-/// one closed path so a fill and a stroke both flow around the tip
-/// instead of drawing a seam where the two would otherwise meet.
-///
-/// The passed rect includes `tailHeight`: the body occupies everything
-/// above it, and `tailCenterX` is measured from the rect's leading edge.
-private struct MenuBubble: Shape {
-    let cornerRadius: CGFloat
-    let tailWidth: CGFloat
-    let tailHeight: CGFloat
-    let tailCenterX: CGFloat
+private extension SimulatorQuitIllustration {
+    /// A rounded rectangle with a downward pointer on its bottom edge, as
+    /// one closed path so a fill and a stroke both flow around the tip
+    /// instead of drawing a seam where the two would otherwise meet.
+    ///
+    /// The passed rect includes `tailHeight`: the body occupies everything
+    /// above it, and `tailCenterX` is measured from the rect's leading edge.
+    struct MenuBubble: Shape {
+        let cornerRadius: CGFloat
+        let tailWidth: CGFloat
+        let tailHeight: CGFloat
+        let tailCenterX: CGFloat
 
-    /// A hard point looks like a drawing artifact at this size; macOS
-    /// rounds it.
-    private let tipRadius: CGFloat = 2.5
+        /// A hard point looks like a drawing artifact at this size; macOS
+        /// rounds it.
+        private let tipRadius: CGFloat = 2.5
 
-    func path(in rect: CGRect) -> Path {
-        let bodyBottom = rect.maxY - tailHeight
-        let tipX = rect.minX + tailCenterX
-        var path = Path()
-        // Start mid-way up the left edge so every corner below is an
-        // arc between two known tangents, with no seam at the origin.
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY + cornerRadius))
-        path.addArc(
-            tangent1End: CGPoint(x: rect.minX, y: rect.minY),
-            tangent2End: CGPoint(x: rect.maxX, y: rect.minY),
-            radius: cornerRadius
-        )
-        path.addArc(
-            tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
-            tangent2End: CGPoint(x: rect.maxX, y: bodyBottom),
-            radius: cornerRadius
-        )
-        path.addArc(
-            tangent1End: CGPoint(x: rect.maxX, y: bodyBottom),
-            tangent2End: CGPoint(x: rect.minX, y: bodyBottom),
-            radius: cornerRadius
-        )
-        // Along the bottom edge to the pointer, down to the rounded
-        // tip, and back up to the bottom edge.
-        path.addLine(to: CGPoint(x: tipX + tailWidth / 2, y: bodyBottom))
-        path.addArc(
-            tangent1End: CGPoint(x: tipX, y: rect.maxY),
-            tangent2End: CGPoint(x: tipX - tailWidth / 2, y: bodyBottom),
-            radius: tipRadius
-        )
-        path.addLine(to: CGPoint(x: tipX - tailWidth / 2, y: bodyBottom))
-        path.addArc(
-            tangent1End: CGPoint(x: rect.minX, y: bodyBottom),
-            tangent2End: CGPoint(x: rect.minX, y: rect.minY),
-            radius: cornerRadius
-        )
-        path.closeSubpath()
-        return path
+        func path(in rect: CGRect) -> Path {
+            let bodyBottom = rect.maxY - tailHeight
+            let tipX = rect.minX + tailCenterX
+            var path = Path()
+            // Start mid-way up the left edge so every corner below is an
+            // arc between two known tangents, with no seam at the origin.
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY + cornerRadius))
+            path.addArc(
+                tangent1End: CGPoint(x: rect.minX, y: rect.minY),
+                tangent2End: CGPoint(x: rect.maxX, y: rect.minY),
+                radius: cornerRadius
+            )
+            path.addArc(
+                tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
+                tangent2End: CGPoint(x: rect.maxX, y: bodyBottom),
+                radius: cornerRadius
+            )
+            path.addArc(
+                tangent1End: CGPoint(x: rect.maxX, y: bodyBottom),
+                tangent2End: CGPoint(x: rect.minX, y: bodyBottom),
+                radius: cornerRadius
+            )
+            // Along the bottom edge to the pointer, down to the rounded
+            // tip, and back up to the bottom edge.
+            path.addLine(to: CGPoint(x: tipX + tailWidth / 2, y: bodyBottom))
+            path.addArc(
+                tangent1End: CGPoint(x: tipX, y: rect.maxY),
+                tangent2End: CGPoint(x: tipX - tailWidth / 2, y: bodyBottom),
+                radius: tipRadius
+            )
+            path.addLine(to: CGPoint(x: tipX - tailWidth / 2, y: bodyBottom))
+            path.addArc(
+                tangent1End: CGPoint(x: rect.minX, y: bodyBottom),
+                tangent2End: CGPoint(x: rect.minX, y: rect.minY),
+                radius: cornerRadius
+            )
+            path.closeSubpath()
+            return path
+        }
     }
 }

@@ -11,14 +11,6 @@ import TerminalProvenance
 import Darwin
 #endif
 
-enum BootClaimRelayError: Error {
-    case socketPathTooLong
-    case socketFailed(Int32)
-    case bindFailed(Int32)
-    case listenFailed(Int32)
-    case permissionFailed(Int32)
-}
-
 /// Mutable socket and anchor state is confined to `queue`. Accepted claims are
 /// handed to the main actor only after their acknowledgement has been written,
 /// so daemon or main-actor starvation cannot make the shim lose the attempt.

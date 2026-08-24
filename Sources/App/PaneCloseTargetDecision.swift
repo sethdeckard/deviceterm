@@ -15,11 +15,6 @@
 // The zero case exists only to keep the function total; that same
 // invariant makes it unreachable.
 
-enum PaneCloseTarget: Equatable, Sendable {
-    case pane(PaneSlot)
-    case tab
-}
-
 enum PaneCloseTargetDecision {
     static func target(focused: PaneSlot?, terminalCount: Int) -> PaneCloseTarget {
         // Focus outside the tab's panes names nothing to close, so ⌘W

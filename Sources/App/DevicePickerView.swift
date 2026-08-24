@@ -135,48 +135,50 @@ struct DevicePickerView: View {
     }
 }
 
-/// One selectable device row. Owns its hover state for the highlight.
-/// Tightly coupled to `DevicePickerView`, so it shares the file.
-private struct DeviceRow: View {
-    let entry: PhysicalDeviceListEntry
-    let select: () -> Void
+private extension DevicePickerView {
+    /// One selectable device row. Owns its hover state for the highlight.
+    /// Tightly coupled to `DevicePickerView`, so it shares the file.
+    struct DeviceRow: View {
+        let entry: PhysicalDeviceListEntry
+        let select: () -> Void
 
-    @State private var isHovering = false
+        @State private var isHovering = false
 
-    var body: some View {
-        Button(action: select) {
-            HStack(spacing: 10) {
-                Image(systemName: "iphone")
-                    .font(.system(size: 18))
-                    .foregroundStyle(entry.available ? .primary : .secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name ?? entry.model ?? entry.deviceId)
-                        .font(.system(size: 13))
-                    if let subtitle = DevicePickerView.subtitle(for: entry) {
-                        Text(subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+        var body: some View {
+            Button(action: select) {
+                HStack(spacing: 10) {
+                    Image(systemName: "iphone")
+                        .font(.system(size: 18))
+                        .foregroundStyle(entry.available ? .primary : .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.name ?? entry.model ?? entry.deviceId)
+                            .font(.system(size: 13))
+                        if let subtitle = DevicePickerView.subtitle(for: entry) {
+                            Text(subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if entry.available {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                Spacer()
-                if entry.available {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
+                .contentShape(Rectangle())
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovering && entry.available
+                            ? Color.primary.opacity(0.08)
+                            : Color.clear)
+                )
             }
-            .contentShape(Rectangle())
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovering && entry.available
-                        ? Color.primary.opacity(0.08)
-                        : Color.clear)
-            )
+            .buttonStyle(.plain)
+            .disabled(!entry.available)
+            .onHover { isHovering = $0 }
         }
-        .buttonStyle(.plain)
-        .disabled(!entry.available)
-        .onHover { isHovering = $0 }
     }
 }

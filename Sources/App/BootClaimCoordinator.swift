@@ -6,12 +6,6 @@
 import DaemonProtocol
 import Foundation
 
-enum BootClaimRequestOutcome: Sendable {
-    case accepted
-    case rejected
-    case uncertain
-}
-
 @MainActor
 final class BootClaimCoordinator {
     private enum ClaimPhase {

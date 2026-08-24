@@ -24,25 +24,6 @@
 import AppKit
 import DaemonProtocol
 
-/// One sim that's currently Booted *and* attributable to a dead
-/// session (by GUI manifest or by daemon `ownedBySession`).
-struct OrphanLiveSim: Sendable, Equatable {
-    let udid: String
-    let displayName: String
-}
-
-struct OrphanRecord: Sendable, Equatable {
-    let sessionId: String
-    let sessionDir: String
-    let liveSims: [OrphanLiveSim]
-}
-
-enum OrphanRecoveryChoice: Sendable, Equatable {
-    case reattach
-    case shutdownAll
-    case leaveRunning
-}
-
 @MainActor
 enum OrphanRecovery {
     /// Read every dead-owner session dir's manifest, then resolve live

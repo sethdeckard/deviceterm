@@ -403,35 +403,37 @@ private extension SimChromeAction {
     }
 }
 
-/// Status badge: small colored indicator showing the sim's lifecycle
-/// state. Mirrors the four `SimulatorPaneState` cases:
-///
-///   .booting → spinning ProgressView (no fixed color; system-tint).
-///   .rendering → solid green dot.
-///   .shutdown → solid gray dot.
-///   .failed → solid red dot.
-///
-/// Sized 12x12 by the caller's `.frame()` modifier; we just paint the
-/// shape.
-private struct StatusBadgeView: View {
-    let state: SimulatorPaneState
+private extension PaneChromeOverlay {
+    /// Status badge: small colored indicator showing the sim's lifecycle
+    /// state. Mirrors the four `SimulatorPaneState` cases:
+    ///
+    ///   .booting → spinning ProgressView (no fixed color; system-tint).
+    ///   .rendering → solid green dot.
+    ///   .shutdown → solid gray dot.
+    ///   .failed → solid red dot.
+    ///
+    /// Sized 12x12 by the caller's `.frame()` modifier; we just paint the
+    /// shape.
+    struct StatusBadgeView: View {
+        let state: SimulatorPaneState
 
-    var body: some View {
-        switch state {
-        case .booting:
-            ProgressView()
-                .progressViewStyle(.circular)
-                .controlSize(.small)
-                .scaleEffect(0.6)
+        var body: some View {
+            switch state {
+            case .booting:
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
 
-        case .rendering:
-            Circle().fill(.green)
+            case .rendering:
+                Circle().fill(.green)
 
-        case .shutdown:
-            Circle().fill(.gray)
+            case .shutdown:
+                Circle().fill(.gray)
 
-        case .failed:
-            Circle().fill(.red)
+            case .failed:
+                Circle().fill(.red)
+            }
         }
     }
 }
