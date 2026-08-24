@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// RelayPacer: the clock the scripted App Switcher trajectory paces against.
+// RelayPacing: the clock the scripted App Switcher trajectory paces against.
 //
 // Sleeping a nominal interval per frame and treating it as the time spent lets
 // each frame's scheduler leeway compound, so a trajectory drifts longer the
@@ -22,17 +22,4 @@ protocol RelayPacing: Sendable {
     /// is cancelled, so a cancelled trajectory still reaches its release
     /// attempt rather than abandoning the contact mid-swipe.
     func sleep(until deadline: ContinuousClock.Instant) async
-}
-
-/// The production pacer: a real continuous clock, slept against with no
-/// tolerance. Zero tolerance declines the leeway a sleep would otherwise
-/// accept; a frame can still wake late.
-struct SystemRelayPacer: RelayPacing {
-    func now() -> ContinuousClock.Instant {
-        ContinuousClock.now
-    }
-
-    func sleep(until deadline: ContinuousClock.Instant) async {
-        try? await Task.sleep(until: deadline, tolerance: .zero, clock: .continuous)
-    }
 }

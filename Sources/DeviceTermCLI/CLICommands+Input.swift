@@ -3,9 +3,9 @@
 // Input command family: the gesture / hardware / text / accessibility
 // verbs (tap, swipe, app-switcher, long-press, pinch, button, key, text,
 // rotate, crown, ax) plus their request builders, split out of
-// Commands.swift to keep that file focused on the shared parse core.
+// CLICommands.swift to keep that file focused on the shared parse core.
 //
-// `parse(_:)` (in Commands.swift) delegates the input verbs here through
+// `parse(_:)` (in CLICommands.swift) delegates the input verbs here through
 // `parseInputVerb`, which returns nil for any verb it doesn't own so the
 // caller falls through to a usage error. The read-only listing builders
 // (`tabsListRequest` / `panesListRequest`) ride along here too, next to
@@ -14,7 +14,7 @@
 // This is a behavior-grouping extension, not a conformance split. It
 // reaches the shared `request(method:body:)` helper and the
 // `parseEnumArg` / `parseKVKToken` token parsers, all `internal` in
-// Commands.swift.
+// CLICommands.swift.
 
 import DaemonProtocol
 import Foundation

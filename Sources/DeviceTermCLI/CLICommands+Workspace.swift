@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Workspace command family: tab / pane / device / window parsing and
-// request building, split out of Commands.swift to keep that file focused
-// on the shared parse core. `parse(_:)` (in Commands.swift) delegates the
+// request building, split out of CLICommands.swift to keep that file focused
+// on the shared parse core. `parse(_:)` (in CLICommands.swift) delegates the
 // workspace verbs to the `parse*Subcommand` helpers here; the `*Request`
 // builders encode the matching `AppCommandParams` struct for the daemon's
 // `app.commands` back-channel.
 //
 // This is a behavior-grouping extension, not a conformance split. The
 // shared `request(method:body:)` helper and the `parse*Subcommand` entries
-// were relaxed from `private` to `internal` in Commands.swift so this file
-// can reach them.
+// are `internal` in CLICommands.swift so this file can call them.
 
 import DaemonProtocol
 import Foundation

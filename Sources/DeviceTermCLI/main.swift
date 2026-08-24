@@ -8,7 +8,7 @@
 // per-session protocol; every client speaks the same wire.
 //
 // The CLI surface covers argv parsing, the daemon round-trip, and
-// per-verb dispatch; see `Commands.swift` for the parser and
+// per-verb dispatch; see `CLICommands.swift` for the parser and
 // `CommandDispatch.swift` for dispatch. Every wire round-trip goes
 // through `roundTrip(method:params:)`.
 
@@ -83,19 +83,11 @@ func daemonSocketPath() -> String {
         .path ?? "/tmp/deviceterm-daemon.sock"
 }
 
-/// One request → one response. Frames an `RPCEnvelope`, sends it over
-/// the UDS, and reads framed bytes until a full response envelope
-/// decodes (or a bounded timeout elapses). Returns the response body
-/// `Data` for `.result`, or throws on `.error` / transport failure.
-enum CLIError: Error {
-    case transport(String)
-    case daemon(code: Int, message: String)
-    /// The CLI was run outside a deviceterm tab (no session creds in the
-    /// env). The associated message is the stderr body (no `deviceterm:`
-    /// prefix); the driver renders it.
-    case notInTab(String)
-}
-
+// The round-trip path below is one request → one response: it frames an
+// `RPCEnvelope`, sends it over the UDS, and reads framed bytes until a full
+// response envelope decodes (or a bounded timeout elapses). It returns the
+// response body `Data` for `.result`, or throws `CLIError` on `.error` /
+// transport failure.
 /// Read one framed response envelope from `fd`, blocking until a
 /// full frame arrives or `deadline` passes. Extracted from `roundTrip`
 /// so the auto-auth handshake can reuse the read path.
@@ -890,14 +882,6 @@ func eventsStream() -> Never {
         }
         eventsBuffer.append(chunk)
     }
-}
-
-/// Classification of one decoded `daemon.events` frame.
-enum EventFrameOutcome: Equatable {
-    case event(Data)
-    case subscriptionAck
-    case unauthorizedSession
-    case daemonError(code: Int, message: String)
 }
 
 /// Decode + classify EVERY complete frame in `buffer`, consuming them (leaving

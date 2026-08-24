@@ -17,16 +17,6 @@
 // the auth handshake. Other methods don't carry creds; the
 // connection's auth state is the source of truth at dispatch time.
 
-public struct SessionAuthenticateParams: Codable, Sendable, Equatable {
-    public let sessionId: String
-    public let cap: String
-
-    public init(sessionId: String, cap: String) {
-        self.sessionId = sessionId
-        self.cap = cap
-    }
-}
-
 public struct SessionAuthenticateResponse: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case success = "ok"

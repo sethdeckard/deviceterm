@@ -34,21 +34,6 @@
 
 import Foundation
 
-public struct RPCError: Codable, Sendable, Equatable {
-    private enum CodingKeys: String, CodingKey {
-        case code
-        case message = "msg"
-    }
-
-    public let code: Int
-    public let message: String
-
-    public init(code: Int, message: String) {
-        self.code = code
-        self.message = message
-    }
-}
-
 public struct RPCEnvelope: Sendable, Equatable {
     public enum MessageType: String, Sendable, Equatable {
         case request  = "req"
@@ -86,15 +71,6 @@ public struct RPCEnvelope: Sendable, Equatable {
         self.method = method
         self.body = body
     }
-}
-
-public enum RPCEnvelopeError: Error, Equatable, Sendable {
-    case notAnObject
-    case invalidId  // present but not a non-negative integer fitting in UInt32
-    case missingType
-    case unknownType(String)
-    case invalidError
-    case bodyEncodeFailed
 }
 
 public extension RPCEnvelope {

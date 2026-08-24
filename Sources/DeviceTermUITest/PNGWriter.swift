@@ -10,11 +10,6 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-enum PNGWriterError: Error, Equatable {
-    /// ImageIO refused to create or finalize the destination.
-    case encodeFailed(path: String)
-}
-
 enum PNGWriter {
     /// Write `image` to `path` as PNG, creating parent directories.
     /// Pixels are written at the image's native size, so the caller is

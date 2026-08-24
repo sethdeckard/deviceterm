@@ -17,15 +17,6 @@
 
 import Foundation
 
-public enum RPCFramingError: Error, Equatable, Sendable {
-    /// Length-prefix decoded to a value larger than the configured cap.
-    case payloadTooLarge(
-        declared:
-        Int,
-        cap: Int
-        )
-}
-
 /// Pure framing primitives, no I/O. Tests exercise these directly;
 /// the actual socket code wraps them in a read/write loop.
 public enum RPCFraming {

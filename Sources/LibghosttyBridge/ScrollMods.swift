@@ -22,16 +22,6 @@
 // NSEvent.Phase → ScrollMomentum mapping lives in
 // `ScrollMomentum+NSEvent.swift` (AppKit-bound).
 
-enum ScrollMomentum: UInt8, Equatable {
-    case none = 0
-    case began = 1
-    case stationary = 2
-    case changed = 3
-    case ended = 4
-    case cancelled = 5
-    case mayBegin = 6
-}
-
 enum ScrollMods {
     /// Pack the precision flag + momentum phase into the Int32 bitmask
     /// `ghostty_surface_mouse_scroll` expects as its `mods` argument.

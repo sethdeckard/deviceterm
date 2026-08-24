@@ -12,13 +12,6 @@
 import DaemonProtocol
 import Foundation
 
-enum UITestClientError: Error, Equatable {
-    /// Couldn't connect, most likely because no resident harness is running.
-    case notRunning(path: String)
-    /// Connected, but no complete reply arrived before the deadline / EOF.
-    case noReply
-}
-
 enum UITestClient {
     struct Reply {
         /// The raw reply JSON, printed verbatim by the caller.

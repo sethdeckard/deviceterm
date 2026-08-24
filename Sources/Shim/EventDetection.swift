@@ -14,16 +14,6 @@
 import DaemonProtocol
 import Foundation
 
-// MARK: - Shim event payload
-
-struct ShimEvent: Sendable {
-    let kind: ShimEventType
-    /// The user's device spec verbatim (e.g. "iPhone 17 Pro",
-    /// "booted", a UDID). Used as the fallback when the snapshot
-    /// diff doesn't yield a unique transition.
-    let deviceSpec: String
-}
-
 // MARK: - Flag tables
 
 /// xcrun flags that take a separate-argument value, in both long
@@ -212,22 +202,6 @@ func deviceFlagValue(in args: [String]) -> String? {
 }
 
 // MARK: - Snapshot resolve
-
-struct DeviceRecord: Sendable {
-    let udid: String
-    let name: String
-    let state: String
-    let runtime: String
-}
-
-/// Resolved-device payload: three identifiers carried together as
-/// a struct (SwiftLint caps tuple width at 2).
-struct ResolvedDevice: Sendable {
-    let udid: String
-    let name: String
-    let runtime: String
-    let state: String
-}
 
 /// Resolve the affected device by diffing two `simctl list`
 /// snapshots taken around the real `simctl` invocation. The

@@ -20,30 +20,6 @@ import Foundation
 import Darwin
 #endif
 
-public enum UDSClientSocketError: Error, Equatable, Sendable {
-    case socketFailed(
-        errno:
-        Int32
-        )
-    case connectFailed(
-        errno:
-        Int32,
-        path: String
-        )
-    case socketPathTooLong(
-        path:
-        String
-        )
-    case readFailed(
-        errno:
-        Int32
-        )
-    case writeFailed(
-        errno:
-        Int32
-        )
-}
-
 public enum UDSClientSocket {
     /// macOS reserves 104 bytes for `sockaddr_un.sun_path`; one is the
     /// trailing NUL, so the practical ceiling is 103.

@@ -9,20 +9,6 @@
 
 import Foundation
 
-/// What the argv resolves to.
-enum UITestCommand: Equatable {
-    /// Run as the resident harness (binds the socket, serves requests).
-    case serve
-    /// Connect to the resident and perform one request.
-    case client(UITestRequest)
-    /// Print help and exit 0.
-    case usage
-}
-
-struct UITestParseError: Error, Equatable {
-    let message: String
-}
-
 enum UITestCLI {
     static let usageText = """
     deviceterm-uitest: out-of-process UI-test instrument for deviceterm.

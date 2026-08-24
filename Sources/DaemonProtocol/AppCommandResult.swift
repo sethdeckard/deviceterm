@@ -7,6 +7,14 @@
 // `commandId` and resumes it with this value; the originating CLI
 // handler then returns either a JSON receipt (success / info data)
 // or a CLI-style error (mapped from the `error` payload).
+//
+// The Codable payloads `data` carries for the info / list verbs
+// (`TabInfoPayload`, `PaneInfoPayload`, `SimPanePayload`,
+// `TabCapturePayload`, `WindowInfoPayload`) live in this module for the
+// same reason this type does: the GUI encodes them and the CLI decodes
+// them, so both sides must see one definition. All are synthesized
+// Codable, so new fields can ride in as Optionals without a wire-version
+// bump.
 
 import Foundation
 

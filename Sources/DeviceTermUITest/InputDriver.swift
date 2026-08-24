@@ -26,16 +26,6 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
-enum InputDriverError: Error, Equatable {
-    case eventSourceUnavailable
-    case eventCreationFailed
-    case noMatchingElement(needle: String)
-    case elementDoesNotSupportPress(needle: String)
-    case pressFailed(needle: String)
-    case noWindow(bundleID: String)
-    case pointOutOfRange(x: Double, y: Double)
-}
-
 enum InputDriver {
     /// How long to wait for an activated app to actually become frontmost.
     private static let activationTimeout: TimeInterval = 1.5

@@ -72,13 +72,16 @@ reviewers can decide whether the trade-off is worth it.
 ## Code Style
 
 - Every first-party source file opens with
-  `// SPDX-License-Identifier: GPL-3.0-or-later`, above the descriptive header
-  comment and separated from it by a bare `//`. Shell scripts put the same
-  identifier on the line after the shebang. `Package.swift` is the one
-  exception to "first line": SwiftPM requires its `swift-tools-version`
-  comment to stay at the top, so the identifier goes directly beneath it. The
-  SwiftLint `file_header` rule enforces this, so a new Swift file without it
-  fails `make lint`. Vendored third-party files keep their upstream notices
+  `// SPDX-License-Identifier: GPL-3.0-or-later`. That identifier is the only
+  required header, and the SwiftLint `file_header` rule enforces it, so a new
+  Swift file without it fails `make lint`. Many files also carry a descriptive
+  header comment, separated from the identifier by a bare `//`. Add one only
+  when it explains something the declarations below it do not; a file whose
+  `///` docs already say what it holds ends at the identifier. Shell scripts
+  put the same identifier on the line after the shebang. `Package.swift` is
+  the one exception to "first line": SwiftPM requires its
+  `swift-tools-version` comment to stay at the top, so the identifier goes
+  directly beneath it. Vendored third-party files keep their upstream notices
   instead and are excluded from the rule.
 - Idiomatic Swift; follow Swift API Design Guidelines.
 - Swift 6 strict concurrency is on package-wide, via
