@@ -125,6 +125,47 @@ struct AppCommandCoordinatorTests {
         dropper.cancel()
     }
 
+    /// Verifies that publication stamps an expiry using the requested
+    /// timeout. It does not observe when the timeout task fires; the two
+    /// share a duration, not an instant.
+    @Test
+    func publishStampsAnExpiryFromTheRequestedTimeout() async throws {
+        let coord = AppCommandCoordinator()
+        let (stream, _) = await coord.subscribe(connectionId: 1)
+        let timeoutMs = 30_000
+        let before = AppCommandDeadline.nowMonotonicNanos()
+        let publishTask = Task {
+            await coord.publishAndAwait(
+                kind: .windowsList,
+                originatingSessionId: nil,
+                params: Data(#"{"all":false}"#.utf8),
+                timeoutMs: timeoutMs
+            )
+        }
+        var iterator = stream.makeAsyncIterator()
+        let command = try #require(await iterator.next())
+        let after = AppCommandDeadline.nowMonotonicNanos()
+        let expiry = try #require(command.expiresAtMonotonicNanos)
+        let budget = UInt64(timeoutMs) * 1_000_000
+        // Bracketed by readings taken either side of the publish, so the
+        // assertion holds however long the actor hop took.
+        #expect(expiry >= before + budget)
+        #expect(expiry <= after + budget)
+        publishTask.cancel()
+        _ = await coord.deliverResult(.ok(commandId: command.commandId), from: 1)
+    }
+
+    /// The daemon's budget has to stay strictly under the CLI's to
+    /// reserve any time at all for its coded refusal to get back before
+    /// the transport deadline. The two constants are read by different
+    /// modules, so nothing but this guard keeps them from re-converging.
+    @Test
+    func daemonDeadlineStaysUnderTheCLIRequestTimeout() {
+        let cliMs = AppCommandDeadline.cliRequestTimeoutSeconds * 1_000
+        #expect(Double(AppCommandCoordinator.defaultTimeoutMs) < cliMs)
+        #expect(Double(AppCommandDeadline.guiReplyTimeoutMs) < cliMs)
+    }
+
     @Test
     func subscriberLossFailsPendingCommands() async {
         let coord = AppCommandCoordinator()

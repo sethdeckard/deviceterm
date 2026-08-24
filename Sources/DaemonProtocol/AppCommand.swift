@@ -61,18 +61,35 @@ public struct AppCommand: Codable, Sendable, Equatable {
     /// decodes into `AppCommandParams.<Kind>` after reading `kind`.
     public let params: Data
 
+    /// Monotonic instant (`AppCommandDeadline.nowMonotonicNanos`) past
+    /// which the GUI must decline this command instead of performing it.
+    ///
+    /// Both hops buffer unbounded, so an `AppCommand` can remain queued
+    /// past its reply deadline and would otherwise run whenever the
+    /// drain loop next moves, potentially after the caller has already
+    /// received an error. The daemon cannot unsend a buffered frame, so
+    /// the consumer declines it.
+    ///
+    /// `nil` means no expiry, which is how a frame from a daemon that
+    /// predates this field decodes. That direction fails open on
+    /// purpose: an older daemon's commands behave exactly as they did
+    /// before rather than being dropped wholesale by a newer GUI.
+    public let expiresAtMonotonicNanos: UInt64?
+
     public init(
         commandId: String,
         kind: AppCommandKind,
         originatingSessionId: String?,
         params: Data,
-        originAutomationGrant: Bool = false
+        originAutomationGrant: Bool = false,
+        expiresAtMonotonicNanos: UInt64? = nil
     ) {
         self.commandId = commandId
         self.kind = kind
         self.originatingSessionId = originatingSessionId
         self.originAutomationGrant = originAutomationGrant
         self.params = params
+        self.expiresAtMonotonicNanos = expiresAtMonotonicNanos
     }
 
     // Decode an absent `originAutomationGrant` as false, so incomplete
@@ -92,5 +109,25 @@ public struct AppCommand: Codable, Sendable, Equatable {
             forKey: .originAutomationGrant
         ) ?? false
         params = try container.decode(Data.self, forKey: .params)
+        // Absent means "no expiry", unlike `originAutomationGrant`
+        // above, which fails closed. Opposite defaults, opposite risks:
+        // an absent grant that defaulted true would hand out authority,
+        // where an absent expiry that defaulted to "already expired"
+        // would silently discard every command from an older daemon.
+        expiresAtMonotonicNanos = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .expiresAtMonotonicNanos
+        )
+    }
+
+    /// Whether this command's deadline has passed as of `now`.
+    ///
+    /// An unstamped command never expires; see
+    /// `expiresAtMonotonicNanos`.
+    public func hasExpired(
+        asOf now: UInt64 = AppCommandDeadline.nowMonotonicNanos()
+    ) -> Bool {
+        guard let deadline = expiresAtMonotonicNanos else { return false }
+        return now >= deadline
     }
 }

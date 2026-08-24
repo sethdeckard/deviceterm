@@ -133,6 +133,20 @@ final class AppCommandSubscriber {
                 )
             return
         }
+        // Decline expired frames before dispatch so a command buffered
+        // past its reply deadline can't mutate state, potentially after
+        // the caller received an error. The ack may still win the
+        // daemon's separately scheduled timeout race; see `expiredCode`.
+        if command.hasExpired() {
+            await sendResult(
+                .error(
+                commandId: command.commandId,
+                code: AppCommandDeadline.expiredCode,
+                message: "command expired before the GUI could run it"
+            )
+                )
+            return
+        }
         let intent: RouteIntent
         do {
             intent = try CLIIntentTranslator.translate(command)

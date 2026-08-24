@@ -165,7 +165,11 @@ private let notReadyCode = -32_002
 /// is a fresh connection (a new fd re-runs the auth handshake). A hard auth
 /// failure (`-32001`) or any other error is surfaced immediately, never
 /// retried.
-func roundTrip(method: String, params: Data?, timeoutSeconds: Double = 5) throws -> Data {
+func roundTrip(
+    method: String,
+    params: Data?,
+    timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds
+) throws -> Data {
     let maxNotReadyRetries = 10
     var attempt = 0
     while true {
@@ -258,7 +262,10 @@ func gestureTimeout(_ gestureMs: Int) -> Double {
     5 + Double(max(0, gestureMs)) / 1_000.0 + 5
 }
 
-func send(_ envelope: RPCEnvelope, timeoutSeconds: Double = 5) throws -> Data {
+func send(
+    _ envelope: RPCEnvelope,
+    timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds
+) throws -> Data {
     guard let method = envelope.method else {
         throw CLIError.transport("internal error: request envelope has no method")
     }
@@ -767,7 +774,7 @@ func eventsStream() -> Never {
                     fd: eventsFd,
                     sessionId: creds.session,
                     cap: creds.cap,
-                    timeoutSeconds: 5
+                    timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds
                 )
             } catch let CLIError.daemon(code, _) where code == notReadyCode && attempt < maxNotReadyRetries {
                 UDSClientSocket.close(eventsFd)

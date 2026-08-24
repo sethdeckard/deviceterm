@@ -698,7 +698,7 @@ func sendResolved<R: Encodable>(
     ref: String?,
     output: OutputMode,
     transport: CLITransport,
-    timeoutSeconds: Double = 5,
+    timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds,
     creds: (sessionId: String, cap: String)? = nil,
     humanFields: (ResolvedPane) -> [(String, String)],
     jsonReceipt: (ResolvedPane) -> R,

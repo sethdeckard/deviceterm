@@ -47,10 +47,13 @@ public actor AppCommandCoordinator {
     // MARK: - Type properties
 
     /// How long to wait for the GUI to reply with `app.commandResult`
-    /// before failing the command with `intent.guiUnavailable`. 5s is
-    /// generous for a GUI under load but not so long that a wedged
-    /// app strands the CLI caller indefinitely.
-    public static let defaultTimeoutMs: Int = 5_000
+    /// before failing the command with `intent.guiUnavailable`.
+    ///
+    /// Defined in `DaemonProtocol` alongside the CLI's own deadline,
+    /// because the two have to stay ordered: this one is the shorter,
+    /// which reserves time to return the coded refusal before the CLI's
+    /// transport deadline. See `AppCommandDeadline`.
+    public static let defaultTimeoutMs: Int = AppCommandDeadline.guiReplyTimeoutMs
 
     // MARK: - Instance properties
 
@@ -181,12 +184,15 @@ public actor AppCommandCoordinator {
             )
         }
         let commandId = UUID().uuidString
+        // The wire deadline and the timeout task below use the same
+        // duration; scheduling may separate their firing instants.
         let command = AppCommand(
             commandId: commandId,
             kind: kind,
             originatingSessionId: originatingSessionId,
             params: params,
-            originAutomationGrant: originAutomationGrant
+            originAutomationGrant: originAutomationGrant,
+            expiresAtMonotonicNanos: AppCommandDeadline.expiry(inMs: timeoutMs)
         )
         return await withCheckedContinuation { (cont: CheckedContinuation<CommandOutcome, Never>) in
             // Spin a timeout task BEFORE yielding to the GUI so a

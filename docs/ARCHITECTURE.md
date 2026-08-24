@@ -2236,10 +2236,19 @@ so no UDS client can subscribe. It needs no authenticated session: the
 GUI subscribes at startup before any tab exists.
 
 Each frame's method name is `app.command` and its params are one
-`AppCommand`: `{commandId, kind, originatingSessionId?, params}`, where
-`kind` is the workspace verb's wire name and `params` carries the verb's
-JSON payload as a base64 string. The GUI replies via
-`app.commandResult`.
+`AppCommand`: `{commandId, kind, originatingSessionId?,
+originAutomationGrant?, params, expiresAtMonotonicNanos?}`, where `kind`
+is the workspace verb's wire name and `params` carries the verb's JSON
+payload as a base64 string. The GUI replies via `app.commandResult`.
+
+`expiresAtMonotonicNanos` is the deadline past which the GUI declines
+the command instead of running it, read from `CLOCK_MONOTONIC_RAW` so
+both processes compare the same clock. Both hops buffer unbounded, so a
+command the daemon has abandoned can remain queued GUI-side and run
+later unless the consumer rejects it, potentially after the caller has
+already seen a timeout. The daemon can't unsend a buffered frame, so the
+consumer declines it and acks `intent.commandExpired`. Absent means no expiry, which is how a
+frame from an older daemon decodes.
 
 Single-subscriber, pinned to the subscribing connection id: the GUI
 subscribes once, a relaunching GUI re-subscribes and takes over
@@ -2258,8 +2267,10 @@ only from the current subscriber connection: a result from any other
 connection is refused with `error.scope_violation`, so a second local
 process can't forge replies. The daemon's `AppCommandCoordinator` keys
 pending continuations by `commandId` and resumes the matching awaiting
-CLI handler. A 5 s timeout surfaces a wedged or absent GUI as
-`intent.guiUnavailable`.
+CLI handler. A 4 s timeout surfaces a wedged GUI as
+`intent.guiUnavailable`, held under the CLI's own 5 s default to reserve
+time for that coded error to get back before the transport deadline
+(`AppCommandDeadline`).
 
 ### Workspace verbs
 
@@ -2968,7 +2979,8 @@ Components:
   pending continuations keyed by `commandId`. Per-verb handlers
   (`AppCommandMethods.publishVerb(kind:)`) call
   `publishAndAwait(...)` to ship a command and block until the GUI
-  replies (5s timeout → `intent.guiUnavailable`).
+  replies (4s timeout → `intent.guiUnavailable`; an absent subscriber
+  fails immediately rather than waiting).
 - **`SessionDispatchContext.originatingSessionId`**: task-local,
   bound by both dispatchers (`RPCConnection`, `XPCConnection`) around
   every handler call. The

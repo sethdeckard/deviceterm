@@ -188,9 +188,20 @@ ok window=2 mode=detach
 
 ## Failure modes worth eyeballing
 
-- **No GUI subscribed** — quit DeviceTerm and run any workspace
-  verb from a stranded tab: daemon returns
-  `intent.guiUnavailable` (timeout = `5s`).
+- **No GUI subscribed** — quitting DeviceTerm takes its tabs with it
+  (the GUI owns each tab's PTY), so run this one from a stock terminal
+  instead. Quit the app, then from the repo run
+  `./.build/debug/deviceterm-cli windows list --all`, the daemon-wide
+  verb that needs no session. It returns `intent.guiUnavailable`
+  immediately, without waiting out a timeout. Do this before the daemon
+  idle-exits.
+- **Wedged GUI** — the alert blocks the tab you'd type in, so start the
+  verb first. With the multi-pane prompt enabled, run
+  `(sleep 1; deviceterm tab rename deadline-probe) &`, immediately press
+  ⌥⌘W on a multi-pane tab, and leave the alert up past the 4 s timeout.
+  The verb reports `intent.guiUnavailable`. Cancel the alert, then
+  confirm the tab name did **not** change: the command carries a
+  deadline and the GUI declines it rather than running it late.
 - **Unresolved ref** — `deviceterm tab close --tab no-such-tab`: daemon
   returns `intent.notFound`.
 - **Ambiguous ref** — if two tabs share the same `name`, `deviceterm tab

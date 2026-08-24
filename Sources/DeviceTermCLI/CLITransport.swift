@@ -21,6 +21,6 @@ protocol CLITransport {
 extension CLITransport {
     /// Default 5-second response timeout, matching the free `send(_:)`.
     func send(_ envelope: RPCEnvelope) throws -> Data {
-        try send(envelope, timeoutSeconds: 5)
+        try send(envelope, timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds)
     }
 }
