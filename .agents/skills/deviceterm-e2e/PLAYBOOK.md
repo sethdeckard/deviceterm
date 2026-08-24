@@ -85,6 +85,31 @@ takes **window-normalized** coordinates in `0..1` (0,0 = window top-left).
 description, or identifier equals `<label>` exactly** — copy the labels in this
 playbook verbatim; a near-miss finds nothing.
 
+**deviceterm must be frontmost for a main-menu press, and `ok:true` is not proof
+one landed.** `drive click --ax` against a **main-menu item** returns
+`{"ok":true}` and does nothing at all when deviceterm is in the background.
+Measured both ways with the same command and nothing else varied: frontmost
+raised the sheet, backgrounded raised nothing and still reported success. The
+harness activates its target before driving, but that activation is too transient
+to carry a main-menu press. So assert a post-condition rather than reading the
+receipt — an `AXSheet` or alert present in a fresh `ax dump`, a changed count, a
+changed title. A silent no-op looks exactly like a clean pass, and a false pass
+is worse than a failure.
+
+**Never force that foreground state by bundle id.** Both
+`osascript -e 'tell application id "com.deviceterm" to activate'` and
+`open -b com.deviceterm` resolve through LaunchServices, which cannot tell this
+checkout from an installed `/Applications/DeviceTerm.app`. Launching the
+installed copy beside a debug build collides on the one bundle id, launchd label,
+and mach service, and wedges the daemon handshake badly enough to need a force
+quit. If deviceterm is not frontmost, bring it forward the way a user would and
+re-run the step.
+
+This was measured for `drive click --ax` against main-menu items. **Whether
+`drive key` carries the same exposure is untested** — treat it as an open
+question, not a guarantee either way. Note also that `drive key` is not a
+universal fallback: `Rename Tab…`, for one, publishes no key equivalent at all.
+
 **The harness only ever captures deviceterm's own windows, never a whole
 display.** `capture window` grabs the frontmost deviceterm content window —
 which, when an app-modal alert is up, is the alert itself. `capture status-item`
@@ -745,8 +770,13 @@ the harness runs out of process.
   the **Shell** menu, below Split Down — it creates a pane, so it sits with the
   splits rather than with the Device menu's drive-a-pane items. Open Shell, then
   `deviceterm-uitest drive click --ax "Mirror Physical Device…"`; the device
-  picker window appears. `capture window` + `ax dump` should name the connected
-  devices, and they should match the `devices list --json` roster.
+  picker window appears. **deviceterm has to be frontmost for that press to
+  land.** Opening Shell first is not what makes it work — it is how you get there
+  with the app already forward. Backgrounded, the same press returns `ok:true`
+  and does nothing, so confirm the picker in a fresh `ax dump` instead of
+  trusting the receipt (see the `drive` contract above). `capture window` +
+  `ax dump` should name the connected devices, and they should match the
+  `devices list --json` roster.
 
 ### 8. Health cross-check (cheap sanity, no sim)
 
