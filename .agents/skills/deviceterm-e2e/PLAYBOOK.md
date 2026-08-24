@@ -112,7 +112,12 @@ universal fallback: `Rename Tab…`, for one, publishes no key equivalent at all
 
 **The harness only ever captures deviceterm's own windows, never a whole
 display.** `capture window` grabs the frontmost deviceterm content window —
-which, when an app-modal alert is up, is the alert itself. `capture status-item`
+which, when an app-modal alert is up, is the alert itself, at natural size. A
+window-modal **sheet** frames differently: you get the whole window scaled
+down with the sheet composited over it, so the image's dimensions track the
+sheet while its content is the window behind it. The close prompts are sheets
+(scenario 5); the quit prompt is an app-modal alert (scenario 6).
+`capture status-item`
 grabs just the daemon's menu-bar badge window (or reports it absent). There is
 no full-screen capture, so nothing on screen outside deviceterm is ever
 photographed, and multi-monitor setups are a non-issue.
@@ -338,6 +343,13 @@ outstanding depends on the verb:
   the ack, so the GUI-side change is already made when the CLI returns. AppKit
   still has to draw it and the daemon still has to be told, so neither pixels
   nor `tabs list` is guaranteed current.
+
+**An app-modal alert stops the GUI-backed verbs you would poll.** While one
+is up, GUI-backed verbs such as `windows list --all --json` time out.
+Daemon-owned reads such as `tabs list --json` continue answering, though their
+GUI-derived state may be stale. Poll a fresh `ax dump` instead, and see
+scenario 5 for which prompts are app-modal and which are sheets that keep
+answering.
 
 **Poll for the expected delta rather than reading once**, on whichever source
 you are asserting against (`tabs list --json`, `windows list --all --json`, a
@@ -715,39 +727,77 @@ behavior; the CLI only sees the final lifecycle state.
   That `present:false` *is* the hidden-at-zero confirmation; a present badge
   returns `present:true` with the image.
 
-### 5. Close-tab modal *(needs a sim — GUI-only; only an out-of-process driver can dismiss it)*
+### 5. Close-tab prompt *(two arms; the multi-pane one needs no sim)*
 
-The disposition alert is `NSAlert.runModal`, which blocks deviceterm's own main
-loop — an in-app driver literally cannot dismiss it, which is the whole reason
-the harness runs out of process.
+One gesture raises **at most one** prompt. An owned booted sim with no stored
+disposition selects the sim prompt, which also lets the user reject the close.
+Otherwise, a multi-pane tab uses the multi-pane confirmation.
 
-- **Precondition:** a tab that booted an **approved** sim.
-- **Trigger:** prefer `deviceterm-uitest drive key opt+cmd+w` — it posts the key
-  and returns cleanly. **⌥⌘W, not ⌘W:** ⌘W closes the *focused pane*, so with
-  the sim pane focused it would detach the mirror and never raise the alert.
-  ⌥⌘W is Close Tab whatever holds focus. (Pressing the pill's `✕` via
-  `drive click --ax "deviceterm.tab.<shortId>.close"` also raises the alert, but
-  that AXPress triggers `runModal` and blocks, so the drive returns **`ok:false`
-  "pressing deviceterm.tab.<shortId>.close failed"** *even though the alert is
-  up*: the message interpolates whatever needle you passed, so it is not a fixed
-  string. The blocked-modal path reports `pressing <needle> failed`, but so does
-  every other unsuccessful AXPress, so that wording narrows the possibilities
-  without confirming anything. Confirm the alert by observing it. The other two
-  press failures mean no AXPress was attempted at all and are findings in their
-  own right: `no accessibility element titled <needle>` and `<needle> exists but
-  is not pressable`. Address the ✕ by identifier: every pill's ✕ has the title `✕`,
-  so `--ax "✕"` presses whichever one the walk reaches first, which need not be
-  the tab you meant.) The alert reads: message
-  **`Close this tab?`**, informative *"Detach keeps any simulators this tab
-  booted running. Shut Down stops them."*
-- **Observe:** the alert is a **separate `NSAlert` window** sitting above the
-  main window. `capture window` captures the **frontmost** deviceterm window, so
-  with the alert up it captures the *alert* (not the window behind it) — that's
-  the pixel view. Cross-check with `ax dump`, where the alert is a distinct
-  **empty-titled `AXWindow`** naming its three buttons:
+**Disambiguate on button titles, not on the message.** Both arms use the
+literal string `Close this tab?`. Matching on that alone cannot tell you which
+one is up, and the two have different safe answers.
+
+**`action-button-1` is positional, not semantic.** Those identifiers are
+AppKit's own `NSAlert` defaults, numbered by the order buttons were added;
+nothing in this repo sets them. So `action-button-1` is **Close** in the
+multi-pane prompt and **Detach (Keep Sims Running)** in the sim-disposition
+one. Press by title.
+
+#### 5a. Multi-pane confirm *(no sim needed)*
+
+- **Precondition:** a tab holding **more than one pane** and no owned booted
+  sim, with no window, session, or persistent multi-pane suppression active.
+  Split a terminal pane and you have one.
+- **Trigger:** `deviceterm-uitest drive key opt+cmd+w`. **⌥⌘W, not ⌘W:** ⌘W
+  closes the *focused pane*, which is a different gesture entirely.
+- **Reads:** message **`Close this tab?`**, informative *"This tab contains N
+  panes. Closing the tab closes all of them."*, buttons **`Close`** and
+  **`Cancel`**.
+- **Dismiss safely:** `drive click --ax "Cancel"`. The tab remains.
+
+#### 5b. Sim disposition *(needs a sim)*
+
+- **Precondition:** a tab that booted an **approved** sim, with no window,
+  session, or persistent sim-close disposition active.
+- **Trigger:** same ⌥⌘W. (With the sim pane focused, ⌘W would detach the
+  mirror and never raise the prompt.)
+- **Reads:** message **`Close this tab?`**, informative *"Detach keeps any
+  simulators this tab booted running. Shut Down stops them."*, buttons
   **`Detach (Keep Sims Running)`**, **`Shut Down Sims`**, **`Cancel`**.
-- **Dismiss safely:** `deviceterm-uitest drive click --ax "Cancel"`. Re-observe;
-  the alert is gone and the tab remains. **Never** press `Shut Down Sims` here.
+- **Dismiss safely:** `drive click --ax "Cancel"`. **Never** press
+  `Shut Down Sims` here.
+
+#### Observing either arm
+
+**A sheet is attached, not a sibling window.** These prompts are window-modal
+sheets, so `ax dump` shows an untitled **`AXSheet` nested inside** the main
+window and the top-level window count stays put. Do not go looking for a
+separate empty-titled `AXWindow`; that is what the app-modal alerts elsewhere
+look like (scenario 6's quit prompt among them), and it is not this.
+
+**`capture window` frames a sheet differently.** Over a sheet it returns the
+*whole window scaled down* with the sheet composited on top, so the image's
+dimensions track the sheet while its content is the entire window. Over an
+app-modal alert it returns the alert alone at natural size. Size an expected
+capture against the right case or a pass reads as a failure.
+
+**Pressing the pill's `✕` is a second trigger** via
+`drive click --ax "deviceterm.tab.<shortId>.close"`. Address it by identifier:
+every pill's ✕ has the title `✕`, so `--ax "✕"` presses whichever one the walk
+reaches first, which need not be the tab you meant.
+
+**CLI verbs keep answering while these sheets are up**, because a sheet spins
+no nested modal run loop. That is not true of the app-modal alerts that remain
+(scenario 6, orphan recovery, the helper prompts): while one of those is up,
+workspace verbs go unanswered and the polling advice under "Mutations land
+after the CLI returns" cannot work, since the verbs it tells you to poll are
+the starved ones. Poll a fresh `ax dump` instead. `deviceterm doctor` still
+answers throughout, because it is daemon-only, which also makes it a poor
+liveness proxy for the GUI.
+
+**A verb that times out against a blocked GUI does not land late.** The daemon
+stamps a deadline on each back-channel command and the GUI declines an expired
+one rather than running it after the fact, so a failed verb stays failed.
 
 ### 6. Quit prompt ⌘Q *(needs a sim — terminates the app under test)*
 

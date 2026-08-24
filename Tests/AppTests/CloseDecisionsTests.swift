@@ -24,35 +24,37 @@ import Testing
 
 @MainActor
 @Test
-func tabCloseHonorsPersistentDetachDefault() throws {
+func tabCloseHonorsPersistentDetachDefault() async throws {
     let fixture = try makeFixture(contents: "tab-close-default = detach\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false)
+            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false),
+            window: nil
         ) == .detach
     )
 }
 
 @MainActor
 @Test
-func tabCloseHonorsPersistentShutdownDefault() throws {
+func tabCloseHonorsPersistentShutdownDefault() async throws {
     let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false)
+            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false),
+            window: nil
         ) == .shutdown
     )
 }
 
 @MainActor
 @Test
-func windowCloseHonorsPersistentDetachDefault() throws {
+func windowCloseHonorsPersistentDetachDefault() async throws {
     // Window close reuses `tab-close-default` so a single "Don't ask
     // again" applies to both surfaces. Pin the no-prompt path here so
     // the shared key isn't accidentally split into a
@@ -60,24 +62,26 @@ func windowCloseHonorsPersistentDetachDefault() throws {
     let fixture = try makeFixture(contents: "tab-close-default = detach\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.windowClose(
+        await CloseDecisions.windowClose(
             config: fixture.config,
             state: fixture.state,
-            windowID: WindowID(value: 1)
+            windowID: WindowID(value: 1),
+            window: nil
         ) == .detach
     )
 }
 
 @MainActor
 @Test
-func windowCloseHonorsPersistentShutdownDefault() throws {
+func windowCloseHonorsPersistentShutdownDefault() async throws {
     let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.windowClose(
+        await CloseDecisions.windowClose(
             config: fixture.config,
             state: fixture.state,
-            windowID: WindowID(value: 1)
+            windowID: WindowID(value: 1),
+            window: nil
         ) == .shutdown
     )
 }
@@ -104,33 +108,35 @@ func quitWithSimsHonorsPersistentShutdownDefault() throws {
 
 @MainActor
 @Test
-func paneCloseHonorsPersistentDetachDefault() throws {
+func paneCloseHonorsPersistentDetachDefault() async throws {
     // Pane close reuses `tab-close-default` too: one question, one stored
     // answer across every surface that asks it. Same regression guard as
     // the window-close pair above, against a `pane-close-default` split.
     let fixture = try makeFixture(contents: "tab-close-default = detach\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.paneClose(
+        await CloseDecisions.paneClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
-            deviceName: "iPhone 17 Pro"
+            deviceName: "iPhone 17 Pro",
+            window: nil
         ) == .detach
     )
 }
 
 @MainActor
 @Test
-func paneCloseHonorsPersistentShutdownDefault() throws {
+func paneCloseHonorsPersistentShutdownDefault() async throws {
     let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.paneClose(
+        await CloseDecisions.paneClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
-            deviceName: "iPhone 17 Pro"
+            deviceName: "iPhone 17 Pro",
+            window: nil
         ) == .shutdown
     )
 }
@@ -139,7 +145,7 @@ func paneCloseHonorsPersistentShutdownDefault() throws {
 
 @MainActor
 @Test
-func perWindowOverrideBeatsPersistent() throws {
+func perWindowOverrideBeatsPersistent() async throws {
     let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
     defer { cleanup(fixture.path) }
     let windowID = WindowID(value: 7)
@@ -151,28 +157,30 @@ func perWindowOverrideBeatsPersistent() throws {
     )
     // Same window → window override wins.
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true)
+            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true),
+            window: nil
         ) == .detach
     )
     // Different window → falls through to persistent.
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(
                 windowID: WindowID(value: 8),
                 hasOtherTabsInWindow: true
-            )
+            ),
+            window: nil
         ) == .shutdown
     )
 }
 
 @MainActor
 @Test
-func paneCloseSharesTheWindowSuppressionTier() throws {
+func paneCloseSharesTheWindowSuppressionTier() async throws {
     // The in-memory tiers are shared too, not only the config file. A
     // "For this window" pick made on a tab close silences the pane prompt
     // in that window. That sharing is the point of reusing the key.
@@ -186,27 +194,29 @@ func paneCloseSharesTheWindowSuppressionTier() throws {
         config: fixture.config
     )
     #expect(
-        CloseDecisions.paneClose(
+        await CloseDecisions.paneClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true),
-            deviceName: "iPhone 17 Pro"
+            deviceName: "iPhone 17 Pro",
+            window: nil
         ) == .detach
     )
     // A pane in a different window falls through to the persistent tier.
     #expect(
-        CloseDecisions.paneClose(
+        await CloseDecisions.paneClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(windowID: WindowID(value: 5), hasOtherTabsInWindow: true),
-            deviceName: "iPhone 17 Pro"
+            deviceName: "iPhone 17 Pro",
+            window: nil
         ) == .shutdown
     )
 }
 
 @MainActor
 @Test
-func sessionOverrideBeatsPersistent() throws {
+func sessionOverrideBeatsPersistent() async throws {
     let fixture = try makeFixture(contents: "tab-close-default = shutdown\n")
     defer { cleanup(fixture.path) }
     fixture.state.recordClose(
@@ -216,17 +226,18 @@ func sessionOverrideBeatsPersistent() throws {
         config: fixture.config
     )
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: false)
+            context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: false),
+            window: nil
         ) == .detach
     )
 }
 
 @MainActor
 @Test
-func perWindowOverrideBeatsSession() throws {
+func perWindowOverrideBeatsSession() async throws {
     let fixture = try makeFixture(contents: "")
     defer { cleanup(fixture.path) }
     let windowID = WindowID(value: 3)
@@ -243,10 +254,11 @@ func perWindowOverrideBeatsSession() throws {
         config: fixture.config
     )
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true)
+            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true),
+            window: nil
         ) == .shutdown
     )
 }
@@ -385,7 +397,7 @@ func windowScopeOnQuitPromptIsNoOp() throws {
 
 @MainActor
 @Test
-func alwaysEvictsPriorPerWindowAndPerSessionCloseChoices() throws {
+func alwaysEvictsPriorPerWindowAndPerSessionCloseChoices() async throws {
     let fixture = try makeFixture(contents: "")
     defer { cleanup(fixture.path) }
     let windowID = WindowID(value: 11)
@@ -413,17 +425,18 @@ func alwaysEvictsPriorPerWindowAndPerSessionCloseChoices() throws {
     #expect(fixture.state.perWindow.isEmpty)
     #expect(fixture.state.perSession == nil)
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true)
+            context: CloseContext(windowID: windowID, hasOtherTabsInWindow: true),
+            window: nil
         ) == .shutdown
     )
 }
 
 @MainActor
 @Test
-func alwaysOnQuitPromptEvictsPriorCloseTiers() throws {
+func alwaysOnQuitPromptEvictsPriorCloseTiers() async throws {
     let fixture = try makeFixture(contents: "")
     defer { cleanup(fixture.path) }
     fixture.state.recordClose(
@@ -441,10 +454,11 @@ func alwaysOnQuitPromptEvictsPriorCloseTiers() throws {
     // The cross-written `tab-close-default` must now win the next
     // close lookup, with no stale session pick blocking it.
     #expect(
-        CloseDecisions.tabClose(
+        await CloseDecisions.tabClose(
             config: fixture.config,
             state: fixture.state,
-            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false)
+            context: CloseContext(windowID: nil, hasOtherTabsInWindow: false),
+            window: nil
         ) == .shutdown
     )
 }
@@ -458,50 +472,53 @@ func alwaysOnQuitPromptEvictsPriorCloseTiers() throws {
 
 @MainActor
 @Test
-func multiPaneTabCloseHonorsPersistentCloseValue() throws {
+func multiPaneTabCloseHonorsPersistentCloseValue() async throws {
     let fixture = try makeFixture(contents: "tab-close-multi-pane = close\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.multiPaneTabClose(
+        await CloseDecisions.multiPaneTabClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
-            paneCount: 3
+            paneCount: 3,
+            window: nil
         )
     )
 }
 
 @MainActor
 @Test
-func bulkMultiPaneTabCloseHonorsPersistentCloseValue() throws {
+func bulkMultiPaneTabCloseHonorsPersistentCloseValue() async throws {
     let fixture = try makeFixture(contents: "tab-close-multi-pane = close\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.bulkMultiPaneTabClose(
+        await CloseDecisions.bulkMultiPaneTabClose(
             config: fixture.config,
             state: fixture.state,
             context: CloseContext(windowID: WindowID(value: 1), hasOtherTabsInWindow: true),
             tabCount: 3,
-            multiPaneTabCount: 2
+            multiPaneTabCount: 2,
+            window: nil
         )
     )
 }
 
 @MainActor
 @Test
-func multiPaneWindowCloseHonorsPersistentCloseValue() throws {
+func multiPaneWindowCloseHonorsPersistentCloseValue() async throws {
     // Window close reuses the same `tab-close-multi-pane` key, mirroring
     // how `windowClose` reuses `tab-close-default`: one stored answer
     // covers every surface that asks the multi-pane question.
     let fixture = try makeFixture(contents: "tab-close-multi-pane = close\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.multiPaneWindowClose(
+        await CloseDecisions.multiPaneWindowClose(
             config: fixture.config,
             state: fixture.state,
             windowID: WindowID(value: 1),
             tabCount: 1,
-            multiPaneTabCount: 1
+            multiPaneTabCount: 1,
+            window: nil
         )
     )
 }
@@ -556,7 +573,7 @@ func paneConfirmSessionScopeSuppressesEveryWindow() throws {
 
 @MainActor
 @Test
-func paneConfirmAlwaysScopePersistsCloseValue() throws {
+func paneConfirmAlwaysScopePersistsCloseValue() async throws {
     let fixture = try makeFixture(contents: "")
     defer { cleanup(fixture.path) }
     fixture.state.recordPaneConfirmSuppression(
@@ -569,11 +586,12 @@ func paneConfirmAlwaysScopePersistsCloseValue() throws {
     )
     // A fresh state (new app launch) still short-circuits off the file.
     #expect(
-        CloseDecisions.multiPaneTabClose(
+        await CloseDecisions.multiPaneTabClose(
             config: ConfigFile(path: fixture.path),
             state: CloseSuppressionState(),
             context: CloseContext(windowID: nil, hasOtherTabsInWindow: false),
-            paneCount: 2
+            paneCount: 2,
+            window: nil
         )
     )
 }

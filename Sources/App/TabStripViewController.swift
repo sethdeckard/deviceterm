@@ -666,11 +666,17 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 // `tabClose` re-runs the lookup that just returned nil;
                 // both reads happen in this same main-actor turn, so it
                 // still misses and the prompt shows.
-                let decision = CloseDecisions.tabClose(
+                let decision = await CloseDecisions.tabClose(
                     config: config,
                     state: CloseSuppressionState.shared,
-                    context: context
+                    context: context,
+                    window: self.view.window
                 )
+                // Awaiting the sheet frees the main actor, so the tab
+                // can close while the prompt is visible. Re-read before
+                // acting on an answer about it; the pane path does the
+                // same after its own prompt.
+                guard self.tabListVM.tab(id: tabID) != nil else { return }
                 switch decision {
                 case .detach:
                     self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
@@ -683,12 +689,14 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 }
 
             case let .multiPaneConfirm(mode):
-                if CloseDecisions.multiPaneTabClose(
+                if await CloseDecisions.multiPaneTabClose(
                     config: config,
                     state: CloseSuppressionState.shared,
                     context: context,
-                    paneCount: paneCount
+                    paneCount: paneCount,
+                    window: self.view.window
                 ) {
+                    guard self.tabListVM.tab(id: tabID) != nil else { return }
                     self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
                 }
 
@@ -754,11 +762,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 multiPane: multiPaneTabCount > 0
             ) {
             case .simDisposition:
-                let decision = CloseDecisions.bulkTabClose(
+                let decision = await CloseDecisions.bulkTabClose(
                     config: config,
                     state: CloseSuppressionState.shared,
                     context: context,
-                    count: sessionIDs.count
+                    count: sessionIDs.count,
+                    window: self.view.window
                 )
                 switch decision {
                 case .detach:
@@ -772,12 +781,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 }
 
             case let .multiPaneConfirm(gateMode):
-                guard CloseDecisions.bulkMultiPaneTabClose(
+                guard await CloseDecisions.bulkMultiPaneTabClose(
                     config: config,
                     state: CloseSuppressionState.shared,
                     context: context,
                     tabCount: sessionIDs.count,
-                    multiPaneTabCount: multiPaneTabCount
+                    multiPaneTabCount: multiPaneTabCount,
+                    window: self.view.window
                 ) else { return }
                 mode = gateMode
 

@@ -68,7 +68,7 @@ struct SimPaneActionCoordinatorTests {
             simResurrect: SimResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
-            askPaneClose: { _, deviceName, alwaysAsk in
+            askPaneClose: { _, deviceName, alwaysAsk, _ in
                 asked(deviceName, alwaysAsk)
                 return answer
             }
@@ -155,7 +155,7 @@ struct SimPaneActionCoordinatorTests {
             simResurrect: SimResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
-            askPaneClose: { _, deviceName, _ in
+            askPaneClose: { _, deviceName, _, _ in
                 prompts.append(deviceName)
                 return .shutdown
             }
@@ -227,7 +227,7 @@ struct SimPaneActionCoordinatorTests {
             simResurrect: SimResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
-            askPaneClose: { _, deviceName, _ in
+            askPaneClose: { _, deviceName, _, _ in
                 prompts.append(deviceName)
                 return .shutdown
             }
@@ -294,7 +294,7 @@ struct SimPaneActionCoordinatorTests {
             simResurrect: SimResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
-            askPaneClose: { _, deviceName, _ in
+            askPaneClose: { _, deviceName, _, _ in
                 prompts.append(deviceName)
                 return .shutdown
             }

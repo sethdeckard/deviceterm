@@ -1125,10 +1125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 multiPane: multiPaneTabCount > 0
             ) {
             case .simDisposition:
-                let decision = CloseDecisions.windowClose(
+                let decision = await CloseDecisions.windowClose(
                     config: config,
                     state: CloseSuppressionState.shared,
-                    windowID: windowID
+                    windowID: windowID,
+                    window: sender
                 )
                 switch decision {
                 case .detach:
@@ -1142,12 +1143,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
 
             case let .multiPaneConfirm(gateMode):
-                guard CloseDecisions.multiPaneWindowClose(
+                guard await CloseDecisions.multiPaneWindowClose(
                     config: config,
                     state: CloseSuppressionState.shared,
                     windowID: windowID,
                     tabCount: tabCount,
-                    multiPaneTabCount: multiPaneTabCount
+                    multiPaneTabCount: multiPaneTabCount,
+                    window: sender
                 ) else { return }
                 mode = gateMode
 

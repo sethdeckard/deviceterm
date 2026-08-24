@@ -504,7 +504,10 @@ The two permissions:
 - **Accessibility**: reading DeviceTerm's AppKit accessibility tree and
   posting the GUI-only gestures (menu clicks, drag, keyboard shortcuts)
   that have no CLI equivalent. It is also the only way to dismiss an
-  app-modal `NSAlert`, which blocks DeviceTerm's own main run loop.
+  app-modal `NSAlert`, which blocks DeviceTerm's own main run loop. The
+  tab, pane, and window close prompts are window-modal sheets and don't
+  block, but plenty of alerts still do, the quit-with-sims prompt and
+  cold-start orphan recovery among them.
 
 With `CODESIGN_IDENTITY` set in `.env.release` the harness is signed with a
 stable Developer-ID identity, so TCC keys on the signature (not a
@@ -549,7 +552,7 @@ it stays out of `make verify` / `make test` and self-skips when the harness
 source is absent. It never boots or shuts down a simulator.
 
 The richer, sim-touching scenarios (pending-pane lifecycle, status-item
-count, close/quit modals, the device picker) are driven interactively by an
+count, close/quit prompts, the device picker) are driven interactively by an
 agent through the `deviceterm-e2e` skill: one neutral playbook at
 `.agents/skills/deviceterm-e2e/PLAYBOOK.md`, with Claude and Codex
 frontmatter shims under `.claude/` and `.codex/`. Those require a

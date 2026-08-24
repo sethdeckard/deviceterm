@@ -6,7 +6,10 @@
 // the CLI. This exists for what it cannot reach: menu key equivalents,
 // clicking chrome, and dismissing an app-modal `NSAlert`, which blocks
 // deviceterm's own main run loop and therefore cannot be dismissed from
-// inside deviceterm at all. Only an out-of-process driver can.
+// inside deviceterm at all. Only an out-of-process driver can. The tab,
+// pane, and window close prompts are window-modal sheets and do not
+// block; plenty of other alerts still do, the quit-with-sims prompt and
+// cold-start orphan recovery among them.
 //
 // Safety: events are delivered with `postToPid`, never to the global HID
 // tap. A `cmd+q` posted globally would quit whatever happens to be

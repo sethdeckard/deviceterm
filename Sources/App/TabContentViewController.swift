@@ -295,6 +295,10 @@ final class TabContentViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // The coordinator reads `hostView?.window` when it prompts, so
+        // it needs the view rather than the window: this runs before the
+        // view is in one.
+        simPaneActions.hostView = view
         addChild(splitVC)
         splitVC.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(splitVC.view)

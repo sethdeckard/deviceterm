@@ -62,12 +62,14 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         context: CloseContext,
         deviceName: String,
+        window: NSWindow?,
         alwaysAsk: Bool = false
-    ) -> TabCloseDecision {
-        askBootedSimDisposition(
+    ) async -> TabCloseDecision {
+        await askBootedSimDisposition(
             config: config,
             state: state,
             context: context,
+            window: window,
             messageText: "Close this pane?",
             informativeText: alwaysAsk
                 ? "DeviceTerm could not reach the daemon to check whether "
@@ -82,12 +84,14 @@ enum CloseDecisions {
     static func tabClose(
         config: ConfigFile,
         state: CloseSuppressionState,
-        context: CloseContext
-    ) -> TabCloseDecision {
-        askBootedSimDisposition(
+        context: CloseContext,
+        window: NSWindow?
+    ) async -> TabCloseDecision {
+        await askBootedSimDisposition(
             config: config,
             state: state,
             context: context,
+            window: window,
             messageText: "Close this tab?",
             informativeText:
                 "Detach keeps any simulators this tab booted running. "
@@ -109,13 +113,15 @@ enum CloseDecisions {
         config: ConfigFile,
         state: CloseSuppressionState,
         context: CloseContext,
-        count: Int
-    ) -> TabCloseDecision {
+        count: Int,
+        window: NSWindow?
+    ) async -> TabCloseDecision {
         let noun = count == 1 ? "tab" : "tabs"
-        return askBootedSimDisposition(
+        return await askBootedSimDisposition(
             config: config,
             state: state,
             context: context,
+            window: window,
             messageText: "Close \(count) \(noun)?",
             informativeText:
                 "Detach keeps any simulators these tabs booted running. "
@@ -126,12 +132,14 @@ enum CloseDecisions {
     static func windowClose(
         config: ConfigFile,
         state: CloseSuppressionState,
-        windowID: WindowID
-    ) -> TabCloseDecision {
-        askBootedSimDisposition(
+        windowID: WindowID,
+        window: NSWindow?
+    ) async -> TabCloseDecision {
+        await askBootedSimDisposition(
             config: config,
             state: state,
             context: CloseContext(windowID: windowID, hasOtherTabsInWindow: false),
+            window: window,
             messageText: "Close this window?",
             informativeText:
                 "Detach keeps any simulators booted from this "
@@ -173,12 +181,14 @@ enum CloseDecisions {
         config: ConfigFile,
         state: CloseSuppressionState,
         context: CloseContext,
-        paneCount: Int
-    ) -> Bool {
-        askMultiPaneConfirmation(
+        paneCount: Int,
+        window: NSWindow?
+    ) async -> Bool {
+        await askMultiPaneConfirmation(
             config: config,
             state: state,
             context: context,
+            window: window,
             messageText: "Close this tab?",
             informativeText:
                 "This tab contains \(paneCount) panes. "
@@ -194,8 +204,9 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         context: CloseContext,
         tabCount: Int,
-        multiPaneTabCount: Int
-    ) -> Bool {
+        multiPaneTabCount: Int,
+        window: NSWindow?
+    ) async -> Bool {
         let noun = tabCount == 1 ? "tab" : "tabs"
         let detail: String
         if tabCount == 1 {
@@ -208,10 +219,11 @@ enum CloseDecisions {
             detail = "\(multiPaneTabCount) of these tabs contain multiple panes. "
                 + "Closing them closes every pane."
         }
-        return askMultiPaneConfirmation(
+        return await askMultiPaneConfirmation(
             config: config,
             state: state,
             context: context,
+            window: window,
             messageText: "Close \(tabCount) \(noun)?",
             informativeText: detail
         )
@@ -226,8 +238,9 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         windowID: WindowID,
         tabCount: Int,
-        multiPaneTabCount: Int
-    ) -> Bool {
+        multiPaneTabCount: Int,
+        window: NSWindow?
+    ) async -> Bool {
         let detail: String
         if tabCount == 1 {
             detail = "Its tab contains multiple panes. "
@@ -239,10 +252,11 @@ enum CloseDecisions {
             detail = "\(multiPaneTabCount) of its tabs contain multiple panes. "
                 + "Closing the window closes every pane."
         }
-        return askMultiPaneConfirmation(
+        return await askMultiPaneConfirmation(
             config: config,
             state: state,
             context: CloseContext(windowID: windowID, hasOtherTabsInWindow: false),
+            window: window,
             messageText: "Close this window?",
             informativeText: detail
         )
@@ -255,12 +269,13 @@ enum CloseDecisions {
         config: ConfigFile,
         state: CloseSuppressionState,
         context: CloseContext,
+        window: NSWindow?,
         messageText: String,
         informativeText: String,
         detachTitle: String = "Detach (Keep Sims Running)",
         shutdownTitle: String = "Shut Down Sims",
         alwaysAsk: Bool = false
-    ) -> TabCloseDecision {
+    ) async -> TabCloseDecision {
         if !alwaysAsk,
             let pinned = state.lookupClose(windowID: context.windowID, config: config) {
             return pinned
@@ -278,7 +293,7 @@ enum CloseDecisions {
         let accessory = SuppressionAccessory(scopes: scopes)
         alert.accessoryView = accessory.view
 
-        let response = alert.runModal()
+        let response = await runAlert(alert, in: window)
         let decision: TabCloseDecision
         switch response {
         case .alertFirstButtonReturn:
@@ -310,9 +325,10 @@ enum CloseDecisions {
         config: ConfigFile,
         state: CloseSuppressionState,
         context: CloseContext,
+        window: NSWindow?,
         messageText: String,
         informativeText: String
-    ) -> Bool {
+    ) async -> Bool {
         if state.lookupPaneConfirmSuppressed(windowID: context.windowID, config: config) {
             return true
         }
@@ -328,7 +344,7 @@ enum CloseDecisions {
         let accessory = SuppressionAccessory(scopes: scopes)
         alert.accessoryView = accessory.view
 
-        let proceed = alert.runModal() == .alertFirstButtonReturn
+        let proceed = await runAlert(alert, in: window) == .alertFirstButtonReturn
         if proceed,
             accessory.suppressionEnabled,
             let scope = accessory.selectedScope {
@@ -339,6 +355,26 @@ enum CloseDecisions {
             )
         }
         return proceed
+    }
+
+    /// Run `alert` as a window-modal sheet when `window` exists;
+    /// otherwise use the app-modal `runModal` fallback.
+    ///
+    /// The sheet is worth the async signature because `runModal` spins a
+    /// nested modal run loop, and while it is up the MainActor stops
+    /// servicing the `app.commands` drain, so CLI workspace verbs go
+    /// unanswered until someone dismisses the prompt. A sheet spins no
+    /// such loop. Matches `GhosttyTerminalSurface.presentConfirmSheet`.
+    private static func runAlert(
+        _ alert: NSAlert,
+        in window: NSWindow?
+    ) async -> NSApplication.ModalResponse {
+        guard let window else { return alert.runModal() }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response)
+            }
+        }
     }
 }
 

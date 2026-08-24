@@ -19,6 +19,12 @@ import Foundation
 
 @MainActor
 final class SimPaneActionCoordinator {
+    /// The close-prompt seam: context, device name, force-ask, and the
+    /// window to anchor the sheet to. Injected so tests can answer it
+    /// without a UI.
+    typealias PaneClosePrompt =
+        @MainActor (CloseContext, String, Bool, NSWindow?) async -> TabCloseDecision
+
     private let tabID: TabID
     private let router: Router
     private let daemonClient: any DeviceControlling
@@ -50,7 +56,13 @@ final class SimPaneActionCoordinator {
     /// decision without a modal, the same seam the Router uses for
     /// `detectWorktreeName`. Production reads the config fresh on each ask
     /// so an edit made while the app runs takes effect.
-    private let askPaneClose: @MainActor (CloseContext, String, Bool) -> TabCloseDecision
+    private let askPaneClose: PaneClosePrompt
+
+    /// View the close prompt anchors its sheet to, set by the owning
+    /// `TabContentViewController` once its view exists. Read at prompt
+    /// time rather than captured, so it follows the pane across a
+    /// cross-window move; `nil` falls back to an app-modal alert.
+    weak var hostView: NSView?
     /// Active simctl recordVideo destinations, keyed by sim UDID. Populated
     /// by `onRecordStart`; consumed (and removed) by `onRecordStop` so the
     /// stop closure can reveal the finalized file in Finder, and by
@@ -73,12 +85,13 @@ final class SimPaneActionCoordinator {
         simResurrect: SimResurrect,
         tabListVM: TabListViewModel,
         windowID: WindowID,
-        askPaneClose: @escaping @MainActor (CloseContext, String, Bool) -> TabCloseDecision = {
-            CloseDecisions.paneClose(
+        askPaneClose: @escaping PaneClosePrompt = {
+            await CloseDecisions.paneClose(
                 config: ConfigFile(),
                 state: .shared,
                 context: $0,
                 deviceName: $1,
+                window: $3,
                 alwaysAsk: $2
             )
         }
@@ -222,7 +235,12 @@ final class SimPaneActionCoordinator {
             // The tab outlives a pane close, so "For this window" is always
             // an available scope here.
             let context = CloseContext(windowID: windowID, hasOtherTabsInWindow: true)
-            switch askPaneClose(context, displayName, lookup == .unknown) {
+            switch await askPaneClose(
+                context,
+                displayName,
+                lookup == .unknown,
+                hostView?.window
+            ) {
             case .detach:
                 break
 
