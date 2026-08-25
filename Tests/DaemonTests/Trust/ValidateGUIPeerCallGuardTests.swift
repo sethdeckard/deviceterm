@@ -5,7 +5,7 @@ import Testing
 
 // Source-level guard: `PeerIdentity.validateGUIPeer` must be called
 // from exactly ONE place in the whole source tree:
-// `defaultPeerValidator` in `Sources/Daemon/PeerValidator.swift`.
+// `defaultPeerValidator` in `Sources/Daemon/Trust/PeerValidator.swift`.
 // Every other consumer of "is this the validated GUI" reads the
 // resolved verdict: the stamped `DispatchPeerContext.validatedGUIPeer`
 // bool, or the value the dispatcher hands the scope check. A stable
@@ -23,7 +23,7 @@ import Testing
 // comment or string literal (conservative by design) and won't flag the
 // method's own declaration.
 
-private let canonicalRelPath = "Sources/Daemon/PeerValidator.swift"
+private let canonicalRelPath = "Sources/Daemon/Trust/PeerValidator.swift"
 
 @Test
 func validateGUIPeerHasExactlyOneCanonicalCallSite() throws {
@@ -83,9 +83,10 @@ private func repoRelativePath(_ url: URL, root: URL) -> String {
 }
 
 /// The repo root, derived from this test file's path
-/// (`<root>/Tests/DaemonTests/ThisFile.swift`).
+/// (`<root>/Tests/DaemonTests/Trust/ThisFile.swift`).
 private func repoRoot() -> URL {
     URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // Trust
         .deletingLastPathComponent()  // DaemonTests
         .deletingLastPathComponent()  // Tests
         .deletingLastPathComponent()  // repo root

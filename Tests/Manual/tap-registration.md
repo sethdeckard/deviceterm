@@ -10,9 +10,7 @@ control stays silent, which no automated check in this repo can tell apart from
 a working tap. A `UISwitch` is the case to watch: dragging its thumb works
 either way, so the pane keeps feeling half functional.
 
-Run before any release that touches `Sources/Daemon/SimInputSynthesis.swift`,
-`Sources/Daemon/GesturePacing.swift`,
-`Sources/Daemon/SystemGesturePacer.swift`,
+Run before any release that touches `Sources/Daemon/Input/`,
 `Sources/Daemon/Pane/PaneCoordinator.swift`,
 `Sources/App/SimulatorContentView.swift`, or
 `Sources/CoreSimulatorBridge/SimHIDClient.m`.

@@ -127,7 +127,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     }
 
     /// Mirror of the daemon's `RPCMethodError.unauthorizedCode`
-    /// (`Sources/Daemon/RPCMethodError.swift`): the wire code for
+    /// (`Sources/Daemon/RPC/RPCMethodError.swift`): the wire code for
     /// "session-scoped method on an unauthenticated connection." The
     /// daemon module isn't linkable from the GUI, so the value is
     /// mirrored here with this pointer to its source of truth.

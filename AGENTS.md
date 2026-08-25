@@ -491,7 +491,7 @@ GUI path) validates the peer's audit token against the daemon's own signature:
 the team identifier plus a host bundle id derived from the daemon's own bundle
 id, so forks rebrand by swapping the bundle id with nothing hardcoded. Full
 explanation and code: `docs/ARCHITECTURE.md` and
-`Sources/Daemon/PeerIdentity.swift`.
+`Sources/Daemon/Trust/PeerIdentity.swift`.
 
 **A capability is one authentication factor, not proof of provenance.** A
 session's cap is inherited by that terminal pane's shell and is readable by any
@@ -522,7 +522,7 @@ its next request: pane JSON/surface streams and its `daemon.events` stream stop
 (a `.guiPeer` subscription is spared). Losing the terminal anchor on a
 still-live session is the **soft, retryable pause** instead: it blocks new
 calls while an already-open stream keeps flowing, and is not a hard revocation.
-See `Sources/Daemon/ProvenanceMatcher.swift`.
+See `Sources/TerminalProvenance/ProvenanceMatcher.swift`.
 
 ## `DEVICETERM_SESSION_CAP`
 

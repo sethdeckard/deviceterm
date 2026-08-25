@@ -21,7 +21,7 @@ import Foundation
 @MainActor
 final class AppCommandSubscriber {
     /// Mirror of the daemon's `RPCMethodError.scopeViolationCode`
-    /// (`Sources/Daemon/RPCMethodError.swift`). The daemon module isn't
+    /// (`Sources/Daemon/RPC/RPCMethodError.swift`). The daemon module isn't
     /// linkable from the GUI, so the wire code is mirrored here. It is a
     /// definite/terminal signature rejection on BOTH transports: the `--smoke`
     /// UDS fallback structurally can't carry the `.validatedGUI` back-channel

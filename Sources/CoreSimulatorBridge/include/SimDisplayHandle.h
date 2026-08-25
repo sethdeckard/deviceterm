@@ -7,10 +7,10 @@
 // The caller is responsible for retain/use-count pairing for the lifetime
 // of any reference it keeps; the bridge holds the source surface only long
 // enough to invoke the callback. The daemon's `RetainedSurface` wrapper
-// (`Sources/Daemon/RetainedSurface.swift`) is the canonical owner: it pairs
-// `IOSurfaceIncrementUseCount`/`CFRetain` at construction with the matching
-// decrement/release in `deinit`, then crosses actors + XPC marshalling
-// boundaries safely.
+// (`Sources/Daemon/Surface/RetainedSurface.swift`) is the canonical owner: it
+// pairs `IOSurfaceIncrementUseCount`/`CFRetain` at construction with the
+// matching decrement/release in `deinit`, then crosses actors + XPC
+// marshalling boundaries safely.
 //
 // On the multi-renderable picker:
 // CoreSimulator exposes multiple proxies that conform to
