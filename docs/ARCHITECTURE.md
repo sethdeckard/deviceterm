@@ -695,13 +695,13 @@ live create's assertion outranks a restore baseline at that epoch. It clears on
 the next connection epoch, and `DaemonClient` logs it rather than reporting a
 cleanup that did not happen.
 
-**Method reference.** The method names below are the single source of truth
-`RPCMethod` enum (`Sources/DaemonProtocol/RPCMethod.swift`): the daemon
-registry is keyed by its `rawValue`s and clients build requests from its
-cases, never raw method-name literals. Two drift guards hold this section to
-the code: a `DaemonTests` guard asserts the registry's keys exactly equal
-`RPCMethod`'s cases, and a `CLITests` guard asserts every case has an entry
-heading below. A new method lands with a new entry.
+**Method reference.** The method names below come from the single source of
+truth, the `RPCMethod` enum (`Sources/DaemonProtocol/RPC/RPCMethod.swift`):
+the daemon registry is keyed by its `rawValue`s and clients build requests
+from its cases, never raw method-name literals. Two drift guards hold this
+section to the code: a `DaemonTests` guard asserts the registry's keys
+exactly equal `RPCMethod`'s cases, and a `CLITests` guard asserts every case
+has an entry heading below. A new method lands with a new entry.
 
 Each entry lists the wire shape and the scope the dispatcher enforces:
 

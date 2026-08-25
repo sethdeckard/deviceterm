@@ -171,10 +171,10 @@ else
     echo "make-app-bundle: warning: Sparkle.framework not found at $SPARKLE_FW" >&2
 fi
 
-# LaunchAgent plist — the launchd registration source that
-# `SMAppService.agent(plistName:)` reads. Must match the constant
-# in `Sources/DaemonProtocol/MachServiceName.swift` exactly; the
-# LaunchAgentPlistTests guard catches drift.
+# LaunchAgent plist. `SMAppService.agent(plistName:)` reads this as the
+# launchd registration source. Must match the constant in
+# `Sources/DaemonProtocol/Environment/MachServiceName.swift` exactly;
+# the LaunchAgentPlistTests guard catches drift.
 cp "$SRC_LAUNCH_AGENT" "$APP/Contents/Library/LaunchAgents/com.deviceterm.daemon.plist"
 
 # Embedded daemon helper bundle (LSUIElement, no Dock icon). The version

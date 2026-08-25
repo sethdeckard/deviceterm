@@ -118,7 +118,7 @@ reviewers can decide whether the trade-off is worth it.
   and fakes by design.
 - Finite wire values are shared `DaemonProtocol` enums, defined once, never
   re-typed as a raw string literal at a call site. The canonical RPC method
-  set is `RPCMethod` (`Sources/DaemonProtocol/RPCMethod.swift`); a
+  set is `RPCMethod` (`Sources/DaemonProtocol/RPC/RPCMethod.swift`); a
   `DaemonTests` drift guard asserts the daemon registry's keys equal its
   cases.
 - **GUI type naming**:

@@ -38,7 +38,7 @@ elif [ "$n1" -eq "$c1" ] && [ "$n2" -eq "$c2" ] && [ "$n3" -gt "$c3" ]; then new
 fi
 [ "$newer" -eq 1 ] || die "new version $NEW is not greater than current $CURRENT"
 
-TRUTH="$ROOT/Sources/DaemonProtocol/DeviceTermVersion.swift"
+TRUTH="$ROOT/Sources/DaemonProtocol/Environment/DeviceTermVersion.swift"
 README="$ROOT/README.md"
 
 # Prepare and validate both rewrites before replacing either file, so
@@ -69,6 +69,6 @@ cat "$README_TMP" > "$README"
 cat "$TRUTH_TMP" > "$TRUTH"
 
 echo "bump-version: $CURRENT → $NEW"
-echo "  Sources/DaemonProtocol/DeviceTermVersion.swift"
+echo "  Sources/DaemonProtocol/Environment/DeviceTermVersion.swift"
 echo "  README.md"
 echo "bump-version: run 'make verify' before committing"

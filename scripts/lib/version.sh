@@ -5,9 +5,9 @@
 # cannot drift between them.
 #
 # The version's source of truth is `DeviceTermVersion.current` in
-# Sources/DaemonProtocol/DeviceTermVersion.swift; everything else (the
-# bundled Info.plists, DMG name, git tag, cask) derives from it at
-# build/publish time.
+# Sources/DaemonProtocol/Environment/DeviceTermVersion.swift; everything
+# else (the bundled Info.plists, DMG name, git tag, cask) derives from it
+# at build/publish time.
 #
 # Sourced by absolute path because a sourced POSIX script cannot learn
 # its own location, so callers pass the repo root:
@@ -24,7 +24,7 @@
 #   line cannot be parsed, writes an error to stderr and returns
 #   nonzero. Never falls back to a placeholder.
 dt_release_version() {
-    dt_ver_file="$1/Sources/DaemonProtocol/DeviceTermVersion.swift"
+    dt_ver_file="$1/Sources/DaemonProtocol/Environment/DeviceTermVersion.swift"
     if [ ! -f "$dt_ver_file" ]; then
         echo "version.sh: release-version source not found: $dt_ver_file" >&2
         return 1
