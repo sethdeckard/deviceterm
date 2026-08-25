@@ -411,6 +411,13 @@ clicking a Device menu item can still target the device pane in that tab.
 Use the **View** menu to choose Physical Size, Point Accurate, Pixel Accurate,
 or Fit Screen. The shortcuts are ⌃⌘1 through ⌃⌘4.
 
+A view mode sizes the pane when you pick it. Rotating the device afterward
+doesn't resize the pane, so it keeps its width and so do the panes beside it.
+
+The picture re-fits inside the pane it has, which leaves a phone turned to
+landscape as a wide strip with empty space above and below. Pick a mode again
+to size the pane to the shape the device is showing now.
+
 ## Drive a Device From the CLI
 
 The `deviceterm` CLI drives the device pane from the same shell. This is how
@@ -492,9 +499,10 @@ target directly and doesn't use the base at all.
 
 A simulator pane's picture is a separate matter, and follows the simulator's
 display rather than the command. Rotate a sim from outside DeviceTerm and the
-pane turns with it, upright and correctly shaped. An app that locks its own
-orientation keeps the picture where it is, because that is what the device is
-still showing, even though DeviceTerm sent the rotation command.
+picture turns with it, upright and in the right proportions inside the pane it
+already had. An app that locks its own orientation keeps the picture where it
+is, because that is what the device is still showing, even though DeviceTerm
+sent the rotation command.
 
 A physical-device pane doesn't follow its display. Rotate the hardware by hand
 and the mirror shows the app's new landscape layout lying on its side in a

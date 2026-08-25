@@ -114,9 +114,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// families default to Fit Screen so a phone/pad/tv fills any
     /// reasonable pane bounds.
     private var lastAppliedPreset: SimSizePreset = .fitScreen
-    /// The orientation the last `render()` sized the pane for, so a display
-    /// that turned re-applies the preset once rather than on every pass.
-    private var lastRenderedOrientation: Orientation?
     private let overlay = NSTextField(labelWithString: "")
     /// Semi-transparent scrim behind the overlay text/buttons so the
     /// shutdown message stays readable over the frozen last frame.
@@ -481,9 +478,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // so they can't settle the fit.
         guard view.window != nil else { return }
         applyLaunchRibbonFit(paneWidth: view.bounds.width)
-        // A rotation that landed while this tab was inactive couldn't size
-        // anything then. This is the first pass that can.
-        applyPendingOrientationResize()
     }
 
     /// Open the ribbon when the pane is wide enough to show it beside
@@ -630,37 +624,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         applySizePreset(lastAppliedPreset)
     }
 
-    /// Re-fit the pane when its display has turned since it was last sized.
-    ///
-    /// The shader, bezel, and hit-test updates in `render()` don't resize
-    /// anything: divider sizing moves only when a preset is applied. So
-    /// re-apply the preset already in effect, which now measures the
-    /// displayed extent, giving a landscape display a landscape-shaped pane
-    /// without changing the preset the user picked.
-    ///
-    /// The mismatch stays pending until it can actually be applied. A
-    /// rotation that arrives while the tab is inactive has no window and no
-    /// bounds anyone will see; recording it as handled there would leave the
-    /// pane at its old aspect permanently, because re-selecting a tab
-    /// reattaches the existing view without re-arming `pendingAutoFit`.
-    /// `viewDidLayout` is the retry, since it fires when the view remounts.
-    private func applyPendingOrientationResize() {
-        let orientation = viewModel.currentOrientation
-        guard let last = lastRenderedOrientation else {
-            // First pass adopts the orientation without resizing: the
-            // initial fit belongs to `pendingAutoFit`, and forcing a preset
-            // here would undo a divider the user had already placed.
-            lastRenderedOrientation = orientation
-            return
-        }
-        guard orientation != last,
-            (chromeViewModel.devicePixelWidth ?? 0) > 0,
-            (chromeViewModel.devicePixelHeight ?? 0) > 0,
-            view.window != nil else { return }
-        lastRenderedOrientation = orientation
-        applySizePreset(lastAppliedPreset)
-    }
-
     // MARK: - SimulatorInputDelegate → VM intents
 
     func simulatorPaneDidTap(at point: CGPoint) {
@@ -753,7 +716,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
                 orientation: viewModel.currentOrientation
             )
         }
-        applyPendingOrientationResize()
         // Mirror VM state + record status into the chrome's view
         // model so the SwiftUI badge + record button reflect them.
         // Observation will re-render the SwiftUI body when these
