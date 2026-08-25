@@ -14,6 +14,49 @@ enum UpdateSimulator {
         ProcessInfo.processInfo.environment["DEVICETERM_UPDATE_SIMULATOR"] == "1"
     }
 
+    /// Notes shaped like a real release-notes file: a stylesheet the
+    /// parser has to drop, both heading levels, inline markup, and enough
+    /// bullets to scroll. A one-liner would exercise none of the popover's
+    /// layout.
+    static let sampleNotes = """
+        <style>
+          body { font: -apple-system-body; }
+          h3 { margin-top: 1.2em; }
+        </style>
+
+        <h2>DeviceTerm 0.2.0</h2>
+
+        <p>
+          Sample notes. The debug pill uses them to exercise the popover's
+          layout without a live appcast, so they describe nothing that
+          shipped.
+        </p>
+
+        <h3>Panes And Devices</h3>
+
+        <ul>
+          <li>
+            <b>Simulator panes.</b> Booting a simulator from a tab attaches a
+            live pane to that tab.
+          </li>
+          <li>
+            <code>devices list</code> reports owned booted simulators and
+            connected physical devices.
+          </li>
+          <li>Rotation and hardware buttons are driven from the CLI.</li>
+        </ul>
+
+        <h3>Layout Coverage</h3>
+
+        <ul>
+          <li>A short item, for the spacing between adjacent bullets.</li>
+          <li>
+            A deliberately long one, so the popover has to wrap it and the
+            wrapped lines can be checked against the hanging indent.
+          </li>
+        </ul>
+        """
+
     /// One representative instance of each pill state, in display order.
     /// Closures are no-ops; this is for driving the UI, not real updates.
     static func sampleStates() -> [UpdateViewModel.State] {
@@ -21,8 +64,7 @@ enum UpdateSimulator {
             .checking(cancel: {}),
             .updateAvailable(
                 version: "0.2.0",
-                notes: "<h3>What's new</h3><ul><li>Faster sim boot.</li>"
-                    + "<li>Fixed a rotation glitch.</li></ul>",
+                notes: sampleNotes,
                 install: {},
                 dismiss: {}
             ),

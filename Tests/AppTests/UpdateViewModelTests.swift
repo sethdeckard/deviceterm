@@ -74,17 +74,6 @@ struct UpdateViewModelTests {
     }
 
     @Test
-    func renderNotesHandlesHTMLEmptyAndNil() {
-        // HTML renders to non-empty text.
-        let rendered = UpdatePopoverView.renderNotes("<h3>New</h3><p>Faster.</p>")
-        let text = rendered.map { String($0.characters) }
-        #expect(text?.contains("Faster") == true)
-        // Empty / whitespace / nil → nil so the view shows a placeholder.
-        #expect(UpdatePopoverView.renderNotes(nil) == nil)
-        #expect(UpdatePopoverView.renderNotes("   ") == nil)
-    }
-
-    @Test
     func simulatorCoversEveryVisibleState() {
         // Guards that the debug simulator lists one of each pill state.
         let titles = Set(UpdateSimulator.sampleStates().map(\.title))

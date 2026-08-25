@@ -1,0 +1,136 @@
+<style>
+  body {
+    font: -apple-system-body;
+    color: -apple-system-label;
+  }
+
+  h2 {
+    font: -apple-system-title2;
+    font-weight: 700;
+    margin-bottom: 0.6em;
+  }
+
+  h3 {
+    font: -apple-system-headline;
+    margin-top: 1.2em;
+    margin-bottom: 0.35em;
+  }
+
+  ul {
+    padding-left: 1.4em;
+  }
+
+  li {
+    margin: 0.35em 0;
+  }
+
+  code {
+    font-family: ui-monospace, monospace;
+    font-size: 0.92em;
+  }
+</style>
+
+<h2>DeviceTerm 0.4.0</h2>
+
+<p>
+  DeviceTerm 0.4.0 makes automation explicit. Ordinary tabs control their own
+  workspace. An Automation Tab holds the live grant needed to create or
+  rearrange tabs and windows, or reach another unprotected tab.
+</p>
+
+<h3>Automation And Protection</h3>
+
+<ul>
+  <li>
+    <b>Open Automation Tab</b> replaces <b>Open Orchestrator Tab</b>. The GUI
+    remains the only place that can grant this authority.
+  </li>
+  <li>
+    Protected tabs stay hidden and unreachable, including from an Automation
+    Tab. <b>Protect Tab</b> and <b>Unprotect Tab</b> replace the previous
+    private/public terminology.
+  </li>
+  <li>
+    Protected tabs now carry a lock in the tab strip. It appears as soon as
+    protection takes effect and remains while an unprotect is still
+    unconfirmed. A protected Automation Tab shows both the wand and the lock.
+  </li>
+  <li>
+    <code>window focus</code> now activates DeviceTerm and raises the requested
+    window.
+  </li>
+</ul>
+
+<h3>Tabs And Device Panes</h3>
+
+<ul>
+  <li>
+    Terminal splits in the same tab now share authority over that tab's device
+    panes.
+  </li>
+  <li>
+    Closing one terminal hands its panes and boot claims to a surviving split
+    instead of orphaning them.
+  </li>
+  <li>
+    Simulator ownership now survives delayed boot events, lost replies, and
+    helper replacement.
+  </li>
+  <li>
+    The title-bar folder control now follows the selected tab's primary
+    terminal.
+  </li>
+</ul>
+
+<h3>Reliability</h3>
+
+<ul>
+  <li>
+    Device-pane rendering no longer shares the GUI control path. Active panes
+    should not delay commands or trigger false helper-restart prompts.
+  </li>
+  <li>
+    A wedged CoreSimulator enumeration no longer queues every later inventory
+    request behind it.
+  </li>
+  <li>
+    Commands that report a timeout are discarded before dispatch instead of
+    taking effect later.
+  </li>
+  <li>
+    Registration repair now reuses its existing repair lock, and retired panes
+    can no longer publish late surfaces.
+  </li>
+</ul>
+
+<h3>Updating From 0.3.0</h3>
+
+<p>
+  The helper's internal RPC version changed. DeviceTerm attempts to replace the
+  older helper during startup. If the app and CLI report different versions,
+  quit DeviceTerm completely and reopen it.
+</p>
+
+<ul>
+  <li>
+    <code>tab set-private</code> is now <code>tab set-protected</code>. Its JSON
+    receipt field is now <code>isProtected</code>.
+  </li>
+  <li>
+    The <code>orchestrator</code> role and grant vocabulary are now
+    <code>automation</code>.
+  </li>
+  <li>
+    Scripts that create or rearrange workspace surfaces must run from an
+    Automation Tab opened through the GUI.
+  </li>
+</ul>
+
+<h3>Known Limits</h3>
+
+<ul>
+  <li>
+    A device command issued immediately after creating a terminal split can be
+    briefly refused while the GUI registers the split. Retry the command.
+  </li>
+</ul>

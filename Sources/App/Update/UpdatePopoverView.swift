@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // UpdatePopoverView: the expanded form of the update pill, showing the new
-// version, the release notes (the appcast's HTML description, rendered to
-// an AttributedString), and Install / Later actions. Shown in a popover
-// anchored to the pill when the user clicks its notes disclosure.
+// version, the release notes (the appcast's HTML description, parsed into
+// blocks and laid out natively), and Install / Later actions. Shown in a
+// popover anchored to the pill when the user clicks its notes disclosure.
+//
+// The app owns the notes' typography: blocks carry no color of their own,
+// so both appearances follow from the semantic styles here.
 
-import AppKit
 import SwiftUI
 
 struct UpdatePopoverView: View {
@@ -25,7 +27,8 @@ struct UpdatePopoverView: View {
                 notesBody
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 240)
+            .frame(maxHeight: 340)
+            .textSelection(.enabled)
 
             HStack {
                 Button("Later", action: later)
@@ -36,41 +39,51 @@ struct UpdatePopoverView: View {
             }
         }
         .padding(16)
-        .frame(width: 380)
+        .frame(width: 420)
     }
 
     @ViewBuilder private var notesBody: some View {
-        if let attributed = Self.renderNotes(notes) {
-            Text(attributed)
-                .font(.callout)
-                .textSelection(.enabled)
-        } else {
+        let blocks = ReleaseNotesDocument.parse(notes ?? "")
+        if blocks.isEmpty {
             Text("No release notes for this version.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    blockView(block)
+                }
+            }
         }
     }
 
-    /// Render the appcast's HTML release notes into an AttributedString,
-    /// honoring the current appearance. Returns `nil` for empty/unparseable
-    /// notes so the caller shows a placeholder.
-    static func renderNotes(_ html: String?) -> AttributedString? {
-        guard let html, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            let data = html.data(using: .utf8) else {
-            return nil
+    @ViewBuilder
+    private func blockView(_ block: ReleaseNotesBlock) -> some View {
+        switch block {
+        case let .title(text):
+            Text(text).font(.headline)
+
+        case let .heading(text):
+            Text(text)
+                .font(.callout.weight(.semibold))
+                .padding(.top, 6)
+
+        case let .paragraph(text):
+            Text(text).font(.callout)
+
+        case let .bullet(text):
+            // Keeping the glyph and the text in separate HStack children is
+            // what aligns wrapped lines under the text rather than under the
+            // glyph; firstTextBaseline aligns their first lines.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("•")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text(text)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, 4)
         }
-        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-            .documentType: NSAttributedString.DocumentType.html,
-            .characterEncoding: String.Encoding.utf8.rawValue
-        ]
-        guard let parsed = try? NSAttributedString(
-            data: data,
-            options: options,
-            documentAttributes: nil
-        ) else {
-            // Not HTML (or failed to parse), so fall back to the raw text.
-            return AttributedString(html)
-        }
-        return AttributedString(parsed)
     }
 }

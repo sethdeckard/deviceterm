@@ -120,10 +120,23 @@ xattr <file>                                                        # expect emp
 
 - [ ] Write the in-app update notes at
   `release/release-notes-<version>.html`. Use an HTML fragment: no DOCTYPE,
-  `<html>`, `<head>`, or `<body>`. A `<style>` element is fine.
-  `make publish` embeds the file in the Sparkle appcast, and refuses to
-  create the release when the notes do not reach it. If the file is absent,
-  the update popover reports that no release notes are available.
+  `<html>`, `<head>`, or `<body>`. `make publish` embeds the file in the
+  Sparkle appcast, and refuses to create the release when the notes do not
+  reach it. If the file is absent, the update popover reports that no
+  release notes are available.
+
+  The popover supplies the typography, so write semantic markup and no
+  stylesheet: `<h3>` section headings, `<p>`, `<ul>` with `<li>` (an `<ol>`
+  renders as bullets too, not numbers), and inline `<b>`, `<i>`, `<code>`,
+  `<a href>`, and `<br>`. The popover names the version above the notes, so
+  skip a title heading; `<h1>` and `<h2>` still render as one for older
+  notes that carry it.
+
+  Styles, scripts, comments, and declarations are dropped with their
+  content. Any other unsupported tag loses its markup and keeps its text.
+
+  These notes are rendered by the app the user is updating from, so an
+  older release displays them through its own renderer.
 
 - [ ] Scrub any new public assets as described above.
 
