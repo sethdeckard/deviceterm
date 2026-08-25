@@ -271,11 +271,11 @@ struct SimulatorPaneViewModelTests {
         let viewModel = makeViewModel(fake)
         // Phases are serialized because neither RPC suspension nor XPC
         // dispatch preserves the order AppKit produced them in.
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, isEdgeGesture: false)
         for step in 1...8 {
-            viewModel.touch(at: CGPoint(x: 0.5, y: 0.5 - CGFloat(step) * 0.01), phase: .move, edge: nil)
+            viewModel.touch(at: CGPoint(x: 0.5, y: 0.5 - CGFloat(step) * 0.01), phase: .move, isEdgeGesture: false)
         }
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, isEdgeGesture: false)
         await settle()
 
         let phases = fake.touchCalls.map(\.phase)
@@ -297,12 +297,12 @@ struct SimulatorPaneViewModelTests {
         // Two drags back to back. Gesture tags are what keep the second drag's
         // move from being sent as part of the first, or cleared by the first's
         // teardown.
-        viewModel.touch(at: CGPoint(x: 0.1, y: 0.1), phase: .down, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.1, y: 0.2), phase: .move, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.1, y: 0.3), phase: .lift, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.9, y: 0.1), phase: .down, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.9, y: 0.2), phase: .move, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.9, y: 0.3), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.1, y: 0.1), phase: .down, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.1, y: 0.2), phase: .move, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.1, y: 0.3), phase: .lift, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.9, y: 0.1), phase: .down, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.9, y: 0.2), phase: .move, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.9, y: 0.3), phase: .lift, isEdgeGesture: false)
         await settle()
 
         let phases = fake.touchCalls.map(\.phase)
@@ -320,9 +320,9 @@ struct SimulatorPaneViewModelTests {
     func anInFlightMoveDrainsBeforeTheLift() async {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.9), phase: .down, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.3), phase: .move, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.2), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.9), phase: .down, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.3), phase: .move, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.2), phase: .lift, isEdgeGesture: false)
         await settle()
 
         // The lift is last, and the move that preceded it was not dropped on
@@ -339,10 +339,10 @@ struct SimulatorPaneViewModelTests {
         let fake = FakeDaemonClient()
         fake.failTouch = true
         let viewModel = makeViewModel(fake)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, isEdgeGesture: false)
         await settle()
         fake.failTouch = false
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, isEdgeGesture: false)
         await settle()
 
         // The terminal lift still has to land, so a failed send is swallowed
@@ -409,21 +409,19 @@ struct SimulatorPaneViewModelTests {
         #expect(call.toY == AppSwitcherGesture.toY)
         #expect(call.durationMs == AppSwitcherGesture.durationMs)
         #expect(call.holdMs == AppSwitcherGesture.holdMs)
-        // The bottom-edge tag is what routes it to the system gesture.
-        #expect(call.edge == AppSwitcherGesture.edge)
         // The active dwell is what lands it in the switcher, not Home.
         #expect(call.holdMs > 0)
     }
 
     @Test
-    func appSwitcherRotatesTheSwipeIntoTheCurrentOrientation() async throws {
+    func appSwitcherSendsDisplayedCoordsInEveryOrientation() async throws {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
-        // Take the device to landscape, then invoke the App Switcher. The
-        // gesture constants are in displayed (oriented) space; the swipe sent
-        // to the daemon must be mapped into the portrait-native surface frame
-        // and carry the landscape home-indicator edge, or the daemon
-        // plays a portrait-bottom swipe that just pans the foreground app.
+        // The gesture constants are in displayed space, which is what the
+        // wire takes. Turning the device must not change them: the daemon
+        // rotates them into the native surface frame and picks the
+        // matching edge tag from its own presentation orientation, which
+        // this view model's copy can lag.
         viewModel.start()
         await settle()
         fake.lastPaneEventContinuation?.yield(
@@ -435,21 +433,10 @@ struct SimulatorPaneViewModelTests {
         viewModel.appSwitcher()
         await settle()
         let call = try #require(fake.edgeSwipeCalls.last)
-        let expectedFrom = SimGestureMath.rotateOrientedToSurface(
-            CGPoint(x: AppSwitcherGesture.fromX, y: AppSwitcherGesture.fromY),
-            orientation: .landscapeLeft
-        )
-        let expectedTo = SimGestureMath.rotateOrientedToSurface(
-            CGPoint(x: AppSwitcherGesture.toX, y: AppSwitcherGesture.toY),
-            orientation: .landscapeLeft
-        )
-        #expect(abs(call.fromX - Double(expectedFrom.x)) < 1e-9)
-        #expect(abs(call.fromY - Double(expectedFrom.y)) < 1e-9)
-        #expect(abs(call.toX - Double(expectedTo.x)) < 1e-9)
-        #expect(abs(call.toY - Double(expectedTo.y)) < 1e-9)
-        #expect(call.edge == AppSwitcherGesture.edge(for: .landscapeLeft))
-        // The rotated swipe is genuinely different from the portrait one.
-        #expect(call.edge != AppSwitcherGesture.edge)
+        #expect(call.fromX == AppSwitcherGesture.fromX)
+        #expect(call.fromY == AppSwitcherGesture.fromY)
+        #expect(call.toX == AppSwitcherGesture.toX)
+        #expect(call.toY == AppSwitcherGesture.toY)
     }
 
     @Test
@@ -475,7 +462,6 @@ struct SimulatorPaneViewModelTests {
         #expect(call.fromY == AppSwitcherGesture.fromY)
         #expect(call.toX == AppSwitcherGesture.toX)
         #expect(call.toY == AppSwitcherGesture.toY)
-        #expect(call.edge == AppSwitcherGesture.edge)
     }
 
     @Test
@@ -507,14 +493,15 @@ struct SimulatorPaneViewModelTests {
         let viewModel = makeViewModel(fake)
         // A live bottom-edge drag: the edge is supplied on `.down` and
         // latched for the whole drag, so move + lift carry it too.
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.99), phase: .down, edge: 3)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.70), phase: .move, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.50), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.99), phase: .down, isEdgeGesture: true)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.70), phase: .move, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.50), phase: .lift, isEdgeGesture: false)
         await settle()
-        // Everything rode `pane.input.edgeTouch`, tagged with edge 3, so the
-        // plain-touch path saw nothing.
+        // Everything rode `pane.input.edgeTouch`, so the plain-touch path
+        // saw nothing. Which native edge the daemon tags them with is its
+        // own decision, from the orientation it holds.
         #expect(fake.touchCalls.isEmpty)
-        #expect(fake.edgeTouchCalls.allSatisfy { $0.edge == 3 && $0.paneId == "p1" })
+        #expect(fake.edgeTouchCalls.allSatisfy { $0.paneId == "p1" })
         let phases = fake.edgeTouchCalls.map(\.phase)
         #expect(phases.first == .down)
         #expect(phases.contains(.move))
@@ -525,10 +512,9 @@ struct SimulatorPaneViewModelTests {
     func plainDragRoutesToTouchNotEdgeTouch() async {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
-        // No edge supplied → an ordinary touch, never edge-tagged.
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .move, edge: nil)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.3), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .move, isEdgeGesture: false)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.3), phase: .lift, isEdgeGesture: false)
         await settle()
         #expect(fake.edgeTouchCalls.isEmpty)
         #expect(!fake.touchCalls.isEmpty)
@@ -539,16 +525,15 @@ struct SimulatorPaneViewModelTests {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
         // Press-and-hold a bottom-edge drag: the keepalive re-reports the
-        // held finger, and those resends must stay edge-tagged so the
+        // held finger, and those resends must stay on the edge path so the
         // dwell still reads as the system gesture (not a plain touch).
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.55), phase: .down, edge: 3)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.55), phase: .down, isEdgeGesture: true)
         try? await Task.sleep(nanoseconds: 140_000_000)  // ~4 keepalive ticks
         let heldMoves = fake.edgeTouchCalls.filter { $0.phase == .move }
         #expect(!heldMoves.isEmpty)
-        #expect(heldMoves.allSatisfy { $0.edge == 3 })
         // The plain-touch keepalive never fires for an edge drag.
         #expect(fake.touchCalls.isEmpty)
-        viewModel.touch(at: CGPoint(x: 0.5, y: 0.55), phase: .lift, edge: nil)
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.55), phase: .lift, isEdgeGesture: false)
     }
 
     @Test

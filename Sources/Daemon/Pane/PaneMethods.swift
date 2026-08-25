@@ -523,8 +523,7 @@ public enum PaneMethods {
                     as: principal,
                     x: params.x,
                     y: params.y,
-                    phase: phase,
-                    edge: params.edge
+                    phase: phase
                 )
             }
         }
@@ -578,7 +577,6 @@ public enum PaneMethods {
                     fromY: params.fromY,
                     toX: params.toX,
                     toY: params.toY,
-                    edge: params.edge,
                     durationMs: durationMs,
                     holdMs: holdMs
                 )

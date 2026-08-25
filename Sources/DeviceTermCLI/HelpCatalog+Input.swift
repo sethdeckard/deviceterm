@@ -65,7 +65,9 @@ extension HelpCatalog {
               app-switcher
                   Open the iOS App Switcher with an edge-tagged swipe up from
                   the bottom edge with a dwell. That is a system gesture,
-                  not a content swipe (portrait). A physical device that
+                  not a content swipe. Confirmed in portrait and both
+                  landscape orientations; upside-down has no edge value
+                  that arms the recognizer. A physical device that
                   doesn't support the edge gesture falls back to a
                   consumer-HID Home double-press.
                   Example: deviceterm app-switcher

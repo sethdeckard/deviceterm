@@ -162,7 +162,6 @@ func run(
                         fromY: AppSwitcherGesture.fromY,
                         toX: AppSwitcherGesture.toX,
                         toY: AppSwitcherGesture.toY,
-                        edge: AppSwitcherGesture.edge,
                         durationMs: AppSwitcherGesture.durationMs,
                         holdMs: AppSwitcherGesture.holdMs
                     )

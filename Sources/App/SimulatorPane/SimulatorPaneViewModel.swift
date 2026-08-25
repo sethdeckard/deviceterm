@@ -41,7 +41,7 @@ final class SimulatorPaneViewModel {
     /// still in flight, and the daemon then sees a plain lift for a two-finger
     /// contact.
     private enum LiveLifecycle: Sendable {
-        case touchDown(CGPoint, edge: Int?, gesture: UInt64)
+        case touchDown(CGPoint, isEdgeGesture: Bool, gesture: UInt64)
         case touchLift(CGPoint, gesture: UInt64)
         case multiDown(CGPoint, CGPoint, gesture: UInt64)
         case multiLift(CGPoint, CGPoint, gesture: UInt64)
@@ -169,13 +169,13 @@ final class SimulatorPaneViewModel {
     @ObservationIgnored private var lastLiveTouchPoint: CGPoint = .zero
     @ObservationIgnored private var liveTouchMovedSinceTick = false
     @ObservationIgnored private var touchKeepaliveTask: Task<Void, Never>?
-    /// Non-nil for the lifetime of a live drag that began in the displayed
-    /// bottom-edge band: the `IndigoHIDEdge` value tagging every contact
-    /// (down/move/keepalive/lift) so the drag drives SpringBoard's system
-    /// gesture (App Switcher) instead of scrolling the foreground app.
-    /// Latched at `.down`, cleared at `.lift`. `nil` → the ordinary
+    /// True for the lifetime of a live drag that began in the displayed
+    /// bottom-edge band, routing every contact (down/move/keepalive/lift)
+    /// through `pane.input.edgeTouch` so the drag drives SpringBoard's
+    /// system gesture (App Switcher) instead of scrolling the foreground
+    /// app. Latched at `.down`, cleared at `.lift`. False is the ordinary
     /// plain-touch path.
-    @ObservationIgnored private var activeTouchEdge: Int?
+    @ObservationIgnored private var activeTouchIsEdgeGesture = false
     @ObservationIgnored private var pendingMultitouchMove: PendingMultitouchMove?
     @ObservationIgnored private var multitouchMoveInFlight = false
     /// AppKit gives key events in order, but dispatching every one in an
@@ -405,17 +405,18 @@ final class SimulatorPaneViewModel {
     }
 
     func touch(at point: CGPoint, phase: TouchPhase) {
-        touch(at: point, phase: phase, edge: nil)
+        touch(at: point, phase: phase, isEdgeGesture: false)
     }
 
-    /// Live single-finger contact. When `edge` is non-nil at `.down` the
-    /// whole drag (down -> moves -> keepalive -> lift) is tagged with that
-    /// `IndigoHIDEdge` value and rides `pane.input.edgeTouch` so it drives
-    /// the system gesture; `nil` keeps the ordinary `pane.input.touch`
-    /// path. The edge is latched at `.down` and read by every follow-on
-    /// event (the view only supplies it on the first contact), so the
-    /// keepalive (which fires with no view event) tags its resends too.
-    func touch(at point: CGPoint, phase: TouchPhase, edge: Int?) {
+    /// Live single-finger contact. When `isEdgeGesture` is true at `.down`
+    /// the whole drag (down -> moves -> keepalive -> lift) rides
+    /// `pane.input.edgeTouch` so it drives the system gesture; false keeps
+    /// the ordinary `pane.input.touch` path. Latched at `.down` and read
+    /// by every follow-on event (the view only supplies it on the first
+    /// contact), so the keepalive, which fires with no view event, stays
+    /// on the same path. Which `IndigoHIDEdge` value the drag carries is
+    /// the daemon's to pick, and it latches that for the drag too.
+    func touch(at point: CGPoint, phase: TouchPhase, isEdgeGesture: Bool) {
         // Idempotent, and here rather than only in `start()` so input is never
         // silently swallowed by a view model that hasn't subscribed yet.
         startTouchPumps()
@@ -430,7 +431,9 @@ final class SimulatorPaneViewModel {
             // The edge is latched by the pump when it sends the down, not here:
             // the next drag's intake can run while this one's lift is still in
             // flight, and an intake-side latch would retag that lift.
-            liveContinuation.yield(.touchDown(point, edge: edge, gesture: intakeGesture))
+            liveContinuation.yield(
+                .touchDown(point, isEdgeGesture: isEdgeGesture, gesture: intakeGesture)
+            )
 
         case .lift:
             liveTouchHeld = false
@@ -468,8 +471,8 @@ final class SimulatorPaneViewModel {
             for await event in stream {
                 guard let self, !Task.isCancelled else { return }
                 switch event {
-                case let .touchDown(point, edge, gesture):
-                    self.activeTouchEdge = edge
+                case let .touchDown(point, isEdgeGesture, gesture):
+                    self.activeTouchIsEdgeGesture = isEdgeGesture
                     self.pumpGesture = gesture
                     self.pumpContactOpen = true
                     await self.deliverTouch(point, phase: .down)
@@ -481,7 +484,7 @@ final class SimulatorPaneViewModel {
                     await self.drainPendingTouchMoves()
                     await self.deliverTouch(point, phase: .lift)
                     self.pumpContactOpen = false
-                    self.activeTouchEdge = nil
+                    self.activeTouchIsEdgeGesture = false
                     // Only this gesture's leftovers: the next drag may already
                     // have queued a move behind the lift.
                     if self.pendingTouchMove?.gesture == gesture {
@@ -538,13 +541,12 @@ final class SimulatorPaneViewModel {
     /// continue: wedging the chain would strand the terminal lift.
     private func deliverTouch(_ point: CGPoint, phase: TouchPhase) async {
         do {
-            if let edge = activeTouchEdge {
+            if activeTouchIsEdgeGesture {
                 try await daemonClient.paneInputEdgeTouch(
                     paneId: paneId,
                     x: point.x,
                     y: point.y,
-                    phase: phase,
-                    edge: edge
+                    phase: phase
                 )
             } else {
                 try await daemonClient.paneInputTouch(paneId: paneId, x: point.x, y: point.y, phase: phase)
@@ -644,42 +646,23 @@ final class SimulatorPaneViewModel {
     /// consumer-HID Home double-press. The client passes the swipe
     /// coordinates either way; the daemon ignores them on the device path.
     ///
-    /// The `AppSwitcherGesture` constants describe the swipe in *displayed*
-    /// (oriented) space: bottom-edge center up to mid-screen. To work in
-    /// landscape they're rotated into the surface's portrait-native frame and
-    /// tagged with the orientation's home-indicator edge, exactly as the live
-    /// bottom-edge drag does (`edge(for:)` + `rotateOrientedToSurface`).
-    /// Upside-down has no home-gesture edge (none arms the recognizer), so the
-    /// fallback is *wholesale* portrait, covering both the edge tag and the
-    /// coordinate rotation. That keeps the tagged gesture self-consistent (a
-    /// portrait swipe tagged with the portrait edge). Falling back only the
-    /// edge would tag a 180°-rotated, top-origin swipe as a bottom-edge
-    /// gesture. The device path ignores both anyway.
+    /// The `AppSwitcherGesture` constants describe the swipe in displayed
+    /// space, bottom-edge center up to mid-screen, which is what the wire
+    /// takes. The daemon rotates them into the surface's portrait-native
+    /// frame and picks the matching home-indicator edge tag from its
+    /// authoritative presentation orientation
+    /// (`AppSwitcherGesture.plan(for:)`), which this view model's own
+    /// `currentOrientation` can lag.
     func appSwitcher() {
-        // Use portrait wholesale when the live orientation has no home-gesture
-        // edge, so the edge tag and the rotation never disagree.
-        let orientation = AppSwitcherGesture.edge(for: currentOrientation) == nil
-            ? .portrait
-            : currentOrientation
-        let edge = AppSwitcherGesture.edge(for: orientation) ?? AppSwitcherGesture.edge
-        let swipeFrom = SimGestureMath.rotateOrientedToSurface(
-            CGPoint(x: AppSwitcherGesture.fromX, y: AppSwitcherGesture.fromY),
-            orientation: orientation
-        )
-        let swipeTo = SimGestureMath.rotateOrientedToSurface(
-            CGPoint(x: AppSwitcherGesture.toX, y: AppSwitcherGesture.toY),
-            orientation: orientation
-        )
         let id = paneId
         let client = daemonClient
         Task { @MainActor in
             try? await client.paneInputEdgeSwipe(
                 paneId: id,
-                fromX: swipeFrom.x,
-                fromY: swipeFrom.y,
-                toX: swipeTo.x,
-                toY: swipeTo.y,
-                edge: edge,
+                fromX: AppSwitcherGesture.fromX,
+                fromY: AppSwitcherGesture.fromY,
+                toX: AppSwitcherGesture.toX,
+                toY: AppSwitcherGesture.toY,
                 durationMs: AppSwitcherGesture.durationMs,
                 holdMs: AppSwitcherGesture.holdMs
             )

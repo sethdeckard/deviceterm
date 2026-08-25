@@ -240,7 +240,6 @@ extension CLICommands {
         fromY: Double,
         toX: Double,
         toY: Double,
-        edge: Int,
         durationMs: Int?,
         holdMs: Int?
     ) throws -> RPCEnvelope {
@@ -252,7 +251,6 @@ extension CLICommands {
             fromY: fromY,
             toX: toX,
             toY: toY,
-            edge: edge,
             durationMs: durationMs,
             holdMs: holdMs
         )

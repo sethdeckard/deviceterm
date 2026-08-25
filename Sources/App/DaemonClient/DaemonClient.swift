@@ -1632,7 +1632,6 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         fromY: Double,
         toX: Double,
         toY: Double,
-        edge: Int,
         durationMs: Int,
         holdMs: Int
     ) async throws {
@@ -1644,7 +1643,6 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 fromY: fromY,
                 toX: toX,
                 toY: toY,
-                edge: edge,
                 durationMs: durationMs,
                 holdMs: holdMs
             )
@@ -1652,18 +1650,17 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     }
 
     /// Per-event edge-tagged live touch: the App Switcher follows the
-    /// cursor on a bottom-edge mouse drag. Coords normalized; `edge` is
-    /// the raw `IndigoHIDEdge` value.
+    /// cursor on a bottom-edge mouse drag. Coords are normalized and in
+    /// displayed space; the daemon resolves the `IndigoHIDEdge` tag.
     func paneInputEdgeTouch(
         paneId: String,
         x: Double,
         y: Double,
-        phase: TouchPhase,
-        edge: Int
+        phase: TouchPhase
     ) async throws {
         try await paneInput(
             .paneInputEdgeTouch,
-            body: EdgeTouchParams(paneId: paneId, x: x, y: y, phase: phase.rawValue, edge: edge)
+            body: EdgeTouchParams(paneId: paneId, x: x, y: y, phase: phase.rawValue)
         )
     }
 

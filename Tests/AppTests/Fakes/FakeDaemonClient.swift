@@ -135,7 +135,6 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let fromY: Double
         let toX: Double
         let toY: Double
-        let edge: Int
         let durationMs: Int
         let holdMs: Int
     }
@@ -150,7 +149,6 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let x: Double
         let y: Double
         let phase: TouchPhase
-        let edge: Int
     }
     struct KeyCall: Equatable {
         let paneId: String
@@ -979,10 +977,9 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         paneId: String,
         x: Double,
         y: Double,
-        phase: TouchPhase,
-        edge: Int
+        phase: TouchPhase
     ) {
-        edgeTouchCalls.append(.init(paneId: paneId, x: x, y: y, phase: phase, edge: edge))
+        edgeTouchCalls.append(.init(paneId: paneId, x: x, y: y, phase: phase))
         paneInputCalls.append((.paneInputEdgeTouch, paneId))
     }
 
@@ -1015,7 +1012,6 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         fromY: Double,
         toX: Double,
         toY: Double,
-        edge: Int,
         durationMs: Int,
         holdMs: Int
     ) {
@@ -1025,7 +1021,6 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             fromY: fromY,
             toX: toX,
             toY: toY,
-            edge: edge,
             durationMs: durationMs,
             holdMs: holdMs
         ))

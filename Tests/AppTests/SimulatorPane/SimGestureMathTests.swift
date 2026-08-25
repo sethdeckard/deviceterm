@@ -75,14 +75,14 @@ struct SimGestureMathTests {
     }
 
     @Test
-    func orientedNormalizedPointReportsDisplayedY() throws {
+    func extendedPointReportsDisplayedY() throws {
         // Surface matches the view aspect → the image fills the view, so
         // displayed-Y maps straight to viewPoint.y / height.
         let size = CGSize(width: 100, height: 200)
         let surface = CGSize(width: 100, height: 200)
         // Just above the bottom edge → oriented y ~0.98.
         let nearBottom = try #require(
-            SimGestureMath.orientedNormalizedPoint(
+            SimGestureMath.extendedNormalizedPoint(
             viewPoint: CGPoint(x: 50, y: 196),
             viewSize: size,
             surfaceSize: surface
@@ -92,7 +92,7 @@ struct SimGestureMathTests {
         // A bezel point *below* the screen reads unclamped (y > 1), since the
         // bottom-edge drag can originate there.
         let belowScreen = try #require(
-            SimGestureMath.orientedNormalizedPoint(
+            SimGestureMath.extendedNormalizedPoint(
             viewPoint: CGPoint(x: 50, y: 210),
             viewSize: size,
             surfaceSize: surface
@@ -321,63 +321,6 @@ struct SimGestureMathTests {
         #expect(center == CGPoint(x: 0.5, y: 0.5))
     }
 
-    /// `landscapeLeft` and `landscapeRight` are exact inverses:
-    /// applying them in either order returns the original point.
-    /// This is the closure pin: if the matrices ever drift, this
-    /// trips before any tap regression reaches users.
-    @Test
-    func landscapeLeftAndRightAreInverses() {
-        let point = CGPoint(x: 0.2, y: 0.7)
-        let leftThenRight = SimGestureMath.rotateOrientedToSurface(
-            SimGestureMath.rotateOrientedToSurface(point, orientation: .landscapeLeft),
-            orientation: .landscapeRight
-        )
-        let rightThenLeft = SimGestureMath.rotateOrientedToSurface(
-            SimGestureMath.rotateOrientedToSurface(point, orientation: .landscapeRight),
-            orientation: .landscapeLeft
-        )
-        #expect(abs(leftThenRight.x - point.x) < 1e-9)
-        #expect(abs(leftThenRight.y - point.y) < 1e-9)
-        #expect(abs(rightThenLeft.x - point.x) < 1e-9)
-        #expect(abs(rightThenLeft.y - point.y) < 1e-9)
-    }
-
-    /// Applying `portraitUpsideDown` twice returns the original:
-    /// 180° + 180° = identity.
-    @Test
-    func upsideDownIsInvolution() {
-        let point = CGPoint(x: 0.3, y: 0.8)
-        let twice = SimGestureMath.rotateOrientedToSurface(
-            SimGestureMath.rotateOrientedToSurface(point, orientation: .portraitUpsideDown),
-            orientation: .portraitUpsideDown
-        )
-        #expect(abs(twice.x - point.x) < 1e-9)
-        #expect(abs(twice.y - point.y) < 1e-9)
-    }
-
-    /// Each landscape orientation's corner mapping matches the
-    /// shader's UV rotation: displayed-top-left -> portrait surface
-    /// corner. (landscapeLeft/Right are the inverse of the device's
-    /// content rotation, so they are 90deg opposites of each other.)
-    @Test(
-        "landscape corner mapping",
-        arguments: [
-            (Orientation.landscapeLeft, CGPoint(x: 1, y: 0)),
-            (.portraitUpsideDown, CGPoint(x: 1, y: 1)),
-            (.landscapeRight, CGPoint(x: 0, y: 1))
-        ]
-    )
-    func landscapeTopLeftMapsToCorrectPortraitCorner(
-        orientation: Orientation,
-        expected: CGPoint
-    ) {
-        let result = SimGestureMath.rotateOrientedToSurface(
-            .zero,
-            orientation: orientation
-        )
-        #expect(result == expected)
-    }
-
     // MARK: - imageRect (shared with shader + bezel math)
 
     @Test
@@ -466,15 +409,16 @@ struct SimGestureMathTests {
     }
 
     @Test
-    func extendedPointRespectsLandscapeRotation() throws {
-        // landscapeLeft: portrait surface 100×200 rendered rotated.
-        // In the displayed (oriented) space, image is wider than
-        // tall → letterbox at top+bottom. A click below the bottom
-        // bezel goes through `rotateOrientedToSurface(.landscapeLeft)`
-        // which maps oriented (x, y) → portrait (1 - y, x).
-        // viewSize 200×100, oriented surface 200×100 (swapped).
-        // A click 10pt below the bottom (y=110) at x=100 →
-        // oriented (0.5, 1.1) → portrait (-0.1, 0.5).
+    func extendedPointUsesTheLandscapeLetterbox() throws {
+        // landscapeLeft: portrait surface 100×200 rendered rotated, so
+        // the aspect-fit runs against a swapped 200×100 effective
+        // surface and the image fills viewSize exactly. A click 10pt
+        // below the bottom edge (y=110) at x=100 is displayed
+        // (0.5, 1.1), out of range on the axis the viewer sees.
+        //
+        // The result stays in displayed space: rotating it into the
+        // device's native frame is the daemon's job, and
+        // `OrientationSurfaceCoordinatesTests` pins that half.
         let point = try #require(
             SimGestureMath.extendedNormalizedPoint(
                 viewPoint: CGPoint(x: 100, y: 110),
@@ -483,7 +427,7 @@ struct SimGestureMathTests {
                 orientation: .landscapeLeft
             )
         )
-        #expect(abs(point.x - (-0.1)) < 1e-9)
-        #expect(abs(point.y - 0.5) < 1e-9)
+        #expect(abs(point.x - 0.5) < 1e-9)
+        #expect(abs(point.y - 1.1) < 1e-9)
     }
 }

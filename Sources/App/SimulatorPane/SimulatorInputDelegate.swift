@@ -20,11 +20,13 @@ protocol SimulatorInputDelegate: AnyObject {
     var simulatorPaneSupportsEdgeGesture: Bool { get }
 
     func simulatorPaneDidTap(at point: CGPoint)
-    /// `edge` is the `IndigoHIDEdge` value when this contact belongs to a
-    /// drag that began in the displayed bottom-edge band (so it drives the
-    /// system gesture), else `nil` for an ordinary touch. Only meaningful
-    /// on `.down`, where the receiver latches it for the drag's lifetime.
-    func simulatorPaneDidTouch(at point: CGPoint, phase: TouchPhase, edge: Int?)
+    /// `isEdgeGesture` is true when this contact belongs to a drag that
+    /// began in the displayed bottom-edge band, so it drives the system
+    /// gesture rather than the foreground app. Only meaningful on
+    /// `.down`, where the receiver latches it for the drag's lifetime.
+    /// Which `IndigoHIDEdge` value that becomes is the daemon's to
+    /// decide, from the orientation it holds.
+    func simulatorPaneDidTouch(at point: CGPoint, phase: TouchPhase, isEdgeGesture: Bool)
     /// Live two-finger contact frame (center-anchored Option-drag).
     /// `finger1` is the mouse finger, `finger2` its mirror about screen
     /// center. Phases mirror the single-finger stream.

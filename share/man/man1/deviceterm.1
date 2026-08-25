@@ -40,7 +40,9 @@ to read that command's reference page, or
 .B deviceterm agents
 for the workflow and triage guide.
 .SS Drive the device
-Coords are normalized; (0,0) top-left, (1,1) bottom-right.
+Coords are normalized to what the device is showing; (0,0) top-left,
+(1,1) bottom-right. A Simulator's observed rotation is followed; a
+physical device is assumed portrait until deviceterm rotates it.
 .TP
 .B tap " " \fIx\fR " " \fIy\fR
 Single discrete tap.
@@ -59,9 +61,10 @@ Two-finger interpolated path. Default 300 ms.
 .TP
 .B app-switcher
 Open the iOS App Switcher with an edge-tagged swipe up from the bottom
-edge with a dwell \(em a system gesture, not a content swipe (portrait). A
-physical device that doesn't support the edge gesture falls back to a
-consumer-HID Home double-press.
+edge with a dwell, a system gesture rather than a content swipe.
+Confirmed in portrait and both landscape orientations; upside-down has no
+edge value that arms the recognizer. A physical device that doesn't
+support the edge gesture falls back to a consumer-HID Home double-press.
 .SS Hardware input
 .TP
 .B button " " \fIhome\fR|\fIlock\fR|\fIside\fR|\fIapple-pay\fR|\fIsiri\fR|\fIdigital-crown\fR

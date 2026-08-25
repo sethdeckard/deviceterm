@@ -630,8 +630,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         viewModel.tap(at: point)
     }
 
-    func simulatorPaneDidTouch(at point: CGPoint, phase: TouchPhase, edge: Int?) {
-        viewModel.touch(at: point, phase: phase, edge: edge)
+    func simulatorPaneDidTouch(at point: CGPoint, phase: TouchPhase, isEdgeGesture: Bool) {
+        viewModel.touch(at: point, phase: phase, isEdgeGesture: isEdgeGesture)
     }
 
     func simulatorPaneDidSwipe(from start: CGPoint, to end: CGPoint, durationMs: Int) {

@@ -84,11 +84,11 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     private var dragStartTime: Date?
     private var liveTouchActive = false
     /// Latched at mouseDown for a single-finger drag that began in the
-    /// displayed bottom-edge band on a sim pane: the `IndigoHIDEdge` value
-    /// the drag's contacts carry so it drives the system gesture (App
-    /// Switcher) rather than scrolling the app. `nil` → ordinary touch.
-    /// Sent to the delegate on the first `.down` and cleared at lift.
-    private var liveTouchEdge: Int?
+    /// displayed bottom-edge band on a sim pane, so the drag drives the
+    /// system gesture (App Switcher) rather than scrolling the app.
+    /// False is the ordinary touch path. Sent to the delegate on the
+    /// first `.down` and cleared at lift.
+    private var liveTouchIsEdgeGesture = false
     /// Pending hold timer for a stationary press. Scheduled when a
     /// single-finger press lands on-screen; if it fires before any drag,
     /// crown, or release intervenes, it promotes the press to a live `.down`
@@ -314,7 +314,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         cancelLongPressHold()
-        liveTouchEdge = nil
+        liveTouchIsEdgeGesture = false
         let viewPoint = convert(event.locationInWindow, from: nil)
         // Option-drag → live two-finger pinch/rotate, center-anchored
         // (Simulator.app's affordance). Latched here for the whole drag;
@@ -354,8 +354,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         ) {
             dragStart = normalized
             dragStartTime = Date()
-            liveTouchEdge = edgeForGestureStart(viewPoint: viewPoint)
-            scheduleLongPressHold(at: normalized, edge: liveTouchEdge)
+            liveTouchIsEdgeGesture = isEdgeGestureStart(viewPoint: viewPoint)
+            scheduleLongPressHold(at: normalized, isEdgeGesture: liveTouchIsEdgeGesture)
             return
         }
         // Outside the screen rect, accept the gesture start only
@@ -376,27 +376,28 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         else { return }
         dragStart = extended
         dragStartTime = Date()
-        liveTouchEdge = edgeForGestureStart(viewPoint: viewPoint)
+        liveTouchIsEdgeGesture = isEdgeGestureStart(viewPoint: viewPoint)
     }
 
-    /// The `IndigoHIDEdge` value for a drag starting at `viewPoint`, or
-    /// `nil` if it shouldn't be edge-tagged. Returns a value only when the
-    /// pane supports edge gestures (sim, not a physical device), the start
-    /// sits in the displayed bottom-edge band, and the current orientation
-    /// has a live-confirmed edge value. Otherwise the drag stays a plain
-    /// touch.
-    private func edgeForGestureStart(viewPoint: CGPoint) -> Int? {
+    /// Whether a drag starting at `viewPoint` should drive the system
+    /// edge gesture rather than a plain touch. True only when the pane
+    /// supports live edge gestures and the start sits in the displayed
+    /// bottom-edge band.
+    ///
+    /// The daemon resolves and latches the tag with
+    /// `AppSwitcherGesture.edge(for:)`, rotating the drag's events
+    /// through that same orientation.
+    private func isEdgeGestureStart(viewPoint: CGPoint) -> Bool {
         guard inputDelegate?.simulatorPaneSupportsEdgeGesture == true,
-            let oriented = SimGestureMath.orientedNormalizedPoint(
+            let displayed = SimGestureMath.extendedNormalizedPoint(
                 viewPoint: viewPoint,
                 viewSize: bounds.size,
                 surfaceSize: surfaceSize,
                 orientation: orientation,
                 displayInset: displayInset
-            ),
-            SimGestureMath.isInBottomEdgeBand(orientedY: oriented.y)
-        else { return nil }
-        return AppSwitcherGesture.edge(for: orientation)
+            )
+        else { return false }
+        return SimGestureMath.isInBottomEdgeBand(orientedY: displayed.y)
     }
 
     /// Arm the stationary-hold timer for a press that landed on-screen at
@@ -405,7 +406,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// has intervened, promote the press to a live `.down` so a finger is
     /// held down on the sim. The VM's keepalive then sustains the contact,
     /// matching iOS's long-press. Replaces any previously-armed timer.
-    private func scheduleLongPressHold(at point: CGPoint, edge: Int?) {
+    private func scheduleLongPressHold(at point: CGPoint, isEdgeGesture: Bool) {
         cancelLongPressHold()
         guard inputDelegate?.simulatorPaneSupportsLiveTouchInput == true else { return }
         longPressHoldTask = Task { @MainActor [weak self] in
@@ -418,7 +419,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 !self.crownDragActive
             else { return }
             self.liveTouchActive = true
-            self.inputDelegate?.simulatorPaneDidTouch(at: point, phase: .down, edge: edge)
+            self.inputDelegate?.simulatorPaneDidTouch(at: point, phase: .down, isEdgeGesture: isEdgeGesture)
         }
     }
 
@@ -460,9 +461,9 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             if !liveTouchActive {
                 cancelLongPressHold()
                 liveTouchActive = true
-                inputDelegate?.simulatorPaneDidTouch(at: start, phase: .down, edge: liveTouchEdge)
+                inputDelegate?.simulatorPaneDidTouch(at: start, phase: .down, isEdgeGesture: liveTouchIsEdgeGesture)
             }
-            inputDelegate?.simulatorPaneDidTouch(at: point, phase: .move, edge: nil)
+            inputDelegate?.simulatorPaneDidTouch(at: point, phase: .move, isEdgeGesture: false)
             return
         }
         // A press that began on-screen but is now dragged off both the
@@ -549,8 +550,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         let wasLiveTouch = liveTouchActive
         if wasLiveTouch {
             liveTouchActive = false
-            inputDelegate?.simulatorPaneDidTouch(at: endNormalized, phase: .lift, edge: nil)
-            liveTouchEdge = nil
+            inputDelegate?.simulatorPaneDidTouch(at: endNormalized, phase: .lift, isEdgeGesture: false)
+            liveTouchIsEdgeGesture = false
         } else if SimGestureMath.isTap(from: start, to: endNormalized) {
             inputDelegate?.simulatorPaneDidTap(at: start)
         }

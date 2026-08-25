@@ -90,6 +90,19 @@ public actor PaneCoordinator {
     /// holds non-Sendable CoreSimulator bridge handles; only the
     /// actor mutates it, so the `@unchecked Sendable` is safe.
     private final class Record: @unchecked Sendable {
+        /// What the most recent live edge `.down` resolved to. `edge` is
+        /// nil when the orientation had no confirmed home-gesture edge, in
+        /// which case the contact runs as a plain touch instead.
+        ///
+        /// Recorded before the lane sees the press, so it can outlive a
+        /// press the lane dropped. That is harmless: with no lease open
+        /// the lane drops the follow-on events too, and the next `.down`
+        /// overwrites this.
+        struct LiveEdgeContact {
+            let orientation: Orientation
+            let edge: Int?
+        }
+
         let id: UUID
         /// Owning session. Mutable so cross-session `createSim`
         /// adoption (orphan recovery after a GUI crash leaves the
@@ -271,6 +284,16 @@ public actor PaneCoordinator {
         /// Starts at `.portrait` for the same reason `controlOrientation`
         /// does, and is corrected by the first seed or observation.
         var presentationOrientation: Orientation = .portrait
+        /// The orientation and edge tag resolved at the last live edge
+        /// `.down`, reused by that contact's moves and lift.
+        ///
+        /// Resolving per event instead would let a rotation mid-drag tag
+        /// the release differently from the press. The lane's lift
+        /// admission checks only the contact flavor
+        /// (`ContactLane.LiveContact.matchesFlavor`), so that mismatch is
+        /// admitted and the contact that is actually down may never be
+        /// released.
+        var liveEdgeContact: LiveEdgeContact?
         /// Whether display-orientation observation is running for this
         /// pane, so teardown only unregisters what was registered.
         var observingDisplayOrientation = false
@@ -2201,6 +2224,32 @@ public actor PaneCoordinator {
         }
     }
 
+    /// Convert a wire coordinate into the pane's native surface space.
+    ///
+    /// Input coordinates are displayed space: `(0, 0)` is the top-left
+    /// of what the viewer sees, which in landscape is a different corner
+    /// of the panel than the HID digitizer addresses. The
+    /// coordinate-bearing touch verbs convert at this boundary, against
+    /// the presentation orientation the record holds, so no caller has
+    /// to know the device is turned. Portrait is the identity.
+    ///
+    /// The edge verbs don't use this. They latch an orientation for the
+    /// whole contact and call `surfacePoint` against that instead.
+    private func native(
+        _ x: Double,
+        _ y: Double,
+        for input: AuthorizedInput
+    ) -> (x: Double, y: Double) {
+        input.record.presentationOrientation.surfacePoint(displayedX: x, displayedY: y)
+    }
+
+    /// `CGPoint` face of `native(_:_:for:)`, for the live-contact paths
+    /// that carry points rather than loose coordinates.
+    private func native(_ point: CGPoint, for input: AuthorizedInput) -> CGPoint {
+        let rotated = native(point.x, point.y, for: input)
+        return CGPoint(x: rotated.x, y: rotated.y)
+    }
+
     func tap(paneId: UUID, as principal: PaneAccessPrincipal, x: Double, y: Double) async throws {
         let input = try inputBackend(
             paneId: paneId,
@@ -2208,6 +2257,7 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .tap
         )
+        let point = native(x, y, for: input)
         // Not preemptible: the dwell is two frames, and cutting it short
         // reintroduces the contact too brief for a control to act on.
         try await withContactLane(
@@ -2220,8 +2270,8 @@ public actor PaneCoordinator {
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
-                x: x,
-                y: y,
+                x: point.x,
+                y: point.y,
                 fence: fence
             )
         }
@@ -2240,23 +2290,13 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .touch
         )
-        let lane = lane(for: input.record, backend: input.backend)
-        let admitted = await lane.admitLive(
+        try await sendLiveContact(
+            input,
+            paneId: paneId,
+            point: native(CGPoint(x: x, y: y), for: input),
             phase: phase,
-            contact: .plain(CGPoint(x: x, y: y)),
-            generation: input.generation
+            edge: nil
         )
-        guard admitted.send else { return }
-        try await sendingLiveContact(admitted, on: lane) {
-            try await SimInputSynthesis.touch(
-                backend: input.backend,
-                paneId: paneId,
-                generation: input.generation,
-                x: x,
-                y: y,
-                phase: phase
-            )
-        }
     }
 
     /// Perform a live contact send, then drop the lease if this phase ended the
@@ -2275,13 +2315,54 @@ public actor PaneCoordinator {
         if let id = admitted.releaseAfterSend { await lane.release(id) }
     }
 
+    /// Admit and send one live contact event, edge-tagged when `edge` is
+    /// present and a plain touch when it isn't.
+    private func sendLiveContact(
+        _ input: AuthorizedInput,
+        paneId: UUID,
+        point: CGPoint,
+        phase: TouchPhase,
+        edge: Int?
+    ) async throws {
+        let lane = lane(for: input.record, backend: input.backend)
+        let contact: ContactLane.LiveContact = edge.map { .edge(point, edge: $0) }
+            ?? .plain(point)
+        let admitted = await lane.admitLive(
+            phase: phase,
+            contact: contact,
+            generation: input.generation
+        )
+        guard admitted.send else { return }
+        try await sendingLiveContact(admitted, on: lane) {
+            if let edge {
+                try await SimInputSynthesis.edgeTouch(
+                    backend: input.backend,
+                    paneId: paneId,
+                    generation: input.generation,
+                    x: point.x,
+                    y: point.y,
+                    phase: phase,
+                    edge: edge
+                )
+            } else {
+                try await SimInputSynthesis.touch(
+                    backend: input.backend,
+                    paneId: paneId,
+                    generation: input.generation,
+                    x: point.x,
+                    y: point.y,
+                    phase: phase
+                )
+            }
+        }
+    }
+
     func edgeTouch(
         paneId: UUID,
         as principal: PaneAccessPrincipal,
         x: Double,
         y: Double,
-        phase: TouchPhase,
-        edge: Int
+        phase: TouchPhase
     ) async throws {
         let input = try inputBackend(
             paneId: paneId,
@@ -2289,24 +2370,38 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .edgeTouch
         )
-        let lane = lane(for: input.record, backend: input.backend)
-        let admitted = await lane.admitLive(
-            phase: phase,
-            contact: .edge(CGPoint(x: x, y: y), edge: edge),
-            generation: input.generation
-        )
-        guard admitted.send else { return }
-        try await sendingLiveContact(admitted, on: lane) {
-            try await SimInputSynthesis.edgeTouch(
-                backend: input.backend,
-                paneId: paneId,
-                generation: input.generation,
-                x: x,
-                y: y,
-                phase: phase,
-                edge: edge
+        let latched: Record.LiveEdgeContact
+        if phase == .down {
+            let orientation = input.record.presentationOrientation
+            latched = Record.LiveEdgeContact(
+                orientation: orientation,
+                edge: AppSwitcherGesture.edge(for: orientation)
             )
+            input.record.liveEdgeContact = latched
+        } else if let open = input.record.liveEdgeContact {
+            latched = open
+        } else {
+            // A move or lift with no press behind it: nothing to carry
+            // and nothing to release.
+            return
         }
+        if phase == .lift { input.record.liveEdgeContact = nil }
+        // Rotated through the orientation the press resolved to, not the
+        // current one, so a rotation mid-drag can't leave the trajectory
+        // and the tag describing different edges.
+        let rotated = latched.orientation.surfacePoint(displayedX: x, displayedY: y)
+        // A nil tag means this orientation has no confirmed home-gesture
+        // edge (upside-down). The drag degrades to a plain touch rather
+        // than being tagged with an edge it didn't come from, and it
+        // still tracks the cursor because the coordinates rotate through
+        // the real orientation either way.
+        try await sendLiveContact(
+            input,
+            paneId: paneId,
+            point: CGPoint(x: rotated.x, y: rotated.y),
+            phase: phase,
+            edge: latched.edge
+        )
     }
 
     func swipe(
@@ -2328,6 +2423,8 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .swipe
         )
+        let origin = native(fromX, fromY, for: input)
+        let target = native(toX, toY, for: input)
         let outcome = try await withContactLane(
             input.record,
             backend: input.backend,
@@ -2338,10 +2435,10 @@ public actor PaneCoordinator {
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
-                fromX: fromX,
-                fromY: fromY,
-                toX: toX,
-                toY: toY,
+                fromX: origin.x,
+                fromY: origin.y,
+                toX: target.x,
+                toY: target.y,
                 durationMs: durationMs,
                 holdMs: holdMs,
                 startHoldMs: startHoldMs,
@@ -2363,7 +2460,6 @@ public actor PaneCoordinator {
         fromY: Double,
         toX: Double,
         toY: Double,
-        edge: Int,
         durationMs: Int,
         holdMs: Int
     ) async throws {
@@ -2377,6 +2473,15 @@ public actor PaneCoordinator {
         // other. On a device it realizes as the App Switcher macro, which only
         // reads as a gesture whole, so live input waits it out instead.
         let preemptible = input.backend.supportsSystemEdgeGesture
+        // Which native edge the displayed bottom is, and where its
+        // coordinates land, both follow from the pane's orientation and
+        // are resolved together so the tag and the swipe can't disagree
+        // about which edge the contact came from. Resolved here, against
+        // the authoritative orientation, rather than from a client
+        // snapshot that may be stale by now.
+        let plan = AppSwitcherGesture.plan(for: input.record.presentationOrientation)
+        let origin = plan.orientation.surfacePoint(displayedX: fromX, displayedY: fromY)
+        let target = plan.orientation.surfacePoint(displayedX: toX, displayedY: toY)
         try await withContactLane(
             input.record,
             backend: input.backend,
@@ -2387,11 +2492,11 @@ public actor PaneCoordinator {
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
-                fromX: fromX,
-                fromY: fromY,
-                toX: toX,
-                toY: toY,
-                edge: edge,
+                fromX: origin.x,
+                fromY: origin.y,
+                toX: target.x,
+                toY: target.y,
+                edge: plan.edge,
                 durationMs: durationMs,
                 holdMs: holdMs,
                 fence: fence
@@ -2412,6 +2517,7 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .longPress
         )
+        let point = native(x, y, for: input)
         try await withContactLane(
             input.record,
             backend: input.backend,
@@ -2422,8 +2528,8 @@ public actor PaneCoordinator {
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
-                x: x,
-                y: y,
+                x: point.x,
+                y: point.y,
                 durationMs: durationMs,
                 fence: fence
             )
@@ -2489,6 +2595,10 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .pinch
         )
+        let fromF1 = native(fromF1X, fromF1Y, for: input)
+        let fromF2 = native(fromF2X, fromF2Y, for: input)
+        let toF1 = native(toF1X, toF1Y, for: input)
+        let toF2 = native(toF2X, toF2Y, for: input)
         try await withContactLane(
             input.record,
             backend: input.backend,
@@ -2499,14 +2609,14 @@ public actor PaneCoordinator {
                 backend: input.backend,
                 paneId: paneId,
                 generation: input.generation,
-                fromF1X: fromF1X,
-                fromF1Y: fromF1Y,
-                fromF2X: fromF2X,
-                fromF2Y: fromF2Y,
-                toF1X: toF1X,
-                toF1Y: toF1Y,
-                toF2X: toF2X,
-                toF2Y: toF2Y,
+                fromF1X: fromF1.x,
+                fromF1Y: fromF1.y,
+                fromF2X: fromF2.x,
+                fromF2Y: fromF2.y,
+                toF1X: toF1.x,
+                toF1Y: toF1.y,
+                toF2X: toF2.x,
+                toF2Y: toF2.y,
                 durationMs: durationMs,
                 fence: fence
             )
@@ -2525,6 +2635,7 @@ public actor PaneCoordinator {
             supporting: \.touch,
             operation: .multitouch
         )
+        let points = points.map { native($0, for: input) }
         // The synthesis rejects any other count, so a well-formed frame always
         // has two contacts to name in the lease.
         guard points.count == 2 else {

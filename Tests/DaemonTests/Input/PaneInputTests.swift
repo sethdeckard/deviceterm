@@ -219,8 +219,7 @@ func edgeTouchParamsRoundTripsWireKeys() throws {
         paneId: "P-1",
         x: 0.5,
         y: 0.99,
-        phase: "down",
-        edge: 3
+        phase: "down"
     )
     let data = try JSONEncoder().encode(params)
     let decoded = try JSONDecoder().decode(EdgeTouchParams.self, from: data)
@@ -228,7 +227,6 @@ func edgeTouchParamsRoundTripsWireKeys() throws {
     #expect(decoded.x == 0.5)
     #expect(decoded.y == 0.99)
     #expect(decoded.phase == "down")
-    #expect(decoded.edge == 3)
 }
 
 @Test

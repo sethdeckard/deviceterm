@@ -64,7 +64,7 @@ struct HelpTopic: Sendable, Equatable {
         var titleAside: String? {
             switch self {
             case .drive:
-                "coords are normalized; (0,0) top-left, (1,1) bottom-right"
+                "coords are normalized to what's on screen; (0,0) top-left"
 
             case .workspace:
                 "back-channel verbs"
@@ -81,7 +81,10 @@ struct HelpTopic: Sendable, Equatable {
         var note: String? {
             switch self {
             case .drive:
-                "  Coords are normalized: (0,0) top-left, (1,1) bottom-right.\n"
+                "  Coords are normalized to what the device is showing:\n"
+                    + "  (0,0) top-left, (1,1) bottom-right. A Simulator's\n"
+                    + "  observed rotation is followed; a physical device is\n"
+                    + "  assumed portrait until deviceterm rotates it.\n"
                     + HelpCatalog.paneTargetNote
 
             case .hardware, .inspect:

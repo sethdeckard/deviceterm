@@ -429,6 +429,16 @@ target, and the agent speaks the same commands you would type.
 CLI coordinates are normalized. `(0,0)` is the top-left corner and `(1,1)` is
 the bottom-right corner regardless of pixel dimensions.
 
+They describe what the device is showing, not the panel underneath it. Turn
+a Simulator to landscape and `(0,0)` follows the picture: DeviceTerm watches
+the simulator's display and rotates your coordinate into the device's native
+frame on the way through.
+
+A physical device has no such source. DeviceTerm assumes a device pane is
+portrait until it performs a rotation itself, so turning the device by hand
+leaves that assumption stale and coordinates land as though it were still
+upright.
+
 ```sh
 deviceterm tap 0.5 0.5
 deviceterm swipe 0.5 0.8 0.5 0.2 --duration 250
@@ -589,6 +599,11 @@ deviceterm ax sweep --step 0.04
 `ax tree` reads the frontmost application's accessibility tree. `ax point`
 reads the element at one normalized coordinate. `ax sweep` samples the
 display with point queries and removes duplicate elements.
+
+Frames are in pixels, in the same displayed space as input coordinates, but
+input coordinates are normalized. Divide a frame's centre by the root frame's
+`w` and `h` before tapping it. No rotation of your own is needed in either
+direction.
 
 All three always emit JSON. The wrapper fields are DeviceTerm contracts; the
 nested accessibility nodes come from Apple frameworks and can vary by

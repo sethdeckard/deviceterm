@@ -3,10 +3,12 @@
 // EdgeSwipeParams: wire shape for `pane.input.edgeSwipe`.
 //
 // An edge-tagged drag for the simulator's system gestures (home
-// indicator / App Switcher). `edge` is the raw `IndigoHIDEdge` value
-// identifying the originating screen edge. Where a plain swipe plays a
-// fixed trajectory, the edge tag lets the OS recognize the system
-// gesture.
+// indicator / App Switcher). Coordinates are displayed space, as with
+// the other coordinate-bearing touch verbs. The raw `IndigoHIDEdge` tag that lets the OS
+// recognize the gesture is not on the wire: it depends on the device's
+// orientation, and the daemon resolves it alongside the coordinate
+// rotation (`AppSwitcherGesture.plan(for:)`) from its authoritative
+// presentation orientation rather than a client snapshot.
 
 public struct EdgeSwipeParams: Codable, Sendable {
     public let paneId: String
@@ -14,7 +16,6 @@ public struct EdgeSwipeParams: Codable, Sendable {
     public let fromY: Double
     public let toX: Double
     public let toY: Double
-    public let edge: Int
     public let durationMs: Int?
     public let holdMs: Int?
 
@@ -24,7 +25,6 @@ public struct EdgeSwipeParams: Codable, Sendable {
         fromY: Double,
         toX: Double,
         toY: Double,
-        edge: Int,
         durationMs: Int?,
         holdMs: Int?
     ) {
@@ -33,7 +33,6 @@ public struct EdgeSwipeParams: Codable, Sendable {
         self.fromY = fromY
         self.toX = toX
         self.toY = toY
-        self.edge = edge
         self.durationMs = durationMs
         self.holdMs = holdMs
     }

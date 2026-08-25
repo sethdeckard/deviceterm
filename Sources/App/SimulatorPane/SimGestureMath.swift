@@ -76,18 +76,16 @@ enum SimGestureMath {
     /// Map a point in view coordinates to (0..1) within the aspect-fit
     /// rendered image, or nil if outside the letterboxed image.
     ///
-    /// `orientation` mirrors the render-side UV rotation in
-    /// `SimulatorContentView`: when the device is landscape we
-    /// compute aspect-fit against a width/height-swapped effective
-    /// surface (so the letterbox rect matches the displayed quad)
-    /// AND rotate the resulting unit-square coordinate back into
-    /// the original portrait surface space (so the daemon's HID,
-    /// which always speaks the IOSurface's fixed portrait
-    /// orientation, gets the equivalent tap location on the
-    /// device's native screen). Without that round-trip, a tap on
-    /// the visible top-left of landscape Maps would normalize to
-    /// the portrait surface's top-left, which after the device's
-    /// rotation lands somewhere off-screen.
+    /// The result is in **displayed** space, which is what the
+    /// coordinate-bearing touch verbs take: `(0, 0)` is the top-left of
+    /// what the viewer sees. The daemon rotates it into the device's
+    /// native portrait surface at its input boundary, resolving against
+    /// the presentation orientation it holds there
+    /// (`Orientation.surfacePoint(displayedX:displayedY:)`).
+    ///
+    /// `orientation` is still needed here, for the letterbox: a
+    /// landscape device aspect-fits against a width/height-swapped
+    /// effective surface so the rect matches the displayed quad.
     static func normalizedPoint(
         viewPoint: CGPoint,
         viewSize: CGSize,
@@ -102,64 +100,26 @@ enum SimGestureMath {
             displayInset: displayInset
         ) else { return nil }
         guard rect.contains(viewPoint) else { return nil }
-        // Normalized in the *displayed* (oriented) coordinate
-        // space.
-        let oriented = CGPoint(
+        return CGPoint(
             x: (viewPoint.x - rect.origin.x) / rect.width,
             y: (viewPoint.y - rect.origin.y) / rect.height
         )
-        return rotateOrientedToSurface(oriented, orientation: orientation)
     }
 
-    /// Map a point in view coordinates to a normalized surface
-    /// coordinate, allowing values outside [0,1] when the point is
-    /// in the bezel area (above / below / beside the rendered
-    /// screen). Same orientation-aware letterbox math as
-    /// `normalizedPoint`, but never returns nil and never clamps, since
-    /// the daemon's HID contract already accepts out-of-range
-    /// coords as off-screen gestures
-    /// (`Sources/Daemon/Pane/PaneMethods.swift` TapParams/SwipeParams).
+    /// Map a point in view coordinates to a **displayed**-space
+    /// coordinate, allowing values outside [0,1] when the point is in
+    /// the bezel area (above / below / beside the rendered screen).
+    /// Same letterbox math as `normalizedPoint`, but never returns nil
+    /// and never clamps, since the daemon's HID contract already accepts
+    /// out-of-range coords as off-screen gestures.
     ///
-    /// This is the path the iOS app-switcher swipe rides on:
-    /// pressing the bezel just below the screen produces a touch
-    /// at y > 1 in the portrait surface frame, and the cross-edge
-    /// trajectory into the screen is what the swipe-up gesture
-    /// needs to register.
+    /// This is the path the iOS app-switcher swipe rides on: pressing
+    /// the bezel just below the screen produces a touch at `y > 1`, and
+    /// the cross-edge trajectory into the screen is what the swipe-up
+    /// gesture needs to register. In displayed space the home-indicator
+    /// strip is near `y = 1` in every orientation, which is what
+    /// `isInBottomEdgeBand` keys on.
     static func extendedNormalizedPoint(
-        viewPoint: CGPoint,
-        viewSize: CGSize,
-        surfaceSize: CGSize,
-        orientation: Orientation = .portrait,
-        displayInset: CGFloat = 0
-    ) -> CGPoint? {
-        guard let rect = imageRect(
-            viewSize: viewSize,
-            surfaceSize: surfaceSize,
-            orientation: orientation,
-            displayInset: displayInset
-        ) else { return nil }
-        let oriented = CGPoint(
-            x: (viewPoint.x - rect.origin.x) / rect.width,
-            y: (viewPoint.y - rect.origin.y) / rect.height
-        )
-        return rotateOrientedToSurface(oriented, orientation: orientation)
-    }
-
-    /// Map a point in view coordinates to the **oriented (displayed)**
-    /// unit-square coordinate: the same intermediate
-    /// `extendedNormalizedPoint` computes *before*
-    /// `rotateOrientedToSurface`. Unclamped and never nil except on
-    /// degenerate geometry, so a bezel-origin point just below the screen
-    /// reads as `y` slightly > 1.
-    ///
-    /// This is what bottom-edge-band detection keys on: in displayed
-    /// space the home-indicator strip is always near `y = 1` regardless of
-    /// device orientation (iOS renders it at the bottom of the current
-    /// interface orientation), whereas the post-rotation *surface* point
-    /// lands on a different edge per orientation. So we test the band here,
-    /// then let the surface coords flow through `extendedNormalizedPoint`
-    /// unchanged.
-    static func orientedNormalizedPoint(
         viewPoint: CGPoint,
         viewSize: CGSize,
         surfaceSize: CGSize,
@@ -180,40 +140,9 @@ enum SimGestureMath {
 
     /// Whether a displayed-space (oriented) unit-Y sits in the bottom-edge
     /// band that arms the home / App-Switcher system gesture. `orientedY`
-    /// is the `y` from `orientedNormalizedPoint`.
+    /// is the `y` from `extendedNormalizedPoint`.
     static func isInBottomEdgeBand(orientedY: CGFloat) -> Bool {
         orientedY >= AppSwitcherGesture.bottomEdgeBandMinY
-    }
-
-    /// Map a unit-square coordinate from the displayed
-    /// (orientation-applied) space to the original portrait surface
-    /// space. This must reproduce the *same* displayed->surface mapping
-    /// the render shader applies (`SimulatorContentView.uvRotation`): the
-    /// shader picks, for each displayed point, the surface texel to show
-    /// there, so a tap injects the touch at exactly that texel. Portrait
-    /// and upside-down are self-inverse (180deg / identity), so they need
-    /// no per-orientation distinction; the two landscape rotations are
-    /// 90deg opposites of each other. Pure math, exposed so the tests can
-    /// pin every corner without going through the view.
-    static func rotateOrientedToSurface(
-        _ point: CGPoint,
-        orientation: Orientation
-    ) -> CGPoint {
-        switch orientation {
-        case .portrait:
-            return point
-
-        case .landscapeLeft:
-            // displayed top-left (0,0) -> portrait bottom-left's surface (1,0)
-            return CGPoint(x: 1 - point.y, y: point.x)
-
-        case .portraitUpsideDown:
-            return CGPoint(x: 1 - point.x, y: 1 - point.y)
-
-        case .landscapeRight:
-            // displayed top-left (0,0) -> portrait top-right's surface (0,1)
-            return CGPoint(x: point.y, y: 1 - point.x)
-        }
     }
 
     /// Fallback for a release point outside the letterbox: map raw view

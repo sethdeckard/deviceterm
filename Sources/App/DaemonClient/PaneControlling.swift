@@ -42,28 +42,30 @@ protocol PaneControlling: AnyObject {
         startHoldMs: Int
     ) async throws
     /// Edge-tagged drag for the simulator's system gestures (home
-    /// indicator / App Switcher). `edge` is the raw `IndigoHIDEdge` value.
+    /// indicator / App Switcher). Coordinates are displayed space; the
+    /// daemon resolves the `IndigoHIDEdge` tag from the pane's
+    /// orientation.
     func paneInputEdgeSwipe(
         paneId: String,
         fromX: Double,
         fromY: Double,
         toX: Double,
         toY: Double,
-        edge: Int,
         durationMs: Int,
         holdMs: Int
     ) async throws
     /// `pane.input.edgeTouch`: a single edge-tagged live touch event, the
     /// per-event analogue of `paneInputTouch`. A live mouse drag from the
     /// displayed bottom edge streams these so the App Switcher follows the
-    /// cursor. `edge` is the raw `IndigoHIDEdge` value (the simulator routes
-    /// by it; the physical device by the system-gesture report trailer).
+    /// cursor. Coordinates are displayed space; the daemon resolves the
+    /// `IndigoHIDEdge` tag from the pane's orientation and latches it for
+    /// the drag (the simulator routes by that tag; the physical device by
+    /// the system-gesture report trailer).
     func paneInputEdgeTouch(
         paneId: String,
         x: Double,
         y: Double,
-        phase: TouchPhase,
-        edge: Int
+        phase: TouchPhase
     ) async throws
     func paneInputLongPress(
         paneId: String,

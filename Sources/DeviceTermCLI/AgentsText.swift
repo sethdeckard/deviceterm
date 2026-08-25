@@ -127,8 +127,8 @@ public enum AgentsText {
         deviceterm panes list                 # pane row appears
 
       Tap a UI element you've located:
-        deviceterm ax tree | jq '.tree'       # locate element
-        deviceterm tap 0.5 0.5                # tap normalized coords
+        deviceterm ax tree | jq '.tree'       # frames in displayed pixels
+        deviceterm tap 0.5 0.5                # normalize by the root frame
 
       Swipe a scrollable list down:
         deviceterm swipe 0.5 0.8 0.5 0.2 --duration 250

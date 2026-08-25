@@ -1407,7 +1407,6 @@ func edgeSwipeEmitsEdgeTaggedDownDragUp() async throws {
         fromY: 0.99,
         toX: 0.5,
         toY: 0.5,
-        edge: 3,
         durationMs: 32,
         holdMs: 0
     )
@@ -1439,7 +1438,6 @@ func edgeSwipeOnDeviceBackendUsesSystemSwipe() async throws {
         fromY: 0.99,
         toX: 0.5,
         toY: 0.5,
-        edge: 3,
         durationMs: 32,
         holdMs: 0
     )
@@ -1458,6 +1456,9 @@ func edgeSwipeOnDeviceBackendUsesSystemSwipe() async throws {
 func edgeSwipeOnDeviceForwardsLandscapeEdge() async throws {
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend(edgeUnsupported: true)
+    // The device is already turned when the pane mounts, so the coordinator
+    // seeds its presentation orientation from the backend.
+    backend.displayOrientation = .landscapeLeft
     let result = try await coordinator.createMockPane(
         udid: "udid-device-appswitcher-landscape",
         sessionId: UUID(),
@@ -1465,15 +1466,16 @@ func edgeSwipeOnDeviceForwardsLandscapeEdge() async throws {
     )
     // landscapeLeft's IndigoHIDEdge value: the device maps it to its native
     // left edge so the swipe (and the report trailer) rotate with the device.
+    // The request carries no tag; the daemon chooses it from the pane
+    // orientation.
     let landscapeEdge = try #require(AppSwitcherGesture.edge(for: .landscapeLeft))
     try await coordinator.edgeSwipe(
         paneId: result.paneId,
         as: .guiPeer,
-        fromX: 0.01,
-        fromY: 0.5,
+        fromX: 0.5,
+        fromY: 0.99,
         toX: 0.5,
         toY: 0.5,
-        edge: landscapeEdge,
         durationMs: 32,
         holdMs: 0
     )
@@ -1498,7 +1500,6 @@ func edgeSwipeFallsBackToDoublePressWithoutSystemSwipe() async throws {
         fromY: 0.99,
         toX: 0.5,
         toY: 0.5,
-        edge: 3,
         durationMs: 32,
         holdMs: 0
     )
@@ -1517,9 +1518,9 @@ func edgeTouchMapsPhasesToEdgePrimitives() async throws {
         sessionId: UUID(),
         backend: backend
     )
-    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down, edge: 3)
-    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.80, phase: .move, edge: 3)
-    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.50, phase: .lift, edge: 3)
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down)
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.80, phase: .move)
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.50, phase: .lift)
     // Distinct primitive per phase: the per-phase NSEventType is what
     // the system recognizer needs (unlike plain `touch`, which collapses
     // down/move to `tapDown`).
@@ -1530,6 +1531,91 @@ func edgeTouchMapsPhasesToEdgePrimitives() async throws {
     // The plain-touch primitives stay untouched.
     #expect(backend.tapDownPoints.isEmpty)
     #expect(backend.tapUpPoints.isEmpty)
+}
+
+@Test("an edge drag keeps its press's tag when the device turns mid-drag")
+func edgeTouchLatchesItsTagAcrossAMidDragRotation() async throws {
+    // The lane's lift admission checks only the contact flavor, so a
+    // release tagged differently from the press is admitted and the
+    // contact that is actually down may never be released. The tag is
+    // resolved once, at the press, and carried to the lift.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let result = try await coordinator.createMockPane(
+        udid: "udid-edge-latch",
+        sessionId: UUID(),
+        backend: backend
+    )
+    let (subscriptionId, stream) = try await coordinator.subscribe(
+        paneId: result.paneId,
+        as: .guiPeer
+    )
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down)
+
+    // Drive the observed orientation; `rotate` does not update this
+    // backend's presentation orientation. Wait for `orientationChanged` so
+    // later input cannot race the update. The watchdog ends the stream if
+    // the event never arrives.
+    backend.emitDisplayOrientation(.landscapeLeft)
+    let watchdog = Task {
+        try? await Task.sleep(for: .seconds(2))
+        await coordinator.unsubscribe(paneId: result.paneId, subscriptionId: subscriptionId)
+    }
+    var turned = false
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event, orientation == .landscapeLeft {
+            turned = true
+            break
+        }
+    }
+    watchdog.cancel()
+    #expect(turned, "the mid-drag rotation never reached the pane")
+
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.80, phase: .move)
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.50, phase: .lift)
+
+    // One tag for the whole contact, the portrait one the press was
+    // admitted with, not the landscape value the rotation would resolve.
+    #expect(backend.edgeValues == [3, 3, 3])
+    #expect(backend.edgeUpPoints.count == 1, "the contact was never released")
+    // Coordinates rotate through the press's orientation too, so the
+    // trajectory and the tag describe the same edge.
+    #expect(backend.edgeDownPoints == [CGPoint(x: 0.5, y: 0.99)])
+    #expect(backend.edgeUpPoints == [CGPoint(x: 0.5, y: 0.50)])
+
+    // A new press must use the updated landscape orientation.
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down)
+    #expect(backend.edgeValues.last == AppSwitcherGesture.edge(for: .landscapeLeft))
+    await coordinator.unsubscribe(paneId: result.paneId, subscriptionId: subscriptionId)
+}
+
+@Test("an upside-down edge drag degrades to a rotated plain touch")
+func edgeTouchUpsideDownFallsBackToPlainTouch() async throws {
+    // No IndigoHIDEdge value arms the recognizer upside-down, so tagging
+    // the drag would claim an edge it didn't come from. It runs as a
+    // plain touch instead, and still tracks the cursor because the
+    // coordinates rotate through the real orientation rather than the
+    // portrait fallback the scripted macro uses.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.displayOrientation = .portraitUpsideDown
+    let result = try await coordinator.createMockPane(
+        udid: "udid-edge-upside-down",
+        sessionId: UUID(),
+        backend: backend
+    )
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down)
+    try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.50, phase: .lift)
+
+    #expect(backend.edgeDownPoints.isEmpty)
+    #expect(backend.edgeUpPoints.isEmpty)
+    #expect(backend.edgeValues.isEmpty)
+    // The displayed bottom (y = 0.99) is the native top when the device
+    // is upside-down, which is where the contact has to land.
+    #expect(backend.tapDownPoints.count == 1)
+    let down = try #require(backend.tapDownPoints.first)
+    #expect(abs(down.x - 0.5) < 1e-9)
+    #expect(abs(down.y - 0.01) < 1e-9)
 }
 
 @Test("a locked interface takes the rotate but the pane does not turn")
@@ -1576,7 +1662,7 @@ func edgeTouchUnsupportedOnDeviceBackend() async throws {
     )
     var thrown: PaneError?
     do {
-        try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down, edge: 3)
+        try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down)
     } catch let error as PaneError {
         thrown = error
     }

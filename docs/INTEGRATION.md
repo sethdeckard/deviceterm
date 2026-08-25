@@ -660,6 +660,15 @@ Every input receipt begins with:
 
 `shortId` is optional. The other fields are required.
 
+Coordinates in a receipt are in the same normalized, displayed space the
+command took: `(0,0)` is the top-left of what the device is showing. The
+daemon converts to the device's native frame internally and does not report
+the converted value.
+
+That conversion follows a Simulator's observed display orientation. A
+physical-device pane exposes no orientation source, so it is treated as
+portrait until DeviceTerm performs a rotation on it.
+
 The command adds these fields:
 
 | Command | Additional Fields |

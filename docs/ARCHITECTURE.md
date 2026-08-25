@@ -1764,16 +1764,25 @@ its first interpolated sample returns `steps: 0` and `dispatched: "tap"`.
 
 #### `pane.input.edgeSwipe`
 
-- Params: `{paneId, fromX, fromY, toX, toY, edge, durationMs?, holdMs?}`
+- Params: `{paneId, fromX, fromY, toX, toY, durationMs?, holdMs?}`
 - Result: `{ok}`
 - Scope: session
 
 An edge-tagged drag that drives the OS system gestures (home indicator,
 App Switcher). Distinct from `swipe` because each contact carries the
-originating screen `edge` (the raw `IndigoHIDEdge` value; bottom = 3,
+originating screen edge (the raw `IndigoHIDEdge` value; bottom = 3,
 live-confirmed): that tag is what routes the drag to the system
 recognizer instead of the foreground app, where a plain `swipe` is eaten
-as a scroll. On a sim it is built through the true 6-arg
+as a scroll.
+
+The tag is not on the wire. Which native edge the displayed bottom is
+depends on the device's orientation, and the daemon resolves the tag and
+the coordinate rotation together from its authoritative presentation
+orientation rather than a client snapshot
+(`AppSwitcherGesture.plan(for:)`). Upside-down has no confirmed
+home-gesture edge, and the scripted macro degrades to the portrait
+gesture wholesale rather than tagging a turned trajectory with an edge it
+didn't come from. On a sim it is built through the true 6-arg
 `IndigoHIDMessageForMouseNSEvent(…, NSSize, IndigoHIDEdge)` prototype
 with `MouseDragged` motion samples.
 
@@ -1798,12 +1807,12 @@ lift.
 
 #### `pane.input.edgeTouch`
 
-- Params: `{paneId, x, y, phase: "down"|"move"|"up", edge}`
+- Params: `{paneId, x, y, phase: "down"|"move"|"up"}`
 - Result: `{ok}`
 - Scope: session
 
-The per-event analogue of `pane.input.touch` carrying the originating
-screen `edge`: a live GUI mouse drag starting in the displayed
+The per-event analogue of `pane.input.touch`, carrying the originating
+screen edge: a live GUI mouse drag starting in the displayed
 bottom-edge band streams these (`down` → `edgeTouchDown`,
 `move` → `edgeTouchMove`, `up` → `edgeTouchUp`) so the App Switcher
 follows the cursor, where `edgeSwipe` plays a fixed trajectory. On a
@@ -1813,6 +1822,14 @@ dragged, up) is what the system recognizer needs. On a physical device
 each contact is sent as an enriched system-gesture report (the relay
 adds the trailer and nanosecond timestamp), so the interactive drag
 works there too.
+
+The tag is resolved once, at `.down`, and reused until the lift. The
+lane's lift admission checks only the contact flavor, so re-resolving per
+event would let a rotation mid-drag tag the release differently from the
+press and leave the contact that is down unreleased. An orientation with
+no confirmed home-gesture edge degrades to a plain touch, which still
+follows the cursor; the portrait-wholesale fallback belongs to the
+scripted macro, whose trajectory is fixed.
 
 #### `pane.input.longPress`
 
