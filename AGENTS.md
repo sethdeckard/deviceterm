@@ -116,6 +116,14 @@ reviewers can decide whether the trade-off is worth it.
   it above the owner's own members. Tests are exempt
   (`Tests/.swiftlint.yml`): a test file colocates related suites, fixtures,
   and fakes by design.
+- Source files group into feature directories one level under the module
+  root: `Sources/App/Tabs/`, `Sources/Daemon/Trust/`,
+  `Sources/DaemonProtocol/Input/`. A new type goes in its feature's
+  directory, or at the module root when it has no feature, and a new
+  directory earns its place at about four files. Membership follows the
+  feature, not the name prefix, so `Pane*` legitimately spans several
+  directories in a module. SwiftPM discovers them from the target's
+  `path:`, so a new directory needs no `Package.swift` change.
 - Finite wire values are shared `DaemonProtocol` enums, defined once, never
   re-typed as a raw string literal at a call site. The canonical RPC method
   set is `RPCMethod` (`Sources/DaemonProtocol/RPC/RPCMethod.swift`); a
