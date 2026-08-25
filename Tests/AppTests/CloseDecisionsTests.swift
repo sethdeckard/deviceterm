@@ -8,8 +8,7 @@ import Testing
 // (`paneClose` / `tabClose` single + bulk / `windowClose`), the quit
 // prompt (`quitWithSims`), and the multi-pane confirm
 // (`multiPaneTabClose` single + bulk, `multiPaneWindowClose`). Each
-// prompts through `NSAlert.runModal` when no stored answer exists
-// (that path can't run in a non-UI test process), and short-circuits
+// raises a prompt when no stored answer exists, and short-circuits
 // when one does exist in `CloseSuppressionState` or
 // `~/.config/deviceterm/config`. `paneClose` is the exception: its
 // `alwaysAsk` flag forces the prompt regardless of a stored answer,
@@ -18,7 +17,10 @@ import Testing
 // The short-circuit paths are what these tests pin: it's the
 // regression class that lets a user's "Don't ask again" stick, and
 // the path that makes the scope tiers (window / session / appExit /
-// always) behave as advertised.
+// always) behave as advertised. Every async close-prompt call here
+// passes `window: nil`; stored answers must short-circuit before
+// presentation. Sheet presentation and target-lifetime dismissal are
+// covered by `CloseSheetLifetimeTests`.
 
 // MARK: - Persistent file lookup (forever tier)
 

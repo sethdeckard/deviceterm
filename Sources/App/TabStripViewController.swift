@@ -670,7 +670,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     config: config,
                     state: CloseSuppressionState.shared,
                     context: context,
-                    window: self.view.window
+                    window: self.view.window,
+                    whileTargetLives: { [weak self] in
+                        self?.tabListVM.tab(id: tabID) != nil
+                    }
                 )
                 // Awaiting the sheet frees the main actor, so the tab
                 // can close while the prompt is visible. Re-read before
@@ -694,7 +697,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     state: CloseSuppressionState.shared,
                     context: context,
                     paneCount: paneCount,
-                    window: self.view.window
+                    window: self.view.window,
+                    whileTargetLives: { [weak self] in
+                        self?.tabListVM.tab(id: tabID) != nil
+                    }
                 ) {
                     guard self.tabListVM.tab(id: tabID) != nil else { return }
                     self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
@@ -767,7 +773,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     state: CloseSuppressionState.shared,
                     context: context,
                     count: sessionIDs.count,
-                    window: self.view.window
+                    window: self.view.window,
+                    whileTargetLives: { [weak self] in
+                        self?.anyTabLives(of: ids) ?? false
+                    }
                 )
                 switch decision {
                 case .detach:
@@ -787,7 +796,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     context: context,
                     tabCount: sessionIDs.count,
                     multiPaneTabCount: multiPaneTabCount,
-                    window: self.view.window
+                    window: self.view.window,
+                    whileTargetLives: { [weak self] in
+                        self?.anyTabLives(of: ids) ?? false
+                    }
                 ) else { return }
                 mode = gateMode
 
@@ -798,6 +810,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
             }
         }
+    }
+
+    /// Whether a bulk close still has anything to close. One prompt
+    /// covers the whole batch, so it stays meaningful while any target
+    /// survives and only becomes unanswerable once they are all gone.
+    private func anyTabLives(of ids: [TabID]) -> Bool {
+        ids.contains { tabListVM.tab(id: $0) != nil }
     }
 
     // MARK: - Right-click menu handlers

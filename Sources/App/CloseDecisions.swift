@@ -39,6 +39,13 @@
 
 import AppKit
 
+/// Whether the tab, pane, or window a close prompt is asking about still
+/// exists. Read on the main actor whenever the `@Observable` state it
+/// touches changes, so the prompt can take itself down; see
+/// `CloseSheetLifetime`. A caller with nothing meaningful to watch passes
+/// `nil` and its prompt stays up until answered.
+typealias CloseTargetLiveness = @MainActor () -> Bool
+
 @MainActor
 enum CloseDecisions {
     static let tabCloseKey = "tab-close-default"
@@ -63,6 +70,7 @@ enum CloseDecisions {
         context: CloseContext,
         deviceName: String,
         window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil,
         alwaysAsk: Bool = false
     ) async -> TabCloseDecision {
         await askBootedSimDisposition(
@@ -70,6 +78,7 @@ enum CloseDecisions {
             state: state,
             context: context,
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close this pane?",
             informativeText: alwaysAsk
                 ? "DeviceTerm could not reach the daemon to check whether "
@@ -85,13 +94,15 @@ enum CloseDecisions {
         config: ConfigFile,
         state: CloseSuppressionState,
         context: CloseContext,
-        window: NSWindow?
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
     ) async -> TabCloseDecision {
         await askBootedSimDisposition(
             config: config,
             state: state,
             context: context,
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close this tab?",
             informativeText:
                 "Detach keeps any simulators this tab booted running. "
@@ -114,7 +125,8 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         context: CloseContext,
         count: Int,
-        window: NSWindow?
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
     ) async -> TabCloseDecision {
         let noun = count == 1 ? "tab" : "tabs"
         return await askBootedSimDisposition(
@@ -122,6 +134,7 @@ enum CloseDecisions {
             state: state,
             context: context,
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close \(count) \(noun)?",
             informativeText:
                 "Detach keeps any simulators these tabs booted running. "
@@ -133,13 +146,15 @@ enum CloseDecisions {
         config: ConfigFile,
         state: CloseSuppressionState,
         windowID: WindowID,
-        window: NSWindow?
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
     ) async -> TabCloseDecision {
         await askBootedSimDisposition(
             config: config,
             state: state,
             context: CloseContext(windowID: windowID, hasOtherTabsInWindow: false),
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close this window?",
             informativeText:
                 "Detach keeps any simulators booted from this "
@@ -182,13 +197,15 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         context: CloseContext,
         paneCount: Int,
-        window: NSWindow?
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
     ) async -> Bool {
         await askMultiPaneConfirmation(
             config: config,
             state: state,
             context: context,
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close this tab?",
             informativeText:
                 "This tab contains \(paneCount) panes. "
@@ -205,7 +222,8 @@ enum CloseDecisions {
         context: CloseContext,
         tabCount: Int,
         multiPaneTabCount: Int,
-        window: NSWindow?
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
     ) async -> Bool {
         let noun = tabCount == 1 ? "tab" : "tabs"
         let detail: String
@@ -224,6 +242,7 @@ enum CloseDecisions {
             state: state,
             context: context,
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close \(tabCount) \(noun)?",
             informativeText: detail
         )
@@ -239,7 +258,8 @@ enum CloseDecisions {
         windowID: WindowID,
         tabCount: Int,
         multiPaneTabCount: Int,
-        window: NSWindow?
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
     ) async -> Bool {
         let detail: String
         if tabCount == 1 {
@@ -257,6 +277,7 @@ enum CloseDecisions {
             state: state,
             context: CloseContext(windowID: windowID, hasOtherTabsInWindow: false),
             window: window,
+            whileTargetLives: isAlive,
             messageText: "Close this window?",
             informativeText: detail
         )
@@ -270,6 +291,7 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         context: CloseContext,
         window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness?,
         messageText: String,
         informativeText: String,
         detachTitle: String = "Detach (Keep Sims Running)",
@@ -293,7 +315,7 @@ enum CloseDecisions {
         let accessory = SuppressionAccessory(scopes: scopes)
         alert.accessoryView = accessory.view
 
-        let response = await runAlert(alert, in: window)
+        let response = await runAlert(alert, in: window, whileTargetLives: isAlive)
         let decision: TabCloseDecision
         switch response {
         case .alertFirstButtonReturn:
@@ -326,6 +348,7 @@ enum CloseDecisions {
         state: CloseSuppressionState,
         context: CloseContext,
         window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness?,
         messageText: String,
         informativeText: String
     ) async -> Bool {
@@ -344,7 +367,11 @@ enum CloseDecisions {
         let accessory = SuppressionAccessory(scopes: scopes)
         alert.accessoryView = accessory.view
 
-        let proceed = await runAlert(alert, in: window) == .alertFirstButtonReturn
+        let proceed = await runAlert(
+            alert,
+            in: window,
+            whileTargetLives: isAlive
+        ) == .alertFirstButtonReturn
         if proceed,
             accessory.suppressionEnabled,
             let scope = accessory.selectedScope {
@@ -365,16 +392,48 @@ enum CloseDecisions {
     /// servicing the `app.commands` drain, so CLI workspace verbs go
     /// unanswered until someone dismisses the prompt. A sheet spins no
     /// such loop. Matches `GhosttyTerminalSurface.presentConfirmSheet`.
+    ///
+    /// A sheet whose `isAlive` target goes away is ended with
+    /// `.cancel`, which every caller already reads as "don't proceed"
+    /// and which records no suppression. The app-modal fallback has no
+    /// such watch: `runModal` is the path taken when there is no window
+    /// to anchor to, and it holds the main actor, so nothing could
+    /// observe a removal while it is up anyway.
+    ///
+    /// Exactly one resume: `endSheet` dismisses through the same
+    /// completion handler a button press does, so the watch never
+    /// resumes the continuation itself.
     private static func runAlert(
         _ alert: NSAlert,
-        in window: NSWindow?
+        in window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness?
     ) async -> NSApplication.ModalResponse {
         guard let window else { return alert.runModal() }
-        return await withCheckedContinuation { continuation in
-            alert.beginSheetModal(for: window) { response in
-                continuation.resume(returning: response)
+        let lifetime = isAlive.map { alive in
+            CloseSheetLifetime(isTargetAlive: alive) { [weak window] in
+                // No window left means no sheet left to take down.
+                guard let window else { return true }
+                // The alert may still be animating in or queued behind
+                // another sheet. Retry until it attaches; the identity
+                // check prevents ending a different sheet.
+                guard window.attachedSheet === alert.window else { return false }
+                window.endSheet(alert.window, returnCode: .cancel)
+                return true
             }
         }
+        let response = await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+            // Armed on the next main-actor turn rather than here, so the
+            // watch is never the thing that has to reason about a
+            // half-presented sheet. Nothing is missed in that gap: the
+            // watch evaluates the target against current state on its
+            // first pass rather than waiting for a change.
+            if let lifetime {
+                Task { @MainActor in lifetime.start() }
+            }
+        }
+        lifetime?.finish()
+        return response
     }
 }
 

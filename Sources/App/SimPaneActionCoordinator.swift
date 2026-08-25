@@ -19,11 +19,16 @@ import Foundation
 
 @MainActor
 final class SimPaneActionCoordinator {
-    /// The close-prompt seam: context, device name, force-ask, and the
-    /// window to anchor the sheet to. Injected so tests can answer it
-    /// without a UI.
-    typealias PaneClosePrompt =
-        @MainActor (CloseContext, String, Bool, NSWindow?) async -> TabCloseDecision
+    /// The close-prompt seam: context, device name, force-ask, the window
+    /// to anchor the sheet to, and whether the pane being asked about is
+    /// still there. Injected so tests can answer it without a UI.
+    typealias PaneClosePrompt = @MainActor (
+        CloseContext,
+        String,
+        Bool,
+        NSWindow?,
+        @escaping CloseTargetLiveness
+    ) async -> TabCloseDecision
 
     private let tabID: TabID
     private let router: Router
@@ -92,6 +97,7 @@ final class SimPaneActionCoordinator {
                 context: $0,
                 deviceName: $1,
                 window: $3,
+                whileTargetLives: $4,
                 alwaysAsk: $2
             )
         }
@@ -235,11 +241,16 @@ final class SimPaneActionCoordinator {
             // The tab outlives a pane close, so "For this window" is always
             // an available scope here.
             let context = CloseContext(windowID: windowID, hasOtherTabsInWindow: true)
+            // The same admission fence the checks either side of this
+            // suspension use, handed to the prompt so a sheet asking
+            // about a pane that automation drops comes down instead of
+            // waiting for an answer nothing would act on.
             switch await askPaneClose(
                 context,
                 displayName,
                 lookup == .unknown,
-                hostView?.window
+                hostView?.window,
+                { [weak self] in self?.simPane(udid: udid)?.admission == admission }
             ) {
             case .detach:
                 break

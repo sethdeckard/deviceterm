@@ -1129,7 +1129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     config: config,
                     state: CloseSuppressionState.shared,
                     windowID: windowID,
-                    window: sender
+                    window: sender,
+                    whileTargetLives: { [weak self] in
+                        self?.workspace.window(id: windowID) != nil
+                    }
                 )
                 switch decision {
                 case .detach:
@@ -1149,7 +1152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     windowID: windowID,
                     tabCount: tabCount,
                     multiPaneTabCount: multiPaneTabCount,
-                    window: sender
+                    window: sender,
+                    whileTargetLives: { [weak self] in
+                        self?.workspace.window(id: windowID) != nil
+                    }
                 ) else { return }
                 mode = gateMode
 
