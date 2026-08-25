@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCMethod: the canonical, single-source-of-truth set of RPC method
-// names every process uses. Defined in DaemonProtocol (Foundation-only,
-// shared by daemon, GUI client, deviceterm-cli, and shim) so a method name
-// is spelled exactly once on the wire instead of re-typed as a raw
-// string literal at each call site.
-//
-// The daemon's `MethodRegistry` is keyed by `rawValue`; the GUI client,
-// CLI, and shim build requests from these cases. The rawValues ARE the
-// wire contract. They must never change without a `wireVersion` bump
-// (see `DaemonProtocolInfo` + the Wire-compatibility policy). Mirrors
-// the `RPCEnvelope.MessageType` string-enum pattern.
-//
-// `CaseIterable` backs the drift guard (DaemonTests) that asserts the
-// daemon registry's keys exactly equal these cases: adding a registry
-// method without a case here (or vice versa) fails that test.
 
+/// The canonical, single-source-of-truth set of RPC method
+/// names every process uses. Defined in DaemonProtocol (Foundation-only,
+/// shared by daemon, GUI client, deviceterm-cli, and shim) so a method name
+/// is spelled exactly once on the wire instead of re-typed as a raw
+/// string literal at each call site.
+///
+/// The daemon's `MethodRegistry` is keyed by `rawValue`; the GUI client,
+/// CLI, and shim build requests from these cases. The rawValues ARE the
+/// wire contract, so changing one is wire-incompatible and needs explicit
+/// approval for a `DaemonProtocolInfo.wireVersion` bump. Mirrors the
+/// `RPCEnvelope.MessageType` string-enum pattern.
+///
+/// `CaseIterable` backs the drift guard (DaemonTests) that asserts the
+/// daemon registry's keys exactly equal these cases: adding a registry
+/// method without a case here (or vice versa) fails that test.
 public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     // daemon.*
     case daemonPing = "daemon.ping"

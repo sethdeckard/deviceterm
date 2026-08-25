@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import DaemonProtocol
+import Foundation
+import Testing
+
 // `pane.input.rotate` carries its two forms as mutually exclusive
 // optional fields. These pin that the target initializer sets exactly
 // one and omits the other (a nil Optional encodes as an absent key, not
 // a JSON null), and that a request round-trips back to the same target.
 // The daemon's rejection of both-set and neither-set lives with the
 // handler, since that is where the wire's looser shape is enforced.
-
-import DaemonProtocol
-import Foundation
-import Testing
 
 private func encoded(_ params: RotateParams) throws -> String {
     let encoder = JSONEncoder()

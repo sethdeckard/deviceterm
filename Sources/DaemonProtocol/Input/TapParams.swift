@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TapParams: wire shape for `pane.input.tap`.
-//
-// A discrete tap at normalized display coords.
 
+/// Wire shape for `pane.input.tap`.
+///
+/// A discrete tap at normalized display coords.
 public struct TapParams: Codable, Sendable {
     public let paneId: String
     /// Normalized display coords; (0, 0) is top-left, (1, 1) is

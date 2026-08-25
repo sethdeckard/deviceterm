@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// One entry of the bare-array `physicalDevice.list` result: a
 /// physically-connected iPhone/iPad the daemon can mirror. Feeds the
 /// GUI "Mirror Physical Device…" picker.

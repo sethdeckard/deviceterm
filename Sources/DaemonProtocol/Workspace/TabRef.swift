@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// Tagged `--tab <ref>` value.
 ///
 /// The user-typed `<ref>` string is interpreted as the most specific

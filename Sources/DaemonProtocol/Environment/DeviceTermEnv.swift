@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceTermEnv: the environment-variable names deviceterm injects into a
-// terminal pane's shell and reads back across the GUI, daemon, CLI, and shim.
-// One source of truth so the writer (SessionEnvironment) and every reader
-// can't drift to different spellings.
 
+/// The environment-variable names deviceterm injects into a
+/// terminal pane's shell and reads back across the GUI, daemon, CLI, and shim.
+/// One source of truth so the writer (SessionEnvironment) and every reader
+/// can't drift to different spellings.
 public enum DeviceTermEnv {
     /// The terminal's session id (set in the shell; read by the CLI + shim).
     public static let session = "DEVICETERM_SESSION"

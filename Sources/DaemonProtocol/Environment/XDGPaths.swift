@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// XDGPaths: the one place that resolves deviceterm's config-file
-// locations from the XDG base-directory spec.
-//
-// Both the GUI (`ConfigFile`, `GhosttyThemeColors`) and the CLI
-// (`deviceterm dump-config`) need the path to `~/.config/deviceterm/config`
-// (and the borrowed `~/.config/ghostty/config`). Rather than each
-// hardcoding `~/.config`, they route through here so a single rule
-// (honor `$XDG_CONFIG_HOME`, fall back to `~/.config`) is defined once
-// and stays consistent across processes.
-//
-// Lives in DaemonProtocol (Foundation-only, shared by App + CLI)
-// alongside `DeviceTermConfigDefaults`, the other config source of truth.
 
 import Foundation
 
+/// The one place that resolves deviceterm's config-file
+/// locations from the XDG base-directory spec.
+///
+/// Both the GUI (`ConfigFile`, `GhosttyThemeColors`) and the CLI
+/// (`deviceterm dump-config`) need the path to `~/.config/deviceterm/config`
+/// (and the borrowed `~/.config/ghostty/config`). Rather than each
+/// hardcoding `~/.config`, they route through here so a single rule
+/// (honor `$XDG_CONFIG_HOME`, fall back to `~/.config`) is defined once
+/// and stays consistent across processes.
+///
+/// Lives in DaemonProtocol (Foundation-only, shared by App + CLI)
+/// alongside `DeviceTermConfigDefaults`, the other config source of truth.
 public enum XDGPaths {
     /// The XDG config base directory: `$XDG_CONFIG_HOME` when set to a
     /// non-empty absolute path, else `~/.config`. Per the spec a

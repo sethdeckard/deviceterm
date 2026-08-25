@@ -1,31 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommand: daemon-to-GUI back-channel request.
-//
-// The CLI's `deviceterm tab close --tab <ref>` (and the other
-// workspace verbs) hits the daemon over the existing UDS RPC. For
-// ops the
-// daemon can't perform on its own (anything that mutates GUI tab /
-// pane / window state), the daemon constructs an `AppCommand` and
-// publishes it on the dedicated `app.commands` subscription that
-// the GUI maintains at startup. The GUI translates the command into
-// a `RouteIntent`, dispatches via `IntentDispatcher`, and acks the
-// result via `app.commandResult`. The daemon correlates by
-// `commandId` and resumes the original handler's continuation so
-// the CLI caller gets a synchronous-feeling answer.
-//
-// Wire shape: a flat struct with a `kind` discriminator and a JSON
-// `params` blob. Strong-typed per-kind params live in `AppCommand
-// Params.<Kind>` sub-types; the GUI decodes the discriminator first,
-// then the matching sub-type. New `kind` values can ship without a
-// wire-version bump (newer GUI sees them; older one returns
-// `unknownKind`).
 
 import Foundation
 
-/// The wire envelope. `params` is the kind-specific Codable struct,
+/// A daemon-to-GUI back-channel request.
+///
+/// The wire envelope: `params` is the kind-specific Codable struct,
 /// JSON-encoded on the daemon side and JSON-decoded on the GUI side
 /// once the kind is read.
+///
+/// The CLI's `deviceterm tab close --tab <ref>` (and the other
+/// workspace verbs) hits the daemon over the existing UDS RPC. For ops
+/// the daemon can't perform on its own (anything that mutates GUI tab /
+/// pane / window state), the daemon constructs an `AppCommand` and
+/// publishes it on the dedicated `app.commands` subscription that
+/// the GUI maintains at startup. The GUI translates the command into
+/// a `RouteIntent`, dispatches via `IntentDispatcher`, and acks the
+/// result via `app.commandResult`. The daemon correlates by
+/// `commandId` and resumes the original handler's continuation so
+/// the CLI caller gets a synchronous-feeling answer.
+///
+/// Wire shape: a flat struct with a `kind` discriminator and a JSON
+/// `params` blob. Strong-typed per-kind params live in
+/// `AppCommandParams.<Kind>` sub-types; the GUI decodes the discriminator
+/// first, then the matching sub-type.
+///
+/// `AppCommandKind` is a closed enum and decodes strictly, so a `kind` the
+/// GUI does not know fails to decode the whole frame. The subscriber logs
+/// it and drops it without acking, which leaves the daemon's caller waiting
+/// on its reply deadline. Adding a kind is a coordinated change across the
+/// daemon and the GUI, not a one-sided one.
 public struct AppCommand: Codable, Sendable, Equatable {
     /// Correlation id the daemon stamps into the published command
     /// and the GUI echoes back in `app.commandResult`. The daemon's

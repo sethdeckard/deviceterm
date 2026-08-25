@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppSwitcherGesture: the canonical App Switcher gesture, defined once
-// so the GUI menu action and the `deviceterm app-switcher` CLI verb can't
-// drift apart.
-//
-// The iOS home-indicator / App-Switcher swipe is a SpringBoard **system
-// edge gesture**, not an ordinary touch. The simulator routes a drag to
-// it only when the touch is tagged with the screen edge it originates
-// from (`IndigoHIDEdge`). So this is an **edge swipe** (`edge: bottom`),
-// driven through `pane.input.edgeSwipe`, since a plain touch swipe is eaten by
-// the foreground app (it just scrolls). Live-confirmed on an iPhone 17
-// Pro sim across Messages / Safari / Maps.
-//
-// Coords are in displayed space, as everywhere on the input surface:
-// (0.5, ~1.0) is the bottom-edge center of what the viewer sees, (0.5,
-// 0.5) is mid-screen. Both the coordinates and the originating edge's
-// `IndigoHIDEdge` value rotate with the device, and the daemon resolves
-// them together at the input boundary (`plan(for:)`) from its
-// authoritative presentation orientation, rather than from a client
-// snapshot that may be stale.
 
+/// The canonical App Switcher gesture, defined once
+/// so the GUI menu action and the `deviceterm app-switcher` CLI verb can't
+/// drift apart.
+///
+/// The iOS home-indicator / App-Switcher swipe is a SpringBoard **system
+/// edge gesture**, not an ordinary touch. The simulator routes a drag to
+/// it only when the touch is tagged with the screen edge it originates
+/// from (`IndigoHIDEdge`). So this is an **edge swipe** (`edge: bottom`),
+/// driven through `pane.input.edgeSwipe`, since a plain touch swipe is eaten by
+/// the foreground app (it just scrolls).
+///
+/// Coords are in displayed space, as everywhere on the input surface:
+/// (0.5, ~1.0) is the bottom-edge center of what the viewer sees, (0.5,
+/// 0.5) is mid-screen. Both the coordinates and the originating edge's
+/// `IndigoHIDEdge` value rotate with the device, and the daemon resolves
+/// them together at the input boundary (`plan(for:)`) from its
+/// authoritative presentation orientation, rather than from a client
+/// snapshot that may be stale.
 public enum AppSwitcherGesture {
     /// How to play a displayed-bottom-edge swipe on a turned device.
     ///

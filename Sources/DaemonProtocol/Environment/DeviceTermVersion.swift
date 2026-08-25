@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceTermVersion: public release version shared by bundled clients.
 
+/// Public release version shared by bundled clients.
 public enum DeviceTermVersion {
     /// The single source of truth for the release version.
     /// `scripts/lib/version.sh` parses this declaration textually, so

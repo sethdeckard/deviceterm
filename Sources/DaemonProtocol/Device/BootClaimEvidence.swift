@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BootClaimEvidence: causal evidence for one DeviceTerm-originated simulator
-// boot. The monotonic lease is expressed as remaining time so it can cross a
-// process boundary without comparing unrelated clocks.
 
+/// Causal evidence for one DeviceTerm-originated simulator
+/// boot. The monotonic lease is expressed as remaining time so it can cross a
+/// process boundary without comparing unrelated clocks.
 public struct BootClaimEvidence: Codable, Sendable, Equatable {
     public static let maximumLeaseMilliseconds: UInt64 = 300_000
 

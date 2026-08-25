@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionBindTerminalParams: wire shape for the `session.bindTerminal`
-// RPC method that binds a session to its terminal's kernel identity.
-//
-// The validated GUI reads its terminal surface's foreground process id and
-// controlling tty name from libghostty (`ghostty_surface_foreground_pid` /
-// `ghostty_surface_tty_name`) and sends them here. Neither value is authority
-// on its own. The daemon re-derives the anchor from the kernel and keeps only
-// kernel-verified facts (the POSIX session id, controlling TTY device, and
-// session-leader start time). The numeric pid is never retained.
-//
-// No `(sessionId, cap)` handshake rides on this method: it is `.validatedGUI`-
-// scoped, so the peer's audit token is the authority and only the host GUI can
-// reach it. The GUI is the only process that can see a terminal's foreground
-// pid/tty, so it is the only legitimate binder.
 
+/// Wire shape for the `session.bindTerminal`
+/// RPC method that binds a session to its terminal's kernel identity.
+///
+/// The validated GUI reads its terminal surface's foreground process id and
+/// controlling tty name from libghostty (`ghostty_surface_foreground_pid` /
+/// `ghostty_surface_tty_name`) and sends them here. Neither value is authority
+/// on its own. The daemon re-derives the anchor from the kernel and keeps only
+/// kernel-verified facts (the POSIX session id, controlling TTY device, and
+/// session-leader start time). The numeric pid is never retained.
+///
+/// No `(sessionId, cap)` handshake rides on this method: it is `.validatedGUI`-
+/// scoped, so the peer's audit token is the authority and only the host GUI can
+/// reach it. That scope, not any privileged view of the terminal, is what makes
+/// the GUI the legitimate binder. Any same-uid process can read a tty's
+/// foreground pid, which is why the payload is treated as a hint and verified.
 public struct SessionBindTerminalParams: Codable, Sendable, Equatable {
     public let sessionId: String
     /// The terminal surface's foreground process id, from libghostty. Used

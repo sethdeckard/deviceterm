@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCFraming: `[uint32 BE length][payload]` wire framing.
-//
-// Daemon and clients exchange framed JSON envelopes over a Unix
-// domain socket. The framing is deliberately minimal: a 4-byte
-// big-endian length prefix followed by exactly that many bytes of
-// payload. The payload is opaque at this layer; `RPCEnvelope`
-// interprets it as JSON.
-//
-// Why length-prefixed instead of newline-delimited: PTY byte streams
-// and other binary-adjacent payloads (base64-encoded inside JSON)
-// don't compose with newlines as a framing terminator. Length
-// prefixes also make partial-read handling trivial: receivers
-// accumulate into a buffer and call `decodeNext(from:)` until it
-// returns nil.
 
 import Foundation
 
+/// `[uint32 BE length][payload]` wire framing.
+///
 /// Pure framing primitives, no I/O. Tests exercise these directly;
 /// the actual socket code wraps them in a read/write loop.
+///
+/// Daemon and clients exchange framed JSON envelopes over a Unix
+/// domain socket. The framing is deliberately minimal: a 4-byte
+/// big-endian length prefix followed by exactly that many bytes of
+/// payload. The payload is opaque at this layer; `RPCEnvelope`
+/// interprets it as JSON.
+///
+/// Why length-prefixed instead of newline-delimited: a length prefix
+/// delimits a payload whatever its JSON formatting, so nothing has to
+/// guarantee the encoder never emits a newline. It also makes partial-read
+/// handling trivial, since a receiver learns exactly how many bytes to
+/// buffer before decoding: accumulate into a buffer and call
+/// `decodeNext(from:)` until it returns nil.
 public enum RPCFraming {
     /// Maximum payload size the daemon will accept in a single frame.
     /// 16 MiB is comfortably larger than any envelope we expect (PTY

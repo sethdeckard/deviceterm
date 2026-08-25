@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// A route the device walks: an ordered list of waypoints, the speed it
 /// travels between them, and how often it publishes a position along the
 /// way.

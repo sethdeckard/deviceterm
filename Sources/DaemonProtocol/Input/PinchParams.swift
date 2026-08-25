@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PinchParams: wire shape for `pane.input.pinch`.
-//
-// A two-finger pinch: each finger interpolates from its `from` point
-// to its `to` point over `durationMs`. All coords normalized 0..1.
 
+/// Wire shape for `pane.input.pinch`.
+///
+/// A two-finger pinch: each finger interpolates from its `from` point
+/// to its `to` point over `durationMs`. All coords normalized 0..1.
 public struct PinchParams: Codable, Sendable {
     public let paneId: String
     public let fromF1X: Double

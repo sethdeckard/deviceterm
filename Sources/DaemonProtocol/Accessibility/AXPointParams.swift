@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AXPointParams: wire shape for `pane.ax.point`.
-//
-// Requests the accessibility element at a normalized display point.
 
+/// Wire shape for `pane.ax.point`.
+///
+/// Requests the accessibility element at a normalized display point.
 public struct AXPointParams: Codable, Sendable {
     public let paneId: String
     /// Normalized display coords (0..1).

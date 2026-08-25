@@ -1,54 +1,53 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DisplayTitleNormalizer: the one routine that turns a raw OSC 0/2
-// terminal title into a value safe to store and republish.
-//
-// A tab's display title is written by whatever program runs in that tab,
-// so it is fully caller-controlled text that ends up in a daemon-wide
-// read (`tabs.list`). Two properties matter:
-//
-//   - **Bounded.** Untreated, an OSC title is unbounded, so it would be
-//     both an unbounded XPC payload and unbounded daemon state. The GUI
-//     applies this before encoding the request (keeping the payload
-//     small) and the daemon applies it again on receipt (keeping the
-//     enforcement honest regardless of client).
-//   - **Non-deceptive, in three specific senses.** Bidi controls can
-//     visually reorder a label so one tab impersonates another's activity
-//     string; C0/C1 controls can break a consumer's line-oriented output;
-//     and an all-invisible title renders blank while still carrying a
-//     non-nil value, blanking the label instead of letting the consumer
-//     fall back to the session name. So the bidi controls and the
-//     controls go, every other `Default_Ignorable_Code_Point` goes, and a
-//     final check requires something in the result to actually render.
-//     That last check is what covers the blank scalars no Unicode property
-//     identifies (`U+2800`).
-//
-//     What this deliberately does NOT guarantee is that two distinct
-//     titles always LOOK distinct. ZWNJ, ZWJ, and the variation selectors
-//     survive inside a visible cluster (see `isProhibited`), because they
-//     are orthographic in Persian and several Indic scripts and structural
-//     inside emoji sequences, so `"a\u{200D}"` and `"a"` are different
-//     values that render the same. Stripping them to close that gap would
-//     corrupt legitimate titles, which is the worse trade for a label
-//     whose whole job is to describe a tab to a human. Nothing resolves a
-//     tab by its display title: `shortId` is the identifier, and
-//     `tabs.list` documents `displayTitle` as explicitly not one.
-//
-// Pipeline order is load-bearing: strip prohibited scalars, THEN
-// NFC-normalize (stripping first is what makes the surviving neighbours
-// compose against each other, and what makes the byte budget account for
-// the FINAL composed form rather than a longer decomposed one), THEN
-// accumulate whole `Character`s while the byte budget allows (so the cut
-// never splits a grapheme cluster into invalid UTF-8).
-//
-// The result is Optional: `normalize` returns nil when filtering or
-// trimming leaves nothing, when no retained scalar renders, or when the
-// first grapheme already exceeds the byte budget. Nil rather than "":
-// consumers fall back to the session name, where an empty string would
-// blank the label instead.
 
 import Foundation
 
+/// The one routine that turns a raw OSC 0/2
+/// terminal title into a value safe to store and republish.
+///
+/// A tab's display title is written by whatever program runs in that tab,
+/// so it is fully caller-controlled text that ends up in a daemon-wide
+/// read (`tabs.list`). Two properties matter:
+///
+///   - **Bounded.** Untreated, an OSC title is unbounded, so it would be
+///     both an unbounded XPC payload and unbounded daemon state. The GUI
+///     applies this before encoding the request (keeping the payload
+///     small) and the daemon applies it again on receipt (keeping the
+///     enforcement honest regardless of client).
+///   - **Non-deceptive, in three specific senses.** Bidi controls can
+///     visually reorder a label so one tab impersonates another's activity
+///     string; C0/C1 controls can break a consumer's line-oriented output;
+///     and an all-invisible title renders blank while still carrying a
+///     non-nil value, blanking the label instead of letting the consumer
+///     fall back to the session name. So the bidi controls and the
+///     controls go, every other `Default_Ignorable_Code_Point` goes, and a
+///     final check requires something in the result to actually render.
+///     That last check is what covers the blank scalars no Unicode property
+///     identifies (`U+2800`).
+///
+///     What this deliberately does NOT guarantee is that two distinct
+///     titles always LOOK distinct. ZWNJ, ZWJ, and the variation selectors
+///     survive inside a visible cluster (see `isProhibited`), because they
+///     are orthographic in Persian and several Indic scripts and structural
+///     inside emoji sequences, so `"a\u{200D}"` and `"a"` are different
+///     values that render the same. Stripping them to close that gap would
+///     corrupt legitimate titles, which is the worse trade for a label
+///     whose whole job is to describe a tab to a human. Nothing resolves a
+///     tab by its display title: `shortId` is the identifier, and
+///     `tabs.list` documents `displayTitle` as explicitly not one.
+///
+/// Pipeline order matters: strip prohibited scalars, THEN
+/// NFC-normalize (stripping first is what makes the surviving neighbours
+/// compose against each other, and what makes the byte budget account for
+/// the FINAL composed form rather than a longer decomposed one), THEN
+/// accumulate whole `Character`s while the byte budget allows (so the cut
+/// never splits a grapheme cluster into invalid UTF-8).
+///
+/// The result is Optional: `normalize` returns nil when filtering or
+/// trimming leaves nothing, when no retained scalar renders, or when the
+/// first grapheme already exceeds the byte budget. Nil rather than "":
+/// consumers fall back to the session name, where an empty string would
+/// blank the label instead.
 public enum DisplayTitleNormalizer {
     /// UTF-8 byte ceiling for a stored/transmitted display title.
     /// Generous for a tab label, small enough that a hostile title is

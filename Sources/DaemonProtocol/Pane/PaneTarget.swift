@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// The identity of the *device* a pane mirrors, independent of the
 /// pane itself. A pane mirrors either a CoreSimulator (keyed by its
 /// **UDID**) or a physically-connected iPhone/iPad (keyed by its stable

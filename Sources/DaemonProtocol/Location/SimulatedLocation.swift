@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// A simulated GPS position for one pane's device: the *value* of a
 /// single device property, not several separate operations. Coordinate,
 /// scenario, route, and cleared are the things that property can be, so

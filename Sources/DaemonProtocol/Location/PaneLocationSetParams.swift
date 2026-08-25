@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLocationSetParams: wire shape for `pane.location.set`.
-//
-// Applies a simulated GPS position to the pane's device. One method for
-// every value it can take (coordinate, scenario, route, cleared). See
-// `SimulatedLocation`.
 
+/// Wire shape for `pane.location.set`.
+///
+/// Applies a simulated GPS position to the pane's device. One method for
+/// every value it can take (coordinate, scenario, route, cleared). See
+/// `SimulatedLocation`.
 public struct PaneLocationSetParams: Codable, Sendable, Equatable {
     public let paneId: String
     public let location: SimulatedLocation

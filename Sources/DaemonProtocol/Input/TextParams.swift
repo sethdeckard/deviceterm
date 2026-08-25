@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TextParams: wire shape for `pane.input.text`.
-//
-// ASCII text input; the daemon translates each character to HID
-// usages.
 
+/// Wire shape for `pane.input.text`.
+///
+/// ASCII text input; the daemon translates each character to HID
+/// usages.
 public struct TextParams: Codable, Sendable {
     public let paneId: String
     /// ASCII string. Each character must appear in the daemon's

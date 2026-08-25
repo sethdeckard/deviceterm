@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonEvent: the on-wire shape of daemon state-change events
-// (`deviceterm events` / `daemon.events`). The wire shape is the same
-// regardless of audience; `daemon.events` delivery is session-scoped
-// (see the daemon's EventBroker), but that's a routing concern, not a
-// field on this struct.
-//
-// Flat struct with a `type` discriminator and per-type Optional
-// fields. Synthesized Encodable's `encodeIfPresent` omits nil fields,
-// so each event lands on the wire as a compact JSON object with only
-// the keys its `type` populates. Decoding a payload with unknown keys
-// ignores them, the same skew-tolerance posture as the rest of the wire
-// surface.
-//
-// Why flat instead of an enum-with-associated-values: a flat struct
-// gives free synthesized Codable + a predictable jq-friendly schema
-// (`.type`, `.ts`, `.paneId`, …) without per-case CodingKeys.
-// Consumers select event kinds with
-// `jq 'select(.type == "pane.stateChanged")'`.
 
 import Foundation
 
+/// The on-wire shape of daemon state-change events
+/// (`deviceterm events` / `daemon.events`). The wire shape is the same
+/// regardless of audience; `daemon.events` delivery is session-scoped
+/// (see the daemon's EventBroker), but that's a routing concern, not a
+/// field on this struct.
+///
+/// Flat struct with a `type` discriminator and per-type Optional
+/// fields. Synthesized Encodable's `encodeIfPresent` omits nil fields,
+/// so each event lands on the wire as a compact JSON object with only
+/// the keys its `type` populates. Decoding a payload with unknown keys
+/// ignores them, the same skew-tolerance posture as the rest of the wire
+/// surface.
+///
+/// Why flat instead of an enum-with-associated-values: a flat struct
+/// gives free synthesized Codable + a predictable jq-friendly schema
+/// (`.type`, `.ts`, `.paneId`, …) without per-case CodingKeys.
+/// Consumers select event kinds with
+/// `jq 'select(.type == "pane.stateChanged")'`.
 public struct DaemonEvent: Codable, Sendable, Equatable {
     /// Discriminator. See `DaemonEventType` for the canonical
     /// values shipped. Future event types can extend the

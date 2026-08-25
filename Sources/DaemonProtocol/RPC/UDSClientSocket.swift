@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UDSClientSocket: the client half of the daemon's Unix-domain
-// socket transport, usable without importing `Daemon`.
-//
-// `Daemon`'s `UDSSocket` keeps the server side (`bindListener` /
-// `acceptOne`) plus its own test-facing `connectClient`. This is a
-// deliberate, small duplication of the ~80 lines of connect/read/
-// write boilerplate: deduplicating would force `UDSSocket` (and the
-// 23 `@testable import Daemon` test files that exercise it) to move,
-// which would touch every existing daemon test for no functional gain.
-// The GUI `DaemonClient` and `deviceterm-cli` link only `DaemonProtocol`,
-// so the client primitive has to live here.
-//
-// `connect(to:)` returns a non-blocking fd. Pair with `readAvailable`
-// in a poll/decode loop and `writeAll` for framed requests.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// The client half of the daemon's Unix-domain
+/// socket transport, usable without importing `Daemon`.
+///
+/// `Daemon`'s `UDSSocket` keeps the server side (`bindListener` /
+/// `acceptOne`) plus its own test-facing `connectClient`. This is a
+/// deliberate, small duplication of the connect/read/write boilerplate:
+/// deduplicating would force `UDSSocket` and every daemon test that
+/// reaches it to move, for no functional gain. The GUI `DaemonClient` and
+/// `deviceterm-cli` link only `DaemonProtocol`, so the client primitive
+/// has to live here.
+///
+/// `connect(to:)` returns a non-blocking fd. Pair with `readAvailable`
+/// in a poll/decode loop and `writeAll` for framed requests.
 public enum UDSClientSocket {
     /// macOS reserves 104 bytes for `sockaddr_un.sun_path`; one is the
     /// trailing NUL, so the practical ceiling is 103.

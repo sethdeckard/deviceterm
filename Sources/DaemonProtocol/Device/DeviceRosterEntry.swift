@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// One entry of the bare-array `devices.list` result: the aggregate
 /// live roster the CLI `deviceterm devices list` renders. Combines booted
 /// CoreSimulators and connected physical devices, each annotated with

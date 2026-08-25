@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The orientation and edge tag a scripted App Switcher swipe plays with.
-// The tag names the native edge the contacts originate from and the
-// coordinates have to land on that same edge, so the two are resolved
-// together; a pair that disagrees arms nothing.
 
 import DaemonProtocol
 import Testing
 
+/// The orientation and edge tag a scripted App Switcher swipe plays with.
+/// The tag names the native edge the contacts originate from and the
+/// coordinates have to land on that same edge, so the two are resolved
+/// together; a pair that disagrees arms nothing.
 struct AppSwitcherGesturePlanTests {
     /// Each orientation plays in its own frame, tagged with its own
     /// live-confirmed edge value.

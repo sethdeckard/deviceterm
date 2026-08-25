@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeyParams: wire shape for `pane.input.key`.
-//
-// A discrete keydown/keyup, so the GUI's NSEvent pipeline can forward
-// press and release 1:1.
 
+/// Wire shape for `pane.input.key`.
+///
+/// A discrete keydown/keyup, so the GUI's NSEvent pipeline can forward
+/// press and release 1:1.
 public struct KeyParams: Codable, Sendable {
     public let paneId: String
     /// macOS HIToolbox virtual key code (kVK_*, the value from

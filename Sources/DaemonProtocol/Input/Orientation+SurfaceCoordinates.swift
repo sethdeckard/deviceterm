@@ -1,37 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Orientation+SurfaceCoordinates: the displayed→native coordinate
-// rotation the coordinate-bearing touch verbs ride on. The hardware,
-// text, rotation, and crown verbs carry no coordinates and never reach
-// it.
-//
-// Two coordinate spaces are easy to confuse:
-//
-//   - **Native surface space.** CoreSimulator keeps the IOSurface at the
-//     device's portrait pixel dimensions whatever the device is doing,
-//     and the HID digitizer's ratio field addresses that fixed panel.
-//     It never rotates.
-//   - **Displayed space.** What the viewer sees. In landscape the app's
-//     interface has turned, so its top-left is a different corner of
-//     the panel. The accessibility tree reports frames here, because
-//     they come from the guest's own UIKit geometry.
-//
-// The wire contract is displayed space: `(0, 0)` is the top-left of what
-// you see. That is the space the GUI's own pointer handling has always
-// spoken, and the space accessibility frames are already in, so a caller
-// working from a frame needs no rotation of its own (it does still have
-// to normalize, since frames are in pixels). The daemon converts to
-// native space at its input boundary, against the presentation
-// orientation it holds there.
-//
-// Portrait is the identity, so nothing about an unrotated device
-// changes.
-//
-// The daemon is the only caller. This lives beside `Orientation` rather
-// than in the daemon because the wire types whose coordinates it governs
-// are defined here, so the contract and the conversion that implements
-// it stay together. Clients stop at displayed space and never convert.
 
+/// The displayed→native coordinate rotation the coordinate-bearing touch
+/// verbs ride on. The hardware, text, rotation, and crown verbs carry no
+/// coordinates and never reach it.
+///
+/// Two coordinate spaces are easy to confuse:
+///
+///   - **Native surface space.** CoreSimulator keeps the IOSurface at the
+///     device's portrait pixel dimensions whatever the device is doing,
+///     and the HID digitizer's ratio field addresses that fixed panel.
+///     It never rotates.
+///   - **Displayed space.** What the viewer sees. In landscape the app's
+///     interface has turned, so its top-left is a different corner of
+///     the panel. The accessibility tree reports frames here, because
+///     they come from the guest's own UIKit geometry.
+///
+/// The wire contract is displayed space: `(0, 0)` is the top-left of what
+/// you see. That is the space the GUI's own pointer handling has always
+/// spoken, and the space accessibility frames are already in, so a caller
+/// working from a frame needs no rotation of its own (it does still have
+/// to normalize, since frames are in pixels). The daemon converts to
+/// native space at its input boundary, against the presentation
+/// orientation it holds there.
+///
+/// Portrait is the identity, so nothing about an unrotated device
+/// changes.
+///
+/// The daemon is the only caller. This lives beside `Orientation` rather
+/// than in the daemon because the wire types whose coordinates it governs
+/// are defined here, so the contract and the conversion that implements
+/// it stay together. Clients stop at displayed space and never convert.
 public extension Orientation {
     /// Convert a point in displayed space to the device's native
     /// portrait surface space.

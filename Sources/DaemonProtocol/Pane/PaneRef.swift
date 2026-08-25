@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// Tagged `--pane <ref>` value. Consumed by `pane info` /
 /// `pane close` / `pane rename` CLI surfaces.
 ///

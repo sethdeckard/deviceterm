@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// What input/control verbs a pane's device supports, reported per
 /// pane on `pane.create` / `device.attach` and `panes.list`. The daemon
 /// hosts a mix of pane kinds at once (a CoreSimulator pane supports

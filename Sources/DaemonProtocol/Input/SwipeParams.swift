@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SwipeParams: wire shape for `pane.input.swipe`.
-//
-// A scripted swipe: interpolated motion from a start point to an end
-// point, with optional active dwells at each end.
 
+/// Wire shape for `pane.input.swipe`.
+///
+/// A scripted swipe: interpolated motion from a start point to an end
+/// point, with optional active dwells at each end.
 public struct SwipeParams: Codable, Sendable {
     public let paneId: String
     public let fromX: Double

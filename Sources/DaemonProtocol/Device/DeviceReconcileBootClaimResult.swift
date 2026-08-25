@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceReconcileBootClaimResult: current daemon disposition of one simulator
-// boot attribution attempt.
 
+/// Current daemon disposition of one simulator
+/// boot attribution attempt.
 public struct DeviceReconcileBootClaimResult: Codable, Sendable, Equatable {
     public let attemptId: String
     public let udid: String

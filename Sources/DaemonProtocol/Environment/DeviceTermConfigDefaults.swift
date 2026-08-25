@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceTermConfigDefaults: the canonical table of `~/.config/deviceterm/config`
-// keys deviceterm honors, each with its default, allowed values, and a
-// one-line summary (`ConfigKeySpec`).
-//
-// Lives in DaemonProtocol so the App-side `Config` layer, the
-// self-documenting config writer (`ConfigFile`), and the CLI's
-// `deviceterm dump-config` reporter all reach the same source of truth.
-// Adding a recognized key here is the architecture-checks gate's
-// "default value lives in Config.swift" rule: the key + its default
-// land in this table at the same time the code that reads it ships, so
-// a `dump-config` report stays complete and a missing default can't
-// drift between modules.
 
+/// The canonical table of `~/.config/deviceterm/config`
+/// keys deviceterm honors, each with its default, allowed values, and a
+/// one-line summary (`ConfigKeySpec`).
+///
+/// Lives in DaemonProtocol so the App-side `Config` layer, the
+/// self-documenting config writer (`ConfigFile`), and the CLI's
+/// `deviceterm dump-config` reporter all reach the same source of truth.
+/// Adding a recognized key here is the architecture-checks gate's
+/// "default value lives in Config.swift" rule: the key + its default
+/// land in this table at the same time the code that reads it ships, so
+/// a `dump-config` report stays complete and a missing default can't
+/// drift between modules.
 public enum DeviceTermConfigDefaults {
     /// Every recognized key, in the order the config writer emits them.
     /// The values are intentionally strings because the config file

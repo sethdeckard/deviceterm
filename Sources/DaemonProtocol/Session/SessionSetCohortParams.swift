@@ -1,31 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionSetCohortParams: wire shape for `session.setCohort`.
-//
-// A cohort is the set of sessions that jointly control a device pane. The GUI
-// knows a cohort is a tab; the daemon never learns that, and nothing here
-// carries a tab id. It records verified session incarnations, an ordered
-// membership, and one representative for attribution.
-//
-// **Two operations, one method, one revision sequence.** `reconcile` and
-// `beginClose` both mutate the same cohort and must order against each other,
-// so they share a `(epoch, revision)` key rather than racing across two
-// methods with independent numbering. The operation-specific fields are
-// optional and validated on arrival, the same shape `pane.input.rotate` uses
-// for its two mutually exclusive targets.
-//
-// No `(sessionId, cap)` handshake: `.validatedGUI`-scoped, so the caller's
-// audit token is the authority. A UDS caller must never reach this method at
-// all: membership decides who may drive another session's pane, and a close
-// verdict decides who inherits its simulator.
-//
-// `revision` is the client half of the ordering key; the daemon pairs it with
-// the monotonic XPC connection id it derives itself. A new transition against
-// an existing cohort applies only when its key strictly dominates the stored
-// key, which is what makes a GUI restart replaying low revisions harmless; an
-// exact `beginClose` retry replays the journalled result instead, for as long
-// as the journal entry is retained (the boot-claim lease).
 
+/// Wire shape for `session.setCohort`.
+///
+/// A cohort is the set of sessions that jointly control a device pane. The GUI
+/// knows a cohort is a tab; the daemon never learns that, and nothing here
+/// carries a tab id. It records verified session incarnations, an ordered
+/// membership, and one representative for attribution.
+///
+/// **Two operations, one method, one revision sequence.** `reconcile` and
+/// `beginClose` both mutate the same cohort and must order against each other,
+/// so they share a `(epoch, revision)` key rather than racing across two
+/// methods with independent numbering. The operation-specific fields are
+/// optional and validated on arrival, the same shape `pane.input.rotate` uses
+/// for its two mutually exclusive targets.
+///
+/// No `(sessionId, cap)` handshake: `.validatedGUI`-scoped, so the caller's
+/// audit token is the authority. A UDS caller must never reach this method at
+/// all: membership decides who may drive another session's pane, and a close
+/// verdict decides who inherits its simulator.
+///
+/// `revision` is the client half of the ordering key; the daemon pairs it with
+/// the monotonic XPC connection id it derives itself. A new transition against
+/// an existing cohort applies only when its key strictly dominates the stored
+/// key, which is what makes a GUI restart replaying low revisions harmless; an
+/// exact `beginClose` retry replays the journalled result instead, for as long
+/// as the journal entry is retained (the boot-claim lease).
 public struct SessionSetCohortParams: Codable, Sendable, Equatable {
     public enum Operation: String, Codable, Sendable, Equatable {
         /// Install or replace a cohort's complete membership, representative,

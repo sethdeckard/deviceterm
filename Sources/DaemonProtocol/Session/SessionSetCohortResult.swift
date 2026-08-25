@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionSetCohortResult: authoritative reply to `session.setCohort`.
-//
-// `applied: false` means validation or ordering rejected the request; cohort
-// membership and pane bindings did not change. As with
-// `session.setProtectedBatch`, the GUI commits
-// presentation state only from an applied reply, and reconciles from a fresh
-// authoritative read rather than guessing after a rejection.
-//
-// For `beginClose`, `outcome` is the whole point of the call: it is the
-// verdict the GUI records in its own boot-claim tombstone before it closes
-// the sessions, so both layers act on one decision instead of two guesses.
-// It is journalled under the request's `transitionId` **before** this reply
-// is sent, so a retry after a lost reply returns this same value even though
-// the cohort has moved on, for as long as the journal entry is retained
-// (the boot-claim lease).
 
+/// Authoritative reply to `session.setCohort`.
+///
+/// `applied: false` means validation or ordering rejected the request; cohort
+/// membership and pane bindings did not change. As with
+/// `session.setProtectedBatch`, the GUI commits
+/// presentation state only from an applied reply, and reconciles from a fresh
+/// authoritative read rather than guessing after a rejection.
+///
+/// For `beginClose`, `outcome` is the whole point of the call: it is the
+/// verdict the GUI records in its own boot-claim tombstone before it closes
+/// the sessions, so both layers act on one decision instead of two guesses.
+/// It is journalled under the request's `transitionId` **before** this reply
+/// is sent, so a retry after a lost reply returns this same value even though
+/// the cohort has moved on, for as long as the journal entry is retained
+/// (the boot-claim lease).
 public struct SessionSetCohortResult: Codable, Sendable, Equatable {
     /// True when the daemon committed this request, or replayed its
     /// retained `beginClose` journal entry. False means validation or

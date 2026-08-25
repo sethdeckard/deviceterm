@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// `pane.create` / `device.attach` → `{paneId, attachment?, scale?,
 /// family?, shortId?, name?, deviceType?, pixelWidth?, pixelHeight?,
 /// capabilities?, target?}`. Mirrors `PaneMethods.CreateResponse`.

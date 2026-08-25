@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLocationStateResult: wire shape returned by `pane.location.state`.
-//
-// A struct rather than a bare `SimulatedLocation` so later fields (a
-// route's playback state, say) are additive rather than wire-breaking.
 
 /// What deviceterm last applied to a pane, and what that pane's device
-/// offers.
+/// offers. The wire shape returned by `pane.location.state`.
+///
+/// A struct rather than a bare `SimulatedLocation` so later fields (a
+/// route's playback state, say) are additive rather than wire-breaking.
 public struct PaneLocationStateResult: Codable, Sendable, Equatable {
     /// **What deviceterm last set, not a reading from the device.** `nil`
     /// when deviceterm has no claim to make.

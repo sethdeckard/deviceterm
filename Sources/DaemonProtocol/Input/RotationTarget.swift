@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RotationTarget: what a `pane.input.rotate` request asks for, as one
-// value. `RotateParams` carries the two possibilities as mutually
-// exclusive optional fields because that is the JSON shape; a producer
-// building from this can't emit the both-set or neither-set request
-// the handler would reject.
 
+/// What a `pane.input.rotate` request asks for, as one
+/// value. `RotateParams` carries the two possibilities as mutually
+/// exclusive optional fields because that is the JSON shape; a producer
+/// building from this can't emit the both-set or neither-set request
+/// the handler would reject.
 public enum RotationTarget: Sendable, Equatable {
     /// Rotate to this orientation, wherever the device is now.
     case absolute(Orientation)

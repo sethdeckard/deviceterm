@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ConfigKeySpec: the full description of one recognized
-// `~/.config/deviceterm/config` key: its default, its allowed values,
-// and a one-line summary of what it does.
-//
-// This is the source of truth the app uses to write a self-documenting
-// config file: every key the app touches is preceded by a doc comment
-// (summary + allowed values + default or absent behavior), and every
-// recognized key the user hasn't set is written as a commented-out
-// example. The format is
-// Ghostty's `key = value` with line-leading `#` comments, not TOML,
-// so the docs are plain `#` lines.
 
+/// The full description of one recognized
+/// `~/.config/deviceterm/config` key: its default, its allowed values,
+/// and a one-line summary of what it does.
+///
+/// This is the source of truth the app uses to write a self-documenting
+/// config file: every key the app touches is preceded by a doc comment
+/// (summary + allowed values + default or absent behavior), and every
+/// recognized key the user hasn't set is written as a commented-out
+/// example. The format is
+/// Ghostty's `key = value` with line-leading `#` comments, not TOML,
+/// so the docs are plain `#` lines.
 public struct ConfigKeySpec: Sendable, Equatable {
     public let key: String
     public let defaultValue: String

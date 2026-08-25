@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Pure unit tests for the relative-rotation cycle: the internal 90°
-// steps on `Orientation` and the `RotationDirection.applied(to:)` the
-// daemon resolves a `pane.input.rotate` direction with. The cycle must
-// close cleanly, and the two directions must be inverses of each other at
-// every orientation, or a repeated Rotate Left walks somewhere the device
-// isn't.
 
 @testable import DaemonProtocol
 import Testing
 
+/// Pure unit tests for the relative-rotation cycle: the internal 90°
+/// steps on `Orientation` and the `RotationDirection.applied(to:)` the
+/// daemon resolves a `pane.input.rotate` direction with. The cycle must
+/// close cleanly, and the two directions must be inverses of each other at
+/// every orientation, or a repeated Rotate Left walks somewhere the device
+/// isn't.
 struct OrientationRotationTests {
     @Test(
         "Rotate Left cycle wraps through every orientation",

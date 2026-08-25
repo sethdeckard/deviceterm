@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabRefResolver: pure-logic `--tab <ref>` resolution.
-//
-// Walks the documented priority (short_id → name → UUID prefix →
-// sentinel) and returns the most-specific match. Lives in
-// DaemonProtocol so both the CLI (consuming `tabs.list`) and any
-// future daemon-side resolver share the same matcher. No I/O, no
-// optionals on the entry list shape: the caller fetches the list and
-// hands it in.
 
 import Foundation
 
+/// Pure-logic `--tab <ref>` resolution.
+///
+/// Walks the documented priority (short_id → name → UUID prefix →
+/// sentinel) and returns the most-specific match. Lives in
+/// DaemonProtocol so CLI code (consuming `tabs.list`) and daemon code
+/// share the same matcher. No I/O, no optionals on the entry list
+/// shape: the caller fetches the list and hands it in.
 public enum TabRefResolver {
     public enum Resolution: Equatable, Sendable {
         case entry(TabsListEntry)

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// These tests pin displayed-to-native mappings measured against a live
-// simulator; drift sends landscape taps to the wrong native point.
 
 import DaemonProtocol
 import Testing
 
+/// These tests pin displayed-to-native mappings measured against a live
+/// simulator; drift sends landscape taps to the wrong native point.
 struct OrientationSurfaceCoordinatesTests {
     /// Portrait is the identity, which is what keeps an unrotated device
     /// unaffected by any of this.

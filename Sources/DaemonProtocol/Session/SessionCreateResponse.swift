@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// `session.create` → `{sessionId, capability, shortId?, name?, role?}`.
 /// Mirrors `SessionMethods.CreateResponse`.
 ///

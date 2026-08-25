@@ -1,39 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCEnvelope: the JSON object shape every framed RPC message wears.
-//
-// On the wire (after the length prefix from `RPCFraming` peels off):
-//
-//     {
-//       "id":     <uint32, monotonic per client>,  // omitted on a notification
-//       "type":   "req" | "res" | "evt",
-//       "method": "<name>",         // req or evt only
-//       "params": { … },            // req or evt; omitted when none
-//       "result": { … },            // res only; omitted on error
-//       "error":  { "code": N, "msg": "…" }  // res only on failure
-//     }
-//
-// The envelope is parsed at the routing layer (server-side dispatch
-// by `method`, client-side correlation by `id`). The body (`params`,
-// `result`, or `error`) is opaque to this layer; method handlers
-// decode their own typed structs from the body bytes via `JSONDecoder`.
-//
-// `id` is optional: a request with no `id` is a **one-way
-// notification** the dispatcher runs fire-and-forget, sending no
-// response (there is no correlation key to reply on). The surface-
-// lease methods, `pane.surfaceRelease` (the watermark ack) and
-// `pane.surfaceDrain` (subscription teardown), ride this shape.
-// Responses and events always carry the `id` of the request they answer.
-//
-// Why `Data` and not a typed `params: Codable` generic: the server
-// has to peek at `method` before it knows which params type to
-// decode, which doesn't fit Codable's static-types model cleanly.
-// Keeping the body as raw JSON bytes lets each handler decode its
-// own typed `Params` struct without the envelope owning the type
-// parameter.
 
 import Foundation
 
+/// The JSON object shape every framed RPC message wears.
+///
+/// On the wire (after the length prefix from `RPCFraming` peels off):
+///
+///     {
+///       "id":     <uint32, monotonic per client>,  // omitted on a notification
+///       "type":   "req" | "res" | "evt",
+///       "method": "<name>",         // req or evt only
+///       "params": { … },            // req or evt; omitted when none
+///       "result": { … },            // res only; omitted on error
+///       "error":  { "code": N, "msg": "…" }  // res only on failure
+///     }
+///
+/// The envelope is parsed at the routing layer (server-side dispatch
+/// by `method`, client-side correlation by `id`). The body (`params`,
+/// `result`, or `error`) is opaque to this layer; method handlers
+/// decode their own typed structs from the body bytes via `JSONDecoder`.
+///
+/// `id` is optional: a request with no `id` is a **one-way
+/// notification** the dispatcher runs fire-and-forget, sending no
+/// response (there is no correlation key to reply on). The surface-
+/// lease methods, `pane.surfaceRelease` (the watermark ack) and
+/// `pane.surfaceDrain` (subscription teardown), ride this shape.
+/// Responses and events always carry the `id` of the request they answer.
+///
+/// Why `Data` and not a typed `params: Codable` generic: the server
+/// has to peek at `method` before it knows which params type to
+/// decode, which doesn't fit Codable's static-types model cleanly.
+/// Keeping the body as raw JSON bytes lets each handler decode its
+/// own typed `Params` struct without the envelope owning the type
+/// parameter.
 public struct RPCEnvelope: Sendable, Equatable {
     public enum MessageType: String, Sendable, Equatable {
         case request  = "req"

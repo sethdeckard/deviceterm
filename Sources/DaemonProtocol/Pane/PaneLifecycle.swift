@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLifecycle: a sim pane's lifecycle state, shared between the
-// daemon (which owns the transitions) and the GUI client (which renders
-// them). Lives in DaemonProtocol so both sides spell the states once;
-// the rawValue is the wire string carried by the `state.changed` event
-// and the `panes.list` row (own-contract enum: strict decode, bump
-// `wireVersion` to add a case; see the Wire-compatibility policy).
 
+/// A sim pane's lifecycle state, shared between the
+/// daemon (which owns the transitions) and the GUI client (which renders
+/// them). Lives in DaemonProtocol so both sides spell the states once;
+/// the rawValue is the wire string carried by the `state.changed` event
+/// and the `panes.list` row. It decodes strictly, so adding a case is
+/// wire-incompatible and needs explicit approval for a
+/// `DaemonProtocolInfo.wireVersion` bump.
 public enum PaneLifecycle: String, Sendable, Codable, Equatable {
     case booting
     case rendering

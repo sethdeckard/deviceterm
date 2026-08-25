@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AXSweepParams: wire shape for `pane.ax.sweep`.
-//
-// Requests a grid sweep of accessibility elements across the display.
 
+/// Wire shape for `pane.ax.sweep`.
+///
+/// Requests a grid sweep of accessibility elements across the display.
 public struct AXSweepParams: Codable, Sendable {
     public let paneId: String
     /// Grid step in normalized [0,1] axis units. Optional; the

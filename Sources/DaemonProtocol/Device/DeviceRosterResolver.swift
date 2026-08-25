@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceRosterResolver: pure `device attach <ref>` resolution.
-//
-// Resolves a user-supplied `<ref>` against the `devices.list` roster,
-// the aggregate of booted sims + connected physical devices, attached
-// or not. This is deliberately distinct from `PaneRefResolver`, which
-// matches *attached panes* (by shortId / name / key): `device attach`
-// can target a device that has no pane yet (an orphan sim, an
-// unattached physical device), so it resolves the roster, not the pane
-// list. Lives in DaemonProtocol so the CLI and any future daemon-side
-// resolver share one matcher. No I/O; the caller fetches the roster.
 
 import Foundation
 
+/// Pure `device attach <ref>` resolution.
+///
+/// Resolves a user-supplied `<ref>` against the `devices.list` roster,
+/// the aggregate of booted sims + connected physical devices, attached
+/// or not. This is deliberately distinct from `PaneRefResolver`, which
+/// matches *attached panes* (by shortId / name / key): `device attach`
+/// can target a device that has no pane yet (an orphan sim, an
+/// unattached physical device), so it resolves the roster, not the pane
+/// list. Lives in DaemonProtocol so CLI and daemon code share one
+/// matcher. No I/O; the caller fetches the roster.
 public enum DeviceRosterResolver {
     public enum Resolution: Equatable, Sendable {
         case entry(DeviceRosterEntry)

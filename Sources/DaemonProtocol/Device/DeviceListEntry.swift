@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// One entry of the bare-array `device.list` result. Mirrors
 /// `DeviceMethods.ListEntry`. `state` is the CoreSimulator state name
 /// ("Booted", "Shutdown", …); `ownedBySession` is the owning session UUID

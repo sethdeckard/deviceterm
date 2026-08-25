@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneRefResolver: pure-logic `--pane <ref>` resolution.
-//
-// Same shape as `TabRefResolver` but matches against `PanesListEntry`
-// instead of `TabsListEntry`. Lives in DaemonProtocol so the CLI and
-// any future daemon-side resolver share the same matcher. No I/O; the
-// caller fetches `panes.list` and hands the entries in.
 
 import Foundation
 
+/// Pure-logic `--pane <ref>` resolution.
+///
+/// Same shape as `TabRefResolver` but matches against `PanesListEntry`
+/// instead of `TabsListEntry`. Lives in DaemonProtocol so CLI and daemon
+/// code share the same matcher. No I/O; the caller fetches `panes.list`
+/// and hands the entries in.
 public enum PaneRefResolver {
     public enum Resolution: Equatable, Sendable {
         case entry(PanesListEntry)

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// `pane.subscribe` event `orientation.changed`. Broadcast on every
-/// `pane.input.rotate` so a rotation from any source (the owning GUI's
-/// own icon, `deviceterm rotate`, or a future auto-rotate) reaches every
-/// subscriber. `orientation` is the device's new `Orientation`; the GUI
+/// `pane.input.rotate`, so a rotation reaches every subscriber whatever
+/// drove it. `orientation` is the device's new `Orientation`; the GUI
 /// adopts it to re-render (counter-rotate the surface) and re-map input
 /// instead of drifting from the device's true orientation.
 public struct OrientationChangedEvent: Codable, Sendable, Equatable {

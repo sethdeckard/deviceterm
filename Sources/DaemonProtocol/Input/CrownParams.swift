@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CrownParams: wire shape for `pane.input.crown`.
-//
-// Drives the watchOS Digital Crown.
 
+/// Wire shape for `pane.input.crown`.
+///
+/// Drives the watchOS Digital Crown.
 public struct CrownParams: Codable, Sendable {
     public let paneId: String
     /// Signed Digital Crown rotation: sign is the direction

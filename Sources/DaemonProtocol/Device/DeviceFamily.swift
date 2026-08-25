@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceFamily: the coarse product family the GUI branches on (e.g.
-// sizing a watch pane smaller than a phone pane). The daemon classifies a
-// CoreSimulator device-type identifier into one of these; clients consume
-// the result off the wire and never parse identifiers themselves.
-//
-// On the wire the field stays a `String?` for forward-compatibility:
-// Apple adds device families independently of our `wireVersion`, so a
-// newer daemon can legitimately send a family an older client doesn't
-// know. Consume it through `init(wire:)`, which maps any unrecognized
-// value to `.unknown`; never strict-decode it.
 
+/// The coarse product family the GUI branches on (e.g.
+/// sizing a watch pane smaller than a phone pane). The daemon classifies a
+/// CoreSimulator device-type identifier into one of these; clients consume
+/// the result off the wire and never parse identifiers themselves.
+///
+/// On the wire the field stays a `String?` for forward-compatibility:
+/// Apple adds device families independently of our `wireVersion`, so a
+/// newer daemon can legitimately send a family an older client doesn't
+/// know. Consume it through `init(wire:)`, which maps any unrecognized
+/// value to `.unknown`; never strict-decode it.
 public enum DeviceFamily: String, Sendable, Equatable, CaseIterable {
     case watch
     case phone

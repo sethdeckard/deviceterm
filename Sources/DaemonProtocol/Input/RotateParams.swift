@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RotateParams: wire shape for `pane.input.rotate`.
-//
-// Sets device orientation, either absolutely (`orientation`) or one 90°
-// step from where the daemon believes the device is (`direction`).
-// Exactly one is required. Both stay raw strings on the wire so the
-// daemon validates them in the handler and an unknown value surfaces as
-// `invalidParams` with the accepted set, rather than a generic decode
-// failure. The both-set and neither-set cases are rejected there too:
-// the wire permits them, `RotationTarget` doesn't.
 
+/// Wire shape for `pane.input.rotate`.
+///
+/// Sets device orientation, either absolutely (`orientation`) or one 90°
+/// step from where the daemon believes the device is (`direction`).
+/// Exactly one is required. Both stay raw strings on the wire so the
+/// daemon validates them in the handler and an unknown value surfaces as
+/// `invalidParams` with the accepted set, rather than a generic decode
+/// failure. The both-set and neither-set cases are rejected there too:
+/// the wire permits them, `RotationTarget` doesn't.
 public struct RotateParams: Codable, Sendable {
     public let paneId: String
     /// One of `portrait`, `portraitUpsideDown`, `landscapeLeft`,

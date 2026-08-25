@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionAuthenticate{Params,Response}: wire shape for the
-// `session.authenticate` RPC method that establishes per-connection
-// auth.
-//
-// The CLI auto-sends this as the first frame on every UDS
-// connection when its env carries `(DEVICETERM_SESSION,
-// DEVICETERM_SESSION_CAP)`. The daemon validates the creds against
-// SessionManager, stores the resulting SessionState on the
-// `RPCConnection`, and returns the role so the caller knows which
-// scope it's in. Subsequent session-scoped methods on the same
-// connection succeed without per-call cred threading; daemon-wide
-// methods work whether the connection auth'd or not.
-//
-// `(sessionId, cap)` parameters stay on this one method; they're
-// the auth handshake. Other methods don't carry creds; the
-// connection's auth state is the source of truth at dispatch time.
 
+/// Wire shape for the `session.authenticate` RPC method that establishes
+/// per-connection auth.
+///
+/// The CLI auto-sends this as the first frame on every UDS
+/// connection when its env carries `(DEVICETERM_SESSION,
+/// DEVICETERM_SESSION_CAP)`. The daemon validates `(sessionId, cap)`
+/// against `SessionManager` AND matches the caller's kernel provenance
+/// against the session's bound terminal, then stores the resulting
+/// `SessionState` on the `RPCConnection` and returns the role so the
+/// caller knows which scope it's in. The cap alone establishes nothing:
+/// any same-uid process can read it. Liveness and provenance are
+/// re-checked before every scoped request, so closing a session or
+/// revoking its anchor invalidates an already-authenticated connection.
+///
+/// Subsequent session-scoped methods on the same connection succeed
+/// without per-call cred threading, and daemon-wide methods work whether
+/// the connection authenticated or not. A few request bodies still carry
+/// `(sessionId, cap)` of their own; their handlers confirm the target
+/// equals the connection's provenance-checked session rather than
+/// trusting the payload.
 public struct SessionAuthenticateResponse: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case success = "ok"

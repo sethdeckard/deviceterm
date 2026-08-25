@@ -1,43 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SwipeAck: extended ack for `pane.input.swipe`. Surfaces the
-// daemon's *dispatched* gesture kind so agents can detect when their
-// requested swipe was silently promoted to a tap-shaped wire payload.
-//
-// Why this exists: `GestureTiming.steps` clamps to `max(1, clamped/16)`,
-// so any caller requesting `durationMs < 32` gets `steps == 1` and the
-// resulting wire is `tapDown(start) → tapDown(end) → tapUp(end)`,
-// wire-indistinguishable from a tap. A caller that reads only
-// `{"ok": true}` therefore cannot tell whether the drag it asked for
-// dispatched as a drag or silently degraded to a tap, which matters to
-// anything driving `deviceterm swipe` programmatically. SwipeAck
-// surfaces the dispatch kind + the step count + the clamped duration
-// the daemon actually used.
-//
-// Wire format adds three fields to the existing `{"ok": true}` shape:
-//
-//     {"ok": true, "dispatched": "tap"|"drag", "steps": N, "durationMs": M}
-//
-// Clients that only check `ok` continue to work unchanged. The wider
-// "echo every resolved-target field on every input ack" pattern lives
-// on the CLI side. SwipeAck stays swipe-specific; the broader
-// response type will be a generalization, not a redesign.
-//
-// **Skew tolerance.** The three extension fields are `Optional` on the
-// Swift side specifically so a newer CLI talking to an older daemon
-// (the in-flight Sparkle-update / stranded-helper window where the
-// helper is still on the prior version) sees `nil` instead of a
-// decode error: the gesture still went through, the rich response
-// just isn't available from that daemon. The new daemon always sends
-// all three; the CLI prints the rich line iff every field is present
-// and falls back to a bare `ok` otherwise. The stranded-helper
-// recovery procedure (a future signing/notarization change) is
-// still the right long-term answer; this just keeps single
-// short-lived CLI invocations during the window from spuriously
-// erroring.
 
 import Foundation
 
+/// Extended ack for `pane.input.swipe`. Surfaces the
+/// daemon's *dispatched* gesture kind so agents can detect when their
+/// requested swipe was silently promoted to a tap-shaped wire payload.
+///
+/// Why this exists: `GestureTiming.steps` clamps to `max(1, clamped/16)`,
+/// so any caller requesting `durationMs < 32` gets `steps == 1` and the
+/// resulting wire is `tapDown(start) → tapDown(end) → tapUp(end)`,
+/// wire-indistinguishable from a tap. A caller that reads only
+/// `{"ok": true}` therefore cannot tell whether the drag it asked for
+/// dispatched as a drag or silently degraded to a tap, which matters to
+/// anything driving `deviceterm swipe` programmatically. SwipeAck
+/// surfaces the dispatch kind + the step count + the clamped duration
+/// the daemon actually used.
+///
+/// Wire format adds three fields to the existing `{"ok": true}` shape:
+///
+///     {"ok": true, "dispatched": "tap"|"drag", "steps": N, "durationMs": M}
+///
+/// Clients that only check `ok` continue to work unchanged. The wider
+/// "echo every resolved-target field on every input ack" pattern lives
+/// on the CLI side. This type stays swipe-specific; treat its extension
+/// fields as swipe-only.
+///
+/// **Skew tolerance.** The three extension fields are `Optional` on the
+/// Swift side specifically so a newer CLI talking to an older daemon
+/// (the helper-replacement window where the helper is still on the prior
+/// version) sees `nil` instead of a decode error: the gesture still went
+/// through, the rich response just isn't available from that daemon. The
+/// new daemon always sends all three; the CLI prints the rich line iff
+/// every field is present and falls back to a bare `ok` otherwise.
 public struct SwipeAck: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case success = "ok"

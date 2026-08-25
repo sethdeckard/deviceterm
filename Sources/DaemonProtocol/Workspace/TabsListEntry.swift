@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
 /// One entry of the bare-array `tabs.list` result.
 /// Mirrors `SessionMethods.TabsListEntry`.
 ///

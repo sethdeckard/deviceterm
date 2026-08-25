@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceBootParams: shared `device.boot` request shape.
 
+/// Shared `device.boot` request shape.
 public struct DeviceBootParams: Codable, Sendable, Equatable {
     public let udid: String
     public let sessionId: String?
