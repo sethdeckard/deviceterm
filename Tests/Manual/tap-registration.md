@@ -12,7 +12,7 @@ either way, so the pane keeps feeling half functional.
 
 Run before any release that touches `Sources/Daemon/Input/`,
 `Sources/Daemon/Pane/PaneCoordinator.swift`,
-`Sources/App/SimulatorContentView.swift`, or
+`Sources/App/SimulatorPane/SimulatorContentView.swift`, or
 `Sources/CoreSimulatorBridge/SimHIDClient.m`.
 
 ## Preconditions

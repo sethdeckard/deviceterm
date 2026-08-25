@@ -11,9 +11,8 @@ And Simulator.app's shutdown behavior is Apple's, decided by preferences in
 another app's domain and observable only by quitting it and seeing what
 survived.
 
-Run before any release that touches `Sources/App/Welcome/`,
-`Sources/App/HeadlessAdvisory*.swift`, `Sources/App/SimulatorDetachPolicy.swift`,
-or the launch sequence in `Sources/App/AppDelegate.swift`.
+Run before any release that touches `Sources/App/Welcome/` or the launch
+sequence in `Sources/App/AppDelegate.swift`.
 
 ## What the preferences do
 

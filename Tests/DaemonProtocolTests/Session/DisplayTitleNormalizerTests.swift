@@ -13,8 +13,8 @@ import Testing
 
 @Test
 func keepsAnOrdinaryTitleVerbatim() {
-    #expect(DisplayTitleNormalizer.normalize("vim Sources/App/Router.swift")
-        == "vim Sources/App/Router.swift")
+    #expect(DisplayTitleNormalizer.normalize("vim Sources/App/Workspace/Router.swift")
+        == "vim Sources/App/Workspace/Router.swift")
 }
 
 @Test

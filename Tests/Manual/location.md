@@ -13,8 +13,7 @@ bare `BOOL` and `devicectl` reports only that it accepted the command.
 And the permission prompt, the sheet, and the menu itself are AppKit
 surfaces no automated test in this repo opens.
 
-Run before any release that touches `Sources/App/Location*`,
-`Sources/App/GPX*`, `Sources/App/RouteFile*`,
+Run before any release that touches `Sources/App/Location/`,
 `Sources/Daemon/DeviceCtl/`,
 `Sources/CoreSimulatorBridge/SimLocation.m`, or
 `Sources/CoreSimulatorBridge/include/SimLocation.h`.
