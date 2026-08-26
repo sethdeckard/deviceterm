@@ -96,7 +96,13 @@ private func readOneEnvelope(
     deadline: Date
 ) throws -> RPCEnvelope {
     var buffer = Data()
-    while Date() < deadline {
+    while true {
+        if let (payload, _) = try? RPCFraming.decodeNext(from: buffer) {
+            return try RPCEnvelope.decode(payload)
+        }
+        guard UDSClientSocket.waitReadable(fd: fd, deadline: deadline) else {
+            throw CLIError.transport("timed out waiting for daemon response")
+        }
         let chunk: Data?
         do {
             chunk = try UDSClientSocket.readAvailable(fd: fd)
@@ -106,17 +112,8 @@ private func readOneEnvelope(
         guard let chunk else {
             throw CLIError.transport("daemon closed the connection")
         }
-        if chunk.isEmpty {
-            usleep(10_000)
-            continue
-        }
         buffer.append(chunk)
-        guard let (payload, _) = try? RPCFraming.decodeNext(from: buffer) else {
-            continue
-        }
-        return try RPCEnvelope.decode(payload)
     }
-    throw CLIError.transport("timed out waiting for daemon response")
 }
 
 /// Send `session.authenticate` over `fd` using the tab's env creds.
@@ -798,17 +795,19 @@ func eventsStream() -> Never {
             // stay buffered for the streaming loop.
             let firstDeadline = Date().addingTimeInterval(5)
             var firstFrame: RPCEnvelope?
-            while Date() < firstDeadline {
+            while true {
                 if let (payload, consumed) = try? RPCFraming.decodeNext(from: eventsBuffer) {
                     eventsBuffer.removeFirst(consumed)
                     firstFrame = try RPCEnvelope.decode(payload)
+                    break
+                }
+                guard UDSClientSocket.waitReadable(fd: eventsFd, deadline: firstDeadline) else {
                     break
                 }
                 guard let chunk = try UDSClientSocket.readAvailable(fd: eventsFd) else {
                     writeStderr("deviceterm: daemon closed the connection\n")
                     exit(1)
                 }
-                if chunk.isEmpty { usleep(10_000); continue }
                 eventsBuffer.append(chunk)
             }
             guard let first = firstFrame else {
@@ -874,7 +873,10 @@ func eventsStream() -> Never {
                 exit(1)
             }
         }
-        // No complete frame left; read another chunk.
+        // No complete frame left. Park in `poll` until the daemon sends the
+        // next event or closes; a subscription has no deadline and no timer
+        // work, so there is nothing for a periodic wakeup to do.
+        _ = UDSClientSocket.waitReadable(fd: eventsFd, deadline: nil)
         let chunk: Data?
         do {
             chunk = try UDSClientSocket.readAvailable(fd: eventsFd)
@@ -883,10 +885,6 @@ func eventsStream() -> Never {
             exit(1)
         }
         guard let chunk else { exit(0) }  // daemon EOF, clean close
-        if chunk.isEmpty {
-            usleep(10_000)  // nothing buffered; poll the fd again
-            continue
-        }
         eventsBuffer.append(chunk)
     }
 }

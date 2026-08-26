@@ -16,8 +16,11 @@ import Darwin
 /// `deviceterm-cli` link only `DaemonProtocol`, so the client primitive
 /// has to live here.
 ///
-/// `connect(to:)` returns a non-blocking fd. Pair with `readAvailable`
-/// in a poll/decode loop and `writeAll` for framed requests.
+/// `connect(to:)` returns a non-blocking fd. Pair `waitReadable` with
+/// `readAvailable` in a wait/decode loop, and `writeAll` for framed
+/// requests. The fd stays non-blocking either way: `waitReadable` parks in
+/// `poll(2)` rather than changing the fd's mode, so a caller that drives
+/// the same fd from a `DispatchSourceRead` is unaffected.
 public enum UDSClientSocket {
     /// macOS reserves 104 bytes for `sockaddr_un.sun_path`; one is the
     /// trailing NUL, so the practical ceiling is 103.
@@ -83,6 +86,33 @@ public enum UDSClientSocket {
                 if saved == EINTR { continue }
                 throw UDSClientSocketError.readFailed(errno: saved)
             }
+        }
+    }
+
+    /// Wait in `poll(2)` until `fd` has bytes to read, the peer closes, or
+    /// `deadline` passes; a nil `deadline` waits indefinitely.
+    /// - Returns `false` only on timeout, so a caller can map that straight
+    ///   to its own timeout error.
+    /// A peer close reports readable, letting the following `readAvailable`
+    /// see EOF rather than deferring it to the deadline. `EINTR` re-polls
+    /// with the time remaining; other `poll` errors return true, leaving the
+    /// caller to attempt a non-blocking read.
+    public static func waitReadable(fd: Int32, deadline: Date?) -> Bool {
+        while true {
+            var timeout: Int32 = -1
+            if let deadline {
+                let remaining = deadline.timeIntervalSinceNow
+                guard remaining > 0 else { return false }
+                // Round up: a sub-millisecond remainder is still time left,
+                // and truncating it to 0 would spin `poll` at zero timeout.
+                timeout = Int32(min((remaining * 1_000).rounded(.up), Double(Int32.max)))
+            }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let rc = Darwin.poll(&descriptor, 1, timeout)
+            if rc > 0 { return true }
+            if rc == 0 { return false }
+            if errno == EINTR { continue }
+            return true
         }
     }
 

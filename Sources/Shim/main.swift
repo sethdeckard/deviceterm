@@ -457,31 +457,35 @@ private func shimAuthenticateAndSend(
     }
 }
 
-/// Block until one length-prefixed RPC frame arrives on `fd`, or
-/// until the wall-clock timeout expires. Framing only: it returns
-/// the raw payload and leaves the `RPCEnvelope` decode to the
-/// caller, which branches on the daemon's answer.
+/// The failure `readOneFrame` throws when no frame arrives, carrying the
+/// reason as its localized description for the shim's debug output.
+private func shimReadError(_ message: String) -> NSError {
+    NSError(
+        domain: "deviceterm-shim",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: message]
+    )
+}
+
+/// Block until one length-prefixed RPC frame arrives on `fd`, throwing
+/// when the peer closes first or the wall-clock timeout expires. Framing
+/// only: it returns the raw payload and leaves the `RPCEnvelope` decode to
+/// the caller, which branches on the daemon's answer.
 func readOneFrame(fd: Int32, timeoutSeconds: Double) throws -> Data {
     let deadline = Date(timeIntervalSinceNow: timeoutSeconds)
     var buffer = Data()
-    while Date() < deadline {
+    while true {
         if let frame = try RPCFraming.decodeNext(from: buffer) {
             return frame.payload
         }
-        if let chunk = try UDSClientSocket.readAvailable(fd: fd), !chunk.isEmpty {
-            buffer.append(chunk)
-            continue
+        guard UDSClientSocket.waitReadable(fd: fd, deadline: deadline) else {
+            throw shimReadError("timed out waiting for daemon response")
         }
-        Thread.sleep(forTimeInterval: 0.01)
+        guard let chunk = try UDSClientSocket.readAvailable(fd: fd) else {
+            throw shimReadError("daemon closed the connection")
+        }
+        buffer.append(chunk)
     }
-    throw NSError(
-        domain: "deviceterm-shim",
-        code: 1,
-        userInfo: [
-            NSLocalizedDescriptionKey:
-            "timed out waiting for daemon response"
-        ]
-    )
 }
 
 // MARK: - Signal forwarding
