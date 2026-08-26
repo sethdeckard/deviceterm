@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceCopy: allocation and copy primitives for daemon-owned
-// IOSurfaces.
-//
-// A decoded device frame is copied into a daemon-owned surface (a
-// `LeasedSurfacePool` slot) before it reaches subscribers, isolating them
-// from VideoToolbox's decode pool: VT recycles its decode surfaces on its
-// own schedule, so shipping one directly would let it overwrite pixels a
-// subscriber is still sampling. These are the pure allocation/copy
-// building blocks the pool and the device backend compose; the ownership
-// and reuse protocol lives in `LeasedSurfacePool`.
 
 import CoreVideo
 import Foundation
 import IOSurface
 
+/// Allocation and copy primitives for daemon-owned
+/// IOSurfaces.
+///
+/// A decoded device frame is copied into a daemon-owned surface (a
+/// `LeasedSurfacePool` slot) before it reaches subscribers, isolating them
+/// from VideoToolbox's decode pool: VT recycles its decode surfaces on its
+/// own schedule, so shipping one directly would let it overwrite pixels a
+/// subscriber is still sampling. These are the pure allocation/copy
+/// building blocks the pool and the device backend compose; the ownership
+/// and reuse protocol lives in `LeasedSurfacePool`.
 enum SurfaceCopy {
     /// Allocate one BGRA IOSurface sized for the device display.
     static func makeSurface(width: Int, height: Int) -> IOSurfaceRef? {

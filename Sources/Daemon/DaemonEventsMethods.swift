@@ -1,31 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonEventsMethods: RPC handler for `daemon.events`.
-//
-// Wire shape:
-//
-//   daemon.events()                         → initial {ok:true}
-//                                              + stream of `event` frames,
-//                                                each frame's params is a
-//                                                JSON-encoded DaemonEvent
-//
-// One subscription per RPC connection. The dispatcher tags every
-// streamed `.event` frame with the original request's id so the client
-// can multiplex, though the CLI only ever opens one subscription
-// per connection.
-//
-// Auth: `daemon.events` is `.session`-scoped. The dispatcher rejects an
-// unauthenticated connection (-32001) at the scope gate before this
-// handler runs, and the handler tags the subscription with the caller's
-// access principal: a `.session` sees only its own session's events plus
-// `.everyone` (device booted/shutdown), while the validated GUI peer
-// spans sessions. The two layers are distinct: the scope gate admits any
-// authenticated session (GUI or agent); the audience filter (in
-// EventBroker) is what promotes the GUI to see everything.
 
 import DaemonProtocol
 import Foundation
 
+/// RPC handler for `daemon.events`.
+///
+/// Wire shape:
+///
+///     daemon.events()                         → initial {ok:true}
+///                                                + stream of `event` frames,
+///                                                  each frame's params is a
+///                                                  JSON-encoded DaemonEvent
+///
+/// The dispatcher tracks subscriptions by request id and tags every
+/// streamed `.event` frame with the id of the request that opened it, so a
+/// client can multiplex several. The CLI opens one per connection.
+///
+/// Auth: `daemon.events` is `.session`-scoped. The dispatcher rejects an
+/// unauthenticated connection (-32001) at the scope gate before this
+/// handler runs, and the handler tags the subscription with the caller's
+/// access principal: a `.session` sees only its own session's events plus
+/// `.everyone` (device booted/shutdown), while the validated GUI peer
+/// spans sessions. The two layers are distinct: the scope gate admits any
+/// authenticated session (GUI or agent); the audience filter (in
+/// EventBroker) is what promotes the GUI to see everything.
 public enum DaemonEventsMethods {
     /// Subscription event method name. The RPC dispatcher tags each
     /// streamed frame with this name so the client can dispatch on

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandCoordinatorTests: exercise the daemon-side back-channel
-// broker: subscribe, publish + await, deliver result, timeout, and
-// subscriber-loss cleanup.
 
 @testable import Daemon
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Exercise the daemon-side back-channel
+/// broker: subscribe, publish + await, deliver result, timeout, and
+/// subscriber-loss cleanup.
 struct AppCommandCoordinatorTests {
     // MARK: - Helpers
 

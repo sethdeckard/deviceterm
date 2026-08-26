@@ -1,14 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// StubDeviceBackend: a synthetic `DeviceBackend` that needs no
-// hardware. It emits one blank IOSurface frame and reports the
-// physical-device capability set, so the capability plumbing (wire →
-// coordinator → client gating) and the device pane lifecycle can be
-// exercised hermetically. Only tests construct it; production device
-// panes run on the split-pipeline-backed backend.
-//
-// `@unchecked Sendable`: it holds only value state + a retained surface;
-// like the other backends, only the `PaneCoordinator` actor touches it.
 
 import CoreVideo
 import DaemonProtocol
@@ -19,6 +9,15 @@ import IOSurface
 // protocol) but have non-throwing stub bodies; the unneeded-throws rule
 // is a false positive across this type.
 // swiftlint:disable unneeded_throws_rethrows
+/// A synthetic `DeviceBackend` that needs no
+/// hardware. It emits one blank IOSurface frame and reports the
+/// physical-device capability set without location, so the capability
+/// plumbing (wire → coordinator → client gating) and the device pane
+/// lifecycle can be exercised hermetically. Only tests construct it; production device
+/// panes run on the split-pipeline-backed backend.
+///
+/// `@unchecked Sendable`: it holds only value state + a retained surface;
+/// like the other backends, only the `PaneCoordinator` actor touches it.
 final class StubDeviceBackend: DeviceBackend, @unchecked Sendable {
     // This backend takes the protocol's throwing location defaults, so
     // it must not advertise location; see `withoutLocation`.

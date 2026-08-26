@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GestureTiming: frame-pacing math for interpolated `pane.input.*`
-// gestures (`swipe`, `pinch`, and anything multi-finger that comes
-// later).
-//
-// Indigo's digitizer accepts a stream of `tapDown`/`twoFingerDown`
-// events at successive points; treating those as continued contact
-// is what makes a swipe look like a swipe rather than a sequence of
-// taps. At ~60Hz (16ms frames) that means the daemon has to pace its
-// own send loop. This struct does the arithmetic once so the gesture
-// methods aren't four lines of clamp-and-divide each.
-//
-// The math: clamp the caller's `durationMs` to `[0, maxMs]` (`maxMs`
-// is `PaneCoordinator.maxGestureDurationMs` in practice, passed in
-// to keep this file independent of the coordinator). Divide into
-// 16ms frames (or one frame minimum for a zero-duration gesture).
-// A loop then sleeps to each step's absolute deadline rather than for
-// a per-step interval, so one step's lateness doesn't shift the rest.
 
 import Foundation
 
+/// Frame-pacing and dwell math for the interpolated `pane.input.*`
+/// gestures (`swipe`, `pinch`) and paced crown input.
+///
+/// Indigo's digitizer accepts a stream of `tapDown`/`twoFingerDown`
+/// events at successive points; treating those as continued contact
+/// is what makes a swipe look like a swipe rather than a sequence of
+/// taps. At ~60Hz (16ms frames) that means the daemon has to pace its
+/// own send loop. This struct does the arithmetic once so the gesture
+/// methods aren't four lines of clamp-and-divide each.
+///
+/// The math: clamp the caller's `durationMs` to `[0, maxMs]` (`maxMs`
+/// is `PaneCoordinator.maxGestureDurationMs` in practice, passed in
+/// to keep this file independent of the coordinator). Divide into
+/// 16ms frames (or one frame minimum for a zero-duration gesture).
+/// A loop then sleeps to each step's absolute deadline rather than for
+/// a per-step interval, so one step's lateness doesn't shift the rest.
 struct GestureTiming {
     /// Approximate display frame duration in ms. 16ms ≈ 60Hz, which
     /// matches Indigo's digitizer cadence on the host.

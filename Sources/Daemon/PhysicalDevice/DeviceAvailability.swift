@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceAvailability: pure decision for whether the daemon can mirror a
-// connected physical device, from what a bounded availability probe could
-// learn about it.
-//
-// CoreDevice screen mirroring (the same path Apple's Device Hub uses, which
-// is itself iOS-version gated) needs the device to vend
-// `com.apple.coredevice.displayservice` and answer `getmediasupportinfo`
-// with a non-zero feature set. An older iOS doesn't vend the service at
-// all, so its absence is the reliable "can't mirror" signal: capability-
-// driven, not a version-number assertion (the exact cutoff is Apple's and
-// drifts across betas). A locked or transiently-unreachable device can't be
-// probed conclusively, so it is treated as available rather than penalized
-// The attach path surfaces the precise error if it really can't mirror.
-//
-// Pure and total: a probe (catalog + media query) maps its result into a
-// `Probe` and this decides; unit-tested without a device.
-//
-// The gate is enforced at **attach**: the picker lists every
-// connected device, and mounting an iOS-too-old one surfaces
-// `unsupportedReason`. `decide`/`Probe` hold the
-// logic a picker would need to pre-grey unavailable rows by probing
-// each device *asynchronously* after the list renders; that probe is
-// deliberately kept out of the synchronous `physicalDevice.list` so
-// the RPC stays cheap.
 
+/// Pure decision for whether the daemon can mirror a
+/// connected physical device, from what a bounded availability probe could
+/// learn about it.
+///
+/// CoreDevice screen mirroring (the same path Apple's Device Hub uses, which
+/// is itself iOS-version gated) needs the device to vend
+/// `com.apple.coredevice.displayservice` and answer `getmediasupportinfo`
+/// with a non-zero feature set. An older iOS doesn't vend the service at
+/// all, so its absence is the reliable "can't mirror" signal: capability-
+/// driven, not a version-number assertion (the exact cutoff is Apple's and
+/// drifts across betas). A locked or transiently-unreachable device can't be
+/// probed conclusively, so it is treated as available rather than penalized
+/// The attach path surfaces the precise error if it really can't mirror.
+///
+/// Pure and total: a probe (catalog + media query) maps its result into a
+/// `Probe` and this decides; unit-tested without a device.
+///
+/// The gate is enforced at **attach**: the picker lists every
+/// connected device, and mounting an iOS-too-old one surfaces
+/// `unsupportedReason`. `decide`/`Probe` hold the
+/// logic a picker would need to pre-grey unavailable rows by probing
+/// each device *asynchronously* after the list renders; that probe is
+/// deliberately kept out of the synchronous `physicalDevice.list` so
+/// the RPC stays cheap.
 enum DeviceAvailability {
     /// What a bounded probe of one connected device learned.
     enum Probe: Sendable, Equatable {

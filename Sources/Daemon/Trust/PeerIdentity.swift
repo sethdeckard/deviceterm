@@ -1,37 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PeerIdentity: self-mirror peer validation for the
-// automation-mint + automation-scope gate on XPC peers.
-//
-// At daemon startup the daemon reads its own signing info via
-// `SecCodeCopySelf` → `SecCodeCopyStaticCode` →
-// `SecCodeCopySigningInformation` and caches the result in
-// `selfIdentity`. When an XPC peer asks for an
-// automation-scoped operation (or mints an automation
-// session), the validator runs the same chain on the peer's
-// audit-token-derived `SecCode` and compares the result against
-// the daemon's own signature:
-//
-//   - Production (Developer-ID self): peer team identifier must
-//     match daemon team identifier AND peer bundle id must match
-//     the expected host bundle id (daemon bundle id with the
-//     trailing `.daemon` stripped) AND peer is Developer-ID-
-//     signed.
-//   - Ad-hoc edge-case branch (ad-hoc self): peer must be
-//     ad-hoc-signed with the matching bundle id AND its process
-//     path must resolve to a sibling of the daemon's process
-//     directory. Only reached when both binaries are ad-hoc
-//     signed in the same build tree (the hermetic
-//     `BundleCodesignTests --ephemeral` path).
-//   - Mixed (Developer-ID self + ad-hoc peer, or vice versa) →
-//     rejected. Catches an attacker who ad-hoc-signs a binary
-//     claiming the host bundle id.
-//
-// Open-source friendly: no team identifier or designated
-// requirement is committed to source. The validator reads the
-// daemon's own signature and the peer's signature, then matches.
-// Forks rebrand by changing the bundle id; the validator picks
-// up the new team automatically.
 
 import DaemonProtocol
 import Foundation
@@ -40,6 +7,38 @@ import Security
 import Darwin
 #endif
 
+/// Self-mirror peer validation for the
+/// automation-mint + automation-scope gate on XPC peers.
+///
+/// At daemon startup the daemon reads its own signing info via
+/// `SecCodeCopySelf` → `SecCodeCopyStaticCode` →
+/// `SecCodeCopySigningInformation` and caches the result in
+/// `selfIdentity`. When an XPC peer asks for an
+/// automation-scoped operation (or mints an automation
+/// session), the validator runs the same chain on the peer's
+/// audit-token-derived `SecCode` and compares the result against
+/// the daemon's own signature:
+///
+///   - Production (Developer-ID self): peer team identifier must
+///     match daemon team identifier AND peer bundle id must match
+///     the expected host bundle id (daemon bundle id with the
+///     trailing `.daemon` stripped) AND peer is Developer-ID-
+///     signed.
+///   - Ad-hoc edge-case branch (ad-hoc self): peer must be
+///     ad-hoc-signed with the matching bundle id AND its process
+///     path must resolve to a sibling of the daemon's process
+///     directory. Only reached when both binaries are ad-hoc
+///     signed in the same build tree (what
+///     `scripts/make-app-bundle.sh --ephemeral` produces).
+///   - Mixed (Developer-ID self + ad-hoc peer, or vice versa) →
+///     rejected. Catches an attacker who ad-hoc-signs a binary
+///     claiming the host bundle id.
+///
+/// Open-source friendly: no team identifier or designated
+/// requirement is committed to source. The validator reads the
+/// daemon's own signature and the peer's signature, then matches.
+/// Forks rebrand by changing the bundle id; the validator picks
+/// up the new team automatically.
 public enum PeerIdentity {
     /// What kind of signature is on the daemon itself. Cached at
     /// startup; never recomputed.

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCMethodError. Typed error a method handler can throw to return
-// a structured RPC error response with a specific code + message.
-//
-// `RPCConnection.dispatch` catches this case specifically: it
-// surfaces the carried `code` / `message` into the response envelope's
-// error body. Untyped errors thrown by handlers still convert to the
-// catch-all `serverError` (-32000); this type is for the cases where
-// the handler actively wants a specific code on the wire (invalid
-// params, unauthorized, not found, etc.).
 
 import Foundation
 
+/// Typed error a method handler can throw to return
+/// a structured RPC error response with a specific code + message.
+///
+/// The UDS and XPC dispatchers both catch this case specifically and
+/// surface the carried `code` / `message` through their own transport's
+/// error body. Untyped errors thrown by handlers still convert to the
+/// catch-all `serverError` (-32000); this type is for the cases where
+/// the handler actively wants a specific code on the wire (invalid
+/// params, unauthorized, not found, etc.).
 public struct RPCMethodError: Error, Sendable, Equatable {
     // MARK: Conventional codes
 

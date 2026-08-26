@@ -1,35 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TunnelKeepalive: holds the CoreDevice RSD tunnel up for a mirrored
-// physical device by *borrowing Apple's own `devicectl`*, so deviceterm
-// mirrors without Device Hub / Xcode open.
-//
-// The OS (`remoted`) only keeps a device's `utun` up while a trusted
-// client holds a CoreDevice session. `devicectl device notification
-// observe` is exactly that: a benign, blocking subprocess that parks a
-// session observing a Darwin notification (one that never fires). While
-// it lives the tunnel stays up; SIGINT it and the tunnel drops. Apple's
-// signed binary makes the privileged ask, so the daemon stays user-scope
-// with no entitlement and no helper. (Measured: tunnel up ~0.8s after
-// spawn; the OS lingers it ~10s after the process exits.)
-//
-// One keepalive per device, **ref-counted** so several panes can mirror
-// the same device and the tunnel drops only when the last detaches. The
-// spawner is injectable so the ref-count / kill logic is unit-tested
-// without a real device.
-//
-// `Process` is not `Sendable`, so state lives behind a serial queue in an
-// `@unchecked Sendable` wrapper rather than an actor, which lets the
-// daemon's *synchronous* `applicationWillTerminate` hook call
-// `shutdownAll()` directly, guaranteeing no orphaned `devicectl` on a
-// clean exit. A crashed daemon's orphan self-exits at `--session-timeout`
-// and is reaped on the next daemon launch (`reapOrphans()`), keyed off the
-// unique notification name.
 
 import Foundation
 
 extension Process: KeepaliveHandle {}
 
+/// Holds the CoreDevice RSD tunnel up for a mirrored
+/// physical device by *borrowing Apple's own `devicectl`*, so deviceterm
+/// mirrors without Device Hub / Xcode open.
+///
+/// The OS (`remoted`) only keeps a device's `utun` up while a trusted
+/// client holds a CoreDevice session. `devicectl device notification
+/// observe` is exactly that: a benign, blocking subprocess that parks a
+/// session observing a Darwin notification (one that never fires). While
+/// it lives the tunnel stays up; SIGINT it and the tunnel drops. Apple's
+/// signed binary makes the privileged ask, so the daemon stays user-scope
+/// with no entitlement and no helper. (Measured: tunnel up ~0.8s after
+/// spawn; the OS lingers it ~10s after the process exits.)
+///
+/// One keepalive per device, **ref-counted** so several panes can mirror
+/// the same device and the tunnel drops only when the last detaches. The
+/// spawner is injectable so the ref-count / kill logic is unit-tested
+/// without a real device.
+///
+/// `Process` is not `Sendable`, so state lives behind a serial queue in an
+/// `@unchecked Sendable` wrapper rather than an actor, which lets the
+/// daemon's *synchronous* `applicationWillTerminate` hook call
+/// `shutdownAll()` directly, guaranteeing no orphaned `devicectl` on a
+/// clean exit. A crashed daemon's orphan self-exits at `--session-timeout`
+/// and is reaped on the next daemon launch (`reapOrphans()`), keyed off the
+/// unique notification name.
 public final class TunnelKeepalive: @unchecked Sendable {
     /// Spawns the keepalive subprocess for a device, or `nil` if launch
     /// failed (the tunnel then never comes up and the attach poll surfaces

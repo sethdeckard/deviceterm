@@ -8,16 +8,17 @@ import Darwin
 #endif
 
 // MARK: - Client harness
-//
-// Minimal blocking UDS client purpose-built for these tests: connect
-// + write a framed envelope + block-read until we have a full
-// response frame back. Production GUI/CLI clients have their own
-// nicer wrappers; the test harness deliberately stays tiny so the
-// integration tests exercise the wire and not test infrastructure.
-//
-// Uses only public Daemon API so it can live in a plain library shared
-// by every test target.
 
+/// Minimal blocking UDS client purpose-built for these tests: connect,
+/// write a framed envelope, then block-read until a full response frame
+/// is back.
+///
+/// Production GUI/CLI clients have their own nicer wrappers; this harness
+/// deliberately stays tiny so the integration tests exercise the wire and
+/// not test infrastructure.
+///
+/// Uses only public Daemon API so it can live in a plain library shared
+/// by every test target.
 public final class TestClient {
     public let fd: Int32
     /// Held across `receive` calls so partial reads between frame

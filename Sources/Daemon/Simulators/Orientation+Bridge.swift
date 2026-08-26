@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Orientation+Bridge: the daemon-only mapping from the shared
-// Orientation wire enum (DaemonProtocol) to CoreSimulatorBridge's
-// private `CSBDeviceOrientation` C enum. Daemon-only computed property,
-// not a protocol conformance; see HardwareButton+Bridge.swift for why it
-// lives in an extension here rather than on the type.
 
 import CoreSimulatorBridge
 import DaemonProtocol
 
+/// The daemon-only mapping from the shared `Orientation` wire enum
+/// (DaemonProtocol) to CoreSimulatorBridge's private
+/// `CSBDeviceOrientation` C enum.
+///
+/// A daemon-only computed property, not a protocol conformance:
+/// `Orientation` lives in the Foundation-only DaemonProtocol module, which
+/// must never link CoreSimulatorBridge, so an extension in the Daemon
+/// module is the only legal home.
 extension Orientation {
     var bridgeValue: CSBDeviceOrientation {
         switch self {

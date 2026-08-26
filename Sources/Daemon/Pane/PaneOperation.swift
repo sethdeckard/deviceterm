@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneOperation: the verb vocabulary pane errors report.
-//
-// `PaneError.bridgeFailed` and `.unsupportedOperation` both name the verb
-// that failed, and that name reaches the user: `PaneMethods.mapPaneError`
-// folds it into an RPC error message, and `diagnosticKind` folds it into a
-// log line. It is a closed set the daemon owns, so it is a type rather than
-// a string literal repeated at every throw site.
-//
-// The labels are load-bearing text, not identifiers. Clients read them in
-// error messages, so `label` is the contract; renaming a case is free,
-// changing its label is not.
 
 import DaemonProtocol
 
 /// A verb a pane-targeted operation can fail under, as reported by
-/// `PaneError`.
+/// `PaneError`. The verb vocabulary pane errors report.
+///
+/// `PaneError.bridgeFailed` and `.unsupportedOperation` both name the verb
+/// that failed, and that name reaches the user: `PaneMethods.mapPaneError`
+/// folds it into an RPC error message, and `diagnosticKind` folds it into a
+/// log line. It is a closed set the daemon owns, so it is a type rather than
+/// a string literal repeated at every throw site.
+///
+/// The labels are user-visible text, not identifiers. Clients read them in
+/// error messages, so `label` is the contract; renaming a case is free,
+/// changing its label is not.
 ///
 /// Most cases are fixed. `button` carries its `HardwareButton` so a failed
 /// press names the button rather than the generic verb, and the two

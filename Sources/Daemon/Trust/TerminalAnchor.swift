@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalAnchor: the in-memory binding from a daemon session to its
-// terminal's kernel identity.
-//
-// Established by the validated GUI over `session.bindTerminal` and never
-// persisted: after a daemon restart the session is restored with no anchor and
-// stays unusable for provenance-gated calls until the live GUI re-binds it.
-// Holds no numeric foreground pid: only the kernel-stable facts a UDS peer's
-// `PeerProcessIdentity` is matched against, plus the connection that issued it
-// so a GUI disconnect can revoke it.
 
 import Foundation
 
+/// The in-memory binding from a daemon session to its
+/// terminal's kernel identity.
+///
+/// Established by the validated GUI over `session.bindTerminal` and never
+/// persisted: after a daemon restart the session is restored with no anchor and
+/// stays unusable for provenance-gated calls until the live GUI re-binds it.
+/// Holds no numeric foreground pid: only the kernel-stable facts a UDS peer's
+/// `PeerProcessIdentity` is matched against, plus the connection that issued it
+/// so a GUI disconnect can revoke it.
 public struct TerminalAnchor: Sendable, Equatable {
     /// The daemon session this terminal is bound to.
     public let sessionId: UUID

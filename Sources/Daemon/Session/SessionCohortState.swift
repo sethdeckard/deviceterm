@@ -1,38 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionCohortState: which sessions jointly control a device pane, as a value
-// type `PaneCoordinator` owns outright.
-//
-// A session is the caller's authenticated identity. The product-level authority
-// boundary is the tab, so every terminal in a tab reaches that tab's device
-// panes. The daemon keeps no tab concept: what it stores is an opaque cohort id
-// the GUI mints and retains, an ordered membership of verified session
-// incarnations, and one representative for attribution.
-//
-// **Why a value type inside `PaneCoordinator` rather than its own actor.**
-// Cohort membership and pane records form one consistency domain: a membership
-// change decides who may drive a pane and rebinds pane records, and those must
-// commit together in one actor turn. Every method here is synchronous, so
-// there is no window between deciding and committing for anything to slip
-// into.
-//
-// Nothing here suspends, and nothing here reads the outside world. Session
-// liveness arrives as a parameter, which is what keeps it that way.
-//
-// Membership is ordered. The order is the GUI's nomination sequence, carried
-// on the wire so who inherits from a closing member is a rule both layers can
-// state identically: the first surviving member in order.
-//
-// A close verdict is decided exactly once per member, at the first of three
-// entry points to reach it (`beginClose`, an explicit close's
-// `recordCloseVerdict`, or a reap's `tearDown`), and the record of it is what
-// makes the other two no-ops. The verdict and its device consequence commit
-// in the same actor turn, so a later close path cannot lose a promotion by
-// re-deciding against membership the close already removed.
 
 import DaemonProtocol
 import Foundation
 
+/// Which sessions jointly control a device pane, as a value
+/// type `PaneCoordinator` owns outright.
+///
+/// A session is the caller's authenticated identity. The product-level authority
+/// boundary is the tab, so every terminal in a tab reaches that tab's device
+/// panes. The daemon keeps no tab concept: what it stores is an opaque cohort id
+/// the GUI mints and retains, an ordered membership of verified session
+/// incarnations, and one representative for attribution.
+///
+/// **Why a value type inside `PaneCoordinator` rather than its own actor.**
+/// Cohort membership and pane records form one consistency domain: a membership
+/// change decides who may drive a pane and rebinds pane records, and those must
+/// commit together in one actor turn. Every method here is synchronous, so
+/// there is no window between deciding and committing for anything to slip
+/// into.
+///
+/// Nothing here suspends, and nothing here reads the outside world. Session
+/// liveness arrives as a parameter, which is what keeps it that way.
+///
+/// Membership is ordered. The order is the GUI's nomination sequence, carried
+/// on the wire so who inherits from a closing member is a rule both layers can
+/// state identically: the first surviving member in order.
+///
+/// A close verdict is decided exactly once per member, at the first of three
+/// entry points to reach it (`beginClose`, an explicit close's
+/// `recordCloseVerdict`, or a reap's `tearDown`), and the record of it is what
+/// makes the other two no-ops. The verdict and its device consequence commit
+/// in the same actor turn, so a later close path cannot lose a promotion by
+/// re-deciding against membership the close already removed.
 struct SessionCohortState: Sendable {
     private struct Cohort: Sendable, Equatable {
         var members: [CohortMember]

@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneAccessPrincipal: derives a pane-access identity from the
-// current dispatch context. This type does not itself enforce pane
-// ownership; it names who a call acts as when a pane-authorization gate
-// compares the identity against a pane's `Record.sessionId`. There are
-// exactly two identities:
-//
-//   - `.session(id)`: an authenticated tab session, which owns the
-//     panes whose `Record.sessionId` matches.
-//   - `.guiPeer`: the signature-validated host GUI XPC peer, which
-//     spans every session: the GUI renders and drives panes across all
-//     tabs, and each of its shared transport lanes may authenticate as
-//     any live tab, so it is identified as a *peer*, not a *session*.
-//
-// `internal`, not `public`: minting a principal is the module's own
-// concern (every caller lives in `Daemon`), and there is deliberately
-// no third "bypass ownership" identity.
 
 import Foundation
 
+/// Derives a pane-access identity from the
+/// current dispatch context. This type does not itself enforce pane
+/// ownership; it names who a call acts as when a pane-authorization gate
+/// compares the identity against a pane's `Record.sessionId`. There are
+/// exactly two identities:
+///
+///   - `.session(id)`: an authenticated tab session, which owns the
+///     panes whose `Record.sessionId` matches.
+///   - `.guiPeer`: the signature-validated host GUI XPC peer, which
+///     spans every session: the GUI renders and drives panes across all
+///     tabs, and each of its shared transport lanes may authenticate as
+///     any live tab, so it is identified as a *peer*, not a *session*.
+///
+/// `internal`, not `public`: minting a principal is the module's own
+/// concern (every caller lives in `Daemon`), and there is deliberately
+/// no third "bypass ownership" identity.
 enum PaneAccessPrincipal: Sendable, Equatable {
     /// An authenticated session identity plus the session INCARNATION the
     /// request was authorized under. Authorization gates compare the id with

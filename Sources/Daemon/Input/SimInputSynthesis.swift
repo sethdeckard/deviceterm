@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimInputSynthesis: the pure input-synthesis half of `PaneCoordinator`.
-//
-// Every `pane.input.*` gesture is coordinate/timing math plus async
-// `DeviceBackend` HID sends; none of it touches `PaneCoordinator`'s mutable
-// pane state. The coordinator resolves the backend (its one stateful step,
-// `requireBackend`), then hands it here. Simulator sends join a per-pane
-// Dispatch queue because SimulatorKit waits synchronously for completion;
-// physical-device sends join their relay pump.
-//
-// The one gesture with a state side effect stays on the actor: `rotate`
-// here does only the backend call; the coordinator fans the
-// `.orientationChanged` event out to subscribers.
 
 import CoreGraphics
 import DaemonProtocol
 import Foundation
 
+/// The pure input-synthesis half of `PaneCoordinator`.
+///
+/// Every `pane.input.*` gesture is coordinate/timing math plus async
+/// `DeviceBackend` HID sends; none of it touches `PaneCoordinator`'s mutable
+/// pane state. The coordinator resolves the backend (its one stateful step,
+/// `requireBackend`), then hands it here. Simulator sends join a per-pane
+/// Dispatch queue because SimulatorKit waits synchronously for completion;
+/// physical-device sends join their relay pump.
+///
+/// The one gesture with a state side effect stays on the actor: `rotate`
+/// here does only the backend call; the coordinator fans the
+/// `.orientationChanged` event out to subscribers.
 enum SimInputSynthesis {
     /// What a paced loop does when it reaches its checkpoint.
     enum PacedStep: Equatable {

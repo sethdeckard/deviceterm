@@ -1,37 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceMethods: RPC handlers for the `device.*` method family.
-//
-// Wire shapes (canonical schema in `docs/ARCHITECTURE.md`):
-//
-//   device.list({scope: "owned"|"all"})
-//        → [{udid, name, state, ownedBySession?, family, deviceType?}]
-//   device.boot({udid, sessionId?, cap?, claim?})  → {ok: true}
-//   device.reconcileBootClaim({claim, sessionId?})
-//        → {attemptId, udid, status, sessionId?}
-//   device.shutdown({udid})                → {ok: true}
-//   device.restoreOwnership({devices: [{udid, sessionId?}]})
-//        → {restoredCount, udids}
-//
-// `device.attach({udid, sessionId, cap, revision?}) → {paneId, scale?, family,
-// …}` transfers ownership of an already-Booted udid to
-// (sessionId, cap) and creates a sim pane for it in one shot. The
-// orphan re-attach path uses it so adoption into a fresh session
-// updates the daemon's ownership map; without it `device.list`
-// keeps reporting the orphan's dead session as owner and a later
-// `detach` close strands the daemon's record.
-//
-// A session-attributed `device.boot` requires one stable boot claim. The RPC
-// only records the attempt and asks CoreSimulator to boot; ownership and the
-// `device.booted` event wait until a notifier or shared device snapshot reports
-// Booted. The validated GUI retries uncertain attempts through
-// `device.reconcileBootClaim`. Omitting both session credentials and a claim
-// keeps the existing authenticated, unattributed boot path.
 
 import CoreSimulatorBridge
 import DaemonProtocol
 import Foundation
 
+/// RPC handlers for the `device.*` method family.
+///
+/// Wire shapes (canonical schema in `docs/ARCHITECTURE.md`):
+///
+///     device.list({scope: "owned"|"all"})
+///          → [{udid, name, state, ownedBySession?, family, deviceType?}]
+///     device.boot({udid, sessionId?, cap?, claim?})  → {ok: true}
+///     device.reconcileBootClaim({claim, sessionId?})
+///          → {attemptId, udid, status, sessionId?}
+///     device.shutdown({udid})                → {ok: true}
+///     device.restoreOwnership({devices: [{udid, sessionId?}]})
+///          → {restoredCount, udids}
+///
+/// `device.attach({udid, sessionId, cap, revision?}) → {paneId, scale?, family,
+/// …}` transfers ownership of an already-Booted udid to
+/// (sessionId, cap) and creates a sim pane for it in one shot. The
+/// orphan re-attach path uses it so adoption into a fresh session
+/// updates the daemon's ownership map; without it `device.list`
+/// keeps reporting the orphan's dead session as owner and a later
+/// `detach` close strands the daemon's record.
+///
+/// A session-attributed `device.boot` requires one stable boot claim. The RPC
+/// only records the attempt and asks CoreSimulator to boot; ownership and the
+/// `device.booted` event wait until a notifier or shared device snapshot reports
+/// Booted. The validated GUI retries uncertain attempts through
+/// `device.reconcileBootClaim`. Omitting both session credentials and a claim
+/// selects the authenticated, unattributed boot path.
 public enum DeviceMethods {
     public typealias BootParams = DeviceBootParams
 

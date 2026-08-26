@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneSubscriptionRegistry: single fan-out point for pane surface
-// delivery, keyed by `(paneId, connectionId)`.
-//
-// JSON pane events fan out inside `PaneCoordinator` (each pane record
-// carries its own subscriber continuations). This registry owns the
-// orthogonal surface lane that UDS can't carry: each XPC subscription
-// registers a synchronous send closure (it marshals a `RetainedSurface`
-// into an `xpc_object_t` and ships it), and the registry routes per-pane
-// surface fan-out to the right closures.
-//
-// For a **device** pane with leasing enabled, the registry runs the pool
-// grant transaction for each subscription before the send (acquire a
-// provisional hold, commit it *before* exposing the surface, then send)
-// so a slot can't be reused while the GUI still holds the frame. The
-// transaction is serialized per subscription through a bounded,
-// latest-only worker, so exposure order equals reservation order and a
-// stalled commit can't accumulate a backlog. Simulator frames (no lease)
-// and the kill-switched path take no hold and send straight through.
 
 import DaemonProtocol
 import Foundation
 
+/// Single fan-out point for pane surface
+/// delivery, keyed by `(paneId, connectionId)`.
+///
+/// JSON pane events fan out inside `PaneCoordinator` (each pane record
+/// carries its own subscriber continuations). This registry owns the
+/// orthogonal surface lane that UDS can't carry: each XPC subscription
+/// registers a synchronous send closure (it marshals a `RetainedSurface`
+/// into an `xpc_object_t` and ships it), and the registry routes per-pane
+/// surface fan-out to the right closures.
+///
+/// For a **device** pane with leasing enabled, the registry runs the pool
+/// grant transaction for each subscription before the send (acquire a
+/// provisional hold, commit it *before* exposing the surface, then send)
+/// so a slot can't be reused while the GUI still holds the frame. The
+/// transaction is serialized per subscription through a bounded,
+/// latest-only worker, so exposure order equals reservation order and a
+/// stalled commit can't accumulate a backlog. Simulator frames (no lease)
+/// and the kill-switched path take no hold and send straight through.
 public actor PaneSubscriptionRegistry {
     /// The synchronous, non-reentrant send: it only marshals the surface
     /// and calls `xpc_connection_send_message`. Kept synchronous so no

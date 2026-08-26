@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandGrantRelayTests: what `publishVerb` puts on the wire and
-// what it does with the answer.
-//
-// This suite covers two daemon-side behaviors:
-//   - The published command carries the caller's live grant, read
-//     server-side from the store rather than taken from the request.
-//   - A GUI refusal for want of a grant comes back as the same numeric
-//     code the daemon's own scope check produces, so an agent branches
-//     on one number whichever layer refused. Everything else keeps
-//     riding the generic code unchanged.
 
 @testable import Daemon
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// What `publishVerb` puts on the wire and
+/// what it does with the answer.
+///
+/// This suite covers two daemon-side behaviors:
+///   - The published command carries the caller's live grant, read
+///     server-side from the store rather than taken from the request.
+///   - A GUI refusal for want of a grant comes back as the same numeric
+///     code the daemon's own scope check produces, so an agent branches
+///     on one number whichever layer refused. Everything else keeps
+///     riding the generic code unchanged.
 struct AppCommandGrantRelayTests {
     /// Publish through `publishVerb` while a fake GUI answers with
     /// `reply`, and hand back both the command the GUI saw and whatever

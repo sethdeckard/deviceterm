@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DiagnosticKind: log-safe names for the errors the attach path can fail with.
-//
-// Error payloads can contain identifiers or caller text: `PhysicalDeviceError`
-// carries a device UDID in every case, and `PaneError` carries pane ids,
-// UDIDs, and caller-supplied text. Log an identifier-free kind instead, and use
-// the attach id for correlation.
-//
-// Both mappings are exhaustive `switch`es on purpose: adding a case to either
-// error stops compiling here, so a new failure mode has to be given a name
-// rather than defaulting into something that prints its payload.
 
+/// Log-safe names for the physical-device failures the attach path reports.
+///
+/// Error payloads can contain identifiers or caller text, and
+/// `PhysicalDeviceError` carries a device UDID in every case. Log an
+/// identifier-free kind instead, and use the attach id for correlation.
+///
+/// The mapping is an exhaustive `switch` on purpose: adding a case to the
+/// error stops compiling here, so a new failure mode has to be given a name
+/// rather than defaulting into something that prints its payload.
 extension PhysicalDeviceError {
     /// A short, identifier-free name for this failure, safe to log `.public`.
     var diagnosticKind: String {
@@ -35,6 +33,12 @@ extension PhysicalDeviceError {
     }
 }
 
+/// Log-safe names for the pane failures the attach path reports.
+///
+/// `PaneError` carries pane ids, UDIDs, and caller-supplied text, so the
+/// same reasoning as `PhysicalDeviceError.diagnosticKind` applies: log an
+/// identifier-free kind and correlate on the attach id. The mapping is an
+/// exhaustive `switch` for the same reason.
 extension PaneError {
     /// A short, identifier-free name for this failure, safe to log `.public`.
     var diagnosticKind: String {

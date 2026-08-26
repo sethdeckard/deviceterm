@@ -1,31 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PhysicalDeviceCoordinator: the daemon actor that enumerates
-// physically-connected iPhones/iPads and resolves one to a streaming
-// `RealDeviceBackend` on attach, holding the CoreDevice tunnel up on its
-// own (no external device-management app or Xcode required).
-//
-// Kept separate from the CoreSimulator-bound `DeviceCoordinator`: this
-// one owns the physical-device tunnel surface, not CoreSimulator handles.
-//
-// **Enumeration** (`enumerate`, for the picker and `devices.list`) goes
-// through `devicectl list devices` (`DeviceCtl`): usbmux/lockdown, works
-// with the tunnel **down**, and yields the device's real **UDID**, name,
-// and model. So a device is selectable the moment it's plugged in and
-// trusted; the tunnel is brought up lazily only on attach.
-//
-// **Attach** (`resolveBackend`) brings the tunnel up itself:
-//   1. `keepalive.retain(udid)` spawns a benign blocking `devicectl`
-//      subprocess that holds the RSD session (see `TunnelKeepalive`).
-//   2. Hand a `devicectl`-backed address source to `DeviceRouteResolver`,
-//      which polls until that UDID reports `tunnelState == connected` with a
-//      `tunnelIPAddress` and matches it to the live `utun`, authoritative
-//      even with several devices connected.
-//   3. Bootstrap the device's channels, gate on the mirror and human-input
-//      roles, and wire the mirror feed + interaction relay into the backend.
-// On any failure after retain, the keepalive is released so we don't hold
-// a tunnel for a pane that never mounted. The pane's eventual close
-// releases it via `releaseKeepalive` (see `PaneCoordinator.close`).
 
 import ChannelBootstrap
 import DaemonProtocol
@@ -35,6 +8,33 @@ import InteractionRelay
 import MirrorPipeline
 import os
 
+/// The daemon actor that enumerates
+/// physically-connected iPhones/iPads and resolves one to a streaming
+/// `RealDeviceBackend` on attach, holding the CoreDevice tunnel up on its
+/// own (no Device Hub or other device-management app, and no running Xcode
+/// UI; `devicectl` itself still comes from an Xcode install).
+///
+/// Kept separate from the CoreSimulator-bound `DeviceCoordinator`: this
+/// one owns the physical-device tunnel surface, not CoreSimulator handles.
+///
+/// **Enumeration** (`enumerate`, for the picker and `devices.list`) goes
+/// through `devicectl list devices` (`DeviceCtl`): usbmux/lockdown, works
+/// with the tunnel **down**, and yields the device's real **UDID**, name,
+/// and model. So a device is selectable the moment it's plugged in and
+/// trusted; the tunnel is brought up lazily only on attach.
+///
+/// **Attach** (`resolveBackend`) brings the tunnel up itself:
+///   1. `keepalive.retain(udid)` spawns a benign blocking `devicectl`
+///      subprocess that holds the RSD session (see `TunnelKeepalive`).
+///   2. Hand a `devicectl`-backed address source to `DeviceRouteResolver`,
+///      which polls until that UDID reports `tunnelState == connected` with a
+///      `tunnelIPAddress` and matches it to the live `utun`, authoritative
+///      even with several devices connected.
+///   3. Bootstrap the device's channels, gate on the mirror and human-input
+///      roles, and wire the mirror feed + interaction relay into the backend.
+/// On any failure after retain, the keepalive is released so we don't hold
+/// a tunnel for a pane that never mounted. The pane's eventual close
+/// releases it via `releaseKeepalive` (see `PaneCoordinator.close`).
 public actor PhysicalDeviceCoordinator {
     /// Lists connected physical devices. Defaults to `devicectl`; injectable
     /// so hermetic tests provide a fixed roster without shelling out.

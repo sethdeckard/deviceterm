@@ -1,37 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalAnchorStore. In-memory registry of session→terminal bindings.
-//
-// Actor-isolated: mutated by the validated-GUI `session.bindTerminal` handler
-// and by lifecycle events (session close via `SessionManager`, GUI disconnect
-// via `XPCConnection.close`), and read by the session-provenance check
-// (`ProvenanceMatcher`'s terminal arm). This is the backing store for the
-// "bound terminal" provenance arm: the thing that lets a non-owner in-tab UDS
-// caller authenticate as a session while an out-of-tab cap thief cannot.
-// Nothing here is persisted; a daemon restart starts empty (the GUI re-binds
-// on reconnect). ONE instance is shared across the bind handler, the
-// provenance lookup, and the close-path revocation. See `ProvenanceContext`.
-//
-// Bindings are immutable for a live session. Re-binding the identical anchor is
-// idempotent (the GUI may re-issue after a reconnect); binding a DIFFERENT
-// terminal to a session that already has one is a conflict: a live terminal
-// can't be silently repointed. An identical re-bind transfers the anchor's
-// issuing connection ONLY to a strictly newer (higher-id) binder, so a delayed
-// teardown of the prior issuer can't remove an anchor the current connection
-// just confirmed, and an older issuer resuming late can't reclaim ownership
-// from a newer one. The session's removal (`revokeForRemovedSession`) frees the
-// id to be bound again, e.g. after a restart restores the session
-// anchor-less.
-//
-// Removal and binding are linearized by live-session membership, mirroring the
-// grant store: a session is registered live at create/restore and removed at
-// close, and a bind requires its target to be a live member. Because
-// registration, removal, and binding all serialize on this actor, a bind that
-// runs after removal is rejected and one that ran before is cleared by the
-// removal, with no timing assumption.
 
 import Foundation
 
+/// In-memory registry of session→terminal bindings.
+///
+/// Actor-isolated: mutated by the validated-GUI `session.bindTerminal` handler
+/// and by lifecycle events (session close via `SessionManager`, GUI disconnect
+/// via `XPCConnection.close`), and read by the session-provenance check
+/// (`ProvenanceMatcher`'s terminal arm). This is the backing store for the
+/// "bound terminal" provenance arm: the thing that lets a non-owner in-tab UDS
+/// caller authenticate as a session while an out-of-tab cap thief cannot.
+/// Nothing here is persisted; a daemon restart starts empty (the GUI re-binds
+/// on reconnect). ONE instance is shared across the bind handler, the
+/// provenance lookup, and the close-path revocation. See `ProvenanceContext`.
+///
+/// Bindings are immutable for a live session. Re-binding the identical anchor is
+/// idempotent (the GUI may re-issue after a reconnect); binding a DIFFERENT
+/// terminal to a session that already has one is a conflict: a live terminal
+/// can't be silently repointed. An identical re-bind transfers the anchor's
+/// issuing connection ONLY to a strictly newer (higher-id) binder, so a delayed
+/// teardown of the prior issuer can't remove an anchor the current connection
+/// just confirmed, and an older issuer resuming late can't reclaim ownership
+/// from a newer one. The session's removal (`revokeForRemovedSession`) frees the
+/// id to be bound again, e.g. after a restart restores the session
+/// anchor-less.
+///
+/// Removal and binding are linearized by live-session membership, mirroring the
+/// grant store: a session is registered live at create/restore and removed at
+/// close, and a bind requires its target to be a live member. Because
+/// registration, removal, and binding all serialize on this actor, a bind that
+/// runs after removal is rejected and one that ran before is cleared by the
+/// removal, with no timing assumption.
 public actor TerminalAnchorStore {
     private var anchors: [UUID: TerminalAnchor] = [:]
     /// Retirement of the validated-GUI connections that issued anchors,

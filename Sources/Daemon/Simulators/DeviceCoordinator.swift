@@ -1,39 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceCoordinator: the daemon's actor for sim lifecycle and
-// provenance.
-//
-// CoreSimulator owns the actual simulator processes; we hold thin
-// `SimDeviceHandle` references transiently and track *which sims we own*
-// and, where there is one, the session attributed to each. The ownership map
-// is the trust anchor for
-// `device.list({scope: "owned"})` and for the menu bar's
-// running-sim badge count, and is updated by:
-//
-//   - `reconcileBootClaim`, which promotes a causally bounded GUI or shim
-//     attempt only after CoreSimulator reports Booted.
-//   - `transferOwnership`, reached by `device.attach` when the user claims an
-//     already-Booted sim without inventing a lifecycle event.
-//   - `recordOwnership`, retained for compatibility and test setup.
-//   - `restoreOwnership`, reached by `device.restoreOwnership` when a
-//     validated GUI restores its claims to a daemon that restarted under
-//     it. It changes bookkeeping without booting a sim or publishing
-//     `device.booted`.
-//
-// Entries are removed by daemon shutdowns, shim-reported shutdown events, and
-// CoreSimulator shutdown notifications.
-//
-// Handles never escape this actor: every public method either
-// returns a `Sendable` snapshot (`CSBDeviceInfo`) or just an ack.
-// The `SimDeviceHandle` is reacquired inside each call's actor-
-// isolated body and dropped before the call returns. That matches
-// the contract in `SimDeviceHandle.h` ("transient lookup result
-// within a serializing context").
 
 import CoreSimulatorBridge
 import DaemonProtocol
 import Foundation
 
+/// The daemon's actor for sim lifecycle and
+/// provenance.
+///
+/// CoreSimulator owns the actual simulator processes; we hold thin
+/// `SimDeviceHandle` references transiently and track *which sims we own*
+/// and, where there is one, the session attributed to each. The ownership map
+/// is the trust anchor for
+/// `device.list({scope: "owned"})` and for the menu bar's
+/// running-sim badge count, and is updated by:
+///
+///   - `reconcileBootClaim`, which promotes a causally bounded GUI or shim
+///     attempt only after CoreSimulator reports Booted.
+///   - `transferOwnership`, reached by `device.attach` when the user claims an
+///     already-Booted sim without inventing a lifecycle event.
+///   - `recordOwnership`, used by claimless shim boot events and test setup.
+///   - `restoreOwnership`, reached by `device.restoreOwnership` when a
+///     validated GUI restores its claims to a daemon that restarted under
+///     it. It changes bookkeeping without booting a sim or publishing
+///     `device.booted`.
+///
+/// Entries are removed by daemon shutdowns, shim-reported shutdown events, and
+/// CoreSimulator shutdown notifications.
+///
+/// Handles never escape this actor: every public method either
+/// returns a `Sendable` snapshot (`CSBDeviceInfo`) or just an ack.
+/// The `SimDeviceHandle` is reacquired inside each call's actor-
+/// isolated body and dropped before the call returns. That matches
+/// the contract in `SimDeviceHandle.h` ("transient lookup result
+/// within a serializing context").
 public actor DeviceCoordinator {
     private struct BootClaimRecord {
         var evidence: BootClaimEvidence

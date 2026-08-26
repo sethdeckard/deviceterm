@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceCtlLocation: `xcrun devicectl device simulate location`, the
-// physical-device counterpart to the simulator's `SimLocation` bridge.
-//
-// Structured like `DeviceCtl`: a pure `arguments(for:)` builds the argv
-// and a pure `parseScenarios` decodes the payload, so both are
-// fixture-tested without spawning anything. `--json-output` is the only
-// interface devicectl documents as supported for programmatic consumers,
-// so results are read from a temp file rather than stdout.
-//
-// Unlike `DeviceCtl.listPhysicalDevices`, a non-zero exit **throws**
-// instead of degrading to an empty result. An enumeration that comes
-// back empty is a usable answer; a location set that silently did
-// nothing is not. Unknown scenario names exit non-zero with the reason
-// on stderr, so the tool reports its own rejection and this type needs
-// no name pre-validation of its own.
-//
-// Each invocation waits for `devicectl` to exit, then retains no
-// keepalive process: an accepted simulation continues on the device
-// afterwards, including a multi-minute scenario, and a later `clear`
-// still finds it active. The device runs the route; the Mac starts it.
 
 import DaemonProtocol
 import Foundation
 
+/// `xcrun devicectl device simulate location`, the
+/// physical-device counterpart to the simulator's `SimLocation` bridge.
+///
+/// Structured like `DeviceCtl`: a pure `arguments(for:)` builds the argv
+/// and a pure `parseScenarios` decodes the payload, so both are
+/// fixture-tested without spawning anything. `--json-output` is the only
+/// interface devicectl documents as supported for programmatic consumers,
+/// so results are read from a temp file rather than stdout.
+///
+/// Unlike `DeviceCtl.listPhysicalDevices`, a non-zero exit **throws**
+/// instead of degrading to an empty result. An enumeration that comes
+/// back empty is a usable answer; a location set that silently did
+/// nothing is not. Unknown scenario names exit non-zero with the reason
+/// on stderr, so the tool reports its own rejection and this type needs
+/// no name pre-validation of its own.
+///
+/// Each invocation waits for `devicectl` to exit, then retains no
+/// keepalive process: an accepted simulation continues on the device
+/// afterwards, including a multi-minute scenario, and a later `clear`
+/// still finds it active. The device runs the route; the Mac starts it.
 struct DeviceCtlLocation: DeviceLocationSimulating {
     /// Spawn seam so tests can drive the pure argv/parse halves without
     /// running the real tool. Returns the process exit status, the

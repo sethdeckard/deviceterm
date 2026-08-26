@@ -1,34 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// XPCConnection: per-peer actor that owns one accepted XPC
-// connection.
-//
-// The XPC-side counterpart to `RPCConnection`. Each peer the
-// `XPCServer` listener accepts gets one of these. The connection:
-//
-//   - Captures the peer's `audit_token_t` at accept time (the
-//     trust primitive XPC carries that UDS doesn't, used to key the
-//     shared verdict cache and validate the peer's signature on a
-//     cache miss, identifying the calling process cryptographically).
-//   - Receives `xpc_dictionary` messages framed by a `type`
-//     discriminator: `"rpc"` carries an RPC envelope's JSON
-//     bytes in a `"data"` field. Inbound traffic is RPC-only:
-//     anything without that discriminator is dropped. The
-//     `"surface"` type travels the other way: the daemon emits
-//     XPC-marshalled IOSurfaces to the GUI on this connection.
-//   - Dispatches RPC frames through the shared `MethodRegistry`
-//     using the same intercept (`session.authenticate`) + scope
-//     check + handler-invocation logic as the UDS path. The
-//     dispatched handler runs with `DispatchPeerContext.current`
-//     bound to a context whose `transport == .xpc` and whose
-//     `auditToken` carries the peer's token.
-//   - Cleans up its `PaneSubscriptionRegistry` slot on
-//     invalidation so any pane subscriptions are dropped without
-//     leaking continuations.
-//
-// `xpc_connection_get_audit_token` is not exposed by Swift's
-// public `XPC` module on macOS 26; the `@_silgen_name` shim
-// below re-imports it from libxpc.
 
 import DaemonProtocol
 import Foundation
@@ -51,6 +21,35 @@ private func _xpc_connection_get_audit_token(
     _ outToken: UnsafeMutablePointer<audit_token_t>
 )
 
+/// Per-peer actor that owns one accepted XPC
+/// connection.
+///
+/// The XPC-side counterpart to `RPCConnection`. Each peer the
+/// `XPCServer` listener accepts gets one of these. The connection:
+///
+///   - Captures the peer's `audit_token_t` at accept time (the
+///     trust primitive XPC carries that UDS doesn't, used to key the
+///     shared verdict cache and validate the peer's signature on a
+///     cache miss, identifying the calling process cryptographically).
+///   - Receives `xpc_dictionary` messages framed by a `type`
+///     discriminator: `"rpc"` carries an RPC envelope's JSON
+///     bytes in a `"data"` field. Inbound traffic is RPC-only:
+///     anything without that discriminator is dropped. The
+///     `"surface"` type travels the other way: the daemon emits
+///     XPC-marshalled IOSurfaces to the GUI on this connection.
+///   - Dispatches RPC frames through the shared `MethodRegistry`
+///     using the same intercept (`session.authenticate`) + scope
+///     check + handler-invocation logic as the UDS path. The
+///     dispatched handler runs with `DispatchPeerContext.current`
+///     bound to a context whose `transport == .xpc` and whose
+///     `auditToken` carries the peer's token.
+///   - Cleans up its `PaneSubscriptionRegistry` slot on
+///     invalidation so any pane subscriptions are dropped without
+///     leaking continuations.
+///
+/// `xpc_connection_get_audit_token` is not exposed by Swift's
+/// public `XPC` module on macOS 26; the `@_silgen_name` shim
+/// below re-imports it from libxpc.
 public actor XPCConnection {
     /// Where one subscription is in its lifetime. The early
     /// (`preStreaming`) record is created before the handler runs, so a

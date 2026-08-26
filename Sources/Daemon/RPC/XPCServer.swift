@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// XPCServer: the XPC counterpart to `RPCServer`. Accepts peer
-// connections on an `xpc_connection_t` listener and wraps each
-// accepted peer in an `XPCConnection` actor.
-//
-// Two ways in, sharing all dispatch logic: only the listener
-// source differs. `bindMachService(name:)` is the production
-// entry point, pulling the launchd-vended listener via
-// `xpc_connection_create_mach_service(name, queue, LISTENER)`.
-// `bind(listener:)` takes an arbitrary listener handle so unit
-// tests can drive the server via `xpc_connection_create_anonymous`
-// + peer-endpoint handoff: a single in-process pair that
-// exercises the full path (frame → envelope → handler → reply)
-// without launchd or a real mach service.
-//
-// Connection-id space: XPC ids start at `xpcIdBase` so a bare
-// connection id tells you which transport vended it, without an
-// extra `transport` field. UDS uses a separate (smaller) range
-// assigned by `RPCServer`.
 
 import DaemonProtocol
 import Foundation
 @preconcurrency import XPC
 
+/// The XPC counterpart to `RPCServer`. Accepts peer
+/// connections on an `xpc_connection_t` listener and wraps each
+/// accepted peer in an `XPCConnection` actor.
+///
+/// Two ways in, sharing all dispatch logic: only the listener
+/// source differs. `bindMachService(name:)` is the production
+/// entry point, pulling the launchd-vended listener via
+/// `xpc_connection_create_mach_service(name, queue, LISTENER)`.
+/// `bind(listener:)` takes an arbitrary listener handle so unit
+/// tests can drive the server via `xpc_connection_create_anonymous`
+/// + peer-endpoint handoff: a single in-process pair that
+/// exercises the full path (frame → envelope → handler → reply)
+/// without launchd or a real mach service.
+///
+/// Connection-id space: XPC ids start at `xpcIdBase` so a bare
+/// connection id tells you which transport vended it, without an
+/// extra `transport` field. UDS uses a separate (smaller) range
+/// assigned by `RPCServer`.
 public actor XPCServer {
     /// XPC connections take ids starting at this base so a
     /// connection id alone identifies the transport that vended

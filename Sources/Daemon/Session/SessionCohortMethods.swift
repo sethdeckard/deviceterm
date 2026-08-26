@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionCohortMethods: the `session.setCohort` handler, the effect pump, and
-// the session lifecycle seam that keeps cohorts converged.
-//
-// Every cohort mutation is one call into `PaneCoordinator`, which commits
-// membership, pane bindings, re-homing, and verdicts in a single actor turn.
-// The device consequences ride the pump, never a return value: `PaneCoordinator`
-// enqueues them synchronously inside the commit turn, and the pump's single
-// consumer applies them to `DeviceCoordinator` strictly in that order, so
-// out-of-order application is structurally impossible: no sequence numbers
-// to compare and no dedup to get wrong.
 
 import DaemonProtocol
 import Foundation
 
+/// The `session.setCohort` handler, the effect pump, and
+/// the session lifecycle seam that keeps cohorts converged.
+///
+/// Every cohort mutation is one call into `PaneCoordinator`, which commits
+/// membership, pane bindings, re-homing, and verdicts in a single actor turn.
+/// The device consequences ride the pump, never a return value: `PaneCoordinator`
+/// enqueues them synchronously inside the commit turn, and the pump's single
+/// consumer applies them to `DeviceCoordinator` strictly in that order, so
+/// out-of-order application is structurally impossible: no sequence numbers
+/// to compare and no dedup to get wrong.
 public enum SessionCohortMethods {
     /// `session.setCohort`. Validated-GUI only: membership decides who may
     /// drive another session's pane, and a close verdict decides who inherits

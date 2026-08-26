@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Re-attaching a physical device that is already mirrored.
-//
-// Bringing up a backend resolves the device, raises a tunnel, and bootstraps
-// services. It is the least reliable part of an attach, and it has to run
-// before `createPane`, because resolving inside the coordinator would hold its
-// actor for the whole bring-up. A re-attach that `createPane` answers from the
-// existing record needs none of it, so a hiccup there must not be the answer.
-//
-// That combination isn't hypothetical: the GUI re-attaches every device pane
-// when it reconnects, including a reconnect the same daemon survived with its
-// records intact, so a transient resolution failure would turn a healthy
-// mirror into a failed pane needing a manual retry.
 
 @testable import Daemon
 import DaemonProtocol
 import Foundation
 import Testing
+
+// Re-attaching a physical device that is already mirrored.
+// Bringing up a backend resolves the device, raises a tunnel, and bootstraps
+// services. It is the least reliable part of an attach, and it has to run
+// before `createPane`, because resolving inside the coordinator would hold its
+// actor for the whole bring-up. A re-attach that `createPane` answers from the
+// existing record needs none of it, so a hiccup there must not be the answer.
+// That combination isn't hypothetical: the GUI re-attaches every device pane
+// when it reconnects, including a reconnect the same daemon survived with its
+// records intact, so a transient resolution failure would turn a healthy
+// mirror into a failed pane needing a manual retry.
 
 /// A physical-device coordinator that can find nothing, so `resolveBackend`
 /// fails the way a device-list, tunnel, or service-bootstrap hiccup does.

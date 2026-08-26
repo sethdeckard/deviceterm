@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SubscriptionLifecycle: late-bound teardown coordinator for one XPC
-// pane subscription, plus the context the transport threads into the
-// subscription handler.
-//
-// A subscription's teardown causes (graceful drain, abrupt orphan) can
-// arrive before the pieces that handle them exist: a drain can fire
-// while the subscribe handler is still running, before `PaneCoordinator`
-// has registered the pool token or `PaneMethods` has composed the
-// producer cleanup. The lifecycle box absorbs that ordering: it records
-// a cause the instant it arrives and applies each half (device pool
-// teardown, producer unsubscribe) once its target installs.
-//
-// The box is universal across XPC *pane* subscriptions: every one gets
-// one (non-pane subscriptions like events/app.commands don't). Only a
-// device pane installs the pool teardown; a simulator subscription
-// installs only the producer cleanup, so the transport path stays uniform.
 
 import Foundation
 
+/// Late-bound teardown coordinator for one XPC
+/// pane subscription, plus the context the transport threads into the
+/// subscription handler.
+///
+/// A subscription's teardown causes (graceful drain, abrupt orphan) can
+/// arrive before the pieces that handle them exist: a drain can fire
+/// while the subscribe handler is still running, before `PaneCoordinator`
+/// has registered the pool token or `PaneMethods` has composed the
+/// producer cleanup. The lifecycle box absorbs that ordering: it records
+/// a cause the instant it arrives and applies each half (device pool
+/// teardown, producer unsubscribe) once its target installs.
+///
+/// The box is universal across XPC *pane* subscriptions: every one gets
+/// one (non-pane subscriptions like events/app.commands don't). Only a
+/// device pane installs the pool teardown; a simulator subscription
+/// installs only the producer cleanup, so the transport path stays uniform.
 public actor SubscriptionLifecycle {
     /// A terminal teardown cause. Orphan dominates drain: an abrupt
     /// disconnect must keep held slots pinned even if a graceful drain

@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandCoordinator: the daemon-side broker for the
-// `app.commands` back-channel that lets CLI verbs reach into the
-// GUI for tab / pane / window operations.
-//
-// Three responsibilities, all behind actor isolation:
-//   1. Maintain the singleton `AsyncStream<AppCommand>` the GUI's
-//      `app.commands` subscription drains.
-//   2. Hand out `commandId`s and hold a continuation per pending
-//      command so the originating RPC handler (`tab.close`,
-//      `windows.list`, etc.) can `await` the GUI's reply.
-//   3. Route `AppCommandResult` frames (from `app.commandResult`)
-//      back to the matching continuation. Includes a wall-clock
-//      timeout so a wedged or absent GUI doesn't leak a continuation
-//      forever. The handler resolves with `guiUnavailable`.
-//
-// Single-subscriber assumption: deviceterm runs one GUI process at a
-// time (multi-window but single-process). If the GUI is up,
-// it holds the subscription. If no subscription is active, every
-// `await` returns `guiUnavailable` immediately rather than waiting
-// for the timer.
 
 import DaemonProtocol
 import Foundation
 
+/// The daemon-side broker for the
+/// `app.commands` back-channel that lets CLI verbs reach into the
+/// GUI for tab / pane / window operations.
+///
+/// Three responsibilities, all behind actor isolation:
+///   1. Maintain the singleton `AsyncStream<AppCommand>` the GUI's
+///      `app.commands` subscription drains.
+///   2. Hand out `commandId`s and hold a continuation per pending
+///      command so the originating RPC handler (`tab.close`,
+///      `windows.list`, etc.) can `await` the GUI's reply.
+///   3. Route `AppCommandResult` frames (from `app.commandResult`)
+///      back to the matching continuation. Includes a wall-clock
+///      timeout so a wedged or absent GUI doesn't leak a continuation
+///      forever. The handler resolves with `guiUnavailable`.
+///
+/// Single-subscriber assumption: deviceterm runs one GUI process at a
+/// time (multi-window but single-process). If the GUI is up,
+/// it holds the subscription. If no subscription is active, every
+/// `await` returns `guiUnavailable` immediately rather than waiting
+/// for the timer.
 public actor AppCommandCoordinator {
     // MARK: - Subtypes
 

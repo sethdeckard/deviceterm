@@ -1,35 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// EventBroker: daemon-wide pub/sub for `DaemonEvent`s, audience-filtered.
-//
-// One broker per daemon. Subscribers (the `daemon.events` RPC handler)
-// call `subscribe(as:)` with their access principal to get an
-// `AsyncStream<DaemonEvent>`; publishers (PaneCoordinator,
-// DeviceCoordinator, SessionManager) call `publish(_:to:)` from inside
-// their actors, naming the event's audience. Fan-out is "best-effort with
-// backpressure-by-AsyncStream-buffer": a slow consumer sees continuation
-// buffering per AsyncStream's defaults but won't block publishers (`yield`
-// is non-blocking against the `.unbounded`-style stream `makeStream`
-// returns by default).
-//
-// Audience filtering mirrors the pane gate: a `.session` principal sees
-// `.everyone`, its own `.session` audience, and any `.sessions` audience
-// containing its session id (and, when the subscriber is pinned, its
-// incarnation); the validated GUI peer (`.guiPeer`) spans sessions and sees
-// every event. "May you drive this pane" and "may you
-// see its events" have the same answer for the same reason, so the
-// principal type is shared rather than duplicated.
-//
-// Subscriber registration is `actor`-isolated per AGENTS.md's "shared
-// daemon state lives behind actors" rule. The continuation's
-// `onTermination` hook releases the subscriber when the consumer cancels
-// (drops the stream or the RPC connection closes); the dispatcher's
-// `onCancel` hook calls `unsubscribe(_:)` explicitly to belt-and-suspenders
-// the cleanup.
 
 import DaemonProtocol
 import Foundation
 
+/// Daemon-wide pub/sub for `DaemonEvent`s, audience-filtered.
+///
+/// One broker per daemon. Subscribers (the `daemon.events` RPC handler)
+/// call `subscribe(as:)` with their access principal to get an
+/// `AsyncStream<DaemonEvent>`; publishers (PaneCoordinator,
+/// DeviceCoordinator, SessionManager) call `publish(_:to:)` from inside
+/// their actors, naming the event's audience. Fan-out is "best-effort with
+/// backpressure-by-AsyncStream-buffer": a slow consumer sees continuation
+/// buffering per AsyncStream's defaults but won't block publishers (`yield`
+/// is non-blocking against the `.unbounded`-style stream `makeStream`
+/// returns by default).
+///
+/// Audience filtering mirrors the pane gate: a `.session` principal sees
+/// `.everyone`, its own `.session` audience, and any `.sessions` audience
+/// containing its session id (and, when the subscriber is pinned, its
+/// incarnation); the validated GUI peer (`.guiPeer`) spans sessions and sees
+/// every event. "May you drive this pane" and "may you
+/// see its events" have the same answer for the same reason, so the
+/// principal type is shared rather than duplicated.
+///
+/// Subscriber registration is `actor`-isolated per AGENTS.md's "shared
+/// daemon state lives behind actors" rule. The continuation's
+/// `onTermination` hook releases the subscriber when the consumer cancels
+/// (drops the stream or the RPC connection closes); the dispatcher's
+/// `onCancel` hook calls `unsubscribe(_:)` explicitly to belt-and-suspenders
+/// the cleanup.
 public actor EventBroker {
     /// A live subscriber: its stream continuation plus the access
     /// principal that decides which audiences reach it.

@@ -1,22 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DispatchPeerContext. Value type that captures "who is calling"
-// for every dispatched method.
-//
-// One context is constructed per dispatched request by the
-// transport layer (UDS in `RPCConnection`, XPC in `XPCConnection`)
-// and threaded through the handler signature in `MethodRegistry`.
-// The automation-mint gate, the automation-scope check, the
-// `daemon.capabilities` response, and pane-subscription tagging
-// all read from it instead of consulting
-// per-call ad-hoc state on the originating connection.
-//
-// Centralizing identity here keeps the two transports (UDS for the
-// CLI and shim, XPC for the GUI) symmetrical: the dispatcher never
-// needs a separate code path per transport: it just constructs
-// the right `transport` case + the right `auditToken` (which is
-// `nil` on UDS, present on XPC), and the rest of the daemon reads
-// uniformly.
 
 import DaemonProtocol
 import Foundation
@@ -24,6 +6,24 @@ import Foundation
 import Darwin
 #endif
 
+/// Value type that captures "who is calling"
+/// for every dispatched method.
+///
+/// One context is constructed per dispatched request by the
+/// transport layer (UDS in `RPCConnection`, XPC in `XPCConnection`) and
+/// bound to `DispatchPeerContext.current` around the handler invocation,
+/// so handlers read it from task-local state rather than a parameter.
+/// The automation-mint gate, the automation-scope check, the
+/// `daemon.capabilities` response, and pane-subscription tagging
+/// all read from it instead of consulting
+/// per-call ad-hoc state on the originating connection.
+///
+/// Centralizing identity here keeps the two transports (UDS for the
+/// CLI and shim, XPC for the GUI) symmetrical: the dispatcher never
+/// needs a separate code path per transport: it just constructs
+/// the right `transport` case + the right `auditToken` (which is
+/// `nil` on UDS, present on XPC), and the rest of the daemon reads
+/// uniformly.
 public struct DispatchPeerContext: Sendable {
     /// Which transport vended the connection. The automation-mint
     /// gate (in `session.create`) uses this to reject automation

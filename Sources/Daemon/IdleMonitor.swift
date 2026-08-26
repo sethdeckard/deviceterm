@@ -1,38 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IdleMonitor: the daemon's stay-alive predicate evaluator.
-//
-// The daemon is lazy-spawn: the GUI's XPC traffic demand-launches it
-// (the LaunchAgent declares the mach service, not the UDS socket, so CLI
-// traffic never starts one), and it keeps itself alive while any of
-// these are true:
-//
-//   - A GUI (XPC) client is connected.
-//   - A CLI (UDS) client is connected.
-//   - A non-terminal pane exists whose owner GUI is still alive, so a
-//     mirror (sim or physical device) survives a momentary connection
-//     lapse, but a pane abandoned by a crashed GUI does not pin the daemon.
-//   - Any deviceterm-owned sim is booted.
-//
-// When no poll has observed any of these busy for `idleTimeoutSeconds`,
-// the monitor calls its `terminate` handler. Sampling is discrete (see
-// the polling cadence below), so busy activity that starts and ends
-// entirely between two polls is never observed. The guarantee is
-// "no sampled activity for the timeout," not "continuously idle." In
-// production
-// that handler calls `NSApp.terminate(nil)` so the runloop unwinds
-// cleanly; tests inject a closure that records the call without
-// touching AppKit.
-//
-// Polling cadence: every `pollIntervalSeconds` (default 30s). Each
-// poll asks `isBusy` for the current verdict. A busy poll resets
-// `lastBusyTime`. An idle poll checks `now - lastBusyTime` against
-// the timeout. The grace window means a transient lull (e.g. GUI
-// disconnect + reconnect within a few seconds) doesn't trigger
-// shutdown.
 
 import Foundation
 
+/// The daemon's stay-alive predicate evaluator.
+///
+/// The daemon is lazy-spawn: the GUI's XPC traffic demand-launches it
+/// (the LaunchAgent declares the mach service, not the UDS socket, so CLI
+/// traffic never starts one), and it keeps itself alive while any of
+/// these are true:
+///
+///   - A GUI (XPC) client is connected.
+///   - A CLI (UDS) client is connected.
+///   - A non-terminal pane exists whose owner GUI is still alive, so a
+///     mirror (sim or physical device) survives a momentary connection
+///     lapse, but a pane abandoned by a crashed GUI does not pin the daemon.
+///   - Any deviceterm-owned sim is booted.
+///
+/// When no poll has observed any of these busy for `idleTimeoutSeconds`,
+/// the monitor calls its `terminate` handler. Sampling is discrete (see
+/// the polling cadence below), so busy activity that starts and ends
+/// entirely between two polls is never observed. The guarantee is
+/// "no sampled activity for the timeout," not "continuously idle." In
+/// production
+/// that handler calls `NSApp.terminate(nil)` so the runloop unwinds
+/// cleanly; tests inject a closure that records the call without
+/// touching AppKit.
+///
+/// Polling cadence: every `pollIntervalSeconds` (default 30s). Each
+/// poll asks `isBusy` for the current verdict. A busy poll resets
+/// `lastBusyTime`. An idle poll checks `now - lastBusyTime` against
+/// the timeout. The grace window means a transient lull (e.g. GUI
+/// disconnect + reconnect within a few seconds) doesn't trigger
+/// shutdown.
 public actor IdleMonitor {
     public typealias BusyPredicate = @Sendable () async -> Bool
     public typealias TerminateHandler = @Sendable () async -> Void

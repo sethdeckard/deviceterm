@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BlockingWorkQueue: bridge synchronous system work into async daemon code
-// without parking a Swift cooperative-executor worker.
 
 import Foundation
 
+/// Bridges synchronous system work into async daemon code without parking a
+/// Swift cooperative-executor worker.
+///
 /// A Dispatch queue for calls whose API offers no asynchronous wait. Serial by
 /// default; independent work may opt into a concurrent queue explicitly.
 ///

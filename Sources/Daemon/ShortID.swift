@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ShortID: daemon-side generator for the human-typeable 6-char tab /
-// pane handle (part of the three-layer identifier model).
-//
-// Crockford base32, lowercased: digits + a..z minus i/l/o/u. Excluding
-// the four visually-or-aurally-ambiguous letters keeps a short_id easy
-// to read from a terminal screenshot and easy to dictate over voice
-// without needing to spell. 32 chars × 6 places ≈ 1 billion values, so
-// per-container collisions stay vanishingly rare even at thousands of
-// concurrent sessions or panes; the bounded retry in
-// `mintShortID(...)` catches the impossible-in-practice exhaustion
-// case instead of spinning forever.
-//
-// The generator stays a pure namespace (no actor state, no I/O) so
-// `SessionManager` and `PaneCoordinator` can both call it from inside
-// their respective actor isolation domains without crossing a hop.
 
 import Foundation
 
+/// Daemon-side generator for the human-typeable 6-char tab /
+/// pane handle (part of the three-layer identifier model).
+///
+/// Crockford base32, lowercased: digits + a..z minus i/l/o/u. Excluding
+/// the four visually-or-aurally-ambiguous letters keeps a short_id easy
+/// to read from a terminal screenshot and easy to dictate over voice
+/// without needing to spell. 32 chars × 6 places ≈ 1 billion values, so
+/// per-container collisions stay vanishingly rare even at thousands of
+/// concurrent sessions or panes. `SessionManager.allocateUniqueShortID()`
+/// and `PaneCoordinator.allocateUniqueShortID()` bound their collision
+/// retries at `ShortID.maxMintAttempts`, so the impossible-in-practice
+/// exhaustion case throws instead of spinning forever.
+///
+/// The generator stays a pure namespace (no actor state, no I/O) so
+/// `SessionManager` and `PaneCoordinator` can both call it from inside
+/// their respective actor isolation domains without crossing a hop.
 public enum ShortID {
     /// Crockford base32 (lowercase) minus the four letters Crockford
     /// reserves for ambiguity: `i`, `l`, `o`, `u`. The remaining 32

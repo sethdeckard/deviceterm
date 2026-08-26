@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandMethods: RPC handlers for the daemon side of the
-// back-channel.
-//
-// Two `.validatedGUI` back-channel methods:
-//   - `app.commands` (subscription): the GUI's perpetual stream.
-//   - `app.commandResult` (one-shot): the GUI's per-command reply.
-// Both are pinned to a single connection: the subscription records the
-// subscriber's `connectionId`, and `app.commandResult` is accepted only
-// from that same connection (see `AppCommandCoordinator`). The
-// `.validatedGUI` scope keeps any UDS client out; the connection pin
-// keeps a second validated peer from *forging results* for the live
-// GUI, and generation-scoped teardown keeps a stale `onCancel` from
-// unsubscribing it. Subscription itself stays last-wins; a relaunched
-// GUI deliberately evicts the prior subscriber.
-//
-// Plus the per-verb handlers (`tab.close`, `tab.info`,
-// `windows.list`, etc.) that build the typed params, publish to the
-// coordinator, await the GUI's reply, and either return the data
-// payload or surface a typed error to the CLI.
-//
-// Role gating: handlers are tagged at registration time
-// (`.daemonWide` / `.session` / `.automationTab` / `.validatedGUI`);
-// the dispatcher's scope check in `RPCConnection.scopeCheck` /
-// `XPCConnection.scopeCheck` rejects before any of these run.
 
 import DaemonProtocol
 import Foundation
 
+/// RPC handlers for the daemon side of the
+/// back-channel.
+///
+/// Two `.validatedGUI` back-channel methods:
+///   - `app.commands` (subscription): the GUI's perpetual stream.
+///   - `app.commandResult` (one-shot): the GUI's per-command reply.
+/// Both are pinned to a single connection: the subscription records the
+/// subscriber's `connectionId`, and `app.commandResult` is accepted only
+/// from that same connection (see `AppCommandCoordinator`). The
+/// `.validatedGUI` scope keeps any UDS client out; the connection pin
+/// keeps a second validated peer from *forging results* for the live
+/// GUI, and generation-scoped teardown keeps a stale `onCancel` from
+/// unsubscribing it. Subscription itself stays last-wins; a relaunched
+/// GUI deliberately evicts the prior subscriber.
+///
+/// Plus the per-verb handlers (`tab.close`, `tab.info`,
+/// `windows.list`, etc.) that build the typed params, publish to the
+/// coordinator, await the GUI's reply, and either return the data
+/// payload or surface a typed error to the CLI.
+///
+/// Role gating: handlers are tagged at registration time
+/// (`.daemonWide` / `.session` / `.automationTab` / `.validatedGUI`);
+/// the dispatcher's scope check in `RPCConnection.scopeCheck` /
+/// `XPCConnection.scopeCheck` rejects before any of these run.
 public enum AppCommandMethods {
     // MARK: - Subscription handler
 

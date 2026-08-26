@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BootClaimReconciliationTests: attribution is causal, idempotent, and gated
-// on CoreSimulator reaching Booted.
 
 @testable import Daemon
 import DaemonProtocol
 import Dispatch
 import Foundation
 import Testing
+
+// Attribution is causal, idempotent, and gated
+// on CoreSimulator reaching Booted.
 
 private let claimedUDID = "11111111-1111-1111-1111-111111111111"
 

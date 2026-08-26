@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceCoordinator's short-lived CoreSimulator device snapshot cache.
-
-// These tests use empty device sets because CSBDeviceInfo intentionally has no
-// fixture initializer. The cache decisions depend on read results, timing, and
-// invalidation generation rather than the contents of a successful snapshot.
 
 import CoreSimulatorBridge
 @testable import Daemon
 import Dispatch
 import Foundation
 import Testing
+
+// DeviceCoordinator's short-lived CoreSimulator device snapshot cache.
+
+// These tests use empty device sets because CSBDeviceInfo intentionally has no
+// fixture initializer. The cache decisions depend on read results, timing, and
+// invalidation generation rather than the contents of a successful snapshot.
 
 private let snapshotTTL: UInt64 = 2_000_000_000
 

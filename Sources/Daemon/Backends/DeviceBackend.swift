@@ -1,31 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceBackend: the seam between `PaneCoordinator` and whatever
-// drives a pane's display + input.
-//
-// This protocol is the indirection between the coordinator's per-pane
-// record and whatever actually drives the pane. A pane can be driven by
-// the four CoreSimulator bridge handles (`SimDisplayHandle`,
-// `SimHIDClient`, `SimPurpleHID`, `SimAccessibility`) or by a
-// physically-connected device (the split CoreDevice tunnel pipeline),
-// and the coordinator doesn't know the difference.
-//
-// Division of labor: the **coordinator** owns every device-agnostic
-// concern: gesture interpolation (swipe/pinch stepping), keymap
-// translation (kVK→HID, ASCII→key), JSON shaping of AX trees, error
-// context (paneId + verb label), dedup, and lifecycle. A **backend**
-// exposes only primitive operations plus its capability set; it never
-// interpolates or translates. That keeps the interpolation/keymap
-// logic in one place, shared by every backend.
 
 import CoreGraphics
 import DaemonProtocol
 import Foundation
 
-/// The display + input primitives a pane backend must provide. Operations
-/// whose system API can block are async so implementations can leave Swift's
-/// cooperative executor; the frame callback hops into `PaneCoordinator`
-/// before any coordinator state is touched.
+/// The seam between `PaneCoordinator` and whatever drives a pane's display
+/// and input: the primitives a backend must provide.
+///
+/// Operations whose system API can block are async so implementations can
+/// leave Swift's cooperative executor; the frame callback hops into
+/// `PaneCoordinator` before any coordinator state is touched.
+///
+/// A pane can be driven by the four CoreSimulator bridge handles
+/// (`SimDisplayHandle`, `SimHIDClient`, `SimPurpleHID`, `SimAccessibility`)
+/// or by a physically-connected device (the split CoreDevice tunnel
+/// pipeline), and the coordinator doesn't know the difference.
+///
+/// Division of labor: the **coordinator** owns every device-agnostic
+/// concern: gesture interpolation (swipe/pinch stepping), keymap
+/// translation (kVK→HID, ASCII→key), JSON shaping of AX trees, error
+/// context (paneId + verb label), dedup, and lifecycle. A **backend**
+/// exposes only primitive operations plus its capability set; it never
+/// interpolates or translates. That keeps the interpolation/keymap
+/// logic in one place, shared by every backend.
 protocol DeviceBackend: AnyObject, Sendable {
     /// What this backend can do; drives the coordinator's per-verb gate.
     var capabilities: DeviceBackendCapabilities { get }

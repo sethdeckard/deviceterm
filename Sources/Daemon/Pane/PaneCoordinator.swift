@@ -1,26 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneCoordinator: the daemon's actor for pane lifecycle.
-//
-// A *pane* is the GUI's window into a simulator's display. The
-// daemon owns a `SimDisplayHandle` for the pane; CoreSimulator
-// delivers `IOSurfaceID`s on its own queue and we fan each out to
-// every subscriber as a `surface.changed` event.
-//
-// State machine:
-//
-//     booting ──first IOSurface──▶ rendering
-//                                       │
-//                                  shutdown / failed
-//
-// Subscribers receive `state.changed` on transition and
-// `surface.changed` on every fresh IOSurface. `pane.subscribe` is a
-// streaming method whose events share the original request's id.
-//
-// `SimDisplayHandle` is non-Sendable; we hold it inside an
-// `@unchecked Sendable` record class. Only this actor mutates the
-// records, and the bridge's callback hops back into the actor
-// before touching state.
 
 import CoreSimulatorBridge
 import DaemonProtocol
@@ -43,6 +21,29 @@ import SurfaceTrace
 /// static helper can reach it without threading a logger through.
 private let locationLog = Logger(subsystem: "com.deviceterm.daemon", category: "location")
 
+/// The daemon's actor for pane lifecycle.
+///
+/// A *pane* is the GUI's window into a simulator or a physical device,
+/// named by `PaneTarget` and driven by a `DeviceBackend`. The backend
+/// delivers surfaces through the callback it was started with, and each is
+/// fanned out to every subscriber as a `surface.changed` event. A backend
+/// may call back from its own queue or inline, so every producer callback
+/// enters this actor before touching state or notifying anyone.
+///
+/// State machine:
+///
+///     booting ──first IOSurface──▶ rendering
+///                                       │
+///                                  shutdown / failed
+///
+/// Subscribers receive `state.changed` on transition and
+/// `surface.changed` on every fresh IOSurface. `pane.subscribe` is a
+/// streaming method whose events share the original request's id.
+///
+/// Each backend encapsulates its own device-specific handles; the
+/// coordinator's `Record` holds only the `any DeviceBackend`. `Record` is
+/// `@unchecked Sendable` because its mutable state is confined to this
+/// actor, and a producer callback enters the actor before touching it.
 public actor PaneCoordinator {
     // HardwareButton (`pane.input.button`) and Orientation
     // (`pane.input.rotate`) are shared wire enums in DaemonProtocol; the
@@ -86,9 +87,9 @@ public actor PaneCoordinator {
         var waiter: CheckedContinuation<Void, Never>?
     }
 
-    /// Per-pane mutable state. Class-backed because the record
-    /// holds non-Sendable CoreSimulator bridge handles; only the
-    /// actor mutates it, so the `@unchecked Sendable` is safe.
+    /// Per-pane mutable state. Class-backed so a pane's state can be passed
+    /// around without copying it. Only this actor mutates a record, so the
+    /// `@unchecked Sendable` conformance is safe.
     private final class Record: @unchecked Sendable {
         /// What the most recent live edge `.down` resolved to. `edge` is
         /// nil when the orientation had no confirmed home-gesture edge, in

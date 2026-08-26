@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ProvenanceContext: the single source of the terminal-anchor store and the
-// per-request provenance lookup, so the store the `session.bindTerminal`
-// handler binds into, the store the lookup reads, and the store the XPC close
-// path revokes are the SAME instance: structurally, not by convention.
-//
-// The store is NOT a free parameter: a context can only be built from a
-// `SessionManager`, and `anchorStore` is a computed passthrough to that
-// manager's own store. There is deliberately no initializer that accepts an
-// arbitrary store, so a caller cannot wire a lookup that reads store A while
-// the close path revokes store B. `defaultRegistry` derives the bindTerminal
-// store from the SAME `sessionManager`, so binding and provenance can't
-// diverge as long as one manager backs both (which `main.swift` and the test
-// harnesses guarantee by passing one manager).
-//
-// `lookupOverride` exists ONLY for tests that need a synthetic snapshot
-// function (e.g. an owner-arm match for an in-process XPC peer); it substitutes
-// the lookup WITHOUT decoupling the store from the manager.
 
 import Foundation
 
+/// The single source of the terminal-anchor store and the
+/// per-request provenance lookup, so the store the `session.bindTerminal`
+/// handler binds into, the store the lookup reads, and the store the XPC close
+/// path revokes are the SAME instance: structurally, not by convention.
+///
+/// The store is NOT a free parameter: a context can only be built from a
+/// `SessionManager`, and `anchorStore` is a computed passthrough to that
+/// manager's own store. There is deliberately no initializer that accepts an
+/// arbitrary store, so a caller cannot wire a lookup that reads store A while
+/// the close path revokes store B. `defaultRegistry` derives the bindTerminal
+/// store from the SAME `sessionManager`, so binding and provenance can't
+/// diverge as long as one manager backs both (which `main.swift` and the test
+/// harnesses guarantee by passing one manager).
+///
+/// `lookupOverride` exists ONLY for tests that need a synthetic snapshot
+/// function (e.g. an owner-arm match for an in-process XPC peer); it substitutes
+/// the lookup WITHOUT decoupling the store from the manager.
 public struct ProvenanceContext: Sendable {
     /// The manager whose store + sessions this context reflects.
     public let sessionManager: SessionManager

@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceOrientationMath: pure helpers for reaching an absolute `Orientation`
-// via the device's *relative* 90° steps (it only rotates left/right, one step at
-// a time). Kept pure and standalone so the stepping is unit-tested without a
-// device. The relay performs each `RotationInput` step; this decides which.
 
 import DaemonProtocol
 import InteractionRelay
 
+/// Pure helpers for reaching an absolute `Orientation`
+/// via the device's *relative* 90° steps (it only rotates left/right, one step at
+/// a time). Kept pure and standalone so the stepping is unit-tested without a
+/// device. The relay performs each `RotationInput` step; this decides which.
 enum DeviceOrientationMath {
     /// The counter-clockwise ("left") rotation order: one `left` step advances by
     /// one index (wrapping), one `right` step retreats by one. Matches the

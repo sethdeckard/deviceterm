@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Daemon-only mapping from a dispatch transport to the shared owner identity.
 
 import TerminalProvenance
 
+/// Daemon-only mapping from a dispatch transport to the shared owner
+/// identity.
 public extension OwnerProcessIdentity {
     /// Derive the owner identity from the transport facts captured by the
     /// daemon. This stays here because `DispatchPeerContext` is daemon-owned.

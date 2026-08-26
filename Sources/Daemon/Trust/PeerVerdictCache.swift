@@ -1,35 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PeerVerdictCache: a bounded, daemon-wide cache of GUI-peer
-// validation verdicts keyed by stable audit-token identity.
-//
-// `DispatchPeerContext.validatedGUIPeer` is stamped on every XPC
-// dispatch, so a local process could otherwise force the expensive
-// `SecCode` signature walk (`PeerIdentity.validateGUIPeer`) by opening
-// a connection, dispatching once, closing, and repeating. Caching the
-// verdict keyed by the peer's `(pid, pidversion)` collapses that: a
-// connection reuses the verdict while its identity remains resident, so
-// churn from one process doesn't re-walk. A miss re-runs the walk after
-// a new execution identity (a fresh `pidversion`, e.g. after exec),
-// eviction, or an earlier `.ephemeral` (non-cached) result.
-//
-// Two design points address availability and fairness:
-//
-//   - Only STABLE verdicts are cached (`.cache`): a positive result, or
-//     a genuine signature mismatch. A NON-CACHEABLE result (`.ephemeral`,
-//     the peer's identity couldn't be read) is returned but not
-//     stored, so a legitimate GUI whose validation failed once isn't
-//     pinned to a cached `false`.
-//   - Signature walks run on a concurrent Dispatch queue, NOT Swift's
-//     cooperative executor or this actor's critical section. Unrelated peers
-//     do not serialize behind one walk; same-key callers still dedup onto the
-//     one in-flight task.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// A bounded, daemon-wide cache of GUI-peer
+/// validation verdicts keyed by stable audit-token identity.
+///
+/// `DispatchPeerContext.validatedGUIPeer` is stamped on every XPC
+/// dispatch, so a local process could otherwise force the expensive
+/// `SecCode` signature walk (`PeerIdentity.validateGUIPeer`) by opening
+/// a connection, dispatching once, closing, and repeating. Caching the
+/// verdict keyed by the peer's `(pid, pidversion)` collapses that: a
+/// connection reuses the verdict while its identity remains resident, so
+/// churn from one process doesn't re-walk. A miss re-runs the walk after
+/// a new execution identity (a fresh `pidversion`, e.g. after exec),
+/// eviction, or an earlier `.ephemeral` (non-cached) result.
+///
+/// Two design points address availability and fairness:
+///
+///   - Only STABLE verdicts are cached (`.cache`): a positive result, or
+///     a genuine signature mismatch. A NON-CACHEABLE result (`.ephemeral`,
+///     the peer's identity couldn't be read) is returned but not
+///     stored, so a legitimate GUI whose validation failed once isn't
+///     pinned to a cached `false`.
+///   - Signature walks run on a concurrent Dispatch queue, NOT Swift's
+///     cooperative executor or this actor's critical section. Unrelated peers
+///     do not serialize behind one walk; same-key callers still dedup onto the
+///     one in-flight task.
 actor PeerVerdictCache {
     /// Stable identity of a peer process: pid plus the pid-generation
     /// counter (`pidversion`). Two live processes never share a pid, and

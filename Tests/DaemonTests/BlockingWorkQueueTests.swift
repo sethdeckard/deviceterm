@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BlockingWorkQueueTests: synchronous work runs in submission order while its
-// async callers remain suspended.
 
 @testable import Daemon
 import Dispatch

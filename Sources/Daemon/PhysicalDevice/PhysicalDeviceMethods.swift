@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PhysicalDeviceMethods: RPC handlers for the physical-device surface:
-// `physicalDevice.list` (the GUI picker), `physicalDevice.attach`
-// (mount a device pane), and `devices.list` (the aggregate sim+device
-// roster).
 
 import DaemonProtocol
 import Foundation
 
+/// RPC handlers for the physical-device surface:
+/// `physicalDevice.list` (the GUI picker), `physicalDevice.attach`
+/// (mount a device pane), and `devices.list` (the aggregate sim+device
+/// roster).
 public enum PhysicalDeviceMethods {
     /// Params for `physicalDevice.attach`. `deviceId` is the device to mount.
     /// `sessionId` names the tab session to attribute the pane to. It is
@@ -300,8 +299,9 @@ public enum PhysicalDeviceMethods {
 
         case .tooOldToMirror:
             // Catalog read fine but no displayservice. The device's iOS is
-            // too old to mirror. Surface the picker gate's wording so the
-            // attach error reads the same as a future pre-greyed row.
+            // too old to mirror. Reuse the picker gate's wording
+            // (`DeviceAvailability.unsupportedReason`) so an attach refusal
+            // and the picker give the user the same reason.
             return RPCMethodError.invalidParams(DeviceAvailability.unsupportedReason)
 
         case let .missingService(deviceId, service):

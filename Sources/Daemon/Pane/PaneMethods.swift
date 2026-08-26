@@ -1,44 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneMethods. RPC handlers for the `pane.*` method family.
-//
-// Wire shapes (canonical schema in `docs/ARCHITECTURE.md`):
-//
-//   pane.create({sessionId, cap, kind: "sim", udid, revision?})
-//                                              → {paneId, attachment,
-//                                                 scale?, family?, ...}
-//   pane.closeById({paneId, mode?, expectedAttachment?})
-//                                              → {ok: true}
-//     mode: "detach" (default) | "shutdown"
-//   pane.subscribe({paneId})                   → initial ack + stream of
-//                                                 state.changed / surface.changed
-//
-// `pane.create` validates session creds; subsequent pane-targeted ops
-// are authorized against the caller's identity (`requirePrincipal` →
-// `PaneCoordinator.authorize`): a session reaches an unbound pane it
-// owns or a cohort-bound pane whose membership contains its session
-// (matched on incarnation too when the request carries a pin), the
-// validated GUI peer spans sessions, and a foreign paneId is
-// indistinguishable from an unknown one.
-//
-// Initial-frame delivery: `pane.create` doesn't carry an
-// `ioSurfaceId`. The GUI immediately calls `pane.subscribe`, and
-// the daemon's subscribe handler synthesizes a `surface.changed`
-// evt + side-band surface payload pair for the pane's current
-// frame (if any) before yielding live events. Same shape for
-// every subsequent surface update; one code path, one ownership
-// model.
-//
-// `pane.close` is the only place pane lifecycle and device lifecycle
-// touch: in `shutdown` mode, `PaneCoordinator.close` reports the UDID
-// back via its return value and the handler then calls
-// `DeviceCoordinator.shutdown`, keeping the two coordinators
-// decoupled while letting one RPC do both jobs.
 
 import CoreGraphics
 import DaemonProtocol
 import Foundation
 
+/// RPC handlers for the `pane.*` method family.
+///
+/// Wire shapes (canonical schema in `docs/ARCHITECTURE.md`):
+///
+///     pane.create({sessionId, cap, kind: "sim", udid, revision?})
+///                                                → {paneId, attachment,
+///                                                   scale?, family?, ...}
+///     pane.closeById({paneId, mode?, expectedAttachment?})
+///                                                → {ok: true}
+///       mode: "detach" (default) | "shutdown"
+///     pane.subscribe({paneId})                   → initial ack + stream of
+///                                                   state.changed / surface.changed
+///
+/// `pane.create` validates session creds; subsequent pane-targeted ops
+/// are authorized against the caller's identity (`requirePrincipal` →
+/// `PaneCoordinator.authorize`): a session reaches an unbound pane it
+/// owns or a cohort-bound pane whose membership contains its session
+/// (matched on incarnation too when the request carries a pin), the
+/// validated GUI peer spans sessions, and a foreign paneId is
+/// indistinguishable from an unknown one.
+///
+/// Initial-frame delivery: `pane.create` doesn't carry an
+/// `ioSurfaceId`. The GUI immediately calls `pane.subscribe`, and
+/// the daemon's subscribe handler synthesizes a `surface.changed`
+/// evt + side-band surface payload pair for the pane's current
+/// frame (if any) before yielding live events. Same shape for
+/// every subsequent surface update; one code path, one ownership
+/// model.
+///
+/// `pane.closeById` is the only place pane lifecycle and device lifecycle
+/// touch: in `shutdown` mode, `PaneCoordinator.close` reports the UDID
+/// back via its return value and the handler then calls
+/// `DeviceCoordinator.shutdown`, keeping the two coordinators
+/// decoupled while letting one RPC do both jobs.
 public enum PaneMethods {
     // MARK: - Wire shapes
 

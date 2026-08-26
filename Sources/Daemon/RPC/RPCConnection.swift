@@ -1,23 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCConnection: per-client actor that owns one accepted UDS fd.
-//
-// Each accepted client gets one of these. The actor encapsulates:
-//
-//   - The connection fd (shut down on close, then released after the read
-//     source cancels and the active write finishes).
-//   - A serial `DispatchSourceRead` that fires when the fd has bytes
-//     to drain.
-//   - A `Data` accumulator for partially-received frames.
-//   - The method registry shared with the server.
-//   - A map of in-flight subscriptions, keyed by the original
-//     request `id` (events sent for a subscription reuse that id so
-//     the client can correlate the stream back to its request).
-//
-// All state mutation runs inside the actor; the dispatch source's
-// event handler dispatches into the actor via a `Task { await … }`
-// so concurrent read events serialize cleanly on the actor's
-// executor.
 
 import DaemonProtocol
 import Foundation
@@ -59,6 +40,24 @@ public typealias RestorationGate = @Sendable () async -> Bool
 public typealias SessionProvenanceLookup =
     @Sendable (_ sessionId: UUID) async -> SessionProvenanceSnapshot?
 
+/// Per-client actor that owns one accepted UDS fd.
+///
+/// Each accepted client gets one of these. The actor encapsulates:
+///
+///   - The connection fd (shut down on close, then released after the read
+///     source cancels and the active write finishes).
+///   - A serial `DispatchSourceRead` that fires when the fd has bytes
+///     to drain.
+///   - A `Data` accumulator for partially-received frames.
+///   - The method registry shared with the server.
+///   - A map of in-flight subscriptions, keyed by the original
+///     request `id` (events sent for a subscription reuse that id so
+///     the client can correlate the stream back to its request).
+///
+/// All state mutation runs inside the actor; the dispatch source's
+/// event handler dispatches into the actor via a `Task { await … }`
+/// so concurrent read events serialize cleanly on the actor's
+/// executor.
 actor RPCConnection {
     /// Tracks an in-flight server-streamed subscription. The `task`
     /// is the drain loop reading from the producer's `events` stream

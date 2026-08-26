@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonMethods: the `daemon.*` method namespace and the registry
-// binding every RPC method to its handler and scope.
-//
-// `daemon.shutdown` is `.validatedGUI`, XPC-only: its sole production
-// use is terminating an incompatible old helper after a definite
-// update-related wire mismatch (Sparkle can swap DeviceTerm.app while a
-// daemon holding an owned booted sim stays alive, so quitting the GUI
-// does not guarantee the daemon exits). No UDS caller, session
-// credential, automation grant, or unvalidated XPC peer can reach it,
-// closing the unauthenticated confused-deputy surface. It does not
-// claim to prevent every same-uid, signal-level DoS. Ordinary daemon
-// lifecycle still uses idle exit.
 
 import DaemonProtocol
 import Foundation
 
+/// The `daemon.*` method namespace and the registry
+/// binding every RPC method to its handler and scope.
+///
+/// `daemon.shutdown` is `.validatedGUI`, XPC-only: its sole production
+/// use is terminating an incompatible old helper after a definite
+/// update-related wire mismatch (Sparkle can swap DeviceTerm.app while a
+/// daemon holding an owned booted sim stays alive, so quitting the GUI
+/// does not guarantee the daemon exits). No UDS caller, session
+/// credential, automation grant, or unvalidated XPC peer can reach it,
+/// closing the unauthenticated confused-deputy surface. It does not
+/// claim to prevent every same-uid, signal-level DoS. Ordinary daemon
+/// lifecycle still uses idle exit.
 public enum DaemonMethods {
     /// Closure the daemon binary supplies to actually terminate the
     /// process. Library code stays AppKit-free; the executable

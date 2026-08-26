@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneCohortAuthorityTests: cohort authority as `PaneCoordinator` enforces it.
-//
-// Membership and pane records live in one actor, so a transition commits
-// membership and bindings together. These tests work at that boundary, where a
-// split design could leave the two halves disagreeing: a pane bound to a
-// cohort that was never installed, a sibling refused because the pane carried
-// someone else's incarnation, a removed member still holding a live stream.
 
 @testable import Daemon
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Cohort authority as `PaneCoordinator` enforces it.
+///
+/// Membership and pane records live in one actor, so a transition commits
+/// membership and bindings together. These tests work at that boundary, where a
+/// split design could leave the two halves disagreeing: a pane bound to a
+/// cohort that was never installed, a sibling refused because the pane carried
+/// someone else's incarnation, a removed member still holding a live stream.
 struct PaneCohortAuthorityTests {
     // MARK: - Helpers
 

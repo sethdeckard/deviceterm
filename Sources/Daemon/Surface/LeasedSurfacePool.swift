@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LeasedSurfacePool: a per-pane pool of daemon-owned IOSurfaces with an
-// acknowledged lease protocol.
-//
-// A decoded device frame is copied into a pool slot before it is handed to
-// subscribers, isolating them from VideoToolbox's decode pool. A slot is
-// reused only once every hold on it has been released: the daemon-current
-// owner (dropped by ARC when a newer frame supersedes it) plus one
-// subscription hold per subscribed GUI, each released only by a cumulative
-// watermark acknowledgement. A slot with any live hold is never
-// overwritten, so a slow consumer can never be shown a mixed- or
-// wrong-generation frame.
-//
-// Slot identity on the wire is the **generation**, a per-pane monotonic
-// counter that never repeats, so a stale ack can only ever match the one
-// grant it named. The **epoch** groups a slot set: resize and controlled
-// recovery retire the current set (quarantined, never re-acquired) and
-// allocate a fresh epoch, so old and new leases coexist while the retired
-// set drains.
-//
-// This type is `actor`-isolated; every mutation is serialized. Subscription
-// holds exist only for registered tokens, so a pane with no subscribers
-// takes only `.daemonCurrent` holds and the pool behaves like a
-// least-recently-freed reuse pool.
 
 import CoreVideo
 import Foundation
 import IOSurface
 
+/// A per-pane pool of daemon-owned IOSurfaces with an
+/// acknowledged lease protocol.
+///
+/// A decoded device frame is copied into a pool slot before it is handed to
+/// subscribers, isolating them from VideoToolbox's decode pool. A slot is
+/// reused only once every hold on it has been released: the daemon-current
+/// owner (dropped by ARC when a newer frame supersedes it) plus one
+/// subscription hold per subscribed GUI, each released only by a cumulative
+/// watermark acknowledgement. A slot with any live hold is never
+/// overwritten, so a slow consumer can never be shown a mixed- or
+/// wrong-generation frame.
+///
+/// Slot identity on the wire is the **generation**, a per-pane monotonic
+/// counter that never repeats, so a stale ack can only ever match the one
+/// grant it named. The **epoch** groups a slot set: resize and controlled
+/// recovery retire the current set (quarantined, never re-acquired) and
+/// allocate a fresh epoch, so old and new leases coexist while the retired
+/// set drains.
+///
+/// This type is `actor`-isolated; every mutation is serialized. Subscription
+/// holds exist only for registered tokens, so a pane with no subscribers
+/// takes only `.daemonCurrent` holds and the pool behaves like a
+/// least-recently-freed reuse pool.
 actor LeasedSurfacePool {
     private final class PhysicalSlot {
         let surface: IOSurfaceRef

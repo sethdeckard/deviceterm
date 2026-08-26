@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneAccessibility: the pure accessibility half of `PaneCoordinator`.
-//
-// Each `pane.ax.*` op is a backend AX read plus `AXTreeAnnotator` /
-// `AXSweep` post-processing and JSON serialization; none of it mutates
-// `PaneCoordinator`'s pane state. The bridge returns Foundation dicts
-// (not Sendable), so serialization happens here synchronously and only
-// `Data` (Sendable) crosses back. The coordinator resolves the backend
-// (its one stateful step) and reads the pane's immutable `family`, then
-// hands both here.
 
 import CoreGraphics
 import DaemonProtocol
 import Foundation
 
+/// The pure accessibility half of `PaneCoordinator`.
+///
+/// Each `pane.ax.*` op is a backend AX read plus `AXTreeAnnotator` /
+/// `AXSweep` post-processing and JSON serialization; none of it mutates
+/// `PaneCoordinator`'s pane state. The bridge returns Foundation dicts
+/// (not Sendable), so serialization happens here synchronously and only
+/// `Data` (Sendable) crosses back. The coordinator resolves the backend
+/// (its one stateful step) and reads the pane's immutable `family`, then
+/// hands both here.
 enum PaneAccessibility {
     /// AXP's callback bridge waits synchronously for each simulator reply.
     /// Keep the whole read and JSON conversion on the pane's serial Dispatch

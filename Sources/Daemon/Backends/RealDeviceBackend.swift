@@ -1,27 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RealDeviceBackend: `DeviceBackend` over the physical-device pipeline,
-// driving a physically-connected iPhone/iPad.
-//
-// Frames: a `DecodedFrameFeed` (the `MirrorPipeline`) yields decoded pixel
-// buffers; each is copied into a `LeasedSurfacePool` slot before it's handed to
-// subscribers, so they read a snapshot VideoToolbox can't recycle out from under
-// them, and the slot is reused only once every hold on it is released (see
-// `LeasedSurfacePool`). The feed never publishes its own surface: the daemon
-// owns the pool, the copy, the trace, and the publish.
-//
-// Input: an `InteractionRelaying` (the `InteractionRelay`) delivers typed
-// intents. The `DeviceBackend` verbs are synchronous (the protocol contract) but
-// a relay send is async, so each verb enqueues onto a per-surface stream and a
-// serial pump drains it into `device.perform(...)`. The device only *routes*
-// touch/keyboard once a media stream holds its auth gate open (which
-// `startFrames` establishes) so the gated pumps wait for the first decoded
-// frame; input enqueued meanwhile buffers and drains once it opens. Buttons and
-// rotation need no stream, so their pumps run ungated.
-//
-// `@unchecked Sendable`: it holds non-Sendable pipeline handles, but only the
-// owning `PaneCoordinator` actor calls into it, and the frame/input work runs on
-// tasks that don't touch coordinator state.
 
 import CoreGraphics
 import CoreVideo
@@ -36,6 +13,30 @@ import SurfaceTrace
 // enqueue, so they never throw; the unneeded-throws rule is a false positive on
 // them. The unsupported verbs under the same suppression do throw.
 // swiftlint:disable unneeded_throws_rethrows
+/// `DeviceBackend` over the physical-device pipeline,
+/// driving a physically-connected iPhone/iPad.
+///
+/// Frames: a `DecodedFrameFeed` (the `MirrorPipeline`) yields decoded pixel
+/// buffers; each is copied into a `LeasedSurfacePool` slot before it's handed to
+/// subscribers, so they read a snapshot VideoToolbox can't recycle out from under
+/// them, and the slot is reused only once every hold on it is released (see
+/// `LeasedSurfacePool`). The feed never publishes its own surface: the daemon
+/// owns the pool, the copy, the trace, and the publish.
+///
+/// Input: an `InteractionRelaying` (the `InteractionRelay`) delivers typed
+/// intents. The touch, key, and button witnesses enqueue and return rather
+/// than awaiting the relay, even though `DeviceBackend` declares them
+/// `async throws`: each enqueues onto a per-surface stream and a serial pump
+/// drains it into `device.perform(...)`. Rotation and location await their
+/// command outcome instead. The device only *routes*
+/// touch/keyboard once a media stream holds its auth gate open (which
+/// `startFrames` establishes) so the gated pumps wait for the first decoded
+/// frame; input enqueued meanwhile buffers and drains once it opens. Buttons and
+/// rotation need no stream, so their pumps run ungated.
+///
+/// `@unchecked Sendable`: it holds non-Sendable pipeline handles, but only the
+/// owning `PaneCoordinator` actor calls into it, and the frame/input work runs on
+/// tasks that don't touch coordinator state.
 final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// One hardware-button press: the control plus how long the daemon holds it
     /// down before releasing. The relay resolves the control's HID usage.

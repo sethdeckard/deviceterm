@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CoreSimulatorDeviceReader: the daemon's off-executor device enumerator.
-//
-// CoreSimulator's device-set read is synchronous and can block while its
-// service is busy. Running it directly in DeviceCoordinator would occupy a
-// Swift cooperative-executor worker for the whole wait. This wrapper confines
-// every read to one serial DispatchQueue and returns only Sendable snapshots.
 
 import CoreSimulatorBridge
 import Foundation
 
 typealias CoreSimulatorDeviceReadResult = Result<[CSBDeviceInfo], CoreSimulatorDeviceReadFailure>
 
+/// The daemon's off-executor device enumerator.
+///
+/// CoreSimulator's device-set read is synchronous and can block while its
+/// service is busy. Running it directly in DeviceCoordinator would occupy a
+/// Swift cooperative-executor worker for the whole wait. This wrapper confines
+/// every read to one serial DispatchQueue and returns only Sendable snapshots.
+///
 /// `@unchecked Sendable`: both stored properties are immutable, `readDevices`
 /// is Sendable, and `queue` serializes every invocation of it.
 final class CoreSimulatorDeviceReader: @unchecked Sendable {

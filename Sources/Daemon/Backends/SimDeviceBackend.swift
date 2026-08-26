@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimDeviceBackend: `DeviceBackend` over the CoreSimulator bridge.
-//
-// Wraps the display / HID / Purple handles acquired at pane-create
-// time and lazily acquires the accessibility client (caching a
-// permanent failure) the way the coordinator's per-pane record used
-// to. This is a faithful move of that logic behind the seam. No
-// behavior changes, the bridge calls are identical.
-//
-// `@unchecked Sendable`: the bridge handles are non-Sendable. The owning
-// coordinator uses display and location state, `inputWorkQueue` serializes
-// HID/Purple work, each pane's AX queue serializes accessibility work, and
-// `inputGate` protects the small state shared across those domains.
 
 import CoreSimulatorBridge
 import DaemonProtocol
 import Foundation
 
+/// `DeviceBackend` over the CoreSimulator bridge.
+///
+/// Wraps the display / HID / Purple handles acquired at pane-create
+/// time and lazily acquires the accessibility client, caching a
+/// permanent acquisition failure so a broken client is not retried
+/// per call.
+///
+/// `@unchecked Sendable`: the bridge handles are non-Sendable. The owning
+/// coordinator uses display and location state, `inputWorkQueue` serializes
+/// HID/Purple work, each pane's AX queue serializes accessibility work, and
+/// `inputGate` protects the small state shared across those domains.
 final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// A contact still held down (nil once lifted), tracked with its kind
     /// so a transfer releases it correctly. Updated under `inputGate` as

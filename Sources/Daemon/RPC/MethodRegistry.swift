@@ -1,45 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// MethodRegistry: name → handler routing for the RPC server.
-//
-// Two handler kinds coexist:
-//
-//   - One-shot: `(paramsJSON) async throws -> resultJSON`. The
-//     dispatcher sends a single `.response` envelope and is done.
-//
-//   - Subscription: `(paramsJSON) async throws -> SubscriptionResult`.
-//     The handler returns the initial `.result` body plus an
-//     `AsyncStream<SubscriptionEvent>` that the dispatcher drains,
-//     emitting each yielded value as an `.event` envelope sharing the
-//     original request's `id`. The handler also returns an
-//     `onCancel` closure that the dispatcher calls when the client
-//     disconnects or the connection otherwise tears the subscription
-//     down: that closure is the producer's hook to release any
-//     resources (e.g. unsubscribe from a coordinator).
-//
-// Method handlers take the raw `params` JSON bytes (or `"{}"` when
-// the request had no body, per `RPCConnection`'s normalization) and
-// return raw JSON bytes for the body of whatever envelope they emit.
-// Each handler decodes its own typed `Params` and encodes its own
-// typed `Result`. The registry is body-shape-agnostic so adding
-// methods doesn't require any envelope-layer changes.
-//
-// Each entry is tagged with a `MethodScope`. The dispatcher in
-// `RPCConnection` reads the tag and pre-checks the connection's
-// auth state before invoking the handler: `.session` requires
-// `authenticatedSession != nil`; `.automationTab` additionally
-// requires a live automation grant for the session (from the
-// `AutomationGrantStore`, checked per request, not a role);
-// `.validatedGUI` requires an XPC peer that validated against the
-// daemon's signature (the GUI back-channel). Handlers see only
-// requests that have already passed those checks.
-// `methodsForRole(_:)` mirrors the same rule on the read side so
-// `daemon.capabilities` advertising stays in lockstep with what
-// the dispatcher actually accepts.
 
 import DaemonProtocol
 import Foundation
 
+/// Name → handler routing for the RPC server.
+///
+/// Two handler kinds coexist:
+///
+///   - One-shot: `(paramsJSON) async throws -> resultJSON`. The
+///     dispatcher sends a single `.response` envelope and is done.
+///
+///   - Subscription: `(paramsJSON, SubscriptionContext?) async throws ->
+///     SubscriptionResult`. The handler returns the initial `.result` body plus an
+///     `AsyncStream<SubscriptionEvent>` that the dispatcher drains,
+///     emitting each yielded value as an `.event` envelope sharing the
+///     original request's `id`. The handler also returns an
+///     `onCancel` closure that the dispatcher calls when the client
+///     disconnects or the connection otherwise tears the subscription
+///     down: that closure is the producer's hook to release any
+///     resources (e.g. unsubscribe from a coordinator).
+///
+/// Method handlers take the raw `params` JSON bytes (or `"{}"` when
+/// the request had no body, per `RPCConnection`'s normalization) and
+/// return raw JSON bytes for the body of whatever envelope they emit.
+/// Each handler decodes its own typed `Params` and encodes its own
+/// typed `Result`. The registry is body-shape-agnostic so adding
+/// methods doesn't require any envelope-layer changes.
+///
+/// Each entry is tagged with a `MethodScope`. Both dispatchers,
+/// `RPCConnection` and `XPCConnection`, read the tag and pre-check the
+/// connection's auth state before invoking the handler: `.session` requires
+/// `authenticatedSession != nil`; `.automationTab` additionally
+/// requires a live automation grant for the session (from the
+/// `AutomationGrantStore`, checked per request, not a role);
+/// `.validatedGUI` requires an XPC peer that validated against the
+/// daemon's signature (the GUI back-channel). Handlers see only
+/// requests that have already passed those checks.
+/// `methodsForRole(_:)` mirrors the same rule on the read side so
+/// `daemon.capabilities` advertising stays in lockstep with what
+/// the dispatcher actually accepts.
 public struct MethodRegistry: Sendable {
     public typealias Handler = @Sendable (_ paramsJSON: Data) async throws -> Data
     /// A subscription handler. The transport-created `SubscriptionContext`

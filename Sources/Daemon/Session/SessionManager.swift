@@ -1,31 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionManager: the daemon's actor for session lifecycle.
-//
-// Each session backs one terminal pane (a tab may hold several): it holds a
-// label, a non-recoverable verifier for the capability issued at create time
-// (never the bearer token), the kernel `owner` identity of the process that
-// created it, and the panes scoped to it. Methods that name a sessionId on
-// the wire validate `(sessionId, cap)` against this manager, but the cap is
-// only ONE factor: it is readable by any same-uid process (`ps -E`), so it
-// can't by itself stop one terminal's shell from spoofing another's. The
-// connection layer additionally checks the caller's kernel provenance (owner
-// identity, or the session's bound terminal via `terminalAnchorStore`) against
-// `ProvenanceMatcher` before installing a session principal. This manager owns
-// the cap verifier + owner identity + the shared `terminalAnchorStore`; the
-// provenance decision lives in the connection layer.
-//
-// Each session carries the three-layer identifier model: a `shortId`
-// (6-char Crockford base32, daemon-minted with collision retry,
-// immutable for the session's lifetime) and an optional `name`
-// (supplied by the caller at create, likewise never rewritten: a
-// manual tab title is separate GUI state). The fields ride through
-// `tabs.list` + `session.create` so the CLI's `--tab <ref>` resolver
-// (`TabRefResolver` in DaemonProtocol) can match against them.
 
 import DaemonProtocol
 import Foundation
 
+/// The daemon's actor for session lifecycle.
+///
+/// Each session backs one terminal pane (a tab may hold several): it holds a
+/// label, a non-recoverable verifier for the capability issued at create time
+/// (never the bearer token), the kernel `owner` identity of the process that
+/// created it, and the panes scoped to it. Credential-bearing methods validate
+/// `(sessionId, cap)` against this manager, but the cap is
+/// only ONE factor: it is readable by any same-uid process (`ps -E`), so it
+/// can't by itself stop one terminal's shell from spoofing another's. The
+/// connection layer additionally checks the caller's kernel provenance (owner
+/// identity, or the session's bound terminal via `terminalAnchorStore`) against
+/// `ProvenanceMatcher` before installing a session principal. This manager owns
+/// the cap verifier + owner identity + the shared `terminalAnchorStore`; the
+/// provenance decision lives in the connection layer.
+///
+/// Each session carries the three-layer identifier model: a `shortId`
+/// (6-char Crockford base32, daemon-minted with collision retry,
+/// immutable for the session's lifetime) and an optional `name`
+/// (supplied by the caller at create, likewise never rewritten: a
+/// manual tab title is separate GUI state). The fields ride through
+/// `tabs.list` + `session.create` so the CLI's `--tab <ref>` resolver
+/// (`TabRefResolver` in DaemonProtocol) can match against them.
 public actor SessionManager {
     /// A session id's ordered lifecycle phase, carrying its incarnation.
     private enum Phase {

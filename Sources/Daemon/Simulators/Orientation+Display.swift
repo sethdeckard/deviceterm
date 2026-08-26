@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Orientation+Display: the daemon-only mapping from CoreSimulatorBridge's
-// observed `CSBDisplayOrientation` into the shared Orientation wire enum.
-// The inverse direction (a rotate target heading for the bridge) lives in
-// `Orientation+Bridge.swift`; this one is an observation, so it is
-// failable where that one is total.
-//
-// Daemon-only initializer, not a protocol conformance; see
-// HardwareButton+Bridge.swift for why it lives in an extension here rather
-// than on the type.
 
 import CoreSimulatorBridge
 import DaemonProtocol
 
+/// The daemon-only mapping from CoreSimulatorBridge's observed
+/// `CSBDisplayOrientation` into the shared `Orientation` wire enum.
+///
+/// The inverse direction (a rotate target heading for the bridge) lives in
+/// `Orientation+Bridge.swift`; this one is an observation, so it is
+/// failable where that one is total.
+///
+/// A daemon-only initializer, not a protocol conformance: `Orientation`
+/// lives in the Foundation-only DaemonProtocol module, which must never
+/// link CoreSimulatorBridge, so an extension in the Daemon module is the
+/// only legal home.
 extension Orientation {
     /// The pane orientation an observed display value names, or nil when
     /// the display vends no orientation source or reports a value with no

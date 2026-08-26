@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceFamilyClassifier: maps a CoreSimulator device-type identifier to
-// the shared `DeviceFamily`. The daemon owns this: `deviceTypeIdentifier`
-// is a daemon-internal CoreSimulator string; the GUI/CLI consume the
-// resulting `family` (as its rawValue) off the wire.
 
 import DaemonProtocol
 
+/// Maps a CoreSimulator device-type identifier to
+/// the shared `DeviceFamily`. The daemon owns this: `deviceTypeIdentifier`
+/// is a daemon-internal CoreSimulator string; the GUI/CLI consume the
+/// resulting `family` (as its rawValue) off the wire.
 public enum DeviceFamilyClassifier {
     /// Map a `deviceTypeIdentifier` like
     /// `com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm`

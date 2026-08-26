@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionMethods: RPC handlers for the `session.*` and `tabs.*`
-// methods.
-//
-// Each handler is a `MethodRegistry.Handler` factory: pass in the
-// shared `SessionManager` and get back the closure to register
-// under a method name. Wire shapes match the schema in
-// `docs/ARCHITECTURE.md`:
-//
-//   session.create({label?})                  → {sessionId, capability}
-//   session.close({sessionId, cap, mode?})    → {ok: true}
-//   tabs.list                                  → [{sessionId, label?}]
-//
-// `session.close` applies `mode` to an in-flight boot claim before removing
-// the session. Existing pane shutdown still uses the GUI's per-pane fan-out.
 
 import DaemonProtocol
 import Foundation
 
+/// RPC handlers for the `session.*` and `tabs.*`
+/// methods.
+///
+/// Each handler is a `MethodRegistry.Handler` factory: pass in the
+/// shared `SessionManager` and get back the closure to register
+/// under a method name. Wire shapes match the schema in
+/// `docs/ARCHITECTURE.md`:
+///
+///     session.create({label?, name?, role?, initialProtected?})
+///                        → {sessionId, capability, shortId, name?, role}
+///     session.close({sessionId, cap, mode?})
+///                        → {ok: true}
+///     tabs.list          → [{sessionId, shortId, name?, displayTitle?, label?}]
+///
+/// `session.close` applies `mode` to an in-flight boot claim before removing
+/// the session. Existing pane shutdown still uses the GUI's per-pane fan-out.
 public enum SessionMethods {
     // MARK: - Wire shapes
 

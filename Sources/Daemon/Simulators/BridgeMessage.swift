@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BridgeMessage: extract a clean, agent-readable error message string
-// from an `Error` raised inside `CoreSimulatorBridge`.
-//
-// The bridge layer carries high-quality diagnostic hints on the
-// `NSLocalizedDescriptionKey` of every NSError it throws, the
-// headline example being SimAccessibility's "No element at point:
-// fullscreen modal, out of bounds, or no AX server?", which names
-// the three likely causes so a caller can act on it. Swift formats
-// NSError values via `String(describing:)` / `"\(error)"` as the
-// verbose
-//
-//     Error Domain=CoreSimulatorBridge.SimHIDClient Code=49
-//     "HID send did not complete within 1s" UserInfo={}
-//
-// shape, which buries the actual hint inside boilerplate the CLI then
-// prints verbatim ("pane.tap: Error Domain=…"). This namespace unwraps
-// the localized description so `PaneError.bridgeFailed`'s `message:`
-// field carries only the hint the bridge wanted to surface, and
-// `mapPaneError` emits `pane.<op>: <hint>` on the wire instead of
-// `pane.<op>: Error Domain=…`.
-//
-// Pure helper (no module imports beyond Foundation) per AGENTS.md's
-// pure-namespace convention so the extraction is unit-testable with
-// synthetic errors. Used by every catch block in `PaneCoordinator`
-// that converts a bridge-thrown error into a `bridgeFailed` message.
 
 import Foundation
 
+/// Extract a clean, agent-readable error message string
+/// from an `Error` raised inside `CoreSimulatorBridge`.
+///
+/// The bridge layer carries high-quality diagnostic hints on the
+/// `NSLocalizedDescriptionKey` of every NSError it throws, the
+/// headline example being SimAccessibility's "No element at point:
+/// fullscreen modal, out of bounds, or no AX server?", which names
+/// the three likely causes so a caller can act on it. Swift formats
+/// NSError values via `String(describing:)` / `"\(error)"` as the
+/// verbose
+///
+///     Error Domain=CoreSimulatorBridge.SimHIDClient Code=49
+///     "HID send did not complete within 1s" UserInfo={}
+///
+/// shape, which buries the actual hint inside boilerplate the CLI then
+/// prints verbatim ("pane.tap: Error Domain=…"). This namespace unwraps
+/// the localized description so `PaneError.bridgeFailed`'s `message:`
+/// field carries only the hint the bridge wanted to surface, and
+/// `mapPaneError` emits `pane.<op>: <hint>` on the wire instead of
+/// `pane.<op>: Error Domain=…`.
+///
+/// Pure helper (no module imports beyond Foundation) per AGENTS.md's
+/// pure-namespace convention so the extraction is unit-testable with
+/// synthetic errors. Used by every catch block in `PaneCoordinator`
+/// that converts a bridge-thrown error into a `bridgeFailed` message.
 enum BridgeMessage {
     /// Return the bridge's intended user-facing message for `error`.
     /// All `CoreSimulatorBridge` .m files raise NSError values whose

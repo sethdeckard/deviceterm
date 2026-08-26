@@ -1,37 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeyboardInputMap: keyboard translation tables for `pane.input.key`
-// and `pane.input.text`.
-//
-// Two pieces, both static and stateless:
-//
-// 1. `kVKToHIDUsage(_:)` maps macOS HIToolbox virtual key codes
-//    (`kVK_*`, from `NSEvent.keyCode`) to USB HID usage codes
-//    (Keyboard/Keypad page 0x07). Indigo's keyboard transport speaks
-//    HID; macOS's NSEvent speaks kVK. The number spaces don't overlap
-//    (e.g. 'a' is kVK 0x00 but HID 0x04), so the daemon translates at
-//    its bridge boundary. Without this, every key sent through
-//    `SimHIDClient` is gibberish.
-//
-// 2. `asciiKeyMap`: ASCII character → (HID keyCode, requires shift).
-//    Built once at static init: characters are authored as kVK rows
-//    so a reviewer can diff them row-by-row against the kVK tables
-//    before translation collapses to HID via `kVKToHIDUsage`. The
-//    translation function is the single source of truth; `hidShift`
-//    is a precomputed convenience for the `text()` hot path.
-//
-// Lives in its own file (rather than nested inside `PaneCoordinator`)
-// because it's pure static logic with no actor-state coupling, and
-// because broader keycode coverage (international layouts, F13+,
-// keypad, media keys) is not covered, and would be much easier to
-// extend in a dedicated file than amongst PaneCoordinator's
-// pane-lifecycle code.
-//
-// Source: macOS `<HIToolbox/Events.h>` for kVK values; USB HID Usage
-// Tables (Keyboard/Keypad page 0x07) for HID values.
 
 import Foundation
 
+/// Keyboard translation tables for `pane.input.key`
+/// and `pane.input.text`.
+///
+/// Two pieces, both static and stateless:
+///
+/// 1. `kVKToHIDUsage(_:)` maps macOS HIToolbox virtual key codes
+///    (`kVK_*`, from `NSEvent.keyCode`) to USB HID usage codes
+///    (Keyboard/Keypad page 0x07). Indigo's keyboard transport speaks
+///    HID; macOS's NSEvent speaks kVK. The number spaces don't overlap
+///    (e.g. 'a' is kVK 0x00 but HID 0x04), so the daemon translates at
+///    its bridge boundary. Without this, every key sent through
+///    `SimHIDClient` is gibberish.
+///
+/// 2. `asciiKeyMap`: ASCII character → (HID keyCode, requires shift).
+///    Built once at static init: characters are authored as kVK rows
+///    so a reviewer can diff them row-by-row against the kVK tables
+///    before translation collapses to HID via `kVKToHIDUsage`. The
+///    translation function is the single source of truth; `hidShift`
+///    is a precomputed convenience for the `text()` hot path.
+///
+/// Lives in its own file (rather than nested inside `PaneCoordinator`)
+/// because it's pure static logic with no actor-state coupling, and
+/// because broader keycode coverage (international layouts, F13+,
+/// keypad, media keys) is not covered, and would be much easier to
+/// extend in a dedicated file than amongst PaneCoordinator's
+/// pane-lifecycle code.
+///
+/// Source: macOS `<HIToolbox/Events.h>` for kVK values; USB HID Usage
+/// Tables (Keyboard/Keypad page 0x07) for HID values.
 public enum KeyboardInputMap {
     /// USB HID usage code for the Shift modifier (Left Shift).
     /// `SimHIDClient` sends these straight to Indigo as-is, so the

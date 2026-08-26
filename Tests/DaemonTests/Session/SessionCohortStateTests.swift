@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionCohortStateTests: the cohort reducer, exercised directly.
-//
-// The reducer is a value type with no clock, no actor and no I/O, so every
-// ordering and lifecycle rule is testable without racing anything. What these
-// pin is the arithmetic of membership: who may drive a pane, who a reconcile
-// removed, and which ids are dead for good.
-//
-// The rules that keep coming back wrong, and so get explicit coverage:
-// "the cohort is gone" must never read as "this pane never had one"; a retired
-// id must stay retired however fresh the request; an emptied id must stay
-// *revivable*, because the GUI retains one id per tab across restores; and a
-// verdict about a member is keyed to an exact incarnation.
 
 @testable import Daemon
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// The cohort reducer, exercised directly.
+///
+/// The reducer is a value type with no clock, no actor and no I/O, so every
+/// ordering and lifecycle rule is testable without racing anything. What these
+/// pin is the arithmetic of membership: who may drive a pane, who a reconcile
+/// removed, and which ids are dead for good.
+///
+/// These rules get explicit coverage:
+/// "the cohort is gone" must never read as "this pane never had one"; a retired
+/// id must stay retired however fresh the request; an emptied id must stay
+/// *revivable*, because the GUI retains one id per tab across restores; and a
+/// verdict about a member is keyed to an exact incarnation.
 struct SessionCohortStateTests {
     // MARK: - Helpers
 

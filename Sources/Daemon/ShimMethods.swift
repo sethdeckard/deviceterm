@@ -1,34 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ShimMethods: RPC handler for shim-originated provenance events.
-//
-// `deviceterm-shim` runs in each tab's shell as a stand-in for `xcrun`
-// and `simctl`. When the user types `xcrun simctl boot <udid>` (or
-// equivalent), the shim:
-//
-//   1. Resolves the real binary and `exec`s it with inherited stdio.
-//   2. Snapshots `simctl list devices` before and after.
-//   3. Diffs the snapshots to identify the device whose state
-//      actually flipped (uniquely resolving even bare names that
-//      collide across runtimes).
-//   4. Queues a boot claim through the terminal-local GUI relay. If that relay
-//      cannot accept it, posts the same attempt through authenticated
-//      `shim.event` as a fallback.
-//
-// The daemon validates `(sessionId, cap)` against `SessionManager`
-// before accepting a fallback; cap mismatch is a hard reject per the trust
-// boundary in AGENTS.md. A boot claim becomes ownership only after
-// CoreSimulator reports Booted. Shutdown events release ownership.
-//
-// Wire shape per docs/ARCHITECTURE.md:
-//
-//   shim.event({event: "booted"|"shutdown",
-//               sessionId, cap, udid,
-//               deviceName?, runtime?, invokedAs?, argv?, claim?})  → {ok}
 
 import DaemonProtocol
 import Foundation
 
+/// RPC handler for shim-originated provenance events.
+///
+/// `deviceterm-shim` runs in each tab's shell as a stand-in for `xcrun`
+/// and `simctl`. When the user types `xcrun simctl boot <udid>` (or
+/// equivalent), the shim:
+///
+///     1. Resolves the real binary and `exec`s it with inherited stdio.
+///     2. Snapshots `simctl list devices` before and after.
+///     3. Diffs the snapshots to identify the device whose state
+///        actually flipped (uniquely resolving even bare names that
+///        collide across runtimes).
+///     4. Queues a boot claim through the terminal-local GUI relay. If that relay
+///        cannot accept it, posts the same attempt through authenticated
+///        `shim.event` as a fallback.
+///
+/// The daemon validates `(sessionId, cap)` against `SessionManager`
+/// before accepting a fallback; cap mismatch is a hard reject per the trust
+/// boundary in AGENTS.md. A boot claim becomes ownership only after
+/// CoreSimulator reports Booted. Shutdown events release ownership.
+///
+/// Wire shape per docs/ARCHITECTURE.md:
+///
+///     shim.event({event: "booted"|"shutdown",
+///                 sessionId, cap, udid,
+///                 deviceName?, runtime?, invokedAs?, argv?, claim?})  → {ok}
 public enum ShimMethods {
     public struct EventParams: Codable, Sendable {
         public let event: String

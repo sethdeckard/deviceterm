@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// XPCErrorDescription: name an `XPC_TYPE_ERROR` object for a log line.
-//
-// A connection teardown is only diagnostic if the timeline says which error
-// caused it. Naming the error distinguishes an interrupted connection from an
-// invalidated one before teardown discards the state that would explain it.
-//
-// libxpc vends its errors as singleton dictionaries, so identity comparison is
-// the documented way to classify them; `XPC_ERROR_KEY_DESCRIPTION` carries the
-// human string for anything outside the known set.
 
 import Foundation
 @preconcurrency import XPC
 
+/// Name an `XPC_TYPE_ERROR` object for a log line.
+///
+/// A connection teardown is only diagnostic if the timeline says which error
+/// caused it. Naming the error distinguishes an interrupted connection from an
+/// invalidated one before teardown discards the state that would explain it.
+///
+/// libxpc vends its errors as singleton dictionaries, so identity comparison is
+/// the documented way to classify them; `XPC_ERROR_KEY_DESCRIPTION` carries the
+/// human string for anything outside the known set.
 enum XPCErrorDescription {
     /// A short, log-safe name for an XPC error object.
     ///

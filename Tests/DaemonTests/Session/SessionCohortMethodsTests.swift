@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionCohortMethodsTests: the `session.setCohort` handler's wire
+
+@testable import Daemon
+import DaemonProtocol
+import Foundation
+import Testing
+
+// The `session.setCohort` handler's wire
 // validation, driven through the real `defaultRegistry(...)`.
-//
 // The handler's contract is that a malformed payload is a *definite*
 // pre-mutation rejection (`invalidParams`), distinguishable from an
 // indeterminate transport loss. The case worth pinning is `replaces`: an
@@ -10,11 +14,6 @@
 // them (the optional-flatMap shape) would execute a replacement request with
 // non-replacement semantics. That leaves the outgoing cohort alive, or
 // refuses on foreign membership when the caller did everything right.
-
-@testable import Daemon
-import DaemonProtocol
-import Foundation
-import Testing
 
 private func setCohortHandler(
     manager: SessionManager = SessionManager()

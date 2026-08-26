@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ContactLane: per-pane arbitration for the input verbs that hold digitizer
-// contact.
-//
-// A pane has one shared digitizer stream. Every paced verb holds contact on it
-// across a suspension, and a live drag spans several RPCs, so two requests on
-// one pane can interleave into `down(A) down(B) up(A) up(B)`: successive downs
-// read as continued contact and the first up clears it, merging two gestures
-// into one. `PaneCoordinator` is an actor, but it releases isolation the moment
-// a gesture awaits into `SimInputSynthesis`, so actor isolation alone does not
-// order them.
-//
-// The lane is its own actor rather than fields on `Record` because admission
-// suspends, and the checks around each suspension have to be uninterruptible.
-// Every transition is keyed by lease identity, so a stale releaser cannot free
-// a lease that has since been handed to someone else.
-//
-// Membership is contact-producing verbs only. `crown`, `key`, `text`, `button`,
-// and `rotate` hold no contact and never enter.
 
 import CoreGraphics
 import DaemonProtocol
 import Foundation
 
+/// Per-pane arbitration for the input verbs that hold digitizer
+/// contact.
+///
+/// A pane has one shared digitizer stream. Every paced verb holds contact on it
+/// across a suspension, and a live drag spans several RPCs, so two requests on
+/// one pane can interleave into `down(A) down(B) up(A) up(B)`: successive downs
+/// read as continued contact and the first up clears it, merging two gestures
+/// into one. `PaneCoordinator` is an actor, but it releases isolation the moment
+/// a gesture awaits into `SimInputSynthesis`, so actor isolation alone does not
+/// order them.
+///
+/// The lane is its own actor rather than fields on `Record` because admission
+/// suspends, and the checks around each suspension have to be uninterruptible.
+/// Every transition is keyed by lease identity, so a stale releaser cannot free
+/// a lease that has since been handed to someone else.
+///
+/// Membership is contact-producing verbs only. `crown`, `key`, `text`, `button`,
+/// and `rotate` hold no contact and never enter.
 actor ContactLane {
     enum Role: Equatable {
         case live

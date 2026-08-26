@@ -1,34 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePadding: detect the real content rectangle inside a decoded
-// physical-device frame.
-//
-// A device's HEVC mirror doesn't arrive at the panel's exact pixel size.
-// The encoder pads the picture width up to a macroblock boundary (e.g. a
-// 1207-wide screen becomes a 1216-wide coded picture) and VideoToolbox can
-// over-allocate the output IOSurface's height (e.g. 2624 → 2656). Both
-// extras are filled with pure-black (0,0,0) on the right and bottom edges,
-// and neither the clean aperture nor the stream-negotiation metadata reports
-// the true visible size. Rendered as-is, that padding shows as black strips
-// between the screen content and the bezel.
-//
-// The content is always anchored top-left, and the padding is always exactly
-// zero (real content essentially never is across a whole edge run), so the
-// real content size is the bottom-right-most non-black pixel. This is pure +
-// IOSurface-only so it's unit-testable with a synthetic padded surface.
 
 import Foundation
 import IOSurface
 
+/// Detect the real content rectangle inside a decoded
+/// physical-device frame.
+///
+/// A device's HEVC mirror doesn't arrive at the panel's exact pixel size.
+/// The encoder pads the picture width up to a macroblock boundary (e.g. a
+/// 1207-wide screen becomes a 1216-wide coded picture) and VideoToolbox can
+/// over-allocate the output IOSurface's height (e.g. 2624 → 2656). Both
+/// extras fill the right and bottom edges with near-black, and neither the
+/// clean aperture nor the stream-negotiation metadata reports the true
+/// visible size. Rendered as-is, that padding shows as black strips between
+/// the screen content and the bezel.
+///
+/// The content is always anchored top-left, so `contentSize` scans bounded
+/// edge bands for the last pixel above `blackThreshold` and returns nil when
+/// sizing is inconclusive. This is pure + IOSurface-only so it's
+/// unit-testable with a synthetic padded surface.
 enum DevicePadding {
     /// A pixel channel at or below this counts as padding. The encoder /
     /// VideoToolbox fill isn't pure zero. It's near-black, plus a column or
     /// two of faint bleed (brightness ~9–15) at the content↔padding boundary,
     /// so an exact-zero test never engages the crop and a too-low floor
-    /// leaves a hairline of bleed. Live measurement (iPhone 16 Pro) showed the
-    /// content edge stabilizing at the true panel width for every threshold
-    /// from 16 up; 24 clears the bleed with margin while staying far below any
-    /// real content, which is never this dark across a whole edge run.
+    /// leaves a hairline of bleed. The content edge stabilizes at the true
+    /// panel width for every threshold from 16 up; 24 clears the bleed with
+    /// margin while staying far below any real content, which is never this
+    /// dark across a whole edge run.
     static let blackThreshold: UInt8 = 24
     /// The real content size within `surface` (BGRA, top-left anchored), or
     /// `nil` when the frame can't be sized confidently: either fully black,

@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Capability: the per-session secret that authenticates messages
-// claiming to originate from a specific session.
-//
-// 32 bytes of cryptographically random data, generated once at
-// `session.create` and exposed to the session's shell tree via the
-// `DEVICETERM_SESSION_CAP` env var (as base64). Every subsequent shim
-// event and CLI request that names a `sessionId` must also carry
-// the matching `cap` on the wire; the server rejects mismatches.
-//
-// Wire encoding is base64: JSON-friendly, exact length-preserving,
-// matches what gets pasted into the env var.
 
 import Foundation
 import Security
 
+/// The per-session capability token: one authentication factor for messages
+/// claiming to originate from a specific session, never proof on its own.
+///
+/// 32 bytes of cryptographically random data, generated once at
+/// `session.create` and exposed to the session's shell tree via the
+/// `DEVICETERM_SESSION_CAP` env var (as base64). It is deliberately not a
+/// secret from same-uid processes, which can read it out of the
+/// environment. `session.authenticate` joins it with the caller's kernel
+/// provenance before installing a session principal; after that the
+/// connection carries the authority, and only credential-bearing payloads
+/// repeat the cap on the wire. The server rejects mismatches.
+///
+/// Wire encoding is base64: JSON-friendly, exact length-preserving,
+/// matches what gets pasted into the env var.
 public struct Capability: Sendable, Hashable {
     /// Standard byte count for newly-generated capabilities. 32 bytes
     /// = 256 bits, well above any practical brute-force boundary;

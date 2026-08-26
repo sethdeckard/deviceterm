@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UDSSocket: thin POSIX wrappers for the daemon's Unix domain socket.
-//
-// macOS's `Network.framework` (`NWListener`/`NWConnection`) doesn't
-// support `AF_UNIX`, so the daemon talks straight to the BSD socket
-// API. These helpers wrap the parts we actually use (listener
-// bind+listen, single-shot accept, non-blocking read of whatever's
-// available, blocking write-all) and translate errno values into
-// typed Swift errors.
-//
-// Everything here is `Sendable` and free of shared mutable state;
-// the actor layers above own per-fd state and call into these
-// functions from their isolation domain.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// Thin POSIX wrappers for the daemon's Unix domain socket.
+///
+/// macOS's `Network.framework` (`NWListener`/`NWConnection`) doesn't
+/// support `AF_UNIX`, so the daemon talks straight to the BSD socket
+/// API. These helpers wrap the parts we actually use (listener
+/// bind+listen, single-shot accept, non-blocking read of whatever's
+/// available, blocking write-all) and translate errno values into
+/// typed Swift errors.
+///
+/// Everything here is `Sendable` and free of shared mutable state;
+/// the actor layers above own per-fd state and call into these
+/// functions from their isolation domain.
 public enum UDSSocket {
     /// Upper bound on the `sun_path` byte length. macOS reserves 104
     /// bytes for `sun_path` in `sockaddr_un`; one byte is reserved for

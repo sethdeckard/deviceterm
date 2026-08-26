@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceRoster: pure builder for the `devices.list` aggregate.
-//
-// Combines booted sims + connected physical devices and annotates each
-// with its pane's attributed session, but only when at least one of the
-// pane's controlling members is visible to the caller, so a device
-// attached to a protected tab the caller doesn't own reads as
-// unattached. That reuses
-// the exact `tabs.list` opacity rule (the caller passes the set of
-// session ids visible to them; an owner-hidden protected session simply
-// isn't in it). Pure, so the opacity logic is unit-tested without a
-// device or CoreSimulator.
 
 import DaemonProtocol
 import Foundation
 
+/// Pure builder for the `devices.list` aggregate.
+///
+/// Combines booted sims + connected physical devices and annotates each
+/// with its pane's attributed session, but only when at least one of the
+/// pane's controlling members is visible to the caller, so a device
+/// attached to a protected tab the caller doesn't own reads as
+/// unattached. That reuses
+/// the exact `tabs.list` opacity rule (the caller passes the set of
+/// session ids visible to them; an owner-hidden protected session simply
+/// isn't in it). Pure, so the opacity logic is unit-tested without a
+/// device or CoreSimulator.
 enum DeviceRoster {
     /// A booted sim the roster should list. `DeviceCoordinator` supplies
     /// these so the builder stays free of CoreSimulator.

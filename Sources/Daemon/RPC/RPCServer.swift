@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCServer: listener actor for the daemon's Unix domain socket.
-//
-// Owns the listening fd and the map of accepted connections. The
-// accept loop is driven by a `DispatchSourceRead` on the listener,
-// not by a blocking thread: when the source fires we drain every
-// pending connection via non-blocking `accept`, hand each new fd to
-// a fresh `RPCConnection` actor, and add it to the connections map.
-//
-// Stop semantics:
-//   - `stop()` cancels the accept source (which closes the listener
-//     fd) and closes every active connection. The socket file at
-//     `socketPath` is unlinked so a subsequent `start()` on the
-//     same path doesn't trip the "path exists" guard.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// Listener actor for the daemon's Unix domain socket.
+///
+/// Owns the listening fd and the map of accepted connections. The
+/// accept loop is driven by a `DispatchSourceRead` on the listener,
+/// not by a blocking thread: when the source fires we drain every
+/// pending connection via non-blocking `accept`, hand each new fd to
+/// a fresh `RPCConnection` actor, and add it to the connections map.
+///
+/// Stop semantics:
+///   - `stop()` cancels the accept source (which closes the listener
+///     fd) and closes every active connection. The socket file at
+///     `socketPath` is unlinked so a subsequent `start()` on the
+///     same path doesn't trip the "path exists" guard.
 public actor RPCServer {
     private let socketPath: String
     private let methods: MethodRegistry

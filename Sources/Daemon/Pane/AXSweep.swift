@@ -1,45 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AXSweep: pure math for `pane.ax.sweep`. Pieces:
-//
-//   1. `gridPoints(step:)`, the grid of normalized [0,1)² coordinates
-//      the daemon walks. The daemon scales each one to pixels (via
-//      `pixelPoint(normalized:screen:)`) before handing to the bridge,
-//      so the grid stays portable across device families. Generator
-//      is sample-on-step (anchor at 0); last sample on each axis is
-//      the largest `n*step < 1.0`.
-//
-//   2. `dedupKey(element:)`, the canonical key for collapsing the N
-//      cells × ~1 element per cell into the unique-element set.
-//      Combines role + identifier + label + frame so two grid points
-//      that hit the same element produce identical keys and elements
-//      that genuinely differ (same role + identifier + frame, different
-//      label = mid-transition state change) keep both. Order-stable
-//      "first sighting wins" is the responsibility of the caller's
-//      collect loop, not this helper.
-//
-//   3. `screenSize(fromTree:)` + `pixelPoint(normalized:screen:)`,
-//      the normalized-to-pixel conversion. AXPTranslator's
-//      `objectAtPoint:displayId:bridgeDelegateToken:` takes absolute
-//      display-space pixel coordinates, *not* the normalized or
-//      view-relative coordinates the rest of this file deals in.
-//      Callers fetch `frontmostTree()` once per request, extract the
-//      root frame's pixel dimensions, then scale each normalized
-//      grid point into that pixel frame before the bridge call.
-//      Without this conversion the sweep walks sub-pixel coordinates
-//      near `(0,0)` on every device and returns empty `children`
-//      regardless of what's on screen.
-//
-// Split out of `PaneCoordinator.accessibilitySweep(paneId:step:)` per
-// AGENTS.md's "pure math namespaces / decision types" convention so the
-// matrix (grid density, dedup uniqueness, coord scaling) is unit-
-// testable without a live sim. The bridge IPC + JSON wrapping stay in
-// PaneCoordinator.
 
 import CoreGraphics
 import CoreSimulatorBridge
 import Foundation
 
+/// Pure math for `pane.ax.sweep`. Pieces:
+///
+///   1. `gridPoints(step:)`, the grid of normalized [0,1)² coordinates
+///      the daemon walks. The daemon scales each one to pixels (via
+///      `pixelPoint(normalized:screen:)`) before handing to the bridge,
+///      so the grid stays portable across device families. Generator
+///      is sample-on-step (anchor at 0); last sample on each axis is
+///      the largest `n*step < 1.0`.
+///
+///   2. `dedupKey(element:)`, the canonical key for collapsing the N
+///      cells × ~1 element per cell into the unique-element set.
+///      Combines role + identifier + label + frame so two grid points
+///      that hit the same element produce identical keys and elements
+///      that genuinely differ (same role + identifier + frame, different
+///      label = mid-transition state change) keep both. Order-stable
+///      "first sighting wins" is the responsibility of the caller's
+///      collect loop, not this helper.
+///
+///   3. `screenSize(fromTree:)` + `pixelPoint(normalized:screen:)`,
+///      the normalized-to-pixel conversion. AXPTranslator's
+///      `objectAtPoint:displayId:bridgeDelegateToken:` takes absolute
+///      display-space pixel coordinates, *not* the normalized or
+///      view-relative coordinates the rest of this file deals in.
+///      Callers fetch `frontmostTree()` once per request, extract the
+///      root frame's pixel dimensions, then scale each normalized
+///      grid point into that pixel frame before the bridge call.
+///      Without this conversion the sweep walks sub-pixel coordinates
+///      near `(0,0)` on every device and returns empty `children`
+///      regardless of what's on screen.
+///
+/// Split out of `PaneCoordinator.accessibilitySweep(paneId:step:)` per
+/// AGENTS.md's "pure math namespaces / decision types" convention so the
+/// matrix (grid density, dedup uniqueness, coord scaling) is unit-
+/// testable without a live sim. The bridge IPC + JSON wrapping stay in
+/// PaneCoordinator.
 enum AXSweep {
     /// What to do with one `elementAtPoint` throw inside the sweep
     /// loop. Routine misses (sparse AX coverage, blank canvas

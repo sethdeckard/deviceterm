@@ -1,28 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// StatusItemController: the daemon's menu bar presence.
-//
-// One `NSStatusItem` in the system status bar. Badge format is
-// the single source of truth referenced from `docs/ARCHITECTURE.md`,
-// the `Tests/Manual/` checklists, and the e2e playbook's status-item
-// capture:
-//
-//   - Hidden when 0 owned booted sims.
-//   - Visible when N > 0, as a monochrome iPhone glyph followed by N.
-//
-// The glyph is an SF Symbol drawn as a template image, so AppKit owns
-// its coloring and renders it for the status button's current
-// appearance and state rather than burning in one color.
-//
-// Beyond the badge, the item carries an `NSMenu` that lists every
-// owned booted sim with a "Shut Down …" action (plus a "Shut Down
-// All"). A detached sim stays owned and counted, so this is how a user
-// reclaims one that outlived its window once the main GUI is gone.
-//
-// The controller polls `DeviceCoordinator.listOwnedBooted()` on a
-// slow timer and derives *both* the badge and the menu from that one
-// snapshot per tick, so they can't disagree across two CoreSimulator
-// reads.
 
 import AppKit
 
@@ -80,6 +56,29 @@ private func shortUDID(_ udid: String) -> String {
     String(udid.prefix(8)).uppercased()
 }
 
+/// The daemon's menu bar presence.
+///
+/// One `NSStatusItem` in the system status bar. Badge format is
+/// the single source of truth referenced from `docs/ARCHITECTURE.md`,
+/// the `Tests/Manual/` checklists, and the e2e playbook's status-item
+/// capture:
+///
+///   - Hidden when 0 owned booted sims.
+///   - Visible when N > 0, as a monochrome iPhone glyph followed by N.
+///
+/// The glyph is an SF Symbol drawn as a template image, so AppKit owns
+/// its coloring and renders it for the status button's current
+/// appearance and state rather than burning in one color.
+///
+/// Beyond the badge, the item carries an `NSMenu` that lists every
+/// owned booted sim with a "Shut Down …" action (plus a "Shut Down
+/// All"). A detached sim stays owned and counted, so this is how a user
+/// reclaims one that outlived its window once the main GUI is gone.
+///
+/// The controller polls `DeviceCoordinator.listOwnedBooted()` on a
+/// slow timer and derives *both* the badge and the menu from that one
+/// snapshot per tick, so they can't disagree across two CoreSimulator
+/// reads.
 @MainActor
 public final class StatusItemController {
     /// SF Symbol drawn as a template image ahead of the count. Held as
@@ -137,8 +136,9 @@ public final class StatusItemController {
     /// only the count, so rebuilding an `NSImage` per refresh would be
     /// pure waste.
     ///
-    /// `isTemplate` is the load-bearing line: it hands the glyph's
-    /// coloring to AppKit instead of burning in one color.
+    /// The menu bar's light and dark appearances depend on `isTemplate`:
+    /// it hands the glyph's coloring to AppKit instead of burning in one
+    /// color.
     /// `accessibilityDescription` labels the glyph for VoiceOver,
     /// which otherwise has only a bare digit to read.
     ///

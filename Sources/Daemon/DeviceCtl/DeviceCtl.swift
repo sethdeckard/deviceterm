@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceCtl: thin wrapper around `xcrun devicectl list devices`, the
-// usbmux/lockdown enumeration that works **without** an RSD tunnel up.
-//
-// This is the roster source for physically-connected devices: unlike a
-// `getifaddrs` tunnel sweep (which sees nothing until some trusted client
-// has already brought a tunnel up), `devicectl list` reaches the device
-// over usbmux and returns its **real UDID**, name, model, and, when a
-// tunnel *is* up, the device's tunnel IP. The daemon uses it both to
-// populate the picker (tunnel-down, the common case) and, during attach,
-// to read the `tunnelIPAddress` that correlates a UDID to the `utun`
-// interface its keepalive just brought up (`TunnelKeepalive`).
-//
-// Parsing is split from the subprocess so the JSON decode is pure and
-// unit-tested against a fixture; `listPhysicalDevices()` runs the tool and
-// is degraded-mode tolerant: any failure (tool missing, non-zero exit,
-// malformed JSON) yields an empty roster rather than throwing, so "no
-// devices" and "couldn't tell" are one answer to the caller.
 
 import Foundation
 
+/// Thin wrapper around `xcrun devicectl list devices`, the
+/// usbmux/lockdown enumeration that works **without** an RSD tunnel up.
+///
+/// This is the roster source for physically-connected devices: unlike a
+/// `getifaddrs` tunnel sweep (which sees nothing until some trusted client
+/// has already brought a tunnel up), `devicectl list` reaches the device
+/// over usbmux and returns its **real UDID**, name, model, and, when a
+/// tunnel *is* up, the device's tunnel IP. The daemon uses it both to
+/// populate the picker (tunnel-down, the common case) and, during attach,
+/// to read the `tunnelIPAddress` that correlates a UDID to the `utun`
+/// interface its keepalive just brought up (`TunnelKeepalive`).
+///
+/// Parsing is split from the subprocess so the JSON decode is pure and
+/// unit-tested against a fixture; `listPhysicalDevices()` runs the tool and
+/// is degraded-mode tolerant: any failure (tool missing, non-zero exit,
+/// malformed JSON) yields an empty roster rather than throwing, so "no
+/// devices" and "couldn't tell" are one answer to the caller.
 enum DeviceCtl {
     // MARK: - Decoded payload
 
