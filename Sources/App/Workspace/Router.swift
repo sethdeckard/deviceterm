@@ -428,18 +428,19 @@ final class Router {
         case let .setTabProtected(tabID, isProtected):
             setTabProtected(tab: tabID, isProtected: isProtected)
 
-        case let .attachSimPane(tabID, udid, displayName, family, atIndex, anchor):
+        case let .attachSimPane(tabID, udid, displayName, family):
             attachPaneOptimistically(
                 tab: tabID,
                 spec: simAttachSpec(
                     tab: tabID,
                     udid: udid,
                     displayName: displayName,
-                    family: family,
-                    atIndex: atIndex,
-                    anchor: anchor
+                    family: family
                 )
             )
+
+        case let .resurrectSimPane(tabID, udid):
+            await resurrectSimPane(tab: tabID, udid: udid)
 
         case let .detachSimPane(tabID, udid, mode, expecting):
             await detachPane(
@@ -517,7 +518,7 @@ final class Router {
                 // be handed the same position. See `simRecoveryOrder`.
                 let order = simRecoveryOrder(in: tab)
                 for pane in tab.simPanes {
-                    recoverSimPane(
+                    reattachSimPaneInPlace(
                         pane,
                         atIndex: order[pane.udid.lowercased()],
                         tab: tab.id,
@@ -763,9 +764,21 @@ final class Router {
         return order
     }
 
+    /// Swap a mounted sim pane for an attaching placeholder in the leaf it
+    /// already holds, then re-run the attach against it.
+    ///
+    /// Shared by helper recovery and the post-reboot resurrect. Both must
+    /// preserve the pane's slot, including its split axis, nesting, and
+    /// divider proportions keyed by tree path. They differ only in whether
+    /// the caller must first close a surviving daemon record.
+    /// `PaneTreeOps.replace` under `replaceSimPaneWithPending` is what makes
+    /// that preservation hold: replacing in place keeps the tree and its
+    /// stored extents, while removing and reinserting can collapse a
+    /// two-child parent, and resets the reinserted leaf's extent.
+    ///
     /// A pane with no entry in the recovery order appends rather than being
     /// given a guessed position.
-    private func recoverSimPane(
+    private func reattachSimPaneInPlace(
         _ pane: SimPaneState,
         atIndex index: Int?,
         tab tabID: TabID,
@@ -1768,16 +1781,12 @@ final class Router {
         tab tabID: TabID,
         udid: String,
         displayName: String?,
-        family: String? = nil,
-        atIndex: Int? = nil,
-        anchor: ResurrectAnchor? = nil
+        family: String? = nil
     ) -> PendingAttachSpec {
         PendingAttachSpec(
             target: .sim(udid: udid),
             displayName: displayName,
             family: family,
-            atIndex: atIndex,
-            anchor: anchor,
             method: .deviceAttach,
             attach: { [weak self, daemon] primary in
                 let answer = try await daemon.attachDeviceWithGeneration(
@@ -1839,8 +1848,6 @@ final class Router {
             target: .device(deviceId: deviceId),
             displayName: displayName,
             family: nil,
-            atIndex: nil,
-            anchor: nil,
             method: .physicalDeviceAttach,
             attach: { [daemon] primary in
                 try await daemon.attachPhysicalDevice(
@@ -1876,13 +1883,13 @@ final class Router {
     /// the user acts, then run the attach RPC **off** the serial drain so a
     /// slow attach never freezes navigation. On success the placeholder
     /// swaps for the real pane; on failure it shows the error + Retry.
-    /// Discovery / resurrect / menu / CLI claim / device picker funnel here.
+    /// Discovery / menu / CLI claim / device picker funnel here.
     private func attachPaneOptimistically(tab tabID: TabID, spec: PendingAttachSpec) {
         guard let window = workspace.windowContaining(tab: tabID),
             let tab = window.tabs.tab(id: tabID) else { return }
         // Target-based dedup across mounted + pending panes so discovery
-        // (every 2s), menu, CLI, picker, and resurrect can't stack a second
-        // (or a duplicate failed) placeholder for the same target.
+        // (every 2s), menu, CLI, and picker can't stack a second (or a
+        // duplicate failed) placeholder for the same target.
         guard !TabListViewModel.isTargetPresent(spec.target, in: tab) else { return }
         // The daemon session is always the tab's primary terminal (the
         // ownership/cap binding); `lastFocusedTerminal` is only the
@@ -1894,12 +1901,10 @@ final class Router {
                 id: pendingId,
                 target: spec.target,
                 displayName: spec.displayName,
-                family: spec.family,
-                atIndex: spec.atIndex
+                family: spec.family
             ),
             toTab: tabID,
-            spawningTerminal: spawningTerminalID,
-            anchor: spec.anchor
+            spawningTerminal: spawningTerminalID
         )
         spawnAttach(tab: tabID, pendingId: pendingId, spec: spec)
     }
@@ -2227,6 +2232,50 @@ final class Router {
         window.tabs.removeSimPane(udid: udid, fromTab: tabID)
     }
 
+    /// Re-attach a sim that shut down out from under its pane, into the leaf
+    /// that pane already holds. Dispatched by the `SimResurrect` watch.
+    ///
+    /// The daemon keeps the shutdown pane record for the overlay. Close that
+    /// terminal record with `.detach` before attaching its replacement; the
+    /// watched simulator is already Booted, and `.shutdown` would stop it
+    /// again.
+    ///
+    /// The window is re-resolved after the close, not just the pane: a tab
+    /// drag or tear-off moves it between windows by mutating the workspace
+    /// directly (`AppDelegate.moveTab`), outside the route drain, so the
+    /// window this started in can no longer hold the tab by the time the
+    /// close returns. Re-reading finds the tab where it is now; keeping the
+    /// captured one would return here having closed the record, stranding a
+    /// pane on a dead pane id with its resurrect watch already spent.
+    private func resurrectSimPane(tab tabID: TabID, udid: String) async {
+        guard let pane = workspace.windowContaining(tab: tabID)?
+            .tabs.tab(id: tabID)?.simPanes
+            .first(where: { $0.udid == udid }) else { return }
+        do {
+            try await daemon.closePane(
+                paneId: pane.paneId,
+                mode: .detach,
+                expecting: pane.attachment
+            )
+        } catch {
+            logError("pane.closeById failed for \(udid): \(error)")
+        }
+        guard let window = workspace.windowContaining(tab: tabID),
+            let tab = window.tabs.tab(id: tabID),
+            let mounted = tab.simPanes.first(where: { $0.udid == udid }) else { return }
+        // The position comes from the tab-wide numbering, not from the array,
+        // because the array excludes placeholders an earlier recovery left
+        // behind and those still hold their positions. Indexing the array
+        // would hand this pane a position one of them has already claimed,
+        // and `restoredIndex` resolves a tie by arrival order.
+        reattachSimPaneInPlace(
+            mounted,
+            atIndex: simRecoveryOrder(in: tab)[udid.lowercased()],
+            tab: tabID,
+            window: window
+        )
+    }
+
     /// Retry a failed pending pane: re-run the attach whose first try
     /// threw. Guarded on the `.failed` phase so a stray retry while an
     /// attach is already in flight is a no-op (re-entrancy).
@@ -2241,8 +2290,11 @@ final class Router {
         // throws away the paneId its cleanup needs.
         //
         // Rebuild the attach spec from the placeholder's target. Retry only
-        // re-runs the attach: the resurrect metadata was consumed at the
-        // original insert, so the sim spec's nil defaults are correct here.
+        // re-runs the attach, and the spec carries no placement: the
+        // placeholder is already in the tree, and the position it claimed
+        // rides on `PendingPaneState.atIndex` until the pane mounts, so a
+        // pane re-attached after a failed recovery still lands in its own
+        // slot rather than appending.
         let spec: PendingAttachSpec
         switch pending.target {
         case let .sim(udid):
@@ -2467,17 +2519,15 @@ private extension Router {
     /// off the serial drain so navigation never freezes, then reconcile with
     /// the same cancel / leak-cleanup guards, the same "Name · Type"
     /// composition, and the same failure rendering. This carries only what
-    /// diverges: the resurrect metadata (sim-only), the RPC + its auth model,
-    /// the name resolution, and the concrete pane build + mount.
+    /// diverges: the placeholder's sizing hint, the RPC + its auth model, the
+    /// name resolution, and the concrete pane build + mount.
     struct PendingAttachSpec {
         let target: PaneTarget
         let displayName: String?
-        /// Placement metadata: sim-only, and read only at placeholder-insert
-        /// time. Nil for a device attach, whose recovery keeps the existing leaf
-        /// rather than restoring a recorded position.
+        /// Coarse device family, read only at placeholder-insert time, so the
+        /// placeholder takes the metrics the real pane will and the success
+        /// swap doesn't resize. Nil → phone-default, corrected on swap.
         let family: String?
-        let atIndex: Int?
-        let anchor: ResurrectAnchor?
         /// The wire method `attach` sends, for the deadline error's text.
         let method: RPCMethod
         /// The attach RPC, given the tab's primary terminal (the

@@ -17,8 +17,10 @@ import TerminalSurface
 /// attribute to the primary terminal's session env; shim boot claims arrive
 /// through the relay owned by the exact terminal that initiated the boot.
 ///
-/// App-wide discovery snapshots + resurrect dispatch attachSimPane /
-/// detachSimPane routes through the Router: one path for all pane mounting.
+/// App-wide discovery snapshots dispatch attachSimPane through the Router
+/// to mount a sim the tab does not hold. A pane whose sim shuts down
+/// dispatches resurrectSimPane instead, re-attaching into the leaf it
+/// already holds.
 @MainActor
 final class TabContentViewController: NSViewController {
     let tabID: TabID

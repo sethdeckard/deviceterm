@@ -548,7 +548,7 @@ final class SimPaneActionCoordinator {
                     udid: udid,
                     displayName: displayName
                 ) { [weak self] in
-                    self?.dispatchResurrect(udid: udid, displayName: displayName)
+                    self?.dispatchResurrect(udid: udid)
                 }
 
             case .rendering:
@@ -579,45 +579,15 @@ final class SimPaneActionCoordinator {
         }
     }
 
-    /// Re-attach a sim that shut down out from under its pane, restoring
-    /// its tree position. Fired by the SimResurrect watch set in
-    /// `onStateChange`.
-    private func dispatchResurrect(udid: String, displayName: String) {
-        guard let tabState = tabListVM.tab(id: tabID),
-            let index = tabState.simPanes.firstIndex(where: { $0.udid == udid })
-        else { return }
-        _ = displayName  // kept on the signature for the watch overlay above
-        let family = tabState.simPanes[index].family
-        let slot = PaneSlot.sim(udid: udid)
-        let leaves = PaneTreeOps.leavesInOrder(tabState.paneTree)
-        let anchor: ResurrectAnchor?
-        if let position = leaves.firstIndex(of: slot) {
-            if position > 0 {
-                anchor = ResurrectAnchor(slot: leaves[position - 1], side: .after)
-            } else if position + 1 < leaves.count {
-                anchor = ResurrectAnchor(slot: leaves[position + 1], side: .before)
-            } else {
-                anchor = nil  // sole leaf, nothing to anchor against
-            }
-        } else {
-            anchor = nil
-        }
-        // Straight to the route, deliberately not through
-        // `requestClosePane`: this detach is the first half of a re-attach,
-        // not a close the user asked for, and routing it through the prompt
-        // would interrupt a resurrect to ask about a sim that is already
-        // shut down.
-        router.dispatch(.detachSimPane(tab: tabID, udid: udid, mode: .detach))
-        router.dispatch(
-            .attachSimPane(
-            tab: tabID,
-            udid: udid,
-            displayName: nil,
-            family: family,
-            atIndex: index,
-            anchor: anchor
-        )
-            )
+    /// Re-attach a sim that shut down out from under its pane. Fired by the
+    /// SimResurrect watch set in `onStateChange`.
+    ///
+    /// Dispatch one `.resurrectSimPane` route so the handler can replace the
+    /// pane's existing leaf with a placeholder, preserving its split. It
+    /// bypasses `requestClosePane` because this is an automatic pane-record
+    /// replacement, not a user-initiated close.
+    private func dispatchResurrect(udid: String) {
+        router.dispatch(.resurrectSimPane(tab: tabID, udid: udid))
     }
 
     private func screenshotDestination(for displayName: String) -> String {

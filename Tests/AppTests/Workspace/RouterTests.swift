@@ -2122,6 +2122,23 @@ struct RouterTests {
         return PaneTreeOps.leavesInOrder(tree)
     }
 
+    /// The whole tree, not just its leaf order. A split's axis and extents
+    /// are exactly what a remove-then-reinsert loses while leaf order
+    /// survives, so asserting placement stability needs the node itself.
+    private func paneTree(
+        _ workspace: WorkspaceViewModel,
+        tab: TabID = TabID(value: 1)
+    ) -> PaneNode? {
+        workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tab)?.paneTree
+    }
+
+    /// Every split axis in the tree, so a test can pin the arrangement it
+    /// means to exercise rather than assume the fixture produced one.
+    private func splitAxes(_ node: PaneNode) -> [SplitAxis] {
+        guard case let .split(axis, children, _) = node else { return [] }
+        return [axis] + children.flatMap(splitAxes)
+    }
+
     @Test
     func attachInsertsPendingPaneBeforeRPCResolves() async {
         // The whole point: the placeholder appears the instant the user
@@ -2865,6 +2882,113 @@ struct RouterTests {
         // order means the slot survived it rather than that nothing ran.
         #expect(simPanes(workspace).map(\.paneId) == ["P2"])
         #expect(leaves(workspace) == before)
+    }
+
+    @Test
+    func resurrectSimPaneKeepsTheSplitItWasArrangedInto() async throws {
+        // Resurrection must replace the leaf in place: removing it compacts
+        // the two-child split, losing its vertical axis and extents, so a
+        // sim the user stacked under a terminal comes back side-by-side at a
+        // default size. Comparing the whole node catches that; leaf order
+        // alone does not.
+        let (router, workspace) = await makeRecoveryFixture(FakeDaemonClient())
+        router.dispatch(
+            .openTerminalPane(
+                tab: TabID(value: 1),
+                anchor: .sim(udid: "U"),
+                axis: .vertical,
+                side: .after
+            )
+        )
+        await settle()
+        let before = try #require(paneTree(workspace))
+        // Pin the precondition: without a vertical split in the tree there is
+        // no axis for the resurrect to lose, and the assertion below would
+        // hold no matter what the handler did.
+        #expect(splitAxes(before).contains(.vertical))
+        router.dispatch(.resurrectSimPane(tab: TabID(value: 1), udid: "U"))
+        await settle()
+        // The fresh pane id proves the round trip ran, so an unchanged tree
+        // means the slot survived it rather than that nothing happened.
+        #expect(simPanes(workspace).map(\.paneId) == ["P2"])
+        #expect(paneTree(workspace) == before)
+    }
+
+    @Test
+    func resurrectSimPaneClosesTheStaleRecordBeforeReattaching() async {
+        // The helper still holds the terminal pane record. Remove it with
+        // `.detach` before re-attaching; the watched simulator is Booted, and
+        // `.shutdown` would stop it again.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeRecoveryFixture(fake)
+        router.dispatch(.resurrectSimPane(tab: TabID(value: 1), udid: "U"))
+        await settle()
+        #expect(fake.closePaneCalls.map(\.paneId) == ["P1"])
+        #expect(fake.closePaneCalls.map(\.mode) == [.detach])
+        #expect(simPanes(workspace).map(\.paneId) == ["P2"])
+        #expect(pendingPanes(workspace).isEmpty)
+    }
+
+    @Test
+    func resurrectSimPaneTakesItsPositionFromTheTabWideNumbering() async throws {
+        // A placeholder an earlier recovery left failed still holds the
+        // position it was minted with, and it is not in `simPanes`. Reading
+        // the array for a resurrecting pane's position would hand it that
+        // same number. Because `restoredIndex` resolves equal claims by
+        // completion order, the array can reorder.
+        let fake = FakeDaemonClient()
+        var attachCount = 0
+        fake.attachResponse = { _, _ in
+            attachCount += 1
+            return PaneCreateResponse(paneId: "P\(attachCount)", scale: nil, family: "phone")
+        }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "A", displayName: "A"))
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "B", displayName: "B"))
+        await settle()
+        #expect(simPanes(workspace).map(\.udid) == ["A", "B"])
+        // Strand A as a failed placeholder holding position 0, with B mounted
+        // back beside it.
+        fake.attachError = FakeDaemonError.attachFailed
+        router.dispatch(.recoverPanes)
+        await settle()
+        fake.attachError = nil
+        let bPending = try #require(
+            pendingPanes(workspace).first { $0.target == .sim(udid: "B") }
+        )
+        router.dispatch(.retryPendingPane(tab: TabID(value: 1), pendingId: bPending.id))
+        await settle()
+        #expect(simPanes(workspace).map(\.udid) == ["B"])
+        #expect(pendingPanes(workspace).map(\.atIndex) == [0])
+        // B sits at array index 0 now, but position 0 is A's. Fail B's
+        // re-attach so its placeholder stays and the position it claimed is
+        // readable: the claim is the thing under test, and a successful
+        // resurrect would swallow it. Whichever mounts last wins index 0, so
+        // duplicate claims reorder the array for one of the two completion
+        // orders; asserting the claims catches both.
+        fake.attachError = FakeDaemonError.attachFailed
+        router.dispatch(.resurrectSimPane(tab: TabID(value: 1), udid: "B"))
+        await settle()
+        let claims = pendingPanes(workspace)
+            .reduce(into: [String: Int?]()) { out, pending in
+                if case let .sim(udid) = pending.target { out[udid] = pending.atIndex }
+            }
+        #expect(claims["A"] == 0)
+        #expect(claims["B"] == 1)
+    }
+
+    @Test
+    func resurrectSimPaneIgnoresAUdidTheTabNoLongerHolds() async {
+        // The watch fires off a poll, so the pane can be closed between the
+        // sample and the drain. Nothing to re-attach, and nothing to close.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeRecoveryFixture(fake)
+        router.dispatch(.resurrectSimPane(tab: TabID(value: 1), udid: "GONE"))
+        await settle()
+        #expect(fake.closePaneCalls.isEmpty)
+        #expect(simPanes(workspace).map(\.paneId) == ["P1"])
     }
 
     @Test

@@ -32,8 +32,11 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
     /// swap doesn't resize. nil → `.unknown` → phone-default.
     let family: String?
     /// The typed-array position to take when the pane mounts, recorded from
-    /// where it came from (resurrect fidelity; mirrors `Route.attachSimPane`'s
-    /// `atIndex`). nil appends.
+    /// where it came from so a pane being re-attached lands back in its own
+    /// slot. Set only by the in-place re-attach paths (helper recovery and
+    /// the post-reboot resurrect), which read it off `simRecoveryOrder`; a
+    /// pane arriving in the tab for the first time has no position to
+    /// restore and passes nil, which appends.
     ///
     /// Mutable because recovery renumbers a tab's placeholders together: a
     /// placeholder that outlived an earlier recovery still carries the index

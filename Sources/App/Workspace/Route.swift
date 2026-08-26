@@ -149,18 +149,22 @@ enum Route: Sendable {
         terminal: TerminalPaneID,
         mode: PaneCloseMode
     )
-    /// Mount a sim pane on a tab (device.attach). Discovery, resurrect,
-    /// and orphan re-attach all funnel through here, one mounting path.
-    /// `atIndex` restores a pane to its original slot in the typed
-    /// `simPanes` array on resurrect; nil appends. `anchor` carries
-    /// the pane's pre-detach tree neighbor so resurrect lands the
-    /// fresh leaf back where the user saw it instead of next to the
-    /// spawning terminal. `nil` falls back to the spawning-terminal
-    /// placement that the discovery / orphan-recovery / claim paths
-    /// expect. `displayName == nil` tells the Router to look up the
-    /// real device name via `daemon.deviceList`, used by callers
-    /// (`deviceterm pane attach`) that don't have the name handy and
-    /// would otherwise have to pass a UDID-prefix placeholder.
+    /// Mount a sim pane on a tab (device.attach), for a sim the tab does not
+    /// already hold: the discovery poll (which is also how a shim-intercepted
+    /// boot arrives) and the `deviceterm pane attach` verb. The new leaf
+    /// lands next to the spawning terminal. Orphan re-attach and the two
+    /// in-place re-attach paths reach the same attach without a route,
+    /// because each has its own placeholder to insert or reuse.
+    ///
+    /// There is no placement metadata to carry: a pane arriving here is new
+    /// to the tab. Mounted panes keep their leaf and typed-array position
+    /// through `reattachSimPaneInPlace`, called directly by helper recovery
+    /// and by `resurrectSimPane`.
+    ///
+    /// `displayName == nil` tells the Router to look up the real device
+    /// name via `daemon.deviceList`, used by callers (`deviceterm pane
+    /// attach`) that don't have the name handy and would otherwise have to
+    /// pass a UDID-prefix placeholder.
     ///
     /// `family` (wire string, optional) sizes the in-flight placeholder
     /// pane with the same metrics the real pane will take so the success
@@ -171,10 +175,19 @@ enum Route: Sendable {
         tab: TabID,
         udid: String,
         displayName: String?,
-        family: String? = nil,
-        atIndex: Int? = nil,
-        anchor: ResurrectAnchor? = nil
+        family: String? = nil
     )
+    /// Re-attach a mounted sim that shut down out from under its pane,
+    /// into the leaf that pane already holds.
+    ///
+    /// The pane becomes an ordinary attaching placeholder in its own slot,
+    /// so the enclosing split's axis, the nesting depth, and the divider
+    /// proportions (keyed by tree path) all survive a reboot. Removing and
+    /// reinserting can collapse a two-child parent, and resets the
+    /// reinserted leaf's stored extent.
+    ///
+    /// Dispatched by the `SimResurrect` watch, never by the user.
+    case resurrectSimPane(tab: TabID, udid: String)
     /// `expecting` fences the close to one admission. `dispatch` only
     /// enqueues onto the serial drain, so before the handler runs a
     /// resurrect can replace the tab's pane for this udid, or a re-attach
@@ -198,10 +211,10 @@ enum Route: Sendable {
     /// tab's primary-terminal session (the GUI threads the target
     /// session explicitly because its one shared connection can't pick
     /// the tab via connection-auth). `displayName == nil` falls back to
-    /// the attach response's `name` / `deviceType`. Unlike sims, there is no
-    /// `atIndex` / `anchor` placement metadata: helper-restart recovery keeps
-    /// a device pane's slot by replacing its leaf in place, so there is no
-    /// original position to record.
+    /// the attach response's `name` / `deviceType`. Like the sim case it
+    /// carries no placement metadata, and for the same reason: a device
+    /// coming back keeps its slot by having its leaf replaced in place, so
+    /// there is no original position to record.
     case attachDevicePane(
         tab: TabID,
         deviceId: String,
