@@ -301,18 +301,56 @@ static BOOL CSBIsDeviceDisconnected(NSError *error) {
     return YES;
 }
 
+/// True for the NULL-build failure `_sendMessage:` reports when the builder
+/// handed it nothing. The message never reached the legacy client, so this
+/// failure says nothing about the HID port.
+static BOOL CSBIsNilMessage(NSError *error) {
+    return error != nil
+        && [error.domain isEqualToString:kCSBErrorDomain]
+        && error.code == CSBHIDClientErrorNilMessage;
+}
+
 /// Build and send an Indigo message, recovering once from a dead HID port.
 /// `builder` must return a freshly allocated message on each call, since
 /// `_sendMessage:` takes ownership and frees it. On a "device
 /// disconnected" failure, reconnect and rebuild (the first message is
 /// already freed), then retry exactly once. Bounding the retry to one
 /// keeps a genuinely wedged port from looping.
+///
+/// Only a disconnect reconnects; a send timeout or any other error is
+/// reported as it stands. A NULL build additionally says in its error why
+/// retrying it is pointless, rather than leaving the next caller to work
+/// that out: every builder is a dlsym'd Indigo helper plus local
+/// arithmetic, none of them reads `legacyClient`, and that client is the
+/// only state a reconnect replaces, so rebuilding behind one returns the
+/// same NULL.
+///
+/// A reconnect that itself fails reports its own error. Falling back to
+/// the disconnect that prompted it would name a condition the reconnect
+/// was the response to, and hide the reason the response didn't land.
 - (BOOL)_sendBuiltMessage:(IndigoMessage *(NS_NOESCAPE ^)(void))builder
                     error:(NSError **)error {
     NSError *sendError = nil;
     if ([self _sendMessage:builder() error:&sendError]) return YES;
-    if (CSBIsDeviceDisconnected(sendError) && [self _reconnectLegacyClientWithError:NULL]) {
-        return [self _sendMessage:builder() error:error];
+    if (CSBIsDeviceDisconnected(sendError)) {
+        NSError *reconnectError = nil;
+        if ([self _reconnectLegacyClientWithError:&reconnectError]) {
+            return [self _sendMessage:builder() error:error];
+        }
+        if (error) *error = reconnectError ?: sendError;
+        return NO;
+    }
+    if (CSBIsNilMessage(sendError)) {
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain
+                                         code:CSBHIDClientErrorNilMessage
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Indigo message builder returned NULL; nothing was sent. "
+                                            "Not retried: the builder reads no HID client state, so a "
+                                            "reconnect and rebuild return the same NULL.",
+            }];
+        }
+        return NO;
     }
     if (error) *error = sendError;
     return NO;

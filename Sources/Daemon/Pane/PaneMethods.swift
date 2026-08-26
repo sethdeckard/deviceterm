@@ -1109,6 +1109,27 @@ public enum PaneMethods {
                 message: "short_id alphabet exhausted; retry the request"
             )
 
+        case let .inputNotAdmitted(_, operation):
+            // The pane's input lane refused the gesture, so nothing reached
+            // the digitizer. `serverError` rather than `invalidParams`: the
+            // request was well-formed and the caller can retry it.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.\(operation.label): input lane refused the gesture; nothing was sent, retry"
+            )
+
+        case let .inputSuperseded(_, operation):
+            // A transfer barrier made the gesture's captured generation
+            // stale. The message claims neither outcome it cannot support:
+            // the barrier precedes the ownership commit and the transfer can
+            // abort, and sends that completed before the bump landed, so
+            // both ownership and delivery are unknown from here.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.\(operation.label): ownership transfer overlapped this gesture; "
+                    + "delivery is unknown"
+            )
+
         case .inputNotQuiesced:
             // Adoption aborted because the prior owner's held input couldn't
             // be released; the transfer didn't happen. Retryable.

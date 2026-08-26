@@ -232,25 +232,32 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) throws {
         if edgeUnsupported { throw DeviceBackendError.unsupportedEdgeGesture }
+        if failSends { throw DeviceBackendError.notActive }
         edgeDownPoints.append(point)
         edgeValues.append(edge)
     }
 
     func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) throws {
         if edgeUnsupported { throw DeviceBackendError.unsupportedEdgeGesture }
+        if failSends { throw DeviceBackendError.notActive }
         edgeMovePoints.append(point)
         edgeValues.append(edge)
     }
 
     func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) throws {
         if edgeUnsupported { throw DeviceBackendError.unsupportedEdgeGesture }
+        if failSends { throw DeviceBackendError.notActive }
         edgeUpPoints.append(point)
         edgeValues.append(edge)
     }
 
-    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
+    func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {
+        if failSends { throw DeviceBackendError.notActive }
+    }
 
-    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {}
+    func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) throws {
+        if failSends { throw DeviceBackendError.notActive }
+    }
 
     func keyDown(hidUsage: UInt32, generation: UInt64) throws { keyDownUsages.append(hidUsage) }
 

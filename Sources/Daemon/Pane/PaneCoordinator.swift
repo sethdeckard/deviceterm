@@ -1632,6 +1632,23 @@ public actor PaneCoordinator {
         // invalidates the holder's remaining sends and frees the contact, so
         // the lane emits nothing and only has to stop handing the pane out.
         await record.contactLane?.transfer()
+        // The lane just dropped the live lease an open edge drag was holding,
+        // so the latch describing that drag can no longer route a `.lift` to
+        // it: the lift finds no lease and is dropped. What the latch can
+        // still do is carry a `.move` into a *fresh* lease and send an edge
+        // drag with no press under it, which is what `edgeTouch`'s no-latch
+        // branch exists to refuse. So drop it in the same step.
+        //
+        // This says nothing about whether the device still holds contact. The
+        // quiesce below is what frees it, and a quiesce that fails aborts the
+        // transfer while leaving it possibly down (`inputNotQuiesced`). The
+        // latch could not have released it either way.
+        //
+        // Cleared here rather than where a gesture reports hitting the
+        // barrier, because a drag that is merely open, with no request in
+        // flight to notice it, has nothing to report and the same stale
+        // latch.
+        record.liveEdgeContact = nil
         let inputClean = await record.backend?.quiesceInputForTransfer() ?? true
 
         // (5) Re-validate after the awaits. Bail if a close/shutdown/fail
@@ -2209,7 +2226,8 @@ public actor PaneCoordinator {
     /// Returns nil when the lane refused admission: the pane closed, it
     /// transferred, a held contact has not been recovered yet, or the caller's
     /// own task was cancelled while queued. A nil result means nothing was
-    /// sent.
+    /// sent, and every caller has to answer for it: `swipe` reports it as zero
+    /// samples, and `requireContactLane` throws it for the verbs that can't.
     private func withContactLane<T>(
         _ record: Record,
         backend: any DeviceBackend,
@@ -2238,6 +2256,103 @@ public actor PaneCoordinator {
             await lane.releaseAfterFailure(ticket.id)
             throw error
         }
+    }
+
+    /// `withContactLane` for the verbs whose ack is a bare `ok`.
+    ///
+    /// Those acks have no field that could report a gesture the lane never
+    /// admitted, so returning normally on refusal tells the caller the
+    /// device was driven when nothing reached it. Throw instead, naming the
+    /// verb that was refused.
+    ///
+    /// Returning also asserts the sends were issued against a generation
+    /// still current when the gesture finished, because neither backend
+    /// throws on a stale one: they drop the send and return. That is the
+    /// strongest claim available here, and it is weaker than delivery. A
+    /// device backend acknowledges on enqueue, so `ok` never means the
+    /// guest saw the input.
+    ///
+    /// `swipe` doesn't come through here. Its ack carries the sample count,
+    /// so it can and does report a refusal as zero samples.
+    private func requireContactLane(
+        _ record: Record,
+        backend: any DeviceBackend,
+        preemptible: Bool,
+        generation: UInt64,
+        paneId: UUID,
+        operation: PaneOperation,
+        _ body: (GestureFence) async throws -> Void
+    ) async throws {
+        var stale = false
+        let admitted: Void? = try await withContactLane(
+            record,
+            backend: backend,
+            preemptible: preemptible,
+            generation: generation
+        ) { fence in
+            try await body(fence)
+            stale = generationWentStale(backend: backend, generation: generation)
+        }
+        guard admitted != nil else {
+            throw PaneError.inputNotAdmitted(paneId: paneId, operation: operation)
+        }
+        guard !stale else {
+            throw PaneError.inputSuperseded(paneId: paneId, operation: operation)
+        }
+    }
+
+    /// Whether a transfer made this gesture's captured input generation
+    /// stale before this sample.
+    ///
+    /// A transfer bumps the generation, and both backends then drop what
+    /// carries the old one without throwing: the simulator's `gatedSend`
+    /// returns false, the device's input queue skips the work item. What
+    /// this observes is the bump, not what became of any particular send.
+    /// Sends that completed before it landed as normal, so delivery may be
+    /// complete, partial, or absent, and this cannot tell which.
+    ///
+    /// Sample it immediately after the final backend call, while the gesture
+    /// still holds the lane. That detects exactly one thing: a generation
+    /// change observed during the body. It is not a delivery proof and it
+    /// does not make a later transfer harmless.
+    ///
+    /// Sampling after the lane release instead would also catch a transfer
+    /// landing in that suspension, and neither backend makes that worth
+    /// much. The simulator's sends have all completed by then, so it would
+    /// report a gesture nothing happened to. The device backend
+    /// acknowledges on enqueue, so its queued work can be discarded by a
+    /// bump arriving well after the request returned, which no sample point
+    /// reaches. The body window is the part that is at least about this
+    /// gesture.
+    private func generationWentStale(backend: any DeviceBackend, generation: UInt64) -> Bool {
+        !backend.isInputGenerationCurrent(generation)
+    }
+
+    /// Whether an admitted live phase should be sent, refusing the ones the
+    /// caller needs to hear about.
+    ///
+    /// A dropped `.lift` stays silent. It has no live lease it could
+    /// release: there is none, it belongs to a composite, its contact is a
+    /// different flavor, its generation has moved, or another lift is
+    /// already in flight against it. Forwarding it anyway could release
+    /// contact belonging to a `tap` or an App Switcher, which is what the
+    /// drop exists to prevent, so nothing was owed and nothing was sent.
+    ///
+    /// A dropped `.down` or `.move` is the live counterpart of a refused
+    /// composite: the caller asked for contact on a lane that is closed,
+    /// transferred, or still holding one it hasn't recovered, and a bare
+    /// `ok` would describe a gesture that never reached the digitizer.
+    private func requireLiveAdmission(
+        _ admitted: ContactLane.LiveAdmission,
+        phase: TouchPhase,
+        paneId: UUID,
+        operation: PaneOperation
+    ) throws -> Bool {
+        if admitted.send { return true }
+        guard phase == .lift else {
+            throw PaneError.inputNotAdmitted(paneId: paneId, operation: operation)
+        }
+        return false
     }
 
     /// Convert a wire coordinate into the pane's native surface space.
@@ -2276,11 +2391,13 @@ public actor PaneCoordinator {
         let point = native(x, y, for: input)
         // Not preemptible: the dwell is two frames, and cutting it short
         // reintroduces the contact too brief for a control to act on.
-        try await withContactLane(
+        try await requireContactLane(
             input.record,
             backend: input.backend,
             preemptible: false,
-            generation: input.generation
+            generation: input.generation,
+            paneId: paneId,
+            operation: .tap
         ) { fence in
             try await SimInputSynthesis.tap(
                 backend: input.backend,
@@ -2309,6 +2426,7 @@ public actor PaneCoordinator {
         try await sendLiveContact(
             input,
             paneId: paneId,
+            operation: .touch,
             point: native(CGPoint(x: x, y: y), for: input),
             phase: phase,
             edge: nil
@@ -2333,9 +2451,15 @@ public actor PaneCoordinator {
 
     /// Admit and send one live contact event, edge-tagged when `edge` is
     /// present and a plain touch when it isn't.
+    ///
+    /// `operation` is passed rather than derived from `edge`, which is nil
+    /// for an edge drag in an orientation with no home-gesture edge: a
+    /// refused edge touch has to name itself, not the plain touch it
+    /// resembles on the wire.
     private func sendLiveContact(
         _ input: AuthorizedInput,
         paneId: UUID,
+        operation: PaneOperation,
         point: CGPoint,
         phase: TouchPhase,
         edge: Int?
@@ -2348,7 +2472,13 @@ public actor PaneCoordinator {
             contact: contact,
             generation: input.generation
         )
-        guard admitted.send else { return }
+        guard try requireLiveAdmission(
+            admitted,
+            phase: phase,
+            paneId: paneId,
+            operation: operation
+        ) else { return }
+        var stale = false
         try await sendingLiveContact(admitted, on: lane) {
             if let edge {
                 try await SimInputSynthesis.edgeTouch(
@@ -2370,6 +2500,10 @@ public actor PaneCoordinator {
                     phase: phase
                 )
             }
+            stale = generationWentStale(backend: input.backend, generation: input.generation)
+        }
+        guard !stale else {
+            throw PaneError.inputSuperseded(paneId: paneId, operation: operation)
         }
     }
 
@@ -2411,13 +2545,34 @@ public actor PaneCoordinator {
         // than being tagged with an edge it didn't come from, and it
         // still tracks the cursor because the coordinates rotate through
         // the real orientation either way.
-        try await sendLiveContact(
-            input,
-            paneId: paneId,
-            point: CGPoint(x: rotated.x, y: rotated.y),
-            phase: phase,
-            edge: latched.edge
-        )
+        do {
+            try await sendLiveContact(
+                input,
+                paneId: paneId,
+                operation: .edgeTouch,
+                point: CGPoint(x: rotated.x, y: rotated.y),
+                phase: phase,
+                edge: latched.edge
+            )
+        } catch {
+            // A refused press must not leave the latch behind. The no-latch
+            // branch above is what refuses a move with no press under it,
+            // and a stale latch defeats it: the next move would go out as an
+            // edge drag from a contact that was never opened.
+            //
+            // Only a refusal, which is the one failure that proves nothing
+            // was sent and that no lease exists. A press whose *send* failed
+            // is ambiguous, and the lane holds a lease naming the contact,
+            // so the caller's own lift can still release it. Clearing the
+            // latch there would send that lift down the no-press branch and
+            // leave the contact held until the lane's expiry recovers it.
+            if phase == .down,
+                let paneError = error as? PaneError,
+                case .inputNotAdmitted = paneError {
+                input.record.liveEdgeContact = nil
+            }
+            throw error
+        }
     }
 
     func swipe(
@@ -2498,11 +2653,13 @@ public actor PaneCoordinator {
         let plan = AppSwitcherGesture.plan(for: input.record.presentationOrientation)
         let origin = plan.orientation.surfacePoint(displayedX: fromX, displayedY: fromY)
         let target = plan.orientation.surfacePoint(displayedX: toX, displayedY: toY)
-        try await withContactLane(
+        try await requireContactLane(
             input.record,
             backend: input.backend,
             preemptible: preemptible,
-            generation: input.generation
+            generation: input.generation,
+            paneId: paneId,
+            operation: .edgeSwipe
         ) { fence in
             try await SimInputSynthesis.edgeSwipe(
                 backend: input.backend,
@@ -2534,11 +2691,13 @@ public actor PaneCoordinator {
             operation: .longPress
         )
         let point = native(x, y, for: input)
-        try await withContactLane(
+        try await requireContactLane(
             input.record,
             backend: input.backend,
             preemptible: true,
-            generation: input.generation
+            generation: input.generation,
+            paneId: paneId,
+            operation: .longPress
         ) { fence in
             try await SimInputSynthesis.longPress(
                 backend: input.backend,
@@ -2615,11 +2774,13 @@ public actor PaneCoordinator {
         let fromF2 = native(fromF2X, fromF2Y, for: input)
         let toF1 = native(toF1X, toF1Y, for: input)
         let toF2 = native(toF2X, toF2Y, for: input)
-        try await withContactLane(
+        try await requireContactLane(
             input.record,
             backend: input.backend,
             preemptible: true,
-            generation: input.generation
+            generation: input.generation,
+            paneId: paneId,
+            operation: .pinch
         ) { fence in
             try await SimInputSynthesis.pinch(
                 backend: input.backend,
@@ -2672,7 +2833,13 @@ public actor PaneCoordinator {
             contact: .multi(points[0], points[1]),
             generation: input.generation
         )
-        guard admitted.send else { return }
+        guard try requireLiveAdmission(
+            admitted,
+            phase: phase,
+            paneId: paneId,
+            operation: .multitouch
+        ) else { return }
+        var stale = false
         try await sendingLiveContact(admitted, on: lane) {
             try await SimInputSynthesis.multitouch(
                 backend: input.backend,
@@ -2681,6 +2848,10 @@ public actor PaneCoordinator {
                 phase: phase,
                 points: points
             )
+            stale = generationWentStale(backend: input.backend, generation: input.generation)
+        }
+        guard !stale else {
+            throw PaneError.inputSuperseded(paneId: paneId, operation: .multitouch)
         }
     }
 

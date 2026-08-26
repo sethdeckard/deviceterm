@@ -89,6 +89,12 @@ extension PaneError {
         case .paneAlreadyAttached:
             return "pane-already-attached"
 
+        case let .inputNotAdmitted(_, operation):
+            return "input-not-admitted:\(operation.label)"
+
+        case let .inputSuperseded(_, operation):
+            return "input-superseded:\(operation.label)"
+
         case .inputNotQuiesced:
             return "input-not-quiesced"
 

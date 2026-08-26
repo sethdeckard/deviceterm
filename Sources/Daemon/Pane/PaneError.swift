@@ -113,6 +113,50 @@ public enum PaneError: Error, Equatable, Sendable {
         String,
         ownerSessionId: UUID
         )
+    /// A contact-holding gesture the pane's input lane refused, so nothing
+    /// reached the digitizer. The lane refuses while the pane is closing,
+    /// while an ownership transfer has invalidated what was in flight, and
+    /// while a contact left down by a failed gesture has not been released
+    /// yet. A caller whose own task was cancelled while queued is treated
+    /// as non-admission too.
+    ///
+    /// Reported rather than acknowledged: the acks these verbs return carry
+    /// no field that could say the gesture never went out, so a silent
+    /// success is indistinguishable from a real one. `swipe` is the
+    /// exception and handles refusal itself, because its ack reports the
+    /// sample count. Retryable.
+    case inputNotAdmitted(
+        paneId:
+        UUID,
+        operation: PaneOperation
+        )
+    /// A gesture the lane admitted whose captured input generation went
+    /// stale before it finished. An ownership transfer bumps that
+    /// generation, and both backends then drop what carries the old one
+    /// *without throwing*: the simulator's `gatedSend` returns false, and
+    /// the device's input queue skips the work item.
+    ///
+    /// **Delivery is unknown.** Sends that completed before the bump landed
+    /// as normal, so the gesture may have arrived whole, in part, or not at
+    /// all, and nothing reachable from here distinguishes those. That
+    /// unknown is the whole reason this is reported rather than
+    /// acknowledged.
+    ///
+    /// Distinct from `inputNotAdmitted`, which means the lane refused the
+    /// gesture before it ran.
+    ///
+    /// It does **not** prove ownership moved either. The generation bump
+    /// and the lane fence are the transfer's input barrier, several steps
+    /// ahead of its commit, and the transfer can still abort in between and
+    /// leave the pane with the owner it had. So the caller may still own the
+    /// pane and a retry may well be admitted; whether repeating the gesture
+    /// is *safe* is the delivery question above, which is the caller's to
+    /// weigh.
+    case inputSuperseded(
+        paneId:
+        UUID,
+        operation: PaneOperation
+        )
     /// An ownership transfer (adoption) couldn't release the prior owner's
     /// held input: a release send failed, so the device can't be
     /// guaranteed input-clean. The transfer is aborted (ownership stays put)
