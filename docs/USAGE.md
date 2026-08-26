@@ -600,10 +600,12 @@ deviceterm ax sweep --step 0.04
 reads the element at one normalized coordinate. `ax sweep` samples the
 display with point queries and removes duplicate elements.
 
-Frames are in pixels, in the same displayed space as input coordinates, but
-input coordinates are normalized. Divide a frame's centre by the root frame's
-`w` and `h` before tapping it. No rotation of your own is needed in either
-direction.
+Frames are in the same displayed space as input coordinates, but they are not
+normalized. Divide a frame's centre by the root frame's `w` and `h` before
+tapping it. No rotation of your own is needed in either direction.
+
+`ax sweep` is the exception: its root frame is a placeholder, not the screen's,
+so take the scale from an `ax tree` root.
 
 All three always emit JSON. The wrapper fields are DeviceTerm contracts; the
 nested accessibility nodes come from Apple frameworks and can vary by

@@ -106,7 +106,10 @@ returns an empty walk by design; use
 as the documented workaround.
 .TP
 .B ax point " " \fIx\fR " " \fIy\fR
-Single AX element at a normalized point.
+Single AX element at a normalized point, in the same displayed space the
+coordinate-bearing input verbs take. Node frames are in that space but are
+not normalized: divide the centre's x and y by the root frame's width and
+height before querying it.
 .TP
 .B ax sweep " " [\fB--step\fR \fI0..1\fR]
 Grid-walk the screen via objectAtPoint and aggregate unique elements.

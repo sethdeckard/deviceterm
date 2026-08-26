@@ -2,43 +2,18 @@
 
 import CoreGraphics
 import CoreSimulatorBridge
+import DaemonProtocol
 import Foundation
 
-/// Pure math for `pane.ax.sweep`. Pieces:
+/// Pure math behind `pane.ax.point` and `pane.ax.sweep`: the grid the
+/// sweep walks, the key that collapses it to unique elements, the
+/// per-cell error classifier, and the displayed-to-native coordinate
+/// conversion both verbs hand the bridge. `pane.ax.tree` addresses no
+/// point and uses none of it.
 ///
-///   1. `gridPoints(step:)`, the grid of normalized [0,1)² coordinates
-///      the daemon walks. The daemon scales each one to pixels (via
-///      `pixelPoint(normalized:screen:)`) before handing to the bridge,
-///      so the grid stays portable across device families. Generator
-///      is sample-on-step (anchor at 0); last sample on each axis is
-///      the largest `n*step < 1.0`.
-///
-///   2. `dedupKey(element:)`, the canonical key for collapsing the N
-///      cells × ~1 element per cell into the unique-element set.
-///      Combines role + identifier + label + frame so two grid points
-///      that hit the same element produce identical keys and elements
-///      that genuinely differ (same role + identifier + frame, different
-///      label = mid-transition state change) keep both. Order-stable
-///      "first sighting wins" is the responsibility of the caller's
-///      collect loop, not this helper.
-///
-///   3. `screenSize(fromTree:)` + `pixelPoint(normalized:screen:)`,
-///      the normalized-to-pixel conversion. AXPTranslator's
-///      `objectAtPoint:displayId:bridgeDelegateToken:` takes absolute
-///      display-space pixel coordinates, *not* the normalized or
-///      view-relative coordinates the rest of this file deals in.
-///      Callers fetch `frontmostTree()` once per request, extract the
-///      root frame's pixel dimensions, then scale each normalized
-///      grid point into that pixel frame before the bridge call.
-///      Without this conversion the sweep walks sub-pixel coordinates
-///      near `(0,0)` on every device and returns empty `children`
-///      regardless of what's on screen.
-///
-/// Split out of `PaneCoordinator.accessibilitySweep(paneId:step:)` per
-/// AGENTS.md's "pure math namespaces / decision types" convention so the
-/// matrix (grid density, dedup uniqueness, coord scaling) is unit-
-/// testable without a live sim. The bridge IPC + JSON wrapping stay in
-/// PaneCoordinator.
+/// Kept out of `PaneCoordinator` so grid density, dedup uniqueness, and
+/// coordinate mapping are testable without a live sim. The bridge IPC
+/// and the JSON wrapping live in `PaneAccessibility`.
 enum AXSweep {
     /// What to do with one `elementAtPoint` throw inside the sweep
     /// loop. Routine misses (sparse AX coverage, blank canvas
@@ -118,15 +93,17 @@ enum AXSweep {
         return points
     }
 
-    /// Extract the device's screen pixel size from a serialized
-    /// `frontmostTree()` response. The root element of the frontmost
-    /// app is fullscreen on iOS/watchOS, so its `frame.{w, h}` is the
-    /// authoritative screen size for the currently-attached display.
-    /// Returns nil if the tree has no frame or zero-sized dimensions
-    /// (caller should fall back to treating the input as already
-    /// pixel-space, the historical behavior, rather than dividing by
-    /// zero or scaling to nothing).
-    static func screenSize(fromTree tree: [String: Any]) -> CGSize? {
+    /// Extract the frontmost app's interface size from a serialized
+    /// `frontmostTree()` response. That app's root element is fullscreen
+    /// on iOS and watchOS, so its `frame.{w, h}` spans the display.
+    ///
+    /// This is the size of the interface as presented, not the display
+    /// panel's own: in landscape the two are transposed, which is why
+    /// `nativePixel(displayed:orientation:interface:)` takes an
+    /// orientation as well. Returns nil when the tree carries no frame
+    /// or a zero-sized one, leaving the caller to pick a degenerate
+    /// stand-in rather than divide by zero.
+    static func interfaceSize(fromTree tree: [String: Any]) -> CGSize? {
         guard let frame = tree["frame"] as? [String: Any] else { return nil }
         let width = (frame["w"] as? NSNumber)?.doubleValue ?? 0
         let height = (frame["h"] as? NSNumber)?.doubleValue ?? 0
@@ -134,14 +111,61 @@ enum AXSweep {
         return CGSize(width: width, height: height)
     }
 
-    /// Scale a normalized [0,1] point to pixel coordinates within the
-    /// given screen size. Used to bridge the daemon's normalized RPC
-    /// surface to AXPTranslator's pixel-space `objectAtPoint:`. The
-    /// upper bound `1.0` maps to `screen.width / .height` exactly;
-    /// `gridPoints(step:)` never emits `1.0` so the bridge never sees
-    /// a coord at the half-open screen edge.
-    static func pixelPoint(normalized: CGPoint, screen: CGSize) -> CGPoint {
-        CGPoint(x: normalized.x * screen.width, y: normalized.y * screen.height)
+    /// The display panel's own size, given the interface size the
+    /// accessibility tree reported and the orientation the pane is
+    /// presenting at.
+    ///
+    /// CoreSimulator holds the panel at the device's portrait
+    /// dimensions however the device is turned, while the accessibility
+    /// tree measures the app's interface, which turns with it. The two
+    /// agree in portrait and transpose in landscape.
+    static func nativeSize(interface size: CGSize, orientation: Orientation) -> CGSize {
+        switch orientation {
+        case .landscapeLeft, .landscapeRight:
+            return CGSize(width: size.height, height: size.width)
+
+        case .portrait, .portraitUpsideDown:
+            return size
+        }
+    }
+
+    /// Convert a normalized point in displayed space to the panel
+    /// coordinate AXPTranslator's `objectAtPoint:` hit-tests against.
+    ///
+    /// Rotate the point into the panel's frame, then scale by the
+    /// panel's size rather than by the interface size the tree reported.
+    /// Scaling a rotated point by the interface size divides each axis by
+    /// the other axis's length, so in landscape a legal coordinate
+    /// resolves the wrong element or none at all.
+    ///
+    /// The result is clamped to the panel. Every orientation but portrait
+    /// sends some displayed boundary to exactly `1.0`, one past the last
+    /// coordinate a frame contains: the top edge under landscape-left,
+    /// the left edge under landscape-right, both upside-down. Those are
+    /// coordinates the grid emits and a caller can legitimately ask for,
+    /// so without the clamp they would hit nothing.
+    static func nativePixel(
+        displayed point: CGPoint,
+        orientation: Orientation,
+        interface size: CGSize
+    ) -> CGPoint {
+        let native = nativeSize(interface: size, orientation: orientation)
+        let rotated = orientation.surfacePoint(
+            displayedX: Double(point.x),
+            displayedY: Double(point.y)
+        )
+        return CGPoint(
+            x: clampedToPanel(rotated.x * Double(native.width), extent: Double(native.width)),
+            y: clampedToPanel(rotated.y * Double(native.height), extent: Double(native.height))
+        )
+    }
+
+    /// Clamp one axis into the half-open `[0, extent)` the panel
+    /// occupies. `CGRect` containment excludes the far edge, so `extent`
+    /// itself hit-tests against nothing.
+    private static func clampedToPanel(_ value: Double, extent: Double) -> Double {
+        guard extent > 0 else { return 0 }
+        return min(max(value, 0), extent.nextDown)
     }
 
     /// Canonical dedup key for an element dict the bridge returned

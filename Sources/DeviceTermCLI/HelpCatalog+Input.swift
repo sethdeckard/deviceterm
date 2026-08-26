@@ -181,8 +181,13 @@ extension HelpCatalog {
                   Example: deviceterm ax tree
 
               ax point <x> <y>
-                  Single AX element at a normalized point. Same shape as
-                  `ax tree` minus children.
+                  Single AX element at a normalized point, in the same
+                  displayed space the coordinate-bearing input verbs
+                  take. Same shape as `ax tree` minus children.
+
+                  Node frames are in that space too but are not
+                  normalized. Divide a frame's centre by the root
+                  frame's w and h before querying it.
                   Example: deviceterm ax point 0.5 0.5
 
               ax sweep [--step <0..1>]

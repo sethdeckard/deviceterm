@@ -11,8 +11,9 @@ import Foundation
 /// `PaneCoordinator`'s pane state. The bridge returns Foundation dicts
 /// (not Sendable), so serialization happens here synchronously and only
 /// `Data` (Sendable) crosses back. The coordinator resolves the backend
-/// (its one stateful step) and reads the pane's immutable `family`, then
-/// hands both here.
+/// (its one stateful step) and hands it here with whatever else the op
+/// needs off the record: the pane's immutable `family` for `tree`, a
+/// reader for its presentation orientation for `element` and `sweep`.
 enum PaneAccessibility {
     /// AXP's callback bridge waits synchronously for each simulator reply.
     /// Keep the whole read and JSON conversion on the pane's serial Dispatch
@@ -65,26 +66,45 @@ enum PaneAccessibility {
     }
 
     /// Serialize the single AX element at a normalized point. Same
-    /// dict shape as `tree` minus the `children` key. `(x, y)` is
-    /// normalized in `[0, 1]` (origin top-left); scaled to pixel space
-    /// against the frontmost app's screen frame before the bridge call,
-    /// since AXPTranslator's `objectAtPoint:` operates in pixel
-    /// coordinates (see AXSweep's header note).
+    /// dict shape as `tree` minus the `children` key.
+    ///
+    /// `(x, y)` is normalized in `[0, 1]` in displayed space, the same
+    /// space the coordinate-bearing input verbs take, with the origin at
+    /// the top-left of what the device is showing. Mapping it into the
+    /// display panel's own frame needs the orientation, because
+    /// AXPTranslator's `objectAtPoint:` hit-tests the panel, which never
+    /// turns, while the frames in the tree describe the interface, which
+    /// does.
+    ///
+    /// `orientation` is read rather than passed by value, and is read
+    /// after the queue wait and after the tree, so it is never an
+    /// enqueue-time snapshot: this queue is shared with `sweep`, and a
+    /// read can wait on it for as long as a full grid walk takes. The two
+    /// reads are not atomic, so a rotation landing between them still
+    /// mismatches the tree.
     static func element(
         backend: any DeviceBackend,
         queue: BlockingWorkQueue,
         paneId: UUID,
+        orientation: @escaping @Sendable () -> Orientation,
         x: Double,
         y: Double
     ) async throws -> Data {
         try await queue.run {
-            try elementSynchronously(backend: backend, paneId: paneId, x: x, y: y)
+            try elementSynchronously(
+                backend: backend,
+                paneId: paneId,
+                orientation: orientation,
+                x: x,
+                y: y
+            )
         }
     }
 
     private static func elementSynchronously(
         backend: any DeviceBackend,
         paneId: UUID,
+        orientation: @Sendable () -> Orientation,
         x: Double,
         y: Double
     ) throws -> Data {
@@ -101,11 +121,12 @@ enum PaneAccessibility {
                     + BridgeMessage.unwrap(error)
             )
         }
-        let screen = AXSweep.screenSize(fromTree: rootTree)
+        let interface = AXSweep.interfaceSize(fromTree: rootTree)
             ?? CGSize(width: 1, height: 1)
-        let pixelPoint = AXSweep.pixelPoint(
-            normalized: CGPoint(x: x, y: y),
-            screen: screen
+        let pixelPoint = AXSweep.nativePixel(
+            displayed: CGPoint(x: x, y: y),
+            orientation: orientation(),
+            interface: interface
         )
         let element: [String: Any]
         do {
@@ -132,7 +153,10 @@ enum PaneAccessibility {
     }
 
     /// Grid-walk the screen via `elementAtPoint` and aggregate unique
-    /// elements. The watchOS workaround for the case where
+    /// elements. The grid is laid out in displayed space and each point
+    /// carried into the panel's frame through the pane's orientation, so
+    /// a turned device is swept over its whole screen rather than a
+    /// transposed corner of it. The watchOS workaround for the case where
     /// `accessibilityChildren` enumeration returns empty (the limitation
     /// `AXTreeAnnotator` notes on `ax tree`), agents can still discover
     /// the on-screen elements by sweeping with `objectAtPoint:`.
@@ -161,21 +185,28 @@ enum PaneAccessibility {
         backend: any DeviceBackend,
         queue: BlockingWorkQueue,
         paneId: UUID,
+        orientation: @escaping @Sendable () -> Orientation,
         step: Double?
     ) async throws -> Data {
         try await queue.run {
-            try sweepSynchronously(backend: backend, paneId: paneId, step: step)
+            try sweepSynchronously(
+                backend: backend,
+                paneId: paneId,
+                orientation: orientation,
+                step: step
+            )
         }
     }
 
     private static func sweepSynchronously(
         backend: any DeviceBackend,
         paneId: UUID,
+        orientation: @Sendable () -> Orientation,
         step: Double?
     ) throws -> Data {
         // Pre-flight: read `frontmostTree()` once to confirm the
-        // AX bridge is reachable AND to learn the screen pixel
-        // frame the grid scales into. The bridge's
+        // AX bridge is reachable AND to learn the interface frame
+        // the grid maps through. The bridge's
         // `objectAtPointNil` (code 78) wraps two unrelated
         // conditions: "no element at this pixel" (routine on
         // blank canvas) and "AX server unavailable" (systemic).
@@ -185,7 +216,7 @@ enum PaneAccessibility {
         // successful `frontmostTree` (even one that returns
         // `{children: []}` on watchOS, where the recursive walk
         // is limited) proves the bridge is operational AND
-        // exposes the root frame's pixel dimensions.
+        // exposes the root frame's dimensions.
         let rootTree: [String: Any]
         do {
             rootTree = try backend.accessibilityFrontmostTree()
@@ -199,22 +230,29 @@ enum PaneAccessibility {
                     + BridgeMessage.unwrap(error)
             )
         }
-        let screen = AXSweep.screenSize(fromTree: rootTree)
+        let interface = AXSweep.interfaceSize(fromTree: rootTree)
             ?? CGSize(width: 1, height: 1)
+        // Read after the tree, not when the request entered the actor, so
+        // a rotation while this waited its turn on the queue doesn't map
+        // the walk through the previous screen. Two limits remain: the
+        // tree and this are separate reads, so a rotation between them
+        // still mismatches, and one *during* the walk splits it.
+        let orientation = orientation()
         let clampedStep = AXSweep.clampStep(step)
         let points = AXSweep.gridPoints(step: clampedStep)
         var seen = Set<String>()
         var unique: [[String: Any]] = []
         for point in points {
-            // Scale normalized grid point into the screen's pixel
-            // frame before the bridge call, since AXPTranslator's
-            // `objectAtPoint:` works in pixel space. Without this
-            // every grid point lands in the sub-pixel `(0,0)`
-            // neighborhood and the bridge returns code 78 for all
-            // 400 cells.
-            let pixelPoint = AXSweep.pixelPoint(
-                normalized: point,
-                screen: screen
+            // Carry the displayed grid point into the panel frame
+            // before the bridge call. AXPTranslator's
+            // `objectAtPoint:` works in panel coordinates, so an
+            // unscaled point lands in the sub-pixel `(0,0)`
+            // neighborhood and every cell returns code 78, and an
+            // unrotated one walks the wrong axis in landscape.
+            let pixelPoint = AXSweep.nativePixel(
+                displayed: point,
+                orientation: orientation,
+                interface: interface
             )
             let element: [String: Any]
             do {
@@ -241,8 +279,8 @@ enum PaneAccessibility {
                     throw PaneError.bridgeFailed(
                         paneId: paneId,
                         operation: .axSweep,
-                        message: "bridge error at normalized point "
-                            + "(\(point.x), \(point.y)) → pixel "
+                        message: "bridge error at displayed point "
+                            + "(\(point.x), \(point.y)) → panel "
                             + "(\(pixelPoint.x), \(pixelPoint.y)): "
                             + BridgeMessage.unwrap(error)
                     )

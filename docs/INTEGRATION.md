@@ -800,6 +800,22 @@ Accessibility commands always emit JSON and require session scope. They
 support Simulator panes only; see the physical-device limits in
 [`USAGE.md`](USAGE.md#know-the-physical-device-limits).
 
+### Coordinate Space
+
+`ax point` takes normalized coordinates in displayed space, the same space the
+coordinate-bearing input verbs take. `(0,0)` is the top-left of what the device
+is showing, whichever way it is turned; the daemon converts to the device's
+native frame before querying.
+
+Node `frame` values are in that same displayed space, so they turn with the
+device and need no rotation of your own. They are not normalized: divide a
+frame's centre by the root node's `w` and `h` rather than by a screen dimension
+you got from somewhere else.
+
+The `ax sweep` root is the exception. Its frame is the normalized placeholder
+under [Sweep Wrapper](#sweep-wrapper), not the screen's, so take the scale from
+an `ax tree` root.
+
 ### Apple Node Dictionaries
 
 DeviceTerm wraps each accessibility result under a command-specific top-level
@@ -891,7 +907,7 @@ The synthetic object under `tree` has these stable-additive fields:
 | Field | Type | Meaning |
 |---|---|---|
 | `role` | string | Always `"AXSweepRoot"` |
-| `frame` | object | Normalized full-screen frame |
+| `frame` | object | Normalized placeholder, always `0, 0, 1, 1`; not the screen's frame |
 | `children` | array | Unique Apple accessibility nodes |
 | `step` | number | Clamped step used by the sweep |
 | `sweepedPoints` | integer | Number of sampled grid points |

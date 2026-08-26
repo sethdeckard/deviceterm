@@ -174,6 +174,11 @@ public actor PaneCoordinator {
         /// AX operations here preserves its bridge ordering while letting AX
         /// work on other panes proceed independently.
         let accessibilityWorkQueue: BlockingWorkQueue
+        /// Publishes `presentationOrientation` across the actor boundary.
+        /// The accessibility reads run on `accessibilityWorkQueue` and need
+        /// the value the actor holds at the moment they run, not a copy
+        /// taken before they were enqueued.
+        let orientationGate = DispatchQueue(label: "com.deviceterm.daemon.pane-orientation")
         var subscribers: [UUID: Subscriber] = [:]
         var state: PaneLifecycle
         /// Set while an ownership transfer (adoption) is quiescing this
@@ -284,7 +289,17 @@ public actor PaneCoordinator {
         ///
         /// Starts at `.portrait` for the same reason `controlOrientation`
         /// does, and is corrected by the first seed or observation.
-        var presentationOrientation: Orientation = .portrait
+        ///
+        /// Gated rather than stored plainly because the accessibility
+        /// reads consume it from the pane's AX queue, off the actor, while
+        /// the actor may be writing it. Every write is still the actor's,
+        /// so the gate publishes the value rather than ordering competing
+        /// writers, and a read-modify-write across two hops is safe.
+        var presentationOrientation: Orientation {
+            get { orientationGate.sync { gatedPresentationOrientation } }
+            set { orientationGate.sync { gatedPresentationOrientation = newValue } }
+        }
+        private var gatedPresentationOrientation: Orientation = .portrait
         /// The orientation and edge tag resolved at the last live edge
         /// `.down`, reused by that contact's moves and lift.
         ///
@@ -2781,9 +2796,15 @@ public actor PaneCoordinator {
 
     // MARK: - Accessibility
     //
-    // As with input, backend resolution is the actor's only stateful step
-    // (`accessibilityTree` also reads the pane's immutable `family`). The
-    // bridge read + `AXTreeAnnotator`/`AXSweep` post-processing + JSON
+    // As with input, backend resolution is the actor's only stateful step,
+    // and `accessibilityTree` reads the pane's immutable `family` alongside
+    // it. The two point-addressed reads need `presentationOrientation`
+    // instead, and take it as a closure rather than a value: a read can wait
+    // on the pane's serial AX queue for as long as a grid walk takes, so
+    // anything sampled here would describe a screen that may since have
+    // turned. `Record` gates that property so the closure can run off the
+    // actor, beside the tree read it has to agree with.
+    // The bridge read + `AXTreeAnnotator`/`AXSweep` post-processing + JSON
     // serialization are pure and live in `PaneAccessibility`; the bridge's
     // non-Sendable Foundation dicts never escape it, only `Data`. Each read
     // re-authorizes after its off-pool suspension so a session cannot receive
@@ -2833,6 +2854,7 @@ public actor PaneCoordinator {
             backend: backend,
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
+            orientation: { [record] in record.presentationOrientation },
             x: x,
             y: y
         )
@@ -2860,6 +2882,7 @@ public actor PaneCoordinator {
             backend: backend,
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
+            orientation: { [record] in record.presentationOrientation },
             step: step
         )
         try revalidateAccessibility(

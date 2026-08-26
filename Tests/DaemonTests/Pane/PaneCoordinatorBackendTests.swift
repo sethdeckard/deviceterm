@@ -36,6 +36,17 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     private(set) var keyDownUsages: [UInt32] = []
     private(set) var keyUpUsages: [UInt32] = []
     private(set) var typedKeystrokeBatches: [[HIDKeystroke]] = []
+    /// The point each `accessibilityElement(at:)` call carried, so a test
+    /// can assert the coordinate the bridge would have been hit-tested at.
+    private(set) var accessibilityPoints: [CGPoint] = []
+    /// What `accessibilityFrontmostTree()` answers. The empty default keeps
+    /// the reachability probe satisfied for tests that only need the call to
+    /// succeed; a test that cares about coordinate mapping sets a root frame.
+    var frontmostTree: [String: Any] = [:]
+    /// Runs at the start of `accessibilityFrontmostTree()`, so a test can
+    /// move state that the read is supposed to observe *after* the tree
+    /// rather than before it.
+    var onFrontmostTree: (@Sendable () -> Void)?
     private(set) var openAppSwitcherCalls = 0
     /// The `IndigoHIDEdge` value each `openAppSwitcher` call carried, so a test
     /// can assert the device swipe rotates with the pane's orientation.
@@ -290,14 +301,18 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     func rotateCrown(delta: Double, generation: UInt64) throws { crownDeltas.append(delta) }
 
     func accessibilityFrontmostTree() throws -> [String: Any] {
+        onFrontmostTree?()
         if blockAccessibility {
             parkedLock.withLock { accessibilityParked = true }
             accessibilityGate.wait()
         }
-        return [:]
+        return frontmostTree
     }
 
-    func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }
+    func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] {
+        accessibilityPoints.append(pixelPoint)
+        return [:]
+    }
 
     func shutdownBackend() { shutdownCalled = true }
 

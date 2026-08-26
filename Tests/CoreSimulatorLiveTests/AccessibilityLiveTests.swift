@@ -80,15 +80,19 @@ func frontmostTreeReturnsRecursiveDict() throws {
 @Test
 func sweepYieldsAtLeastOneElementOnBootedSim() throws {
     // The watchOS workaround. Drives the bridge call pattern
-    // the daemon uses (`AXSweep.gridPoints` + `pixelPoint` +
+    // the daemon uses (`AXSweep.gridPoints` + `nativePixel` +
     // `elementAtPoint`) and confirms a freshly-booted sim yields
     // at least one element regardless of family. The bridge's
     // `accessibilityChildren` is empty on watchOS, but
     // `elementAtPoint` resolves real elements; sweep aggregates
-    // those. The pixel-scaling step is the load-bearing piece:
-    // dropping it means every grid point lands sub-pixel near
-    // `(0,0)` and the sweep returns empty on every screen, the
-    // very regression this test guards against.
+    // those. The scaling step is what this guards: drop it and
+    // every grid point lands sub-pixel near `(0,0)`, so the sweep
+    // returns empty on every screen.
+    //
+    // The track boots its own sim for a clean slate, so the device
+    // is portrait and `nativePixel` is the identity beyond scaling.
+    // Rotated mapping is covered in `AXSweepTests`, which needs no
+    // sim.
     try #require(
         coreSimulatorAvailable,
         "CoreSimulator probe failed — the bridge can't drive this host"
@@ -100,14 +104,18 @@ func sweepYieldsAtLeastOneElementOnBootedSim() throws {
     try waitForAXServer(udid: booted.udid)
     let client = try SimAccessibility.client(forUDID: booted.udid)
     let rootTree = try client.frontmostTree()
-    let screen = try #require(
-        AXSweep.screenSize(fromTree: rootTree),
+    let interface = try #require(
+        AXSweep.interfaceSize(fromTree: rootTree),
         "frontmost tree missing or zero-sized root frame"
     )
     var seen = Set<String>()
     var unique: [[String: Any]] = []
-    for normalized in AXSweep.gridPoints(step: AXSweep.defaultStep) {
-        let pixel = AXSweep.pixelPoint(normalized: normalized, screen: screen)
+    for displayed in AXSweep.gridPoints(step: AXSweep.defaultStep) {
+        let pixel = AXSweep.nativePixel(
+            displayed: displayed,
+            orientation: .portrait,
+            interface: interface
+        )
         guard let element = try? client.elementAtPoint(pixel) else { continue }
         let key = AXSweep.dedupKey(element: element)
         if seen.insert(key).inserted { unique.append(element) }
@@ -131,15 +139,16 @@ func elementAtPointReturnsFlatDict() throws {
     )
     try waitForAXServer(udid: booted.udid)
     let client = try SimAccessibility.client(forUDID: booted.udid)
-    // The bridge takes pixel coords. Convert (0.5, 0.5), the
-    // intended screen-center query, to pixel space using the
-    // frontmost app's root frame, matching how the daemon's
-    // `accessibilityElement` does it.
+    // The bridge takes panel coords. Convert (0.5, 0.5), the
+    // intended screen-center query, through the frontmost app's
+    // root frame, matching how the daemon's `accessibilityElement`
+    // does it. The track's own sim is portrait.
     let rootTree = try client.frontmostTree()
-    let screen = try #require(AXSweep.screenSize(fromTree: rootTree))
-    let center = AXSweep.pixelPoint(
-        normalized: CGPoint(x: 0.5, y: 0.5),
-        screen: screen
+    let interface = try #require(AXSweep.interfaceSize(fromTree: rootTree))
+    let center = AXSweep.nativePixel(
+        displayed: CGPoint(x: 0.5, y: 0.5),
+        orientation: .portrait,
+        interface: interface
     )
     let element = try client.elementAtPoint(center)
     // Flat variant: same keys as the root of a tree, but no

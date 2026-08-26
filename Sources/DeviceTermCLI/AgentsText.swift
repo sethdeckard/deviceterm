@@ -108,8 +108,14 @@ public enum AgentsText {
           discover the elements directly. Use `--step <0..1>` to
           control sweep density (default 0.05).
         - `deviceterm ax point <x> <y>` resolves a single element
-          at a normalized point. Faster than a sweep when you
-          already know roughly where to look.
+          at a normalized point, in the same displayed space the
+          coordinate-bearing input verbs take. Faster than a
+          sweep when you already know roughly where to look.
+        - Node frames are in that displayed space too, but they
+          are not normalized. Divide a frame's centre by the root
+          frame's `w` and `h` before handing it to `tap`. The
+          `ax sweep` root is a placeholder, not the screen, so
+          take the scale from an `ax tree` root.
 
       all input commands (tap, swipe, long-press, pinch, button,
       key, text, rotate, crown)
@@ -127,7 +133,7 @@ public enum AgentsText {
         deviceterm panes list                 # pane row appears
 
       Tap a UI element you've located:
-        deviceterm ax tree | jq '.tree'       # frames in displayed pixels
+        deviceterm ax tree | jq '.tree'       # frames in displayed space
         deviceterm tap 0.5 0.5                # normalize by the root frame
 
       Swipe a scrollable list down:
