@@ -129,7 +129,10 @@ struct PaneLayoutCloseTests {
         // focused.
         let mount = makeMounted(slots: [Self.terminalA, Self.terminalB, Self.sim])
         focus(Self.terminalA, in: mount)
-        mount.controller.reconcile(tree: tree(of: [Self.terminalB, Self.sim])) { _ in nil }
+        mount.controller.reconcile(
+            tree: tree(of: [Self.terminalB, Self.sim]),
+            pendingTargets: [:]
+        ) { _ in nil }
         #expect(mount.controller.focusedSlot() == Self.terminalB)
     }
 
@@ -139,7 +142,10 @@ struct PaneLayoutCloseTests {
         // so the user can keep typing.
         let mount = makeMounted(slots: [Self.terminalA, Self.terminalB])
         focus(Self.terminalB, in: mount)
-        mount.controller.reconcile(tree: tree(of: [Self.terminalB, Self.terminalA])) { _ in nil }
+        mount.controller.reconcile(
+            tree: tree(of: [Self.terminalB, Self.terminalA]),
+            pendingTargets: [:]
+        ) { _ in nil }
         #expect(mount.controller.focusedSlot() == Self.terminalB)
     }
 

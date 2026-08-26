@@ -363,7 +363,15 @@ final class TabContentViewController: NSViewController {
     /// recursive view rebuild against the tree using those VCs.
     private func reconcileLayoutTree() {
         guard !isTornDown, let tabState = tabListVM.tab(id: tabID) else { return }
-        splitVC.reconcile(tree: tabState.paneTree) { [weak self] slot in
+        let pendingTargets = tabState.pendingPanes.reduce(
+            into: [PendingPaneID: PaneTarget]()
+        ) { out, pending in
+            out[pending.id] = pending.target
+        }
+        splitVC.reconcile(
+            tree: tabState.paneTree,
+            pendingTargets: pendingTargets
+        ) { [weak self] slot in
             guard let self else { return nil }
             switch slot {
             case let .terminal(id):

@@ -58,11 +58,12 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
     /// guard). The controller keeps the AppKit view-tree walking below
     /// and routes every state read/write through this store.
     private let ratioStore = PaneRatioStore()
-    /// Path of each sim slot the last time `reconcile` ran. A sim's
-    /// path changes when it's first added, when the user drags it
-    /// into a new sub-split, or when an ancestor split compacts.
-    /// Diffed on every `reconcile` to drive `pendingAutoFit`.
-    private var lastSimPaths: [PaneSlot: [Int]] = [:]
+    /// Where each mounted sim last sat, keyed by target so one pane's
+    /// history survives the placeholder swap an attach or a re-attach puts
+    /// it through. A placeholder keeps the path its pane last occupied.
+    /// `PaneAutoFitDecision` folds this state forward on each tree-changing
+    /// `reconcile` and owns the rules.
+    private var lastFitPaths: [PaneTarget: [Int]] = [:]
     /// Sim slots whose Point Accurate auto-fit should run on the
     /// next layout pass (once the new split's bounds are real and
     /// the sim VC's pixel dimensions have arrived from the IOSurface).
@@ -231,7 +232,7 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
     /// `flushPendingAutoFits` picks it up once split bounds settle
     /// (drag-rearrange path). The flag clears VC-side once the
     /// preset actually applies; subsequent reconciles re-arm via
-    /// the `lastSimPaths` diff in `reconcile`. We deliberately do
+    /// the `lastFitPaths` diff in `reconcile`. We deliberately do
     /// NOT call `tryAutoFitNow()` here: bounds are zero straight
     /// out of `rebuildHierarchy` and the preset math would collapse
     /// a sibling pane to its minimum thickness.
@@ -276,8 +277,15 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
     ///      typing after a drag rearrange or ⌘⇧← / ⌘⇧→. When that slot
     ///      is one of the panes going away, focus hands off to the
     ///      nearest surviving neighbor instead.
+    ///
+    /// `pendingTargets` maps each placeholder in the tree to the target it
+    /// represents. The tree carries only a `PendingPaneID`, so without it
+    /// the auto-fit diff cannot tell a pane coming back from one arriving
+    /// for the first time, and would either re-fit the first or skip the
+    /// second.
     func reconcile(
         tree newTree: PaneNode,
+        pendingTargets: [PendingPaneID: PaneTarget],
         paneVCFactory: (PaneSlot) -> NSViewController?
     ) {
         let newSlots = Set(PaneTreeOps.leavesInOrder(newTree))
@@ -309,26 +317,13 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
         // pane keeps its position), and that swap changes identity.
         applyAccessibilityIdentifiers()
         guard newTree != tree else { return }
-        // Sim path diff drives the auto-fit. A sim is marked only
-        // when it's NEW or its **parent split** changed. A sibling
-        // shuffle (e.g. an existing sim's index moves [1]→[2] because
-        // a new sim was inserted before it) leaves the parent path
-        // unchanged and does NOT re-fit. Without this guard, every
-        // new-sim attach would also re-fit every previously-existing
-        // sim under the same root split: the cascading divider
-        // moves would collapse one of the originals to its minimum
-        // thickness (invisible pane) until the user dragged
-        // something to force a re-balance.
-        let nextSimPaths = simSlotPaths(in: newTree)
-        for (slot, path) in nextSimPaths {
-            let oldPath = lastSimPaths[slot]
-            let newParent = Array(path.dropLast())
-            let oldParent = oldPath.map { Array($0.dropLast()) }
-            if oldPath == nil || newParent != oldParent {
-                pendingAutoFit.insert(slot)
-            }
-        }
-        lastSimPaths = nextSimPaths
+        let fit = PaneAutoFitDecision.advance(
+            previous: lastFitPaths,
+            tree: newTree,
+            pendingTargets: pendingTargets
+        )
+        lastFitPaths = fit.paths
+        pendingAutoFit.formUnion(fit.needsFit)
         tree = newTree
         // Raise the apply guard across the whole seed→rebuild→apply
         // sequence. `rebuildHierarchy` builds fresh NSSplitViews whose
@@ -365,35 +360,6 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
             paneVC.view.setAccessibilityIdentifier(
                 PaneAccessibilityIdentity.identifier(for: slot)
             )
-        }
-    }
-
-    /// Walk `tree` and return `slot → path` for every sim leaf.
-    /// Used by the reconcile diff to decide which sim panes need
-    /// auto-fit on the next layout pass.
-    private func simSlotPaths(in tree: PaneNode) -> [PaneSlot: [Int]] {
-        var result: [PaneSlot: [Int]] = [:]
-        walkLeaves(node: tree, path: []) { slot, path in
-            if case .sim = slot {
-                result[slot] = path
-            }
-        }
-        return result
-    }
-
-    private func walkLeaves(
-        node: PaneNode,
-        path: [Int],
-        body: (PaneSlot, [Int]) -> Void
-    ) {
-        switch node {
-        case let .leaf(slot):
-            body(slot, path)
-
-        case let .split(_, children, _):
-            for (index, child) in children.enumerated() {
-                walkLeaves(node: child, path: path + [index], body: body)
-            }
         }
     }
 
