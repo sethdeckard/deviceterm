@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ProcInfo: shared process-metadata wrappers over `proc_pidinfo(PROC_PIDTBSDINFO)`
-// and `sysctl(KERN_PROC_PID)`.
-//
-// The UDS peer resolver, the terminal-anchor probe, and the ancestry walk all
-// need the same facts about a process: its controlling-terminal device, its
-// start time, and (for the walk) its parent and effective uid. The kernel calls
-// and struct handling live here once so none of them duplicates it.
-// `proc_pidinfo` serves same-uid reads; `sysctl(KERN_PROC_PID)` reads across
-// the uid boundary, which both the root-owned `/usr/bin/login` session leader
-// and an arbitrary ancestor require.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 
+/// Shared process-metadata wrappers over `proc_pidinfo(PROC_PIDTBSDINFO)`
+/// and `sysctl(KERN_PROC_PID)`.
+///
+/// The UDS peer resolver, the terminal-anchor probe, and the ancestry walk all
+/// need the same facts about a process: its controlling-terminal device, its
+/// start time, and (for the walk) its parent and effective uid. The kernel calls
+/// and struct handling live here once so none of them duplicates it.
+/// `proc_pidinfo` serves same-uid reads; `sysctl(KERN_PROC_PID)` reads across
+/// the uid boundary, which both the root-owned `/usr/bin/login` session leader
+/// and an arbitrary ancestor require.
 enum ProcInfo {
     /// One process' kernel metadata, read in a single `sysctl(KERN_PROC_PID)`.
     ///

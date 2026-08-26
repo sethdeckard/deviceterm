@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PNGWriter: encode a captured CGImage to a PNG file.
-//
-// Separate from `CaptureService` so it can be unit-tested against a
-// synthetic image, with no GUI and no Screen Recording grant.
 
 import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// Encode a captured CGImage to a PNG file.
+///
+/// Separate from `CaptureService` so it can be unit-tested against a
+/// synthetic image, with no GUI and no Screen Recording grant.
 enum PNGWriter {
     /// Write `image` to `path` as PNG, creating parent directories.
     /// Pixels are written at the image's native size, so the caller is

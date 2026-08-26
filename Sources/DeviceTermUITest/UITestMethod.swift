@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The request/reply vocabulary the UI-test harness vends over its own
-// private Unix-domain socket.
-//
-// Deliberately separate from `DaemonProtocol.RPCMethod`: the harness is
-// a test *instrument* that screenshots and drives deviceterm from the
-// outside, not a deviceterm RPC peer. Its method set stays decoupled
-// from the daemon's wire contract. The only thing borrowed from
-// `DaemonProtocol` is the length-prefixed framing (`RPCFraming`) and the
-// client socket primitive (`UDSClientSocket`), both Foundation-only.
 
 import Foundation
 
-/// The methods a client may ask the resident harness to perform.
+/// The methods a client may ask the resident harness to perform, over its
+/// own private Unix-domain socket.
 ///
 /// Raw values are the on-the-wire method names.
+///
+/// Deliberately separate from `DaemonProtocol.RPCMethod`: the harness is
+/// a test *instrument* that screenshots and drives deviceterm from the
+/// outside, not a deviceterm RPC peer. Its method set stays decoupled
+/// from the daemon's wire contract. The only thing borrowed from
+/// `DaemonProtocol` is the length-prefixed framing (`RPCFraming`) and the
+/// client socket primitive (`UDSClientSocket`), both Foundation-only.
 public enum UITestMethod: String, Codable, Sendable, CaseIterable, Equatable {
     /// Liveness probe: confirms a resident harness is answering.
     case ping

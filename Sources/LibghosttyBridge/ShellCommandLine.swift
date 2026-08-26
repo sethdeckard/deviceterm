@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ShellCommandLine: marshal a TerminalCommand into the shapes
-// libghostty's `ghostty_surface_config_s` wants.
-//
-// libghostty owns the PTY and `posix_spawn`s the child *through a
-// shell*: `config.command` is a single command-line string the shell
-// word-splits, NOT an argv array (there is no argv field in the C
-// API). So an executable + args must be POSIX-quoted and joined; an
-// unquoted space in the path or an arg would be split by the shell
-// into separate words. Env vars, by contrast, are a `{key,value}`
-// array, not `KEY=VALUE` strings.
-//
-// This is the one piece of the bridge with logic worth unit-testing
-// in isolation (the rest needs a live Metal surface), so it's a pure
-// value type with no libghostty dependency.
 
 import TerminalSurface
 
+/// Marshal a TerminalCommand into the shapes
+/// libghostty's `ghostty_surface_config_s` wants.
+///
+/// libghostty owns the PTY and `posix_spawn`s the child *through a
+/// shell*: `config.command` is a single command-line string the shell
+/// word-splits, NOT an argv array (there is no argv field in the C
+/// API). So an executable + args must be POSIX-quoted and joined; an
+/// unquoted space in the path or an arg would be split by the shell
+/// into separate words. Env vars, by contrast, are a `{key,value}`
+/// array, not `KEY=VALUE` strings.
+///
+/// This is the one piece of the bridge with logic worth unit-testing
+/// in isolation (the rest needs a live Metal surface), so it's a pure
+/// value type with no libghostty dependency.
 enum ShellCommandLine {
     /// POSIX single-quote one argument: wrap in `'…'`, and turn any
     /// embedded `'` into the classic `'\''` escape. Safe for every

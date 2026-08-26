@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// The set of services a device vends, resolved once from its directory, plus
 /// the ability to open a fresh channel to any of them by role.
 ///

@@ -1,17 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CLICommand: what an argv dispatches to.
-//
-// Kept separate from main.swift so Tests/CLITests can drive the parse
-// directly. main.swift owns side effects (env reads, stderr, socket I/O,
-// `exit`); this enum is the deterministic result of reading argv.
-//
-// Grammar (locked): required operands are positional, optional modifiers
-// are flags, and `--pane <ref>` is the shared targeting selector that
-// picks among the tab's device panes. A `<ref>` resolves a shortId,
-// name, pane UUID prefix, sim UDID, or physical deviceId (omit it when
-// the tab shows a single device pane). `--duration`, `--hold`,
-// `--velocity`, and `--step` are the input-specific modifiers.
 
 import DaemonProtocol
 import Foundation
@@ -21,6 +8,17 @@ import Foundation
 /// `pane` on each pane-targeted case is the optional targeting ref
 /// (from `--pane`); main.swift resolves it to a concrete paneId via
 /// `panes.list` + `PaneRefResolver`.
+///
+/// Kept separate from main.swift so Tests/CLITests can drive the parse
+/// directly. main.swift owns side effects (env reads, stderr, socket I/O,
+/// `exit`); this enum is the deterministic result of reading argv.
+///
+/// Grammar (locked): required operands are positional, optional modifiers
+/// are flags, and `--pane <ref>` is the shared targeting selector that
+/// picks among the tab's device panes. A `<ref>` resolves a shortId,
+/// name, pane UUID prefix, sim UDID, or physical deviceId (omit it when
+/// the tab shows a single device pane). `--duration`, `--hold`,
+/// `--velocity`, and `--step` are the input-specific modifiers.
 public enum CLICommand: Equatable, Sendable {
     case tabsList
     /// `deviceterm tabs current`: print the caller's own tab row (the

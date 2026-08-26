@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UITestClient: the client half. Connect to the resident harness,
-// send one framed request, read one framed reply.
-//
-// Reuses `DaemonProtocol`'s Foundation-only `UDSClientSocket` (non-
-// blocking connect + read/write) and `RPCFraming`. Because the fd is
-// non-blocking, the read side polls `readAvailable` and accumulates
-// until `RPCFraming.decodeNext` yields a full frame or the deadline
-// passes.
 
 import DaemonProtocol
 import Foundation
 
+/// The client half. Connect to the resident harness,
+/// send one framed request, read one framed reply.
+///
+/// Reuses `DaemonProtocol`'s Foundation-only `UDSClientSocket` (non-
+/// blocking connect + read/write) and `RPCFraming`. Because the fd is
+/// non-blocking, the read side polls `readAvailable` and accumulates
+/// until `RPCFraming.decodeNext` yields a full frame or the deadline
+/// passes.
 enum UITestClient {
     struct Reply {
         /// The raw reply JSON, printed verbatim by the caller.

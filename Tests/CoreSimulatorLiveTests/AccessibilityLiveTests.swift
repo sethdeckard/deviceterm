@@ -58,8 +58,9 @@ func frontmostTreeReturnsRecursiveDict() throws {
     #expect(frame["w"] is NSNumber)
     #expect(frame["h"] is NSNumber)
 
-    // Close the gap that previously masked the watchOS limitation
-    // (`ax tree` returns `{"children": []}` while elements exist).
+    // An unchecked empty tree masks the watchOS limitation (`ax tree`
+    // returns `{"children": []}` while elements exist), so the two
+    // families are asserted apart.
     // On non-watch sims the AX walk MUST yield at least one child
     // for the freshly-booted SpringBoard screen; an empty tree
     // here means the recursion regressed. On watchOS the bridge's

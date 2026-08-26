@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ProvenancePeer: the caller's kernel identity, shaped per transport.
-//
-// The transport decides which provenance arms are even available, so the
-// identity carries the transport in its shape rather than as a side flag.
-// `ProvenanceMatcher` consumes it.
 
 import Foundation
 
 /// The caller's kernel identity, shaped per transport. `.missing` is the
 /// fail-closed case (the kernel couldn't vend an identity).
+///
+/// The transport decides which provenance arms are even available, so the
+/// identity carries the transport in its shape rather than as a side flag.
+/// `ProvenanceMatcher` consumes it.
 public enum ProvenancePeer: Sendable, Equatable {
     /// XPC peer whose audit token passed the daemon's signature check.
     case validatedGUI(owner: OwnerProcessIdentity)

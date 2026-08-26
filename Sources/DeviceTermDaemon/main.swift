@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import AppKit
+import Daemon
+import Darwin
+import Foundation
+
 // deviceterm-daemon: executable wrapper around the `Daemon` library.
 //
 // Lifecycle:
@@ -16,11 +21,6 @@
 //   6. Run the NSApp event loop. NSApp.terminate(nil) unwinds it, from
 //      any of: a bootstrap failure, the `daemon.shutdown` RPC, the idle
 //      timeout, SIGTERM, or the menu's "Quit" item.
-
-import AppKit
-import Daemon
-import Darwin
-import Foundation
 
 /// When a daemon instance started, and why it exited.
 ///

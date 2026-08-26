@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// VersionReport: `deviceterm version`.
-//
-// Reports the public CLI release version, the live daemon's wire
-// version (probed via `daemon.ping`), the bundled CLI's expected RPC
-// wire version, and the host's macOS version (a proxy for the
-// CoreSimulator boundary, which doesn't expose its own version
-// surface).
-//
-// Pure data type; `VersionReportFormat` renders it and the runner in
-// main.swift fills in the fields (env reads, daemon ping).
 
 import DaemonProtocol
 import Foundation
 
+/// `deviceterm version`.
+///
+/// Reports the public CLI release version, the live daemon's wire
+/// version (probed via `daemon.ping`), the bundled CLI's expected RPC
+/// wire version, and the host's macOS version (a proxy for the
+/// CoreSimulator boundary, which doesn't expose its own version
+/// surface).
+///
+/// Pure data type; `VersionReportFormat` renders it and the runner in
+/// main.swift fills in the fields (env reads, daemon ping).
 public struct VersionReport: Encodable, Sendable, Equatable {
     /// `deviceterm-cli`'s own semver. Pinned at the CLI module's
     /// build-time constant.

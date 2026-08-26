@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GhosttyTerminalSurface: the libghostty-backed TerminalSurface.
-//
-// Ties the process runtime (GhosttyRuntime), the render/input view
-// (GhosttySurfaceView), and the engine-agnostic contract
-// (TerminalSurface) together. `attach` marshals a TerminalCommand
-// into ghostty_surface_config_s and spawns the shell *inside
-// libghostty*; there is no daemon PTY for terminal panes.
-//
-// String-lifetime rule (libghostty copies config strings during
-// ghostty_surface_new, then they may be freed): we strdup the
-// command / cwd / env into C buffers, hold them across the single
-// ghostty_surface_new call, and free immediately after. Do NOT keep
-// the config struct around: its pointers are dead post-call.
 
 import AppKit
 import Foundation
 import GhosttyKit
 import TerminalSurface
 
+/// The libghostty-backed TerminalSurface.
+///
+/// Ties the process runtime (GhosttyRuntime), the render/input view
+/// (GhosttySurfaceView), and the engine-agnostic contract
+/// (TerminalSurface) together. `attach` marshals a TerminalCommand
+/// into ghostty_surface_config_s and spawns the shell *inside
+/// libghostty*; there is no daemon PTY for terminal panes.
+///
+/// String-lifetime rule (libghostty copies config strings during
+/// ghostty_surface_new, then they may be freed): we strdup the
+/// command / cwd / env into C buffers, hold them across the single
+/// ghostty_surface_new call, and free immediately after. Do NOT keep
+/// the config struct around: its pointers are dead post-call.
 @MainActor
 public final class GhosttyTerminalSurface: TerminalSurface {
     /// A macOS virtual keycode no physical key uses, so libghostty

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppSwitcherTrajectory: the scripted App Switcher swipe's geometry, separated
-// from the relay that sends it.
-//
-// The relay owns channels and reports; none of that is needed to decide where
-// each frame goes, and keeping the geometry here is what makes it testable
-// without a live device channel.
 
 import Foundation
 
+/// The scripted App Switcher swipe's geometry, separated
+/// from the relay that sends it.
+///
+/// The relay owns channels and reports; none of that is needed to decide where
+/// each frame goes, and keeping the geometry here is what makes it testable
+/// without a live device channel.
 enum AppSwitcherTrajectory {
     /// Every contact point the trajectory plays after the opening grab, in
     /// order: hold at the grab point, ramp toward the dwell point, hold there.

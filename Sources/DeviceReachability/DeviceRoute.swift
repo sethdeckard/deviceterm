@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// A resolved path to a connected device: which `utun` carries its traffic and
 /// the unique-local addresses of both ends of that point-to-point link.
 ///

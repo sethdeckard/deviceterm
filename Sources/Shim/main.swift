@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import DaemonProtocol
+import Darwin
+import Dispatch
+import Foundation
+
 // deviceterm-shim: argv[0]-driven shim for `xcrun` and `simctl`.
 //
 // Runs in every deviceterm tab's shell as the first entry on PATH so
@@ -38,11 +43,6 @@
 // Provenance: the GUI relay matches the caller's kernel identity to the
 // terminal anchor. The fallback daemon path validates the session capability
 // plus the same terminal provenance. The capability alone grants no authority.
-
-import DaemonProtocol
-import Darwin
-import Dispatch
-import Foundation
 
 // MARK: - Env helpers
 

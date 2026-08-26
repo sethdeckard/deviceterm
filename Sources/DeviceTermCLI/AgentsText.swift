@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AgentsText: the long-form `deviceterm agents` documentation surface.
-//
-// `deviceterm help` lists the commands and `deviceterm help <command>`
-// reads one in full; `deviceterm agents` is the deeper workflow + triage
-// guide. The two stay disjoint in scope: help is organized by verb;
-// agents is organized by task and carries
-// per-command "broken-or-operator-error" checklists, the load-bearing
-// "Getting a sim into your tab" section, integration tips, and the
-// pointer at the permission model.
-//
-// Lives as a pure constant so `Tests/CLITests` can assert content
-// invariants without spawning a process. Wrapped to 78 cols for any
-// 80-col terminal.
 
+/// The long-form `deviceterm agents` documentation surface.
+///
+/// `deviceterm help` lists the commands and `deviceterm help <command>`
+/// reads one in full; `deviceterm agents` is the deeper workflow + triage
+/// guide. The two stay disjoint in scope: help is organized by verb;
+/// agents is organized by task and carries per-command
+/// "broken-or-operator-error" checklists, the "Getting a sim into your
+/// tab" recovery workflow, integration tips, and the pointer at the
+/// permission model.
+///
+/// Lives as a pure constant so `Tests/CLITests` can assert content
+/// invariants without spawning a process. Wrapped to 78 cols for any
+/// 80-col terminal.
 public enum AgentsText {
     /// The shape printed for `deviceterm agents`. main.swift writes
     /// this to stdout and exits 0: same pattern as --help.

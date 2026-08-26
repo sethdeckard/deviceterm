@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Restoring the shared sim after a test drives it through a shutdown.
-//
-// The whole live target shares one booted device that `make test-live`
-// provisions, so a test that shuts it down owes every later test a device
-// in the state the track promised. Two tests do that deliberately, to
-// observe an out-of-band shutdown reaching the notifier and the pane
-// registry.
 
 import CoreSimulatorBridge
 import Foundation
 
 /// Boot the shared sim and wait for `simctl bootstatus` to complete.
+///
+/// The whole live target shares one booted device that `make test-live`
+/// provisions, so a test that shuts it down owes every later test a device
+/// in the state the track promised. Two tests do that deliberately, to
+/// observe an out-of-band shutdown reaching the notifier and the pane
+/// registry.
 ///
 /// CoreSimulator can report `.booted` while its system app is still
 /// starting, so a test that runs next and drives HID hits an unconnected

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// What a channel is *for*, in deviceterm's own terms. The daemon reasons about
 /// roles, never Apple service identifiers.
 ///

@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Cursor: the read side of the CoreDevice object wire format, paired with
-// the encoder in `ObjectCoder.swift`. The 4-byte alignment rules here mirror
-// the encoder's padding exactly; the two must move together.
 
 import Foundation
 
 /// A forward cursor over a byte buffer with little-endian readers and 4-byte
-/// alignment, mirroring the encoder's padding rules.
+/// alignment: the read side of the CoreDevice object wire format.
+///
+/// Paired with the encoder in `ObjectCoder.swift`. The alignment rules here
+/// mirror the encoder's padding exactly; the two must move together.
 struct Cursor {
     private let bytes: [UInt8]
     private(set) var offset = 0

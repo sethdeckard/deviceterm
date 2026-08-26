@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Receipt: per-command JSON shapes for `--json` mode.
-//
-// Each input command gets its own Encodable struct so the JSON shape
-// is enforced at compile time and the test surface is one
-// `JSONEncoder` invocation per command. Fields mirror the
-// `Echo.ok(...)` receipt line: every command's JSON object has the
-// stable `{ok, udid, paneId}` prefix plus the per-command fields the
-// human receipt would show.
-//
-// **nil handling**: synthesized Encodable uses `encodeIfPresent`
-// for Optional fields, so a nil value omits the key entirely rather
-// than emitting JSON `null`. This matches the common JSON-API
-// convention (jq `has(\"key\")` is the canonical absence check).
-// Consequences:
-//   - Older-daemon skew on swipe → `dispatched`/`steps`/`durationMs`
-//     keys absent. Consumers checking `has("dispatched")` see the
-//     skew explicitly.
-//   - `tabs list` rows with no `name` / `label` omit those keys;
-//     the `current` boolean is always present.
-//   - `shortId` is omitted when the daemon predates the identifier
-//     model; current daemons always emit it.
-//
-// All structs encode with `JSONEncoder.OutputFormatting.sortedKeys`
-// in production so test assertions are byte-stable across Swift
-// versions and platforms.
 
 import Foundation
 
+/// Per-command JSON shapes for `--json` mode.
+///
+/// Each input command gets its own Encodable struct so the JSON shape
+/// is enforced at compile time and the test surface is one
+/// `JSONEncoder` invocation per command. Fields mirror the
+/// `Echo.ok(...)` receipt line: every command's JSON object has the
+/// stable `{ok, udid, paneId}` prefix plus the per-command fields the
+/// human receipt would show.
+///
+/// **nil handling**: synthesized Encodable uses `encodeIfPresent`
+/// for Optional fields, so a nil value omits the key entirely rather
+/// than emitting JSON `null`. This matches the common JSON-API
+/// convention (jq `has(\"key\")` is the canonical absence check).
+/// Consequences:
+///   - Older-daemon skew on swipe → `dispatched`/`steps`/`durationMs`
+///     keys absent. Consumers checking `has("dispatched")` see the
+///     skew explicitly.
+///   - `tabs list` rows with no `name` / `label` omit those keys;
+///     the `current` boolean is always present.
+///   - `shortId` stays optional for decode compatibility with the
+///     pre-identifier response shape.
+///
+/// All structs encode with `JSONEncoder.OutputFormatting.sortedKeys`
+/// in production so test assertions are byte-stable across Swift
+/// versions and platforms.
 public enum Receipt {
     public struct Tap: Encodable, Sendable {
         public let ok = true

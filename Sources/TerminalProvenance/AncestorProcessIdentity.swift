@@ -1,19 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AncestorProcessIdentity: one verified hop on a UDS caller's parent chain.
-//
-// The terminal provenance arm asks whether a caller belongs to the session's
-// bound terminal. A caller that detached does not, but its parent chain still
-// leads back into the tab, and an agent harness that runs each command under
-// `setsid` is exactly that shape. So the arm scans the caller's ancestors as
-// well as the caller itself, and this type is one entry in that scan.
-//
-// Deliberately NOT a `PeerProcessIdentity`. An ancestor has no audit token, so
-// reusing that type would mean inventing a `pidVersion` for it, and a
-// fabricated `0` could equal a session owner that also carries `0` and reach
-// the owner arm. An ancestor carries only the terminal triple the match
-// compares plus the two facts the walk's own guards need, which leaves it
-// structurally incapable of authorizing as an owner.
 
 import Foundation
 #if canImport(Darwin)
@@ -24,6 +9,19 @@ import Darwin
 /// produced it. Its terminal triple has the same meaning and the same source as
 /// `PeerProcessIdentity`'s, so `ProvenanceMatcher` compares it against
 /// `TerminalAnchorFacts` with the same test.
+///
+/// The terminal provenance arm asks whether a caller belongs to the session's
+/// bound terminal. A caller that detached does not, but its parent chain still
+/// leads back into the tab, and an agent harness that runs each command under
+/// `setsid` is exactly that shape. So the arm scans the caller's ancestors as
+/// well as the caller itself, and this type is one entry in that scan.
+///
+/// Deliberately NOT a `PeerProcessIdentity`. An ancestor has no audit token, so
+/// reusing that type would mean inventing a `pidVersion` for it, and a
+/// fabricated `0` could equal a session owner that also carries `0` and reach
+/// the owner arm. An ancestor carries only the terminal triple the match
+/// compares plus the two facts the walk's own guards need, which leaves it
+/// structurally incapable of authorizing as an owner.
 public struct AncestorProcessIdentity: Sendable, Equatable {
     public let pid: pid_t
     /// Effective uid, checked against the peer's before this entry was

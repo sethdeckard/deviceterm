@@ -1,21 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UDSListenerSocket: the server half of the harness's private Unix-
-// domain socket, self-contained inside this target.
-//
-// `Daemon`'s `UDSSocket` has an equivalent listener, but it lives in the
-// `Daemon` library, which transitively links CoreSimulator, a dependency
-// the test harness must not take (it stays a small, decoupled
-// instrument). The client half already exists Foundation-only as
-// `DaemonProtocol.UDSClientSocket`, which this target reuses; only the
-// ~145 lines of bind/accept/read/write server boilerplate are duplicated
-// here, mirroring the deliberate split documented on `UDSClientSocket`.
-//
-// Unlike the daemon's non-blocking + `DispatchSourceRead` design, this
-// listener stays *blocking* and is driven from a dedicated background
-// thread (see `ResidentServer`): one request per accepted connection,
-// read to a full frame, reply, close. Simpler, and adequate for a test
-// harness's request volume.
 
 import DaemonProtocol
 import Foundation
@@ -23,6 +6,22 @@ import Foundation
 import Darwin
 #endif
 
+/// The server half of the harness's private Unix-
+/// domain socket, self-contained inside this target.
+///
+/// `Daemon`'s `UDSSocket` has an equivalent listener, but it lives in the
+/// `Daemon` library, which transitively links CoreSimulator, a dependency
+/// the test harness must not take (it stays a small, decoupled
+/// instrument). The client half already exists Foundation-only as
+/// `DaemonProtocol.UDSClientSocket`, which this target reuses; only the
+/// bind/accept/read/write server path is duplicated here, mirroring the
+/// deliberate split documented on `UDSClientSocket`.
+///
+/// Unlike the daemon's non-blocking + `DispatchSourceRead` design, this
+/// listener stays *blocking* and is driven from a dedicated background
+/// thread (see `ResidentServer`): one request per accepted connection,
+/// read to a full frame, reply, close. Simpler, and adequate for a test
+/// harness's request volume.
 enum UDSListenerSocket {
     /// macOS reserves 104 bytes for `sockaddr_un.sun_path`; one is the
     /// trailing NUL, so the practical ceiling is 103.

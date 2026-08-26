@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AXTreeBuilder: pure recursive tree shaping with hard limits.
-//
-// Split from `AXDumpService` so the traversal, the depth/node ceilings,
-// and the truncation and skip markers can be unit-tested against a fake
-// tree, with no live app and no Accessibility grant. The service supplies
-// the closures that read a real `AXUIElement`, and the policy deciding
-// which subtrees are worth descending into.
-//
-// The limits are not cosmetic. An accessibility tree is a foreign process's
-// data structure: it can be enormous (a scrolled terminal), and a
-// misbehaving app can even present a cycle. Bounding depth and node count
-// keeps one `ax dump` from hanging the harness or returning a megabyte of
-// JSON an agent cannot use.
 
 import Foundation
 
+/// Pure recursive tree shaping with hard limits.
+///
+/// Split from `AXDumpService` so the traversal, the depth/node ceilings,
+/// and the truncation and skip markers can be unit-tested against a fake
+/// tree, with no live app and no Accessibility grant. The service supplies
+/// the closures that read a real `AXUIElement`, and the policy deciding
+/// which subtrees are worth descending into.
+///
+/// The limits are not cosmetic. An accessibility tree is a foreign process's
+/// data structure: it can be enormous (a scrolled terminal), and a
+/// misbehaving app can even present a cycle. Bounding depth and node count
+/// keeps one `ax dump` from hanging the harness or returning a megabyte of
+/// JSON an agent cannot use.
 enum AXTreeBuilder {
     /// Walk `root` depth-first into a JSON-ready dictionary.
     ///

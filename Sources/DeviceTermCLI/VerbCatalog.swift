@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// VerbCatalog: the single per-verb table for the two otherwise
-// hand-duplicated mechanical lists: a verb's value-taking flags (the
-// parser's `CLICommands.valuedFlags` grammar) and its shell-completion
-// sub-verbs (`Completions`). Adding a verb updates it in one place
-// instead of a flag switch plus four completion arrays.
-//
-// This is deliberately NOT the source of truth for *which* verbs exist
-// or what they parse to; the `CLICommand` enum and the exhaustive
-// parse/dispatch switches keep the compiler enforcing that. The help
-// prose is hand-authored in `HelpCatalog`, one topic per verb, joined
-// to this table by `HelpCatalogTests` so a verb can't gain a parser
-// entry without gaining a page. The catalog only removes the
-// silent-to-omit duplication the compiler can't catch.
 
+/// The single per-verb table for the two otherwise
+/// hand-duplicated mechanical lists: a verb's value-taking flags (the
+/// parser's `CLICommands.valuedFlags` grammar) and its shell-completion
+/// sub-verbs (`Completions`). Adding a verb updates it in one place
+/// instead of a flag switch plus four completion arrays.
+///
+/// This is deliberately NOT the source of truth for *which* verbs exist
+/// or what they parse to; the `CLICommand` enum and the exhaustive
+/// parse/dispatch switches keep the compiler enforcing that. The help
+/// prose is hand-authored in `HelpCatalog`, one topic per verb, joined
+/// to this table by `HelpCatalogTests` so a verb can't gain a parser
+/// entry without gaining a page. The catalog only removes the
+/// silent-to-omit duplication the compiler can't catch.
 enum VerbCatalog {
     struct Verb {
         let name: String

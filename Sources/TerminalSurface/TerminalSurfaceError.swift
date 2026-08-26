@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalSurfaceError: the failures a TerminalSurface can throw.
-// `attach` raises the surface-creation and re-attach cases; the
-// input and capture verbs raise the not-yet-attached and
-// capture-refused ones.
-//
-// Kept tiny and libghostty-free on purpose: the protocol lives in a
-// module `App` can depend on without the C framework, so its error
-// type can't reference `ghostty_*` codes. The libghostty bridge maps
-// its own failure detail onto these cases.
 
 import Foundation
 
+/// The failures a TerminalSurface can throw.
+/// `attach` raises the surface-creation and re-attach cases; the
+/// input and capture verbs raise the not-yet-attached and
+/// capture-refused ones.
+///
+/// Kept tiny and libghostty-free on purpose: the protocol lives in a
+/// module `App` can depend on without the C framework, so its error
+/// type can't reference `ghostty_*` codes. The libghostty bridge maps
+/// its own failure detail onto these cases.
 public enum TerminalSurfaceError: Error, Sendable, Equatable {
     /// The underlying engine could not create a surface (e.g.
     /// libghostty's `ghostty_surface_new` returned NULL). Usually a

@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import AppKit
+import GhosttyKitResources
+import LibghosttyBridge
+import TerminalSurface
+
 // LibghosttyHarness: a standalone AppKit window hosting one
 // GhosttyTerminalSurface running a login shell.
 //
@@ -7,16 +12,11 @@
 // of the full GUI shell. A standalone debugging surface, not shipped
 // and not signed; run it via `make run-libghostty-harness`.
 //
-// Not a bundled .app, so we drive NSApplication programmatically and
-// point libghostty at the resource tree shipped by the libghostty-spm
-// package (`GhosttyKitResources`, via Bundle.module). Release
-// libghostty reads GHOSTTY_RESOURCES_DIR; the bridge sets it before
-// ghostty_init.
-
-import AppKit
-import GhosttyKitResources
-import LibghosttyBridge
-import TerminalSurface
+// Not a bundled .app, so NSApplication is driven programmatically and
+// libghostty is pointed at the resource tree shipped by the
+// libghostty-spm package (`GhosttyKitResources`, via Bundle.module).
+// Release libghostty reads GHOSTTY_RESOURCES_DIR; the bridge sets it
+// before ghostty_init.
 
 @MainActor
 final class HarnessDelegate: NSObject, NSApplicationDelegate, TerminalSurfaceDelegate {

@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AXDumpService: read another app's AppKit accessibility tree.
-//
-// This is the structured counterpart to a screenshot: instead of asking a
-// model to look at pixels, an agent can assert that the tab strip holds
-// three AXCheckBoxes, or that an AXSheet is present. Pixels still catch
-// what no schema encodes (layout, color, overlap); AX catches everything
-// else, deterministically.
-//
-// Requires the Accessibility grant, which belongs to this resident harness
-// (see TCCStatus). Reading a foreign process's tree is IPC, so every call
-// can block, hence the global messaging timeout below.
 
 import AppKit
 import ApplicationServices
 import Foundation
 
+/// Read another app's AppKit accessibility tree.
+///
+/// This is the structured counterpart to a screenshot: instead of asking a
+/// model to look at pixels, an agent can assert that the tab strip holds
+/// three AXCheckBoxes, or that an AXSheet is present. AX provides
+/// structured roles, labels, values, frames, and hierarchy for assertions;
+/// screenshots cover rendered properties the tree omits.
+///
+/// Requires the Accessibility grant, which belongs to this resident harness
+/// (see TCCStatus). Reading a foreign process's tree is IPC, so every call
+/// can block, hence the global messaging timeout below.
 enum AXDumpService {
     /// How long a single AX message may block before failing. deviceterm can
     /// sit inside a modal run loop; without this a read could hang the worker

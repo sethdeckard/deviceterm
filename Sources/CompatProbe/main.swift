@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import CoreSimulatorBridge
+import Foundation
+
 // deviceterm-probe: CoreSimulator compatibility probe.
 //
 // Runs CoreSimulatorLoader.probe() against the host's CoreSimulator
@@ -8,9 +11,6 @@
 // if every required symbol was found, 1 otherwise. The curated
 // compatibility ledger is as-tested.md's required-symbols table; this
 // log is just a local "did it still resolve?" trail, not kept in git.
-
-import CoreSimulatorBridge
-import Foundation
 
 let report = CoreSimulatorLoader.probe()
 

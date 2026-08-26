@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// The RTCP feedback datagrams sent back to the device over the shared RTP
 /// socket. Two are load-bearing for a stable mirror:
 ///

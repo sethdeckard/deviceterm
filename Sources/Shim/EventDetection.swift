@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// EventDetection: pure argv-pattern matcher for the shim.
-//
-// Extracted from `main.swift` so the `ShimTests` target can call
-// `detectEvent` from a nonisolated test context. Swift 6 treats
-// every top-level declaration in `main.swift` as `@MainActor`
-// (it's the executable's entry point), which means a non-isolated
-// test trips a runtime isolation check when it reaches a Set
-// lookup inside `skipFlagsConsumingValues`. Moving the pure
-// surface here makes it default-nonisolated and unit-testable
-// without forcing every test onto MainActor.
 
 import DaemonProtocol
 import Foundation
+
+// The shim's pure argv-pattern matchers, kept out of `main.swift` so the
+// `ShimTests` target can call them from a nonisolated test context. Swift 6
+// treats every top-level declaration in `main.swift` as `@MainActor` (it's the
+// executable's entry point), which means a non-isolated test trips a runtime
+// isolation check when it reaches a Set lookup inside
+// `skipFlagsConsumingValues`. Keeping the pure surface here makes it
+// default-nonisolated and unit-testable without forcing every test onto
+// MainActor.
 
 // MARK: - Flag tables
 

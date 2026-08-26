@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalAnchorFacts: the kernel-verified terminal identity a session binds.
-//
-// The numeric foreground pid that produced these facts is never retained. The
-// stable boundary is the POSIX session id, the controlling TTY device, and the
-// session-leader start time, which together survive pid reuse.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
-/// Kernel-verified facts describing a terminal. These are the exact fields a
-/// UDS peer's `PeerProcessIdentity` is matched against.
+/// Kernel-verified facts describing a terminal, and the identity a session
+/// binds. These are the exact fields a UDS peer's `PeerProcessIdentity` is
+/// matched against.
+///
+/// The numeric foreground pid that produced these facts is never retained. The
+/// stable boundary is the POSIX session id, the controlling TTY device, and the
+/// session-leader start time, which together survive pid reuse.
 public struct TerminalAnchorFacts: Sendable, Equatable {
     /// The terminal's POSIX session id (`getsid(foregroundPid)`).
     public let terminalSessionId: pid_t

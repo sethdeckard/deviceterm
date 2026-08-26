@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Help topics for the device roster and attachment verbs.
-//
-// This is a behavior-grouping extension, not a conformance split.
 
+/// Help topics for the device roster and attachment verbs.
+///
+/// This is a behavior-grouping extension, not a conformance split.
 extension HelpCatalog {
     static let deviceTopics: [HelpTopic] = [
         HelpTopic(

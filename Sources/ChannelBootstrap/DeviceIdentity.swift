@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// The device's self-reported identity, read from the service-directory
 /// handshake's properties.
 ///

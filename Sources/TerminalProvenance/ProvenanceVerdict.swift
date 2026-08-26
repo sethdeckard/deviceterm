@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ProvenanceVerdict: the three outcomes of the provenance decision.
-//
-// `.notReady` is kept distinct from `.unauthorized` because only the former
-// is retryable: it means the session is live but its terminal anchor hasn't
-// been bound yet, which the CLI waits out briefly.
 
 import Foundation
 
+/// The three outcomes of the provenance decision.
+///
+/// `.notReady` is kept distinct from `.unauthorized` because only the former
+/// is retryable: it means the session is live but its terminal anchor hasn't
+/// been bound yet, which the CLI waits out briefly.
 public enum ProvenanceVerdict: Sendable, Equatable {
     case authorized
     /// A non-owner UDS peer on a live session with no terminal anchor yet

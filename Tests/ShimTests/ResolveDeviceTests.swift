@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ResolveDeviceTests: pin `resolveDevice`'s snapshot-diff
-// attribution behavior. The function takes before/after `simctl
-// list` snapshots and decides which device the user's spec is
-// pointing at. The required invariant is that a non-transition is
-// never resolved to a device. Without that gate an idempotent
-// invocation (`simctl bootstatus -b <udid>` against a sim that's
-// already Booted, which exits 0 without changing any state) would
-// still resolve via the literal-UDID / unique-name fallback and
-// the shim would post a fabricated `.booted` event, claiming
-// ownership of an externally-booted sim for the calling session.
-// `simctl boot` against an already-Booted device exits non-zero, so
-// the `boot <udid>` path gets that signal for free; `bootstatus`
-// exits 0 either way and needs the explicit transition gate.
 
 import DaemonProtocol
 @testable import Shim
 import Testing
+
+// Pin `resolveDevice`'s snapshot-diff attribution behavior. The function
+// takes before/after `simctl list` snapshots and decides which device the
+// user's spec is pointing at. The required invariant is that a non-transition
+// is never resolved to a device. Without that gate an idempotent invocation
+// (`simctl bootstatus -b <udid>` against a sim that's already Booted, which
+// exits 0 without changing any state) would still resolve via the
+// literal-UDID / unique-name fallback and the shim would post a fabricated
+// `.booted` event, claiming ownership of an externally-booted sim for the
+// calling session. `simctl boot` against an already-Booted device exits
+// non-zero, so the `boot <udid>` path gets that signal for free; `bootstatus`
+// exits 0 either way and needs the explicit transition gate.
 
 // MARK: - Fixture helpers
 

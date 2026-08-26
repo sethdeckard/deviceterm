@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// deviceterm's deliberate policy around RTP loss. RFC 7798 defines how to
 /// reconstruct packets but not whether a decoder should consume a damaged
 /// picture; this discards the damaged one and waits for a complete keyframe, so

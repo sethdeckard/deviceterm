@@ -1,48 +1,47 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ProvenanceMatcher. The pure decision at the heart of session provenance.
-//
-// A session's capability authenticates possession, but the capability is
-// readable by any same-uid process in the tab's tree (it is inherited env, and
-// recoverable via `ps -E`). So possession alone can't authenticate a session.
-// A caller is authorized as a session only when, in addition to a valid
-// capability and a live session (checked by the auth layer), its kernel
-// process provenance matches one of:
-//
-//   - it is the validated GUI peer (a provenance exception; XPC only); or
-//   - it is exactly the process that created the session (owner arm); or
-//   - it belongs to the session's bound terminal: same POSIX session id, same
-//     controlling TTY, same session-leader start identity (terminal arm; UDS
-//     only); or
-//   - one of its live ancestors belongs to that terminal by the same test
-//     (anchored-ancestry arm; UDS only).
-//
-// The ancestry arm is why authority is the live parent chain rather than
-// terminal membership alone. A caller that detached from the terminal cannot
-// match on its own facts, but a harness that runs each command under `setsid`
-// still hangs off the tab's shell, and refusing it locks every agent running
-// in a tab out of its own session. Orphaning is what severs authority: once no
-// live ancestor reaches the terminal, nothing authorizes. The trade: detaching
-// a child does not renounce its trust, which would require a separate
-// quarantine mechanism.
-//
-// This function is pure over its inputs so the whole provenance matrix is
-// exercised hermetically. Three outcomes, kept distinct for the caller:
-//   - `.authorized`: a provenance arm matched.
-//   - `.notReady`: a NON-OWNER UDS peer on a live session whose terminal
-//     anchor has not been established yet (the GUI hasn't bound, or a restart
-//     dropped it). Exact-owner UDS and validated-GUI callers are authorized by
-//     an earlier arm, so they never reach this. The bounded-retryable state;
-//     NOT an authorization.
-//   - `.unauthorized`. No arm matched: a wrong terminal, a caller whose chain
-//     no longer reaches the terminal, an XPC peer that isn't the owner, or a
-//     missing kernel identity (fail closed). NOT retryable.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// The pure decision at the heart of session provenance.
+///
+/// A session's capability authenticates possession, but the capability is
+/// readable by any same-uid process in the tab's tree (it is inherited env, and
+/// recoverable via `ps -E`). So possession alone can't authenticate a session.
+/// A caller is authorized as a session only when, in addition to a valid
+/// capability and a live session (checked by the auth layer), its kernel
+/// process provenance matches one of:
+///
+///   - it is the validated GUI peer (a provenance exception; XPC only); or
+///   - it is exactly the process that created the session (owner arm); or
+///   - it belongs to the session's bound terminal: same POSIX session id, same
+///     controlling TTY, same session-leader start identity (terminal arm; UDS
+///     only); or
+///   - one of its live ancestors belongs to that terminal by the same test
+///     (anchored-ancestry arm; UDS only).
+///
+/// The ancestry arm is why authority is the live parent chain rather than
+/// terminal membership alone. A caller that detached from the terminal cannot
+/// match on its own facts, but a harness that runs each command under `setsid`
+/// still hangs off the tab's shell, and refusing it locks every agent running
+/// in a tab out of its own session. Orphaning is what severs authority: once no
+/// live ancestor reaches the terminal, nothing authorizes. The trade: detaching
+/// a child does not renounce its trust, which would require a separate
+/// quarantine mechanism.
+///
+/// This function is pure over its inputs so the whole provenance matrix is
+/// exercised hermetically. Three outcomes, kept distinct for the caller:
+///   - `.authorized`: a provenance arm matched.
+///   - `.notReady`: a NON-OWNER UDS peer on a live session whose terminal
+///     anchor has not been established yet (the GUI hasn't bound, or a restart
+///     dropped it). Exact-owner UDS and validated-GUI callers are authorized by
+///     an earlier arm, so they never reach this. The bounded-retryable state;
+///     NOT an authorization.
+///   - `.unauthorized`. No arm matched: a wrong terminal, a caller whose chain
+///     no longer reaches the terminal, an XPC peer that isn't the owner, or a
+///     missing kernel identity (fail closed). NOT retryable.
 public enum ProvenanceMatcher {
     /// Decide the provenance verdict for `peer` against a session's captured
     /// owner identity and (for UDS) its terminal facts. The auth layer has

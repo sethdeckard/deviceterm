@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CLICommands: pure argv parsing and request encoding.
-//
-// Kept separate from main.swift so Tests/CLITests can drive these
-// functions directly. main.swift owns side effects (env reads, stderr,
-// socket I/O, `exit`); this file owns the deterministic pieces.
-//
-// The verb families split across `CLICommands+Workspace.swift` and
-// `CLICommands+Input.swift`; the grammar they share is documented on
-// `CLICommand`.
 
 import DaemonProtocol
 import Foundation
 
+/// Pure argv parsing and request encoding.
+///
+/// Kept separate from main.swift so Tests/CLITests can drive these
+/// functions directly. main.swift owns side effects (env reads, stderr,
+/// socket I/O, `exit`); this file owns the deterministic pieces.
+///
+/// The verb families split across `CLICommands+Workspace.swift` and
+/// `CLICommands+Input.swift`; the grammar they share is documented on
+/// `CLICommand`.
 public enum CLICommands {
     // MARK: - Nested types
 

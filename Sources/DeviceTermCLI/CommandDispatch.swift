@@ -1,17 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Typed command dispatch. `run(_:transport:output:)` is the single
-// dispatcher: each verb becomes a handler that takes an injected
-// `CLITransport`, reads no globals it can't be handed, and returns a
-// `CommandOutcome` instead of writing to stdout/stderr and calling
-// `exit`. The thin driver in main.swift renders the outcome and exits;
-// the streaming (`events`) and exec (`with-pane`) verbs own their I/O
-// and terminate directly.
-//
-// Handlers throw `CLIError` for transport/daemon failures (mapped to
-// stderr/exit by `errorOutcome`) and return a failing
-// `CommandOutcome` for domain errors that carry a bespoke message
-// (e.g. "no live tab").
 
 import DaemonProtocol
 import Foundation
@@ -58,13 +45,21 @@ func errorOutcome(_ error: Error) -> CommandOutcome {
 }
 
 /// The single command dispatcher: render `command` to a `CommandOutcome`
-/// the driver writes and exits on. Most verbs return a value; the
-/// streaming (`events`) and exec (`with-pane`) verbs, along with the
-/// terse `usage` path, own their I/O and terminate the process directly.
+/// the driver writes and exits on. Each verb becomes a handler that takes an
+/// injected `CLITransport`, reads no globals it can't be handed, and returns
+/// an outcome instead of writing to stdout/stderr and calling `exit`. Most
+/// verbs return a value; the streaming (`events`) and exec (`with-pane`)
+/// verbs, along with the terse `usage` path, own their I/O and terminate the
+/// process directly.
+///
 /// Env-derived inputs (current session, credentials) are read here and
 /// handed to the handlers so the handlers stay pure and unit-testable
-/// against a fake transport. A thrown transport/daemon error is mapped
-/// to its stderr/exit shape by `errorOutcome`.
+/// against a fake transport.
+///
+/// Handlers throw `CLIError` for transport/daemon failures, which
+/// `errorOutcome` maps to its stderr/exit shape, and return a failing
+/// `CommandOutcome` for domain errors that carry a bespoke message
+/// (e.g. "no live tab").
 func run(
     _ command: CLICommand,
     transport: CLITransport,

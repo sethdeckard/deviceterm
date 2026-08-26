@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WorkspaceCommandsTests: parser surface for the tab / pane /
-// window / windows verbs.
-//
-// Every verb gets a happy-path test that pins the exact `CLICommand`
-// the parser emits, plus malformed/usage tests for the verbs whose
-// usage messages were designed to point at the right shape. Covers
-// the standing parser-test invariant: "every verb's parse surface
-// gets happy + malformed coverage."
 
 import DaemonProtocol
 @testable import DeviceTermCLI
 import Foundation
 import Testing
 
+/// Parser surface for the tab / pane /
+/// window / windows verbs.
+///
+/// Every verb gets a happy-path test that pins the exact `CLICommand`
+/// the parser emits, plus malformed/usage tests for the verbs whose
+/// usage messages were designed to point at the right shape. Covers
+/// the standing parser-test invariant: "every verb's parse surface
+/// gets happy + malformed coverage."
 struct WorkspaceCommandsTests {
     // MARK: - Ref parsing
 

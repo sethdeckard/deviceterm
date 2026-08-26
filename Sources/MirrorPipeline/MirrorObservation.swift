@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// A snapshot of what a `MirrorPipeline`'s receive loop has done so far.
 ///
 /// Every field is a monotonic counter over the pipeline's whole lifetime, not a

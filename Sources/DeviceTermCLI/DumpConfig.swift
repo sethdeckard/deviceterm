@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DumpConfig: `deviceterm dump-config`.
-//
-// Reports the effective value for every recognized deviceterm config
-// key, annotated with the source layer (built-in default vs. user
-// file override). Keys whose documented default is only the choice a
-// present key selects (the prompt-suppression keys) report `unset`
-// with an explanatory note when absent, because no default applies:
-// the app shows the prompt. Warnings call out file entries with
-// unrecognized keys so a typo in `~/.config/deviceterm/config`
-// surfaces explicitly.
-//
-// Pure parser + report; the runner in main.swift reads the file
-// from disk and hands the raw text in. Each piece is testable
-// without I/O. This covers the deviceterm overrides path that the
-// architecture-checks gate documents; the Ghostty presentation layer
-// is not parsed here.
 
 import DaemonProtocol
 import Foundation
 
+/// `deviceterm dump-config`.
+///
+/// Reports the effective value for every recognized deviceterm config
+/// key, annotated with the source layer (built-in default vs. user
+/// file override). Keys whose documented default is only the choice a
+/// present key selects (the prompt-suppression keys) report `unset`
+/// with an explanatory note when absent, because no default applies:
+/// the app shows the prompt. Warnings call out file entries with
+/// unrecognized keys so a typo in `~/.config/deviceterm/config`
+/// surfaces explicitly.
+///
+/// Pure parser + report; the runner in main.swift reads the file
+/// from disk and hands the raw text in. Each piece is testable
+/// without I/O. This covers the deviceterm overrides path that the
+/// architecture-checks gate documents; the Ghostty presentation layer
+/// is not parsed here.
 public enum DumpConfig {
     public enum Source: String, Sendable, Codable, Equatable {
         case `default`

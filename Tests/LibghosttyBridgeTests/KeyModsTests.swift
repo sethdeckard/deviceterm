@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeyModsTests: pin GhosttySurfaceView's `mods(from:)` and
-// `consumedMods(from:)` translation to stock Ghostty.app's
-// `Ghostty.ghosttyMods` (Ghostty.Input.swift) row-by-row.
-//
-// Why pin per-row rather than spot-check: a silent divergence from
-// upstream on a single shape drops one TUI keystroke and shows no
-// other symptom. Arrow keys, Ctrl-letter, and Shift+Tab each broke
-// that way. The bridge matches stock Ghostty's NSEvent translation
-// verbatim and this matrix is what holds it there, so a libghostty
-// bump that changes a mod-bit layout trips here rather than in a
-// user-reported TUI symptom.
-//
-// Sided-modifier coverage is exercised via raw bit construction.
-// AppKit's `NSEvent.ModifierFlags(rawValue:)` preserves the IOKit
-// NX_DEVICER*KEYMASK bits packed in the same raw value, so a
-// fabricated flags value lets us test the sided detection without
-// driving real hardware events. Stock Ghostty does this same check
-// (`rawFlags & UInt(NX_DEVICER...)`) so the parity is exact.
 
 import AppKit
 import GhosttyKit
 @testable import LibghosttyBridge
 import Testing
 
+/// Pin GhosttySurfaceView's `mods(from:)` and
+/// `consumedMods(from:)` translation to stock Ghostty.app's
+/// `Ghostty.ghosttyMods` (Ghostty.Input.swift) row-by-row.
+///
+/// Why pin per-row rather than spot-check: a one-row divergence from
+/// upstream affects only the corresponding TUI keystroke and shows no
+/// other symptom, so the matrix covers arrow keys, Ctrl-letter, and
+/// Shift+Tab individually. The bridge matches stock Ghostty's NSEvent
+/// translation verbatim and this matrix is what holds it there, so a
+/// libghostty bump that changes a mod-bit layout trips here rather than
+/// in a user-reported TUI symptom.
+///
+/// Sided-modifier coverage is exercised via raw bit construction.
+/// AppKit's `NSEvent.ModifierFlags(rawValue:)` preserves the IOKit
+/// NX_DEVICER*KEYMASK bits packed in the same raw value, so a
+/// fabricated flags value lets us test the sided detection without
+/// driving real hardware events. Stock Ghostty does this same check
+/// (`rawFlags & UInt(NX_DEVICER...)`) so the parity is exact.
 @MainActor
 struct KeyModsTests {
     // MARK: - Base modifier bits

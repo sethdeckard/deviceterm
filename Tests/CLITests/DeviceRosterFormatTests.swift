@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// `devices list` rendering: physical devices show model + OS columns
-// (disambiguating two devices that share a name); sims show `-` for
-// both. The JSON mode carries the same fields on the wire.
 
 import DaemonProtocol
 @testable import DeviceTermCLI
 import Foundation
 import Testing
 
+/// `devices list` rendering: physical devices show model + OS columns
+/// (disambiguating two devices that share a name); sims show `-` for
+/// both. The JSON mode carries the same fields on the wire.
 struct DeviceRosterFormatTests {
     @Test
     func humanFormatShowsModelAndOSForDevicesAndDashesForSims() {

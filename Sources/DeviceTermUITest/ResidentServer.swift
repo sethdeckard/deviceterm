@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ResidentServer: the long-lived harness process's socket loop.
-//
-// `start()` binds the listener synchronously (so the socket is ready the
-// moment it returns) and drives the blocking accept loop from a
-// dedicated background thread. The resident hands its main thread to an
-// AppKit run loop (see `UITestMain.runResident`), so a blocking accept
-// loop there would wedge it.
-//
-// Protocol: one request per connection. Read one framed request,
-// dispatch through `Responder`, write one framed reply, close.
-//
-// `Sendable` because every stored property is a `let` over `Sendable`
-// state (`socketPath`, a value-type `Responder`, a `DispatchQueue`), so
-// the background accept closure may capture `self` safely.
 
 import Foundation
 
+/// The long-lived harness process's socket loop.
+///
+/// `start()` binds the listener synchronously (so the socket is ready the
+/// moment it returns) and drives the blocking accept loop from a
+/// dedicated background thread. The resident hands its main thread to an
+/// AppKit run loop (see `UITestMain.runResident`), so a blocking accept
+/// loop there would wedge it.
+///
+/// Protocol: one request per connection. Read one framed request,
+/// dispatch through `Responder`, write one framed reply, close.
+///
+/// `Sendable` because every stored property is a `let` over `Sendable`
+/// state (`socketPath`, a value-type `Responder`, a `DispatchQueue`), so
+/// the background accept closure may capture `self` safely.
 final class ResidentServer: Sendable {
     private let socketPath: String
     private let responder = Responder()

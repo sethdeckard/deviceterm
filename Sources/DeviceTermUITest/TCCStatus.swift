@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TCCStatus: this process's privacy grants.
-//
-// Both grants attribute to the process that calls the API, which is why
-// they are read (and requested) inside the resident harness rather than
-// in the short-lived client. A bare binary launched from a terminal
-// attributes to the terminal app; the bundled harness attributes to
-// itself. That difference is the entire reason the harness is bundled.
 
 import ApplicationServices
 import CoreGraphics
 
+/// This process's privacy grants.
+///
+/// Both grants attribute to the process that calls the API, which is why
+/// they are read (and requested) inside the resident harness rather than
+/// in the short-lived client. A bare binary launched from a terminal
+/// attributes to the terminal app; the bundled harness attributes to
+/// itself. That difference is the entire reason the harness is bundled.
 enum TCCStatus {
     /// Screen Recording. Required by ScreenCaptureKit. Preflight never
     /// prompts, so `doctor` can report status without side effects.

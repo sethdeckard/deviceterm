@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HelpTopic: one addressable page of the `deviceterm help` surface.
-//
-// A topic is either a command (one overview line under its group, plus a
-// full page at `deviceterm help <verb>`) or a concept (a page, named in the
-// overview footer, with no overview line of its own). `HelpCatalog` holds
-// the table; `HelpText` renders it.
-//
-// The split from `VerbCatalog` is deliberate: that table is parser grammar
-// (which flags take a value, which sub-verbs a verb accepts) and is read on
-// every flag split. Prose belongs beside prose. `HelpCatalogTests` joins the
-// two so a verb can't gain a parser entry without gaining a page.
 
+/// One addressable page of the `deviceterm help` surface.
+///
+/// A topic is either a command (one overview line under its group, plus a
+/// full page at `deviceterm help <verb>`) or a concept (a page, named in the
+/// overview footer, with no overview line of its own). `HelpCatalog` holds
+/// the table; `HelpText` renders it.
+///
+/// The split from `VerbCatalog` is deliberate: that table is parser grammar
+/// (which flags take a value, which sub-verbs a verb accepts) and is read on
+/// every flag split. Prose belongs beside prose. `HelpCatalogTests` joins the
+/// two so a verb can't gain a parser entry without gaining a page.
 struct HelpTopic: Sendable, Equatable {
     /// Where the topic surfaces. `.command` topics occupy an overview line
     /// under their group; `.concept` topics are reachable only by name.

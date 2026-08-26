@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// Maps a normalised 0…1 touch coordinate onto the device's native touchscreen
 /// range.
 ///

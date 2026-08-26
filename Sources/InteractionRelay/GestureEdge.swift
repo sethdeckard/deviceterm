@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// The screen edge a home-indicator / App Switcher system gesture originates
 /// from, in the device's native (portrait) frame.
 ///

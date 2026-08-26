@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// A single-use source of decoded mirror frames.
 ///
 /// `frames(onFatal:)` starts the pipeline and returns the frame stream; the

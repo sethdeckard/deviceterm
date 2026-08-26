@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WindowChooser: pure "which window do we screenshot?" logic.
-//
-// Split out from `CaptureService` so the selection rules are unit-
-// testable without ScreenCaptureKit, a GUI, or a TCC grant.
 
 import Foundation
 
+/// Pure "which window do we screenshot?" logic.
+///
+/// Split out from `CaptureService` so the selection rules are unit-
+/// testable without ScreenCaptureKit, a GUI, or a TCC grant.
 enum WindowChooser {
     /// Window-server layer at/above which a window is menu-bar / overlay
     /// chrome (status items, tooltips), never document content. This is

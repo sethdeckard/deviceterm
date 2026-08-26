@@ -1,44 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceScrollView: `NSScrollView` wrapper around a libghostty
-// surface view so the host can paint a native macOS scrollbar
-// reflecting libghostty's scrollback state.
-//
-// Architecture (matches Ghostty.app's SurfaceScrollView):
-//
-//   - `scrollView`:   outermost `NSScrollView`; renders the scroller
-//                     and owns the clip view that posts bounds-change
-//                     notifications.
-//   - `documentView`: blank `NSView`; height sized to
-//                     `total rows × cell height` so the scroller
-//                     reflects the full scrollback geometry.
-//   - `surfaceView`:  libghostty's render+input view (passed in by
-//                     the host); positioned to fill the current
-//                     visible rect so the renderer only draws the
-//                     viewport.
-//
-// The wrapper provides bidirectional scrollbar sync:
-//   1. Engine → host: `updateScrollbar(_:)` is called from the
-//      `TerminalSurfaceDelegate.didUpdateScrollbar` path; it caches
-//      the snapshot, resizes the document view, and (unless the
-//      user is mid-drag) repositions the clip view to libghostty's
-//      reported viewport offset.
-//   2. Host → engine: the clip view posts bounds-change
-//      notifications during user-driven scroll; the wrapper converts
-//      the new origin to a row index and calls the
-//      `scrollToRow` closure. A `lastSentRow` guard avoids
-//      re-emitting when the user drags within the same row (an
-//      action spam class the upstream code also guards against).
-//
-// `safeAreaInsets` is zeroed because hidden-titlebar window styles
-// otherwise reserve a strip the terminal grid can't draw into. The
-// content view's `clipsToBounds = false` follows Ghostty.app's
-// pattern so a future legacy-style scroller doesn't cover the
-// underlying terminal background.
 
 import AppKit
 import TerminalSurface
 
+/// `NSScrollView` wrapper around a libghostty
+/// surface view so the host can paint a native macOS scrollbar
+/// reflecting libghostty's scrollback state.
+///
+/// Architecture (matches Ghostty.app's SurfaceScrollView):
+///
+///   - `scrollView`:   outermost `NSScrollView`; renders the scroller
+///                     and owns the clip view that posts bounds-change
+///                     notifications.
+///   - `documentView`: blank `NSView`; height sized to
+///                     `total rows × cell height` so the scroller
+///                     reflects the full scrollback geometry.
+///   - `surfaceView`:  libghostty's render+input view (passed in by
+///                     the host); positioned to fill the current
+///                     visible rect so the renderer only draws the
+///                     viewport.
+///
+/// The wrapper provides bidirectional scrollbar sync:
+///   1. Engine → host: `updateScrollbar(_:)` is called from the
+///      `TerminalSurfaceDelegate.didUpdateScrollbar` path; it caches
+///      the snapshot, resizes the document view, and (unless the
+///      user is mid-drag) repositions the clip view to libghostty's
+///      reported viewport offset.
+///   2. Host → engine: the clip view posts bounds-change
+///      notifications during user-driven scroll; the wrapper converts
+///      the new origin to a row index and calls the
+///      `scrollToRow` closure. A `lastSentRow` guard avoids
+///      re-emitting when the user drags within the same row (an
+///      action spam class the upstream code also guards against).
+///
+/// `safeAreaInsets` is zeroed because hidden-titlebar window styles
+/// otherwise reserve a strip the terminal grid can't draw into. The
+/// content view's `clipsToBounds = false` follows Ghostty.app's
+/// handling of legacy-style scroller overlays.
 @MainActor
 public final class SurfaceScrollView: NSView {
     /// Zero insets so a hidden-titlebar window style doesn't carve

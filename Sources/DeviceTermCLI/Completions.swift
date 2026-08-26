@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Completions: pure shell-completion script emitters for the CLI
-// surface.
-//
-// Each `script(for:)` returns the full text of a `_deviceterm` /
-// `deviceterm.fish` / bash-completion script. main.swift writes the
-// script to `defaultInstallPath(for:homeDir:)` and prints the path +
-// `activationHint(for:installPath:)` so the user knows how to enable
-// it (typical case: append a one-liner to `~/.zshrc` and re-source).
-//
-// Coverage:
-//   - every `VerbCatalog` verb and its `subVerbs`
-//   - `help` topic names, from `HelpCatalog`
-//   - the common flags, not the full per-verb grammar
-//   - enum-valued: `button` (HardwareButton), `rotate` (Orientation
-//     plus RotationDirection), and the shell argument to
-//     `completions install`
-//
-// The emitted scripts cover the happy-path shape: completion
-// candidates as the user types; the verb list is the source of
-// truth. The daemon still validates every call, so a misspelled flag
-// past completion lands the user on the parser's `usage(message:)`
-// error rather than a silent no-op.
 
 import Foundation
 
+/// Pure shell-completion script emitters for the CLI
+/// surface.
+///
+/// Each `script(for:)` returns the full text of a `_deviceterm` /
+/// `deviceterm.fish` / bash-completion script. main.swift writes the
+/// script to `defaultInstallPath(for:homeDir:)` and prints the path +
+/// `activationHint(for:installPath:)` so the user knows how to enable
+/// it (typical case: append a one-liner to `~/.zshrc` and re-source).
+///
+/// Coverage:
+///   - every `VerbCatalog` verb and its `subVerbs`
+///   - `help` topic names, from `HelpCatalog`
+///   - the common flags, not the full per-verb grammar
+///   - enum-valued: `button` (HardwareButton), `rotate` (Orientation
+///     plus RotationDirection), and the shell argument to
+///     `completions install`
+///
+/// The emitted scripts cover the happy-path shape: completion
+/// candidates as the user types; the verb list is the source of
+/// truth. The daemon still validates every call, so a misspelled flag
+/// past completion lands the user on the parser's `usage(message:)`
+/// error rather than a silent no-op.
 public enum Completions {
     public enum Shell: String, CaseIterable, Sendable, Equatable {
         case zsh

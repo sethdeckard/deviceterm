@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Input command family: the gesture / hardware / text / accessibility
-// verbs (tap, swipe, app-switcher, long-press, pinch, button, key, text,
-// rotate, crown, ax) plus their request builders, split out of
-// CLICommands.swift to keep that file focused on the shared parse core.
-//
-// `parse(_:)` (in CLICommands.swift) delegates the input verbs here through
-// `parseInputVerb`, which returns nil for any verb it doesn't own so the
-// caller falls through to a usage error. The read-only listing builders
-// (`tabsListRequest` / `panesListRequest`) ride along here too, next to
-// the input builders they resemble.
-//
-// This is a behavior-grouping extension, not a conformance split. It
-// reaches the shared `request(method:body:)` helper and the
-// `parseEnumArg` / `parseKVKToken` token parsers, all `internal` in
-// CLICommands.swift.
 
 import DaemonProtocol
 import Foundation
 
+/// Input command family: the gesture / hardware / text / accessibility
+/// verbs (tap, swipe, app-switcher, long-press, pinch, button, key, text,
+/// rotate, crown, ax) plus their request builders, split out of
+/// CLICommands.swift to keep that file focused on the shared parse core.
+///
+/// `parse(_:)` (in CLICommands.swift) delegates the input verbs here through
+/// `parseInputVerb`, which returns nil for any verb it doesn't own so the
+/// caller falls through to a usage error. The read-only listing builders
+/// (`tabsListRequest` / `panesListRequest`) ride along here too, next to
+/// the input builders they resemble.
+///
+/// This is a behavior-grouping extension, not a conformance split. It
+/// reaches the shared `request(method:body:)` helper and the
+/// `parseEnumArg` / `parseKVKToken` token parsers, all `internal` in
+/// CLICommands.swift.
 extension CLICommands {
     // MARK: - Input verb parsing
 

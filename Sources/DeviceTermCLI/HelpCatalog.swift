@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HelpCatalog: the table behind `deviceterm help`.
-//
-// Assembly and lookup live here; the topic prose lives in the
-// `HelpCatalog+*.swift` files, grouped the way the overview groups it.
-// `HelpText` turns this table into the overview and the per-topic pages.
-//
-// Topics are ordered group-major so a single array drives the overview
-// without a sort. `HelpCatalogTests` pins the invariants that keep the
-// table honest: every `VerbCatalog` verb has a topic and vice versa, every
-// command topic names a verb the parser actually recognizes, and every
-// sub-verb appears in its parent's page.
 
+/// The table behind `deviceterm help`.
+///
+/// Assembly and lookup live here; the topic prose lives in the
+/// `HelpCatalog+*.swift` files, grouped the way the overview groups it.
+/// `HelpText` turns this table into the overview and the per-topic pages.
+///
+/// Topics are ordered group-major so a single array drives the overview
+/// without a sort. `HelpCatalogTests` pins the invariants that keep the
+/// table honest: every `VerbCatalog` verb has a topic and vice versa, every
+/// command topic names a verb the parser actually recognizes, and every
+/// sub-verb appears in its parent's page.
 enum HelpCatalog {
     /// Every topic, group-major in `HelpTopic.Group.allCases` order, with
     /// the concepts last.

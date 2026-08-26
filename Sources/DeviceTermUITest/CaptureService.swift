@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CaptureService: composited screenshots via ScreenCaptureKit.
-//
-// Captures the *real* window-server output, so Metal-rendered content
-// (the simulator / device panes, the terminal surface) appears exactly as
-// a human sees it. An in-app self-render (`NSView.cacheDisplay`) would
-// miss those layers, which is why the harness captures from outside.
-//
-// TCC: `SCShareableContent` requires the Screen Recording grant, and the
-// grant attributes to the process that calls it (this resident harness),
-// which is the whole reason it exists as a separate binary. When the grant
-// is missing, ScreenCaptureKit throws and `captureFailed` carries a hint.
 
 import AppKit
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 
+/// Composited screenshots via ScreenCaptureKit.
+///
+/// Captures composited per-window output, including the Metal-rendered
+/// layers (the simulator / device panes, the terminal surface) that an
+/// in-app self-render (`NSView.cacheDisplay`) misses, which is why the
+/// harness captures from outside.
+///
+/// TCC: `SCShareableContent` requires the Screen Recording grant, and the
+/// grant attributes to the process that calls it (this resident harness),
+/// which is the whole reason it exists as a separate binary. When the grant
+/// is missing, ScreenCaptureKit throws and `captureFailed` carries a hint.
 enum CaptureService {
     /// Screenshot the frontmost content window owned by `bundleID`: the
     /// main window, or an app-modal alert on top of it.

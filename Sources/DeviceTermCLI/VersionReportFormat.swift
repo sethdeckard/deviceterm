@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// VersionReportFormat: renders a `VersionReport` for `deviceterm version`.
-//
-// The runner in main.swift fills in the fields (env reads, daemon ping) and
-// prints either the human form here or the JSON form via the global `--json`
-// toggle.
 
 import DaemonProtocol
 import Foundation
 
+/// Renders a `VersionReport` for `deviceterm version`.
+///
+/// The runner in main.swift fills in the fields (env reads, daemon ping) and
+/// prints either the human form here or the JSON form via the global `--json`
+/// toggle.
 public enum VersionReportFormat {
     /// The CLI's public release version. The internal RPC wire version is
     /// reported separately because it can change independently.

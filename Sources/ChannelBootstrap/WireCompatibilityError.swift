@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// A device answered with a protocol shape deviceterm cannot work with.
 ///
 /// The associated values name only where in the contract the mismatch happened.

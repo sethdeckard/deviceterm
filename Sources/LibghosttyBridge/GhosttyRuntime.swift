@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GhosttyRuntime: the process-wide libghostty app + event pump.
-//
-// libghostty has exactly one global init (`ghostty_init`) and one
-// `ghostty_app_t` per process; surfaces are created against it. This
-// is that process singleton. It also owns the *only* run model
-// libghostty offers on macOS. There is no timer or run-loop hook;
-// libghostty calls `wakeup_cb` (from an arbitrary thread) whenever it
-// needs servicing, and the host must hop to main and call
-// `ghostty_app_tick`. Miss that and the terminal never renders or
-// drains its PTY. The renderer drives its own CVDisplayLink + Metal
-// layer internally, so we never call `ghostty_surface_draw`.
-//
-// The C callbacks must be `@convention(c)` and therefore cannot
-// capture. State is recovered through the `userdata` pointers:
-// `runtime_config_s.userdata` → this object (wakeup); the close
-// callback uses the owning GhosttyTerminalSurface's pointer set in
-// `surface_config.userdata`. `passUnretained` is sound because the
-// app/harness holds a strong reference for the object's lifetime
-// (documented invariant; the runtime is a process singleton).
 
 import AppKit
 import Foundation
 import GhosttyKit
 import TerminalSurface
 
+/// The process-wide libghostty app + event pump.
+///
+/// libghostty has exactly one global init (`ghostty_init`) and one
+/// `ghostty_app_t` per process; surfaces are created against it. This
+/// is that process singleton. It also owns the *only* run model
+/// libghostty offers on macOS. There is no timer or run-loop hook;
+/// libghostty calls `wakeup_cb` (from an arbitrary thread) whenever it
+/// needs servicing, and the host must hop to main and call
+/// `ghostty_app_tick`. Miss that and the terminal never renders or
+/// drains its PTY. The renderer drives its own CVDisplayLink + Metal
+/// layer internally, so we never call `ghostty_surface_draw`.
+///
+/// The C callbacks must be `@convention(c)` and therefore cannot
+/// capture. State is recovered through the `userdata` pointers:
+/// `runtime_config_s.userdata` → this object (wakeup); the close
+/// callback uses the owning GhosttyTerminalSurface's pointer set in
+/// `surface_config.userdata`. `passUnretained` is sound because the
+/// app/harness holds a strong reference for the object's lifetime
+/// (documented invariant; the runtime is a process singleton).
 @MainActor
 public final class GhosttyRuntime {
     public enum RuntimeError: Error, Equatable {

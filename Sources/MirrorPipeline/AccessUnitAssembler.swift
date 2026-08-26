@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// Turns RTP/HEVC payloads into complete NAL units (RFC 7798): passing single
 /// NALs through, unpacking Aggregation Packets, and reassembling Fragmentation
 /// Units across packets.

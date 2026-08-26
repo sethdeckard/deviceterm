@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// Why a device route could not be resolved.
 package enum DeviceReachabilityError: Error, Equatable, Sendable {
     /// No `utun` carrying the device's advertised tunnel address appeared

@@ -1,34 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Doctor: pure-logic check primitives + reporters for the
-// `deviceterm doctor` command.
-//
-// `doctor` answers the question agents pivot to when something looks
-// broken: "is my context sane?" The checks cover the env vars a
-// healthy deviceterm tab carries, the shim's position on PATH, daemon
-// reachability + version handshake, the identifier model (sessionId
-// + shortId + name + linked panes), and the permissions axes (role
-// + allowedMethods) from `daemon.capabilities`.
-//
-// The check functions stay pure (return a `Check` given inputs) so
-// the formatter + status semantics are unit-testable without spawning
-// processes. The runner in main.swift gathers I/O (env reads, socket
-// connect, daemon ping, tabs.list + panes.list, daemon.capabilities
-// and hands the inputs to these primitives. The Report's `ok`
-// boolean is derived from `!checks.contains(where: { $0.status ==
-// .fail })`; warns don't change exit code (a tab outside the
-// deviceterm-managed PATH still works for many commands).
-//
-// Two distinct axes are reported separately: method availability
-// (`role` + `allowedMethods`) and target availability (linked sim
-// panes). An agent can have a verb available with zero valid
-// targets, and a target can be unreachable even when the verb is
-// available. The Permissions section forward-points at `deviceterm
-// agents` "PERMISSIONS AND LINKAGE" for the deeper model.
 
 import DaemonProtocol
 import Foundation
 
+/// Pure-logic check primitives + reporters for the
+/// `deviceterm doctor` command.
+///
+/// `doctor` answers the question agents pivot to when something looks
+/// broken: "is my context sane?" The checks cover the env vars a
+/// healthy deviceterm tab carries, the shim's position on PATH, daemon
+/// reachability + version handshake, the identifier model (sessionId
+/// + shortId + name + linked panes), and the permissions axes (role
+/// + allowedMethods) from `daemon.capabilities`.
+///
+/// The check functions stay pure (return a `Check` given inputs) so
+/// the formatter + status semantics are unit-testable without spawning
+/// processes. The runner in main.swift gathers the I/O (env reads,
+/// socket connect, daemon ping, tabs.list, panes.list, and
+/// daemon.capabilities) and passes those inputs to these primitives.
+/// The Report's `ok` boolean is derived from
+/// `!checks.contains(where: { $0.status == .fail })`; warns don't change
+/// exit code (a tab outside the deviceterm-managed PATH still works for
+/// many commands).
+///
+/// Two distinct axes are reported separately: method availability
+/// (`role` + `allowedMethods`) and target availability (linked sim
+/// panes). An agent can have a verb available with zero valid
+/// targets, and a target can be unreachable even when the verb is
+/// available. The Permissions section forward-points at `deviceterm
+/// agents` "PERMISSIONS AND LINKAGE" for the deeper model.
 public enum Doctor {
     public enum Status: String, Sendable, Equatable, Codable {
         case ok

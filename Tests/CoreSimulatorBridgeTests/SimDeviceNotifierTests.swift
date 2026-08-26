@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimDeviceNotifierTests: hermetic + lightweight integration
-// coverage for the set-level notification wrapper.
+
+import CoreSimulatorBridge
+import Foundation
+import Testing
+
+// Hermetic + lightweight integration coverage for the set-level
+// notification wrapper.
 //
 // The wrapper is intentionally thin: it constructs a registration
 // against the default device set, retains the registration ID,
@@ -10,10 +14,6 @@
 // (enum + payload type stability) lives here; the actual
 // notification-arrival smoke is in `CoreSimulatorLiveTests` since
 // it needs a live sim to transition state.
-
-import CoreSimulatorBridge
-import Foundation
-import Testing
 
 // MARK: - Pure: enum stability
 

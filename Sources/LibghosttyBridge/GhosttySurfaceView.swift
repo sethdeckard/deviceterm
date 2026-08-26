@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GhosttySurfaceView: the bare NSView libghostty renders into, plus
-// the AppKit→libghostty input bridge.
-//
-// Contract (from Ghostty's own SurfaceView, the canonical embedder):
-// hand libghostty a *plain* NSView and never touch its layer.
-// libghostty installs and owns a CAMetalLayer and runs its own
-// CVDisplayLink. We do NOT set wantsLayer, override draw(), or run a
-// display link. We only: forward input, keep it first-responder, and
-// push pixel size + content scale on geometry/backing changes.
-//
-// Sizing is in framebuffer PIXELS, not points. Passing point sizes
-// yields a doll-house terminal on Retina. Always convertToBacking.
-//
-// Keyboard follows the reference's text-vs-key split: keyDown primes
-// an accumulator, runs interpretKeyEvents (which drives this view as
-// an NSTextInputClient for IME / dead keys), then emits one
-// ghostty_surface_key per committed string (or a bare key event for
-// non-text keys). International layouts reach the engine through that
-// NSTextInputClient path. Media keys are not covered.
 
 import AppKit
 import GhosttyKit
 
+/// The bare NSView libghostty renders into, plus
+/// the AppKit→libghostty input bridge.
+///
+/// Contract (from Ghostty's own SurfaceView, the canonical embedder):
+/// hand libghostty a *plain* NSView and never touch its layer.
+/// libghostty installs and owns a CAMetalLayer and runs its own
+/// CVDisplayLink. We do NOT set wantsLayer, override draw(), or run a
+/// display link. We only: forward input, keep it first-responder, and
+/// push pixel size + content scale on geometry/backing changes.
+///
+/// Sizing is in framebuffer PIXELS, not points. Passing point sizes
+/// yields a doll-house terminal on Retina. Always convertToBacking.
+///
+/// Keyboard follows the reference's text-vs-key split: keyDown primes
+/// an accumulator, runs interpretKeyEvents (which drives this view as
+/// an NSTextInputClient for IME / dead keys), then emits one
+/// ghostty_surface_key per committed string (or a bare key event for
+/// non-text keys). International layouts reach the engine through that
+/// NSTextInputClient path. Media keys are not covered.
 @MainActor
 final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private enum MouseButton {

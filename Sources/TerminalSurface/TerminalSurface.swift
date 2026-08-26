@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalSurface: the engine-agnostic contract for an embedded
-// terminal pane.
-//
-// This module is deliberately libghostty-free. `App` depends on this
-// protocol to host + drive a terminal pane; `LibghosttyBridge`
-// provides the concrete `GhosttyTerminalSurface` conformance. Keeping
-// the C framework out of the contract means the GUI target doesn't
-// transitively link libghostty just to reference `TerminalSurface`,
-// and a future engine swap is a single-conformance change.
-//
-// Ownership model (forced by libghostty's C API): the surface OWNS
-// its PTY. libghostty `posix_spawn`s the shell itself from the
-// `TerminalCommand` it's handed; there is no byte-stream-in API. So
-// this protocol describes *what to run*, not a pipe to feed. The
-// daemon issues the session credentials, the GUI assembles them into
-// the shell environment, and both ride through `TerminalCommand`.
-//
-// Threading: `@MainActor`. libghostty's surface API is main-thread-
-// only and the view is an AppKit NSView; the whole protocol is pinned
-// to the main actor so conformances and call sites inherit it.
 
 import AppKit
 
+/// The engine-agnostic contract for an embedded
+/// terminal pane.
+///
+/// This module is deliberately libghostty-free. `App` depends on this
+/// protocol to host + drive a terminal pane; `LibghosttyBridge`
+/// provides the concrete `GhosttyTerminalSurface` conformance. Keeping
+/// the C framework out of the contract means the GUI target doesn't
+/// transitively link libghostty just to reference `TerminalSurface`,
+/// and isolates an engine swap to a single conformance.
+///
+/// Ownership model (forced by libghostty's C API): the surface OWNS
+/// its PTY. libghostty `posix_spawn`s the shell itself from the
+/// `TerminalCommand` it's handed; there is no byte-stream-in API. So
+/// this protocol describes *what to run*, not a pipe to feed. The
+/// daemon issues the session credentials, the GUI assembles them into
+/// the shell environment, and both ride through `TerminalCommand`.
+///
+/// Threading: `@MainActor`. libghostty's surface API is main-thread-
+/// only and the view is an AppKit NSView; the whole protocol is pinned
+/// to the main actor so conformances and call sites inherit it.
 @MainActor
 public protocol TerminalSurface: AnyObject {
     /// The view to embed in a window/pane. The engine installs its own

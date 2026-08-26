@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import DaemonProtocol
+import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
+
 // deviceterm-cli: short-lived RPC client for the deviceterm daemon.
 //
 // Symlinked as `deviceterm` into each tab's per-session `bin/`. Speaks
@@ -11,12 +17,6 @@
 // per-verb dispatch; see `CLICommands.swift` for the parser and
 // `CommandDispatch.swift` for dispatch. Every wire round-trip goes
 // through `roundTrip(method:params:)`.
-
-import DaemonProtocol
-import Foundation
-#if canImport(Darwin)
-import Darwin
-#endif
 
 func envValue(_ name: String) -> String? {
     guard let raw = getenv(name) else { return nil }

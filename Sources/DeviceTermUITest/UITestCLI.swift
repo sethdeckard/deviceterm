@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UITestCLI: pure argv parsing for `deviceterm-uitest`.
-//
-// No I/O: `parse` turns an argument vector into a `UITestCommand`
-// (serve the resident, run a client request, or print usage) so the
-// parsing surface is unit-testable without a socket. `UITestMain` owns
-// the side effects.
 
 import Foundation
 
+/// Pure argv parsing for `deviceterm-uitest`.
+///
+/// No I/O: `parse` turns an argument vector into a `UITestCommand`
+/// (serve the resident, run a client request, or print usage) so the
+/// parsing surface is unit-testable without a socket. `UITestMain` owns
+/// the side effects.
 enum UITestCLI {
     static let usageText = """
     deviceterm-uitest: out-of-process UI-test instrument for deviceterm.

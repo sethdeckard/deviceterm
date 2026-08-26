@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ColorLuma: pure helper that classifies an RGB triple as "light"
-// or "dark" so the scroll wrapper can pick a matching scroller
-// appearance (`.aqua` vs `.darkAqua`). The 0.5 threshold matches
-// Ghostty.app's `OSColor.isLightColor` and the WCAG convention.
-//
-// Uses the sRGB relative-luminance formula (Y' = 0.299 R + 0.587 G
-// + 0.114 B with components normalized to 0…1). The non-linear
-// gamma decode is skipped: the threshold is far enough from the
-// gamma curve's interesting region that the rough approximation is
-// indistinguishable from the full computation for the
-// "should the scroller be dark?" decision the host actually makes.
 
 import Foundation
 
+/// Pure helper that classifies an RGB triple as "light"
+/// or "dark" so the scroll wrapper can pick a matching scroller
+/// appearance (`.aqua` vs `.darkAqua`). The 0.5 threshold matches
+/// Ghostty.app's `OSColor.isLightColor`.
+///
+/// Uses a weighted-luma heuristic over normalized encoded components:
+/// 0.299 R + 0.587 G + 0.114 B, with a 0.5 threshold. This is not WCAG
+/// relative luminance, which uses different coefficients over
+/// gamma-decoded components.
 enum ColorLuma {
     /// Treat an RGB triple (0…255 per channel, sRGB) as "light"
     /// when its relative luminance is at or above 0.5. Used by

@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OwnerProcessIdentity: the kernel identity of the process that created a
-// session, and the identity a peer is matched against on the "exact owner"
-// provenance arm.
-//
-// Captured server-side from the transport peer at session.create (never from a
-// caller-supplied pid): the audit token on XPC, the LOCAL_PEERTOKEN identity on
-// UDS. Matched on (pid, pidVersion, euid) only: a session owner's POSIX
-// session and controlling tty are irrelevant to *owner* identity (that is the
-// separate terminal-anchor arm), so they are deliberately excluded here.
-//
-// The exact-owner arm is what lets the process that minted a session (the GUI,
-// including its UDS smoke fallback) authenticate as that session without a
-// terminal anchor.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// The kernel identity of the process that created a
+/// session, and the identity a peer is matched against on the "exact owner"
+/// provenance arm.
+///
+/// Captured server-side from the transport peer at session.create (never from a
+/// caller-supplied pid): the audit token on XPC, the LOCAL_PEERTOKEN identity on
+/// UDS. Matched on (pid, pidVersion, euid) only: a session owner's POSIX
+/// session and controlling tty are irrelevant to *owner* identity (that is the
+/// separate terminal-anchor arm), so they are deliberately excluded here.
+///
+/// The exact-owner arm is what lets the process that minted a session (the GUI,
+/// including its UDS smoke fallback) authenticate as that session without a
+/// terminal anchor.
 public struct OwnerProcessIdentity: Sendable, Equatable {
     public let pid: pid_t
     public let pidVersion: Int32

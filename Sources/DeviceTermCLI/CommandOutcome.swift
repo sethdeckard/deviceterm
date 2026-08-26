@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The result of running one CLI command: the exact stdout bytes, an
-// optional stderr message, and a process exit code. Handlers build and
-// return this instead of writing to stdout/stderr and calling `exit`
-// themselves, so the dispatch logic is pure and testable; a single thin
-// driver in `main.swift` renders the outcome and terminates.
-//
-// `stdout` is raw bytes (already newline-terminated where the human /
-// JSON format calls for it). `stderr`, when present, is the message body
-// only. The driver adds the `deviceterm:` prefix and trailing newline.
 
 import Foundation
 
+/// The result of running one CLI command: the exact stdout bytes, an
+/// optional stderr message, and a process exit code. Handlers build and
+/// return this instead of writing to stdout/stderr and calling `exit`
+/// themselves, so the dispatch logic is pure and testable; a single thin
+/// driver in `main.swift` renders the outcome and terminates.
+///
+/// `stdout` is raw bytes (already newline-terminated where the human /
+/// JSON format calls for it). `stderr`, when present, is the message body
+/// only. The driver adds the `deviceterm:` prefix and trailing newline.
 struct CommandOutcome: Equatable {
     /// Success with no output.
     static let ok = CommandOutcome()

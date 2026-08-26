@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Help topics for the back-channel verbs: tabs, panes, windows, and the
-// pane-targeting wrapper.
-//
-// This is a behavior-grouping extension, not a conformance split.
 
+/// Help topics for the back-channel verbs: tabs, panes, windows, and the
+/// pane-targeting wrapper.
+///
+/// This is a behavior-grouping extension, not a conformance split.
 extension HelpCatalog {
     static let workspaceTopics: [HelpTopic] = [
         HelpTopic(

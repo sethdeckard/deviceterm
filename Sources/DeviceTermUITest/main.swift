@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import Foundation
+
 // deviceterm-uitest: out-of-process UI-test instrument for deviceterm.
 //
 // A dedicated, dev/test-only helper that holds the Screen Recording and
@@ -10,7 +12,5 @@
 // gesture: the perception + drive half of the end-to-end loop. Runs
 // resident (`serve`) or as a one-shot client (every other verb).
 // Dev/test-only: never bundled into the release DMG.
-
-import Foundation
 
 UITestMain.run(args: Array(CommandLine.arguments.dropFirst()))

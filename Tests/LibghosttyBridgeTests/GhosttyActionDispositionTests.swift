@@ -1,20 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The unhandled-action diagnostic. A user `keybind =` that fires an action
-// deviceterm answers itself gets no answer; with no report the callback
-// returns false in silence and the shortcut looks broken.
-//
-// The property that matters is that nothing is filtered by tag, because a
-// tag does not reveal whether a keystroke produced the action. Any filter
-// resting on that guess silences a real shortcut. So the tests below pin
-// the absence of a filter rather than the contents of one: an unlabeled
-// tag reports, a labeled tag reports, and every app-targeted binding
-// action reports.
-//
-// `reportedTags` is process-wide, so every test resets it first. These
-// bodies never suspend, which alone makes them atomic on the main actor.
-// The suite is serialized so a suspending test cannot interleave its reset
-// with another test's run.
 
 import GhosttyKit
 @testable import LibghosttyBridge
@@ -56,6 +40,21 @@ private let misleadinglyNamedBindingActions: [(String, UInt32)] = [
     ("secure_input", GHOSTTY_ACTION_SECURE_INPUT.rawValue)
 ]
 
+/// The unhandled-action diagnostic. A user `keybind =` that fires an action
+/// deviceterm answers itself gets no answer; with no report the callback
+/// returns false in silence and the shortcut looks broken.
+///
+/// The property that matters is that nothing is filtered by tag, because a
+/// tag does not reveal whether a keystroke produced the action. Any filter
+/// resting on that guess silences a real shortcut. So the tests below pin
+/// the absence of a filter rather than the contents of one: an unlabeled
+/// tag reports, a labeled tag reports, and every app-targeted binding
+/// action reports.
+///
+/// `reportedTags` is process-wide, so every test resets it first. These
+/// bodies never suspend, which alone makes them atomic on the main actor.
+/// The suite is serialized so a suspending test cannot interleave its reset
+/// with another test's run.
 @MainActor
 @Suite(.serialized)
 struct GhosttyActionDispositionTests {

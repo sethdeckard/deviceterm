@@ -173,7 +173,7 @@ func parseTextResolvesToText() {
 @Test
 func parseTextPreservesUnknownDashDashTokens() {
     // `text` types arbitrary input, so unrecognized `--` tokens are literal,
-    // not flags (regression: the splitter used to eat them).
+    // not flags: the splitter must not consume them.
     #expect(
         CLICommands.parse(["deviceterm", "text", "hello", "--world"])
         == .text(pane: nil, text: "hello --world")

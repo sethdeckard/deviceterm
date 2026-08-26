@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
+
+import DaemonProtocol
+import Foundation
+import Testing
+
 // Drift guards for docs/ARCHITECTURE.md. The RPC protocol section is the
 // canonical method schema: every RPCMethod case must have an entry heading
 // there, and every entry heading must name a real method, so the doc and
 // the wire surface cannot drift apart silently. The registry side of the
 // same contract lives in DaemonTests (registry keys equal RPCMethod cases).
-
-import DaemonProtocol
-import Foundation
-import Testing
 
 private func locateArchitectureGuide() -> URL? {
     let testFile = URL(fileURLWithPath: #filePath)

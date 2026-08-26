@@ -1,20 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PeerProcessIdentity: the kernel-established identity of a UDS peer.
-//
-// Captured once, at accept time, from the peer's audit token
-// (`LOCAL_PEERTOKEN`) plus the process' POSIX session and controlling
-// terminal. This is *infrastructure* for terminal-process provenance: the
-// identity is captured and plumbed through the dispatch context, but it does
-// not by itself gate any authorization. The enforcement that consumes it
-// (binding a session to its terminal and requiring the peer to match) lands
-// separately; on its own this file closes no vulnerability.
-//
-// Why the audit token and not `getpeereid`/`LOCAL_PEERPID`: the token carries
-// a `pidVersion` that increments when the kernel recycles a pid, so a
-// `(pid, pidVersion)` pair names one specific process instance. A later
-// process that inherits a recycled pid gets a different version and cannot
-// impersonate the original. A bare peer pid has no such guard.
 
 import Foundation
 #if canImport(Darwin)
@@ -26,6 +10,18 @@ import Darwin
 /// `sysctl(KERN_PROC_PID)`); none is client-supplied. Callers that need
 /// provenance MUST fail closed when this is unavailable; never fall back to
 /// trusting a capability alone.
+///
+/// Captured once, at accept time, from the peer's audit token
+/// (`LOCAL_PEERTOKEN`) plus the process' POSIX session and controlling
+/// terminal, then plumbed through the dispatch context. This type carries the
+/// identity and decides nothing with it; `ProvenanceMatcher` is what matches it
+/// against the session's bound terminal anchor.
+///
+/// Why the audit token and not `getpeereid`/`LOCAL_PEERPID`: the token carries
+/// a `pidVersion` that increments when the kernel recycles a pid, so a
+/// `(pid, pidVersion)` pair names one specific process instance. A later
+/// process that inherits a recycled pid gets a different version and cannot
+/// impersonate the original. A bare peer pid has no such guard.
 public struct PeerProcessIdentity: Sendable, Equatable {
     /// Peer process id, from the audit token.
     public let pid: pid_t

@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ProvenanceSnapshot: a UDS caller's kernel provenance as of one request.
-//
-// `PeerProcessIdentity` is captured once, at accept. That is enough to name the
-// process on the far end, but not enough to answer "does this caller still
-// reach the session's terminal?" on every request, because authority follows
-// the live parent chain and a chain can be severed while the connection stays
-// open. So the chain is resolved per scoped request rather than cached, and a
-// snapshot is what one resolution returns: hop zero, re-read from the socket's
-// audit token, plus the verified ancestor prefix above it.
-//
-// The two travel together but stay separate values. A walk that finds nothing
-// yields an empty prefix, never a nil snapshot, so a failed or truncated walk
-// denies only the ancestry arm and leaves the owner and direct-terminal arms
-// exactly as they were.
 
 import Foundation
 
 /// Hop zero plus its verified ancestor prefix, resolved together for one
-/// request.
+/// request: a UDS caller's kernel provenance as of that request.
+///
+/// `PeerProcessIdentity` is captured once, at accept. That is enough to name the
+/// process on the far end, but not enough to answer "does this caller still
+/// reach the session's terminal?" on every request, because authority follows
+/// the live parent chain and a chain can be severed while the connection stays
+/// open. So the chain is resolved per scoped request rather than cached, and a
+/// snapshot is what one resolution returns: hop zero, re-read from the socket's
+/// audit token, plus the verified ancestor prefix above it.
+///
+/// The two travel together but stay separate values. A walk that finds nothing
+/// yields an empty prefix, never a nil snapshot, so a failed or truncated walk
+/// denies only the ancestry arm and leaves the owner and direct-terminal arms
+/// exactly as they were.
 public struct ProvenanceSnapshot: Sendable, Equatable {
     /// The connected process, resolved from the socket's audit token.
     public let peer: PeerProcessIdentity

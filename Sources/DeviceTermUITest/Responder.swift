@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Responder: maps one decoded request to a JSON reply.
-//
-// Dispatch only: the work lives in `CaptureService` and friends, so this
-// stays a thin, readable switch. `async` because capture is async; the
-// resident bridges that back to its blocking socket worker.
 
 import Foundation
 
+/// Maps one decoded request to a JSON reply.
+///
+/// Dispatch only: the work lives in `CaptureService` and friends, so this
+/// stays a thin, readable switch. `async` because capture is async; the
+/// resident bridges that back to its blocking socket worker.
 struct Responder: Sendable {
     /// Methods deliberately left as stubs. Empty today: every
     /// `UITestMethod` has a handler.

@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DetectDeviceAttachTests: pin the shim's `devicectl` detection layer:
-// which physical-device deploy/run invocations trigger a contextual
-// auto-attach, and which `devicectl` (and non-devicectl) invocations
-// must NOT, since otherwise the shim would either miss a deploy the user
-// expects mirrored, or fire an attach on a read-only query.
-//
-// The shim parses `--device <id>` verbatim and forwards it to the
-// daemon, which resolves it to a connected device. A miss here means
-// the app installs/launches but deviceterm never mounts the device pane.
 
 import DaemonProtocol
 @testable import Shim
 import Testing
+
+// Pin the shim's `devicectl` detection layer: which physical-device
+// deploy/run invocations trigger a contextual auto-attach, and which
+// `devicectl` (and non-devicectl) invocations must NOT, since otherwise
+// the shim would either miss a deploy the user expects mirrored, or fire
+// an attach on a read-only query.
+//
+// The shim parses `--device <id>` verbatim and forwards it to the
+// daemon, which resolves it to a connected device. A miss here means
+// the app installs/launches but deviceterm never mounts the device pane.
 
 // MARK: - Fixture helper
 

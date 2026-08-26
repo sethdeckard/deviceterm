@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeyShortcutParser: parse "cmd+shift+left" into a virtual key code + flags.
-//
-// Pure, so the whole grammar is unit-testable without posting an event at
-// anything. `InputDriver` turns the result into a real CGEvent.
-//
-// Virtual key codes are the ANSI layout constants from Carbon's Events.h,
-// inlined as literals: importing Carbon for a table of integers would drag
-// a framework into a binary that otherwise needs none, and the values are
-// frozen by the hardware layout, not by the SDK.
 
 import CoreGraphics
 import Foundation
 
+/// Parse "cmd+shift+left" into a virtual key code + flags.
+///
+/// Pure, so the whole grammar is unit-testable without posting an event at
+/// anything. `InputDriver` turns the result into a real CGEvent.
+///
+/// The numeric values match Carbon's ANSI virtual-key constants
+/// (Events.h) and are inlined to avoid adding a Carbon dependency.
 enum KeyShortcutParser {
     /// Modifier aliases. `opt`/`alt`/`option` all mean the same key, and
     /// agents write whichever their muscle memory produces.

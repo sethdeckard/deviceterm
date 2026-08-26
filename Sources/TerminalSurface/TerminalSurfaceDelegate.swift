@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalSurfaceDelegate: lifecycle + shell-integration callbacks from an
-// embedded terminal pane back to its host.
-//
-// Pinned to the main actor for the same reason `TerminalSurface` is: the
-// callbacks originate from the engine's main-thread callbacks and land on
-// AppKit views.
 
 import AppKit
 
-/// Lifecycle + shell-integration callbacks. All delivered on the main
-/// actor (they originate from the engine's main-thread callbacks).
+/// Lifecycle + shell-integration callbacks from an embedded terminal pane back
+/// to its host.
+///
+/// Pinned to the main actor for the same reason `TerminalSurface` is: the
+/// callbacks originate from the engine's main-thread callbacks and land on
+/// AppKit views.
 @MainActor
 public protocol TerminalSurfaceDelegate: AnyObject {
     /// OSC 0/2: process/window title. Drives the tab title.

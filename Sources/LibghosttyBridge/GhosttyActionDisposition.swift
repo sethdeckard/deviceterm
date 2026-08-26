@@ -1,49 +1,48 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GhosttyActionDisposition: reports the libghostty actions deviceterm
-// doesn't handle, once each.
-//
-// deviceterm loads the user's Ghostty config through
-// `ghostty_config_load_default_files`, and the C API exposes no keybind
-// mutator, so a `keybind = ctrl+shift+n=new_tab` line is parsed, matched,
-// and dispatched to `action_cb`. deviceterm owns tabs, windows, and splits
-// itself, so nothing answers it. Without a diagnostic the shortcut simply
-// looks broken.
-//
-// An *enabled* catalog chord never gets this far: main-menu key-equivalent
-// matching precedes `keyDown:`, so the engine never sees it. What reaches
-// here is a chord the catalog does not claim, or one whose menu item
-// validated disabled for the current focus and fell through.
-//
-// ## Everything unhandled reports, deliberately
-//
-// Do not infer from a tag whether a keystroke caused an action. libghostty
-// offers at least three counterexamples:
-//
-//   - `readonly` looks like engine feedback but is emitted *only* from the
-//     `toggle_readonly` binding.
-//   - `show_gtk_inspector` looks GTK-only but ships through core
-//     `App.performAction`, which every apprt shares.
-//   - `secure_input` has two producers: `toggle_secure_input` sends
-//     `.toggle`, termios password detection sends `.on` / `.off`.
-//
-// A tag filtered on a wrong guess is a shortcut that fails silently, the
-// bug this type exists to prevent. Reporting is one-shot, so the cost of
-// filtering nothing is bounded by the number of distinct tags the process
-// sees. There is therefore no classification here, and the message says
-// "unhandled" rather than "declined": it claims only what is observable,
-// never why.
-//
-// Two exceptions live in `GhosttyRuntime.reportUnhandledAction`, not here,
-// because an action's payload rather than its tag settles them. They read
-// a fact off the C union instead of guessing.
-//
-// One report per tag, for the lifetime of the process. A keybind held
-// down would otherwise flood stderr at the repeat rate.
 
 import Foundation
 import GhosttyKit
 
+/// Reports the libghostty actions deviceterm
+/// doesn't handle, once each.
+///
+/// deviceterm loads the user's Ghostty config through
+/// `ghostty_config_load_default_files`, and the C API exposes no keybind
+/// mutator, so a `keybind = ctrl+shift+n=new_tab` line is parsed, matched,
+/// and dispatched to `action_cb`. deviceterm owns tabs, windows, and splits
+/// itself, so nothing answers it. Without a diagnostic the shortcut simply
+/// looks broken.
+///
+/// An *enabled* catalog chord never gets this far: main-menu key-equivalent
+/// matching precedes `keyDown:`, so the engine never sees it. What reaches
+/// here is a chord the catalog does not claim, or one whose menu item
+/// validated disabled for the current focus and fell through.
+///
+/// ## Everything unhandled reports, deliberately
+///
+/// Do not infer from a tag whether a keystroke caused an action. libghostty
+/// offers at least three counterexamples:
+///
+///   - `readonly` looks like engine feedback but is emitted *only* from the
+///     `toggle_readonly` binding.
+///   - `show_gtk_inspector` looks GTK-only but ships through core
+///     `App.performAction`, which every apprt shares.
+///   - `secure_input` has two producers: `toggle_secure_input` sends
+///     `.toggle`, termios password detection sends `.on` / `.off`.
+///
+/// A tag filtered on a wrong guess is a shortcut that fails silently, the
+/// bug this type exists to prevent. Reporting is one-shot, so the cost of
+/// filtering nothing is bounded by the number of distinct tags the process
+/// sees. There is therefore no classification here, and the message says
+/// "unhandled" rather than "declined": it claims only what is observable,
+/// never why.
+///
+/// Two exceptions live in `GhosttyRuntime.reportUnhandledAction`, not here,
+/// because an action's payload rather than its tag settles them. They read
+/// a fact off the C union instead of guessing.
+///
+/// One report per tag, for the lifetime of the process. A keybind held
+/// down would otherwise flood stderr at the repeat rate.
 @MainActor
 enum GhosttyActionDisposition {
     private static var reportedTags: Set<UInt32> = []

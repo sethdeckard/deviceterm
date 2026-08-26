@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Workspace command family: tab / pane / device / window parsing and
-// request building, split out of CLICommands.swift to keep that file focused
-// on the shared parse core. `parse(_:)` (in CLICommands.swift) delegates the
-// workspace verbs to the `parse*Subcommand` helpers here; the `*Request`
-// builders encode the matching `AppCommandParams` struct for the daemon's
-// `app.commands` back-channel.
-//
-// This is a behavior-grouping extension, not a conformance split. The
-// shared `request(method:body:)` helper and the `parse*Subcommand` entries
-// are `internal` in CLICommands.swift so this file can call them.
 
 import DaemonProtocol
 import Foundation
 
+/// Workspace command family: tab / pane / device / window parsing and
+/// request building, split out of CLICommands.swift to keep that file focused
+/// on the shared parse core. `parse(_:)` (in CLICommands.swift) delegates the
+/// workspace verbs to the `parse*Subcommand` helpers here; the `*Request`
+/// builders encode the matching `AppCommandParams` struct for the daemon's
+/// `app.commands` back-channel.
+///
+/// This is a behavior-grouping extension, not a conformance split. The
+/// shared `request(method:body:)` helper and the `parse*Subcommand` entries
+/// are `internal` in CLICommands.swift so this file can call them.
 extension CLICommands {
     // MARK: - Nested types
 

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Concept help topics: the cross-cutting explanations that belong to no
-// single verb. Reachable as `deviceterm help <topic>` and named at the
-// foot of the overview, but they take no overview line of their own.
-//
-// This is a behavior-grouping extension, not a conformance split.
 
+/// Concept help topics: the cross-cutting explanations that belong to no
+/// single verb. Reachable as `deviceterm help <topic>` and named at the
+/// foot of the overview, but they take no overview line of their own.
+///
+/// This is a behavior-grouping extension, not a conformance split.
 extension HelpCatalog {
     /// What `--tab` / `--pane` / `--window` accept on the workspace
     /// verbs. Both the `refs` topic and the workspace group note render

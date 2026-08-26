@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HelpText: renders the `deviceterm help` surface from `HelpCatalog`.
-//
-// Two shapes come out of here. `overview` is what a bare `deviceterm help`
-// prints: one line per top-level verb, grouped by the job it does, with the
-// concepts named at the foot. `page(forTopic:)` is what `deviceterm help
-// <command>` prints: that topic's reference block plus whatever context its
-// group carries. Subcommands (`tab open`, `ax sweep`) never reach the
-// overview; they live on their parent verb's page.
-//
-// Text is wrapped to 78 columns so it reads in any 80-col terminal.
-// `render(role:)` prepends a role-aware header, so a caller can see which
-// role the daemon gave it. That header is the only role-varying part of the
-// output. The verb list is never filtered: an automation-only verb like
-// `tab send-input` appears in every caller's view, and a listed command may
-// still be refused because the connection lacks the required grant.
-//
-// A topic page carries no role header. It answers "how does this work?"
-// rather than "what may I run?", which also means it needs no daemon
-// round-trip: `deviceterm help crown` works with the daemon stopped.
 
 import DaemonProtocol
 
+/// Renders the `deviceterm help` surface from `HelpCatalog`.
+///
+/// Two shapes come out of here. `overview` is what a bare `deviceterm help`
+/// prints: one line per top-level verb, grouped by the job it does, with the
+/// concepts named at the foot. `page(forTopic:)` is what `deviceterm help
+/// <command>` prints: that topic's reference block plus whatever context its
+/// group carries. Subcommands (`tab open`, `ax sweep`) never reach the
+/// overview; they live on their parent verb's page.
+///
+/// Text is wrapped to 78 columns so it reads in any 80-col terminal.
+/// `render(role:)` prepends a role-aware header, so a caller can see which
+/// role the daemon gave it. That header is the only role-varying part of the
+/// output. The verb list is never filtered: an automation-only verb like
+/// `tab send-input` appears in every caller's view, and a listed command may
+/// still be refused because the connection lacks the required grant.
+///
+/// A topic page carries no role header. It answers "how does this work?"
+/// rather than "what may I run?", which also means it needs no daemon
+/// round-trip: `deviceterm help crown` works with the daemon stopped.
 public enum HelpText {
     /// The banner every overview opens with: what deviceterm is, then the
     /// one-line grammar.

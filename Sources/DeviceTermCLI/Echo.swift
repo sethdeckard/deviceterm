@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Echo: the `ok udid=… pane=… [key=value …]` line shape for every
-// `pane.input.*` success.
-//
-// Each accepted input lands as a self-describing receipt rather than
-// a bare `ok`. Agents who ran `deviceterm tap 0.5 0.5` would otherwise
-// have had no signal that it landed on the intended sim until the
-// next screenshot:
-//
-//   ok udid=<UDID> pane=<short_id> [per-command fields]
-//
-// The two leading columns are stable across every input command;
-// the per-command fields slot in afterwards in a documented order.
-// Swipe surfaces the `dispatched=`/`steps=`/`durationMs=` triple
-// from `SwipeAck`, prepended with the udid/pane prefix, not
-// replacing it.
-//
-// Pure namespace, no I/O, so it's testable without spawning a process.
 
 import DaemonProtocol
 import Foundation
 
+/// The `ok udid=… pane=… [key=value …]` line shape for every
+/// `pane.input.*` success.
+///
+/// Each accepted input lands as a self-describing receipt rather than
+/// a bare `ok`. Agents who ran `deviceterm tap 0.5 0.5` would otherwise
+/// have had no signal that it landed on the intended sim until the
+/// next screenshot:
+///
+///   ok udid=<UDID> pane=<short_id> [per-command fields]
+///
+/// The two leading columns are stable across every input command;
+/// the per-command fields slot in afterwards in a documented order.
+/// Swipe surfaces the `dispatched=`/`steps=`/`durationMs=` triple
+/// from `SwipeAck`, prepended with the udid/pane prefix, not
+/// replacing it.
+///
+/// Pure namespace, no I/O, so it's testable without spawning a process.
 public enum Echo {
     /// Format a successful-input echo line. Leading columns are
     /// `ok`, `udid=…`, `pane=…`; trailing key/value pairs are the

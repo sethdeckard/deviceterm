@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Help topics for the verbs that report on the install rather than drive a
-// device: health, versions, config, event stream, shell tooling, and the
-// two documentation verbs.
-//
-// This is a behavior-grouping extension, not a conformance split.
 
+/// Help topics for the verbs that report on the install rather than drive a
+/// device: health, versions, config, event stream, shell tooling, and the
+/// two documentation verbs.
+///
+/// This is a behavior-grouping extension, not a conformance split.
 extension HelpCatalog {
     static let setupTopics: [HelpTopic] = [
         HelpTopic(

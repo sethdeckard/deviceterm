@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DefaultTerminalProbe: derives trusted terminal facts from a foreground pid
-// and a tty name supplied by a trusted terminal surface.
-//
-// Neither input is authority on its own: the probe re-derives the terminal
-// identity from the kernel and returns only verified facts.
-//
-// Pid exit/reuse is guarded by reading the foreground process' identity before
-// AND after the session/TTY lookups: if its start time or controlling tty
-// changed in between, the pid was reused or the process exited and the probe
-// fails closed rather than binding a mismatched anchor.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 
+/// Derives trusted terminal facts from a foreground pid
+/// and a tty name supplied by a trusted terminal surface.
+///
+/// Neither input is authority on its own: the probe re-derives the terminal
+/// identity from the kernel and returns only verified facts.
+///
+/// Pid exit/reuse is guarded by reading the foreground process' identity before
+/// AND after the session/TTY lookups: if its start time or controlling tty
+/// changed in between, the pid was reused or the process exited and the probe
+/// fails closed rather than binding a mismatched anchor.
 public enum DefaultTerminalProbe {
     /// Derive the anchor facts, or nil (fail-closed) when the kernel view is
     /// inconsistent: the tty isn't a character device, the foreground

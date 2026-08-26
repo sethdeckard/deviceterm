@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceTrace: first-party, off-by-default instrumentation shared by the
-// daemon (producer) and the GUI (consumer). Keeping the pure pixel
-// stamp/scan, the row schema, and the JSONL sink in one module means both
-// sides run the same tested code instead of duplicating it.
-//
-// The producer stamps a frame's identity (the pool generation) into the
-// surface pixels; after the command buffer completes, the consumer scans it
-// back. The consumer already knows the identity it intended to render (the
-// wire sequence), so it records that expected id, the observed id, and the
-// count of internally-inconsistent rows for offline comparison,
-// characterizing the reuse race without observing the bytes the GPU
-// actually sampled.
 
 import Foundation
 import IOSurface
 
 /// Writes a 32-bit id into column 0 of every row and scans it back.
+///
+/// The producer stamps a frame's identity (the pool generation) into the
+/// surface pixels; after the command buffer completes, the consumer scans it
+/// back. The consumer already knows the identity it intended to render (the
+/// wire sequence), so it records that expected id, the observed id, and the
+/// count of internally-inconsistent rows for offline comparison,
+/// characterizing the reuse race without observing the bytes the GPU
+/// actually sampled.
+///
+/// This is off-by-default instrumentation shared by the daemon (producer) and
+/// the GUI (consumer). Keeping the pure stamp/scan, the row schema, and the
+/// JSONL sink in one module means both sides run the same tested code instead
+/// of duplicating it.
 public enum SurfacePixelStamp {
     /// Stamp the low 32 bits of `identifier` into the first pixel of every
     /// row. Locks for write.

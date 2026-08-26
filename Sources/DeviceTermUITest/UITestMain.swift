@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UITestMain: the process entry logic (side effects live here).
-//
-// `run` parses argv, then either serves the resident harness or performs
-// one client request. Kept out of `main.swift` so the top-level file is
-// a single call and this logic stays greppable.
 
 import AppKit
 import Foundation
 
+/// The process entry logic (side effects live here).
+///
+/// `run` parses argv, then either serves the resident harness or performs
+/// one client request. Kept out of `main.swift` so the top-level file is
+/// a single call and this logic stays greppable.
 enum UITestMain {
     @MainActor
     static func run(args: [String]) -> Never {

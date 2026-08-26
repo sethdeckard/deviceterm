@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DetectEventTests: pin the shim's argv-detection layer across
-// every state-changing simctl invocation the shim is expected to
-// catch, plus the negative-space invocations that must NOT generate
-// a boot claim or shutdown event (otherwise we'd misattribute boots that never
-// happened or shutdowns we didn't cause).
-//
-// The shim's main loop relies on `detectEvent` to decide whether to
-// take a `simctl list` snapshot, run the child, take another
-// snapshot, diff for the unique state transition, and report it. A miss means
-// the sim boots but
-// deviceterm sees no pane attribution.
 
 import DaemonProtocol
 @testable import Shim
 import Testing
+
+// Pin the shim's argv-detection layer across every state-changing simctl
+// invocation the shim is expected to catch, plus the negative-space
+// invocations that must NOT generate a boot claim or shutdown event, which
+// would misattribute a boot that never happened or a shutdown deviceterm
+// did not cause.
+//
+// The shim's main loop relies on `detectEvent` to decide whether to take a
+// `simctl list` snapshot, run the child, take another snapshot, diff for the
+// unique state transition, and report it. A miss means the sim boots but
+// deviceterm sees no pane attribution.
 
 // MARK: - Fixture helpers
 
@@ -73,9 +72,8 @@ func detectsShutdownViaBareSimctl() {
 // `xcrun simctl bootstatus <device> -b` boots if needed AND waits
 // for the boot to finish. Common in CI / scaffold scripts. simctl's
 // CLI grammar is `bootstatus <device> [-bd]`: device is the first
-// positional after the verb, flags come AFTER. Before this fix the
-// shim's argv detector keyed only on `[simctl, boot, ...]` and
-// missed every bootstatus-driven boot.
+// positional after the verb, flags come AFTER. An argv detector keyed
+// only on `[simctl, boot, ...]` misses every bootstatus-driven boot.
 
 @Test("bootstatus <name> -b — name spec, single flag")
 func detectsBootstatusBootFlag() {

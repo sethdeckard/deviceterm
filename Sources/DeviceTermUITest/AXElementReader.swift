@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AXElementReader: the CoreFoundation plumbing for reading one
-// AXUIElement, shared by the tree dump and the input driver.
-//
-// Two Swift-level hazards live here, in one place rather than at every
-// call site:
-//   * The SDK's `kAX*Attribute` constants are C globals (`var`), which
-//     Swift 6 rejects as shared mutable state, so names are literals.
-//   * `CFTypeRef as? AXValue` is rejected as an always-succeeding cast,
-//     so every downcast is gated on the CoreFoundation type id first.
 
 import ApplicationServices
 import CoreGraphics
 import Foundation
 
+/// The CoreFoundation plumbing for reading one
+/// AXUIElement, shared by the tree dump and the input driver.
+///
+/// Two Swift-level hazards live here, in one place rather than at every
+/// call site:
+///   * The SDK's `kAX*Attribute` constants are C globals (`var`), which
+///     Swift 6 rejects as shared mutable state, so names are literals.
+///   * `CFTypeRef as? AXValue` is rejected as an always-succeeding cast,
+///     so every downcast is gated on the CoreFoundation type id first.
 enum AXElementReader {
     static let pressAction = "AXPress"
 

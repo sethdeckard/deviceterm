@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 /// The narrow role the daemon depends on to drive device input: report what the
 /// device supports, and perform one intent at a time.
 ///

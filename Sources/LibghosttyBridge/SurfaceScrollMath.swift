@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceScrollMath: pure row↔pixel math for the visible scroll
-// indicator. AppKit's coordinate system is +Y-up (origin bottom-
-// left); the terminal model is +Y-down (row 0 = top of history).
-// SurfaceScrollView calls into these helpers to keep the inversion
-// localised + unit-testable, away from the AppKit observation
-// plumbing where bugs would be hard to pin.
 
 import CoreGraphics
 import TerminalSurface
 
+/// Pure row↔pixel math for the visible scroll
+/// indicator. AppKit's coordinate system is +Y-up (origin bottom-
+/// left); the terminal model is +Y-down (row 0 = top of history).
+/// SurfaceScrollView calls into these helpers to keep the inversion
+/// localised + unit-testable, away from the AppKit observation
+/// plumbing where bugs would be hard to pin.
 enum SurfaceScrollMath {
     /// Height the document view should take, given a scrollbar
     /// snapshot + the visible-rect height. The grid contributes

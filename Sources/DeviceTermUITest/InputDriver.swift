@@ -1,34 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// InputDriver: post the GUI-only gestures that have no CLI equivalent.
-//
-// Scope discipline: everything deviceterm's CLI can already do goes through
-// the CLI. This exists for what it cannot reach: menu key equivalents,
-// clicking chrome, and dismissing an app-modal `NSAlert`, which blocks
-// deviceterm's own main run loop and therefore cannot be dismissed from
-// inside deviceterm at all. Only an out-of-process driver can. The tab,
-// pane, and window close prompts are window-modal sheets and do not
-// block; plenty of other alerts still do, the quit-with-sims prompt and
-// cold-start orphan recovery among them.
-//
-// Safety: events are delivered with `postToPid`, never to the global HID
-// tap. A `cmd+q` posted globally would quit whatever happens to be
-// frontmost, plausibly the user's terminal. Even when the target is
-// activated first, the event is still addressed to a pid, so a failed
-// activation cannot leak a keystroke into another app.
-//
-// Activation is nonetheless required for key equivalents. A menu command
-// runs against the key window, and a backgrounded app has none: posting
-// cmd+t to a background deviceterm opens a *window* rather than adding a
-// tab, because "New Tab" finds no window to add to. Observed, not assumed.
-// `pressElement` needs no activation, since an AX action is semantic
-// rather than focus-dependent, so it stays the non-invasive option.
 
 import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
 
+/// Post the GUI-only gestures that have no CLI equivalent.
+///
+/// Scope discipline: everything deviceterm's CLI can already do goes through
+/// the CLI. This exists for what it cannot reach: menu key equivalents,
+/// clicking chrome, and dismissing an app-modal `NSAlert`, which blocks
+/// deviceterm's own main run loop and therefore cannot be dismissed from
+/// inside deviceterm at all. Only an out-of-process driver can. The tab,
+/// pane, and window close prompts are window-modal sheets and do not
+/// block; plenty of other alerts still do, the quit-with-sims prompt and
+/// cold-start orphan recovery among them.
+///
+/// Safety: events are delivered with `postToPid`, never to the global HID
+/// tap. A `cmd+q` posted globally would quit whatever happens to be
+/// frontmost, plausibly the user's terminal. Even when the target is
+/// activated first, the event is still addressed to a pid, so a failed
+/// activation cannot leak a keystroke into another app.
+///
+/// Activation is nonetheless required for key equivalents. A menu command
+/// runs against the key window, and a backgrounded app has none: posting
+/// cmd+t to a background deviceterm opens a *window* rather than adding a
+/// tab, because "New Tab" finds no window to add to.
+/// `pressElement` needs no activation, since an AX action is semantic
+/// rather than focus-dependent, so it stays the non-invasive option.
 enum InputDriver {
     /// How long to wait for an activated app to actually become frontmost.
     private static let activationTimeout: TimeInterval = 1.5

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Help topics for the verbs that drive a device: touch, hardware input,
-// and accessibility inspection.
-//
-// This is a behavior-grouping extension, not a conformance split. The
-// catalog's prose is partitioned the way the overview partitions it, so a
-// help edit touches one file rather than a single long one.
 
+/// Help topics for the verbs that drive a device: touch, hardware input,
+/// and accessibility inspection.
+///
+/// This is a behavior-grouping extension, not a conformance split. The
+/// catalog's prose is partitioned the way the overview partitions it, so a
+/// help edit touches one file rather than a single long one.
 extension HelpCatalog {
     static let driveTopics: [HelpTopic] = [
         HelpTopic(
