@@ -5,8 +5,13 @@ import DaemonProtocol
 import SwiftUI
 
 /// The simulator pane's SwiftUI chrome. A single
-/// 28pt row with two pinned regions framing a collapsible ribbon:
+/// 28pt row of three regions framing a collapsible ribbon:
 ///
+///   - Leading (pinned): the drag grip, a vertical capsule marking
+///     where to grab the pane. It opens the row to keep the marker
+///     clear of the right-anchored ribbon whenever the expanded row
+///     fits. The grip is a marker only: `PaneChromeDragHostView` owns
+///     dragging from the strip's non-interactive regions.
 ///   - Left (pinned): status badge + truncating title.
 ///   - Right (anchored): the ribbon control proper, holding a chevron toggle
 ///     button (tap to expand/collapse), the ribbon contents
@@ -36,39 +41,56 @@ struct PaneChromeOverlay: View {
         return Color(nsColor: GhosttyThemeColors.cachedSelectionBackground() ?? fallback)
     }
 
+    /// Grip opacity with the pointer elsewhere. Faint rather than
+    /// absent: a pane that hides its drag affordance until hovered
+    /// gives no one a reason to hover there in the first place.
+    private static let handleRestOpacity: Double = 0.18
+    /// Grip opacity with the pointer over the chrome row.
+    private static let handleHoverOpacity: Double = 0.55
+
     let viewModel: PaneChromeViewModel
     @State private var isHovering = false
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // Hover-revealed drag handle, painted FIRST so the ribbon
-            // (added second) overlays it whenever the expanded ribbon
-            // reaches the middle of the chrome. Aligned to the top of
-            // the chrome, just under the focus border, matching the
-            // terminal pane handle's position.
-            Capsule()
-                .fill(Color.secondary)
-                .frame(width: 28, height: 3)
-                .opacity(isHovering ? 0.55 : 0.0)
-                .padding(.top, 3)
-                .help("Drag to rearrange pane")
+        // Spacing here comes from `PaneChromeRibbonFit`, which also
+        // predicts whether the expanded ribbon fits alongside an
+        // untruncated title. Shared constants so a tweak here can't
+        // leave that prediction stale.
+        HStack(spacing: 0) {
+            dragGrip
+            badgeAndTitle
                 .allowsHitTesting(false)
-            // Spacing here comes from `PaneChromeRibbonFit`, which also
-            // predicts whether the expanded ribbon fits alongside an
-            // untruncated title. Shared constants so a tweak here can't
-            // leave that prediction stale.
-            HStack(spacing: 0) {
-                badgeAndTitle
-                    .allowsHitTesting(false)
-                    .padding(.leading, PaneChromeRibbonFit.leadingPadding)
-                Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
-                ribbonControl
-            }
+                .padding(.leading, PaneChromeRibbonFit.handleTrailingGap)
+            Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
+            ribbonControl
         }
         .frame(height: 28)
         .background(GhosttyThemeColors.backgroundSwiftUI(opacity: 1.0))
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.15), value: isHovering)
+    }
+
+    /// The drag affordance: a vertical capsule opening the row, ahead
+    /// of the status badge. Purely a marker, so it declines hits and
+    /// lets them reach `PaneChromeDragHostView`, which handles dragging
+    /// from the strip's non-interactive regions and supplies the
+    /// openHand cursor.
+    ///
+    /// `layoutPriority` keeps the grip from being the thing that gives
+    /// when a user expands the ribbon on a pane too narrow for it: the
+    /// title truncates instead, which is what it is already built to do.
+    private var dragGrip: some View {
+        Capsule()
+            .fill(Color.secondary)
+            .frame(
+                width: PaneChromeRibbonFit.handleWidth,
+                height: PaneChromeRibbonFit.handleHeight
+            )
+            .opacity(isHovering ? Self.handleHoverOpacity : Self.handleRestOpacity)
+            .padding(.leading, PaneChromeRibbonFit.leadingPadding)
+            .layoutPriority(1)
+            .help("Drag to rearrange pane")
+            .allowsHitTesting(false)
     }
 
     /// The ribbon control proper, anchored to the trailing edge of

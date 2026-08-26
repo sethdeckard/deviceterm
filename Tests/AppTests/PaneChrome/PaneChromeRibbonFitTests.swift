@@ -19,6 +19,9 @@ import Testing
 ///   3. The threshold moves with the title. The device name is the
 ///      thing being protected, so a longer name has to demand a wider
 ///      pane.
+///   4. The threshold reserves the drag grip. It includes the grip and
+///      its gap so it does not report a fit at widths where the title
+///      would truncate.
 @MainActor
 struct PaneChromeRibbonFitTests {
     /// The full phone-sim row: home, screenshot, record, rotate left,
@@ -145,5 +148,38 @@ struct PaneChromeRibbonFitTests {
                 actionCount: phoneActions
             ) == false
         )
+    }
+
+    @Test
+    func thresholdReservesTheDragGrip() {
+        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
+        let threshold = PaneChromeRibbonFit.minimumPaneWidthForExpandedRibbon(
+            titleWidth: title,
+            actionCount: phoneActions
+        )
+        // The same sum with the grip's leading region removed. The
+        // difference must equal the grip width plus its trailing gap.
+        let withoutGrip = PaneChromeRibbonFit.leadingPadding
+            + PaneChromeRibbonFit.badgeSize
+            + PaneChromeRibbonFit.badgeTitleSpacing
+            + title
+            + PaneChromeRibbonFit.minimumTitleGap
+            + PaneChromeRibbonFit.expandedRibbonWidth(actionCount: phoneActions)
+            + PaneChromeRibbonFit.safetyMargin
+        #expect(
+            threshold - withoutGrip
+                == PaneChromeRibbonFit.handleWidth + PaneChromeRibbonFit.handleTrailingGap
+        )
+    }
+
+    @Test
+    func gripConstantsAreNonZero() {
+        // Zero width or height erases the grip; a zero trailing gap
+        // removes its separation from the badge. None of the three
+        // fails anything else: the row still lays out and the fit math
+        // still answers.
+        #expect(PaneChromeRibbonFit.handleWidth > 0)
+        #expect(PaneChromeRibbonFit.handleHeight > 0)
+        #expect(PaneChromeRibbonFit.handleTrailingGap > 0)
     }
 }

@@ -22,8 +22,15 @@ import AppKit
 enum PaneChromeRibbonFit {
     // MARK: - Shared layout constants
 
-    /// Leading inset before the status badge.
+    /// Leading inset before the drag grip, which opens the row.
     static let leadingPadding: CGFloat = 8
+    /// Thickness of the drag grip capsule.
+    static let handleWidth: CGFloat = 3
+    /// Length of the drag grip capsule. Chosen to read as a vertical
+    /// grip rather than a horizontal seam.
+    static let handleHeight: CGFloat = 14
+    /// Gap between the drag grip and the status badge.
+    static let handleTrailingGap: CGFloat = 8
     /// Status badge is a square; `StatusBadgeView` is framed to it.
     static let badgeSize: CGFloat = 12
     /// Gap between the badge and the title.
@@ -85,13 +92,19 @@ enum PaneChromeRibbonFit {
     }
 
     /// Narrowest pane that shows the expanded ribbon with the whole
-    /// device name still visible: leading inset, badge, title, the
-    /// minimum gap, then the ribbon itself.
+    /// device name still visible: leading inset, drag grip, gap, badge,
+    /// title, the minimum gap, then the ribbon itself.
+    ///
+    /// The grip shares the row rather than floating over it, so
+    /// omitting its width and trailing gap would report a fit at widths
+    /// where the title has to truncate.
     static func minimumPaneWidthForExpandedRibbon(
         titleWidth: CGFloat,
         actionCount: Int
     ) -> CGFloat {
         leadingPadding
+            + handleWidth
+            + handleTrailingGap
             + badgeSize
             + badgeTitleSpacing
             + max(0, titleWidth)

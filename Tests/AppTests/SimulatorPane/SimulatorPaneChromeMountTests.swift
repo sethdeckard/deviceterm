@@ -37,7 +37,7 @@ import Testing
 ///      sequence directly, without a window and its layout passes.
 @MainActor
 struct SimulatorPaneChromeMountTests {
-    /// Widths for the launch-fit tests, against the ~465pt threshold a
+    /// Widths for the launch-fit tests, against the ~476pt threshold a
     /// 10-action phone row titled "iPhone 17 Pro" has to clear.
     /// `tooNarrow` is `simMinThickness`'s non-watch minimum width, so
     /// the narrowest a phone sim pane can be still stays collapsed.
