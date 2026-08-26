@@ -57,6 +57,13 @@ file_header:
   # directly below `swift-tools-version`. The vendored idb headers are MIT
   # and are excluded above, so they keep their own upstream notices.
   required_pattern: '\A// SPDX-License-Identifier: GPL-3\.0-or-later'
+  # The identifier is the whole header: prose describing a declaration
+  # belongs on it as `///`, and prose describing the file itself goes below
+  # the imports. `(?!/)` spares a `///` doc comment that opens the file when
+  # there are no imports to sit under, which is why this cannot be a plain
+  # `^//`. A `//` block below the imports is outside the header region the
+  # rule inspects and passes.
+  forbidden_pattern: '(?m)^//(?!/)(?! SPDX-License-Identifier)'
 
 opt_in_rules:
   - array_init

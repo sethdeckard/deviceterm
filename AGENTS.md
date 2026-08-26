@@ -72,17 +72,25 @@ reviewers can decide whether the trade-off is worth it.
 ## Code Style
 
 - Every first-party source file opens with
-  `// SPDX-License-Identifier: GPL-3.0-or-later`. That identifier is the only
-  required header, and the SwiftLint `file_header` rule enforces it, so a new
-  Swift file without it fails `make lint`. Many files also carry a descriptive
-  header comment, separated from the identifier by a bare `//`. Add one only
-  when it explains something the declarations below it do not; a file whose
-  `///` docs already say what it holds ends at the identifier. Shell scripts
-  put the same identifier on the line after the shebang. `Package.swift` is
-  the one exception to "first line": SwiftPM requires its
-  `swift-tools-version` comment to stay at the top, so the identifier goes
-  directly beneath it. Vendored third-party files keep their upstream notices
-  instead and are excluded from the rule.
+  `// SPDX-License-Identifier: GPL-3.0-or-later`. In Swift sources that
+  identifier is the whole header: no `//` prose block follows it, and
+  SwiftLint's `file_header` rule enforces both halves, so a Swift file that
+  drops the identifier or wedges a prose block under it fails `make lint`.
+  Shell scripts put the same identifier on the line after the shebang.
+  The `file_header` rule applies only to Swift files under the linted
+  paths: `Package.swift` sits outside them (SwiftPM owns its first line, so
+  the identifier goes directly beneath `swift-tools-version`), and the
+  Objective-C bridge headers under `Sources/CoreSimulatorBridge/include/`
+  deliberately keep their prose headers. Vendored third-party files keep
+  their upstream notices instead and are excluded from the rule.
+- Prose that describes a declaration is a `///` doc comment on that
+  declaration, placed above its attributes so `@MainActor` and friends stay
+  between the doc and the type. A `//` block in the header slot is invisible
+  to Quick Help and DocC, and a reader arriving from Jump to Definition
+  scrolls past it. Prose that genuinely describes the file rather than
+  anything declared in it (an executable's contract, a re-export strategy)
+  keeps its `//` markers and moves below the imports;
+  `Sources/Shim/main.swift` is the reference case.
 - Idiomatic Swift; follow Swift API Design Guidelines.
 - Swift 6 strict concurrency is on package-wide, via
   `swift-tools-version: 6.2` in `Package.swift` rather than a per-target
