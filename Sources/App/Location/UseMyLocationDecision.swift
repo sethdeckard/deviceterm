@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UseMyLocationDecision: what to tell the user when Device ▸ Location ▸
-// Use My Location cannot produce a position.
-//
-// Pure, so every outcome's wording is unit-tested and the mapping is
-// total: any `MacLocationFix` that is not a fix produces an alert, which
-// is what keeps the menu item from ever failing silently. The view
-// controller does the presenting; nothing here touches AppKit.
-//
-// Naming follows the `CloseDecisions` / `OrphanDecision` convention for
-// a pure decision namespace beside a view model.
 
 import Foundation
 
+/// What to tell the user when Device ▸ Location ▸
+/// Use My Location cannot produce a position.
+///
+/// Pure, so every outcome's wording is unit-tested and the mapping is
+/// total: any `MacLocationFix` that is not a fix produces an alert, which
+/// is what keeps the menu item from ever failing silently. The view
+/// controller does the presenting; nothing here touches AppKit.
+///
+/// Naming follows the `CloseDecisions` / `OrphanDecision` convention for
+/// a pure decision namespace beside a view model.
 enum UseMyLocationDecision {
     /// Title of the button that opens `locationServicesURL`.
     static let settingsButtonTitle = "Open Privacy & Security"

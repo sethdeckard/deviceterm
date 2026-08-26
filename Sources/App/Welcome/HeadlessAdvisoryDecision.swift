@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HeadlessAdvisoryDecision: whether the Simulator.app coexistence alert
-// fires, and which hazard it should name.
-//
-// Pure, so the whole gate table is unit testable without AppKit.
-// `HeadlessAdvisoryViewModel` supplies the state and
-// `HeadlessAdvisory` renders the result.
-//
-// The expensive inputs arrive as closures rather than values so the
-// cheap gates can short-circuit before an `NSRunningApplication` scan or
-// a cross-process preferences read happens. Ordering is part of the
-// contract here, not an implementation detail, and a test pins it by
-// counting calls.
 
 import Foundation
 
+/// Whether the Simulator.app coexistence alert
+/// fires, and which hazard it should name.
+///
+/// Pure, so the whole gate table is unit testable without AppKit.
+/// `HeadlessAdvisoryViewModel` supplies the state and
+/// `HeadlessAdvisory` renders the result.
+///
+/// The expensive inputs arrive as closures rather than values so the
+/// cheap gates can short-circuit before an `NSRunningApplication` scan or
+/// a cross-process preferences read happens. Ordering is part of the
+/// contract here, not an implementation detail, and a test pins it by
+/// counting calls.
 enum HeadlessAdvisoryDecision: Equatable {
     case skip
     case warn(hazard: SimulatorShutdownHazard)

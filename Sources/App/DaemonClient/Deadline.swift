@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Deadline: bound a wait without abandoning what it was waiting on.
-//
-// The usual way to bound an async call races it against a sleep and cancels
-// the loser. That's right for a read: giving up loses nothing. It's wrong for
-// a call that creates something daemon-side, because the reply is where the
-// new thing's identity lives, and cancelling the wait throws that identity
-// away while the daemon goes on to create it anyway: a session whose one-time
-// capability nobody holds, a pane no window shows and nothing can name.
-//
-// Cancelling the wait doesn't cancel the daemon, so "stop waiting" and "stop
-// caring about the result" are separable, and only the first is safe. This
-// separates them: the caller stops waiting on time, the call keeps running,
-// and whichever side loses the race the value is still accounted for, either
-// returned or handed to a cleanup.
 
 import Foundation
 
+/// Bound a wait without abandoning what it was waiting on.
+///
+/// The usual way to bound an async call races it against a sleep and cancels
+/// the loser. That's right for a read: giving up loses nothing. It's wrong for
+/// a call that creates something daemon-side, because the reply is where the
+/// new thing's identity lives, and cancelling the wait throws that identity
+/// away while the daemon goes on to create it anyway: a session whose one-time
+/// capability nobody holds, a pane no window shows and nothing can name.
+///
+/// Cancelling the wait doesn't cancel the daemon, so "stop waiting" and "stop
+/// caring about the result" are separable, and only the first is safe. This
+/// separates them: the caller stops waiting on time, the call keeps running,
+/// and whichever side loses the race the value is still accounted for, either
+/// returned or handed to a cleanup.
 @MainActor
 enum Deadline {
     /// Wait up to `nanos` for `work`, and account for its value either way.

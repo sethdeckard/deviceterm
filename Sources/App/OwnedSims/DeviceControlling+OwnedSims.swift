@@ -1,12 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceControlling+OwnedSims: read the owned roster, then ask
-// `OwnedSimDecision` about it.
-//
-// The close prompts need to know whether detaching would leave a sim
-// running, and only the daemon knows. The read is one `device.list` and the
-// judgement is pure, so the split is here: fetch once, delegate, and decide
-// what a failed read means.
 
 import DaemonProtocol
 
@@ -30,6 +22,12 @@ enum OwnedSimLookup: Equatable {
     case unknown
 }
 
+/// Read the owned roster, then ask `OwnedSimDecision` about it.
+///
+/// The close prompts need to know whether detaching would leave a sim
+/// running, and only the daemon knows. The read is one `device.list` and the
+/// judgement is pure, so the split is here: fetch once, delegate, and decide
+/// what a failed read means.
 extension DeviceControlling {
     /// Whether any of `sessions` holds a Booted sim. True when the read
     /// fails, so tab and window close follow their configured-or-prompted

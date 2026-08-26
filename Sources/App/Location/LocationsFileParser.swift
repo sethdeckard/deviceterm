@@ -1,45 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LocationsFileParser: the line format of `<config home>/deviceterm/locations`.
-//
-//     # a comment
-//     37.7749,-122.4194 San Francisco
-//     51.5072,-0.1276 London
-//     64.1466,-21.9426
-//     ~/routes/commute.gpx
-//     ~/routes/marathon.gpx Boston Marathon
-//     "~/my routes/sunday run.gpx" Sunday Long Run
-//
-// One entry per line, in one of two shapes: a coordinate pair, or a path
-// to a `.gpx` route file. Either may be followed by an optional label
-// that runs to the end of the line and may contain spaces.
-//
-// **A coordinate is tried first, and the path form requires the `.gpx`
-// suffix.** Not every unreadable line is a path: that would take a line
-// written by a *newer* version of deviceterm and render it in the menu
-// as a broken route, which is exactly what the preserve-what-you-don't-
-// understand rule exists to prevent. Requiring the extension keeps
-// unknown lines unknown.
-//
-// A bare path ends at the first whitespace; a path containing spaces is
-// double-quoted (`"~/my routes/sunday run.gpx" Sunday`), which macOS
-// paths routinely need. Quoting rather than a heuristic, because a rule
-// that guessed where the path stopped would read some lines the opposite
-// way from how they were written.
-//
-// **Parsed without a locale, deliberately.** A config file has one
-// meaning regardless of who opens it, so `.` is always the decimal point
-// and `,` always the pair separator. `CoordinateInput` is the opposite:
-// it reads what a person typed, in that person's locale. The two must
-// not be collapsed into one code path.
-//
-// **Anything this file can't read is not an error.** Unrecognized
-// lines are not entries and not failures; `LocationsFile` preserves
-// them verbatim across writes.
 
 import DaemonProtocol
 import Foundation
 
+/// The line format of `<config home>/deviceterm/locations`.
+///
+///     # a comment
+///     37.7749,-122.4194 San Francisco
+///     51.5072,-0.1276 London
+///     64.1466,-21.9426
+///     ~/routes/commute.gpx
+///     ~/routes/marathon.gpx Boston Marathon
+///     "~/my routes/sunday run.gpx" Sunday Long Run
+///
+/// One entry per line, in one of two shapes: a coordinate pair, or a path
+/// to a `.gpx` route file. Either may be followed by an optional label
+/// that runs to the end of the line and may contain spaces.
+///
+/// **A coordinate is tried first, and the path form requires the `.gpx`
+/// suffix.** Not every unreadable line is a path: that would take a line
+/// written by a *newer* version of deviceterm and render it in the menu
+/// as a broken route, which is exactly what the preserve-what-you-don't-
+/// understand rule exists to prevent. Requiring the extension keeps
+/// unknown lines unknown.
+///
+/// A bare path ends at the first whitespace; a path containing spaces is
+/// double-quoted (`"~/my routes/sunday run.gpx" Sunday`), which macOS
+/// paths routinely need. Quoting rather than a heuristic, because a rule
+/// that guessed where the path stopped would read some lines the opposite
+/// way from how they were written.
+///
+/// **Parsed without a locale, deliberately.** A config file has one
+/// meaning regardless of who opens it, so `.` is always the decimal point
+/// and `,` always the pair separator. `CoordinateInput` is the opposite:
+/// it reads what a person typed, in that person's locale. The two must
+/// not be collapsed into one code path.
+///
+/// **Anything this file can't read is not an error.** Unrecognized
+/// lines are not entries and not failures; `LocationsFile` preserves
+/// them verbatim across writes.
 enum LocationsFileParser {
     /// Decimal places used when deviceterm writes a coordinate.
     ///

@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorPaneViewModel: presentation state + daemon I/O for one
-// sim pane, extracted from SimulatorPaneViewController.
-// `@Observable` so the thin view controller re-renders via
-// `observe()`; pure state transitions go through SimPaneReducer.
-// Owns the pane subscription Task and the IOSurface lifetime.
-//
-// Input maps to one-shot RPCs against the daemon's pane.input.* surface:
-// click/drag streams live `pane.input.touch` down/move/up events,
-// a pinch/rotate → pane.input.pinch with from/to f1/f2. Keyboard sends
-// raw NSEvent.keyCode (kVK); the daemon owns the kVK→USB-HID translation.
-//
-// Surface lifecycle: surfaces arrive from the daemon over XPC as
-// `(SurfaceChangedEvent, IOSurfaceRef?)` pairs through the
-// `PaneSubscribing` role surface. The model stores the ref directly,
-// with no `IOSurfaceLookupFromXPCObject` hop and no per-frame
-// mirror-surface indirection. The first surface that resolves marks the pane as
-// rendering; subsequent surfaces replace it in place.
 
 import DaemonProtocol
 import IOSurface
 import Observation
 
+/// Presentation state + daemon I/O for one
+/// mirrored-device pane, sim or physical.
+/// `@Observable` so the thin view controller re-renders via
+/// `observe()`; pure state transitions go through SimPaneReducer.
+/// Owns the pane subscription Task and the IOSurface lifetime.
+///
+/// Input maps to one-shot RPCs against the daemon's pane.input.* surface:
+/// click/drag streams live `pane.input.touch` down/move/up events,
+/// a pinch/rotate → pane.input.pinch with from/to f1/f2. Keyboard sends
+/// raw NSEvent.keyCode (kVK); the daemon owns the kVK→USB-HID translation.
+///
+/// Surface lifecycle: surfaces arrive from the daemon over XPC as
+/// `(SurfaceChangedEvent, IOSurfaceRef?)` pairs through the
+/// `PaneSubscribing` role surface. The model stores the ref directly,
+/// with no `IOSurfaceLookupFromXPCObject` hop and no per-frame
+/// mirror-surface indirection. The first surface that resolves marks the pane as
+/// rendering; subsequent surfaces replace it in place.
 @MainActor
 @Observable
 final class SimulatorPaneViewModel {

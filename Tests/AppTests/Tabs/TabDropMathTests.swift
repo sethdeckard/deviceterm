@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabDropMath: cursor→gap insertion index + live-reorder target slot.
 
 @testable import App
 import CoreGraphics
 import Testing
 
+/// TabDropMath: cursor→gap insertion index + live-reorder target slot.
 struct TabDropMathTests {
     private let mids: [CGFloat] = [50, 150, 250]   // three pills, 100pt each
     // Three 100pt-wide pills at x = 0, 100, 200.

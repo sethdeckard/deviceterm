@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceBezelLayout: pure geometry for the simulator pane's device
-// frame. The wrapper view paints a programmatic bezel (rounded rect
-// + optional notch / crown sublayer) keyed off `DeviceFamily`; this
-// file owns the dimensions so the math tests without an AppKit view
-// or Metal context in scope.
-//
-// One `layout(family:imageRect:)` entry point per call site. Returns
-// `nil` for tv (no bezel, letterbox stays as-is). Otherwise hands
-// back the bezel rect, its corner radius, and optional sub-rects for
-// the phone notch + watch Digital Crown. Sub-rects are positioned in
-// the same coordinate space as `imageRect` (the parent view's
-// flipped coordinates), so the caller can position layers directly.
 
 import CoreGraphics
 import DaemonProtocol
 
+/// Pure geometry for the simulator pane's device
+/// frame. The wrapper view paints a programmatic bezel (rounded rect
+/// + optional notch / crown sublayer) keyed off `DeviceFamily`; this
+/// file owns the dimensions so the math tests without an AppKit view
+/// or Metal context in scope.
+///
+/// One `layout(family:imageRect:)` entry point per call site. Returns
+/// `nil` for tv (no bezel, letterbox stays as-is). Otherwise hands
+/// back the bezel rect, its corner radius, and optional sub-rects for
+/// the phone notch + watch Digital Crown. Sub-rects are positioned in
+/// the same coordinate space as `imageRect` (the parent view's
+/// flipped coordinates), so the caller can position layers directly.
 struct DeviceBezelLayout: Equatable, Sendable {
     /// The outer bezel rect: the frame painted around the screen.
     let bezelRect: CGRect

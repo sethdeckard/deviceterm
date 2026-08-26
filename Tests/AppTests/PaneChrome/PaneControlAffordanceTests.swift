@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneControlAffordanceTests: the shared affordance gate that keeps
-// the three control surfaces (context menu, main menu, chrome ribbon)
-// from drifting. A simulator reports the full capability set so every
-// action its family supports stays enabled; a physical device is
-// trimmed to buttons + rotation, with the simulator-only housekeeping /
-// capture / Apple Pay / crown / AX actions disabled.
 
 @testable import App
 import AppKit
 import DaemonProtocol
 import Testing
 
+/// The shared affordance gate that keeps
+/// the three control surfaces (context menu, main menu, chrome ribbon)
+/// from drifting. A simulator reports the full capability set so every
+/// action its family supports stays enabled; a physical device is
+/// trimmed to buttons + rotation, with the simulator-only housekeeping /
+/// capture / Apple Pay / crown / AX actions disabled.
 @MainActor
 struct PaneControlAffordanceTests {
     /// A physical-device capability set: touch + keyboard + buttons +

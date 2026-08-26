@@ -4,19 +4,6 @@
 import DaemonProtocol
 import Testing
 
-// The GUI's mirror of which sims deviceterm owns.
-//
-// Ownership lives in the helper's memory alone, so for a sim the user
-// detached this is the only live, trusted claim automatic warm-restart
-// recovery can act on. The mirror's whole job
-// is to still be holding that record at the moment a replacement helper says
-// it owns nothing, which is why every read carries the connection that
-// answered it: "the helper owns nothing" is a fact about one helper, and
-// adopting it from a replacement would erase what recovery exists to restore.
-//
-// Reads take their token through `beginRead()` here, as the poll does, so the
-// ordering the mirror sees is the ordering production hands it.
-
 private let simA = "aaaaaaaa-1111-1111-1111-111111111111"
 private let simB = "bbbbbbbb-2222-2222-2222-222222222222"
 private let sessionA = "11111111-aaaa-aaaa-aaaa-111111111111"
@@ -30,6 +17,18 @@ private func owned(
     DeviceListEntry(udid: udid, name: "sim", state: state, ownedBySession: session)
 }
 
+/// The GUI's mirror of which sims deviceterm owns.
+///
+/// Ownership lives in the helper's memory alone, so for a sim the user
+/// detached this is the only live, trusted claim automatic warm-restart
+/// recovery can act on. The mirror's whole job
+/// is to still be holding that record at the moment a replacement helper says
+/// it owns nothing, which is why every read carries the connection that
+/// answered it: "the helper owns nothing" is a fact about one helper, and
+/// adopting it from a replacement would erase what recovery exists to restore.
+///
+/// Reads take their token through `beginRead()` here, as the poll does, so the
+/// ordering the mirror sees is the ordering production hands it.
 @MainActor
 struct OwnedSimRosterTests {
     /// One poll: claim a token, then hand the answer back under it.

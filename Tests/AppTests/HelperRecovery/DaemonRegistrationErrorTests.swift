@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Which `unregister()` failure the repair is allowed to ignore.
-//
-// Tolerating one specific failure is the point: a job booted out from under a
-// BTM record that still reads enabled is a state the repair recovers from.
-// Other unregister failures propagate so the caller cannot report a repair
-// after teardown failed.
-//
-// `repair()` itself needs a real `SMAppService`, so it is not covered here;
-// this pins the classification it applies.
 
 @testable import App
 import Foundation
 import ServiceManagement
 import Testing
 
+/// Which `unregister()` failure the repair is allowed to ignore.
+///
+/// Tolerating one specific failure is the point: a job booted out from under a
+/// BTM record that still reads enabled is a state the repair recovers from.
+/// Other unregister failures propagate so the caller cannot report a repair
+/// after teardown failed.
+///
+/// `repair()` itself needs a real `SMAppService`, so it is not covered here;
+/// this pins the classification it applies.
 @MainActor
 struct DaemonRegistrationErrorTests {
     private static let domain = "SMAppServiceErrorDomain"

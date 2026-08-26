@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalPaneState: one terminal pane inside a tab. Each terminal
-// pane backs its own daemon session (its own `sessionId` + cap), its
-// own libghostty PTY child, and its own `SessionEnvironment` scratch
-// dir. A tab always holds at least one terminal pane (the primary);
-// additional terminals are added via `Route.openTerminalPane`.
-//
-// The tab still carries the `role` (agent / automation) because role
-// is a tab-wide property: "Open Automation Tab" mints an
-// automation tab, and every terminal within shares that role. Role is
-// descriptive metadata, not authority (cross-tab verbs are gated by a
-// live automation grant); each terminal's session inherits the tab's
-// role at create-time.
 
 import DaemonProtocol
 
+/// One terminal pane inside a tab. Each terminal
+/// pane backs its own daemon session (its own `sessionId` + cap), its
+/// own libghostty PTY child, and its own `SessionEnvironment` scratch
+/// dir. A tab always holds at least one terminal pane (the primary);
+/// additional terminals are added via `Route.openTerminalPane`.
+///
+/// The tab still carries the `role` (agent / automation) because role
+/// is a tab-wide property: "Open Automation Tab" mints an
+/// automation tab, and every terminal within shares that role. Role is
+/// descriptive metadata, not authority (cross-tab verbs are gated by a
+/// live automation grant); each terminal's session inherits the tab's
+/// role at create-time.
 struct TerminalPaneState: Identifiable, Equatable, Sendable {
     let id: TerminalPaneID
     /// Daemon-issued session UUID for this terminal's shell.

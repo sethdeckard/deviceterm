@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabMarkerDecision: which markers a tab's pill carries, and in what order.
-//
-// The strip has two markers and neither excludes the other: an automation tab
-// can be protected, and both then show. Their order is what keeps a strip
-// readable at a glance, so it is stated once here and pinned by a test rather
-// than left to whatever order the strip's rendering code mounts them in.
 
 import DaemonProtocol
 
+/// Which markers a tab's pill carries, and in what order.
+///
+/// The strip has two markers and neither excludes the other: an automation tab
+/// can be protected, and both then show. Their order is what keeps a strip
+/// readable at a glance, so it is stated once here and pinned by a test rather
+/// than left to whatever order the strip's rendering code mounts them in.
 enum TabMarkerDecision {
     /// The ordered markers for a tab.
     ///

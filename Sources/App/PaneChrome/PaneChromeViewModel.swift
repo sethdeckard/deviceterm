@@ -1,34 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneChromeViewModel: observable state for the simulator pane's
-// chrome overlay (focus ring, title bar, status badge, hardware-button
-// toolbar, screenshot / record / AX-inspector controls, size-preset
-// menu). The chrome itself is a SwiftUI surface and is observed
-// natively via SwiftUI's body-tracking, so no `observe()` adapter is
-// required on the SwiftUI side. AppKit consumers of the same model
-// still go through `observe()` per `Observe.swift` if they ever need
-// to read it.
-//
-// Per the SwiftUI/AppKit boundary rule, render-state-only surfaces
-// are SwiftUI by default; this view model is the seam where AppKit
-// (the simulator pane VC owns and mutates it) meets SwiftUI (the
-// overlay renders from it). The VC stays AppKit because Metal
-// rendering and multi-touch hit-testing are responder-chain
-// specific; the chrome is pure render state and is the right place
-// to start the SwiftUI lift.
-//
-// Action closures (`onHardwareButton`, `onSizePresetSelected`, etc.) let
-// SwiftUI buttons dispatch through the chrome rather than reaching
-// back into AppKit responder lookup; the VC populates them at init
-// and they target the VC's existing intent methods + @objc selectors.
-// Same VM backs a future stand-alone SwiftUI surface without rewiring,
-// which is the point of going through closures rather than direct
-// `target: self` selectors.
 
 import DaemonProtocol
 import Foundation
 import Observation
 
+/// Observable state for the simulator pane's
+/// chrome overlay (focus ring, title bar, status badge, hardware-button
+/// toolbar, screenshot / record / AX-inspector controls, size-preset
+/// menu). The chrome itself is a SwiftUI surface and is observed
+/// natively via SwiftUI's body-tracking, so no `observe()` adapter is
+/// required on the SwiftUI side. AppKit consumers of the same model
+/// go through `observe()` per `Observe.swift` when they read it.
+///
+/// Per the SwiftUI/AppKit boundary rule, render-state-only surfaces
+/// are SwiftUI by default; this view model is the seam where AppKit
+/// (the simulator pane VC owns and mutates it) meets SwiftUI (the
+/// overlay renders from it). The VC stays AppKit because Metal
+/// rendering and multi-touch hit-testing are responder-chain
+/// specific; the chrome is pure render state and is the right place
+/// to start the SwiftUI lift.
+///
+/// Action closures (`onHardwareButton`, `onSizePresetSelected`, etc.) let
+/// SwiftUI buttons dispatch through the chrome rather than reaching
+/// back into AppKit responder lookup; the VC populates them at init
+/// and they target the VC's existing intent methods + @objc selectors.
+/// Going through closures rather than direct `target: self` selectors is
+/// what keeps the model reusable from a stand-alone SwiftUI surface.
 @MainActor
 @Observable
 final class PaneChromeViewModel {

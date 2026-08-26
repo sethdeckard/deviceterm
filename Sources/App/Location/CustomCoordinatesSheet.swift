@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CustomCoordinatesSheet: type a position by hand.
-//
-// SwiftUI per the project default for sheets: this renders state and
-// dispatches one action, with no responder-chain or draw-timing needs
-// that would call for AppKit.
-//
-// Coordinate validation lives in `CoordinateInput`. The view decides
-// when to show messages, when to enable Set, and how to normalize the
-// optional name. Setting a location also saves it to the locations file
-// (see `PaneLocationViewModel.apply`), which is why the sheet offers a
-// name: an entry saved without one shows up in the menu as bare
-// coordinates.
 
 import DaemonProtocol
 import SwiftUI
 
+/// Type a position by hand.
+///
+/// SwiftUI per the project default for sheets: this renders state and
+/// dispatches one action, with no responder-chain or draw-timing needs
+/// that would call for AppKit.
+///
+/// Coordinate validation lives in `CoordinateInput`. The view decides
+/// when to show messages, when to enable Set, and how to normalize the
+/// optional name. Setting a location also saves it to the locations file
+/// (see `PaneLocationViewModel.apply`), which is why the sheet offers a
+/// name: an entry saved without one shows up in the menu as bare
+/// coordinates.
 struct CustomCoordinatesSheet: View {
     /// Applies the typed position, with the name the user gave it (nil
     /// when the field was left blank).

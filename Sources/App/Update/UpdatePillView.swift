@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdatePillView: the unobtrusive update notification, a frosted
-// material pill with a semantic-colored icon (or a spinner while
-// checking), the state title, an action button for actionable states, and
-// a close affordance for dismissible ones. The pill background is neutral
-// in every state; only the icon carries color, and the accent shows up
-// only when there's something to act on.
 
 import SwiftUI
 
+/// The unobtrusive update notification, a frosted
+/// material pill with a semantic-colored icon (or a spinner while
+/// checking), the state title, an action button for actionable states, and
+/// a close affordance for dismissible ones. The pill background is neutral
+/// in every state; only the icon carries color, and the accent shows up
+/// only when there's something to act on.
 struct UpdatePillView: View {
     let viewModel: UpdateViewModel
     @State private var showingNotes = false

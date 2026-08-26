@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Role protocol: pane teardown + input injection on the daemon.
-//
-// One of four narrow role protocols carved out of `DaemonClient`
-// (see `SessionControlling` for the rationale). Covers `pane.close`
-// and the whole `pane.input.*` family. Coordinates are normalized
-// 0..1; `keyCode` is a raw `NSEvent.keyCode` (the daemon owns the
-// kVK→HID translation).
 
 import CoreGraphics
 import DaemonProtocol
 
+/// Role protocol: pane teardown + input injection on the daemon.
+///
+/// A narrow role protocol carved out of `DaemonClient`
+/// (see `SessionControlling` for the rationale). Covers `pane.closeById`
+/// and the whole `pane.input.*` family. Coordinates are normalized
+/// 0..1; `keyCode` is a raw `NSEvent.keyCode` (the daemon owns the
+/// kVK→HID translation).
 @MainActor
 protocol PaneControlling: AnyObject {
     var supportsLiveTouchInput: Bool { get }

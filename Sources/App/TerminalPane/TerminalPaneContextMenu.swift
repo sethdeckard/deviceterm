@@ -1,38 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalPaneContextMenu: the right-click menu for a terminal pane.
-//
-// Current slice: Copy / Paste / Clear / Open in New Tab / Split Right /
-// Split Down / Close Pane. Find is deferred: it needs a search-bar
-// overlay, libghostty's `GHOSTTY_ACTION_SEARCH_TOTAL` /
-// `GHOSTTY_ACTION_SEARCH_SELECTED` action callbacks wired through the
-// bridge, a SearchState model, and find-next/previous navigation,
-// substantial enough work that it gets its own pass.
-//
-// Split semantics: "Split Right" / "Split Down" split **just the
-// right-clicked pane**. "Split Right" adds a sibling along a vertical
-// divider (panes side-by-side); "Split Down" along a horizontal
-// divider (panes stacked). When the chosen axis differs from the
-// pane's parent split, the pane is wrapped in a fresh nested sub-split
-// so splitting one pane never re-orients the rest of the tab (e.g.
-// Split Right then Split Down on the left pane yields a left column
-// divided in two beside a full-height right pane). ⌃⇧D ("Toggle Split
-// Direction") flips the axis of the focused pane's immediate parent
-// split, leaving other panes put.
-//
-// Items target nil so AppKit dispatches through the responder chain.
-// The terminal pane VC installs this menu on the libghostty surface
-// view (`surface.view.menu = …`); GhosttySurfaceView's `menu(for:)`
-// override promotes itself to first responder before AppKit reads
-// the menu, so every selector lands on the right
-// TerminalPaneViewController even when right-clicking a backgrounded
-// pane.
-//
-// Split out (like `makeSimulatorPaneContextMenu()`) so tests can pin
-// the item structure without instantiating a full pane VC + window.
 
 import AppKit
 
+/// The right-click menu for a terminal pane.
+///
+/// Provides Copy, Paste, Clear, Open in New Tab, Split Right, Split
+/// Down, and Close Pane. Find is absent because the bridge wires none of
+/// libghostty's `GHOSTTY_ACTION_SEARCH_TOTAL` /
+/// `GHOSTTY_ACTION_SEARCH_SELECTED` callbacks and there is no search
+/// state or search-bar overlay to drive.
+///
+/// Split semantics: "Split Right" / "Split Down" split **just the
+/// right-clicked pane**. "Split Right" adds a sibling along a vertical
+/// divider (panes side-by-side); "Split Down" along a horizontal
+/// divider (panes stacked). When the chosen axis differs from the
+/// pane's parent split, the pane is wrapped in a fresh nested sub-split
+/// so splitting one pane never re-orients the rest of the tab (e.g.
+/// Split Right then Split Down on the left pane yields a left column
+/// divided in two beside a full-height right pane). ⌃⇧D ("Toggle Split
+/// Direction") flips the axis of the focused pane's immediate parent
+/// split, leaving other panes put.
+///
+/// Items target nil so AppKit dispatches through the responder chain.
+/// The terminal pane VC installs this menu on the libghostty surface
+/// view (`surface.view.menu = …`); GhosttySurfaceView's `menu(for:)`
+/// override promotes itself to first responder before AppKit reads
+/// the menu, so every selector lands on the right
+/// TerminalPaneViewController even when right-clicking a backgrounded
+/// pane.
+///
+/// Split out (like `makeSimulatorPaneContextMenu()`) so tests can pin
+/// the item structure without instantiating a full pane VC + window.
 @MainActor
 func makeTerminalPaneContextMenu() -> NSMenu {
     let menu = NSMenu()

@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeybindingAction: the canonical identity of every bound action.
-//
-// Raw values are kebab-case to match the repo's wire and config
-// convention, so the drift guard keys on an identity that a selector
-// rename cannot silently break.
-//
-// `CaseIterable` is load-bearing. The drift guard asserts the catalog's
-// action set equals this enum's case set, as `DaemonTests` asserts the
-// RPC registry's keys equal `RPCMethod`'s cases, so an action added here
-// without a catalog entry fails the test gate.
-//
-// REFACTOR: preserve the kebab-case raw values as the right-hand
-// vocabulary for a future `keybind = cmd+t=new-tab` config parser.
 
+/// The canonical identity of every bound action.
+///
+/// Kebab-case raw values are stable, selector-independent identifiers, so
+/// the drift guard keys on an identity a selector rename cannot silently
+/// break.
+///
+/// The drift guard depends on `CaseIterable`: it asserts the catalog's
+/// action set equals this enum's case set, as `DaemonTests` asserts the
+/// RPC registry's keys equal `RPCMethod`'s cases, so an action added here
+/// without a catalog entry fails the test gate.
+///
+/// REFACTOR: a `keybind = ...` config parser could read these raw values
+/// as its right-hand vocabulary. Nothing consumes them that way today.
 enum KeybindingAction: String, CaseIterable, Sendable {
     // Application
     case openSettings = "open-settings"

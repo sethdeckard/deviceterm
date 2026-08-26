@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentDispatcherTests: the bridge from RouteIntent to either a
-// Router dispatch, an actionDelegate call, or a workspace-read
-// payload.
-//
-// Mutating intents fire the matching Route on the Router (asserted
-// via FakeDaemonClient's recorded calls). Read-only intents
-// (`tabInfo`, `paneInfo`, `windowsList`) return `.data` carrying the
-// wire payload. Resolver errors land as `.error`.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// The bridge from RouteIntent to either a
+/// Router dispatch, an actionDelegate call, or a workspace-read
+/// payload.
+///
+/// Mutating intents fire the matching Route on the Router (asserted
+/// via FakeDaemonClient's recorded calls). Read-only intents
+/// (`tabInfo`, `paneInfo`, `windowsList`) return `.data` carrying the
+/// wire payload. Resolver errors land as `.error`.
 @MainActor
 struct IntentDispatcherTests {
     // MARK: - Helpers

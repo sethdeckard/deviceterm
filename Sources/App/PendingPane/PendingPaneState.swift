@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PendingPaneState: the value record of one placeholder pane shown
-// while a sim/device attach is in flight, or after it failed and is
-// awaiting Retry. A GUI-only concept the daemon never sees: the Router
-// inserts a pending pane immediately (so the layout changes the instant
-// the user acts), runs the attach off the serial route drain, then
-// swaps this placeholder for the real `SimPaneState`/`DevicePaneState`
-// once `device.attach` / `physicalDevice.attach` returns, or flips
-// `phase` to `.failed` so the pane surfaces the error + a Retry button.
-//
-// Keyed by `PendingPaneID` (not the target identity) because the real
-// daemon pane id isn't known until attach completes; `target` records
-// which sim/device this placeholder is attaching and is the dedup key
-// against the tab's mounted (`simPanes`/`devicePanes`) and other
-// pending panes.
 
 import DaemonProtocol
 
+/// The value record of one placeholder pane shown
+/// while a sim/device attach is in flight, or after it failed and is
+/// awaiting Retry. A GUI-only concept the daemon never sees: the Router
+/// inserts a pending pane immediately (so the layout changes the instant
+/// the user acts), runs the attach off the serial route drain, then
+/// swaps this placeholder for the real `SimPaneState`/`DevicePaneState`
+/// once `device.attach` / `physicalDevice.attach` returns, or flips
+/// `phase` to `.failed` so the pane surfaces the error + a Retry button.
+///
+/// Keyed by `PendingPaneID` (not the target identity) because the real
+/// daemon pane id isn't known until attach completes; `target` records
+/// which sim/device this placeholder is attaching and is the dedup key
+/// against the tab's mounted (`simPanes`/`devicePanes`) and other
+/// pending panes.
 struct PendingPaneState: Identifiable, Equatable, Sendable {
     let id: PendingPaneID
     /// Which sim/device this placeholder is attaching: the target-based

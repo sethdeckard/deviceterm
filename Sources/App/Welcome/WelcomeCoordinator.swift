@@ -1,31 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WelcomeCoordinator: owns when a welcome appears and records that it
-// did.
-//
-// Splits cleanly from `WelcomeSelection`, which holds the rules: this
-// side supplies the state, performs the presentation, and latches
-// `didShowThisLaunch`.
-//
-// The two pieces of state come from different places on purpose. The
-// `welcome-messages` master switch is a user preference, so it lives in
-// `~/.config/deviceterm/config`. The seen set is bookkeeping the app
-// writes, so it lives in the XDG cache via `WelcomeSeenStore` and stays
-// out of a file people hand-edit and keep in git.
-//
-// That latch is read by `HeadlessAdvisoryViewModel`: a session where a
-// welcome already explained the coexistence model does not also get the
-// hazard alert. Stacking a modal on top of an explanation the user is
-// still reading is how both end up dismissed unread.
-//
-// State reads/writes and the presentation itself are injected closures,
-// so the gate logic is testable without a window server: the production
-// `init()` wires the real config file and window controller.
 
 import AppKit
 import Foundation
 import Observation
 
+/// Owns when a welcome appears and records that it
+/// did.
+///
+/// Splits cleanly from `WelcomeSelection`, which holds the rules: this
+/// side supplies the state, performs the presentation, and latches
+/// `didShowThisLaunch`.
+///
+/// The two pieces of state come from different places on purpose. The
+/// `welcome-messages` master switch is a user preference, so it lives in
+/// `~/.config/deviceterm/config`. The seen set is bookkeeping the app
+/// writes, so it lives in the XDG cache via `WelcomeSeenStore` and stays
+/// out of a file people hand-edit and keep in git.
+///
+/// That latch is read by `HeadlessAdvisoryViewModel`: a session where a
+/// welcome already explained the coexistence model does not also get the
+/// hazard alert. Stacking a modal on top of an explanation the user is
+/// still reading is how both end up dismissed unread.
+///
+/// State reads/writes and the presentation itself are injected closures,
+/// so the gate logic is testable without a window server: the production
+/// `init()` wires the real config file and window controller.
 @MainActor
 @Observable
 final class WelcomeCoordinator {

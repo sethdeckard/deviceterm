@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ThirdPartyNoticesWindowController: the window for Help > Third-Party
-// Notices. Owns window lifecycle only; the SwiftUI `ThirdPartyNoticesView`
-// (driven by `ThirdPartyNoticesViewModel`) holds all presentation state.
-// `AppDelegate` keeps a single instance and re-fronts it, so repeat
-// invocations bring the same window forward instead of stacking.
 
 import AppKit
 import SwiftUI
 
+/// The window for Help > Third-Party
+/// Notices. Owns window lifecycle only; the SwiftUI `ThirdPartyNoticesView`
+/// (driven by `ThirdPartyNoticesViewModel`) holds all presentation state.
+/// `AppDelegate` keeps a single instance and re-fronts it, so repeat
+/// invocations bring the same window forward instead of stacking.
 @MainActor
 final class ThirdPartyNoticesWindowController: NSWindowController {
     private let viewModel = ThirdPartyNoticesViewModel()

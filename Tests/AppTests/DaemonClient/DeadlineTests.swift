@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeadlineTests: the rule that makes a bounded wait safe for a call that
-// creates something.
-//
-// Racing a call against a sleep and cancelling the loser silently discards
-// whatever the loser was carrying. For a daemon call that mints a session or
-// a pane, the reply IS the only name for what was minted, so discarding it
-// strands the thing. `Deadline.wait` keeps the call running and routes an
-// unclaimed value to a cleanup, and these tests pin that: every ordering
-// either returns the value or delivers it to `late`, exactly once.
 
 @testable import App
 import Foundation
 import Testing
 
+/// The rule that makes a bounded wait safe for a call that
+/// creates something.
+///
+/// Racing a call against a sleep and cancelling the loser silently discards
+/// whatever the loser was carrying. For a daemon call that mints a session or
+/// a pane, the reply IS the only name for what was minted, so discarding it
+/// strands the thing. `Deadline.wait` keeps the call running and routes an
+/// unclaimed value to a cleanup, and these tests pin that: every ordering
+/// either returns the value or delivers it to `late`, exactly once.
 @MainActor
 struct DeadlineTests {
     private enum Failure: Error, Equatable {

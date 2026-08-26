@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WorktreeName.detect against synthetic on-disk layouts.
-// Each test materializes the minimal `.git` / `.git/HEAD` shape it
-// needs in a temp dir, then asserts the detector's answer. No
-// subprocess to git; the detector reads files directly.
 
 @testable import App
 import Foundation
 import Testing
 
+/// WorktreeName.detect against synthetic on-disk layouts.
+/// Each test materializes the minimal `.git` / `.git/HEAD` shape it
+/// needs in a temp dir, then asserts the detector's answer. No
+/// subprocess to git; the detector reads files directly.
 @MainActor
 struct WorktreeNameTests {
     // MARK: - Fixture helpers

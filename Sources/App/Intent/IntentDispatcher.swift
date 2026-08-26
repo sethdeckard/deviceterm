@@ -1,33 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentDispatcher: the single consumer of `RouteIntent` from every
-// input source (CLI back-channel, deep links, menus, future
-// AppleScript).
-//
-// Responsibilities:
-//   1. Resolve external refs to GUI IDs via `IntentResolver`.
-//   2. Translate the resolved intent into `Route`(s) the Router can
-//      execute, OR read inline from the workspace for read-only
-//      intents (`*Info` / `windowsList`), OR call an injected
-//      `IntentActionDelegate` for actions that don't fit the Route
-//      shape (rename / move).
-//   3. Return a typed `IntentResult` the source layer renders.
-//
-// Pattern notes:
-//   - Mutations return `.ok` once the Router has *accepted* the
-//     Route. The actual reconcile happens on the MainActor drain
-//     shortly after. This optimistic shape avoids instrumenting
-//     every Route with a completion handle.
-//   - Read-only intents (`tabInfo`, `paneInfo`, `windowsList`)
-//     synthesize their payload from current workspace state and
-//     return immediately. No Router involvement.
-//   - Errors at the resolver layer (notFound / ambiguous) flow
-//     up as `IntentResult.error(IntentError)` so the source layer
-//     can render without re-classifying.
 
 import DaemonProtocol
 import Foundation
 
+/// The single consumer of `RouteIntent`, which arrives from the CLI
+/// back-channel and from in-process menu actions. Only CLI frames pass
+/// through `CLIIntentTranslator`; menu callers construct a `RouteIntent`
+/// themselves and dispatch it with `origin: .inProcess`.
+///
+/// Responsibilities:
+///   1. Resolve external refs to GUI IDs via `IntentResolver`.
+///   2. Translate the resolved intent into `Route`(s) the Router can
+///      execute, OR read inline from the workspace for read-only
+///      intents (`*Info` / `windowsList`), OR call an injected
+///      `IntentActionDelegate` for actions that don't fit the Route
+///      shape (rename / move).
+///   3. Return a typed `IntentResult` the source layer renders.
+///
+/// Pattern notes:
+///   - Mutations return `.ok` once the Router has *accepted* the
+///     Route. The actual reconcile happens on the MainActor drain
+///     shortly after. This optimistic shape avoids instrumenting
+///     every Route with a completion handle.
+///   - Read-only intents (`tabInfo`, `paneInfo`, `windowsList`)
+///     synthesize their payload from current workspace state and
+///     return immediately. No Router involvement.
+///   - Errors at the resolver layer (notFound / ambiguous) flow
+///     up as `IntentResult.error(IntentError)` so the source layer
+///     can render without re-classifying.
 @MainActor
 final class IntentDispatcher {
     private let workspace: WorkspaceViewModel

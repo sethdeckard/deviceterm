@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimSizePresetTests: pure math for the four sim-pane size presets.
-// The chrome ribbon's Size dropdown and the View menu's ⌃⌘1–⌃⌘4 both
-// call `SimSizeMath.targetWidth`, so pinning the per-case math here
-// covers both surfaces.
-//
-// Each case has its own assertion shape:
-//   - `.fitScreen`: always returns the available width.
-//   - `.pixelAccurate`: width = pixelWidth / Mac backing scale.
-//   - `.pointAccurate`: width = pixelWidth / device @x scale (family-derived).
-//   - `.physical`: width = (pixelWidth / device PPI) × Mac PPI.
-//   - Nil dimensions → nil (caller falls back to family-default).
 
 @testable import App
 import CoreGraphics
 import DaemonProtocol
 import Testing
 
+/// Pure math for the four sim-pane size presets.
+/// The chrome ribbon's Size dropdown and the View menu's ⌃⌘1–⌃⌘4 both
+/// call `SimSizeMath.targetWidth`, so pinning the per-case math here
+/// covers both surfaces.
+///
+/// Each case has its own assertion shape:
+///   - `.fitScreen`: always returns the available width.
+///   - `.pixelAccurate`: width = pixelWidth / Mac backing scale.
+///   - `.pointAccurate`: width = pixelWidth / device @x scale (family-derived).
+///   - `.physical`: width = (pixelWidth / device PPI) × Mac PPI.
+///   - Nil dimensions → nil (caller falls back to family-default).
 @MainActor
 struct SimSizePresetTests {
     private let iPhone = SimDeviceMetrics(

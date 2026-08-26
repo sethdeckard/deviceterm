@@ -1,22 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonStatusSheet: minimal helper-disabled sheet.
-//
-// Shown when `SMAppService.agent.status` is anything other than
-// `.enabled` after registration. macOS 26 surfaces the matching
-// disabled state under System Settings → **Login Items &
-// Extensions** (the older "Background Items" label is gone), and
-// the sheet's CTA deep-links to that pane.
-//
-// Deliberately minimal. A polished onboarding pass (pre-explain
-// copy, screenshot, retry button) is a separate follow-up. This
-// stub exists so the GUI never silently fails when the helper is
-// disabled.
 
 import AppKit
 import ServiceManagement
 import SwiftUI
 
+/// Minimal helper-disabled sheet.
+///
+/// Shown when `SMAppService.agent.status` is anything other than
+/// `.enabled` after registration. macOS 26 surfaces the matching
+/// disabled state under System Settings → **Login Items &
+/// Extensions**, and the sheet's CTA deep-links to that pane.
+///
+/// Deliberately minimal: a recovery surface that keeps the GUI from
+/// silently failing when the helper is disabled.
 struct DaemonStatusSheet: View {
     /// Deep-link URL into System Settings → Login Items &
     /// Extensions. Stable since macOS 13 (the "Extensions"

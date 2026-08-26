@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The `session.restoreBatch` client surface: the request encodes the whole
-// inventory under the right method, carrying each entry's existing bearer cap
-// (which the daemon re-derives the verifier from, unlike a `.validatedGUI`
-// method that must NOT leak a cap, restore legitimately sends it), and the
-// reply decodes.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// The `session.restoreBatch` client surface: the request encodes the whole
+/// inventory under the right method, carrying each entry's existing bearer cap
+/// (which the daemon re-derives the verifier from, unlike a `.validatedGUI`
+/// method that must NOT leak a cap, restore legitimately sends it), and the
+/// reply decodes.
 @MainActor
 struct DaemonClientRestoreBatchTests {
     /// Records the request and returns a valid `SessionRestoreBatchResult` so

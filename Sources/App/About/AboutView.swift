@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AboutView: the SwiftUI content for the About window, showing app icon, name,
-// tagline, Version/Build/Commit rows, Docs + GitHub buttons, and the GPL
-// legal notice. Replaces the stock `orderFrontStandardAboutPanel`. Static
-// content (`AboutInfo`), so there is no view model; it renders once.
 
 import AppKit
 import SwiftUI
 
+/// The SwiftUI content for the About window, showing app icon, name,
+/// tagline, Version/Build/Commit rows, Docs + GitHub buttons, and the GPL
+/// legal notice. Replaces the stock `orderFrontStandardAboutPanel`. Static
+/// content (`AboutInfo`), so there is no view model; the value is
+/// resolved when the window is created.
 struct AboutView: View {
     let info: AboutInfo
 

@@ -1,29 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RouteIntent: source-agnostic, typed value describing what an
-// external (or in-process) caller wants the app to do.
-//
-// This is the boundary type between input sources (CLI verbs over the
-// daemon back-channel, deep-link URLs, menu actions, future
-// AppleScript / accessibility input) and the GUI's `Router`. Each
-// input source has a small translator (`CLIIntentTranslator` today,
-// one per source as they land) that produces values of this type;
-// `IntentDispatcher` is the single consumer that resolves refs,
-// validates, and either synthesizes a `Route` for the Router to
-// execute (mutating intents) or reads from the workspace directly
-// (info / list intents). Nobody outside this layer needs to know
-// where the intent came from.
-//
-// Why a separate enum from `Route`: `Route` uses `WindowID` / `TabID`,
-// internal monotonic IDs the Router mints. `RouteIntent` uses
-// external refs (`TabRef`, `PaneRef`, `WindowRef`) so input sources
-// don't have to chase the GUI's allocation order. The split keeps
-// the resolver as the only place that needs read access to the
-// workspace's id maps; consumers stay pure.
 
 import DaemonProtocol
 import Foundation
 
+/// Source-agnostic, typed value describing what an
+/// external (or in-process) caller wants the app to do.
+///
+/// This is the boundary type between a caller and the GUI's `Router`.
+/// CLI verbs arrive over the daemon back-channel and are translated by
+/// `CLIIntentTranslator`; in-process menu actions construct these values
+/// directly. `IntentDispatcher` is the single consumer that resolves refs,
+/// validates, and either synthesizes a `Route` for the Router to
+/// execute (mutating intents) or reads from the workspace directly
+/// (info / list intents). Nobody outside this layer needs to know
+/// where the intent came from.
+///
+/// Why a separate enum from `Route`: `Route` uses `WindowID` / `TabID`,
+/// internal monotonic IDs the Router mints. `RouteIntent` uses
+/// external refs (`TabRef`, `PaneRef`, `WindowRef`) so input sources
+/// don't have to chase the GUI's allocation order. The split keeps
+/// the resolver as the only place that needs read access to the
+/// workspace's id maps; consumers stay pure.
 enum RouteIntent: Sendable, Equatable {
     // MARK: - Window-level
 

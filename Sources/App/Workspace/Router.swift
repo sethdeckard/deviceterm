@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Router: the single navigation dispatch point. Every Route is
-// enqueued onto a serial drain (one AsyncStream<Route> consumer
-// Task), so navigation is ordered and non-reentrant even though
-// each handler awaits daemon work. The handler performs the daemon
-// *record* operations (session.create, device.attach, pane.close,
-// session.close, the shutdown fan-out) and mutates the nav view
-// models; the AppKit glue reconciles its controllers (views, the
-// session env, and pane subscriptions) to that state. Menu actions,
-// the discovery/resurrect loops, and orphan re-attach all dispatch
-// here: one path for everything.
 
 import DaemonProtocol
 import Foundation
 
+/// The single navigation dispatch point. Every Route is
+/// enqueued onto a serial drain (one AsyncStream<Route> consumer
+/// Task), so navigation is ordered and non-reentrant even though
+/// each handler awaits daemon work. The handler performs the daemon
+/// *record* operations (session.create, device.attach, pane.closeById,
+/// session.close, the shutdown fan-out) and mutates the nav view
+/// models; the AppKit glue reconciles its controllers (views, the
+/// session env, and pane subscriptions) to that state. Menu actions,
+/// the discovery/resurrect loops, and orphan re-attach all dispatch
+/// here: one path for everything.
 @MainActor
 final class Router {
     /// Wire codes for a *definite* pre-commit protection rejection: the

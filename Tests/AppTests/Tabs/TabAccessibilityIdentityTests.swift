@@ -1,20 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The tab-strip identifiers are an observability contract with out-of-process
-// accessibility consumers: filter the shared prefix to collect the controls,
-// compare a full identifier against what `tabs list --json` reports. It is a
-// join key with the CLI rather than a durable handle, since it names a tab's
-// current primary session and follows a change of primary terminal.
-//
-// Uniqueness carries the weight here. A pill's title comes from a precedence
-// chain that sibling tabs routinely resolve to the same string; the identifier
-// is the only thing that names one, and a collision would put a consumer back
-// where it started.
-//
-// The accessibility-element test covers the other half of the contract: an
-// identifier is only reachable if the view carrying it is published to the
-// accessibility tree at all, and the "+" is an NSControl with no cell, which
-// publishes nothing unless it says so.
 
 @testable import App
 import AppKit
@@ -32,6 +16,21 @@ private final class PressRecorder: NSObject {
     }
 }
 
+/// The tab-strip identifiers are an observability contract with out-of-process
+/// accessibility consumers: filter the shared prefix to collect the controls,
+/// compare a full identifier against what `tabs list --json` reports. It is a
+/// join key with the CLI rather than a durable handle, since it names a tab's
+/// current primary session and follows a change of primary terminal.
+///
+/// Uniqueness carries the weight here. A pill's title comes from a precedence
+/// chain that sibling tabs routinely resolve to the same string; the identifier
+/// is the only thing that names one, and a collision would put a consumer back
+/// where it started.
+///
+/// The accessibility-element test covers the other half of the contract: an
+/// identifier is only reachable if the view carrying it is published to the
+/// accessibility tree at all, and the "+" is an NSControl with no cell, which
+/// publishes nothing unless it says so.
 @MainActor
 struct TabAccessibilityIdentityTests {
     @Test

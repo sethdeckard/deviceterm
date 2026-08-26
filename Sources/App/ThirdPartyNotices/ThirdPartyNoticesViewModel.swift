@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ThirdPartyNoticesViewModel: load state for the Help > Third-Party
-// Notices window. Reads the bundled THIRD_PARTY_NOTICES.md and parses it
-// into `[MarkdownBlock]` via the pure `MarkdownDocument`. The view binds
-// to `state`; no presentation state lives in the view or window
-// controller.
 
 import Foundation
 import Observation
 
+/// Load state for the Help > Third-Party
+/// Notices window. Reads the bundled THIRD_PARTY_NOTICES.md and parses it
+/// into `[MarkdownBlock]` via the pure `MarkdownDocument`. The view binds
+/// to `state`; no presentation state lives in the view or window
+/// controller.
 @MainActor
 @Observable
 final class ThirdPartyNoticesViewModel {

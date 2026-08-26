@@ -4,7 +4,7 @@ import DaemonProtocol
 import Foundation
 
 struct RouteFileReader: RouteFileLoading {
-    // The `async` is load-bearing despite nothing being awaited inside.
+    // The `async` matters despite nothing being awaited inside.
     // A nonisolated `async` method runs on the global executor, so
     // declaring it this way is what moves the read and the parse off the
     // main actor; making it synchronous would run both on whichever

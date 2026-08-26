@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdatePopoverView: the expanded form of the update pill, showing the new
-// version, the release notes (the appcast's HTML description, parsed into
-// blocks and laid out natively), and Install / Later actions. Shown in a
-// popover anchored to the pill when the user clicks its notes disclosure.
-//
-// The app owns the notes' typography: blocks carry no color of their own,
-// so both appearances follow from the semantic styles here.
 
 import SwiftUI
 
+/// The expanded form of the update pill, showing the new
+/// version, the release notes (the appcast's HTML description, parsed into
+/// blocks and laid out natively), and Install / Later actions. Shown in a
+/// popover anchored to the pill when the user clicks its notes disclosure.
+///
+/// The app owns the notes' typography: blocks carry no color of their own,
+/// so both appearances follow from the semantic styles here.
 struct UpdatePopoverView: View {
     let version: String
     let notes: String?

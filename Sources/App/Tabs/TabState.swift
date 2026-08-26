@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabState: the value record of one open tab in the navigation
-// model: its identity, the terminal panes (each backing its own
-// daemon session), the sim panes attached to it, and the role
-// assigned at tab open. The AppKit glue keys its
-// TabContentViewController / per-pane controllers off these ids and
-// reconciles to match.
-//
-// `shortId` (Crockford base32, 6 chars, daemon-minted, immutable) +
-// `name` (mutable, optional) are the identifier model and ride
-// alongside `paneId` on `SimPaneState`. Both fields are Optional in
-// the GUI model since they decode from Optional wire fields (skew
-// tolerance against an older daemon during a Sparkle update window);
-// current daemons always emit them.
-//
-// `terminals` is non-empty: every tab is born with one terminal
-// pane (the primary, index 0) and additional terminals are added via
-// `Route.openTerminalPane`. `closeTerminalPane` refuses to remove
-// the last entry (use `closeTab` instead). `primaryTerminal` is the
-// safe accessor for callers that need a representative session
-// (tab-info, status item grouping, sim-pane attribution for the
-// discovery snapshot).
 
 import DaemonProtocol
 import Foundation
 
+/// The value record of one open tab in the navigation
+/// model: its identity, the terminal panes (each backing its own
+/// daemon session), the sim panes attached to it, and the role
+/// assigned at tab open. The AppKit glue keys its
+/// TabContentViewController / per-pane controllers off these ids and
+/// reconciles to match.
+///
+/// `shortId` (Crockford base32, 6 chars, daemon-minted, immutable) +
+/// `name` (mutable, optional) are the identifier model and ride
+/// alongside `paneId` on `SimPaneState`. Both fields are Optional in
+/// the GUI model since they decode from Optional wire fields (skew
+/// tolerance against an older daemon during a Sparkle update window);
+/// current daemons always emit them.
+///
+/// `terminals` is non-empty: every tab is born with one terminal
+/// pane (the primary, index 0) and additional terminals are added via
+/// `Route.openTerminalPane`. `closeTerminalPane` refuses to remove
+/// the last entry (use `closeTab` instead). `primaryTerminal` is the
+/// safe accessor for callers that need a representative session
+/// (tab-info, status item grouping, sim-pane attribution for the
+/// discovery snapshot).
 struct TabState: Identifiable, Equatable, Sendable {
     let id: TabID
     /// The daemon-side session cohort standing for this tab: the id under
@@ -52,7 +51,7 @@ struct TabState: Identifiable, Equatable, Sendable {
     var simPanes: [SimPaneState]
     /// Physically-connected device panes attached to this tab. A
     /// separate typed array from `simPanes` (parallel to it) so the
-    /// load-bearing sim drag / resurrect / orphan-recovery code keeps
+    /// established sim drag / resurrect / orphan-recovery code keeps
     /// hard-referencing `simPanes` untouched; both render through the
     /// same `SimulatorPaneViewController`. Unlike sims, device panes are
     /// **never** persisted and have no resurrect watch, so a device that
@@ -73,7 +72,8 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// pane ordering and nesting inside this tab. Mutated only via
     /// `TabListViewModel` (which calls into `PaneTreeOps` so the
     /// invariants below hold). The tree's leaves index into
-    /// `terminals` / `simPanes`; those arrays stay as typed lookup
+    /// `terminals`, `simPanes`, `devicePanes`, and `pendingPanes`; those
+    /// arrays stay as typed lookup
     /// storage so the rest of the codebase can fetch a pane's state
     /// by id without walking the tree.
     ///

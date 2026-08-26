@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimSizePreset: the four sim-pane size presets, matching Apple's
-// Simulator.app Window submenu (Physical / Point Accurate / Pixel
-// Accurate / Fit Screen). The enum is the user-facing identity; the
-// pure math lives alongside in `SimSizeMath` so it tests without an
-// `NSWindow` or `NSScreen` in scope.
-//
-// The chrome ribbon's size-preset dropdown and the View menu's
-// ⌃⌘1–⌃⌘4 shortcuts both route to the same compute → split-position
-// pipeline; this file is the shared shape so the two surfaces agree on
-// what each preset means.
-//
-// `targetWidth(preset:device:screen:available:)` returns the pane's
-// target width in window points; the caller (PaneLayoutViewController)
-// translates that into a divider position. Returning a CGFloat keeps
-// the caller's split-arithmetic simple, with no `SizeRecommendation`
-// wrapper, no failure cases beyond returning `nil` when the device
-// dimensions aren't available yet.
 
 import CoreGraphics
 import DaemonProtocol
 
+/// The four sim-pane size presets, matching Apple's
+/// Simulator.app Window submenu (Physical / Point Accurate / Pixel
+/// Accurate / Fit Screen). The enum is the user-facing identity; the
+/// pure math lives alongside in `SimSizeMath` so it tests without an
+/// `NSWindow` or `NSScreen` in scope.
+///
+/// The chrome ribbon's size-preset dropdown and the View menu's
+/// ⌃⌘1–⌃⌘4 shortcuts both route to the same compute → split-position
+/// pipeline; this file is the shared shape so the two surfaces agree on
+/// what each preset means.
+///
+/// `targetWidth(preset:device:screen:available:)` returns the pane's
+/// target width in window points; the caller (PaneLayoutViewController)
+/// translates that into a divider position. Returning a CGFloat keeps
+/// the caller's split-arithmetic simple, with no `SizeRecommendation`
+/// wrapper, no failure cases beyond returning `nil` when the device
+/// dimensions aren't available yet.
 enum SimSizePreset: String, CaseIterable, Sendable {
     /// Width ≈ device's real-world physical width, approximated via
     /// the baseline 110 PPI heuristic (close-enough across modern

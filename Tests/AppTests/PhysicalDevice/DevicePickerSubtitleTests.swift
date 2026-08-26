@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePickerView.subtitle: the pure row-subtitle composer. Joins the
-// known model + iOS version (so two devices that share a name read
-// distinctly) and surfaces the unavailable reason for disabled rows.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// DevicePickerView.subtitle: the pure row-subtitle composer. Joins the
+/// known model + iOS version (so two devices that share a name read
+/// distinctly) and surfaces the unavailable reason for disabled rows.
 @MainActor
 struct DevicePickerSubtitleTests {
     private func entry(

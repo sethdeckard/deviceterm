@@ -1,29 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneControlAffordance: the single source of truth for whether a
-// device-control affordance is available on a given pane, shared by the
-// three surfaces that expose those controls: the right-click context
-// menu + main menu (both validated through `validateUserInterfaceItem`
-// on the focused `SimulatorPaneViewController` and the
-// `PaneLayoutViewController` fallback) and the on-pane chrome ribbon
-// (`PaneChromeViewModel.ribbonActions`). Factoring the rule here keeps
-// the surfaces from drifting: a control disabled in one place is
-// disabled in all.
-//
-// A pane mirrors either a CoreSimulator (every control supported) or a
-// physically-connected device (a capability subset). The gate reads the
-// per-pane `PaneCapabilities` for the input-verb families (buttons,
-// rotation, crown, accessibility) and falls back to "is this a
-// simulator" for the housekeeping actions that have no physical-device
-// equivalent (Erase / Shut Down / Open in Simulator / Reveal in Finder
-// / Apple Pay) or whose device path isn't wired yet (Reboot / Screenshot
-// / Record / Install). Sim panes report the full capability set, so the
-// gate is a no-op for them; it only ever subtracts affordances from a
-// device pane.
 
 import AppKit
 import DaemonProtocol
 
+/// The single source of truth for whether a
+/// device-control affordance is available on a given pane, shared by the
+/// three surfaces that expose those controls: the right-click context
+/// menu + main menu (both validated through `validateUserInterfaceItem`
+/// on the focused `SimulatorPaneViewController` and the
+/// `PaneLayoutViewController` fallback) and the on-pane chrome ribbon
+/// (`PaneChromeViewModel.ribbonActions`). Factoring the rule here keeps
+/// the surfaces from drifting: a control disabled in one place is
+/// disabled in all.
+///
+/// A pane mirrors either a CoreSimulator (every control supported) or a
+/// physically-connected device (a capability subset). The gate reads the
+/// per-pane `PaneCapabilities` for the input-verb families (buttons,
+/// rotation, crown, accessibility) and falls back to "is this a
+/// simulator" for the housekeeping actions that have no physical-device
+/// equivalent (Erase / Shut Down / Open in Simulator / Reveal in Finder
+/// / Apple Pay) or that the physical-device backend does not support
+/// (Reboot / Screenshot
+/// / Record / Install). Sim panes report the full capability set, so the
+/// gate is a no-op for them; it only ever subtracts affordances from a
+/// device pane.
 @MainActor
 enum PaneControlAffordance: Equatable {
     /// Hardware buttons Home / Lock / Side / Siri (`capabilities.button`).

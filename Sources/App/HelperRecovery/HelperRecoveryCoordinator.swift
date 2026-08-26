@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HelperRecoveryCoordinator: getting out of a wedged helper without a
-// terminal.
-//
-// The helper is launchd demand-launched, so stopping it makes the next
-// request start a replacement, and the reconnect that follows re-supplies the
-// session inventory. This coordinator is the part around that: it decides
-// when to propose a restart, runs it, and keeps a proposal the user declined
-// from coming straight back.
-//
-// Two things it deliberately does not do. It does not report per-pane
-// results, because each pane reports its own outcome in its own slot and a
-// modal summary would say it later and less precisely. And it does not
-// promise the helper is gone: `terminate` says whether the signal landed,
-// which is a different claim, and the outcomes the GUI can't act on are
-// surfaced rather than smoothed over.
-//
-// Every dependency is injected so the whole sequence runs in tests without
-// AppKit, a live connection, or a real clock.
 
 import Foundation
 
+/// Getting out of a wedged helper without a
+/// terminal.
+///
+/// The helper is launchd demand-launched, so stopping it makes the next
+/// request start a replacement, and the reconnect that follows re-supplies the
+/// session inventory. This coordinator is the part around that: it decides
+/// when to propose a restart, runs it, and keeps a proposal the user declined
+/// from coming straight back.
+///
+/// Two things it deliberately does not do. It does not report per-pane
+/// results, because each pane reports its own outcome in its own slot and a
+/// modal summary would say it later and less precisely. And it does not
+/// promise the helper is gone: `terminate` says whether the signal landed,
+/// which is a different claim, and the outcomes the GUI can't act on are
+/// surfaced rather than smoothed over.
+///
+/// Every dependency is injected so the whole sequence runs in tests without
+/// AppKit, a live connection, or a real clock.
 @MainActor
 final class HelperRecoveryCoordinator {
     struct Dependencies {

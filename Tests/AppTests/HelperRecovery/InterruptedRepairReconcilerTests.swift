@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// InterruptedRepairReconcilerTests: what a launch does when it finds a repair an
-// earlier process was terminated in the middle of.
-//
-// The states worth testing are all about timing and are unreachable against the
-// real ServiceManagement: a replay that never completes, one that completes
-// after the launch stopped waiting, and one that fails at either stage. The
-// clock is injected and advances only when the reconciler sleeps, so a
-// never-completing replay is exercised without the test taking that long.
-//
-// The property that matters most: a stalled replay must reach a visible outcome
-// rather than parking the launch. `SMAppService.unregister()` honours no
-// cancellation, so a launch that awaited a stuck one would never reach a window
-// and would repeat that on every relaunch with nothing on screen.
 
 @testable import App
 import Foundation
 import Testing
 
+/// What a launch does when it finds a repair an
+/// earlier process was terminated in the middle of.
+///
+/// The states worth testing are all about timing and are unreachable against the
+/// real ServiceManagement: a replay that never completes, one that completes
+/// after the launch stopped waiting, and one that fails at either stage. The
+/// clock is injected and advances only when the reconciler sleeps, so a
+/// never-completing replay is exercised without the test taking that long.
+///
+/// The property that matters most: a stalled replay must reach a visible outcome
+/// rather than parking the launch. `SMAppService.unregister()` honours no
+/// cancellation, so a launch that awaited a stuck one would never reach a window
+/// and would repeat that on every relaunch with nothing on screen.
 @MainActor
 struct InterruptedRepairReconcilerTests {
     @MainActor

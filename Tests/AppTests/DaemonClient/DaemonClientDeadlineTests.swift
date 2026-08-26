@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonClientDeadlineTests: the upper bound on a daemon round-trip.
-//
-// A daemon that stops answering (a blocking CoreSimulator call on its actor,
-// a `kill -STOP`) keeps its connection open, so nothing fails: the GUI simply
-// waits. Foreground requests and the pane-subscribe handshake bound that wait,
-// while the background `app.commands` handshake deliberately doesn't. These
-// tests pin what the bound does and doesn't cover.
-//
-// Two shapes of bound live here, and the difference is what happens to a reply
-// that arrives after the caller gave up. An ordinary request cancels its
-// transport, discarding the reply, which costs nothing for a read. A call that
-// mints daemon state can't do that (the reply names what it minted), so
-// `session.create` runs under `Deadline.wait` and closes what it finds.
-//
-// The injected transports model a **silent peer**, not a transport that
-// ignores cancellation. That distinction is what makes the cancel-the-loser
-// bound work at all: the loser is cancelled and awaited, so a transport that
-// refused to unwind would hang the race rather than expire it. The real XPC
-// and UDS transports resume a parked continuation on cancellation
-// (`XPCDaemonConnectionTests` and `UDSDaemonConnectionTests` pin that against
-// real silent peers), and a `Task.sleep` here has the same property while
-// putting nothing on a wire.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// The upper bound on a daemon round-trip.
+///
+/// A daemon that stops answering (a blocking CoreSimulator call on its actor,
+/// a `kill -STOP`) keeps its connection open, so nothing fails: the GUI simply
+/// waits. Foreground requests and the pane-subscribe handshake bound that wait,
+/// while the background `app.commands` handshake deliberately doesn't. These
+/// tests pin what the bound does and doesn't cover.
+///
+/// Two shapes of bound live here, and the difference is what happens to a reply
+/// that arrives after the caller gave up. An ordinary request cancels its
+/// transport, discarding the reply, which costs nothing for a read. A call that
+/// mints daemon state can't do that (the reply names what it minted), so
+/// `session.create` runs under `Deadline.wait` and closes what it finds.
+///
+/// The injected transports model a **silent peer**, not a transport that
+/// ignores cancellation. That distinction is what makes the cancel-the-loser
+/// bound work at all: the loser is cancelled and awaited, so a transport that
+/// refused to unwind would hang the race rather than expire it. The real XPC
+/// and UDS transports resume a parked continuation on cancellation
+/// (`XPCDaemonConnectionTests` and `UDSDaemonConnectionTests` pin that against
+/// real silent peers), and a `Task.sleep` here has the same property while
+/// putting nothing on a wire.
 @MainActor
 struct DaemonClientDeadlineTests {
     /// A peer that accepts every request and answers only after `delay`,

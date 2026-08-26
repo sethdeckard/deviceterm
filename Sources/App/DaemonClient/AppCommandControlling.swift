@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandControlling: narrow role protocol for the daemon's
-// `app.commands` back-channel, the GUI's read-side of the tab/pane/
-// window verbs the CLI invokes.
-//
-// Naming convention follows the other role protocols
-// (`SessionControlling`, `DeviceControlling`, `PaneControlling`,
-// `PaneSubscribing`); see those for the rationale. The
-// `AppCommandSubscriber` depends only on this; tests inject a fake
-// without dragging in the full DaemonClient surface.
 
 import DaemonProtocol
 import Foundation
 
+/// Narrow role protocol for the daemon's
+/// `app.commands` back-channel, the GUI's read-side of the tab/pane/
+/// window verbs the CLI invokes.
+///
+/// Naming convention follows the other role protocols
+/// (`SessionControlling`, `DeviceControlling`, `PaneControlling`,
+/// `PaneSubscribing`); see those for the rationale. The
+/// `AppCommandSubscriber` depends only on this; tests inject a fake
+/// without dragging in the full DaemonClient surface.
 @MainActor
 protocol AppCommandControlling: AnyObject {
     /// Open the long-lived `app.commands` subscription. Yields one

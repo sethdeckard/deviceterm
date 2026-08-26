@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalPaneChromeView: a minimal drag handle. A very
-// thin strip (~8pt) that paints just a centered ⋯ handle as the
-// pane-action affordance. Title and close button are deliberately
-// absent: the tab strip already shows the tab/pane title, and close
-// lives in the ⋯ menu. The handle stays hidden at rest and fades in
-// on hover so the chrome reads as an empty seam most of the time.
-//
-// The ⋯ icon uses overlay so it doesn't add to the layout height;
-// the strip stays 8pt tall regardless of the icon. Hover is detected
-// on the strip itself via SwiftUI `.onHover`.
 
 import SwiftUI
 
+/// A minimal drag handle. A very
+/// thin strip (~8pt) that paints just a centered ⋯ handle as the
+/// pane-action affordance. Title and close button are deliberately
+/// absent: the tab strip already shows the tab/pane title, and close
+/// lives in the ⋯ menu. The handle stays hidden at rest and fades in
+/// on hover so the chrome reads as an empty seam most of the time.
+///
+/// The ⋯ icon uses overlay so it doesn't add to the layout height;
+/// the strip stays 8pt tall regardless of the icon. Hover is detected
+/// on the strip itself via SwiftUI `.onHover`.
 @MainActor
 struct TerminalPaneChromeView: View {
     let viewModel: TerminalPaneChromeViewModel

@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ReleaseNotesDocumentTests: pin the HTML subset the update popover
-// renders. The parser reads notes written by hand for each release and
-// arriving over the network, so the malformed and unknown-markup cases
-// matter as much as the happy path. Unknown presentation tags lose their
-// formatting but keep their text; styles, scripts, declarations, and
-// comments are dropped outright.
 
 @testable import App
 import Foundation
 import Testing
 
+/// Pin the HTML subset the update popover
+/// renders. The parser reads notes written by hand for each release and
+/// arriving over the network, so the malformed and unknown-markup cases
+/// matter as much as the happy path. Unknown presentation tags lose their
+/// formatting but keep their text; styles, scripts, declarations, and
+/// comments are dropped outright.
 struct ReleaseNotesDocumentTests {
     /// The block's text, with inline attributes dropped.
     private func text(_ block: ReleaseNotesBlock) -> String {

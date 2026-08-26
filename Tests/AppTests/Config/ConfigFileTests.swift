@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ConfigFile round-trip. The load-time guarantee is that a prefs
-// write touches only the target key's line and preserves every
-// comment, blank, and unknown key verbatim.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
+
+// ConfigFile round-trip. The guarantee is that a prefs write touches
+// only the target key's line and preserves every comment, blank, and
+// unknown key; saving also ensures a trailing newline.
 
 private func tempConfigPath() -> String {
     let dir = NSTemporaryDirectory() + "deviceterm-cfgtest-\(UUID().uuidString)"

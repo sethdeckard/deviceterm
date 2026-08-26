@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneDropZoneMath: pin the cursor → drop zone mapping. The
-// function is the source of truth for which pane drop zone the
-// cursor is over during a pane drag; getting these boundaries wrong
-// makes the drop indicator land in surprising places.
 
 @testable import App
 import CoreGraphics
 import Testing
 
+/// PaneDropZoneMath: pin the cursor → drop zone mapping. The
+/// function is the source of truth for which pane drop zone the
+/// cursor is over during a pane drag; getting these boundaries wrong
+/// makes the drop indicator land in surprising places.
 struct PaneDropZoneMathTests {
     private let frame = CGRect(x: 0, y: 0, width: 400, height: 200)
 

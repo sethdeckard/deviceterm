@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CLIIntentTranslator: pure mapping from the daemon's `AppCommand`
-// wire frame to the GUI's `RouteIntent`.
-//
-// One source-specific translator per input boundary (CLI, deep link,
-// future AppleScript). Each is a thin shape-converter: decode the
-// wire's per-kind params struct, build the matching `RouteIntent`,
-// surface decode errors as typed `IntentError`s. No workspace
-// access, no dispatch logic. The dispatcher takes it from here.
-//
-// Wire shape: `AppCommand.kind` is the discriminator,
-// `AppCommand.params` is the JSON blob of the matching
-// `AppCommandParams.<Kind>` struct. The translator decodes per kind
-// and produces a strongly-typed `RouteIntent`.
 
 import DaemonProtocol
 import Foundation
 
+/// Pure mapping from the daemon's `AppCommand`
+/// wire frame to the GUI's `RouteIntent`.
+///
+/// The CLI back-channel is the only input that needs translating;
+/// in-process callers construct a `RouteIntent` directly. A thin
+/// shape-converter: decode the wire's per-kind params struct, build the
+/// matching `RouteIntent`, surface decode errors as typed `IntentError`s.
+/// No workspace access, no dispatch logic. The dispatcher takes it from
+/// here.
+///
+/// Wire shape: `AppCommand.kind` is the discriminator,
+/// `AppCommand.params` is the JSON blob of the matching
+/// `AppCommandParams.<Kind>` struct. The translator decodes per kind
+/// and produces a strongly-typed `RouteIntent`.
 enum CLIIntentTranslator {
     /// Convert an incoming AppCommand to a RouteIntent the
     /// IntentDispatcher can consume. Throws `IntentError.internalError`

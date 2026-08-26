@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// MacLocationProviding: this Mac's own position, for Device ▸ Location ▸
-// Use My Location.
-//
-// A protocol so `PaneLocationViewModel` can be tested with a fake and
-// never touches CoreLocation or the authorization prompt.
-// `CoreLocationProvider` is the only production conformer.
 
-/// One-shot access to the Mac's position.
+/// One-shot access to the Mac's position, for Device ▸ Location ▸ Use My
+/// Location.
+///
+/// A protocol so `PaneLocationViewModel` can be tested with a fake and
+/// never touches CoreLocation or the authorization prompt.
+/// `CoreLocationProvider` is the only production conformer.
 ///
 /// `@MainActor` because the only implementation drives
 /// `CLLocationManager`, whose delegate callbacks arrive on the thread

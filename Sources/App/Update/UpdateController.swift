@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdateController: owns the Sparkle `SPUUpdater` driven by our custom
-// `UpdateUserDriver`, applies the `auto-update` config policy, backs the
-// "Check for Updates…" menu action, and hosts the update pill as a
-// titlebar accessory on the key window.
 
 import AppKit
 import Foundation
 import Sparkle
 import SwiftUI
 
+/// Owns the Sparkle `SPUUpdater` driven by our custom
+/// `UpdateUserDriver`, applies the `auto-update` config policy, backs the
+/// "Check for Updates…" menu action, and hosts the update pill as a
+/// titlebar accessory on the key window.
 @MainActor
 final class UpdateController {
     let viewModel = UpdateViewModel()

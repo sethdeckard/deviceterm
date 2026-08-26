@@ -5,18 +5,6 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-// The GUI half of the automation-grant lifecycle: once an automation tab's
-// terminal is bound, the coordinator issues its grant and KEEPS it: retrying
-// transient failures (a connection blip, a `notReady` validation flake) with
-// fresh revisions until it applies, so a validation outage lasting beyond the
-// bind loop still recovers without waiting for an unrelated reconnect. An agent
-// tab is never granted. Reconnect rebind reissues under the fresh epoch.
-//
-// Paired with the daemon half (`AutomationGrantUDSScopeTests`, a granted UDS
-// session reaches `tab.sendInput`/`tab.capture`), this is the end-to-end
-// "open automation tab → grant issued → CLI reaches the verbs" chain, split
-// at the process boundary a unit test can't cross.
-
 @MainActor
 private func makeCoordinator(_ fake: FakeDaemonClient) -> AutomationGrantCoordinator {
     // No-delay sleep so retries run without real time.
@@ -60,6 +48,17 @@ private func drain(_ coord: AutomationGrantCoordinator) async {
     }
 }
 
+/// The GUI half of the automation-grant lifecycle: once an automation tab's
+/// terminal is bound, the coordinator issues its grant and KEEPS it: retrying
+/// transient failures (a connection blip, a `notReady` validation flake) with
+/// fresh revisions until it applies, so a validation outage lasting beyond the
+/// bind loop still recovers without waiting for an unrelated reconnect. An agent
+/// tab is never granted. Reconnect rebind reissues under the fresh epoch.
+///
+/// Paired with the daemon half (`AutomationGrantUDSScopeTests`, a granted UDS
+/// session reaches `tab.sendInput`/`tab.capture`), this is the end-to-end
+/// "open automation tab → grant issued → CLI reaches the verbs" chain, split
+/// at the process boundary a unit test can't cross.
 @MainActor
 struct AutomationGrantCoordinatorTests {
     @Test

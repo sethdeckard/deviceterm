@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The key-versus-pointer arbitration behind focus-scoped device
-// shortcuts.
-//
-// Both paths reach the same validator, so the whole rule rests on
-// telling them apart. These pin the decision half. Whether a given
-// `NSEvent` is a given chord is `KeyChord.matches`, covered in
-// `KeyChordTests` against readings rather than synthesized events,
-// because event synthesis re-derives characters from the active keyboard
-// layout.
 
 @testable import App
 import AppKit
 import Testing
 
+/// The key-versus-pointer arbitration behind focus-scoped device
+/// shortcuts.
+///
+/// Both paths reach the same validator, so the whole rule rests on
+/// telling them apart. These pin the decision half. Whether a given
+/// `NSEvent` is a given chord is `KeyChord.matches`, covered in
+/// `KeyChordTests` against readings rather than synthesized events,
+/// because event synthesis re-derives characters from the active keyboard
+/// layout.
 @MainActor
 struct DeviceShortcutScopeDecisionTests {
     private static let chord = KeyChord(.arrowLeft, .command)

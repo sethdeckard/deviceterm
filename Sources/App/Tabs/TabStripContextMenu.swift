@@ -1,33 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabStripContextMenu: the right-click menu for a tab strip cell.
-//
-// Provides the standard per-tab right-click actions: renaming,
-// lifecycle (close / close others / close to the right),
-// duplication, protection toggle, and the automation-tab escape
-// hatch. Each item gets an EXPLICIT `target` (the strip VC) rather
-// than a nil-targeted responder-chain dispatch. The strip VC is a
-// sibling of the focused pane's VC, not an ancestor, so a chain walk
-// from a focused terminal / sim pane goes up through the pane's VC
-// hierarchy to the window without ever reaching the strip. NSButton
-// right-click doesn't promote the button (or its enclosing VC) to
-// first responder either, so there's no "force the chain to land
-// here" hook the way the per-pane menus get from their content
-// view's `menu(for:)` override. Explicit target sidesteps the chain
-// entirely. The typed `representedObject = TabID` on each item still
-// carries the click target so the handler knows which tab.
-//
-// Two items are deliberately absent:
-//   - "Color Label" submenu: needs persistent per-tab color state
-//     on `TabState` and a rendering pass on the strip.
-//   - "Move to New Window": `Route.openWindow` does not currently
-//     take a `cwd` or carry a tab's identity, so a true "detach to
-//     new window" needs new infrastructure (the moved tab's session
-//     belongs to its GUI process, so re-parenting is a re-create,
-//     not a move).
 
 import AppKit
 
+/// The right-click menu for a tab strip cell.
+///
+/// Provides the standard per-tab right-click actions: renaming,
+/// lifecycle (close / close others / close to the right),
+/// duplication, protection toggle, and the automation-tab escape
+/// hatch. Each item gets an EXPLICIT `target` (the strip VC) rather
+/// than a nil-targeted responder-chain dispatch. The strip VC is a
+/// sibling of the focused pane's VC, not an ancestor, so a chain walk
+/// from a focused terminal / sim pane goes up through the pane's VC
+/// hierarchy to the window without ever reaching the strip. NSButton
+/// right-click doesn't promote the button (or its enclosing VC) to
+/// first responder either, so there's no "force the chain to land
+/// here" hook the way the per-pane menus get from their content
+/// view's `menu(for:)` override. Explicit target sidesteps the chain
+/// entirely. The typed `representedObject = TabID` on each item still
+/// carries the click target so the handler knows which tab.
+///
+/// Two items are deliberately absent:
+///   - "Color Label" submenu: needs persistent per-tab color state
+///     on `TabState` and a rendering pass on the strip.
+///   - "Move to New Window": cross-window relocation is available
+///     through tab drag and tear-off, which moves the live controller
+///     via `TabTransferCoordinating`.
 @MainActor
 func makeTabStripContextMenu(
     for tabID: TabID,

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WorkspaceViewModel: window add/remove/select + the lookups the
-// tab/pane routes rely on.
 
 @testable import App
 import Testing
 
+/// WorkspaceViewModel: window add/remove/select + the lookups the
+/// tab/pane routes rely on.
 @MainActor
 struct WorkspaceViewModelTests {
     private func window(_ value: Int) -> WindowState {

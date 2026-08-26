@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CoreLocationProvider: the app's only CoreLocation client.
-//
-// Quarantined to one file for the reason `CoreSimulatorBridge`
-// quarantines private selectors: everything above it deals in plain
-// degrees, so nothing else reasons about `CLLocationManager`'s delegate
-// lifecycle or about TCC. The daemon links CoreLocation nowhere at all.
-// The GUI resolves the fix and the wire carries two numbers, the same
-// split the saved-locations file uses.
-//
-// The permission rules live in `LocationAuthorization`, where their
-// timing can be tested without CoreLocation. What stays here is what
-// needs the framework in front of it: when the manager counts as ready,
-// what a lapsed timer falls back to, and how concurrent callers share
-// one request.
-//
-// Built lazily on the first Use My Location click, so opening a pane
-// neither constructs a manager nor puts the app near the authorization
-// prompt, and `AppTests` never reaches this file.
 
 import CoreLocation
 import Foundation
 
+/// The app's only CoreLocation client.
+///
+/// Quarantined to one file for the reason `CoreSimulatorBridge`
+/// quarantines private selectors: everything above it deals in plain
+/// degrees, so nothing else reasons about `CLLocationManager`'s delegate
+/// lifecycle or about TCC. The daemon links CoreLocation nowhere at all.
+/// The GUI resolves the fix and the wire carries two numbers, the same
+/// split the saved-locations file uses.
+///
+/// The permission rules live in `LocationAuthorization`, where their
+/// timing can be tested without CoreLocation. What stays here is what
+/// needs the framework in front of it: when the manager counts as ready,
+/// what a lapsed timer falls back to, and how concurrent callers share
+/// one request.
+///
+/// Built lazily on the first Use My Location click, so opening a pane
+/// neither constructs a manager nor puts the app near the authorization
+/// prompt, and `AppTests` never reaches this file.
 @MainActor
 final class CoreLocationProvider: NSObject, MacLocationProviding, CLLocationManagerDelegate {
     /// Info.plist key macOS requires before it will show the prompt.

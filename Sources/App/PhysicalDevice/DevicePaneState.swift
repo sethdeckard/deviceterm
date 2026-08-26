@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePaneState: the value record of one physically-connected device
-// pane attached to a tab. Mirrors `SimPaneState` field-for-field except the
-// identity key is the physical device's CoreDevice UDID (`deviceId`) rather
-// than a CoreSimulator UDID (`udid`). Kept as a separate type + array
-// (`TabState.devicePanes`) so the sim drag/resurrect/reconcile path is
-// untouched; both conform to `MirroredPaneState` and render through the same
-// `SimulatorPaneViewController`, the seam a future unification would build on.
 
 import DaemonProtocol
 
+/// The value record of one physically-connected device
+/// pane attached to a tab. Mirrors `SimPaneState` field-for-field except the
+/// identity key is the physical device's CoreDevice UDID (`deviceId`) rather
+/// than a CoreSimulator UDID (`udid`). Kept as a separate type + array
+/// (`TabState.devicePanes`) so the sim drag/resurrect/reconcile path is
+/// untouched; both conform to `MirroredPaneState` and render through the same
+/// `SimulatorPaneViewController`.
+///
+/// REFACTOR: collapse `simPanes` and `devicePanes` into one
+/// `PaneTarget`-keyed pane type; `MirroredPaneState` is the seam that
+/// consolidation builds on.
 struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
     /// Daemon pane id from `physicalDevice.attach`.
     let paneId: String

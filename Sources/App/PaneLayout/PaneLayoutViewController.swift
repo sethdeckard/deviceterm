@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLayoutViewController: the per-tab container that materializes one
-// `PaneNode` tree into a recursive NSSplitView hierarchy. Supports
-// nested splits, drag-to-rearrange, and tree-driven auto-rebalance.
-//
-// The controller owns a root container view; on every reconcile pass
-// it walks the target tree and rebuilds the NSSplitView hierarchy
-// in place, reusing existing pane VC views. Pane VCs are child
-// controllers of this controller so their lifecycle methods fire at
-// the right times regardless of how deeply nested their view sits.
-//
-// Drag destination: registers for the custom pane-drag pasteboard
-// type, computes the cursor's drop zone over the hovered leaf, and
-// renders a translucent overlay in the future-position. On drop,
-// dispatches `Route.reorderPane` so the nav state mutates and the
-// reconcile picks up the new tree.
-//
-// All the @objc forwarders for Window-menu size presets, Device-menu
-// hardware buttons, and AX inspector toggle live here. They
-// dispatch to the focused / first sim pane through the
-// responder chain.
 
 import AppKit
 import DaemonProtocol
 
+/// The per-tab container that materializes one
+/// `PaneNode` tree into a recursive NSSplitView hierarchy. Supports
+/// nested splits, drag-to-rearrange, and tree-driven auto-rebalance.
+///
+/// The controller owns a root container view. A reconcile updates
+/// controller membership and rebuilds the NSSplitView hierarchy in place
+/// only when the tree has changed, reusing existing pane VC views. Pane VCs are child
+/// controllers of this controller so their lifecycle methods fire at
+/// the right times regardless of how deeply nested their view sits.
+///
+/// Drag destination: registers for the custom pane-drag pasteboard
+/// type, computes the cursor's drop zone over the hovered leaf, and
+/// renders a translucent overlay in the future-position. On drop,
+/// dispatches `Route.reorderPane` so the nav state mutates and the
+/// reconcile picks up the new tree.
+///
+/// All the @objc forwarders for Window-menu size presets, Device-menu
+/// hardware buttons, and AX inspector toggle live here. They
+/// dispatch to the focused / first sim pane through the
+/// responder chain.
 @MainActor
 final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidations {
     /// Resolved parent-split lookup for size-preset application.

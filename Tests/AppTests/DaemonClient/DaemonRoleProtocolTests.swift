@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Daemon-client role protocols + injection. Asserts that both the
-// real `DaemonClient` and the test `FakeDaemonClient` satisfy every
-// role, that a consumer can depend on a *single* narrow role, and that
-// the fake records calls / scripts results / feeds the subscribe stream.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// Daemon-client role protocols + injection. Asserts that both the
+/// real `DaemonClient` and the test `FakeDaemonClient` satisfy every
+/// role, that a consumer can depend on a *single* narrow role, and that
+/// the fake records calls / scripts results / feeds the subscribe stream.
 @MainActor
 struct DaemonRoleProtocolTests {
     // Role-typed sinks: each compiles only if the argument conforms to

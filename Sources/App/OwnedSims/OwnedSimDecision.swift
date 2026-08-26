@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OwnedSimDecision: the owned-roster predicates behind the close prompts.
-//
-// The close flows ask different questions of the same read. Tab and window
-// close filter Booted sims by the sessions they are about to close. Pane
-// close starts from one udid and excludes owners live in another tab. Quit
-// does not use this type at all; it acts on the whole booted roster.
-//
-// The predicates are pure and the read is not, so they are separated here:
-// this type answers from a list already in hand, and
-// `DeviceControlling+OwnedSims` does the `device.list` around it. The
-// ownership rules are the part worth testing, and this way they test without
-// a daemon.
 
 import DaemonProtocol
 
+/// The owned-roster predicates behind the close prompts.
+///
+/// The close flows ask different questions of the same read. Tab and window
+/// close filter Booted sims by the sessions they are about to close. Pane
+/// close starts from one udid and excludes owners live in another tab. Quit
+/// does not use this type at all; it acts on the whole booted roster.
+///
+/// The predicates are pure and the read is not, so they are separated here:
+/// this type answers from a list already in hand, and
+/// `DeviceControlling+OwnedSims` does the `device.list` around it. The
+/// ownership rules are the part worth testing, and this way they test without
+/// a daemon.
 enum OwnedSimDecision {
     /// CoreSimulator's state name for a running sim, as `device.list`
     /// relays it. `DeviceListEntry.state` is a wire string rather than an

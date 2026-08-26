@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BootClaimCoordinator: the app-wide, in-memory owner of simulator boot
-// attempts whose attribution must survive RPC timeout or daemon replacement.
 
 import DaemonProtocol
 import Foundation
 
+/// The app-wide, in-memory owner of simulator boot
+/// attempts whose attribution must survive RPC timeout or daemon replacement.
 @MainActor
 final class BootClaimCoordinator {
     private enum ClaimPhase {

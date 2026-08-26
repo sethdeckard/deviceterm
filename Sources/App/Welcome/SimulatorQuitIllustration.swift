@@ -1,36 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorQuitIllustration: the Dock right-click ▸ Quit graphic in the
-// Simulator coexistence welcome.
-//
-// Shows the Dock path rather than ⌘Q because that is the case that
-// actually bites: Simulator.app running in the background with its
-// window already closed, where ⌘Q goes to whatever is frontmost and the
-// user believes it's gone. ⌘Q is a line of body copy instead; it doesn't
-// need a picture.
-//
-// Both app icons are fetched live rather than bundled as a screenshot
-// crop, so the picture matches the user's own Dock: it renders native at
-// any scale, follows whichever Xcode is installed, can't go stale when
-// Apple redesigns the icon, and carries no baked-in dark Dock
-// background that would break in light mode.
-//
-// The menu and its pointer are one shape (`MenuBubble`), not a panel
-// with a triangle stuck underneath. Drawn as two views they get two
-// borders, and the menu's bottom edge draws a line straight across the
-// join, which makes the pointer look glued on. One path means one
-// outline that flows around the tip.
-//
-// The menu is drawn flat (material, border, accent highlight) rather
-// than reproducing macOS's exact vibrancy. A near-miss on the real blur
-// reads as broken, where an obvious simplification reads as a diagram.
-//
-// Every color is semantic so the whole thing inverts correctly; nothing
-// here hardcodes the dark-mode appearance it was designed against.
 
 import AppKit
 import SwiftUI
 
+/// The Dock right-click ▸ Quit graphic in the
+/// Simulator coexistence welcome.
+///
+/// Shows the Dock path rather than ⌘Q because that is the case that
+/// actually bites: Simulator.app running in the background with its
+/// window already closed, where ⌘Q goes to whatever is frontmost and the
+/// user believes it's gone. ⌘Q is a line of body copy instead; it doesn't
+/// need a picture.
+///
+/// Both app icons are fetched live rather than bundled as a screenshot
+/// crop, so the picture matches the user's own Dock: it renders native at
+/// any scale, follows whichever Xcode is installed, can't go stale when
+/// Apple redesigns the icon, and carries no baked-in dark Dock
+/// background that would break in light mode.
+///
+/// The menu and its pointer are one shape (`MenuBubble`), not a panel
+/// with a triangle stuck underneath. Drawn as two views they get two
+/// borders, and the menu's bottom edge draws a line straight across the
+/// join, which makes the pointer look glued on. One path means one
+/// outline that flows around the tip.
+///
+/// The menu is drawn flat (material, border, accent highlight) rather
+/// than reproducing macOS's exact vibrancy. A near-miss on the real blur
+/// reads as broken, where an obvious simplification reads as a diagram.
+///
+/// Every color is semantic so the whole thing inverts correctly; nothing
+/// here hardcodes the dark-mode appearance it was designed against.
 struct SimulatorQuitIllustration: View {
     /// Geometry, shared by the menu and the Dock strip so the pointer
     /// stays over the Simulator icon if any of it changes.

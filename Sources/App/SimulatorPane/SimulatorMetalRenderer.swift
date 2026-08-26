@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorMetalRenderer: the Metal draw path for a simulator /
-// device pane, split out of SimulatorContentView. It owns the command
-// queue + pipeline state and the shader, and renders one IOSurface into
-// an MTKView's current drawable each frame: aspect-fit inside the
-// wrapper's bezel inset, UV counter-rotation so rotated content shows
-// upright, and an SDF rounded-screen discard. The view keeps the live
-// orientation / inset / surface state (its gesture code reads them too)
-// and passes them in per frame; nothing here touches input.
 
 import DaemonProtocol
 import MetalKit
 import SurfaceTrace
 
+/// The Metal draw path for a simulator /
+/// device pane, split out of SimulatorContentView. It owns the command
+/// queue + pipeline state and the shader, and renders one IOSurface into
+/// an MTKView's current drawable each frame: aspect-fit inside the
+/// wrapper's bezel inset, UV counter-rotation so rotated content shows
+/// upright, and an SDF rounded-screen discard. The view keeps the live
+/// orientation / inset / surface state (its gesture code reads them too)
+/// and passes them in per frame; nothing here touches input.
 @MainActor
 final class SimulatorMetalRenderer {
     /// Shader constants. Layout MUST match `Params` in the

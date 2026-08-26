@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePickerViewModelTests: the Mirror Physical Device… picker's
-// presentation logic against the fake daemon: loading the roster,
-// surfacing a load error, the display-name composition, and that only
-// an available pick fires the attach callback.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// The Mirror Physical Device… picker's
+/// presentation logic against the fake daemon: loading the roster,
+/// surfacing a load error, the display-name composition, and that only
+/// an available pick fires the attach callback.
 @MainActor
 struct DevicePickerViewModelTests {
     private enum PickerError: Error { case listFailed }

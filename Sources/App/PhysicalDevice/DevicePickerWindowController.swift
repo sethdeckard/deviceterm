@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePickerWindowController: a small transient window hosting the
-// SwiftUI `DevicePickerView`. "Mirror Physical Device…" can be invoked
-// from the menu bar, so the picker gets its own utility window (mirrors
-// `SettingsPromptWindowController`). The window is closed by whoever
-// wired the view model's attach / cancel callbacks (AppDelegate) once
-// the user picks a device or cancels; this controller just builds and
-// shows it.
 
 import AppKit
 import SwiftUI
 
+/// A small transient window hosting the
+/// SwiftUI `DevicePickerView`. "Mirror Physical Device…" can be invoked
+/// from the menu bar, so the picker gets its own utility window (mirrors
+/// `SettingsPromptWindowController`). The window is closed by whoever
+/// wired the view model's attach / cancel callbacks (AppDelegate) once
+/// the user picks a device or cancels; this controller just builds and
+/// shows it.
 @MainActor
 final class DevicePickerWindowController: NSWindowController {
     init(viewModel: DevicePickerViewModel) {

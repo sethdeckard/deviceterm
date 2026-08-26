@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdateUserDriver: deviceterm's custom Sparkle `SPUUserDriver`, mapping
-// every update stage to the unobtrusive `UpdateViewModel` pill instead of
-// Sparkle's default modal windows. Drives the pill directly; the
-// release-notes body and the windowless standard-driver fallback are
-// unimplemented, noted below.
 
 import AppKit
 import Foundation
 import Sparkle
 
+/// Deviceterm's custom Sparkle `SPUUserDriver`, mapping
+/// every update stage to the unobtrusive `UpdateViewModel` pill instead of
+/// Sparkle's default modal windows. Drives the pill directly, including
+/// inline and downloaded release notes; the windowless standard-driver
+/// fallback is unimplemented, noted below.
 @MainActor
 final class UpdateUserDriver: NSObject, SPUUserDriver {
     private let viewModel: UpdateViewModel

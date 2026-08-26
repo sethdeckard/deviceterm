@@ -1,8 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCPerformanceDiagnostics: local unified-log timing for GUI RPC attempts.
-// Every request logs at debug level; slow replies and timeouts are also logged
-// at persisted levels. Periodic aggregates contain no request identity.
 
 import DaemonProtocol
 import Foundation
@@ -13,6 +9,9 @@ private let rpcPerformanceLog = Logger(
     category: "rpc-performance"
 )
 
+/// Local unified-log timing for GUI RPC attempts.
+/// Every request logs at debug level; slow replies and timeouts are also logged
+/// at persisted levels. Periodic aggregates contain no request identity.
 @MainActor
 final class RPCPerformanceDiagnostics {
     private let clock: @MainActor () -> UInt64

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Canonical defaults coverage. The architecture-checks gate
-// requires every new ~/.config/deviceterm/config key to have a default
-// recorded in Config.swift. This test pins them.
 
 @testable import App
 import Testing
+
+// Canonical defaults coverage. The architecture-checks gate
+// requires every new ~/.config/deviceterm/config key to have a default
+// recorded in Config.swift. This test pins them.
 
 @Test
 func canonicalDefaultsCoverCloseKeys() {

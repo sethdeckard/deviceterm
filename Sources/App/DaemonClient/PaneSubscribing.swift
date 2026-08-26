@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Role protocol: pane event subscription on the daemon.
-//
-// One of four narrow role protocols carved out of `DaemonClient`
-// (see `SessionControlling` for the rationale). `PaneEvent`
-// stays App-internal (the decoded shape the GUI consumes); the wire
-// frames behind it live in `DaemonClient`.
 
+/// Role protocol: pane event subscription on the daemon.
+///
+/// A narrow role protocol carved out of `DaemonClient`
+/// (see `SessionControlling` for the rationale). `PaneEvent`
+/// stays App-internal (the decoded shape the GUI consumes); the wire
+/// frames behind it live in `DaemonClient`.
 @MainActor
 protocol PaneSubscribing: AnyObject {
     /// `pane.subscribe`. The returned stream finishes when the daemon

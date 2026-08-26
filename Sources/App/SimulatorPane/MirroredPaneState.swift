@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// MirroredPaneState: the backend-neutral fields shared by every pane that
-// mirrors a *device*: a CoreSimulator sim (`SimPaneState`) or a physically-
-// connected iPhone/iPad (`DevicePaneState`). Both render + drive through the
-// same `SimulatorPaneViewController` + view model off exactly these fields
-// plus `target`, so the two state types are deliberately parallel.
-//
-// Breadcrumb toward unification: sim and device panes are kept as
-// separate typed arrays (`TabState.simPanes` / `devicePanes`) so the
-// load-bearing sim drag/resurrect/reconcile path stays untouched. This
-// protocol is the seam a future consolidation would build on: collapse the
-// two into one target-keyed pane type and most call sites already speak this
-// shape. Meanwhile it lets shared code (pane VC construction, sizing) accept
-// `any MirroredPaneState` instead of forking per kind.
 
 import DaemonProtocol
 
+/// The backend-neutral fields shared by every pane that
+/// mirrors a *device*: a CoreSimulator sim (`SimPaneState`) or a physically-
+/// connected iPhone/iPad (`DevicePaneState`). Both render + drive through the
+/// same `SimulatorPaneViewController` + view model off exactly these fields
+/// plus `target`, so the two state types are deliberately parallel.
+///
+/// Sim and device panes are kept as separate typed arrays
+/// (`TabState.simPanes` / `devicePanes`) so the established sim
+/// drag/resurrect/reconcile path stays untouched. This protocol lets shared
+/// code (pane VC construction, sizing) accept `any MirroredPaneState`
+/// instead of forking per kind.
+///
+/// REFACTOR: collapse the two arrays into one `PaneTarget`-keyed pane
+/// type. Most call sites already speak this protocol's shape.
 protocol MirroredPaneState {
     /// Daemon pane id from the attach response. The glue creates a pane VM
     /// for this id (the attach already happened in the Router).

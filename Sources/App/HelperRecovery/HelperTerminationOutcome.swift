@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HelperTerminationOutcome: what came of the GUI asking the running helper
-// to stop.
-//
-// Deliberately not a Bool. Three of these five leave recovery free to carry
-// on, but only one of them means this call sent anything, and the two that
-// stop it are different problems with different remedies. Reporting them apart
-// is what lets the GUI say something true when it couldn't do what the user
-// asked.
 
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// What came of the GUI asking the running helper
+/// to stop.
+///
+/// Deliberately not a Bool. Three of these five leave recovery free to carry
+/// on, but only one of them means this call sent anything, and the two that
+/// stop it are different problems with different remedies. Reporting them apart
+/// is what lets the GUI say something true when it couldn't do what the user
+/// asked.
 enum HelperTerminationOutcome: Sendable, Equatable {
     /// The signal reached `pid`. `kill(2)` returning 0 says it was accepted,
     /// and SIGKILL cannot be blocked or ignored, so that process is going

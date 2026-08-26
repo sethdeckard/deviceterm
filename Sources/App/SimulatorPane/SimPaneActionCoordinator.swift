@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimPaneActionCoordinator: the sim pane's menu/chrome action wiring,
-// lifted out of `TabContentViewController`. One instance per tab. It owns
-// the recording-destination map (written on record-start, consumed on
-// record-stop and on cleanup teardown) and the shutdown→boot resequencing,
-// screenshot/record shell-outs, Finder reveals, Simulator.app launch,
-// install, and the resurrect-watch dispatch: everything the sim pane's VC
-// callbacks fire. Device and pending panes wire far less, so they stay on
-// the VC.
-//
-// Live tab credentials (the primary terminal's session + cap) are read from
-// the tab view model at action time, because terminals can change between
-// wiring and invocation, so nothing is snapshotted at construction.
 
 import AppKit
 import DaemonProtocol
 import Foundation
 
+/// The sim pane's menu/chrome action wiring,
+/// lifted out of `TabContentViewController`. One instance per tab. It owns
+/// the recording-destination map (written on record-start, consumed on
+/// record-stop and on cleanup teardown) and the shutdown→boot resequencing,
+/// screenshot/record shell-outs, Finder reveals, Simulator.app launch,
+/// install, and the resurrect-watch dispatch: everything the sim pane's VC
+/// callbacks fire. Device and pending panes wire far less, so they stay on
+/// the VC.
+///
+/// Live tab credentials (the primary terminal's session + cap) are read from
+/// the tab view model at action time, because terminals can change between
+/// wiring and invocation, so nothing is snapshotted at construction.
 @MainActor
 final class SimPaneActionCoordinator {
     /// The close-prompt seam: context, device name, force-ask, the window

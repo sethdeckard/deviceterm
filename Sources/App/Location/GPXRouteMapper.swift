@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GPXRouteMapper: GPX points to a location the device can take.
-//
-// Pure and total. Every rule that decides *what a file means* lives
-// here, separately from the parser (which decides what the bytes say)
-// and from the loader (which decides how to read them).
-//
-// **A one-point file is a position, not a route.** Xcode's own GPX
-// templates use a single `<wpt>` to mean "the device is here", and both
-// backends reject a route with fewer than two points, so collapsing it
-// is the only reading that works.
-//
-// **Nothing throws.** Every document maps: one point becomes a
-// coordinate, any other count becomes a route, and `RouteSpec.defect` is
-// what then says whether that route is usable. That keeps one validation
-// vocabulary for the GUI and the daemon: the same sentence the daemon
-// would return as `invalidParams` is the one the alert shows, and there
-// is no second set of rules here to drift out of agreement with it. In
-// production the parser has already rejected a file with no points at
-// all (`GPXParseError.noPoints`), so the empty case is a property of
-// this function rather than a path a file takes.
 
 import DaemonProtocol
 import Foundation
 
+/// GPX points to a location the device can take.
+///
+/// Pure and total. Every rule that decides *what a file means* lives
+/// here, separately from the parser (which decides what the bytes say)
+/// and from the loader (which decides how to read them).
+///
+/// **A one-point file is a position, not a route.** Xcode's own GPX
+/// templates use a single `<wpt>` to mean "the device is here", and both
+/// backends reject a route with fewer than two points, so collapsing it
+/// is the only reading that works.
+///
+/// **Nothing throws.** Every document maps: one point becomes a
+/// coordinate, any other count becomes a route, and `RouteSpec.defect` is
+/// what then says whether that route is usable. That keeps one validation
+/// vocabulary for the GUI and the daemon: the same sentence the daemon
+/// would return as `invalidParams` is the one the alert shows, and there
+/// is no second set of rules here to drift out of agreement with it. In
+/// production the parser has already rejected a file with no points at
+/// all (`GPXParseError.noPoints`), so the empty case is a property of
+/// this function rather than a path a file takes.
 enum GPXRouteMapper {
     /// Mean Earth radius in metres (IUGG). Distances here only ever
     /// divide into a duration to produce an average pace, so a spherical

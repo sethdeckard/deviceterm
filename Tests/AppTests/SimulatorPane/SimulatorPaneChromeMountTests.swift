@@ -1,41 +1,40 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorPaneChromeMountTests: the SwiftUI chrome's AppKit
-// integration gate. Five claims this pins:
-//
-//   1. The VC's chrome view model is seeded with the daemon-supplied
-//      display name at init. The chrome is the first surface a user
-//      sees the device name on; a regression here ships an unnamed
-//      "iPhone Simulator" header.
-//   2. After `loadView` runs, the chrome host AND the sim content
-//      view are both mounted as siblings under the VC's wrapper view.
-//      Collapsing the wrapper to a single content view, with chrome
-//      overlaying the Metal surface, is the regression class this test
-//      catches: chrome over the sim picture reads as "title painted
-//      across the lock-screen wallpaper."
-//   3. The chrome host is the pass-through subclass. A bare
-//      `NSHostingView` mounted over interactive content would swallow
-//      mouse events that should land on the sim or the shutdown
-//      buttons. Pinning the concrete subclass means a future
-//      "simplify by using NSHostingView directly" refactor breaks
-//      here.
-//   4. After layout, the chrome host occupies its own top strip and
-//      the sim content view sits entirely below it. The non-overlap
-//      check is the visual-layer assertion: chrome and sim never
-//      share a pixel.
-//   5. The launch-time ribbon fit: a pane wide enough for the
-//      expanded ribbon plus its untruncated device name opens
-//      expanded, a narrow one stays collapsed, provisional widths
-//      during the launch resize decide nothing, and a single settled
-//      pass freezes the answer in both directions.
-//      `applyLaunchRibbonFit` takes a width so these drive the
-//      sequence directly, without a window and its layout passes.
 
 @testable import App
 import AppKit
 import DaemonProtocol
 import Testing
 
+/// The SwiftUI chrome's AppKit
+/// integration gate. Five claims this pins:
+///
+///   1. The VC's chrome view model is seeded with the daemon-supplied
+///      display name at init. The chrome is the first surface a user
+///      sees the device name on; a regression here ships an unnamed
+///      "iPhone Simulator" header.
+///   2. After `loadView` runs, the chrome host AND the sim content
+///      view are both mounted as siblings under the VC's wrapper view.
+///      Collapsing the wrapper to a single content view, with chrome
+///      overlaying the Metal surface, is the regression class this test
+///      catches: chrome over the sim picture reads as "title painted
+///      across the lock-screen wallpaper."
+///   3. The chrome host is the pass-through subclass. A bare
+///      `NSHostingView` mounted over interactive content would swallow
+///      mouse events that should land on the sim or the shutdown
+///      buttons. Pinning the concrete subclass means a future
+///      "simplify by using NSHostingView directly" refactor breaks
+///      here.
+///   4. After layout, the chrome host occupies its own top strip and
+///      the sim content view sits entirely below it. The non-overlap
+///      check is the visual-layer assertion: chrome and sim never
+///      share a pixel.
+///   5. The launch-time ribbon fit: a pane wide enough for the
+///      expanded ribbon plus its untruncated device name opens
+///      expanded, a narrow one stays collapsed, provisional widths
+///      during the launch resize decide nothing, and a single settled
+///      pass freezes the answer in both directions.
+///      `applyLaunchRibbonFit` takes a width so these drive the
+///      sequence directly, without a window and its layout passes.
 @MainActor
 struct SimulatorPaneChromeMountTests {
     /// Widths for the launch-fit tests, against the ~465pt threshold a
@@ -207,11 +206,10 @@ struct SimulatorPaneChromeMountTests {
     @Test
     func chromeAndContentDoNotOverlap() {
         // The whole point of the reserved-strip layout: the chrome
-        // strip and the Metal sim picture never share a pixel. The
-        // bug screenshot showed "iPhone 17 Pro" rendered across the
-        // lock-screen wallpaper because the chrome was a full-
-        // bounds overlay on the content view. After the fix the
-        // chrome owns a top strip and content fills the rest.
+        // strip and the Metal sim picture never share a pixel. A
+        // full-bounds chrome overlay renders the device name across
+        // the guest's own screen; the chrome owns a top strip and
+        // content fills the rest.
         let viewController = makeViewController()
         viewController.view.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
         viewController.view.layoutSubtreeIfNeeded()

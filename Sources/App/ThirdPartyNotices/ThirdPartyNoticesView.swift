@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ThirdPartyNoticesView: renders the parsed THIRD_PARTY_NOTICES.md.
-// Headings get weight/size; paragraphs interpret inline markdown
-// (emphasis/links) while preserving line breaks; verbatim license texts
-// render monospaced. All text is selectable.
 
 import SwiftUI
 
+/// Renders the parsed THIRD_PARTY_NOTICES.md.
+/// Headings get weight/size; paragraphs interpret inline markdown
+/// (emphasis/links) while preserving line breaks; verbatim license texts
+/// render monospaced. All text is selectable.
 struct ThirdPartyNoticesView: View {
     let viewModel: ThirdPartyNoticesViewModel
 

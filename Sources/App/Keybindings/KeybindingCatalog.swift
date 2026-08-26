@@ -1,57 +1,56 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeybindingCatalog: the single source of truth for every keyboard
-// shortcut deviceterm binds.
-//
-// `MainMenu` owns menu structure (order, grouping, separators, submenus)
-// and asks this table for every bound item. A drift guard in `AppTests`
-// asserts a one-for-one correspondence in both directions. Every catalog
-// entry appears in the menu, so a shortcut is always discoverable by
-// browsing, and every bound menu item matches a catalog row on title,
-// chord, selector, and tag, with multiplicities compared so a duplicate
-// is caught too. The guard inspects the menu AppKit would install rather
-// than the source that built it.
-//
-// ## Measured AppKit behavior this design rests on
-//
-// Measured against real keystrokes, because synthesized
-// `NSApp.sendEvent` is not faithful. A synthesized event never enters
-// the event queue, so `NSApp.currentEvent` stays stale and command-chord
-// fall-through reads falsely negative.
-//
-//   - Dispatch order is view-hierarchy `performKeyEquivalent`, then
-//     main-menu key-equivalent matching, then `keyDown:`. An enabled item
-//     here therefore wins against libghostty's own keybinds with no
-//     interception code, because libghostty only ever sees a key at the
-//     `keyDown:` stage.
-//   - An item that validates disabled does NOT swallow the event. It
-//     falls through to `keyDown:`, verified for ⌘, ⌃⇧, and ⌥ chords. A
-//     conditionally-disabled shortcut therefore degrades to "the focused
-//     pane gets the key" rather than eating it.
-//   - During `validateUserInterfaceItem`, `NSApp.currentEvent` is the
-//     triggering `keyDown` on the key path and a non-key event on the
-//     pointer and menu-update paths. AppKit also validates only items
-//     whose chord matches, so that discriminator is narrow.
-//
-// ## Why every chord carries ⌘, or ⌃⇧
-//
-// Bare-Option chords never enter key-equivalent routing at all. An item
-// bound to ⌥A produced no `performKeyEquivalent` and no validation, and
-// the key went straight to the focused view, apparently because AppKit
-// matches the item's `keyEquivalent` against the event's composed
-// characters and ⌥A composes to "å". A bare-Option binding is therefore
-// silently dead. Option is also the terminal's Meta and compose
-// modifier, which the app must leave alone. The drift guard enforces the
-// resulting invariant.
-//
-// ## Deliberately not bound
-//
-// ⌘` (cycle windows) is an OS-owned, user-configurable system shortcut,
-// not deviceterm's to claim. Its absence from this table is a decision
-// rather than an oversight.
 
 import AppKit
 
+/// The single source of truth for every keyboard
+/// shortcut deviceterm binds.
+///
+/// `MainMenu` owns menu structure (order, grouping, separators, submenus)
+/// and asks this table for every bound item. A drift guard in `AppTests`
+/// asserts a one-for-one correspondence in both directions. Every catalog
+/// entry appears in the menu, so a shortcut is always discoverable by
+/// browsing, and every bound menu item matches a catalog row on title,
+/// chord, selector, and tag, with multiplicities compared so a duplicate
+/// is caught too. The guard inspects the menu AppKit would install rather
+/// than the source that built it.
+///
+/// ## Measured AppKit behavior this design rests on
+///
+/// Measured against real keystrokes, because synthesized
+/// `NSApp.sendEvent` is not faithful. A synthesized event never enters
+/// the event queue, so `NSApp.currentEvent` stays stale and command-chord
+/// fall-through reads falsely negative.
+///
+///   - Dispatch order is view-hierarchy `performKeyEquivalent`, then
+///     main-menu key-equivalent matching, then `keyDown:`. An enabled item
+///     here therefore wins against libghostty's own keybinds with no
+///     interception code, because libghostty only ever sees a key at the
+///     `keyDown:` stage.
+///   - An item that validates disabled does NOT swallow the event. It
+///     falls through to `keyDown:`, verified for ⌘, ⌃⇧, and ⌥ chords. A
+///     conditionally-disabled shortcut therefore degrades to "the focused
+///     pane gets the key" rather than eating it.
+///   - During `validateUserInterfaceItem`, `NSApp.currentEvent` is the
+///     triggering `keyDown` on the key path and a non-key event on the
+///     pointer and menu-update paths. AppKit also validates only items
+///     whose chord matches, so that discriminator is narrow.
+///
+/// ## Why every chord carries ⌘, or ⌃⇧
+///
+/// Bare-Option chords never enter key-equivalent routing at all. An item
+/// bound to ⌥A produced no `performKeyEquivalent` and no validation, and
+/// the key went straight to the focused view, apparently because AppKit
+/// matches the item's `keyEquivalent` against the event's composed
+/// characters and ⌥A composes to "å". A bare-Option binding is therefore
+/// silently dead. Option is also the terminal's Meta and compose
+/// modifier, which the app must leave alone. The drift guard enforces the
+/// resulting invariant.
+///
+/// ## Deliberately not bound
+///
+/// ⌘` (cycle windows) is an OS-owned, user-configurable system shortcut,
+/// not deviceterm's to claim. Its absence from this table is a decision
+/// rather than an oversight.
 @MainActor
 enum KeybindingCatalog {
     static let entries: [KeybindingEntry] = [

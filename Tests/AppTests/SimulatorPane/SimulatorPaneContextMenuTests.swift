@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Structural assertions on the sim pane right-click menu. Same
-// shape as MainMenuTests: pin the item ordering + selector wiring
-// so a future rename or accidental drop trips here before the user
-// hits a no-op menu slot.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Structural assertions on the sim pane right-click menu. Same
+/// shape as MainMenuTests: pin the item ordering + selector wiring
+/// so a future rename or accidental drop trips here before the user
+/// hits a no-op menu slot.
 @MainActor
 struct SimulatorPaneContextMenuTests {
     @Test

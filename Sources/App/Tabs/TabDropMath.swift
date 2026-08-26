@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabDropMath: pure cursor→insertion-gap geometry for tab-strip drag
-// reorder, mirroring `PaneDropZoneMath`'s role for panes. Kept separate
-// and dependency-free so the index arithmetic is unit-tested without an
-// AppKit strip. The tab-strip drag destination feeds it the pills'
-// horizontal midpoints and the cursor x; it returns the gap index.
 
 import CoreGraphics
 
+/// Pure cursor→insertion-gap geometry for tab-strip drag
+/// reorder, mirroring `PaneDropZoneMath`'s role for panes. Kept separate
+/// and dependency-free so the index arithmetic is unit-tested without an
+/// AppKit strip. The tab-strip drag destination feeds it the pills'
+/// horizontal midpoints and the cursor x; it returns the gap index.
 enum TabDropMath {
     /// Fraction of a neighbour's width the cursor must cross (from the
     /// edge facing the dragged pill) before the pill slides past it. A

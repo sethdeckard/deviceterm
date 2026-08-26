@@ -1,46 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// XPCDaemonConnection: the GUI's XPC peer onto the launchd-vended
-// daemon mach service.
-//
-// The daemon is registered via `SMAppService.agent` (see
-// `DaemonRegistration`), launchd holds the listener, and the GUI
-// connects via `xpc_connection_create_mach_service`. Reconnect on
-// invalidation is a single call: launchd demand-launches the
-// daemon on the next send. (`UDSDaemonConnection` is the
-// `--smoke`-only fallback.)
-//
-// **Wire shape (request).** The connection ships `RPCEnvelope` JSON
-// bytes inside an `xpc_dictionary` with a `type` discriminator:
-//
-//   { type: "rpc", data: <RPCEnvelope JSON bytes> }
-//
-// **Wire shape (replies + events).** The daemon sends the same
-// envelope shape back; this connection's event handler decodes the
-// envelope and either resumes the matching request continuation
-// or yields to the matching subscription stream.
-//
-// **Wire shape (surface payload).** Surface frames ride on a second
-// dictionary type that pairs with a JSON `surface.changed` evt. It
-// always carries the subscription token, plus the device lease overlay
-// (`leased`/`leaseEpoch`):
-//
-//   { type: "surface", paneId: <string>, sequence: <uint64>,
-//     subscriptionToken: <uuid>, leased: <bool>, leaseEpoch: <uint64>,
-//     surface: <xpc_object_t> }
-//
-// The connection holds an actor-isolated correlation table indexed by
-// `(paneId, sequence, token)`, so two subscriptions on one pane never
-// cross-deliver. Each side of the pair fills its half when it arrives. The
-// side-band builds the `SurfaceLease` immediately (leased ⇒ use-count bumped
-// + registered with the release accountant); once both halves are present
-// the connection yields a single `PaneEvent.surfaceChanged(_, SurfaceLease?)`
-// to the owning subscription only. A slot held only by the surface (JSON dropped/late)
-// ages out after 250ms: its lease releases by ARC; a slot held only by
-// the JSON yields `(_, nil)` after the same timeout. Reconnect clears the
-// correlation table. Both ingress pumps reject stale peer epochs, and the
-// surface pump revalidates after lease accounting, so an old frame cannot
-// repopulate or pair with the new connection's state.
 
 import DaemonProtocol
 import Foundation
@@ -75,6 +33,47 @@ private func describeXPCError(_ event: xpc_object_t) -> String {
     return String(cString: raw)
 }
 
+/// The GUI's XPC peer onto the launchd-vended
+/// daemon mach service.
+///
+/// The daemon is registered via `SMAppService.agent` (see
+/// `DaemonRegistration`), launchd holds the listener, and the GUI
+/// connects via `xpc_connection_create_mach_service`. Reconnect on
+/// invalidation is a single call: launchd demand-launches the
+/// daemon on the next send. (`UDSDaemonConnection` is the
+/// `--smoke`-only fallback.)
+///
+/// **Wire shape (request).** The connection ships `RPCEnvelope` JSON
+/// bytes inside an `xpc_dictionary` with a `type` discriminator:
+///
+///   { type: "rpc", data: <RPCEnvelope JSON bytes> }
+///
+/// **Wire shape (replies + events).** The daemon sends the same
+/// envelope shape back; this connection's event handler decodes the
+/// envelope and either resumes the matching request continuation
+/// or yields to the matching subscription stream.
+///
+/// **Wire shape (surface payload).** Surface frames ride on a second
+/// dictionary type that pairs with a JSON `surface.changed` evt. It
+/// always carries the subscription token, plus the device lease overlay
+/// (`leased`/`leaseEpoch`):
+///
+///   { type: "surface", paneId: <string>, sequence: <uint64>,
+///     subscriptionToken: <uuid>, leased: <bool>, leaseEpoch: <uint64>,
+///     surface: <xpc_object_t> }
+///
+/// The connection holds an actor-isolated correlation table indexed by
+/// `(paneId, sequence, token)`, so two subscriptions on one pane never
+/// cross-deliver. Each side of the pair fills its half when it arrives. The
+/// side-band builds the `SurfaceLease` immediately (leased ⇒ use-count bumped
+/// + registered with the release accountant); once both halves are present
+/// the connection yields a single `PaneEvent.surfaceChanged(_, SurfaceLease?)`
+/// to the owning subscription only. A slot held only by the surface (JSON dropped/late)
+/// ages out after 250ms: its lease releases by ARC; a slot held only by
+/// the JSON yields `(_, nil)` after the same timeout. Reconnect clears the
+/// correlation table. Both ingress pumps reject stale peer epochs, and the
+/// surface pump revalidates after lease accounting, so an old frame cannot
+/// repopulate or pair with the new connection's state.
 actor XPCDaemonConnection: DaemonRequestTransport {
     /// Correlation key for one delivered frame. The subscription token
     /// disambiguates two subscriptions on one pane that carry the same

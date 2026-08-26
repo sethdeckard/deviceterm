@@ -1,32 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// InterruptedRepairReconciler: finishing a registration repair that an earlier
-// process was terminated in the middle of, before this launch registers or
-// connects.
-//
-// A marker means some previous run started a registration repair and may not
-// have finished it. It is written before the teardown, so that run may have
-// died before mutating anything or after tearing the job down. Registering or connecting on top of that half-state
-// would race a teardown that is still in flight, so this runs first.
-//
-// It replays the WHOLE transaction rather than the register leg alone. The
-// marker records that a repair was interrupted, not which phase it reached, and
-// the phases need opposite handling: teardown may be in flight, may have failed
-// before mutating anything, or may have completed. Replaying converges from all
-// of them, because the unregister tolerates job-not-found.
-//
-// The wait is bounded but the work is not. `SMAppService.unregister()` is
-// completion-handler-backed and honours no cancellation, so a replay that stalls
-// cannot be stopped. A launch that awaited one outright would never reach a
-// window, and would repeat that on every relaunch with nothing on screen to
-// explain it. So an independently owned task runs the replay to completion while
-// startup stops waiting, exactly as the recovery ladder's own repair rung does.
-//
-// Every dependency is injected, because none of these states can be reached
-// against the real ServiceManagement without mutating the login session.
 
 import Foundation
 
+/// Finishing a registration repair that an earlier
+/// process was terminated in the middle of, before this launch registers or
+/// connects.
+///
+/// A marker means some previous run started a registration repair and may not
+/// have finished it. It is written before the teardown, so that run may have
+/// died before mutating anything or after tearing the job down. Registering or connecting on top of that half-state
+/// would race a teardown that is still in flight, so this runs first.
+///
+/// It replays the WHOLE transaction rather than the register leg alone. The
+/// marker records that a repair was interrupted, not which phase it reached, and
+/// the phases need opposite handling: teardown may be in flight, may have failed
+/// before mutating anything, or may have completed. Replaying converges from all
+/// of them, because the unregister tolerates job-not-found.
+///
+/// The wait is bounded but the work is not. `SMAppService.unregister()` is
+/// completion-handler-backed and honours no cancellation, so a replay that stalls
+/// cannot be stopped. A launch that awaited one outright would never reach a
+/// window, and would repeat that on every relaunch with nothing on screen to
+/// explain it. So an independently owned task runs the replay to completion while
+/// startup stops waiting, exactly as the recovery ladder's own repair rung does.
+///
+/// Every dependency is injected, because none of these states can be reached
+/// against the real ServiceManagement without mutating the login session.
 @MainActor
 final class InterruptedRepairReconciler {
     struct Dependencies {

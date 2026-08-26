@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Sim pane state machine transitions: pure-logic tests.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// Sim pane state machine transitions: pure-logic tests.
 struct SimPaneReducerTests {
     @Test
     func firstSurfacePromotesBootingToRendering() {

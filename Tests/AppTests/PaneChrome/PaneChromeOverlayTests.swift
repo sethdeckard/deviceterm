@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneChromeOverlayTests: the pane chrome's SwiftUI surface and its
-// AppKit mount. Three concerns:
-//
-//   1. The `@Observable` view model exposes the fields the chrome
-//      reads (`title`, `isFocused`, the ribbon's collapse state) with
-//      sensible defaults and mutable setters. Pinned so a later
-//      rename / refactor that changes the observable surface breaks
-//      here, not in a runtime SwiftUI re-render bug.
-//   2. The AppKit → SwiftUI bridge, `PaneChromeDragHostView`,
-//      instantiates without crashing and accepts a frame, so the
-//      hosting view stays constructible outside a live window.
-//   3. The hosting view's Auto Layout opt-in is set so callers
-//      pinning it with constraints don't have to remember the
-//      `translatesAutoresizingMaskIntoConstraints` toggle.
 
 @testable import App
 import AppKit
 import Testing
 
+/// The pane chrome's SwiftUI surface and its
+/// AppKit mount. Three concerns:
+///
+///   1. The `@Observable` view model exposes the fields the chrome
+///      reads (`title`, `isFocused`, the ribbon's collapse state) with
+///      sensible defaults and mutable setters. Pinned so a later
+///      rename / refactor that changes the observable surface breaks
+///      here, not in a runtime SwiftUI re-render bug.
+///   2. The AppKit → SwiftUI bridge, `PaneChromeDragHostView`,
+///      instantiates without crashing and accepts a frame, so the
+///      hosting view stays constructible outside a live window.
+///   3. The hosting view's Auto Layout opt-in is set so callers
+///      pinning it with constraints don't have to remember the
+///      `translatesAutoresizingMaskIntoConstraints` toggle.
 @MainActor
 struct PaneChromeOverlayTests {
     @Test

@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WorkspaceAuthorityDecision: may this caller mutate this resolved
-// target, or does it need an automation grant first?
-//
-// Ownership suffices for rename and the pane verbs. Close additionally
-// requires a sole-terminal tab, because the trust unit is the session
-// and a tab may hold several of them. Anything else needs a live grant.
-//
-// Pure by construction: the dispatcher resolves the target and reduces
-// it to `WorkspaceAuthorityTarget`, so this type never reads the
-// workspace and can be tested against the matrix directly. Visibility is
-// not its business.
-// Resolution runs first and a foreign protected tab is already
-// `notFound` by the time anything gets here, so every target this sees
-// is one the caller can legitimately name.
 
+/// May this caller mutate this resolved
+/// target, or does it need an automation grant first?
+///
+/// Ownership suffices for rename and the pane verbs. Close additionally
+/// requires a sole-terminal tab, because the trust unit is the session
+/// and a tab may hold several of them. Anything else needs a live grant.
+///
+/// Pure by construction: the dispatcher resolves the target and reduces
+/// it to `WorkspaceAuthorityTarget`, so this type never reads the
+/// workspace and can be tested against the matrix directly. Visibility is
+/// not its business.
+/// Resolution runs first and a foreign protected tab is already
+/// `notFound` by the time anything gets here, so every target this sees
+/// is one the caller can legitimately name.
 enum WorkspaceAuthorityDecision: Equatable {
     case allowed
     case requiresAutomation

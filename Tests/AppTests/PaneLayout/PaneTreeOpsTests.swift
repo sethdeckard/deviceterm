@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneTreeOps: pin the insert / remove / move / swap semantics
-// of the recursive `PaneNode` tree. Every test is structural (no
-// view hierarchy, no @MainActor required), so a regression in the
-// pure layer surfaces without needing a window-attached split view.
 
 @testable import App
 import CoreGraphics
 import Testing
 
+/// PaneTreeOps: pin the insert / remove / move / swap semantics
+/// of the recursive `PaneNode` tree. Every test is structural (no
+/// view hierarchy, no @MainActor required), so a regression in the
+/// pure layer surfaces without needing a window-attached split view.
 struct PaneTreeOpsTests {
     private let alpha = PaneSlot.terminal(TerminalPaneID(value: 1))
     private let beta = PaneSlot.terminal(TerminalPaneID(value: 2))

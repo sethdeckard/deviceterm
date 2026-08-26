@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DiscoveryDecision: the pure per-tab core of app-wide owned-sim discovery.
-// Given the daemon's owned+booted sims for this tab and the tab's bookkeeping
-// sets, it decides which sims need panes and prunes the "already handled"
-// memory. The coordinator reads once, each VC decides and dispatches attach;
-// only the bug-prone set logic is extracted and unit-tested.
 
 import DaemonProtocol
 
+/// The pure per-tab core of app-wide owned-sim discovery.
+/// Given the daemon's owned+booted sims for this tab and the tab's bookkeeping
+/// sets, it decides which sims need panes and prunes the "already handled"
+/// memory. The coordinator reads once, each VC decides and dispatches attach;
+/// only the bug-prone set logic is extracted and unit-tested.
 struct DiscoveryDecision: Equatable {
     /// Sims that need a fresh pane, in `ownedBooted` order.
     let toAttach: [DeviceListEntry]

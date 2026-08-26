@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Pane focus navigation and the split fallback, driven through a real
-// `PaneLayoutViewController` in a real window.
-//
-// The pure math is covered in `PaneFocusOrderMathTests` and
-// `PaneDirectionalFocusMathTests`. What these add is the wiring around
-// it: that the frame snapshot is taken in one coordinate space, that
-// focus actually moves, and that a split reports the focused pane as its
-// anchor. Those are the parts a pure test cannot see.
-//
-// Stand-in pane VCs are plain `NSViewController`s. The controller
-// resolves focus by asking which pane view contains the first responder,
-// so it needs no libghostty surface or Metal view here.
-//
-// Their root views forward first responder to a descendant, because both
-// real pane roots do: the view that has to end up focused is libghostty's
-// surface or the Metal content view, never the wrapper. A stub that
-// simply accepted focus itself would pass while the app left every
-// navigated-to pane unable to receive a keystroke.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Pane focus navigation and the split fallback, driven through a real
+/// `PaneLayoutViewController` in a real window.
+///
+/// The pure math is covered in `PaneFocusOrderMathTests` and
+/// `PaneDirectionalFocusMathTests`. What these add is the wiring around
+/// it: that the frame snapshot is taken in one coordinate space, that
+/// focus actually moves, and that a split reports the focused pane as its
+/// anchor. Those are the parts a pure test cannot see.
+///
+/// Stand-in pane VCs are plain `NSViewController`s. The controller
+/// resolves focus by asking which pane view contains the first responder,
+/// so it needs no libghostty surface or Metal view here.
+///
+/// Their root views forward first responder to a descendant, because both
+/// real pane roots do: the view that has to end up focused is libghostty's
+/// surface or the Metal content view, never the wrapper. A stub that
+/// simply accepted focus itself would pass while the app left every
+/// navigated-to pane unable to receive a keystroke.
 @MainActor
 struct PaneLayoutNavigationTests {
     /// Controller plus the window keeping it alive, since a released

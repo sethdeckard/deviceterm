@@ -1,34 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HeadlessAdvisory: presenter for the Simulator.app coexistence
-// modal. Reads `HeadlessAdvisoryViewModel.decision` to gate the NSAlert
-// and pick its copy, builds it with a "Don't show again" checkbox, runs
-// it modally, and reports the dismiss result back to the VM so a
-// future launch can skip the prompt.
-//
-// `xcrun simctl boot` does not launch Simulator.app; sims booted
-// while Simulator.app is closed run headless. The advisory exists
-// because if Apple's app is *already* running for unrelated work,
-// it observes the CoreSimulator boot event and attaches a window
-// to the new sim, producing a dual-display. No preference stops that
-// attach, so the remedy is ordering: quit Simulator.app before booting.
-//
-// The alert's job is the hazard, not the explanation. It names what can
-// still take this sim down from outside and offers Learn More…; the
-// coexistence welcome carries the whole model. The skip conditions are:
-// already shown this launch, suppressed by the user, Simulator.app not
-// running, a welcome already ran this session (stacking a modal on an
-// explanation the user is still reading gets both dismissed unread), or
-// Simulator.app is already configured to detach on both routes, leaving
-// no hazard to name.
-//
-// Triggered from `SimulatorPaneViewController.viewDidLoad` after
-// the pane finishes layout. The VM's per-launch + persistent
-// latches make repeat invocations cheap no-ops.
 
 import AppKit
 import Foundation
 
+/// Presenter for the Simulator.app coexistence
+/// modal. Reads `HeadlessAdvisoryViewModel.decision` to gate the NSAlert
+/// and pick its copy, builds it with a "Don't show again" checkbox, runs
+/// it modally, and reports the dismiss result back to the VM so a
+/// future launch can skip the prompt.
+///
+/// `xcrun simctl boot` does not launch Simulator.app; sims booted
+/// while Simulator.app is closed run headless. The advisory exists
+/// because if Apple's app is *already* running for unrelated work,
+/// it observes the CoreSimulator boot event and attaches a window
+/// to the new sim, producing a dual-display. No preference stops that
+/// attach, so the remedy is ordering: quit Simulator.app before booting.
+///
+/// The alert's job is the hazard, not the explanation. It names what can
+/// still take this sim down from outside and offers Learn More…; the
+/// coexistence welcome carries the whole model. The skip conditions are:
+/// already shown this launch, suppressed by the user, Simulator.app not
+/// running, a welcome already ran this session (stacking a modal on an
+/// explanation the user is still reading gets both dismissed unread), or
+/// Simulator.app is already configured to detach on both routes, leaving
+/// no hazard to name.
+///
+/// Triggered from `SimulatorPaneViewController.viewDidLoad` after
+/// the pane finishes layout. The VM's per-launch + persistent
+/// latches make repeat invocations cheap no-ops.
 @MainActor
 enum HeadlessAdvisory {
     /// Default entry point: use the shared VM so all sim attaches

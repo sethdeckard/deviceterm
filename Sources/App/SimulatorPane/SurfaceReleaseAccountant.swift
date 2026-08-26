@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceReleaseAccountant: the GUI half of the surface-lease loop.
-//
-// Tracks, per `(paneId, subscriptionToken, leaseEpoch)`, the set of device
-// surface generations the GUI still holds. `acquire` records a generation
-// when a lease is built; `release` drops it when the lease's ARC deinit
-// fires (i.e. the surface is no longer current and every command buffer
-// that sampled it has GPU-completed). A coalescing pump emits one
-// cumulative low-water-mark `pane.surfaceRelease` per key per tick. The
-// daemon then frees committed generations strictly below it.
-//
-// The watermark is `min(held)`, or one past the highest generation
-// received when the set is empty (the GUI only ever receives committed
-// generations). It crosses generation numbers never committed to the
-// token (dropped frames) but never a still-held one, and is idempotent
-// and self-healing: a lost tick is corrected by the next absolute
-// watermark.
 
 import DaemonProtocol
 import Foundation
 
+/// The GUI half of the surface-lease loop.
+///
+/// Tracks, per `(paneId, subscriptionToken, leaseEpoch)`, the set of device
+/// surface generations the GUI still holds. `acquire` records a generation
+/// when a lease is built; `release` drops it when the lease's ARC deinit
+/// fires (i.e. the surface is no longer current and every command buffer
+/// that sampled it has GPU-completed). A coalescing pump emits one
+/// cumulative low-water-mark `pane.surfaceRelease` per key per tick. The
+/// daemon then frees committed generations strictly below it.
+///
+/// The watermark is `min(held)`, or one past the highest generation
+/// received when the set is empty (the GUI only ever receives committed
+/// generations). It crosses generation numbers never committed to the
+/// token (dropped frames) but never a still-held one, and is idempotent
+/// and self-healing: a lost tick is corrected by the next absolute
+/// watermark.
 actor SurfaceReleaseAccountant {
     private struct AccountKey: Hashable {
         let paneId: String

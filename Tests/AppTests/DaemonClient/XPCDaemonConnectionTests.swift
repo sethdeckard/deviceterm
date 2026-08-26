@@ -1,13 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// XPCDaemonConnectionTests: the transport-level fences added for the
-// wire-version-mismatch remediation, exercised against a CONTROLLED silent
-// peer (an anonymous XPC listener that accepts a connection but never replies)
-// so a request genuinely PARKS. That lets each test assert the specific
-// outcome: the gate's own error, no demand-connect for the bootstrap
-// shutdown, quiescence of in-flight traffic, and real cancellation with
-// pending-state cleanup, rather than a service-unavailable invalidation that
-// would pass even with the implementation removed.
 
 @testable import App
 import DaemonProtocol
@@ -15,6 +6,14 @@ import Foundation
 import Testing
 @preconcurrency import XPC
 
+/// The transport-level fences added for the
+/// wire-version-mismatch remediation, exercised against a CONTROLLED silent
+/// peer (an anonymous XPC listener that accepts a connection but never replies)
+/// so a request genuinely PARKS. That lets each test assert the specific
+/// outcome: the gate's own error, no demand-connect for the bootstrap
+/// shutdown, quiescence of in-flight traffic, and real cancellation with
+/// pending-state cleanup, rather than a service-unavailable invalidation that
+/// would pass even with the implementation removed.
 @MainActor
 struct XPCDaemonConnectionTests {
     /// An anonymous listener that accepts a peer connection and then ignores

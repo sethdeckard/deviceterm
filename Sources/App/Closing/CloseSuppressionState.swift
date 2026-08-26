@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CloseSuppressionState: in-memory tiers behind the close-prompt's
-// scope dropdown.
-//
-// The prompt's "Don't ask again" checkbox grew a scope qualifier so
-// the user can choose how long the suppression lasts. The
-// persistent-forever tier still lives in `~/.config/deviceterm/config`
-// via `ConfigFile`; the two softer tiers (per-window and
-// per-app-session) live here, cleared on app quit.
-//
-// Lookup order at prompt-time is most-specific-wins: window override →
-// session override → persistent file. The persistent layer is checked
-// by `CloseDecisions` itself, not by this state; this type only owns
-// the in-memory tiers.
 
 import AppKit
 
+/// In-memory tiers behind the close-prompt's
+/// scope dropdown.
+///
+/// The prompt's "Don't ask again" checkbox carries a scope qualifier, so
+/// the user chooses how long the suppression lasts. The
+/// persistent-forever tier still lives in `~/.config/deviceterm/config`
+/// via `ConfigFile`; the two softer tiers (per-window and
+/// per-app-session) live here, cleared on app quit.
+///
+/// Lookup order at prompt-time is most-specific-wins: window override →
+/// session override → persistent file. The persistent layer is checked
+/// by `CloseDecisions` itself, not by this state; this type only owns
+/// the in-memory tiers.
 @MainActor
 final class CloseSuppressionState {
     static let shared = CloseSuppressionState()

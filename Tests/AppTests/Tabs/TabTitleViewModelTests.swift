@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabTitleViewModel precedence (pure-logic tests). The chain is:
-// manual rename > OSC title > session name > CWD basename > "shell";
-// each source clears independently. The full OSC-7 path is tracked
-// alongside the chain, backing the titlebar proxy icon rather than
-// the label.
 
 @testable import App
 import Testing
 
+/// TabTitleViewModel precedence (pure-logic tests). The chain is:
+/// manual rename > OSC title > session name > CWD basename > "shell";
+/// each source clears independently. The full OSC-7 path is tracked
+/// alongside the chain, backing the titlebar proxy icon rather than
+/// the label.
 @MainActor
 struct TabTitleViewModelTests {
     @Test
@@ -49,7 +48,7 @@ struct TabTitleViewModelTests {
 
     @Test
     func sessionNameAlsoFallsBackPastEmptyInputs() {
-        // Clearing the session name (e.g. a future `tab rename` to
+        // Clearing the session name (e.g. a `tab rename` to
         // nothing) falls back to the CWD basename, then "shell":
         // the chain collapses cleanly through the optionals.
         let model = TabTitleViewModel()

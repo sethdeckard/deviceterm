@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneChromeRibbonFitTests: the width math behind "open this pane's
-// chrome ribbon expanded". Three claims worth pinning:
-//
-//   1. A wide expanded ribbon genuinely does not fit a minimum-width
-//      pane. If this ever computes as fitting, panes at the 380pt
-//      floor open with the ribbon painted across the device name,
-//      which is the exact defect the fit check exists to prevent.
-//   2. Fewer actions means a lower threshold. The action count is
-//      family- and capability-driven, so a physical device (buttons +
-//      rotation only) has to clear a lower bar than a phone sim's
-//      full row. A threshold that ignored the count would be wrong
-//      for one of them.
-//   3. The threshold moves with the title. The device name is the
-//      thing being protected, so a longer name has to demand a wider
-//      pane.
 
 @testable import App
 import Foundation
 import Testing
 
+/// The width math behind "open this pane's
+/// chrome ribbon expanded". Three claims worth pinning:
+///
+///   1. A wide expanded ribbon genuinely does not fit a minimum-width
+///      pane. If this ever computes as fitting, panes at the 380pt
+///      floor open with the ribbon painted across the device name,
+///      which is the exact defect the fit check exists to prevent.
+///   2. Fewer actions means a lower threshold. The action count is
+///      family- and capability-driven, so a physical device (buttons +
+///      rotation only) has to clear a lower bar than a phone sim's
+///      full row. A threshold that ignored the count would be wrong
+///      for one of them.
+///   3. The threshold moves with the title. The device name is the
+///      thing being protected, so a longer name has to demand a wider
+///      pane.
 @MainActor
 struct PaneChromeRibbonFitTests {
     /// The full phone-sim row: home, screenshot, record, rotate left,

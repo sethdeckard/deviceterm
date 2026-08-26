@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePaneState: pins that a device pane carries the backend-neutral
-// `MirroredPaneState` shape, so it renders + drives through the same VC as a
-// sim once the attach/reconcile path mounts it.
 
 @testable import App
 import DaemonProtocol
 import Testing
+
+// DevicePaneState: pins that a device pane carries the backend-neutral
+// `MirroredPaneState` shape, so it renders + drives through the same VC as a
+// sim once the attach/reconcile path mounts it.
 
 private let deviceCaps = PaneCapabilities(
     touch: true,

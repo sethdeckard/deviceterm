@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabStripViewController: one window's tab strip + content swap,
-// driven by observing its TabListViewModel. Menu actions dispatch routes
-// through the Router instead of mutating tabs directly; the strip + the
-// selected content view reconcile from state. The Detach/Shut-Down
-// prompt stays here (CloseDecisions): the Router consumes whatever mode
-// the user picks. When the tab list goes empty (close last tab), the
-// window asks AppKit to close, which routes through `windowWillClose`.
 
 import AppKit
 import DaemonProtocol
 
+/// One window's tab strip + content swap,
+/// driven by observing its TabListViewModel. Menu actions dispatch routes
+/// through the Router instead of mutating tabs directly; the strip + the
+/// selected content view reconcile from state. The Detach/Shut-Down
+/// prompt stays here (CloseDecisions): the Router consumes whatever mode
+/// the user picks. When the tab list goes empty (close last tab), the
+/// window asks AppKit to close, which routes through `windowWillClose`.
 @MainActor
 final class TabStripViewController: NSViewController, NSUserInterfaceValidations {
     /// Maximum width for a solo tab so it doesn't stretch across half

@@ -1,12 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The GUI half of the live tab label: coalescing a shell's prompt-redraw
-// burst into one RPC, keeping order without a per-push sequence number,
-// abandoning a value whose session is gone, giving up on a transport that
-// structurally can't accept the method (for good, or until the daemon
-// behind it is replaced), and re-sending an
-// UNCHANGED title after a reconnect (the daemon's cache is memory-only, so
-// nothing else would ever put the label back).
 
 @testable import App
 import DaemonProtocol
@@ -73,6 +65,13 @@ private func drain(_ publisher: DisplayTitlePublisher) async {
     await yieldUntil { publisher.isSettledForTesting }
 }
 
+/// The GUI half of the live tab label: coalescing a shell's prompt-redraw
+/// burst into one RPC, keeping order without a per-push sequence number,
+/// abandoning a value whose session is gone, giving up on a transport that
+/// structurally can't accept the method (for good, or until the daemon
+/// behind it is replaced), and re-sending an
+/// UNCHANGED title after a reconnect (the daemon's cache is memory-only, so
+/// nothing else would ever put the label back).
 @MainActor
 struct DisplayTitlePublisherTests {
     @Test

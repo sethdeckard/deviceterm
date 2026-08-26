@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Route: every navigation intent as a pure value. All navigation
-// flows through `Router.dispatch(_:)`: menu actions, the
-// discovery/resurrect loops, and (future) CLI/daemon-driven or
-// restored navigation. Unidirectional: intent (Route) → router →
-// state (nav view models) → reconcile (AppKit glue).
-//
-// `openWindow` carries `reattach` because a window is never empty: the
-// handler creates the window *and* its initial tab in one ordered step
-// (matching makeWindow + openInitialTab), avoiding a second
-// dispatch that would have to chain on an id not yet allocated.
 
 import DaemonProtocol
 
+/// Every navigation intent as a pure value. All navigation
+/// flows through `Router.dispatch(_:)`: menu actions, the
+/// discovery/resurrect loops, and CLI/daemon-driven or restored
+/// navigation. Unidirectional: intent (Route) → router →
+/// state (nav view models) → reconcile (AppKit glue).
+///
+/// `openWindow` carries `reattach` because a window is never empty: the
+/// handler creates the window *and* its initial tab in one ordered step
+/// (matching makeWindow + openInitialTab), avoiding a second
+/// dispatch that would have to chain on an id not yet allocated.
 enum Route: Sendable {
     /// New window + its initial tab; `reattach` mounts cold-start orphans.
     /// `cwd`/`command` parameterize that initial tab the same way

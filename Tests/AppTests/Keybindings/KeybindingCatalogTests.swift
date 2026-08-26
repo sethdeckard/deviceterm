@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The keybinding drift guard, run in both directions: every catalog
-// entry appears in the menu, and every bound menu item appears in the
-// catalog, with multiplicities compared so a duplicate is caught too.
-//
-// The pinned map below is deliberately a literal table, so a change to
-// any shortcut shows up in review as a readable diff rather than as a
-// behavioral surprise.
 
 @testable import App
 import AppKit
 import DaemonProtocol
 import Testing
 
+/// The keybinding drift guard, run in both directions: every catalog
+/// entry appears in the menu, and every bound menu item appears in the
+/// catalog, with multiplicities compared so a duplicate is caught too.
+///
+/// The pinned map below is deliberately a literal table, so a change to
+/// any shortcut shows up in review as a readable diff rather than as a
+/// behavioral surprise.
 @MainActor
 struct KeybindingCatalogTests {
     /// Identity of a bound menu item, for set comparison against the catalog.

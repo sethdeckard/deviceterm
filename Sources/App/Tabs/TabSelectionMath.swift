@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabSelectionMath: index arithmetic for the menu items that act on the
-// selected tab, kept pure so the edge cases are enumerable in tests rather
-// than discovered by pressing keys.
-//
-// Handles numbered and relative selection plus selected-tab movement.
-// Each helper returns an index into the window's tab array, or nil when
-// the operation has no valid target; the arithmetic itself knows nothing
-// about tabs.
 
+/// Index arithmetic for the menu items that act on the
+/// selected tab, kept pure so the edge cases are enumerable in tests rather
+/// than discovered by pressing keys.
+///
+/// Handles numbered and relative selection plus selected-tab movement.
+/// Each helper returns an index into the window's tab array, or nil when
+/// the operation has no valid target; the arithmetic itself knows nothing
+/// about tabs.
 enum TabSelectionMath {
     /// The tab a numbered menu item selects. `tag` is 1-based because
     /// `NSMenuItem.tag` mirrors the visible label ("Tab 3" carries 3),

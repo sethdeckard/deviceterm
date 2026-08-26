@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandSubscriberTests: the GUI drain loop's handling of a
-// back-channel scope refusal, and of a command that outlived its deadline.
-//
-// A signature rejection (-32011) is terminal on
-// BOTH transports: the `--smoke` UDS fallback (structural, can't ever
-// validate) and a genuine XPC signature mismatch (retrying can't fix a stable
-// verdict). A transient validation-unavailable outcome is a distinct code
-// (-32002) that stays on the retry path.
-//
-// The expiry tests read the ack rather than instrumenting the dispatcher,
-// because `expiredCode` is the one error code the dispatch path cannot
-// produce: seeing it is the same claim as "the dispatcher was never
-// reached".
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// The GUI drain loop's handling of a
+/// back-channel scope refusal, and of a command that outlived its deadline.
+///
+/// A signature rejection (-32011) is terminal on
+/// BOTH transports: the `--smoke` UDS fallback (structural, can't ever
+/// validate) and a genuine XPC signature mismatch (retrying can't fix a stable
+/// verdict). A transient validation-unavailable outcome is a distinct code
+/// (-32002) that stays on the retry path.
+///
+/// The expiry tests read the ack rather than instrumenting the dispatcher,
+/// because `expiredCode` is the one error code the dispatch path cannot
+/// produce: seeing it is the same claim as "the dispatcher was never
+/// reached".
 @MainActor
 struct AppCommandSubscriberTests {
     /// Fake back-channel that always refuses the subscription with a

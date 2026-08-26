@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CLIIntentTranslatorTests: round-trip every `AppCommandKind` from
-// the wire's `AppCommand` shape to the matching `RouteIntent`. Pure
-// shape conversion; no dispatch / no resolver. A malformed params
-// blob surfaces as `IntentError.internalError`, never as a silent
-// degradation.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Round-trip every `AppCommandKind` from
+/// the wire's `AppCommand` shape to the matching `RouteIntent`. Pure
+/// shape conversion; no dispatch / no resolver. A malformed params
+/// blob surfaces as `IntentError.internalError`, never as a silent
+/// degradation.
 struct CLIIntentTranslatorTests {
     // MARK: - Helpers
 

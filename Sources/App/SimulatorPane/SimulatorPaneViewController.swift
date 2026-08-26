@@ -1,14 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorPaneViewController: the AppKit view glue for one
-// attached iOS Simulator pane. Thin shell over the decomposed
-// pieces: Metal/IOSurface rendering + input synthesis live in
-// `SimulatorContentView`, pure gesture math in `SimGestureMath`,
-// the state machine in `SimPaneReducer`, and presentation state +
-// daemon I/O in `SimulatorPaneViewModel`. What's left here: build
-// the views, bind to the VM via `observe()`, forward input-delegate
-// callbacks to VM intents, and surface the owner-facing
-// close/reboot/state callbacks.
 
 import AppKit
 import DaemonProtocol
@@ -17,6 +7,15 @@ import class SwiftUI.NSHostingController
 import class SwiftUI.NSHostingView
 import UniformTypeIdentifiers
 
+/// The AppKit view glue for one
+/// attached simulator or physical-device pane. Thin shell over the decomposed
+/// pieces: Metal/IOSurface rendering + input synthesis live in
+/// `SimulatorContentView`, pure gesture math in `SimGestureMath`,
+/// the state machine in `SimPaneReducer`, and presentation state +
+/// daemon I/O in `SimulatorPaneViewModel`. What's left here: build
+/// the views, bind to the VM via `observe()`, forward input-delegate
+/// callbacks to VM intents, and surface the owner-facing
+/// close/reboot/state callbacks.
 @MainActor
 final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegate {
     // Identity forwarded from the VM for external callers (PaneLayoutViewController
@@ -181,8 +180,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// this var isn't `@Observable`; the chrome's record button label
     /// would otherwise go stale until something else fires `render()`.
     /// (`render()` ALSO syncs the same field on every pass so a
-    /// race-free first paint still works, but the didSet is the
-    /// load-bearing path for live toggles.)
+    /// race-free first paint still works, but a live toggle depends on
+    /// this didSet.)
     var recordingProcess: Process? {
         didSet { chromeViewModel.recordingActive = recordingProcess != nil }
     }

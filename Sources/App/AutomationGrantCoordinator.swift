@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Issues and *keeps* a session's live automation grant once it is
-// terminal-bound: the recoverable grant-pending lifecycle for an automation
-// tab.
-//
-// A one-shot "grant after bind" is not enough: a transient validation outage
-// (the validated-GUI signature walk momentarily can't complete → `notReady`)
-// or a connection blip can fail the initial grant, and if that outage outlasts
-// the bind poll loop the tab would sit permanently ungranted until an unrelated
-// reconnect. So a failed grant is *retried* with a fresh revision and backoff
-// until it applies, or until a terminal outcome (the session is gone, or the
-// peer isn't the validated GUI) makes retrying pointless.
-//
-// Owned per-tab by `TabContentViewController` and driven from the terminal
-// bind-success path: `sessionBound` fires on the initial bind and on every
-// reconnect rebind, so a reconnect (which loses the daemon's in-memory grant
-// store) reissues automatically under the fresh connection epoch. The lifecycle
-// is unit-testable in isolation (inject the client + sleep); the VC glue that
-// calls it is thin.
 
 import DaemonProtocol
 import Foundation
 
+/// Issues and *keeps* a session's live automation grant once it is
+/// terminal-bound: the recoverable grant-pending lifecycle for an automation
+/// tab.
+///
+/// A one-shot "grant after bind" is not enough: a transient validation outage
+/// (the validated-GUI signature walk momentarily can't complete → `notReady`)
+/// or a connection blip can fail the initial grant, and if that outage outlasts
+/// the bind poll loop the tab would sit permanently ungranted until an unrelated
+/// reconnect. So a failed grant is *retried* with a fresh revision and backoff
+/// until it applies, or until a terminal outcome (the session is gone, or the
+/// peer isn't the validated GUI) makes retrying pointless.
+///
+/// Owned per-tab by `TabContentViewController` and driven from the terminal
+/// bind-success path: `sessionBound` fires on the initial bind and on every
+/// reconnect rebind, so a reconnect (which loses the daemon's in-memory grant
+/// store) reissues automatically under the fresh connection epoch. The lifecycle
+/// is unit-testable in isolation (inject the client + sleep); the VC glue that
+/// calls it is thin.
 @MainActor
 final class AutomationGrantCoordinator {
     private let client: any AutomationGranting

@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LocationMenuModel: the pure row model behind Device ▸ Location.
-//
-// Holds the entire ordering/sectioning rule for the submenu with no
-// AppKit involved, so the shape is exhaustively unit-testable and the
-// two surfaces that show it (the main menu and the pane's right-click
-// menu) can't drift apart. `LocationMenuController` does nothing but
-// turn these rows into `NSMenuItem`s.
-//
-// Empty sections are omitted rather than shown disabled, so callers
-// need no section-specific branching.
 
 import DaemonProtocol
 import Foundation
 
+/// The pure row model behind Device ▸ Location.
+///
+/// Holds the entire ordering/sectioning rule for the submenu with no
+/// AppKit involved, so the shape is exhaustively unit-testable and the
+/// two surfaces that show it (the main menu and the pane's right-click
+/// menu) can't drift apart. `LocationMenuController` does nothing but
+/// turn these rows into `NSMenuItem`s.
+///
+/// Empty sections are omitted rather than shown disabled, so callers
+/// need no section-specific branching.
 enum LocationMenuModel {
     /// Clears any simulation, so the device falls back to whatever it
     /// would report on its own.

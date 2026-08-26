@@ -1,19 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CloseSheetLifetimeTests: a close prompt takes itself down when the
-// thing it is asking about stops existing.
-//
-// Two suites, because the claims need different machinery. The watch
-// itself is pure enough to drive with a fake `@Observable` target. The
-// claim that actually matters to a user, that a real sheet comes off a
-// real window and the awaiting caller gets exactly one answer, needs
-// AppKit and so gets the `.serialized` treatment
-// `CustomCoordinatesSheetPresentationTests` already established.
-//
-// Nothing here awaits a prompt's task. These tests provoke the exact
-// failure that leaves a checked continuation unresumed, and awaiting one
-// would wedge the whole run rather than fail one test, so every wait is
-// bounded and every answer is read out of a box.
 
 @testable import App
 import AppKit
@@ -55,6 +40,20 @@ private struct Fixture {
     let state: CloseSuppressionState
 }
 
+/// A close prompt takes itself down when the
+/// thing it is asking about stops existing.
+///
+/// Two suites, because the claims need different machinery. The watch
+/// itself is pure enough to drive with a fake `@Observable` target. The
+/// claim that actually matters to a user, that a real sheet comes off a
+/// real window and the awaiting caller gets exactly one answer, needs
+/// AppKit and so gets the `.serialized` treatment
+/// `CustomCoordinatesSheetPresentationTests` already established.
+///
+/// Nothing here awaits a prompt's task. These tests provoke the exact
+/// failure that leaves a checked continuation unresumed, and awaiting one
+/// would wedge the whole run rather than fail one test, so every wait is
+/// bounded and every answer is read out of a box.
 @MainActor
 struct CloseSheetLifetimeTests {
     /// Let the watch's re-arm hop through the main actor. `observe`

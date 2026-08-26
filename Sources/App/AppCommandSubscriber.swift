@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppCommandSubscriber: the GUI's consumer of the daemon's
-// `app.commands` back-channel.
-//
-// At app startup `AppDelegate` constructs one of these, hands it the
-// `IntentDispatcher` (the single point that resolves refs, dispatches
-// Routes, and returns `IntentResult`), and spins a long-lived drain
-// task. The subscriber translates each `AppCommand` frame to the
-// matching `RouteIntent`, awaits the dispatch result, and acks via
-// `app.commandResult` so the daemon's coordinator can resume the
-// originating CLI handler's continuation.
-//
-// Single subscription assumption: one GUI process per daemon. The
-// daemon coordinator's `subscribe()` replaces any prior subscription,
-// so a relaunched GUI takes over cleanly.
 
 import DaemonProtocol
 import Foundation
 
+/// The GUI's consumer of the daemon's
+/// `app.commands` back-channel.
+///
+/// At app startup `AppDelegate` constructs one of these, hands it the
+/// `IntentDispatcher` (the single point that resolves refs, dispatches
+/// Routes, and returns `IntentResult`), and spins a long-lived drain
+/// task. The subscriber translates each `AppCommand` frame to the
+/// matching `RouteIntent`, awaits the dispatch result, and acks via
+/// `app.commandResult` so the daemon's coordinator can resume the
+/// originating CLI handler's continuation.
+///
+/// Single subscription assumption: one GUI process per daemon. The
+/// daemon coordinator's `subscribe()` replaces any prior subscription,
+/// so a relaunched GUI takes over cleanly.
 @MainActor
 final class AppCommandSubscriber {
     /// Mirror of the daemon's `RPCMethodError.scopeViolationCode`

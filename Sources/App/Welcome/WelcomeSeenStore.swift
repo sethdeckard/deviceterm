@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WelcomeSeenStore: which welcome windows have already been shown.
-//
-// Lives in the XDG cache directory, not in
-// `~/.config/deviceterm/config`. The config file is hand-edited and
-// holds preferences the user sets; this is bookkeeping the app writes,
-// and mixing the two would put machine-managed lines in a file people
-// keep in git. The on/off switch (`welcome-messages`) stays in config,
-// because that one *is* a preference.
-//
-// Format is one id per line. It needs none of the config file's
-// `key = value` syntax or comments, and one id per line also makes the
-// documented reset easy: delete a line to re-arm that welcome.
-//
-// Every failure is non-fatal and degrades toward showing a welcome
-// again: an unreadable file parses as "none seen" and a failed write is
-// dropped, so a welcome can recur after a failed write or a cleared
-// cache. Re-explaining something is a smaller harm than a crash or a
-// swallowed launch.
 
 import DaemonProtocol
 import Foundation
 
+/// Which welcome windows have already been shown.
+///
+/// Lives in the XDG cache directory, not in
+/// `~/.config/deviceterm/config`. The config file is hand-edited and
+/// holds preferences the user sets; this is bookkeeping the app writes,
+/// and mixing the two would put machine-managed lines in a file people
+/// keep in git. The on/off switch (`welcome-messages`) stays in config,
+/// because that one *is* a preference.
+///
+/// Format is one id per line. It needs none of the config file's
+/// `key = value` syntax or comments, and one id per line also makes the
+/// documented reset easy: delete a line to re-arm that welcome.
+///
+/// Every failure is non-fatal and degrades toward showing a welcome
+/// again: an unreadable file parses as "none seen" and a failed write is
+/// dropped, so a welcome can recur after a failed write or a cleared
+/// cache. Re-explaining something is a smaller harm than a crash or a
+/// swallowed launch.
 struct WelcomeSeenStore {
     private let path: String
 

@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LocationEntry: one line of the user's saved-locations file, parsed.
-//
-// An enum so parser results can distinguish entry kinds without changing
-// the surrounding API. This version recognizes fixed points and paths to
-// `.gpx` route files.
-//
-// Pure data with no formatting of its own. The menu decides how an
-// unlabeled entry reads, so coordinate formatting and a route's fallback
-// title stay in one place.
 
 import DaemonProtocol
 
-/// A location the user saved, in the order the file lists it.
+/// A location the user saved, in the order the file lists it: one line of
+/// the saved-locations file, parsed.
+///
+/// An enum so parser results can distinguish entry kinds without changing
+/// the surrounding API. It recognizes fixed points and paths to `.gpx`
+/// route files.
+///
+/// Pure data with no formatting of its own. The menu decides how an
+/// unlabeled entry reads, so coordinate formatting and a route's fallback
+/// title stay in one place.
 enum LocationEntry: Equatable, Sendable {
     /// A fixed point, with the optional label its file line carried.
     case coordinate(latitude: Double, longitude: Double, label: String?)

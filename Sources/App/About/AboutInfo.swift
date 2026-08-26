@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AboutInfo: the static facts shown in the About window, resolved from
-// the app bundle's Info.plist. Pure value; read once when the window opens.
-// Each field degrades to a sensible placeholder when the key is absent
-// (e.g. a raw `swift run` with no assembled `.app`), so the window never
-// shows an empty row.
 
 import Foundation
 
+/// The static facts shown in the About window, resolved from
+/// the app bundle's Info.plist. Pure value; read once when the window opens.
+/// Each field degrades to a sensible placeholder when the key is absent
+/// (e.g. a raw `swift run` with no assembled `.app`), so the window never
+/// shows an empty row.
 struct AboutInfo: Equatable {
     /// The README subtitle, shown under the app name.
     static let defaultTagline =

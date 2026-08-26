@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorPaneWrapperView: the sim pane's AppKit root view,
-// holding the SwiftUI chrome strip, a layer-backed device-frame
-// (bezel) view, and the Metal content view as siblings. The
-// subclass exists for two reasons:
-//
-//   1. When `PaneLayoutViewController` swaps the focused sim pane with
-//      a neighbor (⌘⇧← / ⌘⇧→), it restores keyboard focus by
-//      calling `window?.makeFirstResponder(focused.view)`. The view
-//      it sees is the pane VC's root, and a plain `NSView` defaults
-//      `acceptsFirstResponder` to false, so the post-swap pane would
-//      silently lose keyboard focus and responder-chain
-//      participation.
-//
-//   2. Painting the device-frame bezel that sits behind the
-//      transparent Metal letterbox. Per-family geometry comes from
-//      `DeviceBezelLayoutMath`; the wrapper owns the layout pass +
-//      layer updates so the bezel re-fits on every pane resize.
-//
-// Input still lives on the Metal-hosting `SimulatorContentView`
-// referenced by `inputTarget`. `becomeFirstResponder` forwards
-// there. The watch Digital Crown is hit-tested by the content
-// view against `currentCrownRect` (published by the wrapper) and
-// routes click/drag through the `onCrownPress` / `onCrownUp` /
-// `onCrownDown` closures the wrapper exposes.
 
 import AppKit
 import DaemonProtocol
 
+/// The sim pane's AppKit root view,
+/// holding the SwiftUI chrome strip, a layer-backed device-frame
+/// (bezel) view, and the Metal content view as siblings. The
+/// subclass exists for two reasons:
+///
+///   1. When `PaneLayoutViewController` swaps the focused sim pane with
+///      a neighbor (⌘⇧← / ⌘⇧→), it restores keyboard focus by
+///      calling `window?.makeFirstResponder(focused.view)`. The view
+///      it sees is the pane VC's root, and a plain `NSView` defaults
+///      `acceptsFirstResponder` to false, so the post-swap pane would
+///      silently lose keyboard focus and responder-chain
+///      participation.
+///
+///   2. Painting the device-frame bezel that sits behind the
+///      transparent Metal letterbox. Per-family geometry comes from
+///      `DeviceBezelLayoutMath`; the wrapper owns the layout pass +
+///      layer updates so the bezel re-fits on every pane resize.
+///
+/// Input still lives on the Metal-hosting `SimulatorContentView`
+/// referenced by `inputTarget`. `becomeFirstResponder` forwards
+/// there. The watch Digital Crown is hit-tested by the content
+/// view against `currentCrownRect` (published by the wrapper) and
+/// routes click/drag through the `onCrownPress` / `onCrownUp` /
+/// `onCrownDown` closures the wrapper exposes.
 @MainActor
 final class SimulatorPaneWrapperView: NSView {
     /// Snapshot of the inputs the bezel layout depends on. The VC

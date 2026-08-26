@@ -1,17 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorContentView: the MTKView that renders a simulator's
-// IOSurface as a textured quad each frame, plus the NSResponder input
-// handlers that synthesize taps/swipes/pinches. The Metal + IOSurface
-// zero-copy texture path and the aspect-fit letterbox math were
-// established empirically against a live simulator, so treat the
-// specifics as load-bearing. The *pure* geometry lives in
-// `SimGestureMath`; the
-// responder overrides and gesture accumulation stay here because
-// input dispatch (and AppKit's multi-touch synthesis) must live on the
-// responder (see AGENTS.md SwiftUI/AppKit boundary). The view never
-// sees the daemon; it reports gestures through `SimulatorInputDelegate`
-// and the VC forwards them to the view model.
 
 import AppKit
 import DaemonProtocol
@@ -20,6 +7,18 @@ import Metal
 import MetalKit
 import SurfaceTrace
 
+/// The MTKView that renders a simulator's
+/// IOSurface as a textured quad each frame, plus the NSResponder input
+/// handlers that synthesize taps/swipes/pinches. The Metal + IOSurface
+/// zero-copy texture path and the aspect-fit letterbox math were
+/// established empirically against a live simulator, so the specifics
+/// are worth preserving exactly. The *pure* geometry lives in
+/// `SimGestureMath`; the
+/// responder overrides and gesture accumulation stay here because
+/// input dispatch (and AppKit's multi-touch synthesis) must live on the
+/// responder (see AGENTS.md SwiftUI/AppKit boundary). The view never
+/// sees the daemon; it reports gestures through `SimulatorInputDelegate`
+/// and the VC forwards them to the view model.
 final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// One detent = `crownDragDetentPoints` of vertical drag.
     /// Smaller = more sensitive. ~8pt feels close to the physical

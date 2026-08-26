@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OrphanRecovery: cold-start cleanup of session dirs left behind by
-// a GUI that crashed or was force-quit.
-//
-// Each tab's SessionEnvironment writes owner.pid (= GUI pid) and
-// owned-udids.json into ~/Library/Caches/deviceterm/sessions/<id>/.
-// At launch we enumerate that tree; any dir whose owner.pid names
-// a dead process is a candidate. We intersect its UDIDs with the
-// daemon's current `Booted` set (the daemon is the source of truth
-// for what's actually running), and only surface UDIDs that are
-// both manifest-owned and daemon-Booted as live orphans.
-//
-// Orphan-recovery decisions:
-//   - Re-attach: adopt each udid into the first tab as a sim pane.
-//   - Shut Down All: device.shutdown each, delete the dead dir.
-//   - Leave Running: leave the dead dir (re-offered next launch).
-//
-// Candidates with no Booted intersection are cleaned up silently
-// (no UX): the manifest references sims that are already gone.
-// Live session dirs (alive owner.pid) are never touched; that's
-// another running deviceterm GUI process.
 
 import AppKit
 import DaemonProtocol
 
+/// Cold-start cleanup of session dirs left behind by
+/// a GUI that crashed or was force-quit.
+///
+/// Each terminal session's SessionEnvironment writes owner.pid (= GUI pid) and
+/// owned-udids.json into ~/Library/Caches/deviceterm/sessions/<id>/.
+/// At launch we enumerate that tree; any dir whose owner.pid names
+/// a dead process is a candidate. We intersect its UDIDs with the
+/// daemon's current `Booted` set (the daemon is the source of truth
+/// for what's actually running), and only surface UDIDs that are
+/// both manifest-owned and daemon-Booted as live orphans.
+///
+/// Orphan-recovery decisions:
+///   - Re-attach: adopt each udid into the first tab as a sim pane.
+///   - Shut Down All: device.shutdown each, delete the dead dir.
+///   - Leave Running: leave the dead dir (re-offered next launch).
+///
+/// Candidates with no Booted intersection are cleaned up silently
+/// (no UX): the manifest references sims that are already gone.
+/// Live session dirs (alive owner.pid) are never touched; that's
+/// another running deviceterm GUI process.
 @MainActor
 enum OrphanRecovery {
     /// Read every dead-owner session dir's manifest, then resolve live

@@ -1,45 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Keeps the daemon's copy of one tab's live label in step with the GUI.
-//
-// The published value is `TabTitleViewModel.publishableTitle`: the tab's
-// label in its normalized, bounded form, and nil whenever the label would
-// only restate the session name the daemon already holds (or the GUI's
-// generic fallback). It goes under the tab's PRIMARY terminal session,
-// because `tabs.list` is per-session while a title is per-tab. A split
-// tab's other sessions carry no title.
-//
-// Three properties the naive "call the daemon from the observation" shape
-// gets wrong, and why this type exists:
-//
-//   - **Coalescing.** A shell can emit a burst of OSC title updates while
-//     redrawing a prompt. Each pass waits a short FIXED window and then
-//     sends the LATEST value, so a burst costs one RPC and continuous
-//     churn still flushes every window rather than being postponed
-//     forever.
-//   - **Ordering.** There is one desired value and at most one send in
-//     flight, so an older update can never land after a newer one. No
-//     per-push sequence number needed. A value that changes mid-send is
-//     simply what the next pass sends.
-//   - **Lifecycle.** A queued push is dropped when the tab tears down
-//     (`cancel`), and a push rejected because its session is gone is
-//     abandoned rather than retried forever. When the primary terminal of
-//     a split tab closes, the tab's representative session changes; the
-//     caller re-reports under the new session and the old session's cached
-//     title dies with the session daemon-side.
-//
-// A reconnect is the one case where an UNCHANGED title must be re-sent:
-// the daemon's cache is memory-only, so a daemon restart or connection
-// replacement leaves it empty while the GUI, seeing no change, would never
-// push again, so `tabs.list` would report the session name until the next
-// OSC event, which may never come. `republish()` forgets what was sent and
-// pushes the current value. Its caller must fire it only after the
-// session inventory has been re-supplied, since the daemon rejects a title
-// for a session it doesn't hold.
 
 import DaemonProtocol
 import Foundation
 
+/// Keeps the daemon's copy of one tab's live label in step with the GUI.
+///
+/// The published value is `TabTitleViewModel.publishableTitle`: the tab's
+/// label in its normalized, bounded form, and nil whenever the label would
+/// only restate the session name the daemon already holds (or the GUI's
+/// generic fallback). It goes under the tab's PRIMARY terminal session,
+/// because `tabs.list` is per-session while a title is per-tab. A split
+/// tab's other sessions carry no title.
+///
+/// Three properties the naive "call the daemon from the observation" shape
+/// gets wrong, and why this type exists:
+///
+///   - **Coalescing.** A shell can emit a burst of OSC title updates while
+///     redrawing a prompt. Each pass waits a short FIXED window and then
+///     sends the LATEST value, so a burst costs one RPC and continuous
+///     churn still flushes every window rather than being postponed
+///     forever.
+///   - **Ordering.** There is one desired value and at most one send in
+///     flight, so an older update can never land after a newer one. No
+///     per-push sequence number needed. A value that changes mid-send is
+///     simply what the next pass sends.
+///   - **Lifecycle.** A queued push is dropped when the tab tears down
+///     (`cancel`), and a push rejected because its session is gone is
+///     abandoned rather than retried forever. When the primary terminal of
+///     a split tab closes, the tab's representative session changes; the
+///     caller re-reports under the new session and the old session's cached
+///     title dies with the session daemon-side.
+///
+/// A reconnect is the one case where an UNCHANGED title must be re-sent:
+/// the daemon's cache is memory-only, so a daemon restart or connection
+/// replacement leaves it empty while the GUI, seeing no change, would never
+/// push again, so `tabs.list` would report the session name until the next
+/// OSC event, which may never come. `republish()` forgets what was sent and
+/// pushes the current value. Its caller must fire it only after the
+/// session inventory has been re-supplied, since the daemon rejects a title
+/// for a session it doesn't hold.
 @MainActor
 final class DisplayTitlePublisher {
     /// Injected seams so the loop is testable without a live daemon.

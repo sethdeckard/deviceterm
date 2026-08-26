@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LocationAuthorization: the permission state machine behind Device ▸
-// Location ▸ Use My Location, held apart from CoreLocation so it can be
-// tested.
-//
-// `CoreLocationProvider` translates `CLAuthorizationStatus` into these
-// cases and carries out whichever step they name. What lives here is the
-// permission rule: given a status and how far a request has got, what
-// happens next. Readiness, timeout fallbacks, and sharing one request
-// between callers stay with the provider, since they are about driving
-// the framework rather than about permission.
-//
-// Separating the permission transitions from the framework driving is
-// what makes these timing rules testable on their own.
 
-/// The authorization states the provider distinguishes.
+/// The authorization states the provider distinguishes: the permission state
+/// machine behind Device ▸ Location ▸ Use My Location, held apart from
+/// CoreLocation so it can be tested.
+///
+/// `CoreLocationProvider` translates `CLAuthorizationStatus` into these
+/// cases and carries out whichever step they name. What lives here is the
+/// permission rule: given a status and how far a request has got, what
+/// happens next. Readiness, timeout fallbacks, and sharing one request
+/// between callers stay with the provider, since they are about driving
+/// the framework rather than about permission.
+///
+/// Separating the permission transitions from the framework driving is
+/// what makes these timing rules testable on their own.
 enum LocationAuthorization: Equatable, Sendable {
     case notDetermined
     case allowed

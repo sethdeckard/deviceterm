@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// MarkdownDocument parser: structural assertions on the tiny grammar
-// the bundled THIRD_PARTY_NOTICES.md is authored in.
 
 @testable import App
 import Testing
 
+/// MarkdownDocument parser: structural assertions on the tiny grammar
+/// the bundled THIRD_PARTY_NOTICES.md is authored in.
 struct MarkdownDocumentTests {
     @Test
     func parsesTitleHeadingParagraphAndVerbatim() {

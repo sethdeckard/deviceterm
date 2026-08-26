@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabContentViewController: one tab's session-bound view. The Router
-// creates the daemon session (session.create) and records the TabState;
-// the glue builds this VC for that state. The VC reconciles its
-// per-terminal-pane and per-sim-pane controllers to TabState.terminals
-// and TabState.simPanes (the Router does session.create / device.attach
-// / pane.close; reconcile creates / drops VCs to match).
-//
-// Each terminal pane carries its own daemon session: `sessionEnvsByID`
-// holds a `SessionEnvironment` per `TerminalPaneID` (provisioned the
-// first time the reconcile sees that terminal). GUI-created sim panes
-// attribute to the primary terminal's session env; shim boot claims arrive
-// through the relay owned by the exact terminal that initiated the boot.
-//
-// App-wide discovery snapshots + resurrect dispatch attachSimPane /
-// detachSimPane routes through the Router: one path for all pane mounting.
 
 import AppKit
 import DaemonProtocol
 import TerminalSurface
 
+/// One tab's session-bound view. The Router
+/// creates the daemon session (session.create) and records the TabState;
+/// the glue builds this VC for that state. The VC reconciles its
+/// per-terminal-pane and per-sim-pane controllers to TabState.terminals
+/// and TabState.simPanes (the Router does session.create / device.attach
+/// / pane.close; reconcile creates / drops VCs to match).
+///
+/// Each terminal pane carries its own daemon session: `sessionEnvsByID`
+/// holds a `SessionEnvironment` per `TerminalPaneID` (provisioned the
+/// first time the reconcile sees that terminal). GUI-created sim panes
+/// attribute to the primary terminal's session env; shim boot claims arrive
+/// through the relay owned by the exact terminal that initiated the boot.
+///
+/// App-wide discovery snapshots + resurrect dispatch attachSimPane /
+/// detachSimPane routes through the Router: one path for all pane mounting.
 @MainActor
 final class TabContentViewController: NSViewController {
     let tabID: TabID

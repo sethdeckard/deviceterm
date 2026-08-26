@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Structural assertions on the tab strip right-click menu. Same
-// shape as SimulatorPaneContextMenuTests / TerminalPaneContextMenuTests:
-// pin item order + selector wiring + state-driven affordances so a
-// rename or accidental drop trips here before the user hits a no-op
-// menu slot.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Structural assertions on the tab strip right-click menu. Same
+/// shape as SimulatorPaneContextMenuTests / TerminalPaneContextMenuTests:
+/// pin item order + selector wiring + state-driven affordances so a
+/// rename or accidental drop trips here before the user hits a no-op
+/// menu slot.
 @MainActor
 struct TabStripContextMenuTests {
     private func menu(

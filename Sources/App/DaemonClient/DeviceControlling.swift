@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Role protocol: simulator device control on the daemon.
-//
-// One of four narrow role protocols carved out of `DaemonClient`
-// (see `SessionControlling` for the rationale). Covers the device-
-// level RPCs: list, boot, shutdown, and attach-into-a-session.
 
 import DaemonProtocol
 
+/// Role protocol: simulator device control on the daemon.
+///
+/// A narrow role protocol carved out of `DaemonClient`
+/// (see `SessionControlling` for the rationale). Covers the device-
+/// level RPCs: list, boot, shutdown, and attach-into-a-session.
 @MainActor
 protocol DeviceControlling: AnyObject {
     /// The connection currently in use. For a caller that needs to name the

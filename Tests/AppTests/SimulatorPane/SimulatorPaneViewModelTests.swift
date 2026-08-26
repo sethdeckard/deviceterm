@@ -1,10 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The sim pane view model driven by a fake daemon. Lifecycle
-// events move state through the reducer, surface.changed applies
-// the paired IOSurfaceRef (which arrives alongside the JSON evt),
-// input intents forward to pane.input.* RPCs, and close() forwards
-// + clears the surface.
 
 @testable import App
 import CoreGraphics
@@ -12,6 +6,11 @@ import DaemonProtocol
 import IOSurface
 import Testing
 
+/// The sim pane view model driven by a fake daemon. Lifecycle
+/// events move state through the reducer, surface.changed applies
+/// the paired IOSurfaceRef (which arrives alongside the JSON evt),
+/// input intents forward to pane.input.* RPCs, and close() forwards
+/// + clears the surface.
 @MainActor
 struct SimulatorPaneViewModelTests {
     /// Let the subscription Task / input Tasks run.

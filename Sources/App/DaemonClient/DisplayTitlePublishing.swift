@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Narrow GUI role for publishing a tab's normalized label under its primary
-// terminal's session. One of the role protocols carved out of `DaemonClient`
-// so a consumer (and its test fake) depends only on the surface it uses.
-//
-// `@MainActor`/`AnyObject` because the whole GUI daemon path is main-actor and
-// reference-typed.
 
+/// Narrow GUI role for publishing a tab's normalized label under its primary
+/// terminal's session. One of the role protocols carved out of `DaemonClient`
+/// so a consumer (and its test fake) depends only on the surface it uses.
+///
+/// `@MainActor`/`AnyObject` because the whole GUI daemon path is main-actor and
+/// reference-typed.
 @MainActor
 protocol DisplayTitlePublishing: AnyObject {
     /// `session.setDisplayTitle`: `.validatedGUI`-scoped, so no cap rides on

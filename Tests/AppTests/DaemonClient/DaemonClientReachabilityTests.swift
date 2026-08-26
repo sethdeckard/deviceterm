@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// `DaemonClientError.isHelperUnreachable`: the classifier that decides whether a
-// failed launch connection is worth re-registering the helper agent for. It
-// separates failures that can occur before any reply establishes reachability,
-// which are consistent with a launchd registration that cannot spawn, from ones
-// that follow a reply and so prove the registration resolves.
-//
-// Every case is pinned in one direction or the other, so a new
-// `DaemonClientError` case has to be classified deliberately rather than
-// inheriting a default.
 
 @testable import App
 import Foundation
 import Testing
 
+/// `DaemonClientError.isHelperUnreachable`: the classifier that decides whether a
+/// failed launch connection is worth re-registering the helper agent for. It
+/// separates failures that can occur before any reply establishes reachability,
+/// which are consistent with a launchd registration that cannot spawn, from ones
+/// that follow a reply and so prove the registration resolves.
+///
+/// Every case is pinned in one direction or the other, so a new
+/// `DaemonClientError` case has to be classified deliberately rather than
+/// inheriting a default.
 struct DaemonClientReachabilityTests {
     /// Silence. Nothing on the other end produced a reply, which is what a job
     /// launchd fails to spawn looks like from the GUI. The `daemon.ping`

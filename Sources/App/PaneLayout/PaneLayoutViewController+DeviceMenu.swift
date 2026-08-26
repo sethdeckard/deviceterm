@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLayoutViewController+DeviceMenu: the device-control menu-bar
-// fallbacks, split out of the layout controller's hot file. These are
-// the responder-chain forwarders the main menu targets when no pane VC
-// is first responder: each routes to the tab's targeted sim pane
-// (`targetedSimPane()`, which lives on the controller since the
-// size-preset selectors and menu validation share it). Enablement is
-// gated in the controller's `validateUserInterfaceItem`.
 
 import AppKit
 
+/// The device-control menu-bar
+/// fallbacks, split out of the layout controller's hot file. These are
+/// the responder-chain forwarders the main menu targets when no pane VC
+/// is first responder: each routes to the tab's targeted sim pane
+/// (`targetedSimPane()`, which lives on the controller since the
+/// size-preset selectors and menu validation share it). Enablement is
+/// gated in the controller's `validateUserInterfaceItem`.
 extension PaneLayoutViewController {
     @objc
     func pressHardwareHome(_ sender: Any?) { targetedSimPane()?.pressHardwareHome(sender) }

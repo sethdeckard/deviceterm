@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BootClaimCoordinatorTests: GUI-memory claims retry across connection
-// generations and retain terminal-close policy.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
+
+// GUI-memory claims retry across connection
+// generations and retain terminal-close policy.
 
 private let coordinatorUDID = "22222222-2222-2222-2222-222222222222"
 

@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HelperRecoveryCoordinatorTests: when a restart is proposed, and what
-// running it actually does.
-//
-// The interesting behavior here is all about restraint, and about who holds
-// the thread. The client reports a silent connection once and then waits to be
-// asked again, so every verdict this coordinator doesn't act on has to be
-// handed back or nothing ever asks; a user who says they'll wait has made a
-// judgement that should outlast the next few seconds of silence; and a restart
-// aimed at one wedged helper must not land on its healthy replacement.
 
 @testable import App
 import Foundation
 import Testing
 
+/// When a restart is proposed, and what
+/// running it actually does.
+///
+/// The interesting behavior here is all about restraint, and about who holds
+/// the thread. The client reports a silent connection once and then waits to be
+/// asked again, so every verdict this coordinator doesn't act on has to be
+/// handed back or nothing ever asks; a user who says they'll wait has made a
+/// judgement that should outlast the next few seconds of silence; and a restart
+/// aimed at one wedged helper must not land on its healthy replacement.
 @MainActor
 struct HelperRecoveryCoordinatorTests {
     /// Records what the coordinator asked for, and scripts what it gets back.

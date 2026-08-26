@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ConfigSettingsViewModel: the Settings… flow, exercised against a
-// temp config path with a spy for the editor-tab side effect so no
-// window/router/editor is launched.
 
 @testable import App
 import Foundation
 import Testing
 
+/// ConfigSettingsViewModel: the Settings… flow, exercised against a
+/// temp config path with a spy for the editor-tab side effect so no
+/// window/router/editor is launched.
 @MainActor
 struct ConfigSettingsViewModelTests {
     private func tempConfigPath() -> String {

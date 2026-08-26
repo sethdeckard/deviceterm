@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BootClaimRelay: one GUI-owned, terminal-bound socket that accepts simulator
-// boot claims from shim descendants without waiting for the daemon.
 
 import DaemonProtocol
 import Dispatch
@@ -11,6 +8,9 @@ import TerminalProvenance
 import Darwin
 #endif
 
+/// One GUI-owned, terminal-bound socket that accepts simulator boot claims
+/// from shim descendants without waiting for the daemon.
+///
 /// Mutable socket and anchor state is confined to `queue`. Accepted claims are
 /// handed to the main actor only after their acknowledgement has been written,
 /// so daemon or main-actor starvation cannot make the shim lose the attempt.

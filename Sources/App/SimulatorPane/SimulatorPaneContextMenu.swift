@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorPaneContextMenu: the right-click menu for a sim pane.
-// Mirrors Apple's Simulator.app pattern of putting hardware controls
-// + housekeeping actions a right-click away, so the user doesn't have
-// to roundtrip to the menu bar for routine sim operations.
-//
-// Items target nil so AppKit dispatches through the responder chain
-// Right-clicking on the sim pane makes its content view the
-// momentary first responder, so `SimulatorPaneViewController` (the
-// content view's enclosing VC) handles every selector. It reuses the
-// @objc methods the Device menu already targets, plus Mirror Physical
-// Device… from Shell. Close Pane is the one item with no main-menu
-// twin: ⌘W names `closeFocusedPaneOrTab` on the layout controller,
-// which resolves what to close, where this item always closes the pane
-// the user right-clicked.
-//
-// Split out (like `makeMainMenu()`) so tests can inspect the menu
-// structure without instantiating a full pane VC + window.
 
 import AppKit
 
+/// The right-click menu for a sim pane.
+/// Mirrors Apple's Simulator.app pattern of putting hardware controls
+/// + housekeeping actions a right-click away, so the user doesn't have
+/// to roundtrip to the menu bar for routine sim operations.
+///
+/// Items target nil so AppKit dispatches through the responder chain
+/// Right-clicking on the sim pane makes its content view the
+/// momentary first responder, so `SimulatorPaneViewController` (the
+/// content view's enclosing VC) handles every selector. It reuses the
+/// @objc methods the Device menu already targets, plus Mirror Physical
+/// Device… from Shell. Close Pane is the one item with no main-menu
+/// twin: ⌘W names `closeFocusedPaneOrTab` on the layout controller,
+/// which resolves what to close, where this item always closes the pane
+/// the user right-clicked.
+///
+/// Split out (like `makeMainMenu()`) so tests can inspect the menu
+/// structure without instantiating a full pane VC + window.
 @MainActor
 func makeSimulatorPaneContextMenu() -> NSMenu {
     let menu = NSMenu()

@@ -1,8 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OwnedSimDiscoveryCoordinatorTests: one daemon-wide read feeds every tab.
-// Failed reads publish nothing, and overlapping cadence attempts do not start
-// another read.
 
 @testable import App
 import DaemonProtocol
@@ -12,6 +8,9 @@ private enum DiscoveryTestError: Error {
     case unavailable
 }
 
+/// One daemon-wide read feeds every tab.
+/// Failed reads publish nothing, and overlapping cadence attempts do not start
+/// another read.
 @MainActor
 struct OwnedSimDiscoveryCoordinatorTests {
     @Test

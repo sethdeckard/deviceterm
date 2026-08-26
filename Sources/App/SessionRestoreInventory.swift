@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionRestoreInventory: builds the daemon's session-restoration inventory
-// from the live GUI model.
-//
-// After a daemon-only restart the validated GUI re-supplies its COMPLETE
-// session inventory (the daemon rehydrates nothing from disk). This pure
-// mapping is the authoritative source: one `RestoredSession` per terminal pane
-// (each backs its own daemon session), assembled straight from the workspace's
-// `TabState`s: not from `DaemonClient.liveSessions`, which retains only
-// `(sessionId, cap)` and can't source role / short id / name / protection.
-//
-// Protection is derived FAIL-CLOSED from `isEffectivelyProtected`, not
-// committed `isProtected`: a tab mid-transition to protected
-// (`.pendingProtected`) restores protected so it is never briefly exposed
-// through `tabs.list`. Entry
-// order is significant (it defines the restored set's `tabs.list` ordering)
-// so tabs are walked in workspace order and terminals in tab order.
 
 import DaemonProtocol
 
+/// Builds the daemon's session-restoration inventory
+/// from the live GUI model.
+///
+/// After a daemon-only restart the validated GUI re-supplies its COMPLETE
+/// session inventory (the daemon rehydrates nothing from disk). This pure
+/// mapping is the authoritative source: one `RestoredSession` per terminal pane
+/// (each backs its own daemon session), assembled straight from the workspace's
+/// `TabState`s: not from `DaemonClient.liveSessions`, which retains only
+/// `(sessionId, cap)` and can't source role / short id / name / protection.
+///
+/// Protection is derived FAIL-CLOSED from `isEffectivelyProtected`, not
+/// committed `isProtected`: a tab mid-transition to protected
+/// (`.pendingProtected`) restores protected so it is never briefly exposed
+/// through `tabs.list`. Entry
+/// order is significant (it defines the restored set's `tabs.list` ordering)
+/// so tabs are walked in workspace order and terminals in tab order.
 enum SessionRestoreInventory {
     /// Map the workspace's tabs (in order) to the restore inventory. The result
     /// is **complete with respect to real daemon sessions**: the only excluded

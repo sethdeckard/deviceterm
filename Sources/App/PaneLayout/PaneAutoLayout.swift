@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneAutoLayout: pure layout math for a single `.split` node in
-// the `PaneNode` tree. The layout controller calls `extents` whenever
-// the tree mutates (add / remove / move) or the user picks "Reset
-// Pane Layout" so every pane lands at a sensible size without
-// relying on `NSSplitView.adjustSubviews`'s opaque proportional
-// shrink.
-//
-// The algorithm is intentionally simple: each child has a natural
-// extent (point-accurate width for a sim pane along the divider
-// axis; a configurable default for a terminal) and a minimum extent.
-// If the children's naturals fit the available extent, terminals
-// absorb the leftover space (text reflows; sim panes aspect-fit so
-// extra room is wasted). If they don't fit, each child scales down
-// proportionally, clamped to its minimum.
-//
-// Auto-rebalance runs per-split, not whole-tree. Children of a
-// horizontal split don't compete for space with children of a
-// vertical sibling split; each split is its own budget.
 
 import CoreGraphics
 import Foundation
 
+/// Pure layout math for a single `.split` node in
+/// the `PaneNode` tree. The layout controller calls `extents` whenever
+/// the tree mutates (add / remove / move) or the user picks "Reset
+/// Pane Layout" so every pane lands at a sensible size without
+/// relying on `NSSplitView.adjustSubviews`'s opaque proportional
+/// shrink.
+///
+/// The algorithm is intentionally simple: each child has a natural
+/// extent (point-accurate width for a sim pane along the divider
+/// axis; a configurable default for a terminal) and a minimum extent.
+/// If the children's naturals fit the available extent, terminals
+/// absorb the leftover space (text reflows; sim panes aspect-fit so
+/// extra room is wasted). If they don't fit, each child scales down
+/// proportionally, clamped to its minimum.
+///
+/// Auto-rebalance runs per-split, not whole-tree. Children of a
+/// horizontal split don't compete for space with children of a
+/// vertical sibling split; each split is its own budget.
 enum PaneAutoLayout {
     /// Compute the extent of each child along the parent split's
     /// divider axis given `availableExtent` (split bounds minus

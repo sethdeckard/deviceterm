@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CoordinateInput: parsing and validating what the user types into the
-// Custom Coordinates sheet.
-//
-// The sheet delegates coordinate validation here, so tests can inspect
-// every rejection and its optional message.
-//
-// **Locale-aware on purpose, and only here.** A person typing into a
-// text field types in their own locale, so `37,7749` must be accepted
-// where the decimal separator is a comma. The saved-locations *file* is
-// the opposite: a fixed POSIX format whose meaning must not change with
-// whoever opens it. `LocationsFileParser` therefore parses without a
-// locale, and the two must not be made to share one code path.
 
 import DaemonProtocol
 import Foundation
 
+/// Parsing and validating what the user types into the
+/// Custom Coordinates sheet.
+///
+/// The sheet delegates coordinate validation here, so tests can inspect
+/// every rejection and its optional message.
+///
+/// **Locale-aware on purpose, and only here.** A person typing into a
+/// text field types in their own locale, so `37,7749` must be accepted
+/// where the decimal separator is a comma. The saved-locations *file* is
+/// the opposite: a fixed POSIX format whose meaning must not change with
+/// whoever opens it. `LocationsFileParser` therefore parses without a
+/// locale, and the two must not be made to share one code path.
 enum CoordinateInput {
     /// Why a typed coordinate was rejected. Each carries the message the
     /// sheet shows beneath the offending field.

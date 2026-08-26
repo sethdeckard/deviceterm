@@ -1,34 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentResolver: resolve user-facing refs (`TabRef`, `PaneRef`,
-// `WindowRef`) into GUI-internal IDs the Router consumes.
-//
-// Lives at `@MainActor` because it reads the workspace's live tab /
-// window lists. Pure projection (no mutation, no side effects); every
-// error path returns a typed `IntentError` with enough hint for the
-// source-layer to render.
-//
-// Resolution is **origin-aware**. The `origin` decides both what
-// `.current` means and which tabs are reachable:
-//   - `.inProcess` (menu / tab strip) has full authority: `.current`
-//     borrows the key window and every tab is visible.
-//   - `.external(sessionID:hasAutomationGrant:)` (the CLI back-channel)
-//     resolves `.current` against the caller's own session (never the
-//     human's key window), and every enumeration restricts to tabs the
-//     caller can legitimately see. A foreign protected tab is opaque: it
-//     resolves `notFound`, indistinguishable from a tab that doesn't
-//     exist, and never leaks as `.ambiguous`. The grant half of that
-//     origin is not read here at all: it widens *authority* to mutate a
-//     resolved target (`WorkspaceAuthorityDecision`), never visibility,
-//     so a granted caller sees exactly what an ungranted one sees.
-//
-// The accessibility check is ANDed **into** each enumeration predicate,
-// not applied as a post-filter, so a name shared by a visible tab and a
-// foreign-protected tab resolves to the visible one rather than throwing
-// `.ambiguous` (which would reveal the protected tab and a match count).
 
 import Foundation
 
+/// Resolve user-facing refs (`TabRef`, `PaneRef`,
+/// `WindowRef`) into GUI-internal IDs the Router consumes.
+///
+/// Lives at `@MainActor` because it reads the workspace's live tab /
+/// window lists. Pure projection (no mutation, no side effects); every
+/// error path returns a typed `IntentError` with enough hint for the
+/// source-layer to render.
+///
+/// Resolution is **origin-aware**. The `origin` decides both what
+/// `.current` means and which tabs are reachable:
+///   - `.inProcess` (menu / tab strip) has full authority: `.current`
+///     borrows the key window and every tab is visible.
+///   - `.external(sessionID:hasAutomationGrant:)` (the CLI back-channel)
+///     resolves `.current` against the caller's own session (never the
+///     human's key window), and every enumeration restricts to tabs the
+///     caller can legitimately see. A foreign protected tab is opaque: it
+///     resolves `notFound`, indistinguishable from a tab that doesn't
+///     exist, and never leaks as `.ambiguous`. The grant half of that
+///     origin is not read here at all: it widens *authority* to mutate a
+///     resolved target (`WorkspaceAuthorityDecision`), never visibility,
+///     so a granted caller sees exactly what an ungranted one sees.
+///
+/// The accessibility check is ANDed **into** each enumeration predicate,
+/// not applied as a post-filter, so a name shared by a visible tab and a
+/// foreign-protected tab resolves to the visible one rather than throwing
+/// `.ambiguous` (which would reveal the protected tab and a match count).
 @MainActor
 struct IntentResolver {
     let workspace: WorkspaceViewModel

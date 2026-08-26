@@ -1,38 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WireVersionRecoveryCoordinator: replacing an incompatible helper at startup,
-// falling back to recovery guidance only if no compatible one answers.
-//
-// After a Sparkle update the bundle on disk is new and the running helper is
-// old. The launchd job resolves `BundleProgram` relative to the registered
-// bundle, which Sparkle replaced in place, so stopping the old helper is enough:
-// the next connect demand-launches the new one from the same path. At startup
-// the GUI holds no window, session, pane, or subscription, so this launching GUI
-// has no state at risk. The helper is a per-user singleton, so another running
-// checkout can still lose its own. A mid-session mismatch is the opposite case
-// and never reaches here.
-//
-// Two things shape the ladder, and both are easy to get wrong.
-//
-// The verdict is bounded by a clock, not by an attempt count, and it reads the
-// PID before the version. `daemon.shutdown` acknowledges a grace period before
-// the daemon exits and SIGKILL is accepted before teardown finishes, so on the
-// SUCCESSFUL path the old helper may answer at least one more ping with the old
-// version. A ladder that treated that as failure would abandon the case it
-// exists for.
-//
-// And the rungs are conditional rather than sequential. The launchd job carries
-// `KeepAlive`/`SuccessfulExit false`, so a killed daemon is respawned. Killing a
-// replacement that merely speaks the wrong version would make launchd start
-// another exactly like it; that state is not a process refusing to die, it is a
-// registration pointing at the wrong bundle, which is what the repair rung
-// treats.
-//
-// Every dependency is injected so the whole sequence runs in tests without
-// AppKit, a live connection, a real clock, or launchd.
 
 import Foundation
 
+/// Replacing an incompatible helper at startup,
+/// falling back to recovery guidance only if no compatible one answers.
+///
+/// After a Sparkle update the bundle on disk is new and the running helper is
+/// old. The launchd job resolves `BundleProgram` relative to the registered
+/// bundle, which Sparkle replaced in place, so stopping the old helper is enough:
+/// the next connect demand-launches the new one from the same path. At startup
+/// the GUI holds no window, session, pane, or subscription, so this launching GUI
+/// has no state at risk. The helper is a per-user singleton, so another running
+/// checkout can still lose its own. A mid-session mismatch is the opposite case
+/// and never reaches here.
+///
+/// Two things shape the ladder, and both are easy to get wrong.
+///
+/// The verdict is bounded by a clock, not by an attempt count, and it reads the
+/// PID before the version. `daemon.shutdown` acknowledges a grace period before
+/// the daemon exits and SIGKILL is accepted before teardown finishes, so on the
+/// SUCCESSFUL path the old helper may answer at least one more ping with the old
+/// version. A ladder that treated that as failure would abandon the case it
+/// exists for.
+///
+/// And the rungs are conditional rather than sequential. The launchd job carries
+/// `KeepAlive`/`SuccessfulExit false`, so a killed daemon is respawned. Killing a
+/// replacement that merely speaks the wrong version would make launchd start
+/// another exactly like it; that state is not a process refusing to die, it is a
+/// registration pointing at the wrong bundle, which is what the repair rung
+/// treats.
+///
+/// Every dependency is injected so the whole sequence runs in tests without
+/// AppKit, a live connection, a real clock, or launchd.
 @MainActor
 final class WireVersionRecoveryCoordinator {
     struct Dependencies {

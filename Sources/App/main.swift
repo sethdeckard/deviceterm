@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// deviceterm GUI entry point. The main menu is built in MainMenu.swift.
 
 import AppKit
 

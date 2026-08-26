@@ -1,18 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CustomCoordinatesSheetPresentationTests: the AppKit half of Custom
-// Coordinates, which the pure `CoordinateInput` tests can't reach.
-//
-// The claim worth pinning is that the sheet actually closes. AppKit
-// overloads `dismiss`: `dismiss(_ sender: Any?)` is `dismissController:`
-// and dismisses *the receiver*, so calling it on the presenting
-// controller compiles, runs, and leaves the sheet on screen forever.
-// Only `dismiss(_ viewController:)` closes a sheet you presented, and
-// nothing but a test distinguishes the two.
-//
-// Submit and cancel call the same dismissal helper. The injected
-// locations store keeps the submit path off the user's filesystem, so
-// both callbacks can be exercised through the presented sheet.
 
 @testable import App
 import AppKit
@@ -20,9 +6,23 @@ import DaemonProtocol
 import SwiftUI
 import Testing
 
+/// The AppKit half of Custom Coordinates, which the pure `CoordinateInput`
+/// tests can't reach.
+///
 /// `.serialized` because each test drives a real `NSWindow` and turns
 /// the run loop to let sheet animation settle. Run in parallel, those
 /// interleave inside AppKit and take the process down with them.
+///
+/// The claim worth pinning is that the sheet actually closes. AppKit
+/// overloads `dismiss`: `dismiss(_ sender: Any?)` is `dismissController:`
+/// and dismisses *the receiver*, so calling it on the presenting
+/// controller compiles, runs, and leaves the sheet on screen forever.
+/// Only `dismiss(_ viewController:)` closes a sheet you presented, and
+/// nothing but a test distinguishes the two.
+///
+/// Submit and cancel call the same dismissal helper. The injected
+/// locations store keeps the submit path off the user's filesystem, so
+/// both callbacks can be exercised through the presented sheet.
 @MainActor
 @Suite(.serialized)
 struct CustomCoordinatesSheetPresentationTests {

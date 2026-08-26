@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneSlot identity seam: pins that adding the backend-neutral
-// `target` accessor changed no existing wire/pasteboard payload, and
-// that `target` maps each slot to the right `PaneTarget`. The drag
-// pasteboard serializes a `PaneSlot`, so its byte shape is a contract;
-// a golden assertion catches any drift from a Codable-synthesis change.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
+
+// PaneSlot identity seam: pins that adding the backend-neutral
+// `target` accessor changed no existing wire/pasteboard payload, and
+// that `target` maps each slot to the right `PaneTarget`. The drag
+// pasteboard serializes a `PaneSlot`, so its byte shape is a contract;
+// a golden assertion catches any drift from a Codable-synthesis change.
 
 private func canonicalEncoder() -> JSONEncoder {
     let encoder = JSONEncoder()

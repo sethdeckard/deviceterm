@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneRatioStore: the split-view ratio state owned by
-// `PaneLayoutViewController`, extracted so the state and its one subtle
-// invariant (the programmatic-apply re-entrancy guard) live in a single
-// cohesive unit instead of as loose properties on the view controller.
-//
-// The controller keeps the AppKit view-tree walking (it's bound to the
-// live pane VCs via `metric`), but routes every read/write of the ratio
-// dictionaries and the apply guard through this store. The pure divider
-// arithmetic lives in `PaneRatioMath`.
 
 import AppKit
 
+/// The split-view ratio state owned by
+/// `PaneLayoutViewController`, extracted so the state and its one subtle
+/// invariant (the programmatic-apply re-entrancy guard) live in a single
+/// cohesive unit instead of as loose properties on the view controller.
+///
+/// The controller keeps the AppKit view-tree walking (it's bound to the
+/// live pane VCs via `metric`), but routes every read/write of the ratio
+/// dictionaries and the apply guard through this store. The pure divider
+/// arithmetic lives in `PaneRatioMath`.
 @MainActor
 final class PaneRatioStore {
     /// Auto-rebalance ratios per split, keyed by the split's address in

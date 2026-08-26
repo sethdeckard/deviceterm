@@ -1,9 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The Router driving the nav model against a fake daemon. Routes
-// dispatch onto the serial drain, so each test settles before asserting
-// nav state + recorded daemon calls. Window/tab ids are allocated
-// monotonically from 1, so a sequence dispatched at once is predictable.
 
 @testable import App
 import DaemonProtocol
@@ -12,6 +7,10 @@ import Testing
 
 private enum FakeDaemonError: Error { case attachFailed }
 
+/// The Router driving the nav model against a fake daemon. Routes
+/// dispatch onto the serial drain, so each test settles before asserting
+/// nav state + recorded daemon calls. Window/tab ids are allocated
+/// monotonically from 1, so a sequence dispatched at once is predictable.
 @MainActor
 struct RouterTests {
     /// Let the serial drain process queued routes (fake daemon is instant).

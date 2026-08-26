@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonRegistration: thin wrapper around
-// `SMAppService.agent(plistName:)`.
-//
-// macOS 13+ exposes a Swift API for what was historically
-// SMJobBless: register a launchd plist embedded under
-// `Contents/Library/LaunchAgents/` and let launchd own the
-// helper's lifecycle. The wrapper:
-//
-//   - Wraps the plist-name constant and the `register()` call so
-//     callers see one entry point.
-//   - Exposes the current `Status` so the GUI can branch into
-//     `DaemonStatusSheet` for the disabled-helper case.
-//   - Is idempotent, so calling `register()` on every launch is
-//     fine; macOS no-ops the second call when the helper is
-//     already enabled.
 
 import Foundation
 import ServiceManagement
 
+/// Thin wrapper around
+/// `SMAppService.agent(plistName:)`.
+///
+/// Registers the launchd plist embedded under
+/// `Contents/Library/LaunchAgents/` and lets launchd own the
+/// helper's lifecycle. The wrapper:
+///
+///   - Wraps the plist-name constant and the `register()` call so
+///     callers see one entry point.
+///   - Exposes the current `Status` so the GUI can branch into
+///     `DaemonStatusSheet` for the disabled-helper case.
+///   - Is idempotent, so calling `register()` on every launch is
+///     fine; macOS no-ops the second call when the helper is
+///     already enabled.
 @MainActor
 enum DaemonRegistration {
     /// The LaunchAgent plist embedded at

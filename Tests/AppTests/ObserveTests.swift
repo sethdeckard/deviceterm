@@ -1,10 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The `observe()` keystone. Validates the Observation→render bridge
-// headlessly (no AppKit): an immediate first render, a re-render on the
-// next main-actor turn when a *read* property changes, no render after
-// cancel(), and the tracking contract (a short-circuited field isn't
-// observed). TabTitleViewModel stands in as the @Observable source.
 
 @testable import App
 import Testing
@@ -16,6 +10,11 @@ private final class RenderSink {
     var titles: [String] = []
 }
 
+/// The `observe()` keystone. Validates the Observation→render bridge
+/// headlessly (no AppKit): an immediate first render, a re-render on the
+/// next main-actor turn when a *read* property changes, no render after
+/// cancel(), and the tracking contract (a short-circuited field isn't
+/// observed). TabTitleViewModel stands in as the @Observable source.
 @MainActor
 struct ObserveTests {
     /// Let the re-arm `Task { @MainActor … }` scheduled by onChange run.

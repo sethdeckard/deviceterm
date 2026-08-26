@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WindowController: one NSWindow hosting a tab's content. The
-// content is a TabStripViewController root that hosts every tab in
-// the window; multi-window is supported.
 
 import AppKit
 
+/// One NSWindow hosting a tab's content. The
+/// content is a TabStripViewController root that hosts every tab in
+/// the window; multi-window is supported.
 @MainActor
 final class WindowController: NSWindowController {
     /// The window's minimum content size, also the floor for the default size

@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RouteFileDecision: what to tell the user when a `.gpx` row won't play.
-//
-// Pure and total over `RouteFileError`, following the same shape as
-// `UseMyLocationDecision`: a new failure case stops compiling here
-// rather than reaching the user as nothing happening.
-//
-// Every message names the file. A route row's title can be a label the
-// user chose, so "that file is missing" is unhelpful unless it says
-// which path the line pointed at, and the locations file is where they
-// would go to fix it.
 
 import Foundation
 
+/// What to tell the user when a `.gpx` row won't play.
+///
+/// Pure and total over `RouteFileError`, following the same shape as
+/// `UseMyLocationDecision`: a new failure case stops compiling here
+/// rather than reaching the user as nothing happening.
+///
+/// Every message names the file. A route row's title can be a label the
+/// user chose, so "that file is missing" is unhelpful unless it says
+/// which path the line pointed at, and the locations file is where they
+/// would go to fix it.
 enum RouteFileDecision {
     /// The alert for a route that couldn't be loaded.
     static func alert(for error: RouteFileError, path: String) -> LocationAlert {

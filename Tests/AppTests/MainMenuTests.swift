@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Structural assertions on the programmatic main menu.
-// We don't (and can't easily) test live AppKit dispatch from a
-// headless test process, so the gate here is "the menu the GUI
-// installs has the shape the responder-chain code on the other side
-// expects." If a selector is renamed without updating the menu, this
-// test trips before a user hits a no-op menu item.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Structural assertions on the programmatic main menu.
+/// We don't (and can't easily) test live AppKit dispatch from a
+/// headless test process, so the gate here is "the menu the GUI
+/// installs has the shape the responder-chain code on the other side
+/// expects." If a selector is renamed without updating the menu, this
+/// test trips before a user hits a no-op menu item.
 @MainActor
 struct MainMenuTests {
     private func deviceMenu() -> NSMenu? {

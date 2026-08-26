@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LocationMenuController: turns `LocationMenuModel` rows into the live
-// Device ▸ Location submenu.
-//
-// One implementation serves both surfaces that show the submenu (the
-// main menu and a pane's right-click menu); which pane it acts on comes
-// from an injected `resolve` closure, so neither surface needs its own
-// copy of the rule and tests can drive it with a stub pane.
-//
-// `menuNeedsUpdate` builds rows from the view model's **current
-// snapshot** and does no I/O: a menu that had to await the daemon
-// before drawing would stutter on every open, and a menu that could
-// throw would be worse than one showing a slightly stale checkmark. A
-// later open uses the refresh it kicks off, once that completes.
 
 import AppKit
 
+/// Turns `LocationMenuModel` rows into the live
+/// Device ▸ Location submenu.
+///
+/// One implementation serves both surfaces that show the submenu (the
+/// main menu and a pane's right-click menu); which pane it acts on comes
+/// from an injected `resolve` closure, so neither surface needs its own
+/// copy of the rule and tests can drive it with a stub pane.
+///
+/// `menuNeedsUpdate` builds rows from the view model's **current
+/// snapshot** and does no I/O: a menu that had to await the daemon
+/// before drawing would stutter on every open, and a menu that could
+/// throw would be worse than one showing a slightly stale checkmark. A
+/// later open uses the refresh it kicks off, once that completes.
 @MainActor
 final class LocationMenuController: NSObject, NSMenuDelegate {
     /// Title of the parent item and its submenu.

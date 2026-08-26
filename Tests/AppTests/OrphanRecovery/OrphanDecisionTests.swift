@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OrphanDecision: resolve dead-session candidates against the
-// daemon's ownership + Booted truth into live orphans vs. empty dirs.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// OrphanDecision: resolve dead-session candidates against the
+/// daemon's ownership + Booted truth into live orphans vs. empty dirs.
 struct OrphanDecisionTests {
     private func entry(
         _ udid: String,

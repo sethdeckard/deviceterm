@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonClientUnresponsiveTests: turning expired deadlines into the one
-// signal a user can act on.
-//
-// A bounded call that expires says something went unanswered; it does not say
-// the helper has stopped answering, because a single call can run long for
-// reasons of its own, and two of them landing together says only that two
-// things were slow at once. So an expiry asks rather than concludes: it sends a
-// `daemon.ping` to the same connection, and only silence there is reported.
-// These pin what the probe is fenced to (one connection, one in flight, one
-// verdict), what counts as the reply that calls it off, and what rearms it.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Turning expired deadlines into the one
+/// signal a user can act on.
+///
+/// A bounded call that expires says something went unanswered; it does not say
+/// the helper has stopped answering, because a single call can run long for
+/// reasons of its own, and two of them landing together says only that two
+/// things were slow at once. So an expiry asks rather than concludes: it sends a
+/// `daemon.ping` to the same connection, and only silence there is reported.
+/// These pin what the probe is fenced to (one connection, one in flight, one
+/// verdict), what counts as the reply that calls it off, and what rearms it.
 @MainActor
 struct DaemonClientUnresponsiveTests {
     /// A peer that answers or stays silent per call, scripted from the front of
@@ -216,9 +215,9 @@ struct DaemonClientUnresponsiveTests {
 
     @Test
     func concurrentExpiriesShareOneProbe() async {
-        // The false-prompt case that motivated the probe. Three calls expiring
-        // together used to be three votes toward a verdict; now they are three
-        // callers asking the same question, which is worth asking once.
+        // The false-prompt case the probe exists for. Three calls expiring
+        // together are three callers asking the same question, which is
+        // worth asking once rather than counting as three votes.
         let (client, transport) = makeClient()
         await transport.script([.silent, .silent, .silent])
         await transport.scriptPing([.silent])

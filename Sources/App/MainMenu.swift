@@ -1,31 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// MainMenu: the programmatic main menu.
-//
-// This file owns menu structure: which menus exist, in what order, how
-// items are grouped and separated, and which submenus nest where. It
-// does not own shortcuts. Every bound item comes from
-// `KeybindingCatalog.makeMenuItem(_:)`, and items with no shortcut stay
-// plain `NSMenuItem`s.
-//
-// The drift guard compares installed menu items with catalog rows by
-// title, chord, selector, tag, and multiplicity. It cannot detect
-// source-level literals.
-//
-// Shell owns the surfaces a workspace is made of, Edit owns text, View
-// owns presentation and pane layout, Window owns the window commands
-// plus tab and pane navigation and rearrangement. Device is
-// deviceterm's own and answers to Simulator.app's Device menu.
-//
-// Every item targets nil so AppKit resolves it against the key window's
-// responder chain: pane view → pane VC → `PaneLayoutViewController` →
-// `TabContentViewController` → `TabStripViewController` → window →
-// `AppDelegate`. That is why the same New Tab item works with a window
-// focused (reaching the tab strip) and with none (reaching the app
-// delegate's fallback).
 
 import AppKit
 
+/// The programmatic main menu.
+///
+/// Owns menu structure: which menus exist, in what order, how
+/// items are grouped and separated, and which submenus nest where. It
+/// does not own shortcuts. Every bound item comes from
+/// `KeybindingCatalog.makeMenuItem(_:)`, and items with no shortcut stay
+/// plain `NSMenuItem`s.
+///
+/// The drift guard compares installed menu items with catalog rows by
+/// title, chord, selector, tag, and multiplicity. It cannot detect
+/// source-level literals.
+///
+/// Shell owns the surfaces a workspace is made of, Edit owns text, View
+/// owns presentation and pane layout, Window owns the window commands
+/// plus tab and pane navigation and rearrangement. Device is
+/// deviceterm's own and answers to Simulator.app's Device menu.
+///
+/// Every item targets nil so AppKit resolves it against the key window's
+/// responder chain: pane view → pane VC → `PaneLayoutViewController` →
+/// `TabContentViewController` → `TabStripViewController` → window →
+/// `AppDelegate`. That is why the same New Tab item works with a window
+/// focused (reaching the tab strip) and with none (reaching the app
+/// delegate's fallback).
 @MainActor
 func installMainMenu() {
     let menu = makeMainMenu()

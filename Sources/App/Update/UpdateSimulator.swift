@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdateSimulator: a debug hook that drives the update pill through every
-// state without a live appcast. There's no feed until release, so this is
-// how the pill is exercised (manually, or via the uitest harness). Gated
-// on the DEVICETERM_UPDATE_SIMULATOR env var so it never appears in normal
-// builds; wires a "Cycle Update Pill (Debug)" app-menu item when set.
 
 import Foundation
 
+/// A debug hook that drives the update pill through every
+/// state without fetching the configured appcast, which is how the pill
+/// is exercised (manually, or via the uitest harness). Gated
+/// on the DEVICETERM_UPDATE_SIMULATOR env var so it never appears in normal
+/// builds; wires a "Cycle Update Pill (Debug)" app-menu item when set.
 @MainActor
 enum UpdateSimulator {
     static var isEnabled: Bool {

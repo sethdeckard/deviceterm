@@ -1,30 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ConfigFile: a comment-preserving reader/writer for
-// `~/.config/deviceterm/config`.
-//
-// `ConfigFile` supplies syntax handling, not cross-domain semantics or
-// precedence. Production writes target DeviceTerm's config; the limited
-// `GhosttyThemeColors` reader also uses this parser against a Ghostty
-// config path so app chrome can inherit selected palette values. The two
-// consumers recognize disjoint keys and do not override one another.
-//
-// The file is held as an ordered list of raw lines. Reading parses
-// Ghostty-style `key = value` with line-leading `#` comments (the
-// shared Ghostty format, not TOML). Writing rewrites only the target
-// key's line in place; every other line (comments, blanks, unknown
-// keys) is preserved verbatim, so a user's hand-edited config survives
-// a prefs write byte-for-byte except the one changed line.
-//
-// When the app *appends* a recognized key (one not yet in the file) it
-// writes a doc comment above it (summary + allowed values + default),
-// and `seedDocumentedExamples()` appends every other recognized key as
-// a commented-out example. The result is a self-documenting file that
-// lists every available option, sourced from `DeviceTermConfigDefaults`.
 
 import DaemonProtocol
 import Foundation
 
+/// A comment-preserving reader/writer for
+/// `~/.config/deviceterm/config`.
+///
+/// `ConfigFile` supplies syntax handling, not cross-domain semantics or
+/// precedence. Production writes target DeviceTerm's config; the limited
+/// `GhosttyThemeColors` reader also uses this parser against a Ghostty
+/// config path so app chrome can inherit selected palette values. The two
+/// consumers recognize disjoint keys and do not override one another.
+///
+/// The file is held as an ordered list of raw lines. Reading parses
+/// Ghostty-style `key = value` with line-leading `#` comments (the
+/// shared Ghostty format, not TOML). Writing rewrites only the target
+/// key's line in place; every other logical line (comments, blanks,
+/// unknown keys) is preserved, so a user's hand-edited config survives a
+/// prefs write except the one changed line. `save()` writes atomically
+/// and ensures a trailing newline.
+///
+/// When the app *appends* a recognized key (one not yet in the file) it
+/// writes a doc comment above it (summary + allowed values + default),
+/// and `seedDocumentedExamples()` appends every other recognized key as
+/// a commented-out example. The result is a self-documenting file that
+/// lists every available option, sourced from `DeviceTermConfigDefaults`.
 final class ConfigFile {
     static let defaultPath = XDGPaths.deviceTermConfig()
 

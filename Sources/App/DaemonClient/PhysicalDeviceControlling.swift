@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Role protocol: physically-connected device control on the daemon.
-//
-// Parallel to `DeviceControlling` (which is CoreSimulator lifecycle). This
-// covers the physical-device RPCs the GUI picker + device-attach path use:
-// enumerate connected devices and mount one as a pane. A narrow role so the
-// picker VM (and its test fake) depend only on these two methods.
 
 import DaemonProtocol
 
+/// Role protocol: physically-connected device control on the daemon.
+///
+/// Parallel to `DeviceControlling` (which is CoreSimulator lifecycle). This
+/// covers the physical-device RPCs the GUI picker + device-attach path use:
+/// enumerate connected devices and mount one as a pane. A narrow role so the
+/// picker VM (and its test fake) depend only on these two methods.
 @MainActor
 protocol PhysicalDeviceControlling: AnyObject {
     /// `physicalDevice.list`: connected physical devices for the picker.

@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceLease: the GUI's ownership handle on one daemon-delivered
-// surface (leased for a device pane, unleased for a simulator pane or a
-// kill-switched device). The inverse of the daemon's `RetainedSurface`.
-//
-// On a **leased** surface (a device frame the daemon committed a pool
-// hold for), `init` bumps the IOSurface use count and `deinit` decrements
-// it and signals "this generation is released" into the accountant sink,
-// exactly once, by ARC, with no manual flag. The lease dies, and only then is
-// its release signalled, when the surface is no longer current *and*
-// every Metal command buffer that sampled it has completed (each holds a
-// strong ref for its in-flight lifetime). This establishes the required
-// happens-before edge between GPU completion and lease release, so the
-// daemon can't recycle a slot the GPU is still sampling.
-//
-// On an **unleased** surface (every simulator frame, and every device
-// frame when `DEVICETERM_SURFACE_LEASES` is off) the sink is nil: no
-// use-count bump, no release, semantically identical to handing around a
-// bare `IOSurfaceRef`.
 
 import Foundation
 import IOSurface
 
+/// The GUI's ownership handle on one daemon-delivered
+/// surface (leased for a device pane, unleased for a simulator pane or a
+/// kill-switched device). The inverse of the daemon's `RetainedSurface`.
+///
+/// On a **leased** surface (a device frame the daemon committed a pool
+/// hold for), `init` bumps the IOSurface use count and `deinit` decrements
+/// it and signals "this generation is released" into the accountant sink,
+/// exactly once, by ARC, with no manual flag. The lease dies, and only then is
+/// its release signalled, when the surface is no longer current *and*
+/// every Metal command buffer that sampled it has completed (each holds a
+/// strong ref for its in-flight lifetime). This establishes the required
+/// happens-before edge between GPU completion and lease release, so the
+/// daemon can't recycle a slot the GPU is still sampling.
+///
+/// On an **unleased** surface (every simulator frame, and every device
+/// frame when `DEVICETERM_SURFACE_LEASES` is off) the sink is nil: no
+/// use-count bump, no release, semantically identical to handing around a
+/// bare `IOSurfaceRef`.
 final class SurfaceLease: @unchecked Sendable {
     /// Identifies one released generation to the accountant. Value type so
     /// the release sink captures no reference back to the lease.

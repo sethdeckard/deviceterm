@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Reconnect re-authentication regression tests (one-shot requests and
-// pane subscriptions).
-//
-// When the daemon idle-exits/respawns (or an XPC connection is
-// interrupted), its fresh `RPCConnection` is unauthenticated, so the
-// GUI's next session-scoped call fails with -32001 ("session-scoped
-// method requires an authenticated connection") even though a valid
-// session exists. Both `DaemonClient.request` and `subscribePane` catch
-// that one code, re-send `session.authenticate` with a live-session
-// credential, and retry the call once. These tests pin that behavior (and
-// that closing the newest session doesn't strand the reauth credential)
-// via injected scripted transports (`DaemonRequestTransport` /
-// `DaemonSubscribeTransport`).
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Reconnect re-authentication regression tests (one-shot requests and
+/// pane subscriptions).
+///
+/// When the daemon idle-exits/respawns (or an XPC connection is
+/// interrupted), its fresh `RPCConnection` is unauthenticated, so the
+/// GUI's next session-scoped call fails with -32001 ("session-scoped
+/// method requires an authenticated connection") even though a valid
+/// session exists. Both `DaemonClient.request` and `subscribePane` catch
+/// that one code, re-send `session.authenticate` with a live-session
+/// credential, and retry the call once. These tests pin that behavior (and
+/// that closing the newest session doesn't strand the reauth credential)
+/// via injected scripted transports (`DaemonRequestTransport` /
+/// `DaemonSubscribeTransport`).
 @MainActor
 struct DaemonClientReauthTests {
     /// A scripted `request` transport: records every call in order and

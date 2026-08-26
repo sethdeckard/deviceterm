@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ReleaseNotesDocument: a deliberately tiny HTML reader for the release
-// notes the Sparkle appcast carries in its <description>. It handles only
-// the grammar those notes are authored in, not real HTML:
-//
-//   <h1>/<h2>  → title      <b>/<strong> → strong    <br> → line break
-//   <h3>…<h6>  → heading    <i>/<em>     → emphasis
-//   <p>        → paragraph  <code>       → code
-//   <li>       → bullet     <a href>     → link
-//   <ul>/<ol>  transparent
-//
-// <style>, <script>, declarations, and comments are dropped along with
-// their content. A fragment may carry a stylesheet, and its CSS must never
-// reach the popover as text. Any other unknown tag is ignored while its
-// text is kept, so an unexpected element costs formatting, not content.
-//
-// Pure and Sendable, so it is unit-testable without any UI. Backs
-// UpdatePopoverView.
 
 import Foundation
 
+/// A deliberately tiny HTML reader for the release
+/// notes the Sparkle appcast carries in its <description>. It handles only
+/// the grammar those notes are authored in, not real HTML:
+///
+///     <h1>/<h2>  → title      <b>/<strong> → strong    <br> → line break
+///     <h3>…<h6>  → heading    <i>/<em>     → emphasis
+///     <p>        → paragraph  <code>       → code
+///     <li>       → bullet     <a href>     → link
+///     <ul>/<ol>  transparent
+///
+/// <style>, <script>, declarations, and comments are dropped along with
+/// their content. A fragment may carry a stylesheet, and its CSS must never
+/// reach the popover as text. Any other unknown tag is ignored while its
+/// text is kept, so an unexpected element costs formatting, not content.
+///
+/// Pure and Sendable, so it is unit-testable without any UI. Backs
+/// UpdatePopoverView.
 enum ReleaseNotesDocument {
     /// Returns no blocks when the fragment carries no renderable text,
     /// which the popover shows as its "no release notes" placeholder.

@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WorkspaceAuthorityDecisionTests: the cross-tab permission matrix, one
-// row per case, against the pure decision type.
-//
-// The dispatcher tests cover the wiring (which verb carries which
-// requirement, and that the refusal reaches the caller). These cover the
-// rule itself, including the two cases the rule turns on: a sibling
-// terminal in the caller's own tab, and a caller with no session at all.
 
 @testable import App
 import Testing
 
+/// The cross-tab permission matrix, one
+/// row per case, against the pure decision type.
+///
+/// The dispatcher tests cover the wiring (which verb carries which
+/// requirement, and that the refusal reaches the caller). These cover the
+/// rule itself, including the two cases the rule turns on: a sibling
+/// terminal in the caller's own tab, and a caller with no session at all.
 struct WorkspaceAuthorityDecisionTests {
     private func decide(
         origin: IntentOrigin,

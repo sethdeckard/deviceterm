@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The ⌘W resolution table. Every row exists because the two close
-// meanings are not interchangeable: one drops a pane, the other runs the
-// tab's detach-or-shut-down prompt over every sim the tab booted.
 
 @testable import App
 import Testing
 
+/// The ⌘W resolution table. Every row exists because the two close
+/// meanings are not interchangeable: one drops a pane, the other runs the
+/// tab's detach-or-shut-down prompt over every sim the tab booted.
 @MainActor
 struct PaneCloseTargetDecisionTests {
     private static let terminal = PaneSlot.terminal(TerminalPaneID(value: 1))

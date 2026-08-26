@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// HeadlessAdvisoryTests: exercise the gates behind the Simulator.app
-// coexistence advisory. The presenter's NSAlert runModal path needs an
-// AppKit display session, so the tests drive `HeadlessAdvisoryDecision`
-// and the VM directly via injected closures, asserting on the decision,
-// the `markPresented` latch, and the suppression write-back through
-// `recordDismiss`.
-//
-// The hazard table matters as much as the skip gates: naming a route
-// the user already closed is what turns the alert from a warning into
-// noise.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// Exercise the gates behind the Simulator.app
+/// coexistence advisory. The presenter's NSAlert runModal path needs an
+/// AppKit display session, so the tests drive `HeadlessAdvisoryDecision`
+/// and the VM directly via injected closures, asserting on the decision,
+/// the `markPresented` latch, and the suppression write-back through
+/// `recordDismiss`.
+///
+/// The hazard table matters as much as the skip gates: naming a route
+/// the user already closed is what turns the alert from a warning into
+/// noise.
 @MainActor
 struct HeadlessAdvisoryTests {
     /// Neither preference set: the observed Simulator.app default,

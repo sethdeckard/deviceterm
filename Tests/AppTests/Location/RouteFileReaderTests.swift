@@ -61,7 +61,7 @@ func readerReportsMalformedXML() async throws {
     }
 }
 
-/// The load-bearing wiring. The file parses cleanly as XML and produces
+/// The wiring that matters. The file parses cleanly as XML and produces
 /// a route the *daemon* would reject, so validating in the reader is
 /// what turns an RPC failure into a sentence about this file.
 @Test("a file that parses but won't play reports the daemon's own reason")

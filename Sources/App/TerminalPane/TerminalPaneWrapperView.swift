@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalPaneWrapperView: terminal pane root view that paints a
-// focus border when the pane (chrome strip + libghostty surface)
-// holds keyboard focus. Mirrors `SimulatorPaneWrapperView`'s
-// `setFocusVisible(_:)` so the two pane types share one focus
-// affordance.
-//
-// Detecting first-responder transitions is the awkward part:
-// libghostty's surface view is the actual first responder when a
-// terminal pane has focus, and the surface is a foreign-module
-// view that deviceterm doesn't subclass. There's no `becomeFirstResponder`
-// hook to call back into deviceterm from. The portable signal AppKit
-// gives us is `NSWindow.didUpdateNotification`, which fires once per
-// event-loop after responder-chain state settles. We poll
-// `window.firstResponder` on that notification and toggle the border
-// only when the resolved focus state actually changes, so the
-// per-update callback is cheap.
 
 import AppKit
 
+/// Terminal pane root view that paints a
+/// focus border when the pane (chrome strip + libghostty surface)
+/// holds keyboard focus. Mirrors `SimulatorPaneWrapperView`'s
+/// `setFocusVisible(_:)` so the two pane types share one focus
+/// affordance.
+///
+/// Detecting first-responder transitions is the awkward part:
+/// libghostty's surface view is the actual first responder when a
+/// terminal pane has focus, and the surface is a foreign-module
+/// view that deviceterm doesn't subclass. There's no `becomeFirstResponder`
+/// hook to call back into deviceterm from. The portable signal AppKit
+/// gives us is `NSWindow.didUpdateNotification`, which fires once per
+/// event-loop after responder-chain state settles. We poll
+/// `window.firstResponder` on that notification and toggle the border
+/// only when the resolved focus state actually changes, so the
+/// per-update callback is cheap.
 @MainActor
 final class TerminalPaneWrapperView: NSView {
     /// `nonisolated(unsafe)` because the nonisolated deinit needs to

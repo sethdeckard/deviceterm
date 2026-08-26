@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdateViewModel: the observable state behind the unobtrusive update
-// pill. The custom Sparkle driver (`UpdateUserDriver`) sets `state`; the
-// pill renders it. Deliberately Sparkle-free: each state carries plain
-// closures the driver wires to Sparkle's callbacks, so this type (and its
-// presentation mapping) is unit-testable without the framework.
-//
-// `permissionRequest` is intentionally omitted: the `auto-update`
-// config key drives consent, not a Sparkle prompt.
 
 import Foundation
 import Observation
 
+/// The observable state behind the unobtrusive update
+/// pill. The custom Sparkle driver (`UpdateUserDriver`) sets `state`; the
+/// pill renders it. Deliberately Sparkle-free: each state carries plain
+/// closures the driver wires to Sparkle's callbacks, so this type (and its
+/// presentation mapping) is unit-testable without the framework.
+///
+/// `permissionRequest` is intentionally omitted: the `auto-update`
+/// config key drives consent, not a Sparkle prompt.
 @MainActor
 @Observable
 final class UpdateViewModel {

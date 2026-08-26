@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Truth table for the DEVICETERM_IGNORE_GHOSTTY_CONFIG dev toggle:
-// only the exact value "1" enables it, matching the other dev env
-// switches, so a stray value can't silently untheme the app.
 
 @testable import App
 import Testing
 
+/// Truth table for the DEVICETERM_IGNORE_GHOSTTY_CONFIG dev toggle:
+/// only the exact value "1" enables it, matching the other dev env
+/// switches, so a stray value can't silently untheme the app.
 struct GhosttyConfigOverrideTests {
     @Test("ignore-flag truth table", arguments: [
         (nil, false),

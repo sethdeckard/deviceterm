@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneSlot: the identity of one leaf pane in the recursive
-// `PaneNode` layout tree. A leaf is either a terminal pane (keyed by
-// the typed `TerminalPaneID`), a sim pane (keyed by its lowercase
-// UDID, the canonical form the daemon stores), or a physical-device
-// pane (keyed by its daemon `deviceId`). The mirror typed-storage
-// arrays on `TabState` hold the per-pane state; this enum just says
-// "which leaf is here" inside the tree's structure.
-//
-// `Codable` because the drag pasteboard payload encodes a slot as
-// JSON so the drag destination can decode the dragged pane back from
-// the wire. The serialized shape uses external tagging
-// (`{"terminal": "…"}` / `{"sim": "…"}` / `{"device": "…"}`) via Swift's
-// automatic associated-value Codable synthesis, which is stable
-// enough for an in-process pasteboard payload that never crosses a
-// process or disk boundary.
 
 import DaemonProtocol
 import Foundation
 
+/// The identity of one leaf pane in the recursive
+/// `PaneNode` layout tree. A leaf is either a terminal pane (keyed by
+/// the typed `TerminalPaneID`), a sim pane (keyed by its lowercase
+/// UDID, the canonical form the daemon stores), or a physical-device
+/// pane (keyed by its daemon `deviceId`). The mirror typed-storage
+/// arrays on `TabState` hold the per-pane state; this enum just says
+/// "which leaf is here" inside the tree's structure.
+///
+/// `Codable` because the drag pasteboard payload encodes a slot as
+/// JSON so the drag destination can decode the dragged pane back from
+/// the wire. The serialized shape uses external tagging
+/// (`{"sim":{"udid":"ABC-123"}}`, and the same nested shape for the other
+/// cases) via Swift's
+/// automatic associated-value Codable synthesis, which is stable
+/// enough for an in-process pasteboard payload that never crosses a
+/// process or disk boundary.
 enum PaneSlot: Equatable, Hashable, Sendable, Codable {
     case terminal(TerminalPaneID)
     case sim(udid: String)

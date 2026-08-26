@@ -1,11 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Wire-version-mismatch remediation: on a definite mismatch the GUI issues
-// `daemon.shutdown` to the incompatible daemon and awaits the ack BEFORE
-// surfacing the user-facing remediation: so a Sparkle-replaced bundle can't
-// leave the old helper alive to be reconnected to. Driven hermetically through
-// the injected `DaemonRequestTransport`, which scripts `daemon.ping` (the
-// handshake) and `daemon.shutdown`.
 
 @testable import App
 import DaemonProtocol
@@ -13,6 +6,12 @@ import Foundation
 import Testing
 @preconcurrency import XPC
 
+/// Wire-version-mismatch remediation: on a definite mismatch the GUI issues
+/// `daemon.shutdown` to the incompatible daemon and awaits the ack BEFORE
+/// surfacing the user-facing remediation: so a Sparkle-replaced bundle can't
+/// leave the old helper alive to be reconnected to. Driven hermetically through
+/// the injected `DaemonRequestTransport`, which scripts `daemon.ping` (the
+/// handshake) and `daemon.shutdown`.
 @MainActor
 struct DaemonClientVersionMismatchTests {
     /// Scripts `daemon.ping` and `daemon.shutdown`. `pingVersions` is consumed

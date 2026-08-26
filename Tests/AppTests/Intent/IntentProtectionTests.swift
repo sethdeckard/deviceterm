@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentProtectionTests. The origin-aware opacity boundary: a foreign
-// protected tab is unreachable and unlistable to an external caller,
-// across every resolver family (tab / pane / window / listing) and the
-// `set-protected` owner gate. In-process callers (the human) see
-// everything.
-//
-// A leak in any one path is as bad as a leak in `capture`, so the suite
-// covers a representative path per family, plus the ambiguity and
-// `.current` fail-closed cases that a naive post-filter gets wrong.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// The origin-aware opacity boundary: a foreign
+/// protected tab is unreachable and unlistable to an external caller,
+/// across every resolver family (tab / pane / window / listing) and the
+/// `set-protected` owner gate. In-process callers (the human) see
+/// everything.
+///
+/// A leak in any one path is as bad as a leak in `capture`, so the suite
+/// covers a representative path per family, plus the ambiguity and
+/// `.current` fail-closed cases that a naive post-filter gets wrong.
 @MainActor
 struct IntentProtectionTests {
     private struct Harness {

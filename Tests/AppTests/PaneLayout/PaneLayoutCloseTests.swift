@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ⌘W driven through a real `PaneLayoutViewController` in a real window.
-//
-// The resolution table itself is covered in
-// `PaneCloseTargetDecisionTests`. What these add is the derivation the
-// controller performs before consulting it: the focused slot, and the
-// terminal count read out of the layout tree. Counting panes instead of
-// terminals is the mistake the mixed-pane cases below are here to catch,
-// and it is invisible to a pure test.
 
 @testable import App
 import AppKit
 import Testing
 
+/// ⌘W driven through a real `PaneLayoutViewController` in a real window.
+///
+/// The resolution table itself is covered in
+/// `PaneCloseTargetDecisionTests`. What these add is the derivation the
+/// controller performs before consulting it: the focused slot, and the
+/// terminal count read out of the layout tree. Counting panes instead of
+/// terminals is the mistake the mixed-pane cases below are here to catch,
+/// and it is invisible to a pure test.
 @MainActor
 struct PaneLayoutCloseTests {
     /// Controller plus the window keeping it alive, since a released

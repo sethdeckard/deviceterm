@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentAuthorityTests: the cross-tab verbs, gated.
-//
-// Every verb that can reach outside the caller's own tab gets both of
-// its cases here, allowed and refused, because a row with only one of
-// the two proves nothing about the gate. The refusal is deliberately
-// `automationRequired` rather than `notFound`: resolution runs first, so
-// anything reaching the gate is a tab the caller can already see in
-// `tabs list` and naming the reason leaks nothing.
-//
-// Protection is the other axis and is not this suite's subject, except
-// for the one case where they meet: a grant must widen authority without
-// widening visibility.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// The cross-tab verbs, gated.
+///
+/// Every verb that can reach outside the caller's own tab gets both of
+/// its cases here, allowed and refused, because a row with only one of
+/// the two proves nothing about the gate. The refusal is deliberately
+/// `automationRequired` rather than `notFound`: resolution runs first, so
+/// anything reaching the gate is a tab the caller can already see in
+/// `tabs list` and naming the reason leaks nothing.
+///
+/// Protection is the other axis and is not this suite's subject, except
+/// for the one case where they meet: a grant must widen authority without
+/// widening visibility.
 @MainActor
 struct IntentAuthorityTests {
     private struct Harness {

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimPaneReducer: the simulator pane's state machine as a pure
-// function. SimulatorPaneViewModel feeds it daemon lifecycle events
-// + surface arrivals; the transitions are unit-tested without any
-// view or daemon. Consumes the shared `PaneLifecycle` wire enum.
 
 import DaemonProtocol
 
+/// The simulator pane's state machine as a pure
+/// function. SimulatorPaneViewModel feeds it daemon lifecycle events
+/// + surface arrivals; the transitions are unit-tested without any
+/// view or daemon. Consumes the shared `PaneLifecycle` wire enum.
 enum SimPaneReducer {
     static func reduce(
         _ state: SimulatorPaneState,

@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WelcomeMessage: one first-run explanation the app presents in its own
-// window.
-//
-// A welcome teaches a DeviceTerm behavior that is hard to discover and
-// expensive to learn the hard way. It is deliberately *not* a hazard
-// warning: `HeadlessAdvisory` owns the just-in-time "this sim can be
-// shut down from outside" alert, and can re-fire on later launches until
-// the user opts out, while a welcome stops appearing automatically once
-// its id is recorded and then stays reachable from the Help menu.
-//
-// The type exists so a second welcome is one value appended to
-// `WelcomeCatalog` rather than another hardcoded window: the id, the
-// title, and the content are all the presentation machinery needs. Its
-// Help menu item is wired separately in `MainMenu.swift`.
 
 import SwiftUI
 
+/// One first-run explanation the app presents in its own
+/// window.
+///
+/// A welcome teaches a DeviceTerm behavior that is hard to discover and
+/// expensive to learn the hard way. It is deliberately *not* a hazard
+/// warning: `HeadlessAdvisory` owns the just-in-time "this sim can be
+/// shut down from outside" alert, and can re-fire on later launches until
+/// the user opts out, while a welcome stops appearing automatically once
+/// its id is recorded and then stays reachable from the Help menu.
+///
+/// The type exists so a second welcome is one value appended to
+/// `WelcomeCatalog` rather than another hardcoded window: the id, the
+/// title, and the content are all the presentation machinery needs. Its
+/// Help menu item is wired separately in `MainMenu.swift`.
 @MainActor
 struct WelcomeMessage {
     /// Stable identifier, recorded as one line in the `welcome-seen`

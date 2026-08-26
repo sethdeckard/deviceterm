@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimGestureMath: pure geometry + multi-touch synthesis for the
-// simulator pane, extracted from SimulatorContentView. No
-// AppKit/responder state: the letterbox mapping, tap/swipe
-// classification, and pinch/rotate finger synthesis are pure so they
-// can be unit-tested in isolation. The view keeps the NSResponder event
-// handlers (input dispatch must live on the responder) and calls these.
-//
-// The formulas were established empirically against a live simulator,
-// so the golden tests pin them exactly rather than re-deriving them.
 
 import CoreGraphics
 import DaemonProtocol
 
+/// Pure geometry + multi-touch synthesis for the
+/// simulator pane, extracted from SimulatorContentView. No
+/// AppKit/responder state: the letterbox mapping, tap/swipe
+/// classification, and pinch/rotate finger synthesis are pure so they
+/// can be unit-tested in isolation. The view keeps the NSResponder event
+/// handlers (input dispatch must live on the responder) and calls these.
+///
+/// The formulas were established empirically against a live simulator,
+/// so the golden tests pin them exactly rather than re-deriving them.
 enum SimGestureMath {
     /// Initial half-separation between the two synthesized fingers when a
     /// pinch/rotate begins.

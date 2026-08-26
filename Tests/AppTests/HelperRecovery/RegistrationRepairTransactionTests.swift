@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RegistrationRepairTransactionTests: the ordering that makes an interrupted
-// repair recoverable.
-//
-// These assert SEQUENCE, not end state. A repair that ends with the marker
-// absent and the job registered looks correct from the outside whether or not
-// the marker was ever written before the teardown, and it is that ordering, not
-// the outcome, that decides whether a process terminated mid-repair leaves the
-// user with a helper.
-//
-// Driven entirely through injected legs, because the real `SMAppService` calls
-// mutate the login session's launchd domain and would take the user's running
-// helper with them.
 
 @testable import App
 import Foundation
 import Testing
 
+/// The ordering that makes an interrupted
+/// repair recoverable.
+///
+/// These assert SEQUENCE, not end state. A repair that ends with the marker
+/// absent and the job registered looks correct from the outside whether or not
+/// the marker was ever written before the teardown, and it is that ordering, not
+/// the outcome, that decides whether a process terminated mid-repair leaves the
+/// user with a helper.
+///
+/// Driven entirely through injected legs, because the real `SMAppService` calls
+/// mutate the login session's launchd domain and would take the user's running
+/// helper with them.
 @MainActor
 struct RegistrationRepairTransactionTests {
     /// Records the order the legs ran in, and can fail any of them.

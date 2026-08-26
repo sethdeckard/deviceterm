@@ -1,15 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UDSDaemonConnectionTests: the cancellation contract of the smoke-mode
-// socket transport, exercised against a genuinely silent peer.
-//
-// A `socketpair` gives the connection a live socket whose far end simply
-// never writes back, which is what a wedged daemon looks like from here: the
-// connection stays open (so nothing errors) and the reply never comes (so the
-// continuation parks). Without a cancellation handler that park is permanent,
-// and a deadline racing the call would wait on the loser forever instead of
-// expiring. These tests pin that a cancelled call resumes exactly once,
-// promptly, and leaves no pending entry behind.
 
 @testable import App
 import DaemonProtocol
@@ -19,6 +8,16 @@ import Testing
 import Darwin
 #endif
 
+/// The cancellation contract of the smoke-mode
+/// socket transport, exercised against a genuinely silent peer.
+///
+/// A `socketpair` gives the connection a live socket whose far end simply
+/// never writes back, which is what a wedged daemon looks like from here: the
+/// connection stays open (so nothing errors) and the reply never comes (so the
+/// continuation parks). Without a cancellation handler that park is permanent,
+/// and a deadline racing the call would wait on the loser forever instead of
+/// expiring. These tests pin that a cancelled call resumes exactly once,
+/// promptly, and leaves no pending entry behind.
 @MainActor
 struct UDSDaemonConnectionTests {
     /// A connected socket pair: the connection owns `fd`, and `peerFD` is the

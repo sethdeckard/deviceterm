@@ -1,24 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UDSDaemonConnection: legacy Unix-domain-socket transport for the
-// GUI, retained as a smoke-mode-only fallback.
-//
-// Production GUI talks to the daemon via XPC (`XPCDaemonConnection`).
-// The `make verify` GUI smoke gate, however, runs hermetically without
-// launchd-vended mach services: there's no SMAppService registration
-// in the smoke harness, so the XPC connection would hang trying to
-// reach a mach service that doesn't exist. To keep the smoke gate
-// useful, the GUI under `--smoke` detects the
-// `DEVICETERM_DAEMON_SOCK` env var and routes through this class
-// instead: it spawns the daemon binary via `Process()` and connects
-// to the resulting UDS. Production XPC remains the only transport
-// reachable from a normally-launched bundle.
-//
-// This is a deliberate, narrowly-scoped exception to the "no
-// fallback" rule: the path is only taken under the
-// `--smoke` argv (which the production app never carries), and the
-// daemon binary it spawns is the same one launchd would normally
-// vend.
 
 import DaemonProtocol
 import Foundation
@@ -26,10 +6,28 @@ import Foundation
 import Darwin
 #endif
 
-/// The socket connection. `@unchecked Sendable`: every mutable
-/// member is touched only on `queue` (serial), which is the
-/// synchronization domain. Continuations are resumed from that
-/// queue.
+/// The Unix-domain-socket transport for the GUI, reached only in smoke mode.
+///
+/// `@unchecked Sendable`: every mutable member is touched only on `queue`
+/// (serial), which is the synchronization domain. Continuations are resumed
+/// from that queue.
+///
+/// The production GUI talks to the daemon via XPC (`XPCDaemonConnection`).
+/// The `make verify` GUI smoke gate, however, runs hermetically without
+/// launchd-vended mach services: there's no SMAppService registration
+/// in the smoke harness, so the XPC connection would hang trying to
+/// reach a mach service that doesn't exist. To keep the smoke gate
+/// useful, the GUI under `--smoke` detects the
+/// `DEVICETERM_DAEMON_SOCK` env var and routes through this class
+/// instead: it spawns the daemon binary via `Process()` and connects
+/// to the resulting UDS. Production XPC remains the only transport
+/// reachable from a normally-launched bundle.
+///
+/// This is a deliberate, narrowly-scoped exception to the "no
+/// fallback" rule: the path is only taken under the
+/// `--smoke` argv (which the production app never carries), and the
+/// daemon binary it spawns is the same one launchd would normally
+/// vend.
 final class UDSDaemonConnection: DaemonRequestTransport, @unchecked Sendable {
     /// One parked call's cancellation state. The send and the cancellation
     /// handler both hop onto `queue` before touching it, so the serial queue

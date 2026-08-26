@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Key-chord round-trips and matching hazards: shifted punctuation,
-// modifier noise, and non-key events.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Key-chord round-trips and matching hazards: shifted punctuation,
+/// modifier noise, and non-key events.
 @MainActor
 struct KeyChordTests {
-    /// `keyCode` is load-bearing: `NSEvent.characters(byApplyingModifiers:)`
+    /// The match depends on `keyCode`: `NSEvent.characters(byApplyingModifiers:)`
     /// re-derives the character from the key code and the active layout, and
     /// ignores the `characters:` argument entirely. Synthesizing with
     /// `keyCode: 0` makes every event report "a".

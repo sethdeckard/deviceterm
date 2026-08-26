@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppLinks: the canonical outbound URLs for the app (site, docs, repo,
-// releases). Defined once so the About window, help text, and any future
-// link surface reference the same values instead of scattering literals.
 
 import Foundation
 
+/// The canonical outbound URLs for the app (site, docs, repo,
+/// releases). Defined once so the About window, help text, and every
+/// other link surface reference the same values instead of scattering
+/// literals.
 enum AppLinks {
     // Compile-time-constant, known-valid literals. A malformed one is a
     // programmer error caught on first launch, so the force-unwrap is safe.

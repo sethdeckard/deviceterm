@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeyChord: one keyboard shortcut as a value, a key plus modifiers.
-//
-// Centralizes construction of arrow-key equivalents in production code,
-// and knows that an `NSMenuItem`'s key equivalent must be lowercase.
-// AppKit reads an uppercase "T" as ⇧+"t", so a chord carrying shift in
-// the string would disagree with its own modifier mask.
-//
-// Two matching hazards are handled here rather than at call sites, both
-// measured against AppKit:
-//
-//   1. Reading `characters` on a non-key event RAISES
-//      NSInternalInconsistencyException. `matches(_:)` checks the event
-//      type first. This is required rather than defensive, because
-//      `NSApp.currentEvent` is very often a mouse event.
-//   2. `charactersIgnoringModifiers` keeps shift, so ⇧⌘[ arrives as "{"
-//      and a naive comparison never matches. The unshifted character has
-//      to be requested explicitly.
 
 import AppKit
 
+/// One keyboard shortcut as a value, a key plus modifiers.
+///
+/// Centralizes construction of arrow-key equivalents in production code,
+/// and knows that an `NSMenuItem`'s key equivalent must be lowercase.
+/// AppKit reads an uppercase "T" as ⇧+"t", so a chord carrying shift in
+/// the string would disagree with its own modifier mask.
+///
+/// Two matching hazards are handled here rather than at call sites, both
+/// measured against AppKit:
+///
+///   1. Reading `characters` on a non-key event RAISES
+///      NSInternalInconsistencyException. `matches(_:)` checks the event
+///      type first. This is required rather than defensive, because
+///      `NSApp.currentEvent` is very often a mouse event.
+///   2. `charactersIgnoringModifiers` keeps shift, so ⇧⌘[ arrives as "{"
+///      and a naive comparison never matches. The unshifted character has
+///      to be requested explicitly.
 struct KeyChord: Hashable, Sendable {
     /// The non-modifier half of a chord. Arrows are named rather than
     /// spelled as characters because their key equivalents are function-key

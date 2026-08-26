@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceShortcutScopeDecision: whether a device-scoped item is offered
-// on the path it was invoked from.
-//
-// Both paths run through `validateUserInterfaceItem`, so that is where
-// the two are told apart. During key-equivalent dispatch AppKit is
-// inside `sendEvent(_:)`, so `NSApp.currentEvent` is the raw keyDown and
-// its chord matches the item's. Menu tracking runs its own loop and
-// exposes a mouse event instead. Keyboard menu navigation also yields a
-// keyDown, but its chord is Return rather than the item's, so comparing
-// chords rather than only asking "is this a keyDown" keeps it on the
-// pointer side where it belongs.
-//
-// Unknown events default to `.pointerOrMenu`, which preserves menu and
-// accessibility activation. A misclassified key equivalent lands there
-// too, so it leaves the fallback enabled and can dispatch to the tab's
-// first device pane rather than to the pane holding focus.
 
 import AppKit
 
+/// Whether a device-scoped item is offered
+/// on the path it was invoked from.
+///
+/// Both paths run through `validateUserInterfaceItem`, so that is where
+/// the two are told apart. During key-equivalent dispatch AppKit is
+/// inside `sendEvent(_:)`, so `NSApp.currentEvent` is the raw keyDown and
+/// its chord matches the item's. Menu tracking runs its own loop and
+/// exposes a mouse event instead. Keyboard menu navigation also yields a
+/// keyDown, but its chord is Return rather than the item's, so comparing
+/// chords rather than only asking "is this a keyDown" keeps it on the
+/// pointer side where it belongs.
+///
+/// Unknown events default to `.pointerOrMenu`, which preserves menu and
+/// accessibility activation. A misclassified key equivalent lands there
+/// too, so it leaves the fallback enabled and can dispatch to the tab's
+/// first device pane rather than to the pane holding focus.
 @MainActor
 enum DeviceShortcutScopeDecision {
     static func origin(currentEvent: NSEvent?, chord: KeyChord) -> MenuActionOrigin {

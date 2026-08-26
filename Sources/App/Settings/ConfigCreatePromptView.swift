@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ConfigCreatePromptView: the SwiftUI confirmation shown when
-// Settings… is invoked and no config file exists yet. A self-contained
-// card (not a system `NSAlert`) so it presents reliably even with no
-// key window open, and stays in the SwiftUI column for product UI. The
-// buttons drive the view model; `SettingsPromptWindowController` hosts
-// it and closes once the view model resolves.
 
 import SwiftUI
 
+/// The SwiftUI confirmation shown when
+/// Settings… is invoked and no config file exists yet. A self-contained
+/// card (not a system `NSAlert`) so it presents reliably even with no
+/// key window open, and stays in the SwiftUI column for product UI. The
+/// buttons drive the view model; `SettingsPromptWindowController` hosts
+/// it and closes once the view model resolves.
 struct ConfigCreatePromptView: View {
     let viewModel: ConfigSettingsViewModel
 

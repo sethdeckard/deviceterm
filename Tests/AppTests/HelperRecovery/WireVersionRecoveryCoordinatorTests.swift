@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WireVersionRecoveryCoordinatorTests: the ladder's decision table.
-//
-// Two properties carry most of the value here, and both are the kind that pass
-// by accident under a weaker test.
-//
-// The ladder must WAIT OUT the helper it asked to stop. `daemon.shutdown` acks a
-// grace period before the daemon exits, so on the successful path the old helper
-// may answer at least one more ping with the old version. A ladder that read that
-// as failure would abandon exactly the case it exists for, and would do so on the
-// happy path.
-//
-// And it must NOT signal a replacement that merely disagrees. The launchd job is
-// `KeepAlive`/`SuccessfulExit false`, so a killed daemon is respawned; killing a
-// replacement would make launchd start another exactly like it. That state is a
-// registration pointing at the wrong bundle, not a process refusing to die.
-//
-// Every dependency is a closure, so none of this touches launchd, a real clock,
-// or a connection.
 
 @testable import App
 import Foundation
 import Testing
 
+/// The ladder's decision table.
+///
+/// Two properties carry most of the value here, and both are the kind that pass
+/// by accident under a weaker test.
+///
+/// The ladder must WAIT OUT the helper it asked to stop. `daemon.shutdown` acks a
+/// grace period before the daemon exits, so on the successful path the old helper
+/// may answer at least one more ping with the old version. A ladder that read that
+/// as failure would abandon exactly the case it exists for, and would do so on the
+/// happy path.
+///
+/// And it must NOT signal a replacement that merely disagrees. The launchd job is
+/// `KeepAlive`/`SuccessfulExit false`, so a killed daemon is respawned; killing a
+/// replacement would make launchd start another exactly like it. That state is a
+/// registration pointing at the wrong bundle, not a process refusing to die.
+///
+/// Every dependency is a closure, so none of this touches launchd, a real clock,
+/// or a connection.
 @MainActor
 struct WireVersionRecoveryCoordinatorTests {
     /// Records which rungs ran, and replays a scripted sequence of handshake

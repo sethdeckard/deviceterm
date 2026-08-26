@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneAccessibilityIdentity: the stable accessibility identifier each
-// pane's root view carries.
-//
-// The out-of-process UI-test harness can read a window's accessibility
-// tree but has no other way to ask "how many panes does this tab hold"
-// or "which one has focus". Pane identity lives entirely in nav state,
-// which the harness cannot see. `panes list` enumerates device panes
-// only; terminal panes are sessions and never appear there. An
-// identifier on the pane's root view is what makes splits, closes, and
-// focus movement assertable from outside.
-//
-// The strings are an observability contract with that harness, not
-// user-visible text, so they stay machine-shaped and stable.
 
+/// The stable accessibility identifier each
+/// pane's root view carries.
+///
+/// The out-of-process UI-test harness can read a window's accessibility
+/// tree but has no other way to ask "how many panes does this tab hold"
+/// or "which one has focus". Pane identity lives entirely in nav state,
+/// which the harness cannot see. `panes list` enumerates device panes
+/// only; terminal panes are sessions and never appear there. An
+/// identifier on the pane's root view is what makes splits, closes, and
+/// focus movement assertable from outside.
+///
+/// The strings are an observability contract with that harness, not
+/// user-visible text, so they stay machine-shaped and stable.
 enum PaneAccessibilityIdentity {
     /// Shared prefix, so a harness can select every pane node in one
     /// pass without knowing the pane kinds.

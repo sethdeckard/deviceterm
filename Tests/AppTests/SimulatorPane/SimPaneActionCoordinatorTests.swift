@@ -4,18 +4,17 @@
 import DaemonProtocol
 import Testing
 
-// The sim pane's boot legs and the owned-sim mirror.
-//
-// Reboot, live reboot, and post-erase boot all send `device.boot` with the
-// tab's credentials plus a pending claim. All three boot from
-// a shut-down sim (live reboot and erase issue the shutdown themselves;
-// ordinary Reboot starts from the shutdown overlay), so a poll has already
-// cleared the mirror's claim before the new claim promotes. The GUI retains
-// that claim across an unanswered RPC or daemon replacement.
-
 private enum FakeBootError: Error { case refused }
 private let bootUDID = "11111111-1111-1111-1111-111111111111"
 
+/// The sim pane's boot legs and the owned-sim mirror.
+///
+/// Reboot, live reboot, and post-erase boot all send `device.boot` with the
+/// tab's credentials plus a pending claim. All three boot from
+/// a shut-down sim (live reboot and erase issue the shutdown themselves;
+/// ordinary Reboot starts from the shutdown overlay), so a poll has already
+/// cleared the mirror's claim before the new claim promotes. The GUI retains
+/// that claim across an unanswered RPC or daemon replacement.
 @MainActor
 struct SimPaneActionCoordinatorTests {
     private func makeCoordinator(

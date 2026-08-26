@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RegistrationRepairLockTests: the cross-process exclusion around a registration
-// repair.
-//
-// `flock` is used here for one property above all: the kernel releases it when
-// the holder exits, however it exits. That is what makes it a barrier a marker
-// file cannot be. A marker can say a repair was interrupted; it cannot say one
-// is running right now without the reader sampling liveness, and every such
-// sample has a race after it.
-//
-// The out-of-process case is exercised with a real second process, because
-// `flock` is per open file description: two acquisitions inside one process can
-// behave differently from two processes, so an in-process test would prove the
-// wrong thing.
 
 @testable import App
 import Foundation
 import Testing
 
+/// The cross-process exclusion around a registration
+/// repair.
+///
+/// `flock` is used here for one property above all: the kernel releases it when
+/// the holder exits, however it exits. That is what makes it a barrier a marker
+/// file cannot be. A marker can say a repair was interrupted; it cannot say one
+/// is running right now without the reader sampling liveness, and every such
+/// sample has a race after it.
+///
+/// The out-of-process case is exercised with a real second process, because
+/// `flock` is per open file description: two acquisitions inside one process can
+/// behave differently from two processes, so an in-process test would prove the
+/// wrong thing.
 @MainActor
 struct RegistrationRepairLockTests {
     private func makeLockPath() -> String {

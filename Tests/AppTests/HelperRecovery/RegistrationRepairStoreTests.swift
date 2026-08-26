@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RegistrationRepairStoreTests: the marker recording that a registration repair
-// was started and did not finish.
-//
-// The properties under test are ORDERING and FAIL-CLOSED behaviour, which is why
-// these assert sequence and error propagation rather than end state. A marker
-// written after the teardown begins would be useless, and a lookup that answers
-// "nothing to do" on an error it could not complete is the one reading that
-// skips the reconciliation.
-//
-// Concurrency is deliberately absent here. This file answers one question, "was
-// a repair started and not finished". In production the callers hold
-// `RegistrationRepairLock` around these calls; these tests do not, because what
-// they exercise is the marker rather than the exclusion. Exclusion is tested in
-// `RegistrationRepairLockTests`.
 
 @testable import App
 import Foundation
 import Testing
 
+/// The marker recording that a registration repair
+/// was started and did not finish.
+///
+/// The properties under test are ORDERING and FAIL-CLOSED behaviour, which is why
+/// these assert sequence and error propagation rather than end state. A marker
+/// written after the teardown begins would be useless, and a lookup that answers
+/// "nothing to do" on an error it could not complete is the one reading that
+/// skips the reconciliation.
+///
+/// Concurrency is deliberately absent here. The store answers one question, "was
+/// a repair started and not finished". In production the callers hold
+/// `RegistrationRepairLock` around these calls; these tests do not, because what
+/// they exercise is the marker rather than the exclusion. Exclusion is tested in
+/// `RegistrationRepairLockTests`.
 @MainActor
 struct RegistrationRepairStoreTests {
     /// A store pointed at a fresh temporary path, plus that path.

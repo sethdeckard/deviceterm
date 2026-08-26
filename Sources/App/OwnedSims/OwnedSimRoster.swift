@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OwnedSimRoster: the GUI's mirror of which sims deviceterm owns, kept so
-// the answer survives the helper it came from.
-//
-// Ownership lives in the daemon's memory alone, so a helper that restarts
-// comes back believing it owns nothing. A sim carried by a pane is restored
-// by re-attaching the pane. A sim the user detached has no pane to carry it,
-// and this mirror is the only live, trusted record automatic warm-restart
-// recovery can act on.
-//
-// Nothing extra is read for it. The app-wide discovery coordinator already
-// asks for `device.list({scope: "owned"})` every couple of seconds and fans
-// that daemon-wide answer out to every live tab. What the mirror adds is
-// holding onto it across the moment the daemon forgets.
-//
-// The mirror is NOT the on-disk `owned-udids.json`, and deliberately can't
-// become it. That file is an untrusted recovery hint a same-uid process can
-// rewrite, admissible only behind the human-confirmed orphan prompt. This is
-// a live read from the daemon, held in memory, discarded with the process.
-//
-// A GUI that just launched has an empty mirror and nothing to restore. Sims
-// left running by a previous launch are the cold-start orphan prompt's
-// business, not this one.
 
 import DaemonProtocol
 
+/// The GUI's mirror of which sims deviceterm owns, kept so
+/// the answer survives the helper it came from.
+///
+/// Ownership lives in the daemon's memory alone, so a helper that restarts
+/// comes back believing it owns nothing. A sim carried by a pane is restored
+/// by re-attaching the pane. A sim the user detached has no pane to carry it,
+/// and this mirror is the only live, trusted record automatic warm-restart
+/// recovery can act on.
+///
+/// Nothing extra is read for it. The app-wide discovery coordinator already
+/// asks for `device.list({scope: "owned"})` every couple of seconds and fans
+/// that daemon-wide answer out to every live tab. What the mirror adds is
+/// holding onto it across the moment the daemon forgets.
+///
+/// The mirror is NOT the on-disk `owned-udids.json`, and deliberately can't
+/// become it. That file is an untrusted recovery hint a same-uid process can
+/// rewrite, admissible only behind the human-confirmed orphan prompt. This is
+/// a live read from the daemon, held in memory, discarded with the process.
+///
+/// A GUI that just launched has an empty mirror and nothing to restore. Sims
+/// left running by a previous launch are the cold-start orphan prompt's
+/// business, not this one.
 @MainActor
 final class OwnedSimRoster {
     /// Lowercased udid → owning session id, as of the last accepted read, or

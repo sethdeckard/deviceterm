@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabStripChromeTests: pin the window-chrome contract: a
-// transparent native title bar with the title text VISIBLE (showing
-// the focused pane / tab name), with the tab strip mounted below it
-// inside the same `.fullSizeContentView` content area. The strip
-// reports its empty regions as draggable so click-and-drag on
-// background space still moves the window.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Pin the window-chrome contract: a
+/// transparent native title bar with the title text VISIBLE (showing
+/// the focused pane / tab name), with the tab strip mounted below it
+/// inside the same `.fullSizeContentView` content area. The strip
+/// reports its empty regions as draggable so click-and-drag on
+/// background space still moves the window.
 @MainActor
 struct TabStripChromeTests {
     /// Bring the window up via the same convenience initializer

@@ -92,7 +92,7 @@ func acceptsLocaleDecimalSeparator() {
     #expect(value(CoordinateInput.latitude("37,7749", locale: german)) == 37.7749)
 }
 
-/// The load-bearing ordering rule, pinned on the input that actually
+/// The ordering rule the parse depends on, pinned on the input that
 /// collides. Where `.` is the *grouping* separator, `NumberFormatter`
 /// rejects `37.7749` (four digits is not a valid group) but reads
 /// `37.774` as **37774**. Only the three-decimal spelling exposes a

@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AboutWindowController: the window for the app-menu "About DeviceTerm"
-// item, replacing `orderFrontStandardAboutPanel`. Owns window lifecycle
-// only; `AboutView` (fed a resolved `AboutInfo`) holds the content.
-// `AppDelegate` keeps a single instance and re-fronts it, so repeat
-// invocations bring the same window forward instead of stacking. Mirrors
-// `ThirdPartyNoticesWindowController`.
 
 import AppKit
 import SwiftUI
 
+/// The window for the app-menu "About DeviceTerm"
+/// item, replacing `orderFrontStandardAboutPanel`. Owns window lifecycle
+/// only; `AboutView` (fed a resolved `AboutInfo`) holds the content.
+/// `AppDelegate` keeps a single instance and re-fronts it, so repeat
+/// invocations bring the same window forward instead of stacking. Mirrors
+/// `ThirdPartyNoticesWindowController`.
 @MainActor
 final class AboutWindowController: NSWindowController {
     convenience init() {

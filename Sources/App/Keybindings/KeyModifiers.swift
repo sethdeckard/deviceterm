@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeyModifiers: the four modifier keys a deviceterm shortcut may use.
-//
-// Owned rather than storing `NSEvent.ModifierFlags` directly for two
-// reasons. It is unambiguously `Sendable` under Swift 6 strict
-// concurrency, so the whole chord value layer stays a plain value type.
-// And it models exactly the four modifiers we bind, so converting from
-// a live `NSEvent` silently drops the noise flags AppKit sets on real
-// events. `.function` and `.numericPad` ride along on every arrow key,
-// and `.capsLock` whenever it happens to be on. Comparing raw
-// `modifierFlags` would reject a genuine ⌥⌘→. Comparing `KeyModifiers`
-// cannot.
 
 import AppKit
 
+/// The four modifier keys a deviceterm shortcut may use.
+///
+/// Owned rather than storing `NSEvent.ModifierFlags` directly for two
+/// reasons. It is unambiguously `Sendable` under Swift 6 strict
+/// concurrency, so the whole chord value layer stays a plain value type.
+/// And it models exactly the four modifiers we bind, so converting from
+/// a live `NSEvent` silently drops the noise flags AppKit sets on real
+/// events. `.function` and `.numericPad` ride along on every arrow key,
+/// and `.capsLock` whenever it happens to be on. Comparing raw
+/// `modifierFlags` would reject a genuine ⌥⌘→. Comparing `KeyModifiers`
+/// cannot.
 struct KeyModifiers: OptionSet, Hashable, Sendable {
     static let control = KeyModifiers(rawValue: 1 << 0)
     static let option = KeyModifiers(rawValue: 1 << 1)

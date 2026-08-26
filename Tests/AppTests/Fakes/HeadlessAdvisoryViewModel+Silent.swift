@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// A non-presenting HeadlessAdvisoryViewModel for the hermetic gate.
-//
-// The production readers answer from the developer's machine: whether
-// Simulator.app is running, and what `~/.config/deviceterm/config` says
-// about suppression. The wrong pair raises a modal NSAlert that nothing
-// in a test process can dismiss, so the suite blocks until it is
-// killed. Panes built by tests take this instead.
-//
-// A factory rather than a conformance, so it lives in an extension.
 
 @testable import App
 import Foundation
 
+/// A non-presenting `HeadlessAdvisoryViewModel` for the hermetic gate.
+///
+/// The production readers answer from the developer's machine: whether
+/// Simulator.app is running, and what `~/.config/deviceterm/config` says
+/// about suppression. The wrong pair raises a modal NSAlert that nothing
+/// in a test process can dismiss, so the suite blocks until it is
+/// killed. Panes built by tests take this instead.
+///
+/// A factory rather than a conformance, so it lives in an extension.
 extension HeadlessAdvisoryViewModel {
     /// A machine where nothing is suppressed and Simulator.app is not
     /// running, so there is no advisory to show.

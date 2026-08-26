@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneRatioMath: pure proportion / divider-position arithmetic for the
-// split-view ratio engine in `PaneLayoutViewController`. The controller owns
-// the `NSSplitView` walking and the `ratiosByPath` store; the numeric
-// work (normalizing extents to proportions, reserving divider thickness,
-// and turning proportions back into cumulative `setPosition` values)
-// lives here so it can be unit-tested without any AppKit views.
-//
-// A "ratio" is a proportion in `0...1`; the ratios for one split sum to
-// 1. Divider positions are the cumulative point offsets passed to
-// `NSSplitView.setPosition(_:ofDividerAt:)`, one per interior divider.
 
 import CoreGraphics
 
+/// Pure proportion / divider-position arithmetic for the
+/// split-view ratio engine in `PaneLayoutViewController`. The controller owns
+/// the `NSSplitView` walking and the `ratiosByPath` store; the numeric
+/// work (normalizing extents to proportions, reserving divider thickness,
+/// and turning proportions back into cumulative `setPosition` values)
+/// lives here so it can be unit-tested without any AppKit views.
+///
+/// A "ratio" is a proportion in `0...1`; the ratios for one split sum to
+/// 1. Divider positions are the cumulative point offsets passed to
+/// `NSSplitView.setPosition(_:ofDividerAt:)`, one per interior divider.
 enum PaneRatioMath {
     /// Even proportions across `count` children (each `1 / count`).
     /// Returns an empty array for a non-positive count.

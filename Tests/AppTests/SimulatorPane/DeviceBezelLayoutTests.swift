@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DeviceBezelLayoutTests: pure-math pins for the per-family bezel
-// geometry the wrapper paints around the sim screen. Each family has
-// its own assertion shape:
-//
-//   - phone → bezel rect insetting `imageRect`, notch rect at top
-//     center, no crown.
-//   - pad → bezel rect, no notch, no crown.
-//   - watch → bezel + crown rect on the trailing (right) edge, no
-//     notch.
-//   - tv → layout is nil (no bezel painted; letterbox stays as-is).
-//   - unknown → falls back to the phone style.
-//
-// The bezel inset + corner radius scale with the smaller imageRect
-// dimension and are clamped to a reasonable range; these tests pin
-// the boundary behavior so a future scale tweak can't accidentally
-// produce a 1pt-thick bezel or a square-cornered phone.
 
 @testable import App
 import CoreGraphics
 import DaemonProtocol
 import Testing
 
+/// Pure-math pins for the per-family bezel
+/// geometry the wrapper paints around the sim screen. Each family has
+/// its own assertion shape:
+///
+///   - phone → bezel rect insetting `imageRect`, notch rect at top
+///     center, no crown.
+///   - pad → bezel rect, no notch, no crown.
+///   - watch → bezel + crown rect on the trailing (right) edge, no
+///     notch.
+///   - tv → layout is nil (no bezel painted; letterbox stays as-is).
+///   - unknown → falls back to the phone style.
+///
+/// The bezel inset + corner radius scale with the smaller imageRect
+/// dimension and are clamped to a reasonable range; these tests pin
+/// the boundary behavior so a future scale tweak can't accidentally
+/// produce a 1pt-thick bezel or a square-cornered phone.
 struct DeviceBezelLayoutTests {
     private let screenRect = CGRect(x: 100, y: 50, width: 200, height: 400)
 

@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentResolverTests: pin the happy-path + error-path behavior of
-// each ref kind.
-//
-// The resolver lives at `@MainActor` (it reads the workspace's live
-// tab/window lists) and is pure (no mutation, no side effects). Each
-// test seeds a `WorkspaceViewModel` with synthetic state, runs one
-// resolution, asserts either the resolved ID/struct or the typed
-// `IntentError`.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// Pin the happy-path + error-path behavior of
+/// each ref kind.
+///
+/// The resolver lives at `@MainActor` (it reads the workspace's live
+/// tab/window lists) and is pure (no mutation, no side effects). Each
+/// test seeds a `WorkspaceViewModel` with synthetic state, runs one
+/// resolution, asserts either the resolved ID/struct or the typed
+/// `IntentError`.
 @MainActor
 struct IntentResolverTests {
     // MARK: - Fixtures

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabListViewModel: one window's open tabs + selection. An
-// `@Observable` nav state the TabStripViewController reconciles its
-// strip to. Mutated by the Router; the close-index-follow selection
-// math is a pure static so it can be unit-tested directly. The one
-// exception is cross-window tab drag: the AppDelegate tab-transfer
-// coordinator calls `detach` / `insert` directly to relocate a tab's
-// `TabState` between two windows' instances (the Router can't, having
-// no AppKit access to move the tab's live view controller).
 
 import DaemonProtocol
 import Observation
 
+/// One window's open tabs + selection. An
+/// `@Observable` nav state the TabStripViewController reconciles its
+/// strip to. Mutated by the Router; the close-index-follow selection
+/// math is a pure static so it can be unit-tested directly. The one
+/// exception is cross-window tab drag: the AppDelegate tab-transfer
+/// coordinator calls `detach` / `insert` directly to relocate a tab's
+/// `TabState` between two windows' instances (the Router can't, having
+/// no AppKit access to move the tab's live view controller).
 @MainActor
 @Observable
 final class TabListViewModel {

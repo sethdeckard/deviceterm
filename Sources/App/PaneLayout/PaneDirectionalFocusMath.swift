@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneDirectionalFocusMath: which pane sits above / below / left / right
-// of the focused one, resolved from a frame snapshot.
-//
-// The layout tree cannot answer this. `PaneNode.split` carries
-// `extents`, but those are seeds written at insert time and never
-// updated when a divider is dragged, so a tree-only walk would resolve
-// neighbors against proportions the user cannot see. The input is
-// therefore an explicit snapshot of every leaf's frame in one
-// coordinate space, taken at the moment the key is pressed.
-//
-// Coordinates follow AppKit's default orientation, y growing upward, so
-// "above" means a larger y. The layout controller's root view is not
-// flipped, which is where the snapshot comes from.
-//
-// Directional focus deliberately does not wrap. Cycling off one edge
-// and reappearing at the opposite one is disorienting when the gesture
-// is "look that way"; Next / Previous Pane is the cycling walk.
 
 import CoreGraphics
 
+/// Which pane sits above / below / left / right
+/// of the focused one, resolved from a frame snapshot.
+///
+/// The layout tree cannot answer this. `PaneNode.split` carries
+/// `extents`, but those are seeds written at insert time and never
+/// updated when a divider is dragged, so a tree-only walk would resolve
+/// neighbors against proportions the user cannot see. The input is
+/// therefore an explicit snapshot of every leaf's frame in one
+/// coordinate space, taken at the moment the key is pressed.
+///
+/// Coordinates follow AppKit's default orientation, y growing upward, so
+/// "above" means a larger y. The layout controller's root view is not
+/// flipped, which is where the snapshot comes from.
+///
+/// Directional focus deliberately does not wrap. Cycling off one edge
+/// and reappearing at the opposite one is disorienting when the gesture
+/// is "look that way"; Next / Previous Pane is the cycling walk.
 enum PaneDirectionalFocusMath {
     /// One candidate reduced to the numbers the ordering reads.
     private struct Ranked {

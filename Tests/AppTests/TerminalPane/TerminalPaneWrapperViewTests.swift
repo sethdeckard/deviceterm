@@ -1,23 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalPaneWrapperViewTests: pin the focus-border toggle and
-// the responder-chain-walk lookup. The wrapper observes
-// `NSWindow.didUpdateNotification` so AppKit's responder-chain
-// transitions (which we can't directly hook on libghostty's
-// foreign-module surface view) toggle the border. Three claims:
-//
-//   1. Layer backing is established at init, before any descendant
-//      Metal-hosting surface gets installed. libghostty's surface
-//      brings a CAMetalLayer with it, so the wrapper opts into layer
-//      backing eagerly: the layer tree settles in one shape instead of
-//      flipping mode mid-life on first focus.
-//   2. `containsFirstResponder()` (via `setFocusVisible` driven by
-//      the responder-chain walk) returns true for a descendant
-//      view and false otherwise. The walk is the load-bearing
-//      logic: a refactor that swaps `superview` for `nextResponder`
-//      would silently miss focus on subviews mounted indirectly.
-//   3. Toggling focus into and out of the descendant updates the
-//      border. This is the visible behavior the user sees.
 
 @testable import App
 import AppKit
@@ -33,6 +14,24 @@ private struct MountedWrapper {
     let responderTarget: NSView
 }
 
+/// Pin the focus-border toggle and
+/// the responder-chain-walk lookup. The wrapper observes
+/// `NSWindow.didUpdateNotification` so AppKit's responder-chain
+/// transitions (which we can't directly hook on libghostty's
+/// foreign-module surface view) toggle the border. Three claims:
+///
+///   1. Layer backing is established at init, before any descendant
+///      Metal-hosting surface gets installed. libghostty's surface
+///      brings a CAMetalLayer with it, so the wrapper opts into layer
+///      backing eagerly: the layer tree settles in one shape instead of
+///      flipping mode mid-life on first focus.
+///   2. `containsFirstResponder()` (via `setFocusVisible` driven by
+///      the responder-chain walk) returns true for a descendant
+///      view and false otherwise. The walk is the essential
+///      logic: a refactor that swaps `superview` for `nextResponder`
+///      would silently miss focus on subviews mounted indirectly.
+///   3. Toggling focus into and out of the descendant updates the
+///      border. This is the visible behavior the user sees.
 @MainActor
 struct TerminalPaneWrapperViewTests {
     /// Build a wrapper mounted in a real window with a single

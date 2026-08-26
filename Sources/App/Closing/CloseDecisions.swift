@@ -1,41 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// CloseDecisions: the pane-close, tab-close, window-close, and quit
-// prompts.
-//
-// Four call sites converge on `askBootedSimDisposition`, all asking whether
-// the sim keeps running once its surface goes away, all resolved through the
-// same `CloseSuppressionState` lookup (per-window tier, then per-session,
-// then the persistent `tab-close-default`):
-//   - sim pane close (Close Pane, the pane's context menu, ⌘W)
-//   - single tab close
-//   - bulk tab close (Close Other Tabs / Close Tabs to the Right)
-//   - window close (red X / ⌘W on the last tab)
-//
-// Pane close adds singular wording, always offers the window scope, and can
-// bypass a stored answer outright when its roster lookup failed.
-//
-// Quit is the fifth prompt and is not one of them: `quitWithSims` builds its
-// own alert, returns its own decision type, and reads
-// `quit-with-sims-default`. Only the `.always` scope writes across the two
-// keys.
-//
-// The multi-pane confirm is a second, independent track: closing a tab,
-// a batch of tabs, or a window whose tabs hold more than one pane asks
-// a plain Close/Cancel question, but only when the sim-disposition
-// prompt is not about to run, because that prompt has Cancel and so
-// already confirms the close. One gesture never stacks two prompts
-// (`TabCloseGateDecision` picks the arm). Its "Don't ask again" reuses
-// the same scope dropdown but stores a boolean under
-// `tab-close-multi-pane`, and never cross-writes the sim keys.
-//
-// The "Don't ask again" affordance is a scoped checkbox + popup, not
-// a single permanent toggle. Per-window and per-app-session tiers live
-// in `CloseSuppressionState` (in-memory, cleared on quit); the
-// long-lived tiers write `quit-with-sims-default` / `tab-close-default`
-// (sim track) or `tab-close-multi-pane` (multi-pane track) in
-// `~/.config/deviceterm/config`. The dropdown's available options and
-// default selection are derived from `CloseContext`.
 
 import AppKit
 
@@ -46,6 +9,42 @@ import AppKit
 /// `nil` and its prompt stays up until answered.
 typealias CloseTargetLiveness = @MainActor () -> Bool
 
+/// The pane-close, tab-close, window-close, and quit
+/// prompts.
+///
+/// Four call sites converge on `askBootedSimDisposition`, all asking whether
+/// the sim keeps running once its surface goes away, all resolved through the
+/// same `CloseSuppressionState` lookup (per-window tier, then per-session,
+/// then the persistent `tab-close-default`):
+///   - sim pane close (Close Pane, the pane's context menu, ⌘W)
+///   - single tab close
+///   - bulk tab close (Close Other Tabs / Close Tabs to the Right)
+///   - window close (red X / ⌘W on the last tab)
+///
+/// Pane close adds singular wording, always offers the window scope, and can
+/// bypass a stored answer outright when its roster lookup failed.
+///
+/// Quit is the fifth prompt and is not one of them: `quitWithSims` builds its
+/// own alert, returns its own decision type, and reads
+/// `quit-with-sims-default`. Only the `.always` scope writes across the two
+/// keys.
+///
+/// The multi-pane confirm is a second, independent track: closing a tab,
+/// a batch of tabs, or a window whose tabs hold more than one pane asks
+/// a plain Close/Cancel question, but only when the sim-disposition
+/// prompt is not about to run, because that prompt has Cancel and so
+/// already confirms the close. One gesture never stacks two prompts
+/// (`TabCloseGateDecision` picks the arm). Its "Don't ask again" reuses
+/// the same scope dropdown but stores a boolean under
+/// `tab-close-multi-pane`, and never cross-writes the sim keys.
+///
+/// The "Don't ask again" affordance is a scoped checkbox + popup, not
+/// a single permanent toggle. Per-window and per-app-session tiers live
+/// in `CloseSuppressionState` (in-memory, cleared on quit); the
+/// long-lived tiers write `quit-with-sims-default` / `tab-close-default`
+/// (sim track) or `tab-close-multi-pane` (multi-pane track) in
+/// `~/.config/deviceterm/config`. The dropdown's available options and
+/// default selection are derived from `CloseContext`.
 @MainActor
 enum CloseDecisions {
     static let tabCloseKey = "tab-close-default"

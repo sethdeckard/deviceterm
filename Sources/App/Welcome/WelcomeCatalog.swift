@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WelcomeCatalog: every welcome the app knows about, in the order they
-// would be shown.
-//
-// Entries are kept in presentation order, and only the first unseen one
-// appears in any launch (`WelcomeSelection.next`), so putting a new
-// welcome first delays every unseen one behind it by a launch. Append
-// rather than prepend unless that is the intent.
-//
-// Ids are written to the `welcome-seen` cache file, so renaming one
-// re-shows that welcome to everybody who already dismissed it and
-// hasn't set `welcome-messages = suppress`; `WelcomeCatalogTests` pins
-// them. Help menu items are not generated
-// from this list: each is wired by hand in `MainMenu.swift` against its
-// own `AppDelegate` action.
 
 import SwiftUI
 
+/// Every welcome the app knows about, in the order they
+/// would be shown.
+///
+/// Entries are kept in presentation order, and only the first unseen one
+/// appears in any launch (`WelcomeSelection.next`), so putting a new
+/// welcome first delays every unseen one behind it by a launch. Append
+/// rather than prepend unless that is the intent.
+///
+/// Ids are written to the `welcome-seen` cache file, so renaming one
+/// re-shows that welcome to everybody who already dismissed it and
+/// hasn't set `welcome-messages = suppress`; `WelcomeCatalogTests` pins
+/// them. Help menu items are not generated
+/// from this list: each is wired by hand in `MainMenu.swift` against its
+/// own `AppDelegate` action.
 @MainActor
 enum WelcomeCatalog {
     /// Id of the Simulator.app coexistence welcome. Referenced by the

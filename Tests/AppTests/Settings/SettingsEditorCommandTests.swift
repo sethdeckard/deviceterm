@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SettingsEditorCommand: the argv tokens typed into the editor tab's
-// shell. The editor token stays unquoted (shell-expanded); the path is
-// POSIX single-quoted.
 
 @testable import App
 import Testing
 
+/// SettingsEditorCommand: the argv tokens typed into the editor tab's
+/// shell. The editor token stays unquoted (shell-expanded); the path is
+/// POSIX single-quoted.
 struct SettingsEditorCommandTests {
     @Test
     func wrapsEditorFallbackAndQuotesPath() {

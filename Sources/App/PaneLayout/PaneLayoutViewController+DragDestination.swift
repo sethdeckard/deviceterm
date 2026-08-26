@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLayoutViewController+DragDestination: the pane drag-and-drop
-// reorder target, split out of the layout controller's hot file. The
-// controller's `PaneLayoutContainerView` forwards the NSView drag
-// callbacks here via a weak delegate; this reads the live tree +
-// pane-view frames, delegates the cursor→zone geometry to the pure
-// `PaneDropZoneMath`, paints the overlay, and dispatches
-// `Route.reorderPane` on drop. It never touches the ratio / split
-// hierarchy; the drop just re-emits a nav intent the Router owns.
 
 import AppKit
 
+/// The pane drag-and-drop
+/// reorder target, split out of the layout controller's hot file. The
+/// controller's `PaneLayoutContainerView` forwards the NSView drag
+/// callbacks here via a weak delegate; this reads the live tree +
+/// pane-view frames, delegates the cursor→zone geometry to the pure
+/// `PaneDropZoneMath`, paints the overlay, and dispatches
+/// `Route.reorderPane` on drop. It never touches the ratio / split
+/// hierarchy; the drop just re-emits a nav intent the Router owns.
 extension PaneLayoutViewController {
     /// Reset the cached drag color for a fresh drag session.
     func refreshDropOverlayColor() {

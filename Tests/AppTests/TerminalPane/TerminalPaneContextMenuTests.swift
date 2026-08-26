@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Structural assertions on the terminal pane right-click menu. Same
-// shape as SimulatorPaneContextMenuTests: pin item order + selector
-// wiring so a rename or accidental drop trips here before the user
-// hits a no-op menu slot.
 
 @testable import App
 import AppKit
 import Testing
 
+/// Structural assertions on the terminal pane right-click menu. Same
+/// shape as SimulatorPaneContextMenuTests: pin item order + selector
+/// wiring so a rename or accidental drop trips here before the user
+/// hits a no-op menu slot.
 @MainActor
 struct TerminalPaneContextMenuTests {
     @Test

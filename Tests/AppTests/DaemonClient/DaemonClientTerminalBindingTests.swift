@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Terminal-provenance client surface: the `session.bindTerminal` request shape
-// (no cap on the wire: the `.validatedGUI` audit token is the authority) and
-// the reconnect-observer registry that drives a tab's rebind-on-reconnect and
-// its teardown observer removal.
-//
-// These are the production mechanisms `TabContentViewController` relies on:
-//   - init registers a reconnect observer whose closure calls
-//     `rebindAllTerminals`;
-//   - teardown removes exactly that observer so the registry doesn't retain a
-//     dead closure across tab open/close cycles.
-// The registry (add / fire / remove) is tested here against the REAL
-// `DaemonClient`. The VC's own poll+bind loop reads a libghostty
-// `GhosttyTerminalSurface` for a FRESH identity each attempt, so initial
-// binding and fresh-identity retry stay in the GUI-smoke layer (they need a
-// live graphics surface); this file covers everything below that surface.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Terminal-provenance client surface: the `session.bindTerminal` request shape
+/// (no cap on the wire: the `.validatedGUI` audit token is the authority) and
+/// the reconnect-observer registry that drives a tab's rebind-on-reconnect and
+/// its teardown observer removal.
+///
+/// These are the production mechanisms `TabContentViewController` relies on:
+///   - init registers a reconnect observer whose closure calls
+///     `rebindAllTerminals`;
+///   - teardown removes exactly that observer so the registry doesn't retain a
+///     dead closure across tab open/close cycles.
+/// The registry (add / fire / remove) is tested here against the REAL
+/// `DaemonClient`. The VC's own poll+bind loop reads a libghostty
+/// `GhosttyTerminalSurface` for a FRESH identity each attempt, so initial
+/// binding and fresh-identity retry stay in the GUI-smoke layer (they need a
+/// live graphics surface); this file covers everything below that surface.
 @MainActor
 struct DaemonClientTerminalBindingTests {
     /// Records each request's method + raw params; returns an empty object body

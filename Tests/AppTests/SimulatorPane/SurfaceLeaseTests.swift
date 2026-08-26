@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SurfaceLease + SurfaceReleaseAccountant: the GUI half of the lease
-// loop. These pin: a leased surface bumps/decrements the use count and
-// signals release exactly once by ARC; an unleased surface does neither;
-// and the accountant's cumulative watermark is `min(held)` (or one past
-// the highest received when empty).
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import IOSurface
 import Testing
+
+// SurfaceLease + SurfaceReleaseAccountant: the GUI half of the lease
+// loop. These pin: a leased surface bumps/decrements the use count and
+// signals release exactly once by ARC; an unleased surface does neither;
+// and the accountant's cumulative watermark is `min(held)` (or one past
+// the highest received when empty).
 
 private func makeSurface() -> IOSurfaceRef {
     let props: [String: Any] = [

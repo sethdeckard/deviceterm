@@ -1,8 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonClientXPCLaneTests: the GUI's control and pane traffic use distinct
-// XPC peers, so a pane subscription whose stream handshake stops answering
-// cannot hold an unrelated control round-trip behind it.
 
 @testable import App
 import DaemonProtocol
@@ -10,6 +6,9 @@ import Foundation
 import Testing
 @preconcurrency import XPC
 
+/// The GUI's control and pane traffic use distinct
+/// XPC peers, so a pane subscription whose stream handshake stops answering
+/// cannot hold an unrelated control round-trip behind it.
 @MainActor
 struct DaemonClientXPCLaneTests {
     @Test

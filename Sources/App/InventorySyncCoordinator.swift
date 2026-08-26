@@ -1,35 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// InventorySyncCoordinator: the SINGLE caller of `session.restoreBatch`.
-//
-// `restoreBatch` is both restart restoration (after a daemon-only respawn) and
-// ongoing authoritative inventory reconciliation: the daemon reclaims a
-// closed-session tombstone only when an accepted, non-stale inventory OMITS it,
-// so the GUI must re-supply its live inventory whenever the workspace changes,
-// not only on reconnect, otherwise close tombstones accumulate until the next
-// reconnect, an unbounded same-uid memory path.
-//
-// The coordinator serializes all of that behind a dirty flag with BOUNDED
-// COALESCING (not a perpetually-reset trailing debounce):
-//   - a completed workspace mutation (session create/close) marks the inventory
-//     dirty (`markDirty`);
-//   - at most one batch is ever in flight;
-//   - each pass waits a short FIXED coalescing window, snapshots the live
-//     inventory, sends it, and advances the synced watermark ONLY on a verified
-//     echo, so continuous churn still flushes every window and can't postpone
-//     synchronization indefinitely;
-//   - a mutation during an in-flight batch re-dirties, forcing another batch;
-//   - a failed or unverified delivery leaves the state dirty and retries with
-//     capped backoff;
-//   - a reconnect (`reconnected(generation:)`) re-supplies too, and fires the
-//     terminal-rebind observers once per generation on its first verified sync;
-//     a steady-state sync fires NO reconnect observers, terminal rebinding, or
-//     pane recovery.
-//
-// The daemon's `(epoch, revision)` fence rejects an older connection's batch
-// after a reconnect, so a superseded generation can neither reclaim nor
-// resurrect state; the coordinator additionally never fires reconnect observers
-// for a superseded generation.
 
 import DaemonProtocol
 import Foundation
@@ -45,6 +14,36 @@ import os
 /// reconnect, or a terminal opening or closing.
 private let syncLog = Logger(subsystem: "com.deviceterm", category: "inventory-sync")
 
+/// The SINGLE caller of `session.restoreBatch`.
+///
+/// `restoreBatch` is both restart restoration (after a daemon-only respawn) and
+/// ongoing authoritative inventory reconciliation: the daemon reclaims a
+/// closed-session tombstone only when an accepted, non-stale inventory OMITS it,
+/// so the GUI must re-supply its live inventory whenever the workspace changes,
+/// not only on reconnect, otherwise close tombstones accumulate until the next
+/// reconnect, an unbounded same-uid memory path.
+///
+/// The coordinator serializes all of that behind a dirty flag with BOUNDED
+/// COALESCING (not a perpetually-reset trailing debounce):
+///   - a completed workspace mutation (session create/close) marks the inventory
+///     dirty (`markDirty`);
+///   - at most one batch is ever in flight;
+///   - each pass waits a short FIXED coalescing window, snapshots the live
+///     inventory, sends it, and advances the synced watermark ONLY on a verified
+///     echo, so continuous churn still flushes every window and can't postpone
+///     synchronization indefinitely;
+///   - a mutation during an in-flight batch re-dirties, forcing another batch;
+///   - a failed or unverified delivery leaves the state dirty and retries with
+///     capped backoff;
+///   - a reconnect (`reconnected(generation:)`) re-supplies too, and fires the
+///     terminal-rebind observers once per generation on its first verified sync;
+///     a steady-state sync fires NO reconnect observers, terminal rebinding, or
+///     pane recovery.
+///
+/// The daemon's `(epoch, revision)` fence rejects an older connection's batch
+/// after a reconnect, so a superseded generation can neither reclaim nor
+/// resurrect state; the coordinator additionally never fires reconnect observers
+/// for a superseded generation.
 @MainActor
 final class InventorySyncCoordinator {
     /// Injected seams so the loop is testable without a live workspace/daemon.

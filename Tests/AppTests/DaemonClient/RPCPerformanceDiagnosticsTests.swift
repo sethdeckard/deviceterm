@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RPCPerformanceDiagnosticsTests: compact per-method/lane aggregates retain
-// reply, timeout, failure, and elapsed-time accounting without request data.
 
 @testable import App
 import DaemonProtocol
@@ -16,6 +13,8 @@ private final class RPCDiagnosticsTestClock {
     }
 }
 
+/// Compact per-method/lane aggregates retain
+/// reply, timeout, failure, and elapsed-time accounting without request data.
 @MainActor
 struct RPCPerformanceDiagnosticsTests {
     @Test

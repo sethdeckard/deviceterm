@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Router cohort curation against the fake daemon: eager reconciles on tab
-// and terminal creation, `beginClose` ahead of session closes, the verdict
-// landing in the boot-claim tombstone, and the reap-race fallback.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// Router cohort curation against the fake daemon: eager reconciles on tab
+/// and terminal creation, `beginClose` ahead of session closes, the verdict
+/// landing in the boot-claim tombstone, and the reap-race fallback.
 @MainActor
 struct RouterCohortTests {
     /// A far-future relay deadline so the claim outlives the assertion.

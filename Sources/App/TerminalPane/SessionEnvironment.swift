@@ -1,19 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SessionEnvironment: the per-terminal-session directory and shell environment.
-//
-// The GUI process (libghostty) spawns the terminal's shell, so the GUI
-// (not the daemon) owns the per-session scratch dir and the env
-// injected into that shell. It also owns the terminal-bound boot-claim relay
-// that lets the shim hand a boot attempt to the GUI without waiting for the
-// daemon. The session UUID and capability come from `session.create`; the
-// daemon remains the session registry. `owner.pid` is the GUI pid, which is
-// the liveness marker used by cold-start orphan recovery.
-//
-// The injected env must carry `DEVICETERM_DAEMON_SOCK` (the global
-// daemon socket: the daemon and shim both read this name) and
-// `DEVICETERM_SESSION_CAP` for daemon authentication and
-// `DEVICETERM_BOOT_CLAIM_SOCK` for boot-attribution handoff.
 
 import DaemonProtocol
 import Foundation
@@ -21,6 +6,20 @@ import Foundation
 import Darwin
 #endif
 
+/// The per-terminal-session directory and shell environment.
+///
+/// The GUI process (libghostty) spawns the terminal's shell, so the GUI
+/// (not the daemon) owns the per-session scratch dir and the env
+/// injected into that shell. It also owns the terminal-bound boot-claim relay
+/// that lets the shim hand a boot attempt to the GUI without waiting for the
+/// daemon. The session UUID and capability come from `session.create`; the
+/// daemon remains the session registry. `owner.pid` is the GUI pid, which is
+/// the liveness marker used by cold-start orphan recovery.
+///
+/// The injected env must carry `DEVICETERM_DAEMON_SOCK` (the global
+/// daemon socket: the daemon and shim both read this name) and
+/// `DEVICETERM_SESSION_CAP` for daemon authentication and
+/// `DEVICETERM_BOOT_CLAIM_SOCK` for boot-attribution handoff.
 final class SessionEnvironment {
     let sessionId: String
     let capability: String

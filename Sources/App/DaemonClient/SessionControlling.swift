@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Role protocol: session lifecycle on the daemon.
-//
-// One of four narrow role protocols carved out of `DaemonClient` so
-// a consumer (and its test fake) depends only on the surface it
-// uses. `DaemonClient` is the sole concrete conformer; consumers
-// take an injected `any SessionControlling` (or a composition with
-// other roles). `@MainActor`/`AnyObject` because the whole GUI
-// daemon path is main-actor and reference-typed.
 
 import DaemonProtocol
 
+/// Role protocol: session lifecycle on the daemon.
+///
+/// A narrow role protocol carved out of `DaemonClient` so
+/// a consumer (and its test fake) depends only on the surface it
+/// uses. `DaemonClient` is the sole concrete conformer; consumers
+/// take an injected `any SessionControlling` (or a composition with
+/// other roles). `@MainActor`/`AnyObject` because the whole GUI
+/// daemon path is main-actor and reference-typed.
 @MainActor
 protocol SessionControlling: AnyObject {
     /// `session.create`: mint a daemon session, returning its id +

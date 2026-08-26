@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PendingPaneViewController: the lightweight AppKit host for a
-// placeholder pane (attach in flight, or failed-awaiting-Retry). It
-// owns no daemon subscription, no Metal view, no drag host: it just
-// hosts `PendingPaneView` and flips its `@Observable` model when the
-// reconcile pass pushes a new `PendingPaneState`. Once the attach
-// succeeds the Router swaps the `.pending` leaf for the real
-// `.sim`/`.device` leaf, and `TabContentViewController` builds the
-// genuine `SimulatorPaneViewController` in this VC's place.
-//
-// `family` is read by `PaneLayoutViewController.leafMetric` /
-// `minThickness` to size the pending leaf with the same metrics the
-// real pane will take, so the success swap doesn't resize the split.
 
 import AppKit
 import DaemonProtocol
 import Observation
 import SwiftUI
 
+/// The lightweight AppKit host for a
+/// placeholder pane (attach in flight, or failed-awaiting-Retry). It
+/// owns no daemon subscription, no Metal view, no drag host: it just
+/// hosts `PendingPaneView` and flips its `@Observable` model when the
+/// reconcile pass pushes a new `PendingPaneState`. Once the attach
+/// succeeds the Router swaps the `.pending` leaf for the real
+/// `.sim`/`.device` leaf, and `TabContentViewController` builds the
+/// genuine `SimulatorPaneViewController` in this VC's place.
+///
+/// `family` is read by `PaneLayoutViewController.leafMetric` /
+/// `minThickness` to size the pending leaf with the same metrics the
+/// real pane will take, so the success swap doesn't resize the split.
 @MainActor
 final class PendingPaneViewController: NSViewController {
     let pendingId: PendingPaneID

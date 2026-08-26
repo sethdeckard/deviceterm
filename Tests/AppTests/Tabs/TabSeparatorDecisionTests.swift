@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabSeparatorDecisionTests: inactive-neighbor and hover suppression rules
-// for the tab strip's decorative separators.
 
 @testable import App
 import Testing
 
+/// Inactive-neighbor and hover suppression rules
+/// for the tab strip's decorative separators.
 struct TabSeparatorDecisionTests {
     @Test
     func emptyAndSingleTabStripsHaveNoSeparators() {

@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// A rotation must not move a divider. The pane keeps the extent it has
-// and the renderer aspect-fits the turned picture inside it, so a
-// landscape phone becomes a short wide strip rather than a pane that
-// grew and took the width out of whatever sits beside it.
-//
-// Both tests mount the actual layout and simulator-pane controllers in
-// an NSWindow, because the claim is about divider arithmetic and the
-// preset math underneath it is already pinned by `SimSizePresetTests`.
-//
-// The pane carries device pixel dimensions from the start, so an
-// orientation-triggered preset would have everything it needs to move
-// the divider. Without them the negative assertion below would pass
-// vacuously.
-//
-// The second test is what keeps the first honest. A broken subscription
-// would leave the pane portrait and the divider still, so the first
-// test would pass having proved nothing. An explicit preset can only
-// produce a landscape-shaped pane if the rotation reached the pane
-// through exactly the path the first test claims moves nothing.
 
 @testable import App
 import AppKit
 import DaemonProtocol
 import Testing
 
+/// A rotation must not move a divider. The pane keeps the extent it has
+/// and the renderer aspect-fits the turned picture inside it, so a
+/// landscape phone becomes a short wide strip rather than a pane that
+/// grew and took the width out of whatever sits beside it.
+///
+/// Both tests mount the actual layout and simulator-pane controllers in
+/// an NSWindow, because the claim is about divider arithmetic and the
+/// preset math underneath it is already pinned by `SimSizePresetTests`.
+///
+/// The pane carries device pixel dimensions from the start, so an
+/// orientation-triggered preset would have everything it needs to move
+/// the divider. Without them the negative assertion below would pass
+/// vacuously.
+///
+/// The second test is what keeps the first honest. A broken subscription
+/// would leave the pane portrait and the divider still, so the first
+/// test would pass having proved nothing. An explicit preset can only
+/// produce a landscape-shaped pane if the rotation reached the pane
+/// through exactly the path the first test claims moves nothing.
 @MainActor
 struct SimulatorPaneRotationLayoutTests {
     private static let terminal = PaneSlot.terminal(TerminalPaneID(value: 1))

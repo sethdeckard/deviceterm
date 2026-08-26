@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WelcomeWindowController: the window a `WelcomeMessage` is shown in.
-// Owns presentation lifecycle only; the message supplies the content.
-//
-// A standalone window, shown at launch *before* the first DeviceTerm
-// window exists, so the welcome is the first thing on screen rather
-// than something competing with the app behind it. That ordering also
-// settles what it can't be: there is no window to host a sheet yet.
-//
-// `onFinished` fires exactly once however the window goes away, by the
-// content's button or by another close request such as ⌘W, because the
-// launch sequence waits on it to open the main window. Dropping it
-// would leave the app running with no window.
 
 import AppKit
 import SwiftUI
 
+/// The window a `WelcomeMessage` is shown in.
+/// Owns presentation lifecycle only; the message supplies the content.
+///
+/// A standalone window, shown at launch *before* the first DeviceTerm
+/// window exists, so the welcome is the first thing on screen rather
+/// than something competing with the app behind it. That ordering also
+/// settles what it can't be: there is no window to host a sheet yet.
+///
+/// `onFinished` fires exactly once however the window goes away, by the
+/// content's button or by another close request such as ⌘W, because the
+/// launch sequence waits on it to open the main window. Dropping it
+/// would leave the app running with no window.
 @MainActor
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
     /// Called once when the window closes. Set by the coordinator.

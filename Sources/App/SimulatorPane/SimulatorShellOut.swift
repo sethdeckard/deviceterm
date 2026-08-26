@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorShellOut: synchronous wrappers around the `xcrun simctl`
-// subcommands that don't belong on the daemon's RPC surface. Per the
-// project philosophy (cat E in docs/PHILOSOPHY.md), wholesale shelling-out
-// to `simctl` for actions Apple already exposes is preferable to
-// reimplementing them as new RPC verbs: the daemon owns the sim's
-// runtime state (HID/AX/display), `simctl` owns one-shot device
-// administration (erase / install / `simctl io` capture).
-//
-// Each entry point is a small wrapper around `Process`, with no new
-// daemon types, no wire surface. Callers run them from the GUI
-// process; the running sim's ownership is preserved because the
-// caller frames the shutdown→action→boot sequence and the boot leg
-// re-asserts `(sessionId, capability)` through the daemon's
-// `device.boot` RPC.
 
 import Foundation
 
+/// Synchronous wrappers around the `xcrun simctl`
+/// subcommands that don't belong on the daemon's RPC surface. Per the
+/// project philosophy (cat E in docs/PHILOSOPHY.md), wholesale shelling-out
+/// to `simctl` for actions Apple already exposes is preferable to
+/// reimplementing them as new RPC verbs: the daemon owns the sim's
+/// runtime state (HID/AX/display), `simctl` owns one-shot device
+/// administration (erase / install / `simctl io` capture).
+///
+/// Each entry point is a small wrapper around `Process`, with no new
+/// daemon types, no wire surface. Callers run them from the GUI
+/// process; the running sim's ownership is preserved because the
+/// caller frames the shutdown→action→boot sequence and the boot leg
+/// re-asserts `(sessionId, capability)` through the daemon's
+/// `device.boot` RPC.
 enum SimulatorShellOut {
     private final class ProcessBox: @unchecked Sendable {
         let process: Process

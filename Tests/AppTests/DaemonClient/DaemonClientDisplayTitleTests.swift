@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The `session.setDisplayTitle` client surface: no cap on the wire (the
-// `.validatedGUI` audit token is the authority), the title bounded BEFORE
-// encoding so a hostile OSC title never becomes a giant XPC payload, and a
-// clear transmitted as an explicit null rather than an omitted key.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import Testing
 
+/// The `session.setDisplayTitle` client surface: no cap on the wire (the
+/// `.validatedGUI` audit token is the authority), the title bounded BEFORE
+/// encoding so a hostile OSC title never becomes a giant XPC payload, and a
+/// clear transmitted as an explicit null rather than an omitted key.
 @MainActor
 struct DaemonClientDisplayTitleTests {
     /// Records each request's method + raw params; returns an empty object

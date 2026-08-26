@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WorktreeName: derive a tab name from the GUI's CWD if it's in a
-// git worktree.
-//
-// Pure logic: takes a path, walks up looking for `.git`, returns the
-// branch name (or short SHA on detached HEAD) or nil. No subprocess
-// to /usr/bin/git, which would require git on PATH at GUI launch, and
-// the formats we care about (`.git/HEAD`, `.git` file pointing at
-// `gitdir: <path>/worktrees/<name>`) are simple enough to parse
-// directly.
-//
-// Label-only worktree binding: the tab's `name` field defaults to
-// the branch when CWD is in a worktree. That label is the whole
-// integration; nothing else keys off the worktree.
 
 import Foundation
 
+/// Derive a tab name from the GUI's CWD if it's in a
+/// git worktree.
+///
+/// Pure logic: takes a path, walks up looking for `.git`, returns the
+/// branch name (or short SHA on detached HEAD) or nil. No subprocess
+/// to /usr/bin/git, which would require git on PATH at GUI launch, and
+/// the formats we care about (`.git/HEAD`, `.git` file pointing at
+/// `gitdir: <path>/worktrees/<name>`) are simple enough to parse
+/// directly.
+///
+/// Label-only worktree binding: the tab's `name` field defaults to
+/// the branch when CWD is in a worktree. That label is the whole
+/// integration; nothing else keys off the worktree.
 enum WorktreeName {
     /// Bound the walk-up so a pathological `cwd` (very deep tree)
     /// can't spin. Ten levels is more than enough, since a real worktree

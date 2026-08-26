@@ -1,46 +1,45 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GhosttyThemeColors: pure helper for resolving ghostty's
-// `selection-background` color out of `~/.config/ghostty/config`.
-// Used by the drag drop-overlay and the focused-pane border so the
-// three visual cues (text-selection highlight inside a terminal, the
-// drag drop region, and the focused-pane ring) share a single source
-// color and read as one design system.
-//
-// This is a one-shot read of the user's ghostty config at
-// process launch (cached via `cachedSelectionBackground()`); it
-// honors only the direct `selection-background = <hex>` key and does
-// NOT follow `theme = name` indirection. When a prefs-pane surface
-// later adds layered theme-file traversal, this helper grows a
-// resolver that consults the theme palette in addition to direct
-// keys, and `invalidateCache()` becomes the hook a config-file
-// watcher fires when the user edits the file.
-//
-// Color parsing accepts ghostty's hex forms only: `#RRGGBB` or bare
-// `RRGGBB`. Named CSS-ish colors (`red`, `cornflowerblue`, …) and
-// the `rgb()/hsl()` functional forms aren't recognized; the helper
-// returns nil for them and callers fall back to
-// `NSColor.controlAccentColor`. The fallback chain is intentional:
-// a fresh-install user without a ghostty config still gets a
-// sensible-looking drag overlay and focus border on the system
-// accent, and a power user who's themed their terminal gets the
-// matching color automatically.
-//
-// **Colorspace**: ghostty honors a `window-colorspace = display-p3`
-// key that flips palette-hex interpretation from sRGB to Display P3,
-// matching the convention iTerm2 uses for its `.itermcolors` files
-// (every color is tagged P3). Without honoring it, deviceterm parses
-// the same `selection-background` hex as sRGB and macOS color-
-// manages sRGB→P3 at render time, washing the focus border + drag
-// overlay relative to the in-terminal text-selection color the
-// user actually sees. The reader picks up that key and constructs
-// the NSColor in the matching colorspace so all three cues line up.
 
 import AppKit
 import DaemonProtocol
 import Foundation
 import SwiftUI
 
+/// Pure helper for resolving ghostty's
+/// `selection-background` color out of `~/.config/ghostty/config`.
+/// Used by the drag drop-overlay and the focused-pane border so the
+/// three visual cues (text-selection highlight inside a terminal, the
+/// drag drop region, and the focused-pane ring) share a single source
+/// color and read as one design system.
+///
+/// This is a one-shot read of the user's ghostty config at
+/// first access and cached process-wide (`cachedSelectionBackground()`); it
+/// honors only the direct `selection-background = <hex>` key and does
+/// NOT follow `theme = name` indirection.
+///
+/// REFACTOR: if layered theme-file traversal is added, resolve theme
+/// palettes here alongside the direct keys, and fire
+/// `invalidateCache()` from the config-file watcher.
+///
+/// Color parsing accepts ghostty's hex forms only: `#RRGGBB` or bare
+/// `RRGGBB`. Named CSS-ish colors (`red`, `cornflowerblue`, …) and
+/// the `rgb()/hsl()` functional forms aren't recognized; the helper
+/// returns nil for them and callers fall back to
+/// `NSColor.controlAccentColor`. The fallback chain is intentional:
+/// a fresh-install user without a ghostty config still gets a
+/// sensible-looking drag overlay and focus border on the system
+/// accent, and a power user who's themed their terminal gets the
+/// matching color automatically.
+///
+/// **Colorspace**: ghostty honors a `window-colorspace = display-p3`
+/// key that flips palette-hex interpretation from sRGB to Display P3,
+/// matching the convention iTerm2 uses for its `.itermcolors` files
+/// (every color is tagged P3). Without honoring it, deviceterm parses
+/// the same `selection-background` hex as sRGB and macOS color-
+/// manages sRGB→P3 at render time, washing the focus border + drag
+/// overlay relative to the in-terminal text-selection color the
+/// user actually sees. The reader picks up that key and constructs
+/// the NSColor in the matching colorspace so all three cues line up.
 @MainActor
 enum GhosttyThemeColors {
     /// Which colorspace ghostty interprets palette hex values in. Set

@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneFocusOrderMath: the linear walk behind Next Pane / Previous Pane.
-//
-// Display order is what the tree already gives us, so this is a wrap at
-// both ends over an ordered list. Kept pure and separate from the
-// spatial walk in `PaneDirectionalFocusMath` because the two answer
-// different questions: this one cycles every pane in a fixed sequence,
-// which is what makes repeated presses reach all of them.
 
+/// The linear walk behind Next Pane / Previous Pane.
+///
+/// Display order is what the tree already gives us, so this is a wrap at
+/// both ends over an ordered list. Kept pure and separate from the
+/// spatial walk in `PaneDirectionalFocusMath` because the two answer
+/// different questions: this one cycles every pane in a fixed sequence,
+/// which is what makes repeated presses reach all of them.
 enum PaneFocusOrderMath {
     /// The pane `delta` steps from `focused` in display order, wrapping
     /// at both ends.

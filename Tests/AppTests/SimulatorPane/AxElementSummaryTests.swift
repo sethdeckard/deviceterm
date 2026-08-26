@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AxElementSummaryTests: pin the chrome-side decoder for
-// `pane.ax.point`. The daemon returns `{"element": {...}}` for a hit
-// and either `{"element": null}` or a missing `element` for a miss;
-// the chrome's AX inspector inline label calls `parse` so a small
-// fixture set covers the field-priority + empty cases without spinning
-// up a daemon.
 
 @testable import App
 import Foundation
 import Testing
 
+/// Pin the chrome-side decoder for
+/// `pane.ax.point`. The daemon returns `{"element": {...}}` for a hit
+/// and either `{"element": null}` or a missing `element` for a miss;
+/// the chrome's AX inspector inline label calls `parse` so a small
+/// fixture set covers the field-priority + empty cases without spinning
+/// up a daemon.
 @MainActor
 struct AxElementSummaryTests {
     private func data(_ json: String) -> Data { Data(json.utf8) }

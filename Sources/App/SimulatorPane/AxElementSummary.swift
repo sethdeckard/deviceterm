@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AxElementSummary: pure decoder that flattens `pane.ax.point`'s
-// opaque-JSON element shape into a one-line summary suitable for the
-// chrome's AX inspector status line. Kept top-level so a unit test
-// can pin the field-priority + empty cases without a daemon
-// connection.
-//
-// Shape: the daemon's handler returns `{"element": {...}}` for a hit
-// and `{"element": null}` (decoded as absent) for a miss. The element
-// dict has a flexible vocabulary depending on the underlying AX
-// translation (role / label / identifier / value / …). For the
-// inspector we read role + label + identifier, drop empties, and
-// join with `·`. Full structured introspection is `deviceterm ax tree`'s
-// surface.
 
 import Foundation
 
+/// Pure decoder that flattens `pane.ax.point`'s
+/// opaque-JSON element shape into a one-line summary suitable for the
+/// chrome's AX inspector status line. Kept top-level so a unit test
+/// can pin the field-priority + empty cases without a daemon
+/// connection.
+///
+/// Shape: the daemon's handler returns `{"element": {...}}` for a hit
+/// and `{"element": null}` (decoded as absent) for a miss. The element
+/// dict has a flexible vocabulary depending on the underlying AX
+/// translation (role / label / identifier / value / …). For the
+/// inspector we read role + label + identifier, drop empties, and
+/// join with `·`. Full structured introspection is `deviceterm ax tree`'s
+/// surface.
 enum AxElementSummary {
     /// Parse the daemon's `pane.ax.point` response data. Returns nil
     /// when the daemon reported no element (cursor over chrome / off-

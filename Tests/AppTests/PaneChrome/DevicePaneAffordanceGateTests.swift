@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePaneAffordanceGateTests: proves the device-pane affordance
-// gate is wired end to end at the two surfaces a test can reach without
-// a window: the focused VC's `validateUserInterfaceItem` (context /
-// main menu) and the chrome ribbon's `ribbonActions`. A device pane
-// disables the simulator-only actions and surfaces only buttons +
-// rotation; a sim pane is unaffected.
 
 @testable import App
 import AppKit
 import DaemonProtocol
 import Testing
 
+/// Proves the device-pane affordance
+/// gate is wired end to end at the two surfaces a test can reach without
+/// a window: the focused VC's `validateUserInterfaceItem` (context /
+/// main menu) and the chrome ribbon's `ribbonActions`. A device pane
+/// disables the simulator-only actions and surfaces only buttons +
+/// rotation; a sim pane is unaffected.
 @MainActor
 struct DevicePaneAffordanceGateTests {
     private let deviceCaps = PaneCapabilities(

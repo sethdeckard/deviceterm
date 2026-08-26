@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GhosttyThemeColorsTests: pin the selection-background and
-// background readers' accepted shapes. The fixture configs cover the
-// canonical inputs (hashed hex, bare hex, key absent, malformed value)
-// plus the colorspace dimension (explicit sRGB, Display P3) on both
-// keys; the parser sub-tests pin the hex-shape rejection rules without
-// going through the file loader.
 
 @testable import App
 import AppKit
 import Foundation
 import Testing
 
+/// Pin the selection-background and background readers' accepted shapes.
+///
+/// The fixture configs cover the canonical inputs (hashed hex, bare hex,
+/// key absent, malformed value) plus the colorspace dimension (explicit
+/// sRGB, Display P3) on both keys; the parser sub-tests pin the hex-shape
+/// rejection rules without going through the file loader.
+///
+/// Cache tests are in a serialized sub-suite so they don't race against
+/// each other on the shared static. The parser + file-read tests above
+/// don't touch the cache so they stay parallelizable.
 @MainActor
 struct GhosttyThemeColorsTests {
     @Test
@@ -291,9 +294,6 @@ struct GhosttyThemeColorsTests {
     }
 }
 
-// Cache tests are in a serialized sub-suite so they don't race against
-// each other on the shared static. The parser + file-read tests above
-// don't touch the cache so they stay parallelizable.
 @MainActor
 @Suite(.serialized)
 struct GhosttyThemeColorsCacheTests {

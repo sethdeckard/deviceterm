@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Role protocol: simulated GPS position on a pane's device.
-//
-// Carved out so the location view model depends on just these two
-// calls rather than the broader `PaneControlling` surface, per the
-// per-role split the other narrow consumers follow.
-//
-// Both methods are `.validatedGUI` on the wire, which is why this role
-// exists on the GUI side and nowhere else. The CLI has no location
-// verb, and a UDS caller cannot reach these methods even by hand-rolling
-// a frame.
 
 import DaemonProtocol
 
+/// Role protocol: simulated GPS position on a pane's device.
+///
+/// Carved out so the location view model depends on just these two
+/// calls rather than the broader `PaneControlling` surface, per the
+/// per-role split the other narrow consumers follow.
+///
+/// Both methods are `.validatedGUI` on the wire, which is why this role
+/// exists on the GUI side and nowhere else. The CLI has no location
+/// verb, and a UDS caller cannot reach these methods even by hand-rolling
+/// a frame.
 @MainActor
 protocol PaneLocationControlling: AnyObject {
     /// `pane.location.set`: apply a coordinate, a named scenario, a

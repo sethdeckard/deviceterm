@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Golden cases for the pure gesture math extracted from
-// SimulatorContentView. Letterbox mapping (both aspect branches),
-// out-of-image rejection, the unit-clamp fallback, tap/swipe
-// classification, finger synthesis, and separation clamping.
 
 @testable import App
 import CoreGraphics
 import DaemonProtocol
 import Testing
 
+/// Golden cases for the pure gesture math extracted from
+/// SimulatorContentView. Letterbox mapping (both aspect branches),
+/// out-of-image rejection, the unit-clamp fallback, tap/swipe
+/// classification, finger synthesis, and separation clamping.
 struct SimGestureMathTests {
     private func approxEqual(
         _ lhs: CGPoint,
@@ -112,7 +111,7 @@ struct SimGestureMathTests {
 
     @Test("App Switcher edge map is the live-confirmed per-orientation set")
     func appSwitcherEdgeMap() {
-        // Live-confirmed: the edge value rotates with orientation.
+        // The edge value rotates with orientation.
         #expect(AppSwitcherGesture.edge(for: .portrait) == 3)
         #expect(AppSwitcherGesture.edge(for: .landscapeLeft) == 2)
         #expect(AppSwitcherGesture.edge(for: .landscapeRight) == 4)

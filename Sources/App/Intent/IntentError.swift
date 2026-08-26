@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// IntentError: the typed error surface for `IntentDispatcher`.
-//
-// Codes are stable strings so CLI receipts can carry them in JSON
-// mode without depending on Swift error type names. Each case
-// carries a `hint` that the CLI prints on stderr (human mode) or
-// includes in the JSON receipt (json mode); UI surfaces translate
-// it into a sheet body.
 
 import DaemonProtocol
 import Foundation
 
+/// The typed error surface for `IntentDispatcher`.
+///
+/// Codes are stable strings so CLI receipts can carry them in JSON
+/// mode without depending on Swift error type names. Each case
+/// carries a `hint` that the CLI prints on stderr (human mode) or
+/// includes in the JSON receipt (json mode); UI surfaces translate
+/// it into a sheet body.
 enum IntentError: Error, Sendable, Equatable {
     /// External ref didn't resolve to anything live. Carries the
     /// kind ("tab" / "pane" / "window") and the original ref text

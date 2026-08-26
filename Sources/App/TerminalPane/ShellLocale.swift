@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ShellLocale: derive a POSIX `LANG` for the spawned login shell.
-//
-// A GUI `.app` launched via Finder/LaunchServices inherits no `LANG`, so a
-// shell it spawns starts with an unset locale: `setlocale` warnings from
-// perl / git hooks / man, non-ASCII filenames printed as octal escapes,
-// and locale-dependent `sort` / `date` / `wc -m` misbehaving. Terminal.app,
-// iTerm, and Ghostty all derive a UTF-8 `LANG` from the system region and
-// export it to the child shell; this mirrors that.
-//
-// Pure + injectable so the derivation is unit-tested without touching the
-// real `Locale` / process environment.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// Derive a POSIX `LANG` for the spawned login shell.
+///
+/// A GUI `.app` launched via Finder/LaunchServices inherits no `LANG`, so a
+/// shell it spawns starts with an unset locale: `setlocale` warnings from
+/// perl / git hooks / man, non-ASCII filenames printed as octal escapes,
+/// and locale-dependent `sort` / `date` / `wc -m` misbehaving. Terminal.app,
+/// iTerm, and Ghostty all derive a UTF-8 `LANG` from the system region and
+/// export it to the child shell; this mirrors that.
+///
+/// Pure + injectable so the derivation is unit-tested without touching the
+/// real `Locale` / process environment.
 enum ShellLocale {
     /// Whether the C library can actually load `name` as a locale. Uses
     /// `newlocale` (not `setlocale`) so the probe never mutates the

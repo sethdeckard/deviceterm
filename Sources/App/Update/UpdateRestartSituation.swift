@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// UpdateRestartSituation: why DeviceTerm is asking to be restarted, in the
-// terms the copy needs.
-//
-// Separate from `VersionMismatchOutcome`, which stays the mid-session
-// vocabulary and describes one thing: what became of a shutdown request. The
-// recovery ladder can end in several distinguishable states that vocabulary has
-// no words for, and widening it would churn the mid-session path for cases it
-// never reaches.
-//
-// The distinctions here are the ones the user needs, not the ones the code finds
-// convenient. Each cause exists because the honest sentence differs: whether the
-// old helper stopped, whether anything replaced it, whether the replacement
-// matches, and whether macOS is still working on the registration. A cause that
-// read the same as its neighbour would be a cause that shouldn't exist.
 
-/// A cause plus what the user should be told about side effects.
+/// A cause plus what the user should be told about side effects: why
+/// DeviceTerm is asking to be restarted, in the terms the copy needs.
+///
+/// Separate from `VersionMismatchOutcome`, which stays the mid-session
+/// vocabulary and describes one thing: what became of a shutdown request. The
+/// recovery ladder can end in several distinguishable states that vocabulary has
+/// no words for, and widening it would churn the mid-session path for cases it
+/// never reaches.
+///
+/// The distinctions here are the ones the user needs, not the ones the code finds
+/// convenient. Each cause exists because the honest sentence differs: whether the
+/// old helper stopped, whether anything replaced it, whether the replacement
+/// matches, and whether macOS is still working on the registration. A cause that
+/// read the same as its neighbour would be a cause that shouldn't exist.
 struct UpdateRestartSituation: Sendable, Equatable {
     let cause: UpdateRestartCause
     /// Whether the launchd registration was torn down and rebuilt, which can

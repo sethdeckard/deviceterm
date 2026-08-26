@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// BootClaimRelayTests: the terminal-local relay binds authority to kernel
-// provenance, caps frames, and creates a mode-0600 endpoint.
 
 @testable import App
 import DaemonProtocol
 import Foundation
 import TerminalProvenance
 import Testing
+
+// The terminal-local relay binds authority to kernel
+// provenance, caps frames, and creates a mode-0600 endpoint.
 
 private let relaySession = "33333333-3333-3333-3333-333333333333"
 private let relayUDID = "44444444-4444-4444-4444-444444444444"

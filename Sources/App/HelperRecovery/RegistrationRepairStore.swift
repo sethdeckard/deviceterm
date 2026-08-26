@@ -1,60 +1,59 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RegistrationRepairStore: a marker recording that a launchd registration repair
-// was started and did not finish, so a later launch can complete it.
-//
-// The repair tears the agent's registration down and stands it back up. Between
-// those two legs the helper is registered nowhere, and a process that dies in
-// that window leaves the user with no helper at all, which is worse than the
-// wire mismatch the repair was treating. An in-process task cannot close that
-// gap: it survives its caller's cancellation, not the process, and every exit
-// from the surrender UI terminates the process on purpose.
-//
-// So the record is on disk, and every operation here FAILS CLOSED.
-//
-//   - Resolving the location throws rather than falling back. A fallback path
-//     would be shared rather than per-user and would sit outside the directory
-//     the rest of the app's durable state lives in, so a marker written there
-//     is not the guarantee it looks like. No location means no repair.
-//   - Inspecting throws on anything but a clean "no such file". A lookup that
-//     could not be completed must not read as "nothing to do", because that is
-//     the answer which skips the reconciliation.
-//   - The marker is written BEFORE the teardown begins, and a write that fails
-//     aborts the repair. A teardown that outruns its marker is exactly the
-//     failure this exists to prevent, so the marker is a precondition and not a
-//     record of the past.
-//   - A failed clear leaves the marker in place. Reconciliation is idempotent,
-//     so a redundant one costs a launch a moment; a marker lost while the repair
-//     was incomplete costs the user their helper.
-//
-// This file answers ONE question: was a repair started and not finished? It is
-// deliberately not asked to say whether one is running right now. Concurrency is
-// `RegistrationRepairLock`'s job. Production reads and writes here happen while
-// the caller holds that lock, which is why a single marker needs no owner, no
-// pid, and no liveness check. This type does not enforce that; its callers do.
-//
-// A passive file cannot act as a barrier: every liveness sample has a race after
-// it, and a non-atomic write can be read half-published.
-//
-// The write is still atomic, which under the lock is belt and braces rather than
-// the mechanism.
-//
-// This is deliberately NOT `WelcomeSeenStore`. That one lives in the XDG cache
-// directory and swallows every failure by design, because re-showing a welcome
-// is harmless and a purged cache is expected. Both properties are disqualifying
-// here, so this lives in Application Support beside the daemon's own durable
-// state and reports its failures.
-//
-// Not claimed to be power-loss safe: that needs file and directory `fsync`, and
-// the exposure is the short window between the write and the teardown. Process
-// termination and crashes, which are the cases that actually arise, are covered.
 
 import Foundation
 
-/// Reads and writes the "a repair was interrupted" marker.
+/// Reads and writes the "a repair was interrupted" marker: a record that a
+/// launchd registration repair was started and did not finish, so a later
+/// launch can complete it.
 ///
 /// A value type over a path so a test can point it at a temporary directory
 /// without touching the user's real Application Support.
+///
+/// The repair tears the agent's registration down and stands it back up. Between
+/// those two legs the helper is registered nowhere, and a process that dies in
+/// that window leaves the user with no helper at all, which is worse than the
+/// wire mismatch the repair was treating. An in-process task cannot close that
+/// gap: it survives its caller's cancellation, not the process, and every exit
+/// from the surrender UI terminates the process on purpose.
+///
+/// So the record is on disk, and every operation here FAILS CLOSED.
+///
+///   - Resolving the location throws rather than falling back. A fallback path
+///     would be shared rather than per-user and would sit outside the directory
+///     the rest of the app's durable state lives in, so a marker written there
+///     is not the guarantee it looks like. No location means no repair.
+///   - Inspecting throws on anything but a clean "no such file". A lookup that
+///     could not be completed must not read as "nothing to do", because that is
+///     the answer which skips the reconciliation.
+///   - The marker is written BEFORE the teardown begins, and a write that fails
+///     aborts the repair. A teardown that outruns its marker is exactly the
+///     failure this exists to prevent, so the marker is a precondition and not a
+///     record of the past.
+///   - A failed clear leaves the marker in place. Reconciliation is idempotent,
+///     so a redundant one costs a launch a moment; a marker lost while the repair
+///     was incomplete costs the user their helper.
+///
+/// It answers ONE question: was a repair started and not finished? It is
+/// deliberately not asked to say whether one is running right now. Concurrency is
+/// `RegistrationRepairLock`'s job. Production reads and writes here happen while
+/// the caller holds that lock, which is why a single marker needs no owner, no
+/// pid, and no liveness check. This type does not enforce that; its callers do.
+///
+/// A passive file cannot act as a barrier: every liveness sample has a race after
+/// it, and a non-atomic write can be read half-published.
+///
+/// The write is still atomic, which under the lock is belt and braces rather than
+/// the mechanism.
+///
+/// This is deliberately NOT `WelcomeSeenStore`. That one lives in the XDG cache
+/// directory and swallows every failure by design, because re-showing a welcome
+/// is harmless and a purged cache is expected. Both properties are disqualifying
+/// here, so this lives in Application Support beside the daemon's own durable
+/// state and reports its failures.
+///
+/// Not claimed to be power-loss safe: that needs file and directory `fsync`, and
+/// the exposure is the short window between the write and the teardown. Process
+/// termination and crashes, which are the cases that actually arise, are covered.
 struct RegistrationRepairStore {
     private let path: String
 

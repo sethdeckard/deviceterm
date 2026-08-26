@@ -1,13 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// WelcomeTests: the welcome registry's rules, storage format, and
-// coordinator behavior.
-//
-// Presentation needs a window server, so the coordinator is driven with
-// an injected presenter that records which message it was handed. What
-// is worth pinning here is the "at most one per launch" rule, the latch
-// the advisory reads, and the ids, which are a contract in two
-// directions: written into the seen cache and used by the Help menu.
 
 @testable import App
 import DaemonProtocol
@@ -15,6 +6,8 @@ import Foundation
 import SwiftUI
 import Testing
 
+/// The welcome registry's selection rules, including the "at most one per
+/// launch" rule.
 @MainActor
 struct WelcomeSelectionTests {
     @Test
@@ -78,6 +71,7 @@ struct WelcomeSelectionTests {
     }
 }
 
+/// The seen cache's storage format.
 @MainActor
 struct WelcomeSeenStoreTests {
     @Test
@@ -123,6 +117,10 @@ struct WelcomeSeenStoreTests {
     }
 }
 
+/// Coordinator behavior, including the latch the advisory reads.
+///
+/// Presentation needs a window server, so the coordinator is driven with an
+/// injected presenter that records which message it was handed.
 @MainActor
 struct WelcomeCoordinatorTests {
     private static func message(_ id: String) -> WelcomeMessage {
@@ -326,6 +324,8 @@ struct WelcomeCoordinatorTests {
     }
 }
 
+/// The welcome ids, which are a contract in two directions: written into
+/// the seen cache, and used by the Help menu.
 @MainActor
 struct WelcomeCatalogTests {
     @Test

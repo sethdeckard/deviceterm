@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneChromeDragHostView: AppKit drag source wrapper around a
-// pane's chrome strip. Hosts the SwiftUI chrome via `NSHostingView`,
-// catches mouseDown / mouseDragged on the strip, and emits a pane
-// drag with a translucent snapshot of the entire pane as the drag
-// image so the pane visibly lifts with the pointer.
-//
-// The drag payload (`PaneDragPayload`, tabID + slot) is encoded as
-// JSON onto the pasteboard; the `PaneLayoutViewController` drag
-// destination decodes it on entry/drop. Cross-window and cross-tab
-// drags are rejected destination-side so a mistaken drop never
-// re-parents a session.
 
 import AppKit
 import SwiftUI
 
+/// AppKit drag source wrapper around a
+/// pane's chrome strip. Hosts the SwiftUI chrome via `NSHostingView`,
+/// catches mouseDown / mouseDragged on the strip, and emits a pane
+/// drag with a translucent snapshot of the entire pane as the drag
+/// image so the pane visibly lifts with the pointer.
+///
+/// The drag payload (`PaneDragPayload`, tabID + slot) is encoded as
+/// JSON onto the pasteboard; the `PaneLayoutViewController` drag
+/// destination decodes it on entry/drop. Cross-window and cross-tab
+/// drags are rejected destination-side so a mistaken drop never
+/// re-parents a session.
 @MainActor
 final class PaneChromeDragHostView<Content: View>: NSView, NSDraggingSource {
     /// The tab id this chrome's pane belongs to, carried on the

@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneAutoLayout: pin the per-split extent math. Each test
-// constructs synthetic `PaneSlotMetrics` and asserts the chosen
-// extents fit the documented algorithm: under-capacity distributes
-// remainder to flexibles; over-capacity shrinks proportionally
-// clamped at minimums.
 
 @testable import App
 import CoreGraphics
 import Testing
 
+/// PaneAutoLayout: pin the per-split extent math. Each test
+/// constructs synthetic `PaneSlotMetrics` and asserts the chosen
+/// extents fit the documented algorithm: under-capacity distributes
+/// remainder to flexibles; over-capacity shrinks proportionally
+/// clamped at minimums.
 struct PaneAutoLayoutTests {
     private let terminal = PaneSlot.terminal(TerminalPaneID(value: 1))
     private let sim = PaneSlot.sim(udid: "sim-1")

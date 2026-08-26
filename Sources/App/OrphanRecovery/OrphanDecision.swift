@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OrphanDecision: the pure core of OrphanRecovery.collect.
-// `collect` does the filesystem read (enumerate session dirs, skip
-// live-owner dirs via kill(0), parse owned-udids.json) and hands the
-// dead-session candidates here; this resolver intersects them with the
-// daemon's ownership + Booted truth to decide live orphans vs.
-// already-empty dead dirs. No filesystem and no daemon, so it is unit-tested.
 
 import DaemonProtocol
 
+/// The pure core of OrphanRecovery.collect.
+/// `collect` does the filesystem read (enumerate session dirs, skip
+/// live-owner dirs via kill(0), parse owned-udids.json) and hands the
+/// dead-session candidates here; this resolver intersects them with the
+/// daemon's ownership + Booted truth to decide live orphans vs.
+/// already-empty dead dirs. No filesystem and no daemon, so it is unit-tested.
 enum OrphanDecision {
     /// Resolve which dead sessions still own Booted sims (→ `live`
     /// orphan records) and which are empty (→ `dead` dir paths to sweep).

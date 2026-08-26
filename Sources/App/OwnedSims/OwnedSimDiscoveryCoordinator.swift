@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// OwnedSimDiscoveryCoordinator: one app-wide owned-simulator poll whose
-// successful snapshots fan out to every live tab.
 
 import DaemonProtocol
 import Foundation
 
+/// One app-wide owned-simulator poll whose
+/// successful snapshots fan out to every live tab.
 @MainActor
 final class OwnedSimDiscoveryCoordinator {
     typealias Observer = @MainActor ([DeviceListEntry]) -> Void

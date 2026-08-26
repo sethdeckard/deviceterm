@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DiscoveryDecision: which owned+booted sims get a pane, and how
-// the "handled" memory is pruned.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// DiscoveryDecision: which owned+booted sims get a pane, and how
+/// the "handled" memory is pruned.
 struct DiscoveryDecisionTests {
     private func device(_ udid: String) -> DeviceListEntry {
         DeviceListEntry(

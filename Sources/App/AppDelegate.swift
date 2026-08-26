@@ -1,13 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// AppDelegate: the composition root and AppKit-side reconcile
-// layer. Constructs the WorkspaceViewModel + Router (and the shared
-// SimResurrect), then `observe()`s the workspace and reconciles its
-// WindowControllers to match. Every nav intent (menu actions, the
-// cold-start orphan flow, the close-window path, ⌘Q quit) dispatches a
-// Route through the Router. The router does the daemon record work
-// (session.create, device.attach, pane.close, session.close, shutdown
-// fan-out); the glue here renders state.
 
 import AppKit
 import DaemonProtocol
@@ -116,6 +107,14 @@ private func restartPlainText(for situation: UpdateRestartSituation) -> String {
     return "\(body)\(aside)\n\n\(situation.detail)"
 }
 
+/// The composition root and AppKit-side reconcile
+/// layer. Constructs the WorkspaceViewModel + Router (and the shared
+/// SimResurrect), then `observe()`s the workspace and reconciles its
+/// WindowControllers to match. Every nav intent (menu actions, the
+/// cold-start orphan flow, the close-window path, ⌘Q quit) dispatches a
+/// Route through the Router. The router does the daemon record work
+/// (session.create, device.attach, pane.closeById, session.close, shutdown
+/// fan-out); the glue here renders state.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Whether the startup repair lock was taken, and what to show if not.

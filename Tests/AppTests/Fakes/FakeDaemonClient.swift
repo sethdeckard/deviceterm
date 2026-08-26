@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// FakeDaemonClient: a test double conforming to all four daemon
-// role protocols. It records every call and returns scripted
-// results, so controllers and view models can be exercised without
-// a live daemon. The shared fake for the App tests.
 
 @testable import App
 import CoreGraphics
 import DaemonProtocol
 import Foundation
 
+/// A test double conforming to the daemon role protocols the App tests
+/// use. It records every call and returns scripted
+/// results, so controllers and view models can be exercised without
+/// a live daemon. The shared fake for the App tests.
 @MainActor
 final class FakeDaemonClient: SessionControlling, DeviceControlling,
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,

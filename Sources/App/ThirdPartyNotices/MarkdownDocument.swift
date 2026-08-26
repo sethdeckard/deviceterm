@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// MarkdownDocument: a deliberately tiny markdown parser for the
-// bundled THIRD_PARTY_NOTICES.md. It handles only the grammar that
-// document is authored in, not full CommonMark:
-//
-//   `# `        → title          (one per document)
-//   `## `       → heading        (per-component)
-//   ``` fences  → verbatim block (license texts, rendered monospaced)
-//   other text  → paragraph      (blank-line separated; inline markdown
-//                                  is interpreted by the view, not here)
-//
-// Pure + `Sendable` so it's unit-testable without any UI. Backs
-// `ThirdPartyNoticesViewModel`.
 
 import Foundation
 
+/// A deliberately tiny markdown parser for the
+/// bundled THIRD_PARTY_NOTICES.md. It handles only the grammar that
+/// document is authored in, not full CommonMark:
+///
+///     `# `        → title          (one per document)
+///     `## `       → heading        (per-component)
+///     ``` fences  → verbatim block (license texts, rendered monospaced)
+///     other text  → paragraph      (blank-line separated; inline markdown
+///                                    is interpreted by the view, not here)
+///
+/// Pure + `Sendable` so it's unit-testable without any UI. Backs
+/// `ThirdPartyNoticesViewModel`.
 enum MarkdownDocument {
     static func parse(_ text: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []

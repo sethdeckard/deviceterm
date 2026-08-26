@@ -1,47 +1,46 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// GPXDocument: the subset of GPX deviceterm reads.
-//
-// Pure: bytes in, points out, no filesystem and no route arithmetic.
-// Turning these points into something a device can walk is
-// `GPXRouteMapper`'s job, so the file format and the playback model stay
-// separately testable.
-//
-// **Three point elements, in one order of precedence.** GPX spells a
-// position three ways: `<trkpt>` inside a track, `<rtept>` inside a
-// route, and a standalone `<wpt>`. Xcode's own GPX support reads only
-// `<wpt>`, which is what its location templates emit, but virtually
-// every exported route (a watch, a mapping site, a race organizer)
-// records the path as a track. Reading only one of them would reject
-// most real files or, worse, read a track file's handful of
-// point-of-interest `<wpt>`s as though they were the route.
-//
-// So all three are collected and the most specific present one wins:
-// track, then route, then standalone. A file with both a track and some
-// `<wpt>` landmarks yields the track, which is the path the user drew.
-//
-// **One continuous run of points per file.** GPX marks a break in the
-// path with a container boundary: a second `<trk>` or `<rte>` for a
-// separate outing, a second `<trkseg>` for a gap in one recording.
-// Neither backend can represent a discontinuity, and joining across one
-// invents a leg from the end of the run to the start of the next: the
-// device walks a straight line over ground nobody covered, and that
-// fabricated distance goes into the derived average pace as well.
-//
-// So any file whose points fall into more than one run **fails**, rather
-// than being silently spliced or silently truncated to whichever came
-// first. That includes `<trkseg>`, and deliberately does not try to
-// judge which breaks are small enough to bridge: a threshold would be
-// the same kind of guess the route-line grammar refuses to make, and
-// wrong in the same way, quietly and only for some people's files.
-//
-// **A malformed point fails the file.** A `<trkpt>` missing `lat`, or
-// carrying something that isn't a number, is not skipped: silently
-// dropping it would quietly reroute the journey around the bad point and
-// still look like a success.
 
 import Foundation
 
+/// The subset of GPX deviceterm reads.
+///
+/// Pure: bytes in, points out, no filesystem and no route arithmetic.
+/// Turning these points into something a device can walk is
+/// `GPXRouteMapper`'s job, so the file format and the playback model stay
+/// separately testable.
+///
+/// **Three point elements, in one order of precedence.** GPX spells a
+/// position three ways: `<trkpt>` inside a track, `<rtept>` inside a
+/// route, and a standalone `<wpt>`. Xcode's own GPX support reads only
+/// `<wpt>`, which is what its location templates emit, but virtually
+/// every exported route (a watch, a mapping site, a race organizer)
+/// records the path as a track. Reading only one of them would reject
+/// most real files or, worse, read a track file's handful of
+/// point-of-interest `<wpt>`s as though they were the route.
+///
+/// So all three are collected and the most specific present one wins:
+/// track, then route, then standalone. A file with both a track and some
+/// `<wpt>` landmarks yields the track, which is the path the user drew.
+///
+/// **One continuous run of points per file.** GPX marks a break in the
+/// path with a container boundary: a second `<trk>` or `<rte>` for a
+/// separate outing, a second `<trkseg>` for a gap in one recording.
+/// Neither backend can represent a discontinuity, and joining across one
+/// invents a leg from the end of the run to the start of the next: the
+/// device walks a straight line over ground nobody covered, and that
+/// fabricated distance goes into the derived average pace as well.
+///
+/// So any file whose points fall into more than one run **fails**, rather
+/// than being silently spliced or silently truncated to whichever came
+/// first. That includes `<trkseg>`, and deliberately does not try to
+/// judge which breaks are small enough to bridge: a threshold would be
+/// the same kind of guess the route-line grammar refuses to make, and
+/// wrong in the same way, quietly and only for some people's files.
+///
+/// **A malformed point fails the file.** A `<trkpt>` missing `lat`, or
+/// carrying something that isn't a number, is not skipped: silently
+/// dropping it would quietly reroute the journey around the bad point and
+/// still look like a success.
 struct GPXDocument: Equatable, Sendable {
     /// The file's points, in the order they will be walked.
     var points: [GPXWaypoint]

@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// RegistrationRepairLock: cross-process exclusion around a launchd registration
-// repair.
-//
-// The helper is a per-user singleton, so two copies of DeviceTerm can try to
-// repair its registration at once, and a launch can arrive while another copy is
-// mid-repair. Between the unregister and the register the helper is registered
-// nowhere, so a second process that registers or connects in that window is
-// acting on a half-torn-down registration.
-//
-// A marker file cannot provide this. A marker records that a repair was
-// interrupted; it cannot say "one is happening right now" without the reader
-// sampling some liveness signal, and every such sample is a guess with a race
-// after it. This is `flock(2)` instead, which the kernel arbitrates.
-//
-// The property that makes it the right tool: the lock is tied to an open file
-// descriptor, so the kernel releases it when the process exits, however it
-// exits. There is no stale lock to detect, no owner pid to record, and no
-// liveness check to get wrong. A process killed mid-repair drops the lock and
-// leaves its marker, which is exactly the pair the next launch needs.
-//
-// Acquisition is non-blocking. Callers poll against their own deadline rather
-// than blocking a launch indefinitely on another process's repair.
 
 import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
 
+/// Cross-process exclusion around a launchd registration
+/// repair.
+///
+/// The helper is a per-user singleton, so two copies of DeviceTerm can try to
+/// repair its registration at once, and a launch can arrive while another copy is
+/// mid-repair. Between the unregister and the register the helper is registered
+/// nowhere, so a second process that registers or connects in that window is
+/// acting on a half-torn-down registration.
+///
+/// A marker file cannot provide this. A marker records that a repair was
+/// interrupted; it cannot say "one is happening right now" without the reader
+/// sampling some liveness signal, and every such sample is a guess with a race
+/// after it. This is `flock(2)` instead, which the kernel arbitrates.
+///
+/// The property that makes it the right tool: the lock is tied to an open file
+/// descriptor, so the kernel releases it when the process exits, however it
+/// exits. There is no stale lock to detect, no owner pid to record, and no
+/// liveness check to get wrong. A process killed mid-repair drops the lock and
+/// leaves its marker, which is exactly the pair the next launch needs.
+///
+/// Acquisition is non-blocking. Callers poll against their own deadline rather
+/// than blocking a launch indefinitely on another process's repair.
 @MainActor
 enum RegistrationRepairLock {
     /// Proof that the repair lock is held, and the thing that releases it.

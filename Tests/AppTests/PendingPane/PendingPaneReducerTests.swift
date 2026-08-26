@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PendingPaneReducer: the placeholder pane's phase machine as a pure
-// function. No view, no daemon: the two transitions a pending pane can
-// take (its attach threw, or the user retried) are pinned here.
 
 @testable import App
 import Testing
 
+/// PendingPaneReducer: the placeholder pane's phase machine as a pure
+/// function. No view, no daemon: the two transitions a pending pane can
+/// take (its attach threw, or the user retried) are pinned here.
 struct PendingPaneReducerTests {
     @Test
     func attachFailedMovesToFailedWithMessage() {

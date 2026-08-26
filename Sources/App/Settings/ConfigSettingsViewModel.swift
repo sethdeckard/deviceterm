@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// ConfigSettingsViewModel: drives "deviceterm > Settings…". Opens the
-// config file in a new terminal tab running `$EDITOR` (Philosophy #1
-// "the tab is the workspace", #5 "agents speak CLI"). When the file
-// doesn't exist yet, surface a create-confirmation first; on confirm,
-// write a seeded, self-documenting config, then open it.
-//
-// Presentation state only: `isConfirmingCreate` toggles the SwiftUI
-// prompt (`ConfigCreatePromptView`). The actual tab launch is an
-// injected side effect (`openInEditorTab`, supplied by `AppDelegate`),
-// so this view model is testable without a live window/router.
 
 import Foundation
 import Observation
 
+/// Drives "deviceterm > Settings…". Opens the
+/// config file in a new terminal tab running `$EDITOR` (Philosophy #1
+/// "the tab is the workspace", #5 "agents speak CLI"). When the file
+/// doesn't exist yet, surface a create-confirmation first; on confirm,
+/// write a seeded, self-documenting config, then open it.
+///
+/// Presentation state only: `isConfirmingCreate` toggles the SwiftUI
+/// prompt (`ConfigCreatePromptView`). The actual tab launch is an
+/// injected side effect (`openInEditorTab`, supplied by `AppDelegate`),
+/// so this view model is testable without a live window/router.
 @MainActor
 @Observable
 final class ConfigSettingsViewModel {

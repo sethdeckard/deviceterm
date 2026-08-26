@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabSeparatorDecision: pure visibility rules for the decorative lines
-// between tab-strip cells.
 
+/// Pure visibility rules for the decorative lines
+/// between tab-strip cells.
 enum TabSeparatorDecision {
     static func trailingVisibility(
         for tabs: [(isSelected: Bool, isHovered: Bool)]

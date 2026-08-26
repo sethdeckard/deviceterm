@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// `RegistrationRepairDecision`: which launch failures are worth offering a
-// helper re-registration for.
-//
-// The repair stops a running helper and discards everything it held, so the
-// gate matters in both directions. Every status other than `.enabled` wants a
-// different remedy, and any reply at all proves the registration resolves, so
-// only the enabled-yet-silent combination is a possible registration wedge.
 
 @testable import App
 import Foundation
 import ServiceManagement
 import Testing
 
+/// `RegistrationRepairDecision`: which launch failures are worth offering a
+/// helper re-registration for.
+///
+/// The repair stops a running helper and discards everything it held, so the
+/// gate matters in both directions. Every status other than `.enabled` wants a
+/// different remedy, and any reply at all proves the registration resolves, so
+/// only the enabled-yet-silent combination is a possible registration wedge.
 struct RegistrationRepairDecisionTests {
     private static let unreachable = DaemonClientError.timedOut(method: "daemon.ping")
 

@@ -1,30 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLayoutViewController+Close: the ⌘W responder-chain action, an
-// extension file for the same reason `+PaneNavigation` and `+Split`
-// are, keeping a set of menu forwarders out of the controller's own
-// file.
-//
-// The selector deliberately does not carry a pane VC's name. Split
-// Right forwards to `TerminalPaneViewController`'s own selector because
-// a focused terminal must claim it first; ⌘W is the opposite, since the
-// decision of what to close needs the whole tab in view and only this
-// controller has it. So the chain resolves here for every pane kind,
-// and this file dispatches to the pane afterwards.
-//
-// Each pane kind is closed through the affordance it already has:
-// terminal and mirrored panes reuse their context-menu actions, and a
-// placeholder reuses its Close button. So there is one close path per
-// kind rather than a keyboard-only variant that can drift from it.
-//
-// The tab case re-enters the responder chain rather than calling
-// through, because closing a tab is `TabStripViewController`'s
-// decision: it owns the close prompts and the dispatch. The terminal's
-// own explicit-close path lands in the same prompts for a last
-// terminal (`onTerminalCloseRequested`), so the two routes agree.
 
 import AppKit
 
+/// The ⌘W responder-chain action, an
+/// extension file for the same reason `+PaneNavigation` and `+Split`
+/// are, keeping a set of menu forwarders out of the controller's own
+/// file.
+///
+/// The selector deliberately does not carry a pane VC's name. Split
+/// Right forwards to `TerminalPaneViewController`'s own selector because
+/// a focused terminal must claim it first; ⌘W is the opposite, since the
+/// decision of what to close needs the whole tab in view and only this
+/// controller has it. So the chain resolves here for every pane kind,
+/// and this file dispatches to the pane afterwards.
+///
+/// Each pane kind is closed through the affordance it already has:
+/// terminal and mirrored panes reuse their context-menu actions, and a
+/// placeholder reuses its Close button. So there is one close path per
+/// kind rather than a keyboard-only variant that can drift from it.
+///
+/// The tab case re-enters the responder chain rather than calling
+/// through, because closing a tab is `TabStripViewController`'s
+/// decision: it owns the close prompts and the dispatch. The terminal's
+/// own explicit-close path lands in the same prompts for a last
+/// terminal (`onTerminalCloseRequested`), so the two routes agree.
 extension PaneLayoutViewController {
     @objc
     func closeFocusedPaneOrTab(_ sender: Any?) {

@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneChromeRibbonFit: the pane chrome's horizontal layout constants,
-// plus the math that predicts whether the expanded ribbon can share the
-// 28pt chrome row with an untruncated device name.
-//
-// `PaneChromeOverlay` lays the row out with these same constants, so the
-// numbers that draw the ribbon and the numbers that predict its width
-// are one set. Splitting them (literals in the view, a copy here) is the
-// drift this file exists to prevent: a spacing tweak in the view would
-// silently teach the prediction to lie.
-//
-// Why predict at all: the ribbon's contents are incompressible (fixed
-// 22pt buttons, a `.fixedSize()` size-preset menu), so SwiftUI layout
-// cannot report that the ribbon does not fit. It truncates the title out
-// of existence instead and lets the ribbon sit on top of it. Only the
-// title and the spacer between the two regions can give. The pane view
-// controller uses `fitsExpanded` once, when a pane's launch layout
-// settles, to decide whether that pane opens expanded.
 
 import AppKit
 
+/// The pane chrome's horizontal layout constants,
+/// plus the math that predicts whether the expanded ribbon can share the
+/// 28pt chrome row with an untruncated device name.
+///
+/// `PaneChromeOverlay` lays the row out with these same constants, so the
+/// numbers that draw the ribbon and the numbers that predict its width
+/// are one set. Splitting them (literals in the view, a copy here) is the
+/// drift this file exists to prevent: a spacing tweak in the view would
+/// silently teach the prediction to lie.
+///
+/// Why predict at all: the ribbon's contents are incompressible (fixed
+/// 22pt buttons, a `.fixedSize()` size-preset menu), so SwiftUI layout
+/// cannot report that the ribbon does not fit. It truncates the title out
+/// of existence instead and lets the ribbon sit on top of it. Only the
+/// title and the spacer between the two regions can give. The pane view
+/// controller uses `fitsExpanded` once, when a pane's launch layout
+/// settles, to decide whether that pane opens expanded.
 enum PaneChromeRibbonFit {
     // MARK: - Shared layout constants
 

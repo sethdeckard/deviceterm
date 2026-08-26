@@ -64,8 +64,8 @@ func unreadableFileIsFlagged() throws {
 
 // MARK: - The forward-compatibility rule
 
-/// The load-bearing test. An append must preserve comments and
-/// unrecognized lines verbatim.
+/// The rule the whole format rests on: an append must preserve comments
+/// and unrecognized lines verbatim.
 @Test("an append preserves comments and unrecognized lines")
 func appendPreservesEverythingElse() throws {
     let path = tempLocationsPath()

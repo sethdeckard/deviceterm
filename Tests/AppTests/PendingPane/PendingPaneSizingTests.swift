@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Pending-pane sizing: a pending placeholder must size identically to
-// the sim/device pane it becomes (so the success swap doesn't resize),
-// and its family must reach the layout controller via
-// `PendingPaneViewController.family`. These pin the pure metric helper
-// + the VC's exposed family without needing a window-attached split
-// view.
 
 @testable import App
 import CoreGraphics
 import DaemonProtocol
 import Testing
 
+/// Pending-pane sizing: a pending placeholder must size identically to
+/// the sim/device pane it becomes (so the success swap doesn't resize),
+/// and its family must reach the layout controller via
+/// `PendingPaneViewController.family`. These pin the pure metric helper
+/// + the VC's exposed family without needing a window-attached split
+/// view.
 @MainActor
 struct PendingPaneSizingTests {
     private func naturalExtent(_ family: String, isVerticalDivider: Bool) -> CGFloat {

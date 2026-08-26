@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorPaneAXViewModel: observable state for the AX inspector
-// side panel. Holds the cursor-driven AX label (the focused element
-// under the mouse pointer) that the AX-inspector mouse-move
-// tracking populates.
-//
-// The model is intentionally minimal. The AX RPC surface drives a
-// label-under-cursor flow, and the side panel presents that
-// information in a dedicated 240pt-wide pane on the right
-// of the sim pixels, satisfying the "no AX printout on sim pixels +
-// no taller chrome" constraint.
 
 import Foundation
 import Observation
 
+/// Observable state for the AX inspector
+/// side panel. Holds the cursor-driven AX label (the element under the
+/// mouse pointer) that the AX-inspector mouse-move
+/// tracking populates.
+///
+/// The model is intentionally minimal. The AX RPC surface drives a
+/// label-under-cursor flow, and the side panel presents that
+/// information in a dedicated 240pt-wide pane on the right
+/// of the sim pixels, satisfying the "no AX printout on sim pixels +
+/// no taller chrome" constraint.
 @MainActor
 @Observable
 final class SimulatorPaneAXViewModel {

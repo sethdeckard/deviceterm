@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Index arithmetic for the Window menu's tab-selection items. These pure
-// tests enumerate wrapping, missing positions, and empty or single-tab
-// windows.
 
 @testable import App
 import Testing
 
+/// Index arithmetic for the Window menu's tab-selection items. These pure
+/// tests enumerate wrapping, missing positions, and empty or single-tab
+/// windows.
 @Suite
 struct TabSelectionMathTests {
     // MARK: - Numbered items

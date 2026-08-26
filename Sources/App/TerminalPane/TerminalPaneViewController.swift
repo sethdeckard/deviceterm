@@ -1,17 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TerminalPaneViewController: hosts one libghostty surface in an AppKit VC.
-//
-// The embed recipe is the authoritative one from
-// `Sources/LibghosttyHarness/main.swift`: own a clean container view,
-// fill-constrain `surface.view`, `attach(command:)`, make the host
-// first responder. libghostty owns the PTY in-process;
-// the shell is spawned from the daemon-minted `TerminalCommand`.
-//
-// Resources-dir resolver: env override → the bundled
-// `Contents/Resources/ghostty` tree → `GhosttyKitResources.
-// directoryURL` (safe only unbundled: it fatalErrors if Bundle.module
-// can't resolve, which is the case inside a signed .app).
 
 import AppKit
 import DaemonProtocol
@@ -19,6 +6,19 @@ import GhosttyKitResources
 import LibghosttyBridge
 import TerminalSurface
 
+/// Hosts one libghostty surface in an AppKit VC.
+///
+/// The embed recipe is the authoritative one from
+/// `Sources/LibghosttyHarness/main.swift`: own a clean container view,
+/// fill-constrain `surface.view`, `attach(command:)`, make the host
+/// first responder. libghostty owns the PTY in-process; the shell is
+/// spawned from a `TerminalCommand.loginShell` the GUI builds from
+/// daemon-issued credentials plus app-owned shell settings.
+///
+/// Resources-dir resolver: env override → the bundled
+/// `Contents/Resources/ghostty` tree → `GhosttyKitResources.
+/// directoryURL` (safe only unbundled: it fatalErrors if Bundle.module
+/// can't resolve, which is the case inside a signed .app).
 @MainActor
 final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegate {
     /// Constant chrome height; the libghostty scroll wrapper's top

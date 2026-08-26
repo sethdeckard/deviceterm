@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabListViewModel: append/select/remove + sim-pane bookkeeping,
-// and the pure close-index-follow selection math.
 
 @testable import App
 import Testing
 
+/// TabListViewModel: append/select/remove + sim-pane bookkeeping,
+/// and the pure close-index-follow selection math.
 @MainActor
 struct TabListViewModelTests {
     private func tab(_ value: Int) -> TabState {
@@ -196,7 +195,7 @@ struct TabListViewModelTests {
     func addSimPaneDedupsAcrossUDIDCase() {
         // Daemon-canonicalized lowercased udid from one attach path
         // and simctl-uppercase from another point at the same sim;
-        // case-insensitive compare is the load-bearing piece that
+        // case-insensitive compare is the piece that
         // makes the dedup correct in mixed-case storage scenarios.
         let model = TabListViewModel()
         model.append(tab(1))

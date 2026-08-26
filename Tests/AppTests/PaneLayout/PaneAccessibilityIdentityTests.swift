@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The pane identifiers are an observability contract with the
-// out-of-process UI-test harness, which selects the shared prefix and
-// then follows one full identifier across dumps.
-//
-// The prefix is the discovery half: the harness fails loudly when it
-// selects nothing, so a prefix change announces itself. The suffixes are
-// the quieter half, since a reshaped one still matches the prefix and
-// still counts. Uniqueness carries its own weight because the focus
-// checks name panes by whole identifier: a collision makes two distinct
-// pane nodes indistinguishable, and the harness can then no longer say
-// which one a shortcut acted on.
-//
-// The accessibility-group test covers the rest of the contract: an
-// identifier is only reachable if the view carrying it is published to
-// the accessibility tree at all.
 
 @testable import App
 import AppKit
 import DaemonProtocol
 import Testing
 
+/// The pane identifiers are an observability contract with the
+/// out-of-process UI-test harness, which selects the shared prefix and
+/// then follows one full identifier across dumps.
+///
+/// The prefix is the discovery half: the harness fails loudly when it
+/// selects nothing, so a prefix change announces itself. The suffixes are
+/// the quieter half, since a reshaped one still matches the prefix and
+/// still counts. Uniqueness carries its own weight because the focus
+/// checks name panes by whole identifier: a collision makes two distinct
+/// pane nodes indistinguishable, and the harness can then no longer say
+/// which one a shortcut acted on.
+///
+/// The accessibility-group test covers the rest of the contract: an
+/// identifier is only reachable if the view carrying it is published to
+/// the accessibility tree at all.
 @MainActor
 struct PaneAccessibilityIdentityTests {
     @Test

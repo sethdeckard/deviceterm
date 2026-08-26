@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// The linear pane walk behind Next Pane / Previous Pane. Wrapping and
-// the no-focus start are the two cases a user hits first, so both are
-// pinned rather than left to the arrow keys to discover.
 
 @testable import App
 import Testing
 
+/// The linear pane walk behind Next Pane / Previous Pane. Wrapping and
+/// the no-focus start are the two cases a user hits first, so both are
+/// pinned rather than left to the arrow keys to discover.
 @MainActor
 struct PaneFocusOrderMathTests {
     private let first = PaneSlot.terminal(TerminalPaneID(value: 1))

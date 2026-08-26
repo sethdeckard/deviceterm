@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// LocationsFile: a line-preserving reader/writer for
-// `<config home>/deviceterm/locations`.
-//
-// Built on the same substrate as `ConfigFile`: the file is held as an
-// ordered list of raw lines, and a write appends without disturbing
-// anything already there. Comments and blank lines survive
-// byte-for-byte, and so do **lines this version does not understand**.
-// That last part is the load-bearing one.
-//
-// Unknown lines are preserved verbatim across appends, so entry kinds
-// this parser doesn't support remain intact. Such a line is never
-// parsed, warned about, or acted on, and never destroyed.
-//
-// **A saved list, not a recents list.** deviceterm appends and nothing
-// else: it never reorders, never caps, never evicts. File order is menu
-// order, so the user is the one who curates it. Any MRU behavior would
-// eventually delete a line somebody typed by hand, which is not a thing
-// a file we advertise as hand-editable gets to do.
 
 import DaemonProtocol
 import Foundation
 import os
 
+/// A line-preserving reader/writer for
+/// `<config home>/deviceterm/locations`.
+///
+/// Built on the same substrate as `ConfigFile`: the file is held as an
+/// ordered list of raw lines, and a write appends without disturbing
+/// anything already there. Comments and blank lines survive
+/// byte-for-byte, and so do **lines this version does not understand**.
+/// That last part is what forward compatibility depends on.
+///
+/// Unknown lines are preserved verbatim across appends, so entry kinds
+/// this parser doesn't support remain intact. Such a line is never
+/// parsed, warned about, or acted on, and never destroyed.
+///
+/// **A saved list, not a recents list.** deviceterm appends and nothing
+/// else: it never reorders, never caps, never evicts. File order is menu
+/// order, so the user is the one who curates it. Any MRU behavior would
+/// eventually delete a line somebody typed by hand, which is not a thing
+/// a file we advertise as hand-editable gets to do.
 final class LocationsFile {
     static let defaultPath = XDGPaths.deviceTermLocations()
 

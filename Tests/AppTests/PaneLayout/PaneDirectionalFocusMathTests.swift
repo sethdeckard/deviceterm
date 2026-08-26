@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Spatial neighbor resolution for the ⌥⌘ arrows. Frames are in the
-// layout controller's own coordinate space, which is AppKit's default
-// orientation, so a larger y is higher on screen.
-//
-// Every layout here is written as explicit rectangles rather than built
-// from a `PaneNode`, because the whole point of the snapshot input is
-// that the tree's `extents` do not track a dragged divider.
 
 @testable import App
 import CoreGraphics
 import Testing
 
+/// Spatial neighbor resolution for the ⌥⌘ arrows. Frames are in the
+/// layout controller's own coordinate space, which is AppKit's default
+/// orientation, so a larger y is higher on screen.
+///
+/// Every layout here is written as explicit rectangles rather than built
+/// from a `PaneNode`, because the whole point of the snapshot input is
+/// that the tree's `extents` do not track a dragged divider.
 @MainActor
 struct PaneDirectionalFocusMathTests {
     private static let left = PaneSlot.terminal(TerminalPaneID(value: 1))

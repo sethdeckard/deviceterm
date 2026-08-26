@@ -1,31 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabTitleViewModel: a tab's strip/window label state, extracted
-// from TabContentViewController as an `@Observable` view model used
-// with the `observe()` keystone.
-//
-// Label inputs, highest precedence first:
-//   1. manual rename: the user explicitly named it; nothing else wins
-//   2. shell OSC 0/2 title: often command-aware ("vim foo.swift") and
-//      worth surfacing in real time when the shell sends it
-//   3. session name: session-stable identity (e.g. worktree branch
-//      at session-create, or a future `deviceterm tab rename`); a
-//      meaningful default when the shell isn't emitting OSC titles
-//   4. working-directory basename: the OSC-7 CWD, the last resort before
-//      the generic "shell" fallback
-//
-// Each source writes only its own field (via the mutators below), so a
-// later CWD or OSC update can't erase a manual rename. The fields live
-// on the tab, so they survive strip rebuilds and tab switches.
-//
-// The OSC-7 path is also retained in full, which is not a label input:
-// it backs the window's titlebar proxy icon, whose directory is
-// independent of whatever the label ends up saying.
 
 import DaemonProtocol
 import Foundation
 import Observation
 
+/// A tab's strip/window label state, extracted
+/// from TabContentViewController as an `@Observable` view model used
+/// with the `observe()` keystone.
+///
+/// Label inputs, highest precedence first:
+///   1. manual rename: the user explicitly named it; nothing else wins
+///   2. shell OSC 0/2 title: often command-aware ("vim foo.swift") and
+///      worth surfacing in real time when the shell sends it
+///   3. session name: session-stable identity (e.g. worktree branch
+///      at session-create, or `deviceterm tab rename`); a
+///      meaningful default when the shell isn't emitting OSC titles
+///   4. working-directory basename: the OSC-7 CWD, the last resort before
+///      the generic "shell" fallback
+///
+/// Each source writes only its own field (via the mutators below), so a
+/// later CWD or OSC update can't erase a manual rename. The fields live
+/// on the tab, so they survive strip rebuilds and tab switches.
+///
+/// The OSC-7 path is also retained in full, which is not a label input:
+/// it backs the window's titlebar proxy icon, whose directory is
+/// independent of whatever the label ends up saying.
 @MainActor
 @Observable
 final class TabTitleViewModel {
@@ -134,8 +133,8 @@ final class TabTitleViewModel {
 
     /// Set the session-bound name. Nil clears it.
     /// `TabContentViewController.init` calls this with the worktree
-    /// branch returned from `session.create`; a future `tab rename`
-    /// route will call it when the daemon-side name changes.
+    /// branch returned from `session.create`, and the `tab rename`
+    /// route calls it when the daemon-side name changes.
     func updateSessionName(_ name: String?) {
         guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines),
             !name.isEmpty else {

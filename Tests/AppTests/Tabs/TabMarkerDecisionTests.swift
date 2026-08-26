@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// TabMarkerDecisionTests: which markers a pill carries, and their order.
-//
-// The order is the part worth pinning. `markers` appends in order and the
-// strip mounts the list as given, so swapping the two appends would put the
-// lock first and nothing in the code would object. The last case is what
-// catches that.
 
 @testable import App
 import DaemonProtocol
 import Testing
 
+/// Which markers a pill carries, and their order.
+///
+/// The order is the part worth pinning. `markers` appends in order and the
+/// strip mounts the list as given, so swapping the two appends would put the
+/// lock first and nothing in the code would object. The last case is what
+/// catches that.
 @Suite("tab pill markers")
 struct TabMarkerDecisionTests {
     /// Role and protection are independent, so all four combinations are

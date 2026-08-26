@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimResurrect: auto-resurrect for sim panes that went `.shutdown`.
-//
-// When a pane's underlying sim is shut down (either via the pane's
-// "Reboot" button or via an
-// external `xcrun simctl boot <udid>` after a shutdown), the GUI
-// should re-attach a fresh sim pane in place, keeping the user's
-// tab layout instead of leaving a dimmed overlay or spawning a new
-// pane elsewhere.
-//
-// Implemented via a bounded poll: while at least one watch is
-// active, we ask the daemon for `device.list(scope:"owned")`
-// every couple of seconds and resurrect any watched UDID that's
-// transitioned back to Booted. No new daemon RPC is needed; a
-// dedicated `devices.subscribe` would avoid the poll but isn't
-// built. Watches are registered by
-// TabContentViewController the moment a sim pane reports `.shutdown` and
-// removed when the user clicks Close Pane or the resurrect fires.
 
 import Foundation
 
+/// Auto-resurrect for sim panes that went `.shutdown`.
+///
+/// When a pane's underlying sim is shut down (either via the pane's
+/// "Reboot" button or via an
+/// external `xcrun simctl boot <udid>` after a shutdown), the GUI
+/// should re-attach a fresh sim pane in place, keeping the user's
+/// tab layout instead of leaving a dimmed overlay or spawning a new
+/// pane elsewhere.
+///
+/// Implemented via a bounded poll: while at least one watch is
+/// active, we ask the daemon for `device.list(scope:"owned")`
+/// every couple of seconds and resurrect any watched UDID that's
+/// transitioned back to Booted. No new daemon RPC is needed; a
+/// dedicated `devices.subscribe` would avoid the poll but isn't
+/// built. Watches are registered by
+/// `SimPaneActionCoordinator` the moment a sim pane reports `.shutdown` and
+/// removed when the user clicks Close Pane or the resurrect fires.
 @MainActor
 final class SimResurrect {
     /// Poll cadence while at least one watch is active. 2s is

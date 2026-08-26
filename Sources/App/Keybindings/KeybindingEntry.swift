@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// KeybindingEntry: one row of the keybinding catalog, describing what
-// the action is, what you press, what the menu says, and which selector
-// the responder chain dispatches.
-//
-// Entries carry AppKit-only `Selector` and `AnyClass` metadata, neither
-// of which is `Sendable`, so the catalog is main-actor isolated. The
-// pure half of the layer (`KeyChord`, `KeyModifiers`,
-// `KeybindingAction`, `KeybindingScope`) stays `Sendable` and actor-free.
-// This mirrors the shape `PaneControlAffordance` already uses.
 
 import AppKit
 
+/// One row of the keybinding catalog, describing what
+/// the action is, what you press, what the menu says, and which selector
+/// the responder chain dispatches.
+///
+/// Entries carry AppKit-only `Selector` and `AnyClass` metadata, neither
+/// of which is `Sendable`, so the catalog is main-actor isolated. The
+/// pure half of the layer (`KeyChord`, `KeyModifiers`,
+/// `KeybindingAction`, `KeybindingScope`) stays `Sendable` and actor-free.
+/// This mirrors the shape `PaneControlAffordance` already uses.
 @MainActor
 struct KeybindingEntry {
     let action: KeybindingAction

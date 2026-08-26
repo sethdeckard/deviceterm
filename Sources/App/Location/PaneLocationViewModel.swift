@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneLocationViewModel: presentation state for Device ▸ Location on
-// one pane.
-//
-// `@MainActor @Observable`, bound through the `App.observe { }` helper
-// like the other pane view models. It holds a *snapshot* the menu reads
-// synchronously; refreshing happens off to the side in a `Task` and
-// never blocks menu construction. A refresh that lands while a menu is
-// open doesn't retro-update it. A later open uses the refresh once it
-// completes, the same bargain `SimulatorPaneViewModel` makes for
-// orientation.
 
 import DaemonProtocol
 import Foundation
 import os
 
+/// Presentation state for Device ▸ Location on
+/// one pane.
+///
+/// `@MainActor @Observable`, bound through the `App.observe { }` helper
+/// like the other pane view models. It holds a *snapshot* the menu reads
+/// synchronously; refreshing happens off to the side in a `Task` and
+/// never blocks menu construction. A refresh that lands while a menu is
+/// open doesn't retro-update it. A later open uses the refresh once it
+/// completes, the same bargain `SimulatorPaneViewModel` makes for
+/// orientation.
 @MainActor
 @Observable
 final class PaneLocationViewModel {

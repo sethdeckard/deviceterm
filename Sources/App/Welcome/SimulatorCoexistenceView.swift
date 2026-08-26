@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// SimulatorCoexistenceView: the content of the Simulator.app
-// coexistence welcome.
-//
-// Shaped like Apple's own first-run screens: a full-bleed hero band, an
-// eyebrow and large title, the explanation, then one prominent button.
-// The window is chromeless, so this view owns the entire surface and
-// that button is the only obvious way forward.
-//
-// The hero is the quit illustration rather than decoration. What the
-// screen is really teaching is one action, so the picture of that action
-// gets the top of the window and the prose underneath explains why.
-//
-// Body text is leading-aligned and fixed-width even though the title
-// block is centered: centered prose reads badly past a line or two,
-// which is why `DaemonStatusSheet` sets the pattern this follows.
-//
-// No "Don't show again" checkbox. Once its id is recorded, automatic
-// selection skips this welcome, so the box would have nothing to
-// suppress; `welcome-messages` covers the case where someone wants none
-// of them. That is the deliberate asymmetry with `HeadlessAdvisory`,
-// which can re-fire on later launches and does carry one.
 
 import SwiftUI
 
+/// The content of the Simulator.app
+/// coexistence welcome.
+///
+/// Shaped like Apple's own first-run screens: a full-bleed hero band, an
+/// eyebrow and large title, the explanation, then one prominent button.
+/// The window is chromeless, so this view owns the entire surface and
+/// that button is the only obvious way forward.
+///
+/// The hero is the quit illustration rather than decoration. What the
+/// screen is really teaching is one action, so the picture of that action
+/// gets the top of the window and the prose underneath explains why.
+///
+/// Body text is leading-aligned and fixed-width even though the title
+/// block is centered: centered prose reads badly past a line or two,
+/// which is why `DaemonStatusSheet` sets the pattern this follows.
+///
+/// No "Don't show again" checkbox. Once its id is recorded, automatic
+/// selection skips this welcome, so the box would have nothing to
+/// suppress; `welcome-messages` covers the case where someone wants none
+/// of them. That is the deliberate asymmetry with `HeadlessAdvisory`,
+/// which can re-fire on later launches and does carry one.
 struct SimulatorCoexistenceView: View {
     /// Whether this is the first-run gate or an explicit reopen, from
     /// the Help menu or the advisory's Learn More… button. Changes the

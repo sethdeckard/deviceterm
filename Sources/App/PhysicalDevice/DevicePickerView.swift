@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DevicePickerView: the SwiftUI surface for "Mirror Physical Device…".
-// Renders the connected-device roster from `DevicePickerViewModel`:
-// a progress indicator while loading, an error line if the list RPC
-// failed, an empty-state hint when nothing is connected, or a list of
-// devices. Each row reads as a selectable list entry: device icon,
-// name, a `model · iOS x.y` subtitle (so two devices that share a name
-// are distinguishable), a hover highlight, and a trailing chevron.
-// A single click mirrors the device; unavailable rows are disabled and
-// show their reason. Pure render-state product UI, so SwiftUI per the
-// boundary rule.
 
 import DaemonProtocol
 import SwiftUI
 
+/// The SwiftUI surface for "Mirror Physical Device…".
+/// Renders the connected-device roster from `DevicePickerViewModel`:
+/// a progress indicator while loading, an error line if the list RPC
+/// failed, an empty-state hint when nothing is connected, or a list of
+/// devices. Each row reads as a selectable list entry: device icon,
+/// name, a `model · iOS x.y` subtitle (so two devices that share a name
+/// are distinguishable), a hover highlight, and a trailing chevron.
+/// A single click mirrors the device; unavailable rows are disabled and
+/// show their reason. Pure render-state product UI, so SwiftUI per the
+/// boundary rule.
 struct DevicePickerView: View {
     /// Above this many devices the list scrolls; at or below it sizes to
     /// its content so the window stays compact for the typical 1–3

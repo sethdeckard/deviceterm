@@ -1,27 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// DaemonClient: the GUI's persistent control and pane RPC lanes.
-//
-// `@MainActor` (not an actor): the surface, its delegate, the VCs and
-// NSWindow are all main-actor; an actor would force a hop per request
-// and invite subscription-replay reentrancy. The XPC transport
-// underneath (`XPCDaemonConnection`) is an actor and serializes each
-// lane's state; this façade just adapts the RPC envelope shape to the
-// role-protocol surface the rest of the GUI consumes.
-//
-// **Transport.** The GUI talks to the daemon over a launchd-vended
-// XPC mach service. The daemon registers via `SMAppService.agent`
-// (`DaemonRegistration` on the App side); the mach service name
-// lives in `MachServiceName.daemon` (DaemonProtocol). There is no
-// `Process()` spawn fallback. Developer-ID signing is the
-// production path, and ad-hoc / unsigned builds also flow through
-// XPC (so contributors hit the same code path as production users).
-//
-// **Subscriptions.** `subscribePane` returns a stream that pairs
-// each `surface.changed` JSON evt with its matching side-band
-// surface payload: the `XPCDaemonConnection` does the
-// `(paneId, sequence)` correlation and `IOSurfaceLookupFromXPCObject`
-// invisibly. Callers see typed `PaneEvent` values, not raw frames.
 
 import DaemonProtocol
 import Foundation
@@ -40,6 +17,28 @@ private let reconnectLog = Logger(subsystem: "com.deviceterm", category: "reconn
 /// notably a session it created but could neither hand to a tab nor close.
 private let sessionLog = Logger(subsystem: "com.deviceterm", category: "session")
 
+/// The GUI's persistent control and pane RPC lanes.
+///
+/// `@MainActor` (not an actor): the surface, its delegate, the VCs and
+/// NSWindow are all main-actor; an actor would force a hop per request
+/// and invite subscription-replay reentrancy. The XPC transport
+/// underneath (`XPCDaemonConnection`) is an actor and serializes each
+/// lane's state; this façade just adapts the RPC envelope shape to the
+/// role-protocol surface the rest of the GUI consumes.
+///
+/// **Transport.** The GUI talks to the daemon over a launchd-vended
+/// XPC mach service. The daemon registers via `SMAppService.agent`
+/// (`DaemonRegistration` on the App side); the mach service name
+/// lives in `MachServiceName.daemon` (DaemonProtocol). There is no
+/// `Process()` spawn fallback. Developer-ID signing is the
+/// production path, and ad-hoc / unsigned builds also flow through
+/// XPC (so contributors hit the same code path as production users).
+///
+/// **Subscriptions.** `subscribePane` returns a stream that pairs
+/// each `surface.changed` JSON evt with its matching side-band
+/// surface payload: the `XPCDaemonConnection` does the
+/// `(paneId, sequence)` correlation and `IOSurfaceLookupFromXPCObject`
+/// invisibly. Callers see typed `PaneEvent` values, not raw frames.
 @MainActor
 final class DaemonClient: SessionControlling, DeviceControlling, AutomationGranting,
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,

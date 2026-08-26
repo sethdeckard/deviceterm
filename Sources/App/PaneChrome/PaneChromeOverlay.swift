@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// PaneChromeOverlay: the simulator pane's SwiftUI chrome. A single
-// 28pt row with two pinned regions framing a collapsible ribbon:
-//
-//   - Left (pinned): status badge + truncating title.
-//   - Right (anchored): the ribbon control proper, holding a chevron toggle
-//     button (tap to expand/collapse), the ribbon contents
-//     (last-used action when collapsed, full family-aware set when
-//     expanded), and the ⋯ overflow on the trailing side. The whole
-//     ribbon is anchored to the right edge of the chrome with a
-//     left-rounded / right-flat capsule.
-//
-// At any moment exactly one ribbon action is the "hot" button,
-// theme-tinted with the ghostty `selection-background` color
-// (fallback `controlAccentColor`) so the user sees the active focus
-// at a glance. Stateful toggles (AX inspector, recording) become
-// hot when active and remain hot until turned off, after which the
-// last-used action takes over. The ⋯ overflow is never hot.
-//
-// Per AGENTS.md SwiftUI/AppKit boundary: this surface is pure render
-// state + action callbacks, so SwiftUI is correct here. The action
-// closures route to `SimulatorPaneViewController` intent methods,
-// which delegate to `SimulatorPaneViewModel`'s pre-existing input
-// surface, so there is no duplication of business logic in the chrome.
 
 import AppKit
 import DaemonProtocol
 import SwiftUI
 
+/// The simulator pane's SwiftUI chrome. A single
+/// 28pt row with two pinned regions framing a collapsible ribbon:
+///
+///   - Left (pinned): status badge + truncating title.
+///   - Right (anchored): the ribbon control proper, holding a chevron toggle
+///     button (tap to expand/collapse), the ribbon contents
+///     (last-used action when collapsed, full family-aware set when
+///     expanded), and the ⋯ overflow on the trailing side. The whole
+///     ribbon is anchored to the right edge of the chrome with a
+///     left-rounded / right-flat capsule.
+///
+/// At any moment exactly one ribbon action is the "hot" button,
+/// theme-tinted with the ghostty `selection-background` color
+/// (fallback `controlAccentColor`) so the user sees the active focus
+/// at a glance. Stateful toggles (AX inspector, recording) become
+/// hot when active and remain hot until turned off, after which the
+/// last-used action takes over. The ⋯ overflow is never hot.
+///
+/// Per AGENTS.md SwiftUI/AppKit boundary: this surface is pure render
+/// state + action callbacks, so SwiftUI is correct here. The action
+/// closures route to `SimulatorPaneViewController` intent methods,
+/// which delegate to `SimulatorPaneViewModel`'s pre-existing input
+/// surface, so there is no duplication of business logic in the chrome.
 struct PaneChromeOverlay: View {
     /// The ghostty selection-background color (fallback to system
     /// accent) for the hot-button and on-state tint. Shared across
