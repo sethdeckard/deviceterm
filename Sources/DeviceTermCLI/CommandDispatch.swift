@@ -348,7 +348,13 @@ func run(
             }
 
         case let .axSweep(pane, step):
-            return try sendResolvedPrintingResult(ref: pane, transport: transport) {
+            // `ax sweep` scales with grid density, so it waits 15 seconds
+            // rather than the default five.
+            return try sendResolvedPrintingResult(
+                ref: pane,
+                transport: transport,
+                timeoutSeconds: axSweepTimeoutSeconds
+            ) {
                 try CLICommands.axSweepRequest(paneId: $0, step: step)
             }
 
@@ -723,10 +729,11 @@ func sendResolvedPrintingResult(
     ref: String?,
     transport: CLITransport,
     creds: (sessionId: String, cap: String)? = nil,
+    timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds,
     build: (String) throws -> RPCEnvelope
 ) throws -> CommandOutcome {
     let envelope = try build(try resolvePane(ref: ref, transport: transport, creds: creds).paneId)
-    var result = try transport.send(envelope)
+    var result = try transport.send(envelope, timeoutSeconds: timeoutSeconds)
     result.append(0x0A)
     return .stdout(result)
 }

@@ -249,8 +249,6 @@ func paramsData(_ envelope: RPCEnvelope) -> Data? {
     return nil
 }
 
-/// Send a request envelope built by `CLICommands` and return the result
-/// payload. The builders always set `method`; a nil here is a bug.
 /// Response timeout for a gesture RPC that the daemon answers only after
 /// the gesture finishes dispatching (`swipe` / `app-switcher`): the
 /// gesture's own wall-clock plus generous headroom for the sim's
@@ -259,6 +257,20 @@ func gestureTimeout(_ gestureMs: Int) -> Double {
     5 + Double(max(0, gestureMs)) / 1_000.0 + 5
 }
 
+/// Response timeout for `ax sweep`, whose grid walk the daemon runs under a
+/// deadline of its own and then answers with what it found. The legal step
+/// range reaches grids that take far longer than the default wait, so
+/// without this a caller asking for a fine step got a bare transport
+/// timeout instead of the partial answer the daemon was about to send.
+///
+/// The daemon's 10-second deadline plus five seconds for dispatch and
+/// return-path latency. Mirrored as a literal, like `notReadyCode` above,
+/// because the CLI links `DaemonProtocol` and not the daemon's
+/// `AXSweep.maxDurationMs`.
+let axSweepTimeoutSeconds: Double = 10 + 5
+
+/// Send a request envelope built by `CLICommands` and return the result
+/// payload. The builders always set `method`; a nil here is a bug.
 func send(
     _ envelope: RPCEnvelope,
     timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds

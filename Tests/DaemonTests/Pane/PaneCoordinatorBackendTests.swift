@@ -146,6 +146,11 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// When true, every touch primitive throws, modelling a gesture whose sends
     /// start failing partway.
     var failSends = false
+    /// Makes one `accessibilityElement(at:)` call block, so a test can put a
+    /// slow bridge call at a chosen point in a sweep's grid. `index` counts
+    /// this backend's recorded queries, which spans every sweep it has run,
+    /// so a test wanting per-sweep positions uses a fresh backend.
+    var slowElementCall: (index: Int, seconds: Double)?
 
     init(
         capabilities: DeviceBackendCapabilities = .simulator.withoutLocation,
@@ -317,6 +322,9 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] {
+        if let slow = slowElementCall, accessibilityPoints.count == slow.index {
+            Thread.sleep(forTimeInterval: slow.seconds)
+        }
         accessibilityPoints.append(pixelPoint)
         return [:]
     }

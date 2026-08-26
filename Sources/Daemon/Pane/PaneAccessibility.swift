@@ -162,9 +162,35 @@ enum PaneAccessibility {
     /// the on-screen elements by sweeping with `objectAtPoint:`.
     /// Result shape mirrors `ax tree`: a synthetic root dict with
     /// `role: "AXSweepRoot"`, normalized full-screen frame, and a
-    /// `children` list of unique elements seen. Adds two non-tree
-    /// fields the caller can use to size the response: `step` (the
-    /// clamped step actually used) and `sweepedPoints` (the grid size).
+    /// `children` list of unique elements seen. Adds three non-tree
+    /// fields describing the walk that produced it: `step` (the clamped
+    /// step actually used), `sweepedPoints` (cells queried), and
+    /// `truncated`.
+    ///
+    /// `truncated` is true when an expired deadline stopped the walk before
+    /// its next query. That result covers part of the screen, so an element
+    /// missing from a truncated sweep is not evidence it isn't there. A grid
+    /// that finishes is never truncated, even when its last query ran past
+    /// the deadline, because nothing checks after the final cell.
+    ///
+    /// The deadline starts when the request does, so the wait for the
+    /// pane's queue spends it, and a request whose deadline went while it
+    /// waited answers without touching the bridge at all. It is checked
+    /// before the pre-flight and before each cell, which is not the same as
+    /// a hard bound: an in-flight bridge call runs to completion, so the
+    /// walk can overrun by one.
+    ///
+    /// Cancellation does not stop it, and not for the reason it looks like.
+    /// The walk is dispatched onto a Dispatch queue with no task context,
+    /// so `Task.isCancelled` reads false inside it however the request
+    /// ended; seeing a cancellation would take a flag raised from
+    /// `withTaskCancellationHandler` and polled between cells, and none is
+    /// wired. XPC task cancellation therefore doesn't reach this walk, and
+    /// a UDS disconnect doesn't cancel its inline handler in the first
+    /// place. A client that gives up goes unnoticed until the request ends
+    /// on its own. Once the queued closure begins, an expired deadline stops
+    /// it starting new bridge calls, but the wait behind earlier queue work
+    /// and one in-flight call can still carry the request past `budgetMs`.
     ///
     /// Per-point "no element here" misses are skipped, since sparse AX
     /// coverage (a Canvas + GeometryReader composition with a few
@@ -186,14 +212,24 @@ enum PaneAccessibility {
         queue: BlockingWorkQueue,
         paneId: UUID,
         orientation: @escaping @Sendable () -> Orientation,
-        step: Double?
+        step: Double?,
+        budgetMs: Int = AXSweep.maxDurationMs
     ) async throws -> Data {
-        try await queue.run {
+        // Started on arrival, not once the walk gets the queue. The queue is
+        // serial and shared with every other `ax` read, so waiting for it is
+        // most of what a busy pane spends. A deadline taken inside would let
+        // a sweep queued behind another run its own full deadline after
+        // waiting out that one's, and two fresh deadlines back to back would
+        // exceed the CLI's own response wait, which is the failure this
+        // bounds.
+        let deadline = ContinuousClock.now + .milliseconds(budgetMs)
+        return try await queue.run {
             try sweepSynchronously(
                 backend: backend,
                 paneId: paneId,
                 orientation: orientation,
-                step: step
+                step: step,
+                deadline: deadline
             )
         }
     }
@@ -202,8 +238,24 @@ enum PaneAccessibility {
         backend: any DeviceBackend,
         paneId: UUID,
         orientation: @Sendable () -> Orientation,
-        step: Double?
+        step: Double?,
+        deadline: ContinuousClock.Instant
     ) throws -> Data {
+        // Spent before this reached the queue, so there is nothing left to
+        // spend on it. Answered here, ahead of the pre-flight, because that
+        // probe is a synchronous bridge call with no bound of its own:
+        // making it would hold the pane's queue past the deadline the budget
+        // exists to enforce, and the budget is a claim about the whole
+        // request, not about the walk alone.
+        guard ContinuousClock.now < deadline else {
+            return try sweepRoot(
+                paneId: paneId,
+                step: AXSweep.clampStep(step),
+                unique: [],
+                swept: 0,
+                truncated: true
+            )
+        }
         // Pre-flight: read `frontmostTree()` once to confirm the
         // AX bridge is reachable AND to learn the interface frame
         // the grid maps through. The bridge's
@@ -242,7 +294,18 @@ enum PaneAccessibility {
         let points = AXSweep.gridPoints(step: clampedStep)
         var seen = Set<String>()
         var unique: [[String: Any]] = []
+        var swept = 0
+        var cutShort = false
         for point in points {
+            // Before the bridge call rather than after it: a cell started
+            // here is a cell the caller waits out. Stopping between cells is
+            // safe because a point query holds nothing across the loop,
+            // unlike a gesture's contact.
+            guard ContinuousClock.now < deadline else {
+                cutShort = true
+                break
+            }
+            swept += 1
             // Carry the displayed grid point into the panel frame
             // before the bridge call. AXPTranslator's
             // `objectAtPoint:` works in panel coordinates, so an
@@ -289,12 +352,35 @@ enum PaneAccessibility {
             let key = AXSweep.dedupKey(element: element)
             if seen.insert(key).inserted { unique.append(element) }
         }
+        return try sweepRoot(
+            paneId: paneId,
+            step: clampedStep,
+            unique: unique,
+            swept: swept,
+            truncated: cutShort
+        )
+    }
+
+    /// Serializes the same wrapper shape for completed and already-expired
+    /// sweeps, so one that never reached the bridge still parses like any
+    /// other and differs only in what its fields say.
+    private static func sweepRoot(
+        paneId: UUID,
+        step: Double,
+        unique: [[String: Any]],
+        swept: Int,
+        truncated: Bool
+    ) throws -> Data {
         let root: [String: Any] = [
             "role": "AXSweepRoot",
             "frame": ["x": 0, "y": 0, "w": 1, "h": 1],
             "children": unique,
-            "step": clampedStep,
-            "sweepedPoints": points.count
+            "step": step,
+            // Points this walk actually queried, which equals the grid it
+            // planned unless `truncated` says it stopped early. Reporting the
+            // plan instead would describe coverage the sweep didn't have.
+            "sweepedPoints": swept,
+            "truncated": truncated
         ]
         do {
             return try JSONSerialization.data(

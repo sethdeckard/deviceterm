@@ -607,6 +607,22 @@ tapping it. No rotation of your own is needed in either direction.
 `ax sweep` is the exception: its root frame is a placeholder, not the screen's,
 so take the scale from an `ax tree` root.
 
+A completed sweep makes `ceil(1/step)^2` point queries: 400 at the 0.05
+default, 2500 at the 0.02 floor. Steps outside `[0.02, 0.5]` are clamped
+silently, so read `step` in the result for what the daemon actually used.
+
+The step is also the sample spacing, so a control narrower than it can fall
+between samples and read as absent. At 0.08 the samples sit 32pt apart on a
+400pt-wide screen, wide enough to skip a 25pt toolbar button. If an element you
+can see doesn't appear, sweep again finer before concluding it has no
+accessibility node.
+
+The daemon checks a deadline between bridge calls and returns partial
+coverage when a check finds it expired before the grid is complete, rather than
+running on past the point you'd have given up.
+Check `truncated`: when it's true the sweep covers only `sweepedPoints` of its
+grid, and a missing element is not evidence it isn't on screen.
+
 All three always emit JSON. The wrapper fields are DeviceTerm contracts; the
 nested accessibility nodes come from Apple frameworks and can vary by
 runtime. See [Accessibility](INTEGRATION.md#accessibility) before building an

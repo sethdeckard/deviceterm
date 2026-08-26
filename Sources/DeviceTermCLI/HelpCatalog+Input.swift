@@ -191,10 +191,25 @@ extension HelpCatalog {
 
               ax sweep [--step <0..1>]
                   Grid-walk the screen via objectAtPoint and aggregate
-                  unique elements. Default step 0.05; clamped into
-                  [0.01, 0.5]. Result mirrors `ax tree` shape with a
+                  unique elements. Result mirrors `ax tree` shape with a
                   synthetic root role `AXSweepRoot`. Use when `ax tree`
                   returns empty (the watchOS workaround).
+
+                  Default step 0.05, clamped into [0.02, 0.5]. The clamp
+                  is silent; read `step` in the result for what was used.
+                  A completed sweep makes ceil(1/step)^2 queries: 400 at
+                  the default, 2500 at the floor.
+
+                  The step is the sample spacing, so a control narrower
+                  than it can fall between samples and read as absent. At
+                  0.08 the samples sit 32pt apart on a 400pt-wide screen,
+                  wide enough to skip a 25pt toolbar button.
+
+                  If the daemon finds its deadline expired before the
+                  grid is done, it stops before the next query and sets
+                  `truncated`. `sweepedPoints` counts the cells it
+                  reached, so an element missing from a truncated sweep
+                  is not evidence it isn't on screen.
                   Example: deviceterm ax sweep --step 0.04
             """
         )

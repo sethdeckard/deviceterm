@@ -2013,17 +2013,27 @@ wait, receives no payload.
 The result shape mirrors
 `pane.ax.tree` with a synthetic root `{role: "AXSweepRoot",
 frame: {x:0,y:0,w:1,h:1}, children: [unique elements], step,
-sweepedPoints}`. The `step` field echoes the actually-used post-clamp
-value.
+sweepedPoints, truncated}`. The `step` field echoes the actually-used
+post-clamp value.
+
+The deadline starts when the sweep handler begins and is checked before the
+pre-flight and before each cell. The wait for the pane's serial AX queue
+consumes it, so a queued sweep does not start with a full one; an in-flight
+bridge call may still overrun it. When a check falls before the grid is
+complete and finds the deadline expired, the walk stops before the next query
+and sets `truncated`.
 
 Per-cell "no element at this point" is a routine outcome: sparse AX
 coverage (a `Canvas + GeometryReader` composition with a few `Text(...)`
 nodes) returns the actual sweep even if `children` is empty, and
-`sweepedPoints` confirms the grid ran.
+`sweepedPoints` confirms cells were queried.
 
 The bridge's `objectAtPointNil` code conflates "blank pixel here" with
 "AX server unreachable," so to preserve the retry signal for the latter
-the sweep first probes `frontmostTree()` once. A bridge throw from that
+the sweep probes `frontmostTree()` once before walking. A sweep whose deadline
+passed while it waited for the queue skips that probe along with the walk,
+and returns `truncated` with no cells queried; it makes no claim about the
+bridge either way. A bridge throw from that
 probe surfaces immediately as `error.bridgeFailed` (code `-32020`), while
 a torn-down backend surfaces as the usual pane-not-active
 `invalidParams`; a return,

@@ -897,7 +897,8 @@ and returns a DeviceTerm-owned wrapper:
     },
     "children": [],
     "step": 0.04,
-    "sweepedPoints": 625
+    "sweepedPoints": 625,
+    "truncated": false
   }
 }
 ```
@@ -910,13 +911,30 @@ The synthetic object under `tree` has these stable-additive fields:
 | `frame` | object | Normalized placeholder, always `0, 0, 1, 1`; not the screen's frame |
 | `children` | array | Unique Apple accessibility nodes |
 | `step` | number | Clamped step used by the sweep |
-| `sweepedPoints` | integer | Number of sampled grid points |
+| `sweepedPoints` | integer | Grid points this sweep queried |
+| `truncated` | boolean | True when the walk stopped before finishing the grid |
 
 The objects inside `children` remain best-effort Apple node dictionaries.
 
-A successful empty `children` array means the bridge responded but the sweep
-found no unique elements. A systemic bridge failure exits nonzero and prints an
-error instead of returning a successful empty wrapper.
+A successful empty `children` array with `truncated` false means the bridge
+responded but the sweep found no unique elements. A systemic bridge failure
+exits nonzero and prints an error instead of returning a successful empty
+wrapper.
+
+The daemon checks a deadline before the pre-flight probe and before each point
+query. The wait for the pane's accessibility queue counts toward it, but an
+in-flight bridge call is not interrupted. When a check finds the deadline
+expired before the grid is complete, the sweep stops before the next query and
+returns what it has with `truncated` true, and `sweepedPoints` counts the cells
+queried rather than the grid that was planned. This is a successful
+response, so a client that ignores `truncated` reads partial coverage as
+complete. An element absent from a truncated sweep is not evidence it is absent
+from the screen.
+
+A sweep whose deadline passed before it reached the queue returns `truncated`
+true with `sweepedPoints` zero without querying the bridge at all, so that
+result says nothing about whether accessibility is reachable. Retry it when the
+pane is quieter.
 
 ## Automation
 
