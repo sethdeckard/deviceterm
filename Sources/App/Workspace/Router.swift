@@ -1852,8 +1852,9 @@ final class Router {
     /// Device attach: mirrors `simAttachSpec` with two deliberate
     /// differences: `physicalDevice.attach` (deviceId + an explicit
     /// attribution session the daemon honors only for the
-    /// signature-validated GUI peer, no cap), and no resurrect metadata
-    /// (device panes are never persisted).
+    /// signature-validated GUI peer, no cap), and no ownership bookkeeping
+    /// (`noteSimOwned` records a sim's boot claim for cold-start orphan
+    /// recovery; device panes are never persisted).
     ///
     /// There is no name lookup on this path, and the response's `name` is a
     /// human-set pane name the daemon leaves nil at create, so a caller

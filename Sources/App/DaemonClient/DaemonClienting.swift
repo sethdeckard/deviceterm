@@ -12,8 +12,9 @@
 /// NOT a fat protocol: it composes the roles, it doesn't replace
 /// them. Narrow consumers, view models included, must still depend
 /// on the smallest role(s) they use (`SimResurrect` on
-/// `DeviceControlling`, a pane VM on `PaneControlling & PaneSubscribing`,
-/// the device picker on `PhysicalDeviceControlling`), never on this alias.
+/// `DeviceControlling & PhysicalDeviceControlling`, a pane VM on
+/// `PaneControlling & PaneSubscribing`, the device picker on
+/// `PhysicalDeviceControlling`), never on this alias.
 /// `DaemonClient` is the sole concrete conformer (it conforms to the roles
 /// on its primary type, per AGENTS.md).
 typealias DaemonClienting =

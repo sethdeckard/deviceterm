@@ -54,11 +54,11 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// established sim drag / resurrect / orphan-recovery code keeps
     /// hard-referencing `simPanes` untouched; both render through the
     /// same `SimulatorPaneViewController`. Unlike sims, device panes are
-    /// **never** persisted and have no resurrect watch, so a device that
-    /// drops and returns doesn't re-mount itself. Helper-restart recovery
-    /// re-attaches one, but only a pane the tab is already showing, not a
-    /// pane restored from somewhere: a `TabState` is still always born with
-    /// this empty, and the seeding loop below is for symmetry.
+    /// **never** persisted. Two things re-attach one, and both work from a
+    /// pane the tab is already showing rather than a pane restored from
+    /// somewhere: helper-restart recovery, and the resurrect watch that
+    /// re-mirrors a device whose mirror stopped. A new tab defaults this to
+    /// empty; the seeding loop in `init` handles state passed in explicitly.
     var devicePanes: [DevicePaneState]
     /// Placeholder panes for sim/device attaches that are in flight (or
     /// failed, awaiting Retry). A GUI-only concept the daemon never sees:

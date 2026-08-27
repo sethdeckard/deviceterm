@@ -8,10 +8,11 @@ import Observation
 /// (`physicalDevice.list`) and, on selection, hands the chosen device's
 /// id + display name back to the host (AppDelegate) which dispatches
 /// `Route.attachDevicePane` against the current tab and closes the
-/// picker. Bypasses SimResurrect / DiscoveryDecision entirely, since those
-/// model owned-booted *sims*. A physical device is mounted through this
-/// picker, `deviceterm device attach`, or the shim's contextual
-/// auto-attach.
+/// picker. Bypasses SimResurrect / DiscoveryDecision entirely: discovery
+/// models owned-booted *sims*, and the resurrect watch re-attaches a pane
+/// that lost its device, while this mounts one the tab isn't showing yet.
+/// A physical device is mounted through this picker, `deviceterm device
+/// attach`, or the shim's contextual auto-attach.
 ///
 /// The daemon dependency is the narrow `PhysicalDeviceControlling` role
 /// so the VM (and its test fake) depend on just the two device RPCs.

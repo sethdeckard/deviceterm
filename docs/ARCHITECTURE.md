@@ -261,11 +261,16 @@ whether a backend is needed, so an attach that fails there would otherwise
 fail a re-attach that never needed one. The failure is raised from `acquire`,
 which runs only on a genuine fresh create.
 
-The sim resurrect path (detach + re-attach in place, gated on the sim still
-being booted) covers a different case: a sim that shut down under a live daemon
-and later re-booted. Physical-device panes have no equivalent watch, so outside
-restart recovery they mount only through explicit action or the shim's
-contextual auto-attach.
+The resurrect path (detach + re-attach in place) covers a different case: a
+pane that lost its device under a live daemon and can get it back. A sim
+qualifies once `device.list` reports it Booted again; a physical device once
+`physicalDevice.list` enumerates it. Either way the pane keeps its leaf, so
+the split axis, nesting, and stored divider proportions survive the round
+trip.
+
+Only a mirror that had been working earns the watch. A physical-device pane
+whose mirror never produced a frame is failed rather than shut down, and
+nothing watches for it: re-attaching would land in the same place.
 
 ### Boot attribution convergence
 
@@ -1463,13 +1468,13 @@ for the signature-validated GUI peer, which spans sessions, and ignored
 for UDS callers.
 
 Attached through explicit action or the shim's contextual auto-attach, plus
-restart recovery re-attaching a pane the workspace is still showing. No
-resurrect watch: there is no physical equivalent of the sim's
-detach-and-re-attach-in-place path. A device whose iOS is too old to
-mirror (the catalog vends no displayservice) returns `invalidParams` with
-a "needs a newer iOS" reason; an absent or locked device returns a clear
-`invalidParams`/`serverError`. `family` reads `unknown` for device panes;
-the GUI sizes them from the surface stream instead.
+restart recovery re-attaching a pane the workspace is still showing, plus
+the resurrect watch re-mirroring a pane whose mirror stopped (see State
+recovery). A device whose iOS is too old to mirror (the catalog vends no
+displayservice) returns `invalidParams` with a "needs a newer iOS" reason;
+an absent or locked device returns a clear `invalidParams`/`serverError`.
+`family` reads `unknown` for device panes; the GUI sizes them from the
+surface stream instead.
 
 #### `devices.list`
 
@@ -2956,9 +2961,10 @@ Three properties hold for physical panes:
   address is no longer the handle; it's resolved on demand at attach.
   Physical attach is **explicit or shim-contextual**: the GUI picker,
   `deviceterm device attach`, or the shim's `devicectl` interception
-  mount it. There is no resurrect watch, so outside restart recovery,
-  which re-attaches a pane the workspace is still showing, nothing
-  mounts one by itself.
+  mount it. Two paths re-mount one by themselves: restart recovery,
+  which re-attaches a pane the workspace is still showing, and the
+  resurrect watch, which re-mirrors a pane whose mirror stopped once
+  the device enumerates again.
 - **Connection-auth, not cred params.** `physicalDevice.attach` carries
   no `cap`: the originating session comes from the connection's
   authenticated context, plus an optional `sessionId` attribution field
@@ -3601,7 +3607,7 @@ The GUI is a thin AppKit shell over a testable view-model layer:
   `WindowController`/`TabStripViewController`/pane controllers to that state by
   stable `WindowID`/`TabID` identity (it provisions the session env,
   builds the terminal/sim views, and owns the pane subscriptions).
-  Menu actions, discovery observers, sim-resurrect watches, and orphan
+  Menu actions, discovery observers, resurrect watches, and orphan
   re-attach all dispatch routes: one path for navigation and pane mounting. The
   router *enables* session restoration, but no layout is persisted.
 

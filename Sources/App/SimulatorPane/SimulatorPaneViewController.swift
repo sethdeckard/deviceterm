@@ -213,8 +213,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// user can poke at app data / logs / preferences without
     /// hunting for the UDID path manually.
     var onRevealInFinder: (() -> Void)?
-    /// Fires on every (deduped) state transition. TabContentViewController uses this
-    /// to manage SimResurrect watches when a pane enters/leaves shutdown.
+    /// Fires on every (deduped) state transition. The pane's owner uses this to
+    /// manage its resurrect watch when a pane enters or leaves shutdown:
+    /// `SimPaneActionCoordinator` for a sim, `TabContentViewController` for a
+    /// device.
     var onStateChange: ((SimulatorPaneState) -> Void)?
     /// Fires when the user picks a size preset the pane wasn't already on.
     /// The owner records it in nav state, which is what carries the choice

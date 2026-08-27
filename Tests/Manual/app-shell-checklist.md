@@ -67,7 +67,7 @@ means that item.
 | 4.3 | Open one sim's submenu and click `Shut Down` | That sim shuts down; its pane shows the shutdown overlay; badge decrements to `1`. |
 | 4.4 | Click the badge → `Shut Down All` | Remaining sim(s) shut down; badge disappears (count 0 → item hidden). |
 
-## 5. Pane shutdown overlay + Reboot/Close
+## 5. Sim pane shutdown overlay + Reboot/Close
 
 | # | Action | Expected |
 |---|--------|----------|
@@ -77,11 +77,19 @@ means that item.
 
 ## 6. Auto-resurrect
 
+Sims and physical devices both come back into the leaf they left. The sim
+half needs a bootable runtime; the device half needs a connected, unlocked,
+trusted iPhone or iPad, and is skippable without one.
+
 | # | Action | Expected |
 |---|--------|----------|
 | 6.1 | Boot a sim into tab A; then `xcrun simctl shutdown <udid>` so the pane is in the shutdown overlay | Pane shows the shutdown overlay. |
-| 6.2 | From **tab A's** shell, `xcrun simctl boot <udid>` (same udid) | The **existing** shutdown-state pane resurrects in place — no duplicate pane. |
+| 6.2 | From **tab A's** shell, `xcrun simctl boot <udid>` (same udid) | The **existing** shutdown-state pane resurrects in place, with no duplicate pane. |
 | 6.3 | Boot the same udid from **tab B** instead (after shutting down) | A new pane appears in **tab B** (provenance is per-session); tab A does not resurrect. |
+| 6.4 | Mirror a physical device (Shell ▸ **Mirror Physical Device…**), then split the tab so the device pane sits beside or above another pane, and drag the divider well off center | Device pane renders in its own leaf at the size you set. |
+| 6.5 | Unplug the device | The pane stops rendering and shows the device's name plus *"stopped mirroring. Reconnecting…"* over the frozen last frame, with `[Close Pane]` and **no** `[Reboot]`. Not instant: the mirror spends its restart budget before giving up. |
+| 6.6 | Plug it back in and unlock it | The **same** pane re-mirrors in its original leaf, keeping the divider position from 6.4. No second pane, and nothing else moves. |
+| 6.7 | Unplug again, then click `[Close Pane]` while it is reconnecting | The pane is removed and stops watching. Re-plugging brings nothing back. |
 
 ## 7. Close prompts + don't-ask-again
 

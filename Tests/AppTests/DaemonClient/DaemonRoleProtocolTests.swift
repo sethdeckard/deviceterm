@@ -11,8 +11,8 @@ import Testing
 @MainActor
 struct DaemonRoleProtocolTests {
     // Role-typed sinks: each compiles only if the argument conforms to
-    // exactly that role. Standing in for the real consumers (e.g.
-    // `SimResurrect` needs only `DeviceControlling`).
+    // exactly that role. Standing in for the real consumers, which depend
+    // on the narrowest roles they use rather than on `DaemonClienting`.
     private func needsSession(_ client: any SessionControlling) {}
     private func needsDevice(_ client: any DeviceControlling) {}
     private func needsPane(_ client: any PaneControlling) {}
