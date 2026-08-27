@@ -237,7 +237,8 @@ object. A caller whose session holds no grant is rejected with
 .BR error.scope_violation .
 .TP
 .B tabs list
-List every open daemon session.
+List every daemon session you can see. A protected session is listed
+only for its owner.
 .TP
 .B tabs current
 Print the caller's own tab row.

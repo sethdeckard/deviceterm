@@ -419,7 +419,7 @@ Optional fields:
 | `family` | `"watch"`, `"phone"`, `"pad"`, `"tv"`, `"unknown"`, or a future value |
 | `shortId` | Short pane reference |
 | `name` | Optional pane name |
-| `capabilities` | Per-pane supported operation families |
+| `capabilities` | Per-pane device capabilities; see below for what each flag gates |
 | `target` | Backend-neutral device discriminator |
 
 A physical-device target uses:
@@ -438,6 +438,19 @@ permits an older daemon to remain decodable during an update.
 If `target` is absent, treat the pane as a Simulator for compatibility with
 older releases. If a new capability flag is absent from a present capabilities
 object, treat that capability as unsupported.
+
+Seven flags gate a CLI verb family: `touch`, `key`, `text`, `button`, `rotate`,
+`crown`, and `accessibility`. `location` is the exception, and `location: true`
+does not mean you can set a position from the CLI.
+
+What it gates is a GUI affordance: the Location submenu, in the Device menu and
+in a device pane's context menu. `pane.location.*` is GUI-only, and `location`
+is on the CLI's no-simctl-wrappers list, so there is deliberately no verb behind
+it.
+
+`touch` carries an exception of its own. On a physical device it covers `tap`,
+`swipe`, `long-press`, and `app-switcher` but not `pinch`, which is refused
+whatever `touch` reports. A Simulator supports all five.
 
 ### Device Roster Rows
 

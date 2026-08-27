@@ -110,14 +110,16 @@ extension HelpCatalog {
         HelpTopic(
             "tabs",
             .command(.workspace),
-            summary: "List every open tab, or print your own",
+            summary: "List every session you can see, or print your own",
             detail: """
               tabs list
-                  List every open daemon session. Five tab-separated columns:
+                  List every daemon session you can see. Five tab-separated
+                  columns:
                     <marker>  <short_id>  <name>  <sessionId>  <label>
                   The marker is `*` on the caller's current tab (matches
                   $DEVICETERM_SESSION), a space otherwise. Use the short_id for
                   quick reference; sessionId is the canonical UUID.
+                  A protected session is listed only for its owner.
 
               tabs current
                   Print the caller's own tab row (the one whose sessionId
