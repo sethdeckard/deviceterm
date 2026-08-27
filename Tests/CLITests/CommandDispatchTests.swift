@@ -14,6 +14,9 @@ private final class FakeTransport: CLITransport {
     private let fallback: Data
     var error: CLIError?
     private(set) var sent: [RPCEnvelope] = []
+    /// The response timeout each send was given, positionally aligned with
+    /// `sent`, so a test can assert the budget a verb chose.
+    private(set) var timeouts: [Double] = []
 
     /// Replay `response` for every send (for single-round-trip handlers).
     init(response: Data = Data(), error: CLIError? = nil) {
@@ -32,6 +35,7 @@ private final class FakeTransport: CLITransport {
 
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data {
         sent.append(envelope)
+        timeouts.append(timeoutSeconds)
         if let error { throw error }
         if !queue.isEmpty { return queue.removeFirst() }
         return fallback
@@ -502,6 +506,35 @@ func axTreeReturnsDaemonPayloadVerbatim() throws {
     expected.append(0x0A)
     #expect(outcome.stdout == expected)
     #expect(fake.sent.map(\.method) == [RPCMethod.panesList.rawValue, RPCMethod.paneAXTree.rawValue])
+}
+
+@Test
+func axCallGetsItsOwnBudgetWhilePaneResolutionKeepsTheDefault() throws {
+    let fake = FakeTransport(responses: [try onePaneResponse(), Data(#"{}"#.utf8)])
+    _ = try sendResolvedPrintingResult(
+        ref: nil,
+        transport: fake,
+        creds: testCreds,
+        timeoutSeconds: AXTimeout.query
+    ) {
+        try CLICommands.axTreeRequest(paneId: $0)
+    }
+    // Resolution is a cheap `panes.list`, so it keeps the short wait and a
+    // wedged resolve still fails fast; only the AX envelope waits longer.
+    #expect(fake.timeouts == [AppCommandDeadline.cliRequestTimeoutSeconds, AXTimeout.query])
+}
+
+@Test
+func axBudgetsCoverWaitingOutASweep() {
+    // `AXSweep.maxDurationMs`, mirrored as a literal for the same reason
+    // `AXTimeout` mirrors it: `DeviceTermCLI` links `DaemonProtocol` and
+    // not the daemon. The daemon stops starting new sweep calls after ten
+    // seconds; an AX read may spend most of that interval queued behind it.
+    let sweepSchedulingBudgetSeconds = 10.0
+    #expect(AXTimeout.query > sweepSchedulingBudgetSeconds)
+    #expect(AXTimeout.sweep > sweepSchedulingBudgetSeconds)
+    #expect(AXTimeout.query > AppCommandDeadline.cliRequestTimeoutSeconds)
+    #expect(AXTimeout.sweep > AppCommandDeadline.cliRequestTimeoutSeconds)
 }
 
 @Test

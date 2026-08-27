@@ -338,12 +338,24 @@ func run(
             )
 
         case let .axTree(pane):
-            return try sendResolvedPrintingResult(ref: pane, transport: transport) {
+            // Shares the pane's accessibility queue with `ax sweep`, so it
+            // can spend most of the sweep's scheduling budget queued
+            // before its own walk starts.
+            return try sendResolvedPrintingResult(
+                ref: pane,
+                transport: transport,
+                timeoutSeconds: AXTimeout.query
+            ) {
                 try CLICommands.axTreeRequest(paneId: $0)
             }
 
         case let .axPoint(pane, x, y):
-            return try sendResolvedPrintingResult(ref: pane, transport: transport) {
+            // Queues behind a sweep the same way `ax tree` does.
+            return try sendResolvedPrintingResult(
+                ref: pane,
+                transport: transport,
+                timeoutSeconds: AXTimeout.query
+            ) {
                 try CLICommands.axPointRequest(paneId: $0, x: x, y: y)
             }
 
@@ -353,7 +365,7 @@ func run(
             return try sendResolvedPrintingResult(
                 ref: pane,
                 transport: transport,
-                timeoutSeconds: axSweepTimeoutSeconds
+                timeoutSeconds: AXTimeout.sweep
             ) {
                 try CLICommands.axSweepRequest(paneId: $0, step: step)
             }
