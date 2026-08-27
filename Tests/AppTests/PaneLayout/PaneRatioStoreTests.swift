@@ -18,6 +18,24 @@ struct PaneRatioStoreTests {
     }
 
     @Test
+    func remapRatiosRekeysTheStoreOntoTheNewTree() {
+        // The mapping itself is pinned in PaneRatioRemapTests; this is
+        // the surface `reconcile` calls, so it only has to show the
+        // store adopting the result.
+        let terminal = PaneSlot.terminal(TerminalPaneID(value: 1))
+        let sim = PaneSlot.sim(udid: "udid-a")
+        let store = PaneRatioStore()
+        store.setRatios([0.71, 0.29], forPath: [])
+
+        store.remapRatios(
+            from: .split(axis: .horizontal, children: [.leaf(terminal), .leaf(sim)], extents: [1, 1]),
+            to: .split(axis: .horizontal, children: [.leaf(sim), .leaf(terminal)], extents: [1, 1])
+        )
+
+        #expect(store.ratios(forPath: []) == [0.29, 0.71])
+    }
+
+    @Test
     func splitRegistryMapsBothWays() {
         let store = PaneRatioStore()
         let split = NSSplitView()

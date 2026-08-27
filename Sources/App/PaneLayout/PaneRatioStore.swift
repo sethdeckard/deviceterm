@@ -52,6 +52,15 @@ final class PaneRatioStore {
         ratiosByPath[path] = ratios
     }
 
+    /// Carry each split's proportions from `oldTree`'s shape onto
+    /// `newTree`'s. `PaneRatioRemap` decides which splits inherit
+    /// permuted, which inherit unchanged, and which inherit nothing;
+    /// every path it leaves unfilled falls to the controller's seed
+    /// pass.
+    func remapRatios(from oldTree: PaneNode, to newTree: PaneNode) {
+        ratiosByPath = PaneRatioRemap.remapped(ratiosByPath, from: oldTree, to: newTree)
+    }
+
     /// Drop all stored ratios (the Reset-Pane-Layout / from-scratch path).
     func clearRatios() {
         ratiosByPath.removeAll()

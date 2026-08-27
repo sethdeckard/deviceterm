@@ -324,6 +324,11 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
         )
         lastFitPaths = fit.paths
         pendingAutoFit.formUnion(fit.needsFit)
+        // Divider proportions are keyed by a split's path, so they
+        // describe a position rather than a pane. Carry them onto the
+        // new shape while both trees are in hand; reordering a split's
+        // panes without this leaves each holding its neighbor's extent.
+        ratioStore.remapRatios(from: tree, to: newTree)
         tree = newTree
         // Raise the apply guard across the whole seed→rebuild→apply
         // sequence. `rebuildHierarchy` builds fresh NSSplitViews whose
