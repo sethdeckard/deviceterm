@@ -364,13 +364,10 @@ final class IntentDispatcher {
             // returns the IOSurface handle; the GUI then mounts the
             // sim pane in the resolved tab.
             //
-            // UUIDs are case-insensitive: `simctl list` prints
-            // them uppercase, the daemon's `canonicalizeUDID`
-            // lowercases on the way in, and existing `SimPaneState`
-            // entries can have either case depending on which path
-            // populated them (discovery / orphan recovery preserve
-            // simctl's uppercase; shim-intercept stores the daemon-
-            // normalized lowercase). Canonicalize the input first
+            // UUIDs are case-insensitive and `simctl list` prints
+            // them uppercase, so this argument arrives in either
+            // case while the mounted panes carry the daemon's
+            // lowercase. Canonicalize the input first
             // and walk pane comparisons case-insensitively so
             // repeated calls with different casing don't slip past
             // the duplicate guards and double-attach the same sim.

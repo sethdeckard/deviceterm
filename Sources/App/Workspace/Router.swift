@@ -1809,9 +1809,28 @@ final class Router {
                 return "Sim \(udid.prefix(8))"
             },
             mount: { window, pendingId, response, resolvedName in
+                // Mount the identity the daemon reports, not the one this
+                // call asked with, so `pane info` and the `panes.list` the
+                // daemon answers name the pane with one string. `createSim`
+                // canonicalizes to lowercase; the attach paths reach here
+                // with whatever case they were handed.
+                //
+                // A peer too old to send `target` canonicalized its own
+                // record all the same, so the fallback applies that rule
+                // locally rather than echoing the caller. Duplicating it is
+                // safe in this direction: only a peer that predates `target`
+                // reaches the fallback, and it can no longer change its rule.
+                var canonicalUDID = udid
+                if case let .sim(reported)? = response.target {
+                    canonicalUDID = reported
+                } else if let parsed = UUID(
+                    uuidString: udid.trimmingCharacters(in: .whitespacesAndNewlines)
+                ) {
+                    canonicalUDID = parsed.uuidString.lowercased()
+                }
                 let pane = SimPaneState(
                     paneId: response.paneId,
-                    udid: udid,
+                    udid: canonicalUDID,
                     displayName: resolvedName,
                     family: response.family ?? DeviceFamily.unknown.rawValue,
                     attachment: response.attachment,

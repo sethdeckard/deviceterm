@@ -193,10 +193,10 @@ struct TabListViewModelTests {
 
     @Test
     func addSimPaneDedupsAcrossUDIDCase() {
-        // Daemon-canonicalized lowercased udid from one attach path
-        // and simctl-uppercase from another point at the same sim;
-        // case-insensitive compare is the piece that
-        // makes the dedup correct in mixed-case storage scenarios.
+        // Two spellings of one sim's UDID. The model takes a fully-built
+        // pane and does not parse its udid, so the case-insensitive compare
+        // is the only thing keeping a mixed-case pair from stacking two
+        // panes on one device.
         let model = TabListViewModel()
         model.append(tab(1))
         let upper = SimPaneState(

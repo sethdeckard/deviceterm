@@ -35,6 +35,14 @@ final class SimResurrect {
         self.daemonClient = daemonClient
     }
 
+    /// Fold a UDID to one spelling before keying or comparing on it. A watch
+    /// carries a mounted pane's daemon-canonical lowercase, while `tick`'s
+    /// booted set comes from `device.list`, which reports CoreSimulator's
+    /// uppercase verbatim.
+    private static func watchKey(_ udid: String) -> String {
+        udid.lowercased()
+    }
+
     /// Watch `udid` for a Booted transition; on detection invoke
     /// `resurrect` (typically a TabContentViewController re-attach) and remove
     /// the watch. Re-registering the same UDID replaces the prior
@@ -44,14 +52,17 @@ final class SimResurrect {
         displayName: String,
         resurrect: @escaping @MainActor () -> Void
     ) {
-        watches[udid] = WatchEntry(displayName: displayName, resurrect: resurrect)
+        watches[Self.watchKey(udid)] = WatchEntry(
+            displayName: displayName,
+            resurrect: resurrect
+        )
         startPollIfNeeded()
     }
 
     /// Stop watching `udid`. Called when the user picks Close Pane
     /// on the shutdown overlay or when the resurrect fires.
     func unwatch(udid: String) {
-        watches.removeValue(forKey: udid)
+        watches.removeValue(forKey: Self.watchKey(udid))
         if watches.isEmpty { stopPoll() }
     }
 
@@ -67,7 +78,7 @@ final class SimResurrect {
     func tick() async {
         let all = (try? await daemonClient.deviceList(scope: .all)) ?? []
         let bootedNow = Set(
-            all.filter { $0.state == "Booted" }.map(\.udid)
+            all.filter { $0.state == "Booted" }.map { Self.watchKey($0.udid) }
         )
         let resolved = watches.filter { bootedNow.contains($0.key) }
         for (udid, entry) in resolved {

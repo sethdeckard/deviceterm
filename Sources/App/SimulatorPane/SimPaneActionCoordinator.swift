@@ -533,8 +533,14 @@ final class SimPaneActionCoordinator {
             // parent, with this folder highlighted) so the user
             // can navigate down into the `data/` subtree from a
             // familiar starting point.
+            //
+            // CoreSimulator names each device directory with the uppercase
+            // UUID, while a mounted pane carries the daemon's canonical
+            // lowercase. A case-insensitive volume forgives the difference
+            // and a case-sensitive one does not, so ask for the spelling
+            // that is actually on disk.
             let path = NSHomeDirectory()
-                + "/Library/Developer/CoreSimulator/Devices/\(udid)"
+                + "/Library/Developer/CoreSimulator/Devices/\(udid.uppercased())"
             NSWorkspace.shared.selectFile(
                 path,
                 inFileViewerRootedAtPath: ""

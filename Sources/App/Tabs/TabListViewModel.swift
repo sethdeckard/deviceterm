@@ -305,9 +305,9 @@ final class TabListViewModel {
     }
 
     /// `atIndex` selects the typed-array insertion position; nil appends.
-    /// Idempotent by case-insensitive UDID, since `SimPaneState.udid`
-    /// storage varies: some sources preserve `simctl list`'s uppercase and
-    /// others store the daemon's lowercased canonical form. The leaf is
+    /// Idempotent by case-insensitive UDID, since a UDID is a
+    /// case-insensitive UUID and two spellings of one device must not stack
+    /// two panes. The leaf is
     /// inserted after `spawningTerminal` along the horizontal axis, falling
     /// back to the primary terminal.
     func addSimPane(

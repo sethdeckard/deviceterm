@@ -154,8 +154,23 @@ DeviceTerm exposes several identifier layers:
 | `shortId` | Short display and reference handle. Optional during version skew |
 | `name` | Optional human-assigned or creation-time name. It may be absent or ambiguous |
 | `displayTitle` | Live GUI title. It is display metadata, not an identifier |
-| `udid` in a pane | The pane's device key: a Simulator UDID or physical CoreDevice device ID |
-| `id` in the device roster | A Simulator UDID or physical CoreDevice device ID |
+| `udid` in a pane | The pane's device key: a Simulator UDID (lowercase) or physical CoreDevice device ID |
+| `id` in the device roster | A Simulator UDID (lowercase) or physical CoreDevice device ID |
+
+A Simulator UDID is a case-insensitive UUID, and case is where two outputs stop
+comparing equal. DeviceTerm prints a *resolved* one lowercase: `panes list`,
+`pane info`, `tab info`, `devices list`, input receipts, and the event stream.
+`simctl` prints the same UDID uppercase, and physical device IDs keep the
+uppercase form `devicectl` reports.
+
+A receipt that echoes an unresolved reference is the exception. `device attach`
+on an externally booted Simulator has no roster entry to resolve against, so it
+prints back the spelling you gave it.
+
+References resolve case-insensitively, so once a Simulator is attached, its
+uppercase UDID from `simctl list devices` works as a `--pane` argument. Case
+matters only when you compare strings, and only when one side came from outside
+DeviceTerm.
 
 Workspace receipts generally echo the reference supplied by the caller, such
 as `"current"` or `"abc123"`. They do not promise to replace it with a resolved
@@ -359,7 +374,7 @@ Do not use it as a `--tab` reference.
 ```jsonc
 {
   "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
-  "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6",
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
   "state": "rendering",
   "family": "phone",
   "shortId": "phn001",
@@ -376,7 +391,7 @@ Do not use it as a `--tab` reference.
   },
   "target": {
     "sim": {
-      "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6"
+      "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
     }
   }
 }
@@ -387,7 +402,7 @@ Required fields:
 | Field | Type | Meaning |
 |---|---|---|
 | `paneId` | string | Pane UUID |
-| `udid` | string | Device key for either backend |
+| `udid` | string | Device key for either backend. Simulator UDIDs are lowercase |
 | `state` | string | Current pane lifecycle |
 
 Current lifecycle values are:
@@ -502,7 +517,7 @@ computed after that filtering.
   "simPanes": [
     {
       "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
-      "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6",
+      "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
       "shortId": "phn001",
       "displayName": "iPhone 17 Pro",
       "family": "phone"
@@ -529,7 +544,7 @@ panes. Use `panes list --json` for the backend-neutral pane roster.
 ```jsonc
 {
   "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
-  "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6",
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
   "shortId": "phn001",
   "name": "Primary Phone",
   "displayName": "iPhone 17 Pro",
@@ -652,7 +667,7 @@ Every input receipt begins with:
 ```jsonc
 {
   "ok": true,
-  "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6",
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
   "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
   "shortId": "phn001"
 }
@@ -696,7 +711,7 @@ Example tap receipt:
   "ok": true,
   "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
   "shortId": "phn001",
-  "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6",
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
   "x": 0.5,
   "y": 0.5
 }
@@ -712,7 +727,7 @@ Example swipe receipt:
   "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
   "shortId": "phn001",
   "steps": 15,
-  "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6"
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
 }
 ```
 
@@ -1109,7 +1124,7 @@ unused:
   "state": "rendering",
   "ts": "2026-08-08T15:30:12.123Z",
   "type": "pane.stateChanged",
-  "udid": "A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6"
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
 }
 ```
 

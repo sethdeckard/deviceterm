@@ -803,12 +803,11 @@ struct IntentDispatcherTests {
 
     @Test
     func paneAttachCanonicalizesUDIDCaseAcrossDuplicateChecks() async {
-        // UDIDs are case-insensitive, so the existing pane may have been
-        // stored as uppercase (discovery / orphan recovery paths
-        // preserve simctl's `list` output) and a re-attach call from
-        // an agent that lowercased the value (or vice versa) must
-        // still hit the same-tab idempotency guard, not stack a
-        // duplicate via a second daemon.attachDevice round-trip.
+        // UDIDs are case-insensitive, so a re-attach naming the mounted
+        // pane's device in the other case must still hit the same-tab
+        // idempotency guard rather than stacking a duplicate via a second
+        // daemon.attachDevice round-trip. The guard is what makes the
+        // spelling an agent happens to pass irrelevant.
         let harness = makeHarness()
         let upperUDID = "7DB632B6-86D3-437D-B567-36A80E59788B"
         let lowerUDID = upperUDID.lowercased()
