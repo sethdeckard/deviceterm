@@ -1551,9 +1551,9 @@ func edgeTouchMapsPhasesToEdgePrimitives() async throws {
     try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.99, phase: .down)
     try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.80, phase: .move)
     try await coordinator.edgeTouch(paneId: result.paneId, as: .guiPeer, x: 0.5, y: 0.50, phase: .lift)
-    // Distinct primitive per phase: the per-phase NSEventType is what
-    // the system recognizer needs (unlike plain `touch`, which collapses
-    // down/move to `tapDown`).
+    // Distinct primitive per phase, each carrying the edge tag the system
+    // recognizer reads (unlike plain `touch`, which has no tag to carry and
+    // collapses down/move to `tapDown`).
     #expect(backend.edgeDownPoints == [CGPoint(x: 0.5, y: 0.99)])
     #expect(backend.edgeMovePoints == [CGPoint(x: 0.5, y: 0.80)])
     #expect(backend.edgeUpPoints == [CGPoint(x: 0.5, y: 0.50)])

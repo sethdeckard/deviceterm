@@ -39,14 +39,22 @@ typedef IndigoMessage *(*CSBIndigoMessageForMouseFn)(CGPoint *point0, CGPoint *p
 // `IndigoHIDMessageForMouseNSEvent(CGPoint*, CGPoint*, IndigoHIDTarget,
 // NSEventType, NSSize, IndigoHIDEdge)`). The legacy `…MouseFn` typedef
 // above is short by two args: it omits `NSSize` and `IndigoHIDEdge`, so
-// the plain-touch path has always passed `edge = 0` (the `BOOL flag` it
-// sends lands in the edge integer register) with a garbage `NSSize` in
-// the FP registers. That's harmless for taps/drags, which overwrite the ratio
-// fields afterward. We keep that call site byte-identical (proven) and
-// use THIS pointer only for edge-tagged system gestures, where the
-// `IndigoHIDEdge` arg is load-bearing and a `MouseDragged` build with a
-// garbage `NSSize` returns NULL / crashes the sim. On arm64 the `NSSize`
-// (two doubles) is passed in v0/v1, so `edge` is the 5th *integer* arg.
+// the plain-touch path passes `edge = 0` (the `BOOL flag` it sends lands
+// in the edge integer register) with a garbage `NSSize` in the FP
+// registers. That's harmless: the builder reads `NSSize` only to scale the
+// ratio fields, which both builders overwrite afterward. Use the full
+// six-argument pointer only for edge-tagged gestures; plain touches retain
+// the five-argument call. The edge argument routes system gestures to
+// SpringBoard. On arm64 the `NSSize` (two doubles) is passed in v0/v1, so
+// `edge` is the 5th *integer* arg.
+//
+// The builder accepts only the four down/up `NSEventType` values
+// (`LeftMouseDown` 1, `LeftMouseUp` 2, and their right-button twins 3 and
+// 4, which build byte-identical messages). Every motion type, including
+// `MouseMoved` and `LeftMouseDragged`, returns NULL through either
+// prototype, whatever `NSSize` and `IndigoHIDEdge` accompany it. So motion
+// is expressed the way the digitizer already reads it, as a repeated down
+// at a new point, not as a drag event.
 typedef IndigoMessage *(*CSBIndigoMessageForMouseEdgeFn)(CGPoint *point0, CGPoint *point1, NSInteger target, NSUInteger eventType, CGSize size, NSInteger edge);
 // IndigoHIDMessageForHIDArbitrary(target, usagePage, usage, op) sends an
 // arbitrary HID usage. Arg→field mapping reverse-engineered by comparing its
@@ -426,14 +434,16 @@ static BOOL CSBIsNilMessage(NSError *error) {
 #pragma mark Edge-tagged touch (system gestures: home / App Switcher)
 
 /// Like `_buildTouchMessageAtRatio:direction:`, but built through the
-/// true 6-arg `fnMouseEdge` so the touch carries (1) an originating
-/// screen `edge` (`IndigoHIDEdge`, what routes it to SpringBoard's
-/// system edge-gesture recognizer instead of app content) and (2) a real
-/// motion phase via `eventType` (`NSEventTypeLeftMouseDragged` = 6 for
-/// the drag samples), not a stream of "down"s. A correct `NSSize` (we
-/// pass zero, since the ratio fields are overwritten below anyway) keeps
-/// the `MouseDragged` build from returning NULL / crashing the sim, which
-/// is what calling this symbol through the 5-arg `fnMouse` typedef does.
+/// true 6-arg `fnMouseEdge` so the touch carries an originating screen
+/// `edge` (`IndigoHIDEdge`), which is what routes it to SpringBoard's
+/// system edge-gesture recognizer instead of app content. The edge lands
+/// in the high bytes of `IndigoTouch.field3` (0x38), alongside the
+/// constant low half-word the plain path also writes there.
+///
+/// `eventType` carries a down or an up, never a motion phase: the builder
+/// returns NULL for every motion `NSEventType` (see the `fnMouseEdge`
+/// typedef). `NSSize` is passed zero because the builder reads it only to
+/// scale the ratio fields, which are overwritten below.
 - (IndigoMessage *)_buildEdgeTouchMessageAtRatio:(CGPoint)ratio
                                        eventType:(int)eventType
                                             edge:(int)edge {
@@ -469,9 +479,11 @@ static BOOL CSBIsNilMessage(NSError *error) {
 }
 
 - (BOOL)edgeTouchMoveAtNormalizedPoint:(CGPoint)point edge:(NSInteger)edge error:(NSError **)error {
-    // NSEventTypeLeftMouseDragged = 6: a real drag phase, not a re-down.
+    // A move is a re-down at the new point, the continued-contact convention
+    // the plain-touch drag already relies on. The builder has no motion event
+    // type to offer: every one of them returns NULL.
     return [self _sendBuiltMessage:^IndigoMessage *{
-        return [self _buildEdgeTouchMessageAtRatio:point eventType:0x6 edge:(int)edge];
+        return [self _buildEdgeTouchMessageAtRatio:point eventType:0x1 edge:(int)edge];
     } error:error];
 }
 
@@ -479,6 +491,75 @@ static BOOL CSBIsNilMessage(NSError *error) {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x2 edge:(int)edge];
     } error:error];
+}
+
++ (BOOL)isEdgeTouchBuildableWithError:(NSError **)error {
+    if (![CoreSimulatorLoader loadSimulatorKitWithError:error]) return NO;
+    CSBIndigoMessageForMouseEdgeFn fn = (CSBIndigoMessageForMouseEdgeFn)
+        dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
+    if (!fn) {
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain
+                                         code:CSBHIDClientErrorIndigoSymsMissing
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"IndigoHIDMessageForMouseNSEvent is unavailable "
+                    @"on this host; no touch input can be built.",
+            }];
+        }
+        return NO;
+    }
+    // `edgeTouchMove` re-sends the down event type, so down and up between
+    // them cover every phase the system-gesture path emits. Each is built
+    // twice, tagged and untagged, because a builder that still returns a
+    // message while quietly dropping the edge argument would leave the
+    // gesture reaching the foreground app instead of SpringBoard, which
+    // looks like nothing happening rather than like a failure.
+    const int phases[] = {0x1, 0x2};
+    for (size_t i = 0; i < sizeof(phases) / sizeof(phases[0]); i++) {
+        CGPoint taggedPoint = CGPointMake(0.5, 0.99);
+        CGPoint untaggedPoint = CGPointMake(0.5, 0.99);
+        // 3 is the bottom edge, the live-confirmed value the App Switcher
+        // rides on; 0 is the untagged touch the plain path sends.
+        IndigoMessage *tagged = fn(&taggedPoint, NULL, 0x32, (NSUInteger)phases[i],
+                                   CGSizeZero, (NSInteger)3);
+        IndigoMessage *untagged = fn(&untaggedPoint, NULL, 0x32, (NSUInteger)phases[i],
+                                     CGSizeZero, (NSInteger)0);
+        BOOL built = (tagged != NULL && untagged != NULL);
+        // The edge lands in the high bytes of `field3`, so a tagged build
+        // that matches its untagged twin there never carried the tag.
+        BOOL tagLanded = built && tagged->payload.event.touch.field3
+                               != untagged->payload.event.touch.field3;
+        if (tagged) free(tagged);
+        if (untagged) free(untagged);
+        if (!built) {
+            if (error) {
+                *error = [NSError errorWithDomain:kCSBErrorDomain
+                                             code:CSBHIDClientErrorNilMessage
+                                         userInfo:@{
+                    NSLocalizedDescriptionKey: [NSString stringWithFormat:
+                        @"IndigoHIDMessageForMouseNSEvent returned NULL for NSEventType %d; "
+                        @"this host's SimulatorKit no longer accepts an argument the "
+                        @"edge-tagged system-gesture path depends on.", phases[i]],
+                }];
+            }
+            return NO;
+        }
+        if (!tagLanded) {
+            if (error) {
+                *error = [NSError errorWithDomain:kCSBErrorDomain
+                                             code:CSBHIDClientErrorNilMessage
+                                         userInfo:@{
+                    NSLocalizedDescriptionKey: [NSString stringWithFormat:
+                        @"IndigoHIDMessageForMouseNSEvent built NSEventType %d but the "
+                        @"IndigoHIDEdge argument left the touch payload unchanged; this "
+                        @"host's SimulatorKit no longer carries the edge tag, so system "
+                        @"gestures would reach the foreground app instead.", phases[i]],
+                }];
+            }
+            return NO;
+        }
+    }
+    return YES;
 }
 
 #pragma mark Two-finger touch (3-payload, reverse-engineered)
@@ -623,16 +704,16 @@ static const int kCSBVoiceCommandUsage = 0xCF;
 
 #pragma mark Digital Crown
 
-/// Rotate the watchOS Digital Crown by a signed delta via SimulatorKit's
-/// dedicated `IndigoHIDMessageForDigitalCrownEvent`. A single send (no
-/// down/up pair, since the crown is a continuous rotary, not a button). Sign is
-/// direction; magnitude is distance. Routed through `_sendBuiltMessage:` for
-/// the same disconnect-recovery as every other send.
 + (BOOL)isDigitalCrownAvailable {
     if (![CoreSimulatorLoader loadSimulatorKitWithError:NULL]) return NO;
     return dlsym(RTLD_DEFAULT, "IndigoHIDMessageForDigitalCrownEvent") != NULL;
 }
 
+/// Rotate the watchOS Digital Crown by a signed delta via SimulatorKit's
+/// dedicated `IndigoHIDMessageForDigitalCrownEvent`. A single send (no
+/// down/up pair, since the crown is a continuous rotary, not a button). Sign is
+/// direction; magnitude is distance. Routed through `_sendBuiltMessage:` for
+/// the same disconnect-recovery as every other send.
 - (BOOL)rotateCrownByDelta:(double)delta error:(NSError **)error {
     if (!self.fnCrown) {
         if (error) {

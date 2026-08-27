@@ -151,14 +151,14 @@ enum SimInputSynthesis {
     /// analogue of `touch` for the system gestures. A live GUI mouse drag
     /// starting in the displayed bottom-edge band streams these so the home
     /// indicator / App Switcher follows the cursor, where the scripted
-    /// `edgeSwipe` plays a fixed trajectory. Unlike plain `touch` (which
-    /// collapses `.down`/`.move` to `tapDown`), each phase maps to its own
-    /// primitive: the per-phase `NSEventType` (down/dragged/up) is exactly
-    /// what routes the contact to SpringBoard's edge-gesture recognizer.
-    /// `edge` is the raw `IndigoHIDEdge` value (used by the simulator; the
-    /// physical device routes via the system-gesture report trailer and
-    /// ignores it). A backend with no edge path throws `unsupportedEdgeGesture`,
-    /// mapped to `unsupportedOperation`.
+    /// `edgeSwipe` plays a fixed trajectory. Each phase maps to an
+    /// edge-aware backend primitive so every contact keeps the backend's
+    /// system-gesture metadata; the simulator encodes both `.down` and
+    /// `.move` with the down event type.
+    /// `edge` is the raw `IndigoHIDEdge` value. The simulator writes it into
+    /// the Indigo payload; the physical backend maps it to the
+    /// system-gesture report trailer. A backend with no edge path throws
+    /// `unsupportedEdgeGesture`, mapped to `unsupportedOperation`.
     static func edgeTouch(
         backend: any DeviceBackend,
         paneId: UUID,
@@ -299,9 +299,10 @@ enum SimInputSynthesis {
     /// Edge-tagged drag: an interpolated swipe whose contacts carry the
     /// originating screen `edge` (raw `IndigoHIDEdge`), so iOS routes it
     /// to the system gesture recognizer (home indicator / App Switcher)
-    /// rather than app content. Down → `MouseDragged` samples → optional
-    /// active dwell → up, all edge-tagged. Sim-only (other backends throw
-    /// `unsupportedEdgeGesture`).
+    /// rather than app content. Down → interpolated samples → optional
+    /// active dwell → up. On simulators the interpolated contacts are
+    /// edge-tagged; other backends use their own App Switcher realization,
+    /// with a Home double-press fallback.
     static func edgeSwipe(
         backend: any DeviceBackend,
         paneId: UUID,

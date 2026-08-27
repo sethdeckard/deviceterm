@@ -1782,9 +1782,19 @@ orientation rather than a client snapshot
 (`AppSwitcherGesture.plan(for:)`). Upside-down has no confirmed
 home-gesture edge, and the scripted macro degrades to the portrait
 gesture wholesale rather than tagging a turned trajectory with an edge it
-didn't come from. On a sim it is built through the true 6-arg
-`IndigoHIDMessageForMouseNSEvent(…, NSSize, IndigoHIDEdge)` prototype
-with `MouseDragged` motion samples.
+didn't come from.
+
+On a sim each contact is built through the true 6-arg
+`IndigoHIDMessageForMouseNSEvent(…, NSSize, IndigoHIDEdge)` prototype,
+which is what carries the tag. That builder takes only the down and up
+event types and returns NULL for every motion type, so motion is
+expressed as a repeated down at each new point rather than as a drag
+event.
+
+That constraint is a private-API one and can move under a toolchain
+update. `make probe` only resolves the symbol by name. The default bridge
+test invokes the builder for the down and up event types the path uses,
+and checks that the edge tag changes the payload.
 
 On a physical device the interpolated trajectory doesn't apply: the
 backend opens the App Switcher via a scripted system-gesture swipe on
@@ -1816,9 +1826,11 @@ screen edge: a live GUI mouse drag starting in the displayed
 bottom-edge band streams these (`down` → `edgeTouchDown`,
 `move` → `edgeTouchMove`, `up` → `edgeTouchUp`) so the App Switcher
 follows the cursor, where `edgeSwipe` plays a fixed trajectory. On a
-sim, unlike plain `touch`, which collapses `down`/`move` to `tapDown`,
-each phase maps to its own primitive: the per-phase `NSEventType` (down,
-dragged, up) is what the system recognizer needs. On a physical device
+sim each phase maps to its own edge-tagged primitive, and every contact
+carries the tag; that tag, not the event type, is what reaches the
+system recognizer. The event types themselves collapse the way plain
+`touch`'s do, because the Indigo builder accepts no motion type. On a
+physical device
 each contact is sent as an enriched system-gesture report (the relay
 adds the trailer and nanosecond timestamp), so the interactive drag
 works there too.

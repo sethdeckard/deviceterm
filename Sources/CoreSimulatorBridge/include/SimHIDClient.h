@@ -69,9 +69,10 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
 // touch with the screen edge it originates from (`edge` → the touch's
 // `IndigoHIDEdge` slot) is what makes iOS route the drag to SpringBoard's
 // system edge-gesture recognizer (home indicator / App Switcher / Control
-// Center) instead of the foreground app. The move phase uses a real
-// drag event type. `edge` is the raw `IndigoHIDEdge` value, pinned by
-// a live spike.
+// Center) instead of the foreground app. `edge` is the raw `IndigoHIDEdge`
+// value. Contact continues across moves the same way a plain drag does, by
+// re-sending the down at each new point; the Indigo builder offers no
+// motion event type.
 
 - (BOOL)edgeTouchDownAtNormalizedPoint:(CGPoint)point
                                   edge:(NSInteger)edge
@@ -87,6 +88,20 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
                                 edge:(NSInteger)edge
                                error:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(edgeTouchUp(at:edge:));
+
+/// Whether this host's SimulatorKit still builds an edge-tagged message for
+/// every phase the system-gesture path sends, with the tag reaching the
+/// touch payload.
+///
+/// `dlsym` proves the symbol's name, not what it accepts. The symbol may
+/// resolve even when invoking the builder for a required event type
+/// returns NULL. A dropped `IndigoHIDEdge` is quieter still, since the
+/// message builds and sends and the gesture reaches the foreground app
+/// rather than SpringBoard, so each phase is built both tagged and
+/// untagged and the two compared. Loads SimulatorKit if needed; needs no
+/// device and no booted simulator.
++ (BOOL)isEdgeTouchBuildableWithError:(NSError * _Nullable * _Nullable)error
+    NS_SWIFT_NAME(isEdgeTouchBuildable());
 
 // MARK: Two-finger touch (pinch / rotate / two-finger pan)
 //
