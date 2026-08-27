@@ -23,6 +23,9 @@ private final class FakeFeed: DecodedFrameFeed, @unchecked Sendable {
     private let frames: [DecodedFrame]
     private(set) var stopped = false
 
+    /// Runs out of frames rather than failing or disconnecting.
+    let termination = FeedTermination.stopped
+
     init(frames: [DecodedFrame] = []) { self.frames = frames }
 
     func frames(onFatal: @escaping @Sendable (String) -> Void) -> AsyncStream<DecodedFrame> {
@@ -35,6 +38,63 @@ private final class FakeFeed: DecodedFrameFeed, @unchecked Sendable {
     func stop() { stopped = true }
 }
 
+/// A feed whose stream stays open until the test ends it, so a disconnect can
+/// be told apart from a teardown. `FakeFeed` finishes immediately, which races
+/// any `stopFrames` the test wants to land first.
+private final class ControlledFeed: DecodedFrameFeed, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncStream<DecodedFrame>.Continuation?
+    private var onFatal: (@Sendable (String) -> Void)?
+    private var verdict = FeedTermination.active
+    private(set) var stopped = false
+
+    var termination: FeedTermination {
+        lock.lock(); defer { lock.unlock() }; return verdict
+    }
+
+    func frames(onFatal: @escaping @Sendable (String) -> Void) -> AsyncStream<DecodedFrame> {
+        AsyncStream { continuation in
+            lock.lock()
+            self.continuation = continuation
+            self.onFatal = onFatal
+            lock.unlock()
+        }
+    }
+
+    /// End the stream the way `MirrorPipeline.disconnect` does: settle the
+    /// verdict, then finish. This is what an unplug actually produces, once
+    /// the pipeline has burned its restart budget on a device that had been
+    /// mirroring.
+    func endStream() {
+        lock.lock()
+        verdict = .disconnected
+        let pending = continuation
+        continuation = nil
+        onFatal = nil
+        lock.unlock()
+        pending?.finish()
+    }
+
+    /// End the stream the way `MirrorPipeline.fail` does, in that order: the
+    /// verdict is settled, then the stream finishes, and only afterwards does
+    /// the fatal callback run. A consumer that treats the end of the stream as
+    /// a disconnect can lose that race, so the ordering here is the point of
+    /// the fake.
+    func failStream(_ reason: String) {
+        lock.lock()
+        verdict = .failed
+        let pending = continuation
+        let fatal = onFatal
+        continuation = nil
+        onFatal = nil
+        lock.unlock()
+        pending?.finish()
+        fatal?(reason)
+    }
+
+    func stop() { stopped = true }
+}
+
 /// A hostile feed that deliberately retains its `onFatal` callback and never
 /// clears it, even on `stop` (unlike the real `MirrorPipeline`, which clears it
 /// on every terminal path). This isolates the backend's weak capture: with a
@@ -42,6 +102,8 @@ private final class FakeFeed: DecodedFrameFeed, @unchecked Sendable {
 /// (`backend → feed → onFatal → backend`); with the weak capture it does not.
 private final class RetainingFeed: DecodedFrameFeed, @unchecked Sendable {
     private var retained: (@Sendable (String) -> Void)?
+
+    let termination = FeedTermination.stopped
 
     func frames(onFatal: @escaping @Sendable (String) -> Void) -> AsyncStream<DecodedFrame> {
         retained = onFatal
@@ -264,6 +326,109 @@ func rotatePerformsWhenSupportedElseThrows() async {
 // MARK: - Lifecycle and publication
 
 @Test
+func aFrameStreamEndingOnItsOwnReportsADisconnect() async throws {
+    // A feed that classified its own ending as retryable, with nobody having
+    // asked it to stop. The pane has to hear about it, or it holds a frozen
+    // last frame with no signal.
+    let feed = ControlledFeed()
+    let backend = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: feed,
+        device: FakeRelay(support: touchOnly)
+    )
+    let disconnected = CompletionFlag()
+    try backend.startFrames(
+        onFrame: { _ in },
+        onFatal: { _ in },
+        onDisconnect: { disconnected.set() }
+    )
+    feed.endStream()
+    try await waitUntil { disconnected.isSet }
+    #expect(disconnected.isSet)
+}
+
+@Test(arguments: [true, false])
+func aDeliberateTeardownReportsNoDisconnect(viaShutdown: Bool) async throws {
+    // The other half, and the one that matters: both teardown paths end the
+    // same loop, so without the run-token fence each would report itself as a
+    // disconnect and resurrect a pane the user just closed.
+    let feed = ControlledFeed()
+    let backend = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: feed,
+        device: FakeRelay(support: touchOnly)
+    )
+    let disconnected = CompletionFlag()
+    try backend.startFrames(
+        onFrame: { _ in },
+        onFatal: { _ in },
+        onDisconnect: { disconnected.set() }
+    )
+    if viaShutdown {
+        backend.shutdownBackend()
+    } else {
+        backend.stopFrames()
+    }
+    feed.endStream()
+    // Negative assertion, so give the report its chance to arrive before
+    // confirming it never did.
+    try? await waitUntil({ disconnected.isSet }, within: .milliseconds(200))
+    #expect(!disconnected.isSet)
+}
+
+@Test
+func aFatalFeedFailureReportsNoDisconnect() async throws {
+    // A terminal pipeline failure finishes the stream too, and finishes it
+    // *before* it calls `onFatal`. Treating the end of the stream as a
+    // disconnect therefore races the fatal report, and losing that race takes
+    // `.shutdown` instead of `.failed`: the reconnect overlay, then a
+    // re-attach straight into the same failure on the next resurrect tick.
+    let feed = ControlledFeed()
+    let backend = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: feed,
+        device: FakeRelay(support: touchOnly)
+    )
+    let disconnected = CompletionFlag()
+    let failed = CompletionFlag()
+    try backend.startFrames(
+        onFrame: { _ in },
+        onFatal: { _ in failed.set() },
+        onDisconnect: { disconnected.set() }
+    )
+
+    feed.failStream("decode gave up")
+
+    try await waitUntil { failed.isSet }
+    // Negative half: give the disconnect its chance to arrive late before
+    // confirming it never came.
+    try? await waitUntil({ disconnected.isSet }, within: .milliseconds(200))
+    #expect(failed.isSet)
+    #expect(!disconnected.isSet)
+}
+
+@Test
+func aStreamEndingWithoutADisconnectVerdictReportsNothing() async throws {
+    // The report is allowlisted on `.disconnected` rather than excluding the
+    // endings we know about, so a feed that ends for some other reason, or
+    // classifies nothing at all, leaves the pane alone instead of
+    // re-mirroring on a guess.
+    let backend = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: FakeFeed(),
+        device: FakeRelay(support: touchOnly)
+    )
+    let disconnected = CompletionFlag()
+    try backend.startFrames(
+        onFrame: { _ in },
+        onFatal: { _ in },
+        onDisconnect: { disconnected.set() }
+    )
+    try? await waitUntil({ disconnected.isSet }, within: .milliseconds(200))
+    #expect(!disconnected.isSet)
+}
+
+@Test
 func backendDeallocatesAfterShutdown() async throws {
     // `RetainingFeed` holds the backend's fenced fatal callback and never clears
     // it, so a strong capture there would form a `backend → feed → onFatal →
@@ -277,7 +442,7 @@ func backendDeallocatesAfterShutdown() async throws {
             device: FakeRelay(support: touchOnly)
         )
         leaked = backend
-        try backend.startFrames(onFrame: { _ in }, onFatal: { _ in })
+        try backend.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
         backend.shutdownBackend()
     }
     // Bounded wait: ARC reclaims the backend as soon as the last strong ref drops
@@ -325,7 +490,7 @@ func transferQuiesceReleasesAHeldTouchContact() async throws {
         feed: FakeFeed(frames: [DecodedFrame(pixelBuffer: pixelBuffer)]),
         device: relay
     )
-    try device.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    try device.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
 
     // Hold a contact down (the gated pump opens on the first frame).
     try device.tapDown(at: CGPoint(x: 0.5, y: 0.5), generation: device.currentInputGeneration())
@@ -362,7 +527,7 @@ func transferFenceDropsInputBufferedBeforeTheGateOpens() async throws {
     _ = await device.quiesceInputForTransfer()
 
     // Open the gate; the buffered, now-stale tap is drained and dropped.
-    try device.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    try device.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
     try await Task.sleep(for: .milliseconds(200))
     #expect(await relay.performed().isEmpty, "a tap buffered before quiesce reached the device")
 
@@ -386,7 +551,7 @@ func quiesceReportsNotCleanWhenAHeldReleaseFails() async throws {
         feed: FakeFeed(frames: [DecodedFrame(pixelBuffer: pixelBuffer)]),
         device: relay
     )
-    try device.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    try device.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
 
     try device.tapDown(at: CGPoint(x: 0.5, y: 0.5), generation: device.currentInputGeneration())
     try await waitUntil { await relay.performed().contains("touch.contact") }
@@ -487,7 +652,8 @@ func publishedSurfaceIsNeverTheDecoderSurface() async throws {
                 Task { await captured.set(id) }
             }
         },
-        onFatal: { _ in }
+        onFatal: { _ in },
+        onDisconnect: {}
     )
     try await waitUntil { await captured.value != nil }
     let publishedIdentity = try #require(await captured.value)
@@ -1009,7 +1175,7 @@ func openAppSwitcherWaitsForTheRelayMacroToFinish() async throws {
         device: relay
     )
     // The gated human-input pump opens on the first frame.
-    try backend.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    try backend.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
     let completed = CompletionFlag()
     let call = Task {
         try await backend.openAppSwitcher(edge: 3, generation: backend.currentInputGeneration())
@@ -1033,7 +1199,7 @@ func aTransferCancelsAnInFlightAppSwitcherWithoutKillingThePump() async throws {
         feed: FakeFeed(frames: [DecodedFrame(pixelBuffer: pixelBuffer)]),
         device: relay
     )
-    try backend.startFrames(onFrame: { _ in }, onFatal: { _ in })
+    try backend.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
     let call = Task { try await backend.openAppSwitcher(edge: 3, generation: backend.currentInputGeneration()) }
     #expect(await relay.waitUntilStarted())
     backend.cancelAppSwitcherRequests()

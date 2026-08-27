@@ -188,6 +188,13 @@ enum Route: Sendable {
     ///
     /// Dispatched by the `SimResurrect` watch, never by the user.
     case resurrectSimPane(tab: TabID, udid: String)
+    /// Re-mirror a physically-connected device whose mirror stopped out from
+    /// under its pane, into the leaf that pane already holds.
+    ///
+    /// The device counterpart of `resurrectSimPane`, preserving the slot for
+    /// the same reasons. Dispatched by the `SimResurrect` watch once the
+    /// device is enumerable again, never by the user.
+    case resurrectDevicePane(tab: TabID, deviceId: String)
     /// `expecting` fences the close to one admission. `dispatch` only
     /// enqueues onto the serial drain, so before the handler runs a
     /// resurrect can replace the tab's pane for this udid, or a re-attach

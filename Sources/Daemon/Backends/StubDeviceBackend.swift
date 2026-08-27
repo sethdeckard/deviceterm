@@ -36,9 +36,12 @@ final class StubDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.pixelHeight = pixelHeight
     }
 
+    // The stub publishes one static surface and never ends its stream, so
+    // neither `onFatal` nor `onDisconnect` fires.
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) throws {
         let properties: [IOSurfacePropertyKey: Any] = [
             .width: pixelWidth,

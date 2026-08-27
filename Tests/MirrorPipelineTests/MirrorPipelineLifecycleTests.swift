@@ -7,10 +7,17 @@ import Testing
 
 @testable import MirrorPipeline
 
-/// The feed lifecycle state machine, `idle → running → (stopped | failed)`,
-/// driven without a device. Channels vend no mirror role, so each session ends
-/// immediately (the mirror channel can't open), which lets the restart/terminal
-/// paths run fast and hermetically.
+/// The feed lifecycle state machine,
+/// `idle → running → (stopped | disconnected | failed)`, driven without a
+/// device. Channels vend no mirror role, so each session ends immediately (the
+/// mirror channel can't open), which lets the restart/terminal paths run fast
+/// and hermetically.
+///
+/// That same property is why the `disconnected` verdict has no test here: the
+/// pipeline reaches it only after a session has *produced* frames, which needs
+/// a device to negotiate with, so it is outside a hermetic suite.
+/// `MirrorRunHistoryTests` pins the rule that chooses it, and
+/// `RealDeviceBackendTests` pins what the consumer does with each verdict.
 struct MirrorPipelineLifecycleTests {
     private actor FatalLog {
         private(set) var reasons: [String] = []
@@ -86,6 +93,35 @@ struct MirrorPipelineLifecycleTests {
         pipeline.stop()
         try await Task.sleep(for: .milliseconds(50))
         #expect(await log.reasons.count == 1)
+    }
+
+    @Test("a give-up with no frames ever produced classifies as a failure")
+    func giveUpWithoutFramesClassifiesAsFailure() async throws {
+        // The distinction the consumer acts on. A mirror that never worked
+        // must not read as retryable: the pane would show "reconnecting",
+        // re-attach, and land in the same place, forever. Only a run that
+        // produced frames before stopping is classified as retryable.
+        let log = FatalLog()
+        let pipeline = MirrorPipeline(
+            route: route(),
+            channels: channelsWithoutMirror(),
+            emptyRestartLimit: 1,
+            restartBackoff: .milliseconds(1)
+        )
+        for await _ in pipeline.frames(onFatal: { reason in Task { await log.record(reason) } }) {}
+        try await waitUntil { await log.reasons.count == 1 }
+
+        #expect(pipeline.termination == .failed)
+    }
+
+    @Test("a voluntary stop classifies as stopped")
+    func voluntaryStopClassifiesAsStopped() async {
+        let pipeline = MirrorPipeline(route: route(), channels: channelsWithoutMirror())
+        let stream = pipeline.frames(onFatal: { _ in })
+        pipeline.stop()
+        for await _ in stream {}
+
+        #expect(pipeline.termination == .stopped)
     }
 
     @Test("a second frames() after a terminal state returns a finished stream without re-arming onFatal")

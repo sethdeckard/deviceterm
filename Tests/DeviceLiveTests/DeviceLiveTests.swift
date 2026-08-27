@@ -149,7 +149,7 @@ struct DeviceLiveTests {
     func framesFlowThroughOwnedSurfaceRing() async throws {
         try await withDeviceBackend { backend in
             let sink = FrameSink()
-            try backend.startFrames(onFrame: { _ in Task { await sink.bump() } }, onFatal: { _ in })
+            try backend.startFrames(onFrame: { _ in Task { await sink.bump() } }, onFatal: { _ in }, onDisconnect: {})
             try await waitUntil(attempts: 100, interval: .milliseconds(200)) { await sink.received > 0 }
             let received = await sink.received
             #expect(received > 0, "no frames decoded within ~20s — media / decode / owned-surface copy failed")
@@ -221,7 +221,7 @@ struct DeviceLiveTests {
         // wire path doesn't throw.
         try await withDeviceBackend { backend in
             let sink = FrameSink()
-            try backend.startFrames(onFrame: { _ in Task { await sink.bump() } }, onFatal: { _ in })
+            try backend.startFrames(onFrame: { _ in Task { await sink.bump() } }, onFatal: { _ in }, onDisconnect: {})
             try await waitUntil(attempts: 100, interval: .milliseconds(200)) { await sink.received > 0 }
             try #require(await sink.received > 0, "stream never produced a frame")
             try backend.tapDown(at: CGPoint(x: 0.5, y: 0.5), generation: backend.currentInputGeneration())
@@ -284,7 +284,7 @@ struct DeviceLiveTests {
             #expect(backend.capabilities.key)
             #expect(backend.capabilities.text)
             let sink = FrameSink()
-            try backend.startFrames(onFrame: { _ in Task { await sink.bump() } }, onFatal: { _ in })
+            try backend.startFrames(onFrame: { _ in Task { await sink.bump() } }, onFatal: { _ in }, onDisconnect: {})
             try await waitUntil(attempts: 100, interval: .milliseconds(200)) { await sink.received > 0 }
             try #require(await sink.received > 0, "no frames — keyboard auth gate stays closed")
             for usage: UInt32 in [0x0B, 0x0C] {

@@ -442,6 +442,9 @@ final class Router {
         case let .resurrectSimPane(tabID, udid):
             await resurrectSimPane(tab: tabID, udid: udid)
 
+        case let .resurrectDevicePane(tabID, deviceId):
+            await resurrectDevicePane(tab: tabID, deviceId: deviceId)
+
         case let .detachSimPane(tabID, udid, mode, expecting):
             await detachPane(
                 tab: tabID,
@@ -2293,6 +2296,35 @@ final class Router {
             tab: tabID,
             window: window
         )
+    }
+
+    /// Re-mirror a device whose mirror stopped out from under its pane, into the
+    /// leaf that pane already holds. Dispatched by the `SimResurrect` watch.
+    ///
+    /// The device counterpart of `resurrectSimPane`, and it re-resolves the
+    /// window after the close for the same reason: a tab drag can move the
+    /// tab between windows outside the route drain.
+    ///
+    /// The daemon keeps the shutdown pane record for the overlay, so close it
+    /// before attaching its replacement. `.detach` because the mirror is what
+    /// ends here; the device itself is not the daemon's to stop.
+    private func resurrectDevicePane(tab tabID: TabID, deviceId: String) async {
+        guard let pane = workspace.windowContaining(tab: tabID)?
+            .tabs.tab(id: tabID)?.devicePanes
+            .first(where: { $0.deviceId == deviceId }) else { return }
+        do {
+            try await daemon.closePane(
+                paneId: pane.paneId,
+                mode: .detach,
+                expecting: pane.attachment
+            )
+        } catch {
+            logError("pane.closeById failed for \(deviceId): \(error)")
+        }
+        guard let window = workspace.windowContaining(tab: tabID),
+            let mounted = window.tabs.tab(id: tabID)?.devicePanes
+                .first(where: { $0.deviceId == deviceId }) else { return }
+        recoverDevicePane(mounted, tab: tabID, window: window)
     }
 
     /// Retry a failed pending pane: re-run the attach whose first try

@@ -39,7 +39,8 @@ private final class LocationMockBackend: DeviceBackend, @unchecked Sendable {
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (390, 844) }
@@ -517,7 +518,8 @@ private final class ParkingLocationBackend: DeviceBackend, @unchecked Sendable {
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (390, 844) }

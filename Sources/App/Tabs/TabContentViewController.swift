@@ -474,7 +474,10 @@ final class TabContentViewController: NSViewController {
             simPaneActions.stopRecordingForCleanup(paneVC)
         }
         for udid in simPaneVCByUDID.keys {
-            simResurrect.unwatch(udid: udid)
+            simResurrect.unwatch(target: .sim(udid: udid))
+        }
+        for deviceId in devicePaneVCByID.keys {
+            simResurrect.unwatch(target: .device(deviceId: deviceId))
         }
     }
 
@@ -748,7 +751,7 @@ final class TabContentViewController: NSViewController {
             // is only ever armed by a pane that went `.shutdown`, so a
             // replacement arriving under that udid means the sim is booted
             // again, which is the transition the watch was waiting for.
-            simResurrect.unwatch(udid: simPane.udid)
+            simResurrect.unwatch(target: simPane.target)
             simPaneVCByUDID.removeValue(forKey: simPane.udid)
         }
         let current = Set(simPaneVCByUDID.keys)
@@ -765,7 +768,7 @@ final class TabContentViewController: NSViewController {
                 simPaneActions.stopRecordingForCleanup(paneVC)
             }
             simPaneVCByUDID.removeValue(forKey: udid)
-            simResurrect.unwatch(udid: udid)
+            simResurrect.unwatch(target: .sim(udid: udid))
         }
         // Add new panes from state; the layout-tree reconcile drops them
         // into place per nav-state order.
@@ -792,9 +795,9 @@ final class TabContentViewController: NSViewController {
     /// shared renderer) for each new `DevicePaneState`, drop the VC for
     /// any removed one. The Router already did `physicalDevice.attach` /
     /// `closePane`; this is pure AppKit, and the unified layout-tree
-    /// reconcile handles view placement. Device panes carry no recording
-    /// or resurrect state, so removal is just dropping the VC: no
-    /// `stopRecordingForCleanup` / `simResurrect.unwatch`.
+    /// reconcile handles view placement. Device panes hold no recording
+    /// state, so removal drops the VC and its resurrect watch but never
+    /// calls `stopRecordingForCleanup`.
     private func reconcileDevicePanes() {
         guard !isTornDown, let tabState = tabListVM.tab(id: tabID) else { return }
         // Same one-VC-per-pane-id rule as the sim reconcile above, keyed by
@@ -803,6 +806,12 @@ final class TabContentViewController: NSViewController {
         for devicePane in tabState.devicePanes {
             guard let paneVC = devicePaneVCByID[devicePane.deviceId],
                 paneVC.paneId != devicePane.paneId else { continue }
+            // Drop the watch with the VC, for the reason the sim reconcile
+            // gives: a watch outliving its pane would fire against whatever
+            // holds the deviceId now and detach it. A replacement arriving
+            // under this deviceId means the device is back, which is the
+            // transition the watch was waiting for.
+            simResurrect.unwatch(target: devicePane.target)
             devicePaneVCByID.removeValue(forKey: devicePane.deviceId)
         }
         let current = Set(devicePaneVCByID.keys)
@@ -810,6 +819,7 @@ final class TabContentViewController: NSViewController {
 
         for deviceId in current.subtracting(target) {
             devicePaneVCByID.removeValue(forKey: deviceId)
+            simResurrect.unwatch(target: .device(deviceId: deviceId))
         }
         for devicePane in tabState.devicePanes where !current.contains(devicePane.deviceId) {
             let paneVC = SimulatorPaneViewController(
@@ -823,17 +833,18 @@ final class TabContentViewController: NSViewController {
 
     /// Wire a device pane VC's owner-facing callbacks. Deliberately a
     /// thin subset of the sim wiring: a device pane gets **Close Pane**
-    /// (detach the mirror, the physical device keeps running) and the
-    /// size-preset reporting every mirrored pane shares. The sim-only
-    /// lifecycle actions (reboot / live-reboot / erase /
-    /// open-in-Simulator / shutdown / reveal-in-Finder) and the
-    /// SimResurrect watch have no physical-device meaning and are left
+    /// (detach the mirror, the physical device keeps running), the
+    /// size-preset reporting every mirrored pane shares, and the resurrect
+    /// watch that re-mirrors it when it reconnects. The sim-only lifecycle
+    /// actions (reboot / live-reboot / erase / open-in-Simulator / shutdown
+    /// / reveal-in-Finder) have no physical-device meaning and are left
     /// unattached: their context-menu items stay visible and no-op.
-    /// Nothing hides them. Device reboot / screenshot / record are not
-    /// implemented.
+    /// Nothing hides them. Device screenshot / record are not implemented.
     private func wire(deviceVC paneVC: SimulatorPaneViewController, devicePane: DevicePaneState) {
         let tabID = self.tabID
         let deviceId = devicePane.deviceId
+        let target = devicePane.target
+        let displayName = devicePane.displayName
         // Stamp tabID before viewDidLoad runs so the chrome's drag host
         // has it when constructed (same rationale as the sim wiring).
         paneVC.tabID = tabID
@@ -841,6 +852,31 @@ final class TabContentViewController: NSViewController {
             self?.router.dispatch(
                 .detachDevicePane(tab: tabID, deviceId: deviceId, mode: .detach)
             )
+        }
+        // A device pane reaches `.shutdown` when its mirror stops without the
+        // pane being closed, which the daemon reports when the frame stream
+        // ends on its own. Watch for the device to be enumerable again and
+        // re-mirror into the same leaf, the device counterpart of the sim
+        // watch `SimPaneActionCoordinator` sets.
+        paneVC.onStateChange = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .shutdown:
+                self.simResurrect.watch(
+                    target: target,
+                    displayName: displayName
+                ) { [weak self] in
+                    self?.router.dispatch(
+                        .resurrectDevicePane(tab: tabID, deviceId: deviceId)
+                    )
+                }
+
+            case .rendering:
+                self.simResurrect.unwatch(target: target)
+
+            default:
+                break
+            }
         }
         wire(sizePresetReporting: paneVC, target: devicePane.target)
     }

@@ -1031,6 +1031,11 @@ public actor PaneCoordinator {
                     Task { [weak self, paneId] in
                         await self?.markPaneFailed(paneId: paneId, reason: reason)
                     }
+                },
+                onDisconnect: { [weak self, paneId] in
+                    Task { [weak self, paneId] in
+                        await self?.markPaneShutdown(paneId: paneId)
+                    }
                 }
             )
         } catch {
@@ -1845,6 +1850,27 @@ public actor PaneCoordinator {
             to: .sessions(controllers(of: record))
         )
         finishTerminalStatePublication(record, revision: terminalPublicationRevision)
+    }
+
+    /// Shut down one pane whose backend classified its stream termination as
+    /// retryable, so the GUI shows the shutdown overlay and can re-attach in
+    /// place once the device is available again, instead of holding a frozen
+    /// last frame with no signal.
+    ///
+    /// Keyed by pane id, not by target, because the report belongs to the
+    /// stream that raised it. `createPane` dedups live records by target, so
+    /// a target names at most one live pane at a time but names a *succession*
+    /// of them: retiring one frees the target for a fresh attach. A
+    /// target-keyed shutdown from a late callback would land on whichever pane
+    /// holds the target now, which is the replacement, not the sender.
+    ///
+    /// `.shutdown` rather than `.failed` because that is the state the GUI
+    /// already watches and re-attaches from; a failure is the one it asks the
+    /// user about. Idempotent; a no-op for an already-terminal pane.
+    public func markPaneShutdown(paneId: UUID) async {
+        guard let record = panes[paneId],
+            record.state != .failed, record.state != .shutdown else { return }
+        await retire(record: record, to: .shutdown)
     }
 
     /// Fail a pane whose backend reported an unrecoverable fault (a

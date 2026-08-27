@@ -121,16 +121,18 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Semi-transparent scrim behind the overlay text/buttons so the
     /// shutdown message stays readable over the frozen last frame.
     private let dimView = NSView()
+    /// Held so the shutdown overlay can hide it for a physical device, whose
+    /// pane wires no reboot action.
+    private lazy var rebootButton = NSButton(
+        title: "Reboot",
+        target: self,
+        action: #selector(rebootClicked(_:))
+    )
     private lazy var shutdownButtons: NSStackView = {
         let closeButton = NSButton(
             title: "Close Pane",
             target: self,
             action: #selector(closePaneClicked(_:))
-        )
-        let rebootButton = NSButton(
-            title: "Reboot",
-            target: self,
-            action: #selector(rebootClicked(_:))
         )
         let stack = NSStackView(views: [closeButton, rebootButton])
         stack.orientation = .horizontal
@@ -781,7 +783,15 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
 
         case .shutdown:
             overlay.isHidden = false
-            overlay.stringValue = "Simulator shut down."
+            // A device pane reaches this when its mirror stopped, not when
+            // anything shut down, and a watch is already waiting to re-mirror
+            // it. Reboot is a simulator action with no device wiring, so the
+            // device overlay offers Close Pane alone rather than a button
+            // that would do nothing.
+            overlay.stringValue = isPhysicalDevice
+                ? "\(displayName) stopped mirroring. Reconnecting…"
+                : "Simulator shut down."
+            rebootButton.isHidden = isPhysicalDevice
             shutdownButtons.isHidden = false
 
         case let .failed(message):

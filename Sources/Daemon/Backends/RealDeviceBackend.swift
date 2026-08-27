@@ -671,7 +671,8 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) throws {
         let pool = self.pool
         let gates = gateContinuations
@@ -700,9 +701,21 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             guard let self else { return }
             gate.sync { if token == self.frameToken { onFatal(reason) } }
         }
+        // The run token separates a stream that ended on its own from one this
+        // backend stopped: `stopFrames` / `shutdownBackend` bump the token
+        // before cancelling the frame task, so a teardown-driven end of the
+        // loop finds the token stale and reports nothing.
+        let disconnected: @Sendable () -> Void = { [weak self] in
+            guard let self else { return }
+            gate.sync { if token == self.frameToken { onDisconnect() } }
+        }
         // A terminal pipeline failure fails the pane the same way pool exhaustion
         // does: the feed forwards it (fenced) straight into this channel.
         let frames = feed.frames(onFatal: fail)
+        // Local, like every other capture below: reaching `self.feed` from
+        // inside the frame task would retain the backend for the life of the
+        // stream and keep `deinit` from ever running.
+        let feed = self.feed
         // Off-by-default tracing: when on, stamp the frame's pool generation into
         // the copied slot so the GUI can compare the generation it intended to
         // render against what it scans back, and carry it on the published frame.
@@ -839,6 +852,20 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 publish(published)
                 metrics?.notePublished()
             }
+            // Falling out of the loop says the stream ended, not why. Every
+            // ending arrives here the same way, including the two that must
+            // not re-mirror: a feed that gave up having never worked, and a
+            // teardown this backend asked for.
+            //
+            // So ask the feed, rather than inferring. Waiting to hear from
+            // `fail` instead is a race this loop can lose, because a feed
+            // finishes its stream *before* it calls `onFatal`; the verdict is
+            // settled before the finish this loop just observed. The run token still fences the answer, so a teardown
+            // reports nothing even if the feed classified it otherwise.
+            //
+            // Pool exhaustion never reaches here: it `return`s above, having
+            // already reported through `fail`.
+            if feed.termination == .disconnected { disconnected() }
         }
         startWatchdog()
     }

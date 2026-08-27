@@ -15,8 +15,9 @@ import os
 /// frames: it never allocates a surface pool, stamps a trace, or publishes,
 /// since the daemon owns all of that.
 ///
-/// Lifecycle is a single state machine, `idle → running → (stopped | failed)`,
-/// both terminal states absorbing. One serial `stateQueue` is the sole owner of
+/// Lifecycle is a single state machine,
+/// `idle → running → (stopped | disconnected | failed)`, every terminal state
+/// absorbing. One serial `stateQueue` is the sole owner of
 /// every field touched from more than one execution context: the state, the
 /// stream continuation, the current session's `ingress`, and the liveness
 /// counters the decode callback writes and the watchdog reads. Session teardown
@@ -34,6 +35,7 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
         case idle
         case running
         case stopped
+        case disconnected
         case failed
     }
 
@@ -112,6 +114,29 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
 
     private var isRunning: Bool {
         stateQueue.sync { state == .running }
+    }
+
+    /// `DecodedFrameFeed.termination`. Each terminal transition moves state
+    /// inside the same `stateQueue.sync` that finishes the continuation, and
+    /// before it, so a consumer that has observed the stream end is
+    /// guaranteed to read the verdict here. That ordering is what the
+    /// requirement asks for.
+    package var termination: FeedTermination {
+        stateQueue.sync {
+            switch state {
+            case .idle, .running:
+                return .active
+
+            case .stopped:
+                return .stopped
+
+            case .disconnected:
+                return .disconnected
+
+            case .failed:
+                return .failed
+            }
+        }
     }
 
     package init(
@@ -198,7 +223,7 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
                 onFatal = nil // release the callback so it can't retain its owner
                 return grabbed
 
-            case .stopped, .failed:
+            case .stopped, .disconnected, .failed:
                 return .none
             }
         }
@@ -289,6 +314,22 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
         fatal?(reason)
     }
 
+    /// Terminal give-up on a run that had been mirroring: finish the stream
+    /// and record it as retryable, so the consumer re-mirrors instead of
+    /// surfacing an error. No `onFatal`, because there is no fault to name
+    /// (see `FeedTermination.disconnected` for what this does and doesn't
+    /// claim); the verdict travels through `termination` instead.
+    private func disconnect() {
+        stateQueue.sync {
+            guard state == .running else { return }
+            state = .disconnected
+            let grabbedContinuation = continuation
+            continuation = nil
+            onFatal = nil // release the callback so it can't retain its owner
+            grabbedContinuation?.finish() // onTermination re-enters via async, not sync
+        }
+    }
+
     /// Voluntary completion (the loop ended without a caller stop): finish the
     /// stream, no fatal.
     private func finish() {
@@ -311,12 +352,21 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
     /// channel, negotiate, or simply stalled).
     private func drive() async {
         var emptyRestarts = 0
+        var history = MirrorRunHistory()
         while isRunning, !Task.isCancelled {
             let produced = await runSession()
+            history.record(framesProduced: produced)
             if !isRunning || Task.isCancelled { break }
             emptyRestarts = produced > 0 ? 0 : emptyRestarts + 1
             guard emptyRestarts < emptyRestartLimit else {
-                fail("mirror gave up after \(emptyRestartLimit) consecutive empty sessions")
+                switch history.giveUpTermination {
+                case .disconnected:
+                    diagnostics?("mirror stopped producing; treating as a disconnect")
+                    disconnect()
+
+                default:
+                    fail("mirror gave up after \(emptyRestartLimit) consecutive empty sessions")
+                }
                 return
             }
             diagnostics?("stream ended; restarting (\(emptyRestarts) empty in a row)")

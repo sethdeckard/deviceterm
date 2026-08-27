@@ -236,9 +236,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) throws {
         // A sim pane has no leased pool, so `onFatal` never fires.
+        // `onDisconnect` doesn't either: a sim doesn't disconnect, and a sim
+        // that shuts down is reported through CoreSimulator's own
+        // notification, which reaches `markPanesShutdown(forUDID:)`.
         guard let displayHandle else { throw DeviceBackendError.notActive }
         // Wrap on the bridge's queue so the retain/use-count pairing
         // happens before the autoreleased source ref escapes. A sim frame

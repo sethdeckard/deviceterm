@@ -551,14 +551,14 @@ final class SimPaneActionCoordinator {
             switch state {
             case .shutdown:
                 self.simResurrect.watch(
-                    udid: udid,
+                    target: .sim(udid: udid),
                     displayName: displayName
                 ) { [weak self] in
                     self?.dispatchResurrect(udid: udid)
                 }
 
             case .rendering:
-                self.simResurrect.unwatch(udid: udid)
+                self.simResurrect.unwatch(target: .sim(udid: udid))
 
             default:
                 break

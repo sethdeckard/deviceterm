@@ -75,6 +75,9 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// dropped) so a test can drive surfaces through the pane's ordered
     /// publish pump.
     private(set) var onSurface: (@Sendable (PublishedSurface) -> Void)?
+    /// The disconnect callback the coordinator installed, so a test can report
+    /// a retryable stream termination the way a real backend would.
+    private(set) var onDisconnect: (@Sendable () -> Void)?
     /// Test gate: when set, `tapDown` parks the calling (actor) thread on
     /// a semaphore until `releaseTapDown()`, so a test can hold the
     /// `PaneCoordinator` actor and watch the surface pump's bounded
@@ -170,10 +173,12 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) throws {
         startFramesCalled = true
         self.onSurface = onFrame
+        self.onDisconnect = onDisconnect
     }
 
     func stopFrames() {}
@@ -2213,6 +2218,62 @@ func shutdownReleasesTheBackend() async throws {
     await #expect(throws: PaneError.paneNotActive(paneId: pane.paneId)) {
         try await coordinator.tap(paneId: pane.paneId, as: .guiPeer, x: 1, y: 1)
     }
+}
+
+@Test("a reported disconnect shuts the pane down")
+func disconnectShutsThePaneDown() async throws {
+    // A retryable termination is not a failure as far as the pane is
+    // concerned: it takes the shutdown state, whose overlay and re-attach path
+    // already exist, rather than a failure the user can only close.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(
+        udid: "teardown-disconnect", sessionId: session, backend: backend
+    )
+
+    await coordinator.markPaneShutdown(paneId: pane.paneId)
+
+    #expect(backend.shutdownCalled)
+    #expect(await coordinator.panesForSession(session).first?.state == .shutdown)
+    await #expect(throws: PaneError.paneNotActive(paneId: pane.paneId)) {
+        try await coordinator.tap(paneId: pane.paneId, as: .guiPeer, x: 1, y: 1)
+    }
+}
+
+@Test("a disconnect reported by the backend reaches the pane")
+func backendDisconnectCallbackShutsThePaneDown() async throws {
+    // The wiring, not just the method: a coordinator that never handed the
+    // backend an `onDisconnect` would leave every one of these panes frozen,
+    // and the method above would still pass.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let backend = MockDeviceBackend()
+    _ = try await coordinator.createMockPane(
+        udid: "teardown-disconnect-wired", sessionId: session, backend: backend
+    )
+    let report = try #require(backend.onDisconnect)
+
+    report()
+
+    #expect(await waitForPaneState(.shutdown, sessionId: session, coordinator: coordinator))
+}
+
+@Test("a disconnect leaves an already-terminal pane alone")
+func disconnectDoesNotReviveATerminalPane() async throws {
+    // Both terminal states are final. A late disconnect arriving after a
+    // failure must not rewrite it to shutdown, which would offer the user a
+    // recovery path for a pane whose backend faulted.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let pane = try await coordinator.createMockPane(
+        udid: "teardown-disconnect-late", sessionId: session, backend: MockDeviceBackend()
+    )
+    await coordinator.markPaneFailed(paneId: pane.paneId, reason: "surface pool exhausted")
+
+    await coordinator.markPaneShutdown(paneId: pane.paneId)
+
+    #expect(await coordinator.panesForSession(session).first?.state == .failed)
 }
 
 @Test("a failure releases the backend")

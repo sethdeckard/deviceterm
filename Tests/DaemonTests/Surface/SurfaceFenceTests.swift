@@ -57,7 +57,8 @@ private final class DrainParkingBackend: DeviceBackend, @unchecked Sendable {
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) throws {}
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }

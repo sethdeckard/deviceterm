@@ -45,9 +45,20 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// (after its one controlled recovery) or the frame pipeline giving up, and
     /// the coordinator fails the pane. Backends that can't fail terminally never
     /// call it. Throws if the stream can't start.
+    ///
+    /// `onDisconnect` fires at most once for a stream termination the backend
+    /// judges **retryable** and that nothing asked for, and the coordinator
+    /// shuts the pane down. It is distinct from `onFatal` in what the pane
+    /// should do next, not in what went wrong: a retryable end gets the
+    /// shutdown state its overlay and re-attach path already understand, so
+    /// re-mirroring is worth a try, while `onFatal` gets a failure the user
+    /// has to act on. A conformer must not fire it for its own `stopFrames` /
+    /// `shutdownBackend`, which would resurrect a pane the user just closed.
+    /// Backends whose stream ends only on teardown never call it.
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
-        onFatal: @escaping @Sendable (String) -> Void
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void
     ) throws
     /// Stop streaming and release the display subscription. Idempotent.
     func stopFrames()
