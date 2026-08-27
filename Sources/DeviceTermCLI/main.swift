@@ -250,11 +250,22 @@ func paramsData(_ envelope: RPCEnvelope) -> Data? {
 }
 
 /// Response timeout for a gesture RPC that the daemon answers only after
-/// the gesture finishes dispatching (`swipe` / `app-switcher`): the
-/// gesture's own wall-clock plus generous headroom for the sim's
-/// synchronous per-contact HID sends.
-func gestureTimeout(_ gestureMs: Int) -> Double {
-    5 + Double(max(0, gestureMs)) / 1_000.0 + 5
+/// the gesture finishes dispatching: the gesture's own wall-clock plus
+/// generous headroom for the sim's synchronous per-contact HID sends.
+///
+/// Takes the phases separately and bounds each one, because that is how the
+/// daemon validates them: `swipe` runs a motion *and* a dwell, each accepted
+/// up to `GestureDuration.maxMs` on its own, so a legal swipe can outlast that
+/// ceiling and a deadline capped at it would expire mid-gesture.
+///
+/// Bounding is per phase rather than on the total because the values reaching
+/// here are unvalidated: argv takes any `Int` and the daemon refuses anything
+/// past the ceiling with `invalidParams`. Summing raw ones could overflow, and
+/// deriving a deadline from a value the daemon will reject would leave the CLI
+/// waiting days on a peer that stalled instead of answering.
+func gestureTimeout(_ phasesMs: Int...) -> Double {
+    let total = phasesMs.reduce(0) { $0 + min(max(0, $1), GestureDuration.maxMs) }
+    return 5 + Double(total) / 1_000.0 + 5
 }
 
 /// Send a request envelope built by `CLICommands` and return the result

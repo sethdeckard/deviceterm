@@ -138,7 +138,8 @@ func run(
                 // (motion + dwell + synchronous HID samples) dispatches;
                 // on a slow sim that legitimately exceeds the default 5s.
                 timeoutSeconds: gestureTimeout(
-                    AppSwitcherGesture.durationMs + AppSwitcherGesture.holdMs
+                    AppSwitcherGesture.durationMs,
+                    AppSwitcherGesture.holdMs
                 ),
                 humanFields: { _ in [] },
                 jsonReceipt: { resolved in
@@ -168,6 +169,13 @@ func run(
                 ref: pane,
                 output: output,
                 transport: transport,
+                // The daemon may hold the RPC open for the whole requested
+                // duration, up to a minute. A preempted press ends sooner,
+                // but the caller cannot know that in advance, so the wait
+                // covers what it asked for.
+                timeoutSeconds: gestureTimeout(
+                    durationMs ?? GestureDuration.longPressDefaultMs
+                ),
                 humanFields: { _ in
                     var fields: [(String, String)] = [("x", String(x)), ("y", String(y))]
                     if let durationMs { fields.append(("durationMs", String(durationMs))) }
@@ -191,6 +199,12 @@ func run(
                 ref: pane,
                 output: output,
                 transport: transport,
+                // The RPC may stay open until both fingers have travelled
+                // their whole path, so the wait covers the duration asked
+                // for. Preemption can end it earlier.
+                timeoutSeconds: gestureTimeout(
+                    durationMs ?? GestureDuration.pinchDefaultMs
+                ),
                 // The eight coords would make the line illegible; surface
                 // only `durationMs` (the parameter agents actually tune).
                 humanFields: { _ in durationMs.map { [("durationMs", String($0))] } ?? [] },
@@ -311,6 +325,13 @@ func run(
                 ref: pane,
                 output: output,
                 transport: transport,
+                // A positive duration sub-steps the rotation at ~60Hz and can
+                // keep the RPC open through the final step; a generation
+                // change stops it sooner. The default is 0, which resolves
+                // to the plain floor.
+                timeoutSeconds: gestureTimeout(
+                    durationMs ?? GestureDuration.crownDefaultMs
+                ),
                 humanFields: { _ in
                     var fields: [(String, String)] = [("delta", String(delta))]
                     if let velocity { fields.append(("velocity", String(velocity))) }
@@ -777,8 +798,18 @@ func handleSwipe(
         durationMs: durationMs,
         holdMs: holdMs
     )
-    let gestureMs = (durationMs ?? 200) + (holdMs ?? 0)
-    let result = try transport.send(envelope, timeoutSeconds: gestureTimeout(gestureMs))
+    // Motion and end dwell are separate phases the daemon validates and runs
+    // independently, so the wait covers both rather than their capped sum.
+    // The start dwell is the third such phase, omitted here because no flag
+    // feeds it and `swipeRequest` therefore sends nil; a `--start-hold` would
+    // have to be added to this list as well as to the request.
+    let result = try transport.send(
+        envelope,
+        timeoutSeconds: gestureTimeout(
+            durationMs ?? GestureDuration.swipeDefaultMs,
+            holdMs ?? 0
+        )
+    )
     let ack = try JSONDecoder().decode(SwipeAck.self, from: result)
     switch output {
     case .human:

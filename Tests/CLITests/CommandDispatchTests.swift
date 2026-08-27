@@ -545,3 +545,151 @@ func errorOutcomeMappings() {
         == CommandOutcome(stderr: "no tab", exitCode: 1))
     #expect(errorOutcome(CLIError.transport("t")).exitCode == 1)
 }
+
+// MARK: - gesture response budgets
+
+/// Verbs the daemon answers only once the gesture has finished dispatching.
+///
+/// These drive `run` rather than reconstructing the `sendResolved` call the way
+/// the tap tests above do, because what needs pinning is the dispatch site's own
+/// choice of budget. A reconstructed call would pass even if the verb omitted
+/// `timeoutSeconds:` entirely.
+///
+/// Serialized because `run` reads the session credentials from the process
+/// environment and there is no seam for injecting them, so concurrent cases
+/// would race over a process-wide value. Each call restores what it found.
+@Suite(.serialized)
+struct GestureBudgetTests {
+    private func withTabEnv<T>(_ body: () throws -> T) rethrows -> T {
+        let priorSession = ProcessInfo.processInfo.environment[DeviceTermEnv.session]
+        let priorCap = ProcessInfo.processInfo.environment[DeviceTermEnv.sessionCap]
+        defer {
+            if let priorSession {
+                setenv(DeviceTermEnv.session, priorSession, 1)
+            } else {
+                unsetenv(DeviceTermEnv.session)
+            }
+            if let priorCap {
+                setenv(DeviceTermEnv.sessionCap, priorCap, 1)
+            } else {
+                unsetenv(DeviceTermEnv.sessionCap)
+            }
+        }
+        setenv(DeviceTermEnv.session, testCreds.sessionId, 1)
+        setenv(DeviceTermEnv.sessionCap, testCreds.cap, 1)
+        return try body()
+    }
+
+    /// The budget the action envelope was sent with. Index 1 because index 0 is
+    /// the `panes.list` resolution, which deliberately keeps the short wait.
+    private func actionBudget(for command: CLICommand) throws -> Double {
+        let fake = FakeTransport(responses: [try onePaneResponse(), Data(#"{}"#.utf8)])
+        let outcome = withTabEnv { run(command, transport: fake, output: .json) }
+        #expect(outcome.exitCode == 0)
+        #expect(fake.timeouts.count == 2)
+        #expect(fake.timeouts.first == AppCommandDeadline.cliRequestTimeoutSeconds)
+        return fake.timeouts[1]
+    }
+
+    private func pinch(durationMs: Int?) -> CLICommand {
+        .pinch(
+            pane: nil,
+            fromF1X: 0.4,
+            fromF1Y: 0.4,
+            fromF2X: 0.6,
+            fromF2Y: 0.6,
+            toF1X: 0.3,
+            toF1Y: 0.3,
+            toF2X: 0.7,
+            toF2Y: 0.7,
+            durationMs: durationMs
+        )
+    }
+
+    @Test
+    func longPressWaitsOutTheHoldItAskedFor() throws {
+        let budget = try actionBudget(
+            for: .longPress(pane: nil, x: 0.5, y: 0.5, durationMs: 5_000)
+        )
+        #expect(budget == gestureTimeout(5_000))
+        // A five-second hold has to keep headroom beyond the ordinary
+        // five-second request timeout, or it expires on a press it dispatched.
+        #expect(budget > AppCommandDeadline.cliRequestTimeoutSeconds + 5)
+    }
+
+    @Test
+    func pinchWaitsOutTheDurationItAskedFor() throws {
+        #expect(try actionBudget(for: pinch(durationMs: 8_000)) == gestureTimeout(8_000))
+    }
+
+    @Test
+    func crownWaitsOutASubSteppedRotation() throws {
+        let budget = try actionBudget(
+            for: .crown(pane: nil, delta: 100, velocity: nil, durationMs: 6_000)
+        )
+        #expect(budget == gestureTimeout(6_000))
+    }
+
+    /// An omitted `--duration` must resolve the daemon's own default, not the
+    /// bare floor: the daemon still holds a long-press for half a second, and a
+    /// client that assumed zero would be cutting its own margin.
+    @Test(arguments: [
+        (
+            CLICommand.longPress(pane: nil, x: 0.5, y: 0.5, durationMs: nil),
+            GestureDuration.longPressDefaultMs
+        ),
+        (
+            CLICommand.crown(pane: nil, delta: 10, velocity: nil, durationMs: nil),
+            GestureDuration.crownDefaultMs
+        )
+    ])
+    func anOmittedDurationTakesTheSharedDefault(command: CLICommand, expected: Int) throws {
+        #expect(try actionBudget(for: command) == gestureTimeout(expected))
+    }
+
+    /// argv takes any `Int` and the daemon refuses anything past
+    /// `GestureDuration.maxMs`, so a duration that will be rejected must not
+    /// buy the client an unbounded wait on a peer that never answers.
+    @Test
+    func anOutOfRangeDurationCannotStretchTheDeadline() throws {
+        let absurd = GestureDuration.maxMs * 10_000
+        let ceiling = gestureTimeout(GestureDuration.maxMs)
+        #expect(gestureTimeout(absurd) == ceiling)
+        #expect(try actionBudget(
+            for: .longPress(pane: nil, x: 0.5, y: 0.5, durationMs: absurd)
+        ) == ceiling)
+        // A minute of gesture plus its headroom is the most a single-phase
+        // verb can claim.
+        #expect(ceiling < 75)
+    }
+
+    /// `swipe` runs a motion and then a dwell, and the daemon validates the two
+    /// independently, so both are legal at the ceiling and the gesture can
+    /// legitimately outlast it. Bounding their sum instead would expire the
+    /// deadline halfway through a swipe the daemon accepted.
+    @Test
+    func aSwipeDeadlineCoversItsDwellAsWellAsItsMotion() {
+        let ceiling = GestureDuration.maxMs
+        #expect(gestureTimeout(ceiling, ceiling) > gestureTimeout(ceiling))
+        #expect(gestureTimeout(ceiling, ceiling) == gestureTimeout(ceiling) + 60)
+        // Each phase is still bounded on its own, so an out-of-range pair
+        // cannot reach past two legal ones.
+        #expect(gestureTimeout(ceiling * 99, ceiling * 99) == gestureTimeout(ceiling, ceiling))
+    }
+
+    /// Pins every single-phase duration-bearing verb to a budget longer than
+    /// the duration it asked for, so none can fall back to the floor on its
+    /// own. `swipe`'s two-phase budget is covered above.
+    @Test
+    func everyDurationBearingVerbOutlastsItsOwnGesture() throws {
+        let durationMs = 9_000
+        let commands: [CLICommand] = [
+            .longPress(pane: nil, x: 0.5, y: 0.5, durationMs: durationMs),
+            pinch(durationMs: durationMs),
+            .crown(pane: nil, delta: 100, velocity: nil, durationMs: durationMs)
+        ]
+        for command in commands {
+            #expect(try actionBudget(for: command) > Double(durationMs) / 1_000)
+        }
+    }
+}

@@ -10,7 +10,7 @@ public struct SwipeParams: Codable, Sendable {
     public let fromY: Double
     public let toX: Double
     public let toY: Double
-    /// Optional, defaults to `swipeDefaultDurationMs` (200ms).
+    /// Optional, defaults to `GestureDuration.swipeDefaultMs`.
     public let durationMs: Int?
     /// Optional dwell at the END point, *after* the interpolated
     /// motion and *before* the lift, defaulting to 0 (no dwell).

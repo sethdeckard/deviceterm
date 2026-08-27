@@ -164,26 +164,11 @@ public enum PaneMethods {
         public let target: PaneTarget
     }
 
-    // MARK: - Gesture / crown defaults
-
     // Event method names that flow through `pane.subscribe` are the
     // shared `PaneEventName` enum (DaemonProtocol); the encoder below
-    // and the GUI client's decoder both key off it.
-
-    /// Matches the typical `UIScrollView` deceleration; a reasonable
-    /// "feels like a swipe, not a flick" default for automation.
-    public static let swipeDefaultDurationMs: Int = 200
-
-    /// Matches iOS's default 500ms long-press threshold.
-    public static let longPressDefaultDurationMs: Int = 500
-
-    /// Default pinch duration (300ms), slightly longer than swipe so
-    /// the gesture reads as deliberate to UIKit's gesture recognizers.
-    public static let pinchDefaultDurationMs: Int = 300
-
-    /// Default crown duration (0ms): a single send of the full delta.
-    /// Callers wanting a smooth scroll pass a positive `durationMs`.
-    public static let crownDefaultDurationMs: Int = 0
+    // and the GUI client's decoder both key off it. Omitted gesture
+    // durations come from `GestureDuration`, shared with the CLI so its
+    // response timeout can cover the gesture the daemon is about to run.
 
     // MARK: - Handlers
 
@@ -532,7 +517,7 @@ public enum PaneMethods {
         { paramsJSON in
             let params = try JSONDecoder().decode(SwipeParams.self, from: paramsJSON)
             let paneId = try requirePaneId(params.paneId)
-            let durationMs = try requireValidDuration(params.durationMs ?? swipeDefaultDurationMs)
+            let durationMs = try requireValidDuration(params.durationMs ?? GestureDuration.swipeDefaultMs)
             let holdMs = try requireValidDuration(params.holdMs ?? 0)
             let startHoldMs = try requireValidDuration(params.startHoldMs ?? 0)
             let principal = try requirePrincipal()
@@ -565,7 +550,7 @@ public enum PaneMethods {
         { paramsJSON in
             let params = try JSONDecoder().decode(EdgeSwipeParams.self, from: paramsJSON)
             let paneId = try requirePaneId(params.paneId)
-            let durationMs = try requireValidDuration(params.durationMs ?? swipeDefaultDurationMs)
+            let durationMs = try requireValidDuration(params.durationMs ?? GestureDuration.swipeDefaultMs)
             let holdMs = try requireValidDuration(params.holdMs ?? 0)
             let principal = try requirePrincipal()
             return try await paneAck {
@@ -587,7 +572,7 @@ public enum PaneMethods {
         { paramsJSON in
             let params = try JSONDecoder().decode(LongPressParams.self, from: paramsJSON)
             let paneId = try requirePaneId(params.paneId)
-            let durationMs = try requireValidDuration(params.durationMs ?? longPressDefaultDurationMs)
+            let durationMs = try requireValidDuration(params.durationMs ?? GestureDuration.longPressDefaultMs)
             let principal = try requirePrincipal()
             return try await paneAck {
                 try await paneCoordinator.longPress(
@@ -638,7 +623,7 @@ public enum PaneMethods {
         { paramsJSON in
             let params = try JSONDecoder().decode(PinchParams.self, from: paramsJSON)
             let paneId = try requirePaneId(params.paneId)
-            let durationMs = try requireValidDuration(params.durationMs ?? pinchDefaultDurationMs)
+            let durationMs = try requireValidDuration(params.durationMs ?? GestureDuration.pinchDefaultMs)
             let principal = try requirePrincipal()
             return try await paneAck {
                 try await paneCoordinator.pinch(
@@ -826,7 +811,7 @@ public enum PaneMethods {
             let paneId = try requirePaneId(params.paneId)
             // `velocity` is decoded (accepted) but deliberately not
             // forwarded; the bridge builder takes only a delta.
-            let durationMs = try requireValidDuration(params.durationMs ?? crownDefaultDurationMs)
+            let durationMs = try requireValidDuration(params.durationMs ?? GestureDuration.crownDefaultMs)
             let principal = try requirePrincipal()
             return try await paneAck {
                 try await paneCoordinator.crown(

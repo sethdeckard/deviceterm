@@ -563,7 +563,11 @@ public actor PaneCoordinator {
     /// few seconds), and capping at 60s keeps `ms * 1_000_000` well
     /// inside `UInt64` so a malicious or malformed client can't
     /// overflow `Task.sleep(nanoseconds:)` and trap the daemon.
-    public static let maxGestureDurationMs: Int = 60_000
+    ///
+    /// The value is `GestureDuration.maxMs` rather than a literal because the
+    /// CLI bounds its own response deadline by the same number; this name is
+    /// the daemon-local spelling of it.
+    public static let maxGestureDurationMs: Int = GestureDuration.maxMs
 
     // The swipe-dwell cadence/jitter and the App-Switcher double-press gap
     // live with the gesture logic in `SimInputSynthesis`, their only user.
