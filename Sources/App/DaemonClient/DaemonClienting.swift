@@ -11,7 +11,7 @@
 ///
 /// NOT a fat protocol: it composes the roles, it doesn't replace
 /// them. Narrow consumers, view models included, must still depend
-/// on the smallest role(s) they use (`SimResurrect` on
+/// on the smallest role(s) they use (`PaneResurrect` on
 /// `DeviceControlling & PhysicalDeviceControlling`, a pane VM on
 /// `PaneControlling & PaneSubscribing`, the device picker on
 /// `PhysicalDeviceControlling`), never on this alias.

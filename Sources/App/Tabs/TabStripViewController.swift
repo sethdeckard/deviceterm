@@ -26,7 +26,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     private let windowID: WindowID
     private let tabListVM: TabListViewModel
     private let daemonClient: any DaemonClienting
-    private let simResurrect: SimResurrect
+    private let paneResurrect: PaneResurrect
     private let router: Router
     /// User-input verbs (menu actions, tab-button clicks, terminal
     /// onExit) flow through the dispatcher so the architecture
@@ -102,7 +102,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         windowID: WindowID,
         tabListVM: TabListViewModel,
         daemonClient: any DaemonClienting,
-        simResurrect: SimResurrect,
+        paneResurrect: PaneResurrect,
         router: Router,
         intentDispatcher: IntentDispatcher,
         adopting: [(TabID, TabContentViewController)] = []
@@ -110,7 +110,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         self.windowID = windowID
         self.tabListVM = tabListVM
         self.daemonClient = daemonClient
-        self.simResurrect = simResurrect
+        self.paneResurrect = paneResurrect
         self.router = router
         self.intentDispatcher = intentDispatcher
         self.adopting = adopting
@@ -319,7 +319,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// Called by AppDelegate when a window is going away (red-X close or
     /// quit-driven reconcile drop). Runs the per-tab teardown (cancel
     /// observation/discovery, close the libghostty surface, unwatch
-    /// SimResurrect) before the controller drops out of the AppKit tree.
+    /// PaneResurrect) before the controller drops out of the AppKit tree.
     func teardown() {
         observation?.cancel()
         observation = nil
@@ -982,7 +982,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     role: tab.role,
                     tabListVM: tabListVM,
                     daemonClient: daemonClient,
-                    simResurrect: simResurrect,
+                    paneResurrect: paneResurrect,
                     router: router
                 )
                 wireTerminalExit(of: tabContent)

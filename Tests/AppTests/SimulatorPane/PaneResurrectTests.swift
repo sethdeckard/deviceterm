@@ -15,7 +15,7 @@ import Testing
 /// resolve each other: they are separate enumerations that happen to be
 /// compared against one keyspace.
 @MainActor
-struct SimResurrectTests {
+struct PaneResurrectTests {
     private static let canonical = "1d464fbe-56ba-4a49-8d73-277a7e8a0e92"
     private static let uppercased = "1D464FBE-56BA-4A49-8D73-277A7E8A0E92"
 
@@ -43,7 +43,7 @@ struct SimResurrectTests {
     func aBootedSimResolvesAWatchSpelledInTheOtherCase() async {
         let fake = FakeDaemonClient()
         fake.deviceListResult = [booted(Self.uppercased)]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         var fired = 0
         resurrect.watch(target: .sim(udid: Self.canonical), displayName: "iPhone") { fired += 1 }
         await resurrect.tick()
@@ -63,7 +63,7 @@ struct SimResurrectTests {
                 ownedBySession: nil
             )
         ]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         var fired = 0
         resurrect.watch(target: .sim(udid: Self.canonical), displayName: "iPhone") { fired += 1 }
         await resurrect.tick()
@@ -76,7 +76,7 @@ struct SimResurrectTests {
         // hand is not always the one the watch was registered with.
         let fake = FakeDaemonClient()
         fake.deviceListResult = [booted(Self.canonical)]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         var fired = 0
         resurrect.watch(target: .sim(udid: Self.canonical), displayName: "iPhone") { fired += 1 }
         resurrect.unwatch(target: .sim(udid: Self.uppercased))
@@ -90,7 +90,7 @@ struct SimResurrectTests {
         // reports what is connected, and mirror capability is judged at attach.
         let fake = FakeDaemonClient()
         fake.physicalDeviceListResult = [connected("D-1")]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         var fired = 0
         resurrect.watch(target: .device(deviceId: "D-1"), displayName: "iPhone") { fired += 1 }
         await resurrect.tick()
@@ -101,7 +101,7 @@ struct SimResurrectTests {
     func aStillAbsentDeviceKeepsItsWatch() async {
         let fake = FakeDaemonClient()
         fake.physicalDeviceListResult = [connected("D-other")]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         var fired = 0
         resurrect.watch(target: .device(deviceId: "D-1"), displayName: "iPhone") { fired += 1 }
         await resurrect.tick()
@@ -115,7 +115,7 @@ struct SimResurrectTests {
         let fake = FakeDaemonClient()
         fake.deviceListResult = [booted(Self.canonical)]
         fake.physicalDeviceListResult = [connected("D-1")]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         var firedSim = 0
         var firedDevice = 0
         resurrect.watch(target: .sim(udid: "D-1"), displayName: "sim") { firedSim += 1 }
@@ -135,7 +135,7 @@ struct SimResurrectTests {
         // live rather than on every tick.
         let fake = FakeDaemonClient()
         fake.deviceListResult = [booted(Self.canonical)]
-        let resurrect = SimResurrect(daemonClient: fake)
+        let resurrect = PaneResurrect(daemonClient: fake)
         resurrect.watch(target: .sim(udid: Self.canonical), displayName: "iPhone") {}
         await resurrect.tick()
         #expect(fake.physicalDeviceListCallCount == 0)

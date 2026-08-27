@@ -51,7 +51,7 @@ final class TabContentViewController: NSViewController {
         any DeviceControlling & PaneControlling & PaneSubscribing & TerminalBinding & ReconnectObserving
             & PaneAccessibilityControlling & PaneLocationControlling
             & AutomationGranting & DisplayTitlePublishing
-    private let simResurrect: SimResurrect
+    private let paneResurrect: PaneResurrect
     private let router: Router
     /// The window's tab-list nav state this VC reconciles against. A
     /// `var` because a cross-window move relocates the tab's `TabState`
@@ -162,7 +162,7 @@ final class TabContentViewController: NSViewController {
         daemonClient: any DeviceControlling & PaneControlling & PaneSubscribing & TerminalBinding & ReconnectObserving
             & PaneAccessibilityControlling & PaneLocationControlling
             & AutomationGranting & DisplayTitlePublishing,
-        simResurrect: SimResurrect,
+        paneResurrect: PaneResurrect,
         router: Router,
         daemonSocketPath: String = DaemonClient.socketPath()
     ) throws {
@@ -176,14 +176,14 @@ final class TabContentViewController: NSViewController {
                 try await daemonClient?.setDisplayTitle(sessionId: sessionId, title: title)
             })
         )
-        self.simResurrect = simResurrect
+        self.paneResurrect = paneResurrect
         self.router = router
         self.tabListVM = tabListVM
         self.simPaneActions = SimPaneActionCoordinator(
             tabID: tabID,
             router: router,
             daemonClient: daemonClient,
-            simResurrect: simResurrect,
+            paneResurrect: paneResurrect,
             tabListVM: tabListVM,
             windowID: windowID
         )
@@ -439,7 +439,7 @@ final class TabContentViewController: NSViewController {
 
     /// Called by TabStripViewController when reconcile drops this VC. Removes
     /// its discovery observer, asks libghostty to close each terminal pane's
-    /// shell, and clears any SimResurrect watches we still hold.
+    /// shell, and clears any PaneResurrect watches we still hold.
     func teardown() {
         isTornDown = true
         // Stop any in-flight automation-grant retry loops. The tab is going
@@ -474,10 +474,10 @@ final class TabContentViewController: NSViewController {
             simPaneActions.stopRecordingForCleanup(paneVC)
         }
         for udid in simPaneVCByUDID.keys {
-            simResurrect.unwatch(target: .sim(udid: udid))
+            paneResurrect.unwatch(target: .sim(udid: udid))
         }
         for deviceId in devicePaneVCByID.keys {
-            simResurrect.unwatch(target: .device(deviceId: deviceId))
+            paneResurrect.unwatch(target: .device(deviceId: deviceId))
         }
     }
 
@@ -751,7 +751,7 @@ final class TabContentViewController: NSViewController {
             // is only ever armed by a pane that went `.shutdown`, so a
             // replacement arriving under that udid means the sim is booted
             // again, which is the transition the watch was waiting for.
-            simResurrect.unwatch(target: simPane.target)
+            paneResurrect.unwatch(target: simPane.target)
             simPaneVCByUDID.removeValue(forKey: simPane.udid)
         }
         let current = Set(simPaneVCByUDID.keys)
@@ -768,7 +768,7 @@ final class TabContentViewController: NSViewController {
                 simPaneActions.stopRecordingForCleanup(paneVC)
             }
             simPaneVCByUDID.removeValue(forKey: udid)
-            simResurrect.unwatch(target: .sim(udid: udid))
+            paneResurrect.unwatch(target: .sim(udid: udid))
         }
         // Add new panes from state; the layout-tree reconcile drops them
         // into place per nav-state order.
@@ -811,7 +811,7 @@ final class TabContentViewController: NSViewController {
             // holds the deviceId now and detach it. A replacement arriving
             // under this deviceId means the device is back, which is the
             // transition the watch was waiting for.
-            simResurrect.unwatch(target: devicePane.target)
+            paneResurrect.unwatch(target: devicePane.target)
             devicePaneVCByID.removeValue(forKey: devicePane.deviceId)
         }
         let current = Set(devicePaneVCByID.keys)
@@ -819,7 +819,7 @@ final class TabContentViewController: NSViewController {
 
         for deviceId in current.subtracting(target) {
             devicePaneVCByID.removeValue(forKey: deviceId)
-            simResurrect.unwatch(target: .device(deviceId: deviceId))
+            paneResurrect.unwatch(target: .device(deviceId: deviceId))
         }
         for devicePane in tabState.devicePanes where !current.contains(devicePane.deviceId) {
             let paneVC = SimulatorPaneViewController(
@@ -862,7 +862,7 @@ final class TabContentViewController: NSViewController {
             guard let self else { return }
             switch state {
             case .shutdown:
-                self.simResurrect.watch(
+                self.paneResurrect.watch(
                     target: target,
                     displayName: displayName
                 ) { [weak self] in
@@ -872,7 +872,7 @@ final class TabContentViewController: NSViewController {
                 }
 
             case .rendering:
-                self.simResurrect.unwatch(target: target)
+                self.paneResurrect.unwatch(target: target)
 
             default:
                 break

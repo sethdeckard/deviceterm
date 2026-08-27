@@ -24,11 +24,8 @@ import Foundation
 /// Watches are registered the moment a pane reports `.shutdown`, by
 /// `SimPaneActionCoordinator` for a sim and `TabContentViewController` for a
 /// device, and removed when the user clicks Close Pane or the resurrect fires.
-///
-/// REFACTOR: the name predates physical-device panes. `PaneResurrect` would
-/// say what this watches now.
 @MainActor
-final class SimResurrect {
+final class PaneResurrect {
     /// Poll cadence while at least one watch is active. 2s is frequent enough
     /// that a manual reboot feels live. Polling stops entirely once no watch
     /// remains, so this runs only while a pane is waiting on its device.
@@ -140,7 +137,7 @@ final class SimResurrect {
     }
 }
 
-private extension SimResurrect {
+private extension PaneResurrect {
     struct WatchEntry {
         let displayName: String
         let resurrect: @MainActor () -> Void

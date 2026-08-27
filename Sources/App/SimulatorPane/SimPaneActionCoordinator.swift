@@ -32,7 +32,7 @@ final class SimPaneActionCoordinator {
     private let tabID: TabID
     private let router: Router
     private let daemonClient: any DeviceControlling
-    private let simResurrect: SimResurrect
+    private let paneResurrect: PaneResurrect
     /// The window's tab-list nav state. A `var` (not `let`) because a
     /// cross-window tab move relocates the tab's `TabState` into a
     /// different window's `TabListViewModel` instance; the owning
@@ -86,7 +86,7 @@ final class SimPaneActionCoordinator {
         tabID: TabID,
         router: Router,
         daemonClient: any DeviceControlling,
-        simResurrect: SimResurrect,
+        paneResurrect: PaneResurrect,
         tabListVM: TabListViewModel,
         windowID: WindowID,
         askPaneClose: @escaping PaneClosePrompt = {
@@ -104,7 +104,7 @@ final class SimPaneActionCoordinator {
         self.tabID = tabID
         self.router = router
         self.daemonClient = daemonClient
-        self.simResurrect = simResurrect
+        self.paneResurrect = paneResurrect
         self.tabListVM = tabListVM
         self.windowID = windowID
         self.askPaneClose = askPaneClose
@@ -550,7 +550,7 @@ final class SimPaneActionCoordinator {
             guard let self else { return }
             switch state {
             case .shutdown:
-                self.simResurrect.watch(
+                self.paneResurrect.watch(
                     target: .sim(udid: udid),
                     displayName: displayName
                 ) { [weak self] in
@@ -558,7 +558,7 @@ final class SimPaneActionCoordinator {
                 }
 
             case .rendering:
-                self.simResurrect.unwatch(target: .sim(udid: udid))
+                self.paneResurrect.unwatch(target: .sim(udid: udid))
 
             default:
                 break
@@ -586,7 +586,7 @@ final class SimPaneActionCoordinator {
     }
 
     /// Re-attach a sim that shut down out from under its pane. Fired by the
-    /// SimResurrect watch set in `onStateChange`.
+    /// PaneResurrect watch set in `onStateChange`.
     ///
     /// Dispatch one `.resurrectSimPane` route so the handler can replace the
     /// pane's existing leaf with a placeholder, preserving its split. It

@@ -2256,7 +2256,7 @@ final class Router {
     }
 
     /// Re-attach a sim that shut down out from under its pane, into the leaf
-    /// that pane already holds. Dispatched by the `SimResurrect` watch.
+    /// that pane already holds. Dispatched by the `PaneResurrect` watch.
     ///
     /// The daemon keeps the shutdown pane record for the overlay. Close that
     /// terminal record with `.detach` before attaching its replacement; the
@@ -2300,7 +2300,7 @@ final class Router {
     }
 
     /// Re-mirror a device whose mirror stopped out from under its pane, into the
-    /// leaf that pane already holds. Dispatched by the `SimResurrect` watch.
+    /// leaf that pane already holds. Dispatched by the `PaneResurrect` watch.
     ///
     /// The device counterpart of `resurrectSimPane`, and it re-resolves the
     /// window after the close for the same reason: a tab drag can move the

@@ -8,7 +8,7 @@ import Observation
 /// (`physicalDevice.list`) and, on selection, hands the chosen device's
 /// id + display name back to the host (AppDelegate) which dispatches
 /// `Route.attachDevicePane` against the current tab and closes the
-/// picker. Bypasses SimResurrect / DiscoveryDecision entirely: discovery
+/// picker. Bypasses PaneResurrect / DiscoveryDecision entirely: discovery
 /// models owned-booted *sims*, and the resurrect watch re-attaches a pane
 /// that lost its device, while this mounts one the tab isn't showing yet.
 /// A physical device is mounted through this picker, `deviceterm device

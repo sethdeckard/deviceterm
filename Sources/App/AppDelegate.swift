@@ -109,7 +109,7 @@ private func restartPlainText(for situation: UpdateRestartSituation) -> String {
 
 /// The composition root and AppKit-side reconcile
 /// layer. Constructs the WorkspaceViewModel + Router (and the shared
-/// SimResurrect), then `observe()`s the workspace and reconciles its
+/// PaneResurrect), then `observe()`s the workspace and reconciles its
 /// WindowControllers to match. Every nav intent (menu actions, the
 /// cold-start orphan flow, the close-window path, ⌘Q quit) dispatches a
 /// Route through the Router. The router does the daemon record work
@@ -134,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         daemon: daemonClient,
         rpcPerformance: daemonClient.rpcPerformance
     )
-    private lazy var simResurrect = SimResurrect(daemonClient: daemonClient)
+    private lazy var paneResurrect = PaneResurrect(daemonClient: daemonClient)
     /// The single consumer of `RouteIntent` from every external
     /// source. Wired with `self` as the `IntentActionDelegate` so
     /// intents that don't fit a Route shape (tab rename) reach
@@ -1015,7 +1015,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // the Observation re-arm schedules the next reconcile on a
             // later main-actor turn that won't run before NSApp.reply()
             // tears the process down, so libghostty surfaces / discovery
-            // polls / SimResurrect watches would otherwise outlive quit.
+            // polls / PaneResurrect watches would otherwise outlive quit.
             for (_, windowCtl) in windowControllerByID {
                 (windowCtl.contentViewController as? TabStripViewController)?.teardown()
                 windowCtl.window?.close()
@@ -1223,7 +1223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // predicate.
         let mode = pendingCloseModeByID.removeValue(forKey: windowID) ?? .detach
         // Tear down before dropping the WC so the per-tab cleanup runs
-        // (observation, discovery observer, terminal.requestClose, SimResurrect
+        // (observation, discovery observer, terminal.requestClose, PaneResurrect
         // unwatch); releasing the WC alone would leak those.
         (windowCtl.contentViewController as? TabStripViewController)?.teardown()
         windowControllerByID.removeValue(forKey: windowID)
@@ -1509,7 +1509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // already have dropped the WC; this catches the close-from-Router
         // path (e.g. quit) and clears closing-in-flight bookkeeping. Run
         // per-tab teardown before closing the window so libghostty
-        // surfaces / discovery observers / SimResurrect watches don't leak.
+        // surfaces / discovery observers / PaneResurrect watches don't leak.
         for windowID in Array(windowControllerByID.keys) where !liveIDs.contains(windowID) {
             if let windowCtl = windowControllerByID.removeValue(forKey: windowID) {
                 (windowCtl.contentViewController as? TabStripViewController)?.teardown()
@@ -1529,7 +1529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 windowID: windowState.id,
                 tabListVM: windowState.tabs,
                 daemonClient: daemonClient,
-                simResurrect: simResurrect,
+                paneResurrect: paneResurrect,
                 router: router,
                 intentDispatcher: intentDispatcher
             )
@@ -1726,7 +1726,7 @@ extension AppDelegate: TabTransferCoordinating {
             windowID: newID,
             tabListVM: destVM,
             daemonClient: daemonClient,
-            simResurrect: simResurrect,
+            paneResurrect: paneResurrect,
             router: router,
             intentDispatcher: intentDispatcher,
             adopting: [(tab, tabContent)]

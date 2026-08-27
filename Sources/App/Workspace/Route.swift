@@ -186,13 +186,13 @@ enum Route: Sendable {
     /// reinserting can collapse a two-child parent, and resets the
     /// reinserted leaf's stored extent.
     ///
-    /// Dispatched by the `SimResurrect` watch, never by the user.
+    /// Dispatched by the `PaneResurrect` watch, never by the user.
     case resurrectSimPane(tab: TabID, udid: String)
     /// Re-mirror a physically-connected device whose mirror stopped out from
     /// under its pane, into the leaf that pane already holds.
     ///
     /// The device counterpart of `resurrectSimPane`, preserving the slot for
-    /// the same reasons. Dispatched by the `SimResurrect` watch once the
+    /// the same reasons. Dispatched by the `PaneResurrect` watch once the
     /// device is enumerable again, never by the user.
     case resurrectDevicePane(tab: TabID, deviceId: String)
     /// `expecting` fences the close to one admission. `dispatch` only

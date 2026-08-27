@@ -25,7 +25,7 @@ struct SimPaneActionCoordinatorTests {
             tabID: TabID(value: 1),
             router: router,
             daemonClient: fake,
-            simResurrect: SimResurrect(daemonClient: fake),
+            paneResurrect: PaneResurrect(daemonClient: fake),
             tabListVM: TabListViewModel(),
             windowID: WindowID(value: 1)
         )
@@ -64,7 +64,7 @@ struct SimPaneActionCoordinatorTests {
             tabID: tabID,
             router: router,
             daemonClient: fake,
-            simResurrect: SimResurrect(daemonClient: fake),
+            paneResurrect: PaneResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
             askPaneClose: { _, deviceName, alwaysAsk, _, _ in
@@ -151,7 +151,7 @@ struct SimPaneActionCoordinatorTests {
             tabID: tabID,
             router: router,
             daemonClient: fake,
-            simResurrect: SimResurrect(daemonClient: fake),
+            paneResurrect: PaneResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
             askPaneClose: { _, deviceName, _, _, _ in
@@ -223,7 +223,7 @@ struct SimPaneActionCoordinatorTests {
             tabID: tabID,
             router: router,
             daemonClient: fake,
-            simResurrect: SimResurrect(daemonClient: fake),
+            paneResurrect: PaneResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
             askPaneClose: { _, deviceName, _, _, _ in
@@ -290,7 +290,7 @@ struct SimPaneActionCoordinatorTests {
             tabID: tabID,
             router: router,
             daemonClient: fake,
-            simResurrect: SimResurrect(daemonClient: fake),
+            paneResurrect: PaneResurrect(daemonClient: fake),
             tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
             windowID: WindowID(value: 1),
             askPaneClose: { _, deviceName, _, _, _ in
