@@ -8,6 +8,11 @@ records what it intended to render against what it observed. The hermetic
 completion-handler path can only be exercised against a real GPU, so it is
 verified here.
 
+This trace answers *which* frame a consumer rendered. For how long each stage
+took (decode, copy, and the lease round trip) use `DEVICETERM_FRAME_METRICS`
+and `device-mirror-perf.md` instead. The two are independent and can be set
+together.
+
 ## Cross-process activation (required)
 
 The daemon is launched on demand by launchd, so a setting present only in an

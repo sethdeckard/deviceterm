@@ -7,6 +7,7 @@ import Foundation
 import InteractionRelay
 import IOSurface
 import MirrorPipeline
+import os
 import SurfaceTrace
 
 // The touch and key witnesses are `throws` (the protocol requires it) but only
@@ -181,6 +182,8 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Consecutive exhaustion drops that trigger a controlled pool recovery
     /// (~2s at 60fps).
     private static let exhaustionRecoveryThreshold = 120
+    /// How much frame history one metrics summary covers.
+    private static let metricsWindowNanoseconds: UInt64 = 1_000_000_000
     /// How long an App Switcher request waits for the human-input pump to pick
     /// it up before giving up.
     ///
@@ -199,6 +202,11 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     private let location: any DeviceLocationSimulating
     private let onDiagnostic: (@Sendable (String) -> Void)?
     private let pool: LeasedSurfacePool
+    /// Off-by-default frame measurement. Non-nil is the on switch: the frame
+    /// task reads no clocks and builds no accumulator without it.
+    private let metricsSink: FrameMetricsSink?
+    /// Copy intervals for Instruments, `.disabled` unless metrics are on.
+    private let signposter: OSSignposter
     // Fences frame/fatal callback eligibility against teardown. `startFrames`
     // captures the current `frameToken`; teardown bumps it (both under
     // `frameGate`). A callback fires only while its captured token is still
@@ -301,9 +309,18 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.device = device
         self.location = location
         self.onDiagnostic = diagnostics
+        let sink = FrameMetricsSink.make(
+            baseDirectory: ProcessInfo.processInfo.environment[DeviceTermEnv.frameMetrics],
+            deviceId: deviceId,
+            log: diagnostics
+        )
+        metricsSink = sink
+        signposter = sink == nil
+            ? .disabled
+            : OSSignposter(subsystem: "com.deviceterm.daemon", category: "mirror")
         let slotCount = ProcessInfo.processInfo.environment[DeviceTermEnv.surfacePoolSlots]
             .flatMap(Int.init) ?? Self.defaultPoolSlots
-        self.pool = LeasedSurfacePool(slotCount: slotCount)
+        self.pool = LeasedSurfacePool(slotCount: slotCount, recordHoldAges: sink != nil)
         (humanInputStream, humanInputContinuation) = AsyncStream<PumpItem<HumanInputWork>>.makeStream()
         (buttonStream, buttonContinuation) = AsyncStream<PumpItem<ButtonPress>>.makeStream()
         (rotationStream, rotationContinuation) = AsyncStream<PumpItem<RotationRequest>>.makeStream()
@@ -660,6 +677,8 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         let gates = gateContinuations
         let log = self.onDiagnostic
         let recoveryThreshold = Self.exhaustionRecoveryThreshold
+        let metricsSink = self.metricsSink
+        let signposter = self.signposter
         // Install a fresh run token; teardown bumps it to fence late callbacks.
         // `publish`/`fail` invoke the caller's callback only while the token is
         // still current, checked and invoked together under `frameGate`, so
@@ -700,7 +719,32 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             var contentSize: (width: Int, height: Int)?
             var contentForDims: (Int, Int)?
             var frameIndex = 0
+            // Nil unless metrics are armed, which is what keeps the clock reads
+            // below out of an ordinary run. The first frame opens the window
+            // rather than the task doing it: a stream that takes seconds to
+            // produce one would otherwise close an empty window first and emit
+            // a row carrying no geometry and no outcome.
+            var metrics: DeviceFrameMetrics?
             for await frame in frames {
+                // Close the window *before* counting this frame, so no window
+                // holds a frame's arrival without its outcome. Counting first
+                // would put the boundary frame's `noteConsumed` in one row and
+                // its copy and publish in the next, and every row would
+                // contradict `framesConsumed == framesPublished + drops`.
+                if let metricsSink {
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    if metrics == nil {
+                        metrics = DeviceFrameMetrics(startNanoseconds: now)
+                    } else if let elapsed = metrics?.elapsedNanoseconds(now: now),
+                        elapsed >= Self.metricsWindowNanoseconds {
+                        let leaseHold = await pool.drainHoldAges()
+                        if let summary = metrics?.summarize(now: now, leaseHold: leaseHold) {
+                            metricsSink.record(summary)
+                        }
+                        metrics?.startWindow(at: now)
+                    }
+                }
+                metrics?.noteConsumed()
                 if !openedGate {
                     // First frame ⇒ the stream is live and the HID auth gate is
                     // open: release every gated pump (human input + keyboard).
@@ -708,6 +752,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     gates.forEach { $0.yield(); $0.finish() }
                 }
                 guard let ioSurface = CVPixelBufferGetIOSurface(frame.pixelBuffer)?.takeUnretainedValue() else {
+                    metrics?.noteDroppedNoSurface()
                     continue
                 }
                 let dims = (IOSurfaceGetWidth(ioSurface), IOSurfaceGetHeight(ioSurface))
@@ -724,11 +769,23 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 }
                 frameIndex += 1
                 let contentDims = SurfaceCopy.contentDimensions(source: ioSurface, contentSize: contentSize)
+                // Before the acquire guard, so a drop reports the geometry of
+                // the frame that dropped. Recording it after would leave an
+                // exhaustion row describing the previous resolution, which is
+                // exactly the frame a rotation fails to acquire for.
+                metrics?.noteGeometry(
+                    sourceWidth: dims.0,
+                    sourceHeight: dims.1,
+                    contentWidth: contentDims.width,
+                    contentHeight: contentDims.height,
+                    pixelFormat: IOSurfaceGetPixelFormat(ioSurface)
+                )
                 // Exhaustion (no free slot) drops the frame: never blocks decode
                 // or backlogs. Sustained exhaustion drives one controlled
                 // recovery, then fails the pane.
                 guard var published = await pool.acquire(width: contentDims.width, height: contentDims.height)
                 else {
+                    metrics?.noteDroppedExhaustion()
                     consecutiveDrops += 1
                     if consecutiveDrops >= recoveryThreshold {
                         consecutiveDrops = 0
@@ -752,8 +809,21 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 // before publishing so the published surface is never the
                 // decoder's (which VideoToolbox may recycle). `frame` stays
                 // retained across the copy.
-                published.surface.withRef { destination in
+                let copyStart = metricsSink == nil ? 0 : DispatchTime.now().uptimeNanoseconds
+                let copyInterval = signposter.beginInterval("copy")
+                // The copy reports what it moved rather than the metrics
+                // recomputing it: an uncropped copy spans the whole row stride,
+                // alignment padding included, so deriving the figure from the
+                // content rect would undercount the bandwidth.
+                let bytesCopied = published.surface.withRef { destination in
                     SurfaceCopy.copy(from: ioSurface, to: destination, contentSize: contentSize)
+                }
+                signposter.endInterval("copy", copyInterval)
+                if metricsSink != nil {
+                    metrics?.noteCopy(
+                        nanoseconds: DispatchTime.now().uptimeNanoseconds &- copyStart,
+                        bytes: bytesCopied
+                    )
                 }
                 if tracing, let generation = published.lease?.generation {
                     published.surface.withRef { SurfacePixelStamp.stamp(generation, into: $0) }
@@ -767,6 +837,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 // publish can't escape after `stopFrames`/`shutdownBackend`, even
                 // though `acquire` above was a suspension point.
                 publish(published)
+                metrics?.notePublished()
             }
         }
         startWatchdog()

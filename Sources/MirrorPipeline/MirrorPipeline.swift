@@ -4,6 +4,7 @@ import ChannelBootstrap
 import CoreVideo
 import DeviceReachability
 import Foundation
+import os
 
 /// The live HEVC mirror of a physical device's display, delivered as decoded
 /// pixel buffers.
@@ -51,6 +52,13 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
     private let channels: DeviceChannels
     private let displayID: Int
     private let diagnostics: (@Sendable (String) -> Void)?
+    /// Per-window decode counts on `diagnostics`. Off by default; the daemon
+    /// turns it on from the same environment switch that arms its own frame
+    /// metrics, so one capture covers both sides of the hand-off.
+    private let metricsEnabled: Bool
+    /// Decode intervals for Instruments. `.disabled` makes the signpost calls
+    /// no-ops when metrics are off.
+    private let signposter: OSSignposter
     // Restart tuning (production defaults; a test can shorten them). The cap and
     // the backoff are behaviour, not policy the daemon sets.
     private let emptyRestartLimit: Int
@@ -75,6 +83,13 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
     private var framesDelivered = 0
     private var receiverReportAttempts = 0
     private var sessionRestarts = 0
+    private var framesDroppedToConsumer = 0
+    /// Start of the current metrics window, and its counter baselines. Only the
+    /// deltas are reported, so a line describes its own window rather than the
+    /// run so far.
+    private var metricsWindowStartNanos: UInt64 = 0
+    private var metricsWindowDelivered = 0
+    private var metricsWindowDropped = 0
 
     // Receive-task-confined: touched only during handle/ingest/flush/reset, which
     // run on the single receive task, one session at a time.
@@ -105,6 +120,7 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
         displayID: Int = 1,
         emptyRestartLimit: Int = 5,
         restartBackoff: Duration = .seconds(2),
+        metricsEnabled: Bool = false,
         diagnostics: (@Sendable (String) -> Void)? = nil
     ) {
         self.route = route
@@ -112,7 +128,11 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
         self.displayID = displayID
         self.emptyRestartLimit = emptyRestartLimit
         self.restartBackoff = restartBackoff
+        self.metricsEnabled = metricsEnabled
         self.diagnostics = diagnostics
+        signposter = metricsEnabled
+            ? OSSignposter(subsystem: "com.deviceterm.daemon", category: "mirror")
+            : .disabled
     }
 
     // MARK: DecodedFrameFeed
@@ -197,7 +217,8 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
             MirrorObservation(
                 framesDelivered: framesDelivered,
                 receiverReportAttempts: receiverReportAttempts,
-                sessionRestarts: sessionRestarts
+                sessionRestarts: sessionRestarts,
+                framesDroppedToConsumer: framesDroppedToConsumer
             )
         }
     }
@@ -210,9 +231,44 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
     private func deliver(_ pixelBuffer: CVPixelBuffer) {
         let frame = DecodedFrame(pixelBuffer: pixelBuffer)
         stateQueue.async {
-            guard self.state == .running else { return }
-            self.continuation?.yield(frame)
+            guard self.state == .running, let continuation = self.continuation else { return }
+            // `.bufferingNewest(1)` returns the evicted element (the
+            // previously buffered frame), so this counts frames no consumer
+            // ever saw.
+            if case .dropped = continuation.yield(frame) {
+                self.framesDroppedToConsumer += 1
+            }
         }
+    }
+
+    /// Log one aggregate when an arriving frame finds at least one second
+    /// elapsed. Driven by frame arrival rather than a timer, so a stalled
+    /// stream stops logging instead of printing zeroes, and the first call only
+    /// opens the window. `stateQueue`-confined, like every counter it reads.
+    private func emitMetricsIfDue(now: UInt64) {
+        guard metricsEnabled else { return }
+        let elapsed = now &- metricsWindowStartNanos
+        guard metricsWindowStartNanos != 0, elapsed >= 1_000_000_000 else {
+            if metricsWindowStartNanos == 0 { openMetricsWindow(at: now) }
+            return
+        }
+        let decoded = framesDelivered - metricsWindowDelivered
+        let dropped = framesDroppedToConsumer - metricsWindowDropped
+        let seconds = Double(elapsed) / 1_000_000_000
+        diagnostics?(String(
+            format: "decode-metrics: decoded=%d dropped=%d %.1ffps over %.2fs",
+            decoded,
+            dropped,
+            Double(decoded) / seconds,
+            seconds
+        ))
+        openMetricsWindow(at: now)
+    }
+
+    private func openMetricsWindow(at now: UInt64) {
+        metricsWindowStartNanos = now
+        metricsWindowDelivered = framesDelivered
+        metricsWindowDropped = framesDroppedToConsumer
     }
 
     /// Terminal give-up: finish the stream and fire `onFatal` exactly once.
@@ -492,7 +548,11 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
 
         ensureDecoder()
         guard let decoder, !accessUnit.isEmpty else { return }
+        // The decode is synchronous and its output callback runs inside it, so
+        // this interval is the whole decode plus delivery hand-off.
+        let interval = signposter.beginInterval("decode")
         try? decoder.decode(accessUnit: accessUnit, isKeyframe: accessUnitIsKey)
+        signposter.endInterval("decode", interval)
     }
 
     /// Build the decoder once VPS/SPS/PPS are all known. The decode callback runs
@@ -516,7 +576,15 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
             guard let self else { return }
             self.stateQueue.sync {
                 guard self.state == .running else { return }
-                self.lastFrameNanos = DispatchTime.now().uptimeNanoseconds
+                let now = DispatchTime.now().uptimeNanoseconds
+                // Close the window before counting this frame. `deliver`
+                // records the previous frame's eviction on this same queue,
+                // and it has already run by now, so a window closed here holds
+                // every counted frame's decode *and* its drop. Counting first
+                // would put a boundary frame's decode in one row and its
+                // eviction in the next.
+                self.emitMetricsIfDue(now: now)
+                self.lastFrameNanos = now
                 self.framesThisSession += 1
                 self.framesDelivered += 1
             }

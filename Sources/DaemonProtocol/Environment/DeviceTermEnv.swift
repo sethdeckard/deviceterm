@@ -52,4 +52,8 @@ public enum DeviceTermEnv {
     public static let surfaceLeases = "DEVICETERM_SURFACE_LEASES"
     /// Ceiling on the release-ack notification rate per subscription.
     public static let surfaceAckMaxRate = "DEVICETERM_SURFACE_ACK_MAX_RATE"
+    /// A nonempty base path enables off-by-default device-frame metrics. The
+    /// daemon logs each completed frame-driven window and appends it to one
+    /// `<base>.<deviceId>.frames.jsonl` per mirrored device.
+    public static let frameMetrics = "DEVICETERM_FRAME_METRICS"
 }

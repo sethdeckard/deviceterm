@@ -25,9 +25,20 @@ package struct MirrorObservation: Sendable, Equatable {
     /// still has to survive the backoff, so a stop can land in between.
     package let sessionRestarts: Int
 
-    package init(framesDelivered: Int, receiverReportAttempts: Int, sessionRestarts: Int) {
+    /// Frames evicted from the one-deep buffer before a consumer took them,
+    /// because decode outpaced the consumer. The difference between this and
+    /// `framesDelivered` is what a consumer could actually have seen.
+    package let framesDroppedToConsumer: Int
+
+    package init(
+        framesDelivered: Int,
+        receiverReportAttempts: Int,
+        sessionRestarts: Int,
+        framesDroppedToConsumer: Int
+    ) {
         self.framesDelivered = framesDelivered
         self.receiverReportAttempts = receiverReportAttempts
         self.sessionRestarts = sessionRestarts
+        self.framesDroppedToConsumer = framesDroppedToConsumer
     }
 }

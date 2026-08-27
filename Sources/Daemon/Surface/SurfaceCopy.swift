@@ -30,8 +30,10 @@ enum SurfaceCopy {
 
     /// Lock both surfaces and copy row-by-row (source and destination may
     /// have different row strides), so the owned copy is a faithful
-    /// snapshot.
-    static func copy(from source: IOSurfaceRef, to destination: IOSurfaceRef) {
+    /// snapshot. Returns the bytes moved, which includes whatever row
+    /// alignment padding the narrower stride carries.
+    @discardableResult
+    static func copy(from source: IOSurfaceRef, to destination: IOSurfaceRef) -> Int {
         IOSurfaceLock(source, .readOnly, nil)
         IOSurfaceLock(destination, [], nil)
         defer {
@@ -51,6 +53,7 @@ enum SurfaceCopy {
                 rowBytes
             )
         }
+        return rowBytes * rows
     }
 
     /// Copy the top-left `contentWidth × contentHeight` rect of `source`
@@ -59,12 +62,14 @@ enum SurfaceCopy {
     /// stride-tolerant `copy`, the per-row span is exactly `contentWidth × 4`
     /// The destination's aligned stride would otherwise pad back up to the
     /// source width and re-include the padding columns.
+    /// Returns the bytes moved.
+    @discardableResult
     static func copyCropped(
         from source: IOSurfaceRef,
         to destination: IOSurfaceRef,
         contentWidth: Int,
         contentHeight: Int
-    ) {
+    ) -> Int {
         IOSurfaceLock(source, .readOnly, nil)
         IOSurfaceLock(destination, [], nil)
         defer {
@@ -84,25 +89,29 @@ enum SurfaceCopy {
                 rowBytes
             )
         }
+        return rowBytes * rows
     }
 
     /// Copy `source` into `destination`, cropping to `contentSize` when it
     /// is smaller than the source in either dimension, else a full copy.
-    /// `destination` must already be sized to the content rect.
+    /// `destination` must already be sized to the content rect. Returns the
+    /// bytes moved, which is what a bandwidth measurement wants: the two
+    /// branches move different amounts for the same content rect, because
+    /// only the cropped one narrows each row to the content width.
+    @discardableResult
     static func copy(
         from source: IOSurfaceRef,
         to destination: IOSurfaceRef,
         contentSize: (width: Int, height: Int)?
-    ) {
+    ) -> Int {
         let sourceWidth = IOSurfaceGetWidth(source)
         let sourceHeight = IOSurfaceGetHeight(source)
         let targetWidth = min(contentSize?.width ?? sourceWidth, sourceWidth)
         let targetHeight = min(contentSize?.height ?? sourceHeight, sourceHeight)
         if targetWidth == sourceWidth, targetHeight == sourceHeight {
-            copy(from: source, to: destination)
-        } else {
-            copyCropped(from: source, to: destination, contentWidth: targetWidth, contentHeight: targetHeight)
+            return copy(from: source, to: destination)
         }
+        return copyCropped(from: source, to: destination, contentWidth: targetWidth, contentHeight: targetHeight)
     }
 
     /// The content-cropped destination dimensions for a source surface.

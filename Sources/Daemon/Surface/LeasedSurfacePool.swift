@@ -87,6 +87,10 @@ actor LeasedSurfacePool {
     private let now: @Sendable () -> UInt64
     private let delinquencyThresholdNs: UInt64
     private let quarantineBudget: Int
+    /// Whether to time acknowledged holds. Off unless the daemon's frame
+    /// metrics are armed, so an ordinary run does no extra clock reads for a
+    /// histogram nothing would drain.
+    private let recordHoldAges: Bool
 
     private var nextGeneration: UInt64 = 0
     private var nextEpoch: UInt64 = 0
@@ -96,6 +100,13 @@ actor LeasedSurfacePool {
     private var quarantined: [EpochPool] = []
     private var tokens: [UUID: TokenInfo] = [:]
     private var counters = SurfacePoolCounters()
+    /// Ages of holds released by an accepted watermark. The clock starts at the
+    /// grant, which is before the surface is sent, so this brackets the
+    /// publish-to-ack round trip rather than isolating it. Only that path is
+    /// recorded: a cancelled or revoked grant never reached a consumer, so its
+    /// age is not a round trip. The slot's existing hold timestamps are the
+    /// whole source, so this adds no state beyond what the pool already keeps.
+    private var holdAges = LatencyHistogram()
     /// One controlled recovery is permitted per pool: after it, another
     /// sustained exhaustion is fatal rather than retiring again indefinitely.
     private var usedRecovery = false
@@ -106,16 +117,19 @@ actor LeasedSurfacePool {
     ///   - delinquencyThresholdNs: hold age past which `diagnoseDelinquent`
     ///     flags a lease (default ~2s).
     ///   - quarantineBudget: max retired epochs retained at once.
+    ///   - recordHoldAges: time acknowledged holds for `drainHoldAges`.
     init(
         slotCount: Int,
         now: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
         delinquencyThresholdNs: UInt64 = 2_000_000_000,
-        quarantineBudget: Int = 2
+        quarantineBudget: Int = 2,
+        recordHoldAges: Bool = false
     ) {
         self.slotCount = min(max(slotCount, Self.slotRange.lowerBound), Self.slotRange.upperBound)
         self.now = now
         self.delinquencyThresholdNs = delinquencyThresholdNs
         self.quarantineBudget = max(1, quarantineBudget)
+        self.recordHoldAges = recordHoldAges
     }
 
     // MARK: - Acquire (daemon-current)
@@ -309,6 +323,7 @@ actor LeasedSurfacePool {
         epochState.acceptedLowestHeld = max(epochState.acceptedLowestHeld, lowestHeld)
         for generation in epochState.committed where generation < lowestHeld {
             epochState.committed.remove(generation)
+            recordHoldAge(epoch: epoch, generation: generation, token: token)
             removeSubscriptionHolder(epoch: epoch, generation: generation, token: token)
         }
         closeIfDrained(token)
@@ -408,6 +423,16 @@ actor LeasedSurfacePool {
 
     func snapshotCounters() -> SurfacePoolCounters { counters }
 
+    /// Take the hold ages accumulated since the last call and start a fresh
+    /// window. Draining rather than snapshotting is what makes the caller's
+    /// per-window quantiles describe that window; nothing else reads it, so an
+    /// undrained pool simply keeps counting into fixed-size buckets.
+    func drainHoldAges() -> LatencyHistogram {
+        let drained = holdAges
+        holdAges.reset()
+        return drained
+    }
+
     /// Free (unheld) slot count in the active epoch.
     func freeSlotCount() -> Int { active?.slots.filter(\.isFree).count ?? 0 }
 
@@ -428,6 +453,14 @@ actor LeasedSurfacePool {
         let created = TokenEpoch()
         info.perEpoch[epoch] = created
         return created
+    }
+
+    /// Record how long an acknowledged hold lasted. Must run before
+    /// `removeSubscriptionHolder`, which clears the timestamp it reads.
+    private func recordHoldAge(epoch: UInt64, generation: UInt64, token: UUID) {
+        guard recordHoldAges else { return }
+        guard let since = slot(epoch: epoch, generation: generation)?.subscriptionHoldSince[token] else { return }
+        holdAges.record(now() &- since)
     }
 
     private func removeSubscriptionHolder(epoch: UInt64, generation: UInt64, token: UUID) {

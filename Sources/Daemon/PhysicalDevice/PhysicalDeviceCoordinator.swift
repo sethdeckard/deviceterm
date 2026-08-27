@@ -155,7 +155,16 @@ public actor PhysicalDeviceCoordinator {
         let diagnose: @Sendable (String) -> Void = { message in
             Logger(subsystem: "com.deviceterm.daemon", category: "mirror").debug("\(message, privacy: .public)")
         }
-        let feed = MirrorPipeline(route: route, channels: channels, diagnostics: diagnose)
+        // The decode counts and the daemon's own frame metrics arm off one
+        // switch, so a single capture covers both sides of the hand-off.
+        let metricsEnabled = ProcessInfo.processInfo.environment[DeviceTermEnv.frameMetrics]
+            .map { !$0.isEmpty } ?? false
+        let feed = MirrorPipeline(
+            route: route,
+            channels: channels,
+            metricsEnabled: metricsEnabled,
+            diagnostics: diagnose
+        )
         let relay: InteractionRelay
         do {
             relay = try await InteractionRelay.make(channels: channels, diagnostics: diagnose)
