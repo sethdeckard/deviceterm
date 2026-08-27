@@ -39,6 +39,9 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
     /// block. The VM resolves nil to `.simulator` (historical
     /// all-enabled behavior).
     let capabilities: PaneCapabilities?
+    /// See `MirroredPaneState.sizePreset`. Mutable because the pane's chrome
+    /// reports a newly-picked preset back into nav state.
+    var sizePreset: SimSizePreset?
 
     /// `MirroredPaneState` identity: a sim pane keys on its UDID.
     var target: PaneTarget { .sim(udid: udid) }
@@ -53,7 +56,8 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
         name: String? = nil,
         pixelWidth: Int? = nil,
         pixelHeight: Int? = nil,
-        capabilities: PaneCapabilities? = nil
+        capabilities: PaneCapabilities? = nil,
+        sizePreset: SimSizePreset? = nil
     ) {
         self.paneId = paneId
         self.attachment = attachment
@@ -65,5 +69,6 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.capabilities = capabilities
+        self.sizePreset = sizePreset
     }
 }

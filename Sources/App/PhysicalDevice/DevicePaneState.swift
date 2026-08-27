@@ -27,6 +27,9 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
     let pixelWidth: Int?
     let pixelHeight: Int?
     let capabilities: PaneCapabilities?
+    /// See `MirroredPaneState.sizePreset`. Mutable because the pane's chrome
+    /// reports a newly-picked preset back into nav state.
+    var sizePreset: SimSizePreset?
 
     var target: PaneTarget { .device(deviceId: deviceId) }
 
@@ -40,7 +43,8 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
         name: String? = nil,
         pixelWidth: Int? = nil,
         pixelHeight: Int? = nil,
-        capabilities: PaneCapabilities? = nil
+        capabilities: PaneCapabilities? = nil,
+        sizePreset: SimSizePreset? = nil
     ) {
         self.paneId = paneId
         self.attachment = attachment
@@ -52,5 +56,6 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.capabilities = capabilities
+        self.sizePreset = sizePreset
     }
 }

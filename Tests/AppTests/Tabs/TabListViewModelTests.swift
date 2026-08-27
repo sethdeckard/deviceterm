@@ -359,6 +359,116 @@ struct TabListViewModelTests {
         #expect(TabListViewModel.isTargetPresent(.device(deviceId: "d"), in: tabState))
     }
 
+    // MARK: - Size preset
+
+    @Test
+    func setSizePresetTouchesOnlyTheNamedPane() {
+        let model = TabListViewModel()
+        model.append(tab(1))
+        for udid in ["A", "B"] {
+            model.addSimPane(
+                SimPaneState(paneId: "p-\(udid)", udid: udid, displayName: udid, family: "phone"),
+                toTab: TabID(value: 1)
+            )
+        }
+        model.addDevicePane(
+            DevicePaneState(paneId: "p-D", deviceId: "D", displayName: "iPhone", family: "phone"),
+            toTab: TabID(value: 1)
+        )
+        model.setSizePreset(.pixelAccurate, forPane: .sim(udid: "B"), inTab: TabID(value: 1))
+        model.setSizePreset(.physical, forPane: .device(deviceId: "D"), inTab: TabID(value: 1))
+        let tabState = model.tab(id: TabID(value: 1))
+        #expect(tabState?.simPanes.map(\.sizePreset) == [nil, .pixelAccurate])
+        #expect(tabState?.devicePanes.map(\.sizePreset) == [.physical])
+    }
+
+    @Test
+    func aSimPanePresetSurvivesTheRecoveryRoundTrip() {
+        // The attach response carries no preset, so the placeholder is the
+        // only thing holding it while the pane is away. A pane that comes back
+        // without it falls back to its family default.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        model.addSimPane(
+            SimPaneState(paneId: "old", udid: "A", displayName: "iPhone", family: "phone"),
+            toTab: TabID(value: 1)
+        )
+        model.setSizePreset(.pixelAccurate, forPane: .sim(udid: "A"), inTab: TabID(value: 1))
+        model.replaceSimPaneWithPending(
+            udid: "A",
+            pending: PendingPaneState(
+                id: PendingPaneID(value: 1),
+                target: .sim(udid: "A"),
+                displayName: "iPhone",
+                family: "phone",
+                atIndex: 0
+            ),
+            inTab: TabID(value: 1)
+        )
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.first?.sizePreset == .pixelAccurate)
+        mountRecovered(model, "A", 1)
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.first?.sizePreset == .pixelAccurate)
+    }
+
+    @Test
+    func aDevicePanePresetSurvivesTheRecoveryRoundTrip() {
+        let model = TabListViewModel()
+        model.append(tab(1))
+        model.addDevicePane(
+            DevicePaneState(paneId: "old", deviceId: "D", displayName: "iPhone", family: "phone"),
+            toTab: TabID(value: 1)
+        )
+        model.setSizePreset(.physical, forPane: .device(deviceId: "D"), inTab: TabID(value: 1))
+        model.replaceDevicePaneWithPending(
+            deviceId: "D",
+            pending: PendingPaneState(
+                id: PendingPaneID(value: 1),
+                target: .device(deviceId: "D"),
+                displayName: "iPhone",
+                family: "phone"
+            ),
+            inTab: TabID(value: 1)
+        )
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.first?.sizePreset == .physical)
+        model.replacePendingWithDevice(
+            id: PendingPaneID(value: 1),
+            pane: DevicePaneState(
+                paneId: "new",
+                deviceId: "D",
+                displayName: "iPhone",
+                family: "phone"
+            ),
+            inTab: TabID(value: 1)
+        )
+        #expect(model.tab(id: TabID(value: 1))?.devicePanes.first?.sizePreset == .physical)
+    }
+
+    @Test
+    func aPaneWithNoChosenPresetComesBackWithNone() {
+        // The round trip must not invent one either: a pane that never had a
+        // preset picked has to keep taking its family default, which is what
+        // nil means downstream.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        model.addSimPane(
+            SimPaneState(paneId: "old", udid: "A", displayName: "Watch", family: "watch"),
+            toTab: TabID(value: 1)
+        )
+        model.replaceSimPaneWithPending(
+            udid: "A",
+            pending: PendingPaneState(
+                id: PendingPaneID(value: 1),
+                target: .sim(udid: "A"),
+                displayName: "Watch",
+                family: "watch",
+                atIndex: 0
+            ),
+            inTab: TabID(value: 1)
+        )
+        mountRecovered(model, "A", 1)
+        #expect(model.tab(id: TabID(value: 1))?.simPanes.first?.sizePreset == nil)
+    }
+
     // MARK: - addTerminal placement (Split Right / Split Down)
 
     @Test

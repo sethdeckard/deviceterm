@@ -55,6 +55,13 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
     /// type onto it a second time. Retry reads this for the same reason the
     /// first attach does.
     let resolvesName: Bool
+    /// The size preset the pane being re-attached was carrying, ferried
+    /// across the round trip the way `atIndex` ferries the array position.
+    /// Set by the replace-with-placeholder paths off the departing pane, and
+    /// read back onto the rebuilt pane state. Nil when there is nothing to
+    /// restore: a pane arriving in the tab for the first time, or one whose
+    /// state stored no preset.
+    var sizePreset: SimSizePreset?
     /// Attach lifecycle: in-flight, or failed-with-message (Retry shown).
     var phase: PendingPanePhase
 
@@ -69,6 +76,7 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
         family: String? = nil,
         atIndex: Int? = nil,
         resolvesName: Bool = false,
+        sizePreset: SimSizePreset? = nil,
         phase: PendingPanePhase = .attaching
     ) {
         self.id = id
@@ -77,6 +85,7 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
         self.family = family
         self.atIndex = atIndex
         self.resolvesName = resolvesName
+        self.sizePreset = sizePreset
         self.phase = phase
     }
 }

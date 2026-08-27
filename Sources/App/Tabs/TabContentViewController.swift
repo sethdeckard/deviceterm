@@ -772,6 +772,7 @@ final class TabContentViewController: NSViewController {
         for simPane in tabState.simPanes where !current.contains(simPane.udid) {
             let paneVC = SimulatorPaneViewController(simPane: simPane, daemonClient: daemonClient)
             simPaneActions.wire(paneVC: paneVC, simPane: simPane)
+            wire(sizePresetReporting: paneVC, target: simPane.target)
             simPaneVCByUDID[simPane.udid] = paneVC
             // Sim ownership is recorded against the tab's primary
             // terminal env, so discovery attribution is
@@ -822,13 +823,14 @@ final class TabContentViewController: NSViewController {
 
     /// Wire a device pane VC's owner-facing callbacks. Deliberately a
     /// thin subset of the sim wiring: a device pane gets **Close Pane**
-    /// (detach the mirror, the physical device keeps running) and
-    /// nothing else. The sim-only lifecycle actions (reboot /
-    /// live-reboot / erase / open-in-Simulator / shutdown /
-    /// reveal-in-Finder) and the SimResurrect watch have no
-    /// physical-device meaning and are left unattached: their
-    /// context-menu items stay visible and no-op. Nothing hides
-    /// them. Device reboot / screenshot / record are not implemented.
+    /// (detach the mirror, the physical device keeps running) and the
+    /// size-preset reporting every mirrored pane shares. The sim-only
+    /// lifecycle actions (reboot / live-reboot / erase /
+    /// open-in-Simulator / shutdown / reveal-in-Finder) and the
+    /// SimResurrect watch have no physical-device meaning and are left
+    /// unattached: their context-menu items stay visible and no-op.
+    /// Nothing hides them. Device reboot / screenshot / record are not
+    /// implemented.
     private func wire(deviceVC paneVC: SimulatorPaneViewController, devicePane: DevicePaneState) {
         let tabID = self.tabID
         let deviceId = devicePane.deviceId
@@ -839,6 +841,24 @@ final class TabContentViewController: NSViewController {
             self?.router.dispatch(
                 .detachDevicePane(tab: tabID, deviceId: deviceId, mode: .detach)
             )
+        }
+        wire(sizePresetReporting: paneVC, target: devicePane.target)
+    }
+
+    /// Land a pane's newly-picked size preset in nav state. Wired here rather
+    /// than alongside the rest of the sim wiring in `SimPaneActionCoordinator`
+    /// because it is a nav-state write rather than a device action, and
+    /// because device panes take it too.
+    ///
+    /// Reads `tabListVM` through `self` so a cross-window tab move, which
+    /// repoints it, doesn't leave the write going to the tab's old home.
+    private func wire(
+        sizePresetReporting paneVC: SimulatorPaneViewController,
+        target: PaneTarget
+    ) {
+        let tabID = self.tabID
+        paneVC.onSizePresetChange = { [weak self] preset in
+            self?.tabListVM.setSizePreset(preset, forPane: target, inTab: tabID)
         }
     }
 

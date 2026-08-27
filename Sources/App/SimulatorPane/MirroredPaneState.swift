@@ -40,6 +40,14 @@ protocol MirroredPaneState {
     var pixelHeight: Int? { get }
     /// Per-pane device-control capabilities; nil resolves to `.simulator`.
     var capabilities: PaneCapabilities? { get }
+    /// The pane's stored size preset, or nil to derive the family-aware
+    /// default.
+    ///
+    /// Nav state rather than view state because the pane's view controller is
+    /// destroyed and rebuilt whenever the daemon record behind the pane is
+    /// replaced, which is what recovery and a post-reboot re-attach do. A
+    /// preset held only on the view controller comes back as the default.
+    var sizePreset: SimSizePreset? { get }
     /// The backend-neutral identity (`.sim(udid:)` / `.device(deviceId:)`),
     /// the key under which this pane's leaf lives in the layout tree.
     var target: PaneTarget { get }

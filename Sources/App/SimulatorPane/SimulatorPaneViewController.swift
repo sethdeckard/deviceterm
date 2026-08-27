@@ -101,18 +101,22 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// this gating, the auto-fit would run before dims arrive and
     /// silently no-op, leaving the pane chunky.
     var pendingAutoFit: Bool = false
-    /// The most recent preset the user applied (or the default-on-
-    /// attach `.fitScreen` if they haven't picked one). Drives the
-    /// auto-fit pass after pane rearranges so a deliberately-chosen
+    /// The preset the auto-fit pass replays, so a deliberately-chosen
     /// Pixel Accurate / Point Accurate pane keeps that sizing when
     /// it moves to a new split, instead of springing back to fit.
-    /// Stamped to a family-aware default in `viewDidLoad`, because
+    /// Stamped in `viewDidLoad` from `restoredPreset`, or from a
+    /// family-aware default when the pane carries none, because
     /// watch's tiny native screen would look comically wide when
     /// Fit-Screen'd into a full-window pane, so watches default
     /// to Point Accurate (a ~250pt-wide compact size); the other
     /// families default to Fit Screen so a phone/pad/tv fills any
     /// reasonable pane bounds.
     private var lastAppliedPreset: SimSizePreset = .fitScreen
+    /// The preset the pane state arrived carrying, so a pane whose view
+    /// controller was rebuilt keeps the sizing the user chose instead of
+    /// falling back to the family default. Nil when the pane state carries
+    /// no preset, which is what selects that default.
+    private let restoredPreset: SimSizePreset?
     private let overlay = NSTextField(labelWithString: "")
     /// Semi-transparent scrim behind the overlay text/buttons so the
     /// shutdown message stays readable over the frozen last frame.
@@ -210,6 +214,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Fires on every (deduped) state transition. TabContentViewController uses this
     /// to manage SimResurrect watches when a pane enters/leaves shutdown.
     var onStateChange: ((SimulatorPaneState) -> Void)?
+    /// Fires when the user picks a size preset the pane wasn't already on.
+    /// The owner records it in nav state, which is what carries the choice
+    /// across the view controller being rebuilt.
+    var onSizePresetChange: ((SimSizePreset) -> Void)?
 
     /// Held for the AX inspector path, since `paneAxPoint` lives on a
     /// separate role protocol that the VM doesn't need. Stored on the
@@ -272,6 +280,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         advisory: HeadlessAdvisoryViewModel = .shared
     ) {
         self.advisory = advisory
+        self.restoredPreset = mirroredPane.sizePreset
         self.viewModel = SimulatorPaneViewModel(
             paneId: mirroredPane.paneId,
             daemonClient: daemonClient,
@@ -447,14 +456,20 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     override func viewDidLoad() {
         super.viewDidLoad()
         wireChromeActions()
-        // Family-aware default preset. Watch sims have tiny
+        // A pane whose state carries a preset keeps it: this view controller
+        // is rebuilt whenever the daemon record behind the pane is replaced,
+        // and the choice would otherwise reset every time.
+        //
+        // Otherwise, a family-aware default. Watch sims have tiny
         // native screens (~395pt); Fit Screen on a full-window
         // pane would aspect-fit a watch into a comically wide
         // frame, so they default to Point Accurate (compact). The
         // other families fill any reasonable pane with Fit Screen.
-        lastAppliedPreset = DeviceFamily(wire: viewModel.family) == .watch
-            ? .pointAccurate
-            : .fitScreen
+        lastAppliedPreset = restoredPreset
+            ?? (DeviceFamily(wire: viewModel.family) == .watch ? .pointAccurate : .fitScreen)
+        // Left nil for a pane with no restored preset, so the chrome picker
+        // shows no checkmark until something applies one.
+        chromeViewModel.selectedPreset = restoredPreset
         // `App.`-qualified: NSObject's KVO `observe` shadows the global.
         observation = App.observe { [weak self] in self?.render() }
         viewModel.start()
@@ -1090,10 +1105,20 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// the sim pane's right-click menu carries no size items.
     func applySizePreset(_ preset: SimSizePreset) {
         chromeViewModel.selectedPreset = preset
-        // Stick the chosen preset so future auto-fit passes (after
-        // pane drag-rearrange, sibling close, window resize) replay
-        // it rather than springing back to the on-attach default.
-        lastAppliedPreset = preset
+        // Stick the chosen preset so an auto-fit pass after a tree change
+        // (a drag-rearrange, a sibling close) replays it rather than
+        // springing back to the family default, and report it up so it
+        // also outlives this view controller.
+        //
+        // Only on a real change, which is what keeps those replays out of
+        // nav state: an auto-fit re-applies `lastAppliedPreset` itself. A
+        // user picking the preset the pane is already on reports nothing
+        // either, and needs to: the default this falls back to is the same
+        // function of family that seeded it.
+        if preset != lastAppliedPreset {
+            lastAppliedPreset = preset
+            onSizePresetChange?(preset)
+        }
         let device = SimDeviceMetrics(
             pixelWidth: chromeViewModel.devicePixelWidth ?? 0,
             pixelHeight: chromeViewModel.devicePixelHeight ?? 0,

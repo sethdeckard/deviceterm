@@ -417,6 +417,26 @@ final class TabListViewModel {
         )
     }
 
+    /// Record the size preset a pane's chrome just applied. Nav state holds
+    /// it because the pane's view controller does not survive the daemon
+    /// record behind it being replaced, and the replace paths ferry this
+    /// across the round trip. No-op if the pane is gone.
+    func setSizePreset(_ preset: SimSizePreset, forPane target: PaneTarget, inTab id: TabID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        switch target {
+        case let .sim(udid):
+            guard let paneIndex = tabs[index].simPanes.firstIndex(where: { $0.udid == udid })
+            else { return }
+            tabs[index].simPanes[paneIndex].sizePreset = preset
+
+        case let .device(deviceId):
+            guard let paneIndex = tabs[index].devicePanes
+                .firstIndex(where: { $0.deviceId == deviceId })
+            else { return }
+            tabs[index].devicePanes[paneIndex].sizePreset = preset
+        }
+    }
+
     // MARK: - Pending panes (in-flight / failed attaches)
 
     /// Insert a placeholder pane and its `.pending(id)` leaf. Placement
@@ -487,7 +507,8 @@ final class TabListViewModel {
 
     /// Swap a successful pending pane for the real sim pane in place:
     /// drop the pending record, insert the `SimPaneState` into the typed
-    /// array (honoring the pending's `atIndex` for resurrect fidelity),
+    /// array (honoring the pending's `atIndex` and `sizePreset` for
+    /// resurrect fidelity, since the attach response carries neither),
     /// and rewrite the `.pending(id)` leaf to `.sim(udid)` at the exact
     /// same tree position via `PaneTreeOps.replace` (preserving divider
     /// proportions). No-op if the pending pane is gone; if the target is
@@ -507,13 +528,15 @@ final class TabListViewModel {
             )
             return
         }
+        var restored = pane
+        restored.sizePreset = pane.sizePreset ?? pending.sizePreset
         if let atIndex = pending.atIndex {
             tabs[index].simPanes.insert(
-                pane,
+                restored,
                 at: restoredIndex(atIndex, amongPendingIn: tabs[index])
             )
         } else {
-            tabs[index].simPanes.append(pane)
+            tabs[index].simPanes.append(restored)
         }
         tabs[index].paneTree = PaneTreeOps.replace(
             slot: .pending(pendingId),
@@ -544,7 +567,7 @@ final class TabListViewModel {
     /// Physical-device counterpart to `replacePendingWithSim`.
     func replacePendingWithDevice(id pendingId: PendingPaneID, pane: DevicePaneState, inTab id: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }),
-            tabs[index].pendingPanes.contains(where: { $0.id == pendingId })
+            let pending = tabs[index].pendingPanes.first(where: { $0.id == pendingId })
         else { return }
         tabs[index].pendingPanes.removeAll { $0.id == pendingId }
         if tabs[index].devicePanes.contains(where: { $0.deviceId == pane.deviceId }) {
@@ -554,7 +577,9 @@ final class TabListViewModel {
             )
             return
         }
-        tabs[index].devicePanes.append(pane)
+        var restored = pane
+        restored.sizePreset = pane.sizePreset ?? pending.sizePreset
+        tabs[index].devicePanes.append(restored)
         tabs[index].paneTree = PaneTreeOps.replace(
             slot: .pending(pendingId),
             with: .device(deviceId: pane.deviceId),
@@ -569,7 +594,9 @@ final class TabListViewModel {
     /// The `.sim(udid)` leaf becomes `.pending(id)` at the same tree position
     /// via `PaneTreeOps.replace`, and the swap back lands there too, so the
     /// pane keeps its place in the layout and its divider proportions (which
-    /// are keyed by tree position, not by slot) across the round trip. Passing
+    /// are keyed by tree position, not by slot) across the round trip. The
+    /// size preset rides on the placeholder instead, because nothing about
+    /// the pane's position records which sizing the user picked. Passing
     /// the pane's own stored `udid` matters: casing varies across the attach
     /// paths, and the leaf key carries whichever spelling the pane was mounted
     /// with. No-op if the pane is gone.
@@ -579,10 +606,12 @@ final class TabListViewModel {
         inTab id: TabID
     ) {
         guard let index = tabs.firstIndex(where: { $0.id == id }),
-            tabs[index].simPanes.contains(where: { $0.udid == udid })
+            let departing = tabs[index].simPanes.first(where: { $0.udid == udid })
         else { return }
+        var carried = pending
+        carried.sizePreset = pending.sizePreset ?? departing.sizePreset
         tabs[index].simPanes.removeAll { $0.udid == udid }
-        tabs[index].pendingPanes.append(pending)
+        tabs[index].pendingPanes.append(carried)
         tabs[index].paneTree = PaneTreeOps.replace(
             slot: .sim(udid: udid),
             with: .pending(pending.id),
@@ -639,10 +668,12 @@ final class TabListViewModel {
         inTab id: TabID
     ) {
         guard let index = tabs.firstIndex(where: { $0.id == id }),
-            tabs[index].devicePanes.contains(where: { $0.deviceId == deviceId })
+            let departing = tabs[index].devicePanes.first(where: { $0.deviceId == deviceId })
         else { return }
+        var carried = pending
+        carried.sizePreset = pending.sizePreset ?? departing.sizePreset
         tabs[index].devicePanes.removeAll { $0.deviceId == deviceId }
-        tabs[index].pendingPanes.append(pending)
+        tabs[index].pendingPanes.append(carried)
         tabs[index].paneTree = PaneTreeOps.replace(
             slot: .device(deviceId: deviceId),
             with: .pending(pending.id),
