@@ -578,12 +578,12 @@ final class TabContentViewController: NSViewController {
     }
 
     private func wire(terminalVC: TerminalPaneViewController, id: TerminalPaneID) {
-        // The terminal's wrapper fires `onFocusGained` on every
-        // false → true edge of its responder-chain hook. Stamp the
-        // tab's `lastFocusedTerminal` so the spawning-terminal
-        // heuristic in `Router.attachPane` lands new sims next to
-        // whichever terminal the user is actually typing in (rather
-        // than always next to the tab's primary).
+        // The terminal's wrapper reports both edges of its
+        // responder-chain hook; the VC narrows that to the arrival and
+        // republishes it as `onFocusGained`. Stamp the tab's
+        // `lastFocusedTerminal` so the spawning-terminal heuristic in
+        // `Router.attachPane` lands new sims next to whichever terminal
+        // the user is actually typing in.
         terminalVC.onFocusGained = { [weak self] in
             guard let self else { return }
             self.tabListVM.updateLastFocusedTerminal(id, inTab: self.tabID)

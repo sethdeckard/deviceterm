@@ -146,11 +146,11 @@ struct SimulatorPaneChromeMountTests {
     }
 
     @Test
-    func becomingFirstResponderMarksChromeFocused() {
-        // SimulatorContentView's becomeFirstResponder calls back into
-        // the VC via SimulatorInputDelegate; the VC pushes the focus
-        // bit into chromeViewModel where SwiftUI observes it and re-
-        // renders the chrome's title brightening.
+    func becomingFirstResponderMarksChromeFocused() async throws {
+        // The wrapper resolves focus from the responder chain and
+        // mirrors it into chromeViewModel, where SwiftUI observes it
+        // and re-renders the chrome's title brightening. The mirror is
+        // one-way: the chrome never decides whether the pane is focused.
         let viewController = makeViewController()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
@@ -161,11 +161,13 @@ struct SimulatorPaneChromeMountTests {
         window.contentView = viewController.view
         #expect(viewController.chromeViewModel.isFocused == false)
         _ = window.makeFirstResponder(viewController.view)
+        window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
         #expect(viewController.chromeViewModel.isFocused == true)
     }
 
     @Test
-    func resigningFirstResponderClearsChromeFocus() {
+    func resigningFirstResponderClearsChromeFocus() async throws {
         let viewController = makeViewController()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
@@ -175,8 +177,12 @@ struct SimulatorPaneChromeMountTests {
         )
         window.contentView = viewController.view
         _ = window.makeFirstResponder(viewController.view)
+        window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
         #expect(viewController.chromeViewModel.isFocused == true)
-        _ = window.makeFirstResponder(nil)
+        _ = window.makeFirstResponder(window)
+        window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
         #expect(viewController.chromeViewModel.isFocused == false)
     }
 
@@ -184,21 +190,28 @@ struct SimulatorPaneChromeMountTests {
     func wrapperBorderTracksFocusedState() async throws {
         // The focus ring around the entire pane lives on the wrapper's
         // CALayer (SwiftUI inside the chrome host would only ring the
-        // chrome strip). render() runs through observe() so a focus
-        // mutation arrives on the next main-actor turn, so settle.
+        // chrome strip). Driven through the window, because the
+        // responder chain is what the border answers to.
         let viewController = makeViewController()
-        viewController.view.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
-        // Force viewDidLoad so the observe() binding arms.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = viewController.view
         viewController.loadViewIfNeeded()
-        guard let wrapper = viewController.view as? SimulatorPaneWrapperView else {
-            Issue.record("VC root view is not the wrapper subclass")
-            return
-        }
+        let wrapper = try #require(
+            viewController.view as? SimulatorPaneWrapperView,
+            "VC root view is not the wrapper subclass"
+        )
         #expect(wrapper.layer?.borderWidth ?? -1 == 0)
-        viewController.chromeViewModel.isFocused = true
+        _ = window.makeFirstResponder(viewController.view)
+        window.update()
         try await Task.sleep(nanoseconds: 30_000_000)
         #expect((wrapper.layer?.borderWidth ?? 0) > 0)
-        viewController.chromeViewModel.isFocused = false
+        _ = window.makeFirstResponder(window)
+        window.update()
         try await Task.sleep(nanoseconds: 30_000_000)
         #expect(wrapper.layer?.borderWidth ?? -1 == 0)
     }

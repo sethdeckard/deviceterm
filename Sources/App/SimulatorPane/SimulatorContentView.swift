@@ -189,18 +189,6 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        if accepted { inputDelegate?.simulatorPaneDidBecomeFirstResponder() }
-        return accepted
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let willResign = super.resignFirstResponder()
-        if willResign { inputDelegate?.simulatorPaneDidResignFirstResponder() }
-        return willResign
-    }
-
     func setSurface(_ lease: SurfaceLease?) {
         currentSurface = lease
         if let surface = lease?.surface {

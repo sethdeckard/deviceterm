@@ -43,6 +43,10 @@ final class SimulatorPaneWrapperView: NSView {
     /// The input-target subview that should actually own first-
     /// responder status when the wrapper is asked for it.
     weak var inputTarget: NSView?
+    /// Fires on each resolved focus change, with the new state. The
+    /// owning VC mirrors it into the chrome's view model, where SwiftUI
+    /// reads it for the title brightening.
+    var onFocusChange: ((Bool) -> Void)?
     /// Gate the focus border. The layout controller flips this off
     /// when the tab holds only one pane so the ring doesn't draw
     /// over a non-rearrangeable surface, and on for any multi-pane
@@ -65,7 +69,9 @@ final class SimulatorPaneWrapperView: NSView {
     var onCrownUp: () -> Void = {}
     var onCrownDown: () -> Void = {}
 
-    private var currentFocused = false
+    /// Resolves focus from the window's responder chain; see
+    /// `PaneFocusTracker` for why the chain is the only authority here.
+    private let focusTracker = PaneFocusTracker()
     private let bezelView = LayerBackedView()
     private let bezelShapeLayer = CAShapeLayer()
     private let notchLayer = CAShapeLayer()
@@ -117,10 +123,25 @@ final class SimulatorPaneWrapperView: NSView {
         bezelShapeLayer.isHidden = true
         notchLayer.isHidden = true
         crownLayer.isHidden = true
+
+        focusTracker.onFocusChange = { [weak self] focused in
+            guard let self else { return }
+            applyFocusVisible()
+            onFocusChange?(focused)
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+    /// Re-arm the focus tracker whenever the pane's window changes.
+    /// This is what clears the ring when a tab switch pulls the pane
+    /// out of the window: AppKit drops the first responder without
+    /// delivering `resignFirstResponder`, so nothing else would.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        focusTracker.viewDidMoveToWindow(self)
+    }
 
     /// Insert the bezel view into the hierarchy BELOW the Metal
     /// content view. Callable from the VC after both subviews are
@@ -145,22 +166,11 @@ final class SimulatorPaneWrapperView: NSView {
     }
 
     /// Report focus to the accessibility tree, so the UI-test harness
-    /// can assert which pane a focus shortcut landed on. Answers from
-    /// the responder chain rather than from `currentFocused`, which
-    /// tracks the drawn border: the border is gated by
-    /// `focusBorderEnabled`, and it is pushed in by the pane VC rather
-    /// than observed, so it can lag the real responder.
+    /// can assert which pane a focus shortcut landed on. Answers the
+    /// chain directly so accessibility reflects current focus without
+    /// waiting for the tracker's next refresh.
     override func isAccessibilityFocused() -> Bool {
         containsFirstResponder()
-    }
-
-    /// Record the caller's intent. The effective border
-    /// (intent ∧ `focusBorderEnabled`) is applied by
-    /// `applyFocusVisible()` so the gate can re-evaluate without the
-    /// caller re-asserting focus.
-    func setFocusVisible(_ focused: Bool) {
-        currentFocused = focused
-        applyFocusVisible()
     }
 
     /// Recompute bezel geometry from the current bounds + context.
@@ -211,7 +221,7 @@ final class SimulatorPaneWrapperView: NSView {
     /// overlay); fallback to `NSColor.controlAccentColor` when the
     /// ghostty config doesn't set `selection-background`.
     private func applyFocusVisible() {
-        let effective = currentFocused && focusBorderEnabled
+        let effective = focusTracker.isFocused && focusBorderEnabled
         layer?.borderWidth = effective ? 1 : 0
         let color = GhosttyThemeColors.cachedSelectionBackground()
             ?? NSColor.controlAccentColor

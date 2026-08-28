@@ -431,6 +431,13 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         wrapper.onCrownDown = { [weak self] in
             self?.viewModel.crown(delta: 1)
         }
+        // Mirror the wrapper's resolved focus into the chrome's view
+        // model, where SwiftUI observes it for the title brightening.
+        // The wrapper resolves from the responder chain, so this is a
+        // one-way copy of that answer, never a second source for it.
+        wrapper.onFocusChange = { [weak self] focused in
+            self?.chromeViewModel.isFocused = focused
+        }
         wrapperView = wrapper
         // Snapshot the entire wrapper (chrome + Metal sim view) when
         // a drag starts so the user drags a translucent miniature of
@@ -688,14 +695,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         viewModel.keyUp(keyCode: keyCode)
     }
 
-    func simulatorPaneDidBecomeFirstResponder() {
-        chromeViewModel.isFocused = true
-    }
-
-    func simulatorPaneDidResignFirstResponder() {
-        chromeViewModel.isFocused = false
-    }
-
     func simulatorPaneDidCrown(delta: Double) {
         // Family gate: the Digital Crown only exists on watchOS, so
         // bare scrolls over a phone / pad / tv sim are silently
@@ -717,13 +716,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Announces deduped state transitions to the owner.
     private func render() {
         let state = viewModel.state
-        let focused = chromeViewModel.isFocused
         let lease = viewModel.currentSurface
         let orientation = viewModel.currentOrientation
         contentView?.applyFrame(lease: lease, traceSequence: viewModel.currentSurfaceSequence)
         contentView?.setOrientation(orientation)
         refreshOverlay(for: state)
-        wrapperView?.setFocusVisible(focused)
         // Push the bezel inputs every render(). The wrapper's
         // `BezelContext.didSet` gates layout to actual changes, so
         // this is cheap when nothing moved.

@@ -18,20 +18,22 @@ private struct MountedWrapper {
 /// the responder-chain-walk lookup. The wrapper observes
 /// `NSWindow.didUpdateNotification` so AppKit's responder-chain
 /// transitions (which we can't directly hook on libghostty's
-/// foreign-module surface view) toggle the border. Three claims:
+/// foreign-module surface view) toggle the border. Four claims:
 ///
 ///   1. Layer backing is established at init, before any descendant
 ///      Metal-hosting surface gets installed. libghostty's surface
 ///      brings a CAMetalLayer with it, so the wrapper opts into layer
 ///      backing eagerly: the layer tree settles in one shape instead of
 ///      flipping mode mid-life on first focus.
-///   2. `containsFirstResponder()` (via `setFocusVisible` driven by
-///      the responder-chain walk) returns true for a descendant
-///      view and false otherwise. The walk is the essential
-///      logic: a refactor that swaps `superview` for `nextResponder`
-///      would silently miss focus on subviews mounted indirectly.
+///   2. `containsFirstResponder()`, which the tracker polls, returns
+///      true for the wrapper or one of its descendants, and false
+///      otherwise. The walk is the essential logic: a refactor that
+///      swaps `superview` for `nextResponder` would silently miss
+///      focus on subviews mounted indirectly.
 ///   3. Toggling focus into and out of the descendant updates the
 ///      border. This is the visible behavior the user sees.
+///   4. The border derives only from the responder chain; no setter
+///      can assert a conflicting focus state.
 @MainActor
 struct TerminalPaneWrapperViewTests {
     /// Build a wrapper mounted in a real window with a single
@@ -75,55 +77,74 @@ struct TerminalPaneWrapperViewTests {
     }
 
     @Test
-    func setFocusVisibleTrueDrawsBorder() {
-        let wrapper = TerminalPaneWrapperView(
-            frame: NSRect(x: 0, y: 0, width: 200, height: 200)
-        )
-        #expect(wrapper.layer?.borderWidth ?? -1 == 0)
-        wrapper.setFocusVisible(true)
-        #expect((wrapper.layer?.borderWidth ?? 0) == 1)
+    func focusArrivingDrawsBorder() async throws {
+        let mount = makeMountedWrapper()
+        #expect(mount.wrapper.layer?.borderWidth ?? -1 == 0)
+        _ = mount.window.makeFirstResponder(mount.responderTarget)
+        mount.window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect((mount.wrapper.layer?.borderWidth ?? 0) == 1)
     }
 
     @Test
-    func setFocusVisibleFalseClearsBorder() {
-        let wrapper = TerminalPaneWrapperView(
-            frame: NSRect(x: 0, y: 0, width: 200, height: 200)
-        )
-        wrapper.setFocusVisible(true)
-        wrapper.setFocusVisible(false)
-        #expect(wrapper.layer?.borderWidth ?? -1 == 0)
+    func focusLeavingClearsBorder() async throws {
+        let mount = makeMountedWrapper()
+        _ = mount.window.makeFirstResponder(mount.responderTarget)
+        mount.window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        _ = mount.window.makeFirstResponder(mount.window)
+        mount.window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(mount.wrapper.layer?.borderWidth ?? -1 == 0)
     }
 
     @Test
-    func focusBorderGateSuppressesBorderEvenWhenFocused() {
+    func focusBorderGateSuppressesBorderEvenWhenFocused() async throws {
         // Solo-pane tabs flip the gate off; the wrapper should refuse
         // to draw the border even when focus arrives. A regression
         // that ignores the gate would paint a ring around the only
         // pane in the tab, where the rearrange affordance the ring
         // implies doesn't exist there.
-        let wrapper = TerminalPaneWrapperView(
-            frame: NSRect(x: 0, y: 0, width: 200, height: 200)
-        )
-        wrapper.focusBorderEnabled = false
-        wrapper.setFocusVisible(true)
-        #expect(wrapper.layer?.borderWidth ?? -1 == 0)
+        let mount = makeMountedWrapper()
+        mount.wrapper.focusBorderEnabled = false
+        _ = mount.window.makeFirstResponder(mount.responderTarget)
+        mount.window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(mount.wrapper.layer?.borderWidth ?? -1 == 0)
     }
 
     @Test
-    func focusBorderGateFlippingOnRefreshesActiveBorder() {
+    func focusBorderGateFlippingOnRefreshesActiveBorder() async throws {
         // Flipping the gate from off → on while focus is held should
-        // re-paint the border without the caller re-asserting
-        // setFocusVisible. The layout controller relies on this when
-        // a second pane joins a solo tab: the gate flips, the
-        // already-focused wrapper picks it up.
-        let wrapper = TerminalPaneWrapperView(
-            frame: NSRect(x: 0, y: 0, width: 200, height: 200)
-        )
-        wrapper.focusBorderEnabled = false
-        wrapper.setFocusVisible(true)
-        #expect(wrapper.layer?.borderWidth ?? -1 == 0)
-        wrapper.focusBorderEnabled = true
-        #expect((wrapper.layer?.borderWidth ?? 0) == 1)
+        // re-paint the border without focus having to move again. The
+        // layout controller relies on this when a second pane joins a
+        // solo tab: the gate flips, the already-focused wrapper picks
+        // it up.
+        let mount = makeMountedWrapper()
+        mount.wrapper.focusBorderEnabled = false
+        _ = mount.window.makeFirstResponder(mount.responderTarget)
+        mount.window.update()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(mount.wrapper.layer?.borderWidth ?? -1 == 0)
+        mount.wrapper.focusBorderEnabled = true
+        #expect((mount.wrapper.layer?.borderWidth ?? 0) == 1)
+    }
+
+    @Test
+    func focusChangeReportsEachEdgeOnce() async throws {
+        // The tracker gates on resolved changes, so a steady state
+        // across several window updates must not re-report. The tab
+        // controller writes nav state from this edge; a per-update
+        // callback would write on every event-loop pass.
+        let mount = makeMountedWrapper()
+        var reported: [Bool] = []
+        mount.wrapper.onFocusChange = { reported.append($0) }
+        _ = mount.window.makeFirstResponder(mount.responderTarget)
+        for _ in 0..<3 {
+            mount.window.update()
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(reported == [true])
     }
 
     @Test

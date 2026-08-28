@@ -262,10 +262,11 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         // this, clicking the chrome would never light up the focus
         // border on a multi-pane tab.
         chromeHost.focusReceiver = surface.view
-        // Wrapper's responder-chain hook fires `onFocusGained` on the
-        // false → true edge; relay it through the VC so the tab
-        // controller can stamp `TabState.lastFocusedTerminal`.
-        (view as? TerminalPaneWrapperView)?.onFocusGained = { [weak self] in
+        // The wrapper reports both edges; only the arrival interests
+        // the tab controller, which stamps `TabState.lastFocusedTerminal`
+        // from it.
+        (view as? TerminalPaneWrapperView)?.onFocusChange = { [weak self] focused in
+            guard focused else { return }
             self?.onFocusGained?()
         }
         // Anything that focuses the pane by its root view has to reach

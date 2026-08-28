@@ -4,31 +4,14 @@ import AppKit
 
 /// Terminal pane root view that paints a
 /// focus border when the pane (chrome strip + libghostty surface)
-/// holds keyboard focus. Mirrors `SimulatorPaneWrapperView`'s
-/// `setFocusVisible(_:)` so the two pane types share one focus
-/// affordance.
-///
-/// Detecting first-responder transitions is the awkward part:
-/// libghostty's surface view is the actual first responder when a
-/// terminal pane has focus, and the surface is a foreign-module
-/// view that deviceterm doesn't subclass. There's no `becomeFirstResponder`
-/// hook to call back into deviceterm from. The portable signal AppKit
-/// gives us is `NSWindow.didUpdateNotification`, which fires once per
-/// event-loop after responder-chain state settles. We poll
-/// `window.firstResponder` on that notification and toggle the border
-/// only when the resolved focus state actually changes, so the
-/// per-update callback is cheap.
+/// holds keyboard focus. Shares `PaneFocusTracker` with
+/// `SimulatorPaneWrapperView`, so both pane types derive focus from the
+/// same responder-chain query.
 @MainActor
 final class TerminalPaneWrapperView: NSView {
-    /// `nonisolated(unsafe)` because the nonisolated deinit needs to
-    /// read it for cleanup (NSObjectProtocol isn't Sendable, so a
-    /// plain @MainActor stored property would be unreachable from
-    /// the deinit). All other access happens on the main actor via
-    /// `viewDidMoveToWindow`, so the only off-isolation read is the
-    /// deinit's snapshot, and NotificationCenter.removeObserver is
-    /// thread-safe, so no synchronization is needed beyond that.
-    nonisolated(unsafe) private var windowObserver: NSObjectProtocol?
-    private var currentFocused = false
+    /// Resolves focus from the window's responder chain; see
+    /// `PaneFocusTracker` for why the chain is the only authority here.
+    private let focusTracker = PaneFocusTracker()
     /// Gate the focus border. The layout controller flips this off
     /// for a tab that holds only one pane (no rearrange affordances
     /// apply, so the ring is just visual noise) and on for any
@@ -37,14 +20,14 @@ final class TerminalPaneWrapperView: NSView {
     var focusBorderEnabled: Bool = true {
         didSet { applyFocusVisible() }
     }
-    /// Fires the first time focus arrives at the pane after losing
-    /// it. The owning `TerminalPaneViewController` forwards this to
+    /// Fires on each resolved focus change, with the new state. The
+    /// owning `TerminalPaneViewController` forwards the true edge to
     /// the tab controller so `TabState.lastFocusedTerminal` follows
     /// the user's actual typing target; the spawning-terminal
-    /// heuristic for sim placement reads that field. Only the
-    /// false→true edge fires; repeated focus-true notifications
-    /// from the same observation pass don't re-fire.
-    var onFocusGained: (() -> Void)?
+    /// heuristic for sim placement reads that field. The tracker
+    /// reports only changes, so a repeated focus-true observation pass
+    /// doesn't re-fire.
+    var onFocusChange: ((Bool) -> Void)?
     /// The descendant that should actually hold first responder when
     /// something focuses this pane by its root view: libghostty's
     /// surface, set by the owning VC. See `becomeFirstResponder`.
@@ -81,60 +64,20 @@ final class TerminalPaneWrapperView: NSView {
         // exposed rather than collapsing the pane into a leaf.
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
+
+        focusTracker.onFocusChange = { [weak self] focused in
+            guard let self else { return }
+            applyFocusVisible()
+            onFocusChange?(focused)
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-    /// Tear down the notification observer if the wrapper is
-    /// dealloc'd while still attached to a window. AppKit doesn't
-    /// reliably fire `viewDidMoveToWindow(nil)` when a window closes
-    /// and its view tree is released wholesale, so the
-    /// viewDidMoveToWindow path alone can leak one observer per
-    /// pane lifecycle. NotificationCenter.removeObserver is thread-
-    /// safe so the nonisolated deinit can call it directly.
-    nonisolated deinit {
-        if let observer = windowObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let observer = windowObserver {
-            NotificationCenter.default.removeObserver(observer)
-            windowObserver = nil
-        }
-        guard let window else {
-            // View was removed from a window, so clear the visible
-            // border so a re-mount starts clean.
-            currentFocused = false
-            setFocusVisible(false)
-            return
-        }
-        windowObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didUpdateNotification,
-            object: window,
-            queue: .main
-        ) { @Sendable [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.refreshFocusFromResponderChain()
-            }
-        }
-        refreshFocusFromResponderChain()
-    }
-
-    /// Read the window's current first responder, walk its superview
-    /// chain to decide whether focus is *inside* this wrapper, and
-    /// toggle the border iff the resolved focus state changed since
-    /// the last check.
-    private func refreshFocusFromResponderChain() {
-        let focused = containsFirstResponder()
-        guard focused != currentFocused else { return }
-        setFocusVisible(focused)
-        if focused {
-            onFocusGained?()
-        }
+        focusTracker.viewDidMoveToWindow(self)
     }
 
     /// Hand first responder down to libghostty's surface.
@@ -156,23 +99,11 @@ final class TerminalPaneWrapperView: NSView {
     }
 
     /// Report focus to the accessibility tree, so the UI-test harness
-    /// can assert which pane a focus shortcut landed on. Answers from
-    /// the responder chain rather than from `currentFocused`, which
-    /// tracks the drawn border and is gated by `focusBorderEnabled`. A
-    /// solo pane draws no ring but still holds focus.
+    /// can assert which pane a focus shortcut landed on. Answers the
+    /// chain directly so accessibility reflects current focus without
+    /// waiting for the tracker's next refresh.
     override func isAccessibilityFocused() -> Bool {
         containsFirstResponder()
-    }
-
-    /// Record the caller's intent. The responder-chain walk in
-    /// `refreshFocusFromResponderChain` and the externally-driven
-    /// path on `SimulatorPaneWrapperView` both route through here.
-    /// The effective border (intent ∧ `focusBorderEnabled`) is
-    /// applied by `applyFocusVisible()` so the gate can re-evaluate
-    /// without the caller re-asserting focus state.
-    func setFocusVisible(_ focused: Bool) {
-        currentFocused = focused
-        applyFocusVisible()
     }
 
     /// Paint the effective focus state (focused ∧ enabled). Same
@@ -184,7 +115,7 @@ final class TerminalPaneWrapperView: NSView {
     /// config doesn't set the key. Layer backing + corner radius are
     /// established in `init` so this just mutates border properties.
     private func applyFocusVisible() {
-        let effective = currentFocused && focusBorderEnabled
+        let effective = focusTracker.isFocused && focusBorderEnabled
         layer?.borderWidth = effective ? 1 : 0
         let color = GhosttyThemeColors.cachedSelectionBackground()
             ?? NSColor.controlAccentColor

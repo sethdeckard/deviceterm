@@ -49,13 +49,6 @@ protocol SimulatorInputDelegate: AnyObject {
     )
     func simulatorPaneKeyDown(keyCode: UInt16)
     func simulatorPaneKeyUp(keyCode: UInt16)
-    /// Pane became the window's first responder, so input is now
-    /// routed here. Drives the chrome's focus indication (title
-    /// brightening, AppKit border on the wrapper).
-    func simulatorPaneDidBecomeFirstResponder()
-    /// Pane lost first-responder status. Symmetric to the
-    /// becomeFirstResponder hook; chrome dims back.
-    func simulatorPaneDidResignFirstResponder()
     /// Unmodified scroll gesture over the pane. The VC decides
     /// whether to dispatch (watch sims drive the crown; phone /
     /// pad / tv sims drop it). `delta` is already in crown units.
