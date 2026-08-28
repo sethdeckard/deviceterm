@@ -2,15 +2,24 @@
 
 import AppKit
 import Foundation
+import os
 import Sparkle
+
+/// Narrates the stages Sparkle reports to the driver. Shares the category
+/// with `UpdateController`'s logger so one predicate covers the whole check.
+private let updateLog = Logger(subsystem: "com.deviceterm", category: "update")
 
 /// Deviceterm's custom Sparkle `SPUUserDriver`, mapping
 /// every update stage to the unobtrusive `UpdateViewModel` pill instead of
 /// Sparkle's default modal windows. Drives the pill directly, including
-/// inline and downloaded release notes; the windowless standard-driver
-/// fallback is unimplemented, noted below.
+/// inline and downloaded release notes.
 @MainActor
 final class UpdateUserDriver: NSObject, SPUUserDriver {
+    /// Invoked when Sparkle asks for the current update to be brought into
+    /// focus. The driver owns no window, so the controller supplies the
+    /// re-presentation.
+    var onRevealRequested: () -> Void = {}
+
     private let viewModel: UpdateViewModel
     /// The configured policy, so an auto (non-user-initiated) permission
     /// request is answered without a Sparkle prompt.
@@ -45,6 +54,7 @@ final class UpdateUserDriver: NSObject, SPUUserDriver {
     }
 
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        updateLog.notice("user-initiated check started")
         viewModel.set(.checking(cancel: cancellation))
     }
 
@@ -54,6 +64,7 @@ final class UpdateUserDriver: NSObject, SPUUserDriver {
         reply: @escaping (SPUUserUpdateChoice) -> Void
     ) {
         let version = appcastItem.displayVersionString
+        updateLog.notice("presenting update \(version, privacy: .public)")
         availableVersion = version
         availableReply = reply
         // Inline release notes (the appcast `<description>`) are available
@@ -82,18 +93,26 @@ final class UpdateUserDriver: NSObject, SPUUserDriver {
         ))
     }
 
-    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {}
+    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {
+        // The pill keeps the inline notes from the appcast, so this is a
+        // downgrade in detail rather than a failure worth showing.
+        updateLog.notice(
+            "release notes download failed: \(ErrorText.describing(error), privacy: .public)"
+        )
+    }
 
     func showUpdateNotFoundWithError(
         _ error: Error,
         acknowledgement: @escaping () -> Void
     ) {
+        updateLog.notice("check finished with no update")
         // Auto-acknowledge so nothing blocks; the pill auto-dismisses.
         viewModel.set(.notFound(dismiss: { [weak self] in self?.viewModel.reset() }))
         acknowledgement()
     }
 
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        updateLog.error("update failed: \(ErrorText.describing(error), privacy: .public)")
         viewModel.set(.error(
             message: error.localizedDescription,
             dismiss: { [weak self] in self?.viewModel.reset() }
@@ -102,6 +121,7 @@ final class UpdateUserDriver: NSObject, SPUUserDriver {
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        updateLog.notice("download started")
         expectedLength = 0
         receivedLength = 0
         downloadCancellation = cancellation
@@ -127,6 +147,7 @@ final class UpdateUserDriver: NSObject, SPUUserDriver {
     }
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        updateLog.notice("ready to install")
         // Actionable pill: the user clicks Restart to install + relaunch.
         // If they don't, Sparkle installs on next quit.
         viewModel.set(.readyToInstall(install: { reply(.install) }))
@@ -135,17 +156,28 @@ final class UpdateUserDriver: NSObject, SPUUserDriver {
     func showInstallingUpdate(
         withApplicationTerminated applicationTerminated: Bool,
         retryTerminatingApplication: @escaping () -> Void
-    ) {}
+    ) {
+        updateLog.notice(
+            "installing (terminated=\(applicationTerminated, privacy: .public))"
+        )
+    }
 
     func showUpdateInstalledAndRelaunched(
         _ relaunched: Bool,
         acknowledgement: @escaping () -> Void
     ) {
+        updateLog.notice("installed (relaunched=\(relaunched, privacy: .public))")
         viewModel.reset()
         acknowledgement()
     }
 
-    func showUpdateInFocus() {}
+    /// Sparkle calls this when the user requests another check while update UI
+    /// is already presented. Retry presentation in case the pill is not
+    /// attached to a window.
+    func showUpdateInFocus() {
+        updateLog.notice("asked to bring the current update into focus")
+        onRevealRequested()
+    }
 
     func dismissUpdateInstallation() {
         viewModel.reset()

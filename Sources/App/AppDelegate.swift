@@ -116,7 +116,7 @@ private func restartPlainText(for situation: UpdateRestartSituation) -> String {
 /// (session.create, device.attach, pane.closeById, session.close, shutdown
 /// fan-out); the glue here renders state.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     /// Whether the startup repair lock was taken, and what to show if not.
     private enum StartupLockAcquisition {
         case acquired(RegistrationRepairLock.Handle)
@@ -1453,6 +1453,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc
     func openSimulatorCoexistenceWelcome(_ sender: Any?) {
         WelcomeCoordinator.shared.present(id: WelcomeCatalog.simulatorCoexistenceID)
+    }
+
+    /// Gate the one app-menu item that can be dispatched into a dead end.
+    ///
+    /// The app menu leaves `autoenablesItems` at its default `true`, so AppKit
+    /// asks the target (this delegate) before showing each item. Everything
+    /// else routed here is unconditional, and an item whose selector isn't
+    /// handled below must stay enabled, so the default is `true`.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(checkForUpdates(_:)) else { return true }
+        // Nil when the updater never started (`--smoke`, or no Metal device),
+        // where the item would do nothing at all.
+        return updateController?.canPerformCheck ?? false
     }
 
     /// App menu > Check for Updates…: forward to the Sparkle updater.
