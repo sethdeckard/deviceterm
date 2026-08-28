@@ -2047,9 +2047,9 @@ sets `truncated`, and adds a `tree.note`: `AXTreeNote.sweepTruncated` normally,
 or `.sweepTruncatedAtMaxBudget` when the budget was already at the ceiling and
 there is no larger one to ask for.
 
-The 0.02 step floor plans 2500 queries, enough to exhaust the default budget
-at ordinary bridge-call costs. Whether it does is a property of the host, so a
-caller reads `truncated` and raises the budget when it is set.
+The 0.02 step floor plans 2500 queries. Whether they fit inside the default
+budget is a property of the host and the device, so a caller reads `truncated`
+and raises the budget when it is set.
 
 Per-cell "no element at this point" is a routine outcome: sparse AX
 coverage (a `Canvas + GeometryReader` composition with a few `Text(...)`

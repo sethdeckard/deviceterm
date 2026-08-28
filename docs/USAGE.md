@@ -617,8 +617,9 @@ silently, so read `step` in the result for what the daemon actually used.
 
 `--budget` bounds how long the daemon spends scheduling those queries, 10000ms
 by default and 60000ms at most, clamped as silently as `step` and echoed back as
-`budgetMs`. A 2500-query floor sweep normally exhausts the default, so raise it
-when the result comes back truncated.
+`budgetMs`. The 0.02 floor plans 2500 queries; whether they fit inside the
+default depends on the host and the device, so read `truncated` rather than
+predicting it, and raise the budget when it is set.
 
 The step is also the sample spacing, so a control narrower than it can fall
 between samples and read as absent. At 0.08 the samples sit 32pt apart on a

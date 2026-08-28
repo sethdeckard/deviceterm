@@ -110,10 +110,11 @@ public enum AgentsText {
           its time budget with grid left, alongside
           `truncated: true`. Read one before concluding an
           element isn't on screen: part of the grid went
-          unqueried. The 0.02 floor plans 2500 cells and
-          normally exhausts the 10000ms default, so raise
-          `--budget <ms>` (up to 60000) when a floor sweep
-          comes back truncated. At the
+          unqueried. The 0.02 floor plans 2500 cells;
+          whether they fit the 10000ms default depends on
+          the host and the device, so raise `--budget <ms>`
+          (up to 60000) when a sweep comes back
+          truncated. At the
           ceiling the note changes, because there is no larger
           budget to ask for: coarsen `--step` or retry when the
           pane is serving fewer accessibility reads.

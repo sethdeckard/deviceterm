@@ -182,7 +182,9 @@ extension HelpCatalog {
               ax point <x> <y>
                   Single AX element at a normalized point, in the same
                   displayed space the coordinate-bearing input verbs
-                  take. Same shape as `ax tree` minus children.
+                  take. The node has the same shape as an `ax tree`
+                  node minus children, and arrives under `element`
+                  rather than `tree`.
 
                   Node frames are in that space too but are not
                   normalized. Divide a frame's centre by the root
@@ -208,8 +210,9 @@ extension HelpCatalog {
                   `--budget` is how long the daemon may spend scheduling
                   queries, default 10000, clamped into [0, 60000] and
                   echoed as `budgetMs`. The 0.02 floor plans 2500
-                  queries and normally exhausts the default, so raise
-                  the budget when a floor sweep comes back truncated.
+                  queries; whether they fit the default depends on the
+                  host and the device, so read `truncated` rather than
+                  predicting it and raise the budget when it is set.
                   Every `ax` verb waits out the 60000 ceiling, so no
                   budget you can ask for outruns the client.
 

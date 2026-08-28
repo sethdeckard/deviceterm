@@ -964,10 +964,11 @@ from the screen.
 
 `budgetMs` is how long the daemon may spend scheduling queries. It defaults to
 10000 and is held inside `[0, 60000]`; like `step`, the clamp is silent, so read
-the echo for what you got. Raising it is the remedy for a truncated sweep, and
-the 0.02 step floor usually needs it: that grid plans 2500 queries, enough to
-exhaust the default budget at ordinary bridge-call costs. A sweep that truncates at the ceiling carries a
-different `note`, since raising the budget is no longer open to it.
+the echo for what you got. Raising it is the remedy for a truncated sweep. The
+0.02 step floor plans 2500 queries, and whether they fit inside the default
+budget depends on the host and the device, so read `truncated` rather than
+predicting it. A sweep that truncates at the ceiling carries a different `note`,
+since raising the budget is no longer open to it.
 
 A sweep whose deadline passed before it reached the queue returns `truncated`
 true with `sweepedPoints` zero without querying the bridge at all, so that

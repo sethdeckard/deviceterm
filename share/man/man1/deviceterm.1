@@ -119,8 +119,9 @@ control narrower than the step can fall between samples and read as absent.
 .B --budget
 bounds how long the daemon may spend scheduling those queries: default
 10000, clamped into [0, 60000], echoed as budgetMs in the result. The 0.02
-floor makes 2500 queries and normally exhausts the default, so raise it when
-the result comes back truncated.
+floor makes 2500 queries; whether they fit inside the default depends on the
+host and the device, so read truncated rather than predicting it, and raise
+the budget when it is set.
 If the daemon finds its budget spent before the grid is done, it stops
 before the next query, sets
 .B truncated
