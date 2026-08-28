@@ -1188,13 +1188,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The `windowControllerByID` lookup is also the filter: the
     /// welcome, About, settings-prompt, and device-picker windows aren't
     /// in the map, so one of them taking key doesn't move the workspace
-    /// selection to nothing.
+    /// selection to nothing. It guards the focus repair below too.
+    ///
+    /// The selection write is conditional but the focus repair is not:
+    /// returning to the app you already had selected is the common
+    /// ⌘Tab-back case, and it is exactly where an orphaned first
+    /// responder needs repairing.
+    ///
+    /// Repairing synchronously assumes this notification arrives before
+    /// the activating click's `mouseDown`. On that ordering a pane that
+    /// kept focus reads as non-orphaned and is left alone, and a
+    /// genuinely orphaned tab is restored here and then superseded by
+    /// the click's own `makeFirstResponder` if it landed on another
+    /// pane. Deferring a runloop turn would land after the click and
+    /// take focus back off it.
     func windowDidBecomeKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-            let entry = windowControllerByID.first(where: { $0.value.window === window }),
-            workspace.selectedWindowID != entry.key
+            let entry = windowControllerByID.first(where: { $0.value.window === window })
         else { return }
-        workspace.select(id: entry.key)
+        if workspace.selectedWindowID != entry.key {
+            workspace.select(id: entry.key)
+        }
+        strip(for: entry.key)?.restoreFocusIfOrphaned()
     }
 
     /// Window is definitely closing now. Drop the WC from the map

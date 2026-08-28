@@ -424,6 +424,23 @@ final class TabContentViewController: NSViewController {
         )
     }
 
+    /// Restore the remembered pane only when the window itself holds
+    /// first responder. That is the orphan state AppKit leaves behind
+    /// when a focused view is pulled out of the hierarchy, and
+    /// reactivating from it hands focus to whatever the key view loop
+    /// names first, which is rarely the pane the user left.
+    ///
+    /// Any view holding first responder has it legitimately and keeps
+    /// it, whether that is a pane that survived deactivation or a
+    /// tab-strip control reached through Full Keyboard Access. Asking
+    /// whether a *pane* is focused would be the wrong test, because it
+    /// answers no in that second case too and would pull focus out of
+    /// the strip on every reactivation.
+    func restoreFocusIfOrphaned() {
+        guard let window = view.window, window.firstResponder === window else { return }
+        restoreRememberedFocus()
+    }
+
     /// Resolve the **original** primary terminal pane VC, the one
     /// the daemon session bound to at tab open. Tab-scoped operations
     /// (automation's `sendInput` / `captureScreen`) must target this

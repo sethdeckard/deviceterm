@@ -3509,6 +3509,21 @@ first mounted pane in display order, so a stale value is inert. Leaving it also
 lets the memory survive the detach and re-attach that swaps a sim pane's
 record behind the same udid.
 
+**Reactivating a window repairs an orphaned first responder, nothing
+more.** `windowDidBecomeKey` restores the remembered pane only when the
+window itself holds first responder, the state AppKit leaves behind when
+a focused view is pulled out of the view hierarchy.
+
+Any view holding it keeps it, whether that's a pane that survived
+deactivation or a tab-strip control reached through Full Keyboard Access.
+Asking whether a pane is focused would answer no in that second case too,
+and pull focus out of the strip on every reactivation.
+
+Repairing synchronously assumes `windowDidBecomeKey` arrives before the
+activating click's `mouseDown`. If it does, a click landing on another
+pane supersedes the repair. Deferring a runloop turn instead would land
+after the click and take focus back off it.
+
 **A layout reconcile decides who keeps focus, before it tears anything
 down.** `reconcile` rebuilds the whole split hierarchy on any tree
 change, and removing a pane's view drops the window's first responder, so

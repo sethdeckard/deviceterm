@@ -118,6 +118,23 @@ struct PaneFocusRestoreTests {
     }
 
     @Test
+    func pullingTheFocusedPaneOutLeavesTheWindowAsFirstResponder() {
+        // The state the window-key restore keys on, pinned because the
+        // guard is only reachable when AppKit leaves the window itself
+        // behind. Keying on "no pane holds focus" instead would also
+        // fire while a tab-strip control legitimately holds it under
+        // Full Keyboard Access.
+        let mount = mount()
+        _ = mount.window.makeFirstResponder(
+            mount.controller.paneVCs[Self.simSlot]?.view
+        )
+        #expect(mount.window.firstResponder !== mount.window)
+
+        mount.controller.view.removeFromSuperview()
+        #expect(mount.window.firstResponder === mount.window)
+    }
+
+    @Test
     func onlyOnePaneDrawsAFocusRingAfterTheCycle() async throws {
         // After returning to a tab, exactly one ring remains: the pane
         // that holds focus.

@@ -614,6 +614,18 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         return try tabContent.captureScreen()
     }
 
+    /// Repair an orphaned first responder in the selected tab, if it
+    /// has one. Driven by `AppDelegate` when this strip's window takes
+    /// key. Resolving through `tabListVM.selectedTab` rather than
+    /// taking a TabID keeps the caller from having to know which tab is
+    /// on screen, and matches what the user sees: only the visible
+    /// tab's panes can be holding focus.
+    func restoreFocusIfOrphaned() {
+        guard let tabID = tabListVM.selectedTab?.id,
+            let tabContent = tabContentByID[tabID] else { return }
+        tabContent.restoreFocusIfOrphaned()
+    }
+
     private func requestCloseTab(id tabID: TabID) {
         guard let tab = tabListVM.tab(id: tabID) else { return }
         guard !tab.primaryTerminal.sessionId.isEmpty else { return }
