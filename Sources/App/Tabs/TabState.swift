@@ -111,11 +111,11 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// Most-recently-focused terminal in this tab. Updated by the
     /// terminal pane wrapper's responder-chain hook every time
     /// libghostty's surface gains first responder. Read by
-    /// `Router.attachPane` as the spawning-terminal heuristic so a
+    /// `Router.attachPaneOptimistically` as the spawning-terminal heuristic so a
     /// `xcrun simctl boot Foo` typed in pane B places the booted
     /// sim adjacent to B (not next to the tab's primary terminal,
-    /// which is the fallback). Nil only before the first focus
-    /// event, at which point `primaryTerminal` is the fallback.
+    /// which is the fallback). Nil until the first focus event, or after
+    /// the recorded terminal is removed; `primaryTerminal` is the fallback.
     var lastFocusedTerminal: TerminalPaneID?
 
     /// The primary terminal pane at index 0, always present. Tab-scoped
@@ -141,11 +141,11 @@ struct TabState: Identifiable, Equatable, Sendable {
         self.pendingPanes = []
         self.protectionState = isProtected ? .protected : .unprotected
         self.lastFocusedTerminal = nil
-        // Seed the layout tree: primary terminal as a single leaf,
-        // then sibling-append every other terminal and every sim along
-        // the horizontal axis (matches the pre-tree default). The
-        // mutation methods on `TabListViewModel` (`addTerminal`,
-        // `addSimPane`, `reorderPane`) take over once the tab is live.
+        // Seed the layout tree: primary terminal as a single leaf, then
+        // sibling-append every other terminal, sim, and device along the
+        // horizontal axis. The mutation methods on `TabListViewModel`
+        // (`addTerminal`, `addPendingPane`, `reorderPane`) take over once
+        // the tab is live.
         var tree: PaneNode = .leaf(.terminal(terminals[0].id))
         for terminal in terminals.dropFirst() {
             tree = PaneTreeOps.append(

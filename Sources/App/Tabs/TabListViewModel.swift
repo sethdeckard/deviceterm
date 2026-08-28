@@ -43,12 +43,12 @@ final class TabListViewModel {
     }
 
     /// Whether `target` is already mounted (sim or device pane) or
-    /// in-flight/failed (pending pane) in `tab`. The Router's
-    /// optimistic-insert path checks this so menu / CLI / discovery /
-    /// resurrect can't stack a second (or a duplicate *failed*) pane for
-    /// a target already present. Sim UDIDs compare case-insensitively,
-    /// the same normalization `addSimPane` uses, because UDID casing
-    /// varies across the attach paths.
+    /// in-flight/failed (pending pane) in `tab`. The Router's optimistic
+    /// attach and orphan-reattach paths check this so menu, CLI, discovery,
+    /// and orphan adoption can't stack a second (or a duplicate *failed*)
+    /// pane for a target already present. Sim UDIDs compare
+    /// case-insensitively, the same normalization `replacePendingWithSim`
+    /// uses, because UDID casing varies across the attach paths.
     static func isTargetPresent(_ target: PaneTarget, in tab: TabState) -> Bool {
         switch target {
         case let .sim(udid):
@@ -268,12 +268,12 @@ final class TabListViewModel {
             slot: .terminal(terminalID),
             from: tabs[index].paneTree
         )
-        // Clear the spawning-terminal hint if it pointed at the
-        // terminal we just dropped. Otherwise `Router.attachPane`
-        // would later pass a dead id to `addSimPane`, the tree
-        // insert would silently no-op (target slot missing), and
-        // a freshly-attached sim would be appended to `simPanes`
-        // but never land in the layout tree (invisible pane).
+        // Clear the spawning-terminal hint if it pointed at the terminal we
+        // just dropped, so the Router's optimistic attach path doesn't carry
+        // a dead id into `addPendingPane`. That method falls back to the
+        // tab's primary when the anchor is no longer a live leaf, so this is
+        // the outer of two guards against a placeholder landing in
+        // `pendingPanes` but nowhere in the layout tree.
         if tabs[index].lastFocusedTerminal == terminalID {
             tabs[index].lastFocusedTerminal = nil
         }
@@ -282,12 +282,12 @@ final class TabListViewModel {
     /// Record that `terminalID` was the last terminal in `tabID` to
     /// receive keyboard focus. Wired up from each terminal pane
     /// wrapper's responder-chain hook so the value follows what the
-    /// user is actually typing in. Read by `Router.attachPane` as the
-    /// spawning-terminal heuristic: a `xcrun simctl boot Foo` typed
+    /// user is actually typing in. Read by `Router.attachPaneOptimistically`
+    /// as the spawning-terminal heuristic: a `xcrun simctl boot Foo` typed
     /// in pane B places the booted sim next to B even though the
     /// daemon's attach event doesn't carry per-terminal attribution
-    /// yet. Falls back to `primaryTerminal` when no focus event has
-    /// arrived yet (cold-start case).
+    /// yet. Falls back to `primaryTerminal` until focus is recorded, and
+    /// again if the recorded terminal is removed.
     func updateLastFocusedTerminal(_ terminalID: TerminalPaneID, inTab tabID: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         guard tabs[index].terminals.contains(where: { $0.id == terminalID }) else { return }
@@ -304,59 +304,6 @@ final class TabListViewModel {
         tabs[index].protectionState = state
     }
 
-    /// `atIndex` selects the typed-array insertion position; nil appends.
-    /// Idempotent by case-insensitive UDID, since a UDID is a
-    /// case-insensitive UUID and two spellings of one device must not stack
-    /// two panes. The leaf is
-    /// inserted after `spawningTerminal` along the horizontal axis, falling
-    /// back to the primary terminal.
-    func addSimPane(
-        _ pane: SimPaneState,
-        toTab id: TabID,
-        atIndex: Int? = nil,
-        spawningTerminal: TerminalPaneID? = nil
-    ) {
-        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if tabs[index].simPanes.contains(
-            where: {
-            $0.udid.caseInsensitiveCompare(pane.udid) == .orderedSame
-            }
-            ) {
-            return
-        }
-        // Typed-array placement: explicit `atIndex` preserves a recorded
-        // slot among sim panes; nil appends. Either way, the layout tree
-        // picks up the placement below. The tree drives visual placement,
-        // not the typed-array index.
-        if let atIndex {
-            let clamped = max(0, min(atIndex, tabs[index].simPanes.count))
-            tabs[index].simPanes.insert(pane, at: clamped)
-        } else {
-            tabs[index].simPanes.append(pane)
-        }
-        // Belt-and-braces validate the anchor is actually in the
-        // tree before handing it to `PaneTreeOps.insert`. Without
-        // this, a caller passing a stale `spawningTerminal` id
-        // (e.g. the terminal closed between focus and attach)
-        // would land at `insertWalk(…) ?? tree`, which returns
-        // the unchanged tree. The typed-array append above
-        // would have already happened, so the new sim would be
-        // in `simPanes` but invisible in the layout. Fall back
-        // to the tab's primary in that case (always a live leaf).
-        let leaves = PaneTreeOps.leavesInOrder(tabs[index].paneTree)
-        let candidate = spawningTerminal ?? tabs[index].primaryTerminal.id
-        let anchorTerminal = leaves.contains(.terminal(candidate))
-            ? candidate
-            : tabs[index].primaryTerminal.id
-        tabs[index].paneTree = PaneTreeOps.insert(
-            leaf: .sim(udid: pane.udid),
-            adjacent: .terminal(anchorTerminal),
-            axis: .horizontal,
-            side: .after,
-            in: tabs[index].paneTree
-        )
-    }
-
     func removeSimPane(udid: String, fromTab id: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         if let claim = restorePosition(ofSim: udid, in: tabs[index]) {
@@ -366,45 +313,6 @@ final class TabListViewModel {
         tabs[index].paneTree = PaneTreeOps.remove(
             slot: .sim(udid: udid),
             from: tabs[index].paneTree
-        )
-    }
-
-    /// Append a physical-device pane to typed storage and insert its leaf.
-    /// Parallels `addSimPane` but without its `atIndex`: a device pane has
-    /// no recorded position to restore.
-    ///
-    /// Idempotent by `deviceId`, so a duplicate never stacks two
-    /// `DevicePaneState` entries and two MTKViews mirroring one device. The
-    /// leaf is inserted after `spawningTerminal`, falling back to the
-    /// primary terminal when the hint is nil or stale.
-    func addDevicePane(
-        _ pane: DevicePaneState,
-        toTab id: TabID,
-        spawningTerminal: TerminalPaneID? = nil
-    ) {
-        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if tabs[index].devicePanes.contains(where: { $0.deviceId == pane.deviceId }) {
-            return
-        }
-        tabs[index].devicePanes.append(pane)
-        // Anchor the new leaf next to the spawning terminal (the
-        // terminal the user most recently typed in), falling back to
-        // the primary when the hint is nil or no longer a live leaf.
-        // Without the liveness check a stale id would make
-        // `PaneTreeOps.insert` no-op and strand the pane in the typed
-        // array but invisible in the tree (the same trap `addSimPane`
-        // guards against).
-        let leaves = PaneTreeOps.leavesInOrder(tabs[index].paneTree)
-        let candidate = spawningTerminal ?? tabs[index].primaryTerminal.id
-        let anchorTerminal = leaves.contains(.terminal(candidate))
-            ? candidate
-            : tabs[index].primaryTerminal.id
-        tabs[index].paneTree = PaneTreeOps.insert(
-            leaf: .device(deviceId: pane.deviceId),
-            adjacent: .terminal(anchorTerminal),
-            axis: .horizontal,
-            side: .after,
-            in: tabs[index].paneTree
         )
     }
 
@@ -439,15 +347,16 @@ final class TabListViewModel {
 
     // MARK: - Pending panes (in-flight / failed attaches)
 
-    /// Insert a placeholder pane and its `.pending(id)` leaf. Placement
-    /// mirrors `addSimPane` exactly: the spawning terminal, then the tab's
-    /// primary (always a live leaf), so the real pane swapped in later
-    /// lands where the user would expect. The caller (Router) has already
-    /// done the target-based dedup via `isTargetPresent`.
+    /// Insert a placeholder pane and its `.pending(id)` leaf. The leaf goes
+    /// after the spawning terminal, falling back to the tab's primary
+    /// (always a live leaf), so the real pane swapped in later lands where
+    /// the user would expect. The caller (Router) has already done the
+    /// target-based dedup via `isTargetPresent`.
     ///
     /// Only a pane arriving for the first time inserts a leaf. One that is
     /// already mounted and being re-attached takes
-    /// `replaceSimPaneWithPending` instead, keeping its slot.
+    /// `replaceSimPaneWithPending` or `replaceDevicePaneWithPending`
+    /// instead, keeping its slot.
     func addPendingPane(
         _ pending: PendingPaneState,
         toTab id: TabID,

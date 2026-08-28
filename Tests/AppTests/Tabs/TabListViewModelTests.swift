@@ -21,6 +21,55 @@ struct TabListViewModelTests {
         )
     }
 
+    /// Mount a sim pane the way production does: a placeholder, then the
+    /// swap that resolves it. The Router has no other path, so a fixture
+    /// that wants a mounted pane goes through this one.
+    ///
+    /// The placeholder is consumed before this returns, so the fixed id is
+    /// safe across sequential calls. A test that already holds a placeholder
+    /// of its own has to mint a different id: `addPendingPane` does not dedup
+    /// by id, and the swap would take both.
+    private func mountSim(
+        _ model: TabListViewModel,
+        _ pane: SimPaneState,
+        inTab tabID: TabID,
+        spawningTerminal: TerminalPaneID? = nil
+    ) {
+        let pendingId = PendingPaneID(value: 9_000)
+        model.addPendingPane(
+            PendingPaneState(
+                id: pendingId,
+                target: .sim(udid: pane.udid),
+                displayName: pane.displayName,
+                family: pane.family
+            ),
+            toTab: tabID,
+            spawningTerminal: spawningTerminal
+        )
+        model.replacePendingWithSim(id: pendingId, pane: pane, inTab: tabID)
+    }
+
+    /// Device counterpart to `mountSim`.
+    private func mountDevice(
+        _ model: TabListViewModel,
+        _ pane: DevicePaneState,
+        inTab tabID: TabID,
+        spawningTerminal: TerminalPaneID? = nil
+    ) {
+        let pendingId = PendingPaneID(value: 9_001)
+        model.addPendingPane(
+            PendingPaneState(
+                id: pendingId,
+                target: .device(deviceId: pane.deviceId),
+                displayName: pane.displayName,
+                family: pane.family
+            ),
+            toTab: tabID,
+            spawningTerminal: spawningTerminal
+        )
+        model.replacePendingWithDevice(id: pendingId, pane: pane, inTab: tabID)
+    }
+
     @Test
     func appendSelectsNewTab() {
         let model = TabListViewModel()
@@ -122,7 +171,7 @@ struct TabListViewModelTests {
             displayName: "iPhone",
             family: "phone"
         )
-        model.addSimPane(pane, toTab: TabID(value: 1))
+        mountSim(model, pane, inTab: TabID(value: 1))
         #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["U"])
         model.removeSimPane(udid: "U", fromTab: TabID(value: 1))
         #expect(model.tab(id: TabID(value: 1))?.simPanes.isEmpty == true)
@@ -141,7 +190,7 @@ struct TabListViewModelTests {
             displayName: "iPhone 16 Pro",
             family: "phone"
         )
-        model.addDevicePane(pane, toTab: TabID(value: 1))
+        mountDevice(model, pane, inTab: TabID(value: 1))
         #expect(model.tab(id: TabID(value: 1))?.devicePanes.map(\.deviceId) == ["fd00::1"])
         let treeAfterAdd = model.tab(id: TabID(value: 1)).map { PaneTreeOps.leavesInOrder($0.paneTree) }
         #expect(treeAfterAdd?.contains(.device(deviceId: "fd00::1")) == true)
@@ -152,10 +201,12 @@ struct TabListViewModelTests {
     }
 
     @Test
-    func addDevicePaneIsIdempotentByDeviceID() {
-        // The picker / CLI / shim attach paths can all target the same
-        // connected device; without this guard each Router callback
-        // would append a second `DevicePaneState` and the GUI would
+    func aSecondSwapForAMountedDeviceDropsItsPlaceholder() {
+        // Swap-time dedup, exercised directly. `attachPaneOptimistically`
+        // screens a duplicate target before minting a placeholder, so this
+        // directly tests the model's own invariant. If duplicate pending
+        // state does reach the swap, keep the mounted device and drop the
+        // extra placeholder; appending a second `DevicePaneState` would
         // render two mirrors of one device.
         let model = TabListViewModel()
         model.append(tab(1))
@@ -165,19 +216,41 @@ struct TabListViewModelTests {
             displayName: "iPhone 16 Pro",
             family: "phone"
         )
-        model.addDevicePane(pane, toTab: TabID(value: 1))
-        model.addDevicePane(pane, toTab: TabID(value: 1))
+        mountDevice(model, pane, inTab: TabID(value: 1))
+        model.addPendingPane(
+            PendingPaneState(
+                id: PendingPaneID(value: 7),
+                target: .device(deviceId: "fd00::1"),
+                displayName: "iPhone 16 Pro",
+                family: "phone"
+            ),
+            toTab: TabID(value: 1)
+        )
+        model.replacePendingWithDevice(
+            id: PendingPaneID(value: 7),
+            pane: DevicePaneState(
+                paneId: "dp2",
+                deviceId: "fd00::1",
+                displayName: "iPhone 16 Pro",
+                family: "phone"
+            ),
+            inTab: TabID(value: 1)
+        )
         #expect(model.tab(id: TabID(value: 1))?.devicePanes.count == 1)
+        // The rejected placeholder has to leave the tree as well as the
+        // array. Dropping it from `pendingPanes` alone leaves a `.pending`
+        // leaf with no `PendingPaneState` behind it.
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.isEmpty == true)
+        let leaves = model.tab(id: TabID(value: 1)).map { PaneTreeOps.leavesInOrder($0.paneTree) }
+        #expect(leaves?.contains(.pending(PendingPaneID(value: 7))) == false)
     }
 
     @Test
-    func addSimPaneIsIdempotentByUDID() {
-        // Racing attach paths (discovery vs. an explicit
-        // `deviceterm device attach`) both round-trip through
-        // `daemon.device.attach`; daemon-side dedup returns the
-        // same paneId to both, but without this model-layer guard
-        // each Router callback still appends a `SimPaneState` and
-        // the GUI ends up rendering two MTKViews for one sim.
+    func aSecondSwapForAMountedSimDropsItsPlaceholder() {
+        // Swap-time dedup, as in the device case above. If duplicate pending
+        // state resolves to a UDID already mounted, keep the mounted sim and
+        // drop the extra placeholder; appending a second `SimPaneState`
+        // would render two MTKViews for one sim.
         let model = TabListViewModel()
         model.append(tab(1))
         let pane = SimPaneState(
@@ -186,34 +259,60 @@ struct TabListViewModelTests {
             displayName: "iPhone",
             family: "phone"
         )
-        model.addSimPane(pane, toTab: TabID(value: 1))
-        model.addSimPane(pane, toTab: TabID(value: 1))
+        mountSim(model, pane, inTab: TabID(value: 1))
+        model.addPendingPane(
+            PendingPaneState(
+                id: PendingPaneID(value: 7),
+                target: .sim(udid: "U"),
+                displayName: "iPhone",
+                family: "phone"
+            ),
+            toTab: TabID(value: 1)
+        )
+        model.replacePendingWithSim(
+            id: PendingPaneID(value: 7),
+            pane: SimPaneState(paneId: "p2", udid: "U", displayName: "iPhone", family: "phone"),
+            inTab: TabID(value: 1)
+        )
         #expect(model.tab(id: TabID(value: 1))?.simPanes.count == 1)
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.isEmpty == true)
+        let leaves = model.tab(id: TabID(value: 1)).map { PaneTreeOps.leavesInOrder($0.paneTree) }
+        #expect(leaves?.contains(.pending(PendingPaneID(value: 7))) == false)
     }
 
     @Test
-    func addSimPaneDedupsAcrossUDIDCase() {
+    func aSwapDedupsAgainstAMountedSimInTheOtherCase() {
         // Two spellings of one sim's UDID. The model takes a fully-built
         // pane and does not parse its udid, so the case-insensitive compare
         // is the only thing keeping a mixed-case pair from stacking two
         // panes on one device.
+        let upper = "ABCDEFAB-1234-5678-9ABC-DEFABCDEF012"
+        let lower = "abcdefab-1234-5678-9abc-defabcdef012"
         let model = TabListViewModel()
         model.append(tab(1))
-        let upper = SimPaneState(
-            paneId: "p1",
-            udid: "ABCDEFAB-1234-5678-9ABC-DEFABCDEF012",
-            displayName: "iPhone",
-            family: "phone"
+        mountSim(
+            model,
+            SimPaneState(paneId: "p1", udid: upper, displayName: "iPhone", family: "phone"),
+            inTab: TabID(value: 1)
         )
-        let lower = SimPaneState(
-            paneId: "p1",
-            udid: "abcdefab-1234-5678-9abc-defabcdef012",
-            displayName: "iPhone",
-            family: "phone"
+        model.addPendingPane(
+            PendingPaneState(
+                id: PendingPaneID(value: 7),
+                target: .sim(udid: lower),
+                displayName: "iPhone",
+                family: "phone"
+            ),
+            toTab: TabID(value: 1)
         )
-        model.addSimPane(upper, toTab: TabID(value: 1))
-        model.addSimPane(lower, toTab: TabID(value: 1))
+        model.replacePendingWithSim(
+            id: PendingPaneID(value: 7),
+            pane: SimPaneState(paneId: "p2", udid: lower, displayName: "iPhone", family: "phone"),
+            inTab: TabID(value: 1)
+        )
         #expect(model.tab(id: TabID(value: 1))?.simPanes.count == 1)
+        #expect(model.tab(id: TabID(value: 1))?.pendingPanes.isEmpty == true)
+        let leaves = model.tab(id: TabID(value: 1)).map { PaneTreeOps.leavesInOrder($0.paneTree) }
+        #expect(leaves?.contains(.pending(PendingPaneID(value: 7))) == false)
     }
 
     @Test
@@ -366,14 +465,16 @@ struct TabListViewModelTests {
         let model = TabListViewModel()
         model.append(tab(1))
         for udid in ["A", "B"] {
-            model.addSimPane(
+            mountSim(
+                model,
                 SimPaneState(paneId: "p-\(udid)", udid: udid, displayName: udid, family: "phone"),
-                toTab: TabID(value: 1)
+                inTab: TabID(value: 1)
             )
         }
-        model.addDevicePane(
+        mountDevice(
+            model,
             DevicePaneState(paneId: "p-D", deviceId: "D", displayName: "iPhone", family: "phone"),
-            toTab: TabID(value: 1)
+            inTab: TabID(value: 1)
         )
         model.setSizePreset(.pixelAccurate, forPane: .sim(udid: "B"), inTab: TabID(value: 1))
         model.setSizePreset(.physical, forPane: .device(deviceId: "D"), inTab: TabID(value: 1))
@@ -389,9 +490,10 @@ struct TabListViewModelTests {
         // without it falls back to its family default.
         let model = TabListViewModel()
         model.append(tab(1))
-        model.addSimPane(
+        mountSim(
+            model,
             SimPaneState(paneId: "old", udid: "A", displayName: "iPhone", family: "phone"),
-            toTab: TabID(value: 1)
+            inTab: TabID(value: 1)
         )
         model.setSizePreset(.pixelAccurate, forPane: .sim(udid: "A"), inTab: TabID(value: 1))
         model.replaceSimPaneWithPending(
@@ -414,9 +516,10 @@ struct TabListViewModelTests {
     func aDevicePanePresetSurvivesTheRecoveryRoundTrip() {
         let model = TabListViewModel()
         model.append(tab(1))
-        model.addDevicePane(
+        mountDevice(
+            model,
             DevicePaneState(paneId: "old", deviceId: "D", displayName: "iPhone", family: "phone"),
-            toTab: TabID(value: 1)
+            inTab: TabID(value: 1)
         )
         model.setSizePreset(.physical, forPane: .device(deviceId: "D"), inTab: TabID(value: 1))
         model.replaceDevicePaneWithPending(
@@ -450,9 +553,10 @@ struct TabListViewModelTests {
         // nil means downstream.
         let model = TabListViewModel()
         model.append(tab(1))
-        model.addSimPane(
+        mountSim(
+            model,
             SimPaneState(paneId: "old", udid: "A", displayName: "Watch", family: "watch"),
-            toTab: TabID(value: 1)
+            inTab: TabID(value: 1)
         )
         model.replaceSimPaneWithPending(
             udid: "A",
@@ -553,21 +657,23 @@ struct TabListViewModelTests {
         model.append(tab(1))
         switch anchor {
         case let .sim(udid):
-            model.addSimPane(
+            mountSim(
+                model,
                 SimPaneState(paneId: "p", udid: udid, displayName: "iPhone", family: "phone"),
-                toTab: TabID(value: 1),
+                inTab: TabID(value: 1),
                 spawningTerminal: TerminalPaneID(value: 1)
             )
 
         default:
-            model.addDevicePane(
+            mountDevice(
+                model,
                 DevicePaneState(
                     paneId: "p",
                     deviceId: "D",
                     displayName: "iPhone",
                     family: "phone"
                 ),
-                toTab: TabID(value: 1),
+                inTab: TabID(value: 1),
                 spawningTerminal: TerminalPaneID(value: 1)
             )
         }
@@ -648,17 +754,17 @@ struct TabListViewModelTests {
     private func modelRecoveringThreeSims() -> TabListViewModel {
         let model = TabListViewModel()
         model.append(tab(1))
-        for (index, udid) in ["A", "B", "C"].enumerated() {
-            model.addSimPane(
+        for udid in ["A", "B", "C"] {
+            mountSim(
+                model,
                 SimPaneState(
                     paneId: "old-\(udid)",
                     udid: udid,
                     displayName: "iPhone \(udid)",
                     family: "phone"
                 ),
-                toTab: TabID(value: 1)
+                inTab: TabID(value: 1)
             )
-            _ = index
         }
         for (index, udid) in ["A", "B", "C"].enumerated() {
             model.replaceSimPaneWithPending(
@@ -719,9 +825,10 @@ struct TabListViewModelTests {
         let model = TabListViewModel()
         model.append(tab(1))
         for udid in ["A", "B"] {
-            model.addSimPane(
+            mountSim(
+                model,
                 SimPaneState(paneId: "p-\(udid)", udid: udid, displayName: udid, family: "phone"),
-                toTab: TabID(value: 1)
+                inTab: TabID(value: 1)
             )
         }
         model.replaceSimPaneWithPending(
