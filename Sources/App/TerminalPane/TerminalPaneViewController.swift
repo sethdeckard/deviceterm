@@ -343,8 +343,8 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     /// land after it has already restored the previously-focused pane.
     /// Re-claiming there hands focus to whichever pane comes last in
     /// display order, so a rearrange or a close lands the user on an
-    /// unrelated pane. Tab switching does not rely on this: it calls
-    /// `focus()` on the tab's primary terminal directly.
+    /// unrelated pane. Tab switching does not rely on it either: the
+    /// strip restores the tab's remembered pane directly.
     override func viewDidAppear() {
         super.viewDidAppear()
         // The flag stays false until the surface view exists, so a pane
@@ -416,13 +416,6 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
             env["LANG"] = lang
         }
         return env
-    }
-
-    /// Make the libghostty host view first responder. Called by the
-    /// TabStripViewController on tab switch (the surface's NSTextInputClient
-    /// view must hold focus, not this VC's plain container).
-    func focus() {
-        if let host = surface?.view { view.window?.makeFirstResponder(host) }
     }
 
     /// Ask libghostty to tear the child shell down gracefully. Called

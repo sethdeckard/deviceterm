@@ -294,6 +294,20 @@ final class TabListViewModel {
         tabs[index].lastFocusedTerminal = terminalID
     }
 
+    /// Record which pane in `tabID` last took keyboard focus, so
+    /// selecting the tab again returns the user to it. Written from
+    /// every pane wrapper's focus-gained edge.
+    ///
+    /// Ignores a slot absent from the tab's layout tree: a focus
+    /// callback can land just after the pane's leaf is removed, and
+    /// recording a pane the tab no longer holds would mean the tab
+    /// remembers something it can never restore.
+    func updateLastFocusedPane(_ slot: PaneSlot, inTab tabID: TabID) {
+        guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        guard PaneTreeOps.path(to: slot, in: tabs[index].paneTree) != nil else { return }
+        tabs[index].lastFocusedPane = slot
+    }
+
     /// Set a tab's presentation protection state. The Router drives the
     /// transition machine (fail-closed hide, commit on ack, revert on a
     /// definite rejection, generation ordering) and calls this to move

@@ -2403,7 +2403,7 @@ only a tab it owns a terminal in.
 - Scope: automation tab
 
 Selects the resolved tab. Gated even when the target is the caller's own
-tab: selection can replace the visible tab and terminal focus in that
+tab: selection can replace the visible tab and pane focus in that
 window.
 
 #### `tab.info`
@@ -3484,14 +3484,30 @@ chain, and a test asserts each implements the selector.
 
 **Pane focus moves synchronously, outside the Router.** Which pane holds
 first responder is AppKit state `PaneLayoutViewController` already owns and
-reconciles, not navigation state the workspace models, so a route would
-have nothing to mutate and would only queue the press behind the serial
-drain. Two walks share the controller: `PaneFocusOrderMath` cycles display
-order for ⌘[ / ⌘], and `PaneDirectionalFocusMath` resolves the ⌥⌘ arrows
-against a `[PaneSlot: CGRect]` snapshot taken at the keypress. The
-snapshot is required rather than convenient. `PaneNode.split` carries
-`extents`, but those are seeds that a divider drag never updates, so a
-tree-only walk would answer against proportions the user cannot see.
+reconciles, so a route would have nothing to mutate and would only queue
+the press behind the serial drain. Two walks share the controller:
+`PaneFocusOrderMath` cycles display order for ⌘[ / ⌘], and
+`PaneDirectionalFocusMath` resolves the ⌥⌘ arrows against a
+`[PaneSlot: CGRect]` snapshot taken at the keypress. The snapshot is
+required rather than convenient. `PaneNode.split` carries `extents`, but
+those are seeds that a divider drag never updates, so a tree-only walk
+would answer against proportions the user cannot see.
+
+**The pane a tab remembers is navigation state; live focus is not.**
+`TabState.lastFocusedPane` records the pane whose focus-gained edge fired
+last, so selecting a tab again returns to the pane the user was working in
+rather than to the tab's primary terminal. It holds a `PaneSlot`, naming
+sim and device panes as well as terminals, which is what separates it from
+`lastFocusedTerminal`: that one names terminals only and answers a
+different question, which terminal a newly booted sim should attach
+beside.
+
+Nothing clears `lastFocusedPane` when the pane it names goes away.
+`PaneFocusRestoreDecision` resolves it against the panes that currently
+have a controller, falling back to the primary terminal and then to the
+first mounted pane in display order, so a stale value is inert. Leaving it also
+lets the memory survive the detach and re-attach that swaps a sim pane's
+record behind the same udid.
 
 **A layout reconcile decides who keeps focus, before it tears anything
 down.** `reconcile` rebuilds the whole split hierarchy on any tree

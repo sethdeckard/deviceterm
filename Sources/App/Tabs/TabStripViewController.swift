@@ -1243,7 +1243,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 tabContent.view.trailingAnchor.constraint(equalTo: content.trailingAnchor)
                 ]
                 )
-            tabContent.primaryTerminalVC()?.focus()
+            tabContent.restoreRememberedFocus()
             lastSelectedID = selectedID
         }
     }

@@ -55,7 +55,7 @@ reach it. Opt a tab out of everything above with
 
 Creating and arranging surfaces is gated even when the target is your own
 tab, because the effect isn't contained to it: a reorder can shift other tabs,
-and selecting one can replace the visible tab and terminal focus in that
+and selecting one can replace the visible tab and pane focus in that
 window.
 
 The consequence is that a script can't open new tabs or windows for itself. An

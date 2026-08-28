@@ -117,6 +117,22 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// which is the fallback). Nil until the first focus event, or after
     /// the recorded terminal is removed; `primaryTerminal` is the fallback.
     var lastFocusedTerminal: TerminalPaneID?
+    /// The pane this tab last held keyboard focus in, restored when the
+    /// tab is selected again. Written on every pane's focus-gained
+    /// edge, so unlike `lastFocusedTerminal` it names sim and device
+    /// panes too, and it answers a different question: which pane the
+    /// user was working in, not which terminal should adopt a sim.
+    ///
+    /// Never a `.pending` slot, because a placeholder has no wrapper to
+    /// report focus from. Focusing one and switching away therefore
+    /// restores whichever pane was remembered before it.
+    ///
+    /// Not cleared when the named pane goes away. Every read resolves
+    /// it against the currently mounted panes
+    /// (`PaneFocusRestoreDecision`), so a stale value is inert, and
+    /// keeping it lets the memory survive the detach/re-attach cycle
+    /// that replaces a sim pane's record behind the same udid.
+    var lastFocusedPane: PaneSlot?
 
     /// The primary terminal pane at index 0, always present. Tab-scoped
     /// operations (sim-pane attribution, `tab info`'s reported
@@ -141,6 +157,7 @@ struct TabState: Identifiable, Equatable, Sendable {
         self.pendingPanes = []
         self.protectionState = isProtected ? .protected : .unprotected
         self.lastFocusedTerminal = nil
+        self.lastFocusedPane = nil
         // Seed the layout tree: primary terminal as a single leaf, then
         // sibling-append every other terminal, sim, and device along the
         // horizontal axis. The mutation methods on `TabListViewModel`

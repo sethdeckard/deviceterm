@@ -377,6 +377,10 @@ selection stops when no pane exists in that direction.
 
 Use ⇧⌘← and ⇧⌘→ to move the focused pane past its neighbor.
 
+Switching to another tab and back returns focus to the pane you were last using
+in that tab. If that pane is gone, focus falls back to another pane in the
+tab.
+
 Press ⌘W to close the focused pane. Closing a Simulator pane raises the Close
 a Device Pane prompt. If the focused pane is the tab's final terminal,
 DeviceTerm closes the tab and applies its Simulator close decision instead.

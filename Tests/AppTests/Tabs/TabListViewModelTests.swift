@@ -880,4 +880,93 @@ struct TabListViewModelTests {
         mountRecovered(model, "B", 2)
         #expect(model.tab(id: TabID(value: 1))?.simPanes.map(\.udid) == ["B", "C"])
     }
+
+    // MARK: - Last-focused pane
+
+    @Test
+    func recordsTheLastFocusedPaneForEveryPaneKind() {
+        let model = TabListViewModel()
+        model.append(tab(1))
+        let tabID = TabID(value: 1)
+        mountSim(
+            model,
+            SimPaneState(paneId: "p1", udid: "U", displayName: "iPhone", family: "phone"),
+            inTab: tabID
+        )
+        mountDevice(
+            model,
+            DevicePaneState(
+                paneId: "dp1",
+                deviceId: "fd00::1",
+                displayName: "iPhone 16 Pro",
+                family: "phone"
+            ),
+            inTab: tabID
+        )
+        #expect(model.tab(id: tabID)?.lastFocusedPane == nil)
+
+        for slot in [
+            PaneSlot.terminal(TerminalPaneID(value: 1)),
+            .sim(udid: "U"),
+            .device(deviceId: "fd00::1")
+        ] {
+            model.updateLastFocusedPane(slot, inTab: tabID)
+            #expect(model.tab(id: tabID)?.lastFocusedPane == slot)
+        }
+    }
+
+    @Test
+    func ignoresAPaneThatIsNotInTheTabsTree() {
+        // A focus callback can land just after the pane's leaf is
+        // removed. Recording it would leave the tab remembering a pane
+        // it can never restore.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        let tabID = TabID(value: 1)
+        model.updateLastFocusedPane(.terminal(TerminalPaneID(value: 1)), inTab: tabID)
+        model.updateLastFocusedPane(.sim(udid: "never-mounted"), inTab: tabID)
+        #expect(model.tab(id: tabID)?.lastFocusedPane == .terminal(TerminalPaneID(value: 1)))
+    }
+
+    @Test
+    func ignoresAnUnknownTab() {
+        let model = TabListViewModel()
+        model.append(tab(1))
+        model.updateLastFocusedPane(.terminal(TerminalPaneID(value: 1)), inTab: TabID(value: 99))
+        #expect(model.tab(id: TabID(value: 1))?.lastFocusedPane == nil)
+    }
+
+    @Test
+    func theMemorySurvivesASimDetachAndReattach() {
+        // A sim pane's record is replaced behind the same udid by a
+        // helper restart or a resurrect: the leaf becomes pending and
+        // comes back at the same tree position. Clearing the memory on
+        // removal would drop the user back on the terminal every time
+        // that happened, so the value is deliberately left alone and
+        // resolved against mounted panes at read time instead.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        let tabID = TabID(value: 1)
+        let pane = SimPaneState(paneId: "p1", udid: "U", displayName: "iPhone", family: "phone")
+        mountSim(model, pane, inTab: tabID)
+        model.updateLastFocusedPane(.sim(udid: "U"), inTab: tabID)
+
+        let pendingId = PendingPaneID(value: 9_100)
+        model.replaceSimPaneWithPending(
+            udid: "U",
+            pending: PendingPaneState(
+                id: pendingId,
+                target: .sim(udid: "U"),
+                displayName: "iPhone",
+                family: "phone"
+            ),
+            inTab: tabID
+        )
+        model.replacePendingWithSim(
+            id: pendingId,
+            pane: SimPaneState(paneId: "p2", udid: "U", displayName: "iPhone", family: "phone"),
+            inTab: tabID
+        )
+        #expect(model.tab(id: tabID)?.lastFocusedPane == .sim(udid: "U"))
+    }
 }

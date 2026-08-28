@@ -412,13 +412,24 @@ final class TabContentViewController: NSViewController {
         try primary.sendInput(text, typeDelayMillis: typeDelayMillis)
     }
 
+    /// Focus the pane this tab last held focus in, falling back to the
+    /// primary terminal, then to the first mounted pane in display
+    /// order. Called when the tab becomes the selected one, after its
+    /// view is back in the window.
+    func restoreRememberedFocus() {
+        let tab = tabListVM.tab(id: tabID)
+        splitVC.restoreFocus(
+            remembered: tab?.lastFocusedPane,
+            primaryTerminal: tab?.primaryTerminal.id
+        )
+    }
+
     /// Resolve the **original** primary terminal pane VC, the one
     /// the daemon session bound to at tab open. Tab-scoped operations
-    /// (automation's `sendInput` / `captureScreen`, tab-switch
-    /// focus) must target this session regardless of where the user
-    /// has dragged the pane in the tree. Reading nav-state's
-    /// `primaryTerminal.id` on every call keeps the answer stable
-    /// across rearranges.
+    /// (automation's `sendInput` / `captureScreen`) must target this
+    /// session regardless of where the user has dragged the pane in
+    /// the tree. Reading nav-state's `primaryTerminal.id` on every call
+    /// keeps the answer stable across rearranges.
     func primaryTerminalVC() -> TerminalPaneViewController? {
         guard let primaryID = tabListVM.tab(id: tabID)?.primaryTerminal.id else { return nil }
         return splitVC.terminalVC(for: primaryID)
@@ -587,6 +598,7 @@ final class TabContentViewController: NSViewController {
         terminalVC.onFocusGained = { [weak self] in
             guard let self else { return }
             self.tabListVM.updateLastFocusedTerminal(id, inTab: self.tabID)
+            self.tabListVM.updateLastFocusedPane(.terminal(id), inTab: self.tabID)
         }
         // Bind this terminal's kernel identity so an in-tab CLI process can
         // authenticate as the pane's session (the provenance "terminal" arm).
@@ -776,6 +788,7 @@ final class TabContentViewController: NSViewController {
             let paneVC = SimulatorPaneViewController(simPane: simPane, daemonClient: daemonClient)
             simPaneActions.wire(paneVC: paneVC, simPane: simPane)
             wire(sizePresetReporting: paneVC, target: simPane.target)
+            wire(focusReporting: paneVC, slot: .sim(udid: simPane.udid))
             simPaneVCByUDID[simPane.udid] = paneVC
             // Sim ownership is recorded against the tab's primary
             // terminal env, so discovery attribution is
@@ -827,6 +840,7 @@ final class TabContentViewController: NSViewController {
                 daemonClient: daemonClient
             )
             wire(deviceVC: paneVC, devicePane: devicePane)
+            wire(focusReporting: paneVC, slot: .device(deviceId: devicePane.deviceId))
             devicePaneVCByID[devicePane.deviceId] = paneVC
         }
     }
@@ -879,6 +893,25 @@ final class TabContentViewController: NSViewController {
             }
         }
         wire(sizePresetReporting: paneVC, target: devicePane.target)
+    }
+
+    /// Stamp the tab's remembered pane when a sim or device pane takes
+    /// focus. Both kinds render through `SimulatorPaneViewController`, so
+    /// each reconcile path wires this with its own slot. Lives here, beside
+    /// the size-preset wiring, for the same reason that one does: it is a
+    /// nav-state write rather than a device action, and device panes take
+    /// it too.
+    ///
+    /// Reads `tabListVM` through `self` so a cross-window tab move, which
+    /// repoints it, doesn't leave the write going to the tab's old home.
+    private func wire(
+        focusReporting paneVC: SimulatorPaneViewController,
+        slot: PaneSlot
+    ) {
+        let tabID = self.tabID
+        paneVC.onFocusGained = { [weak self] in
+            self?.tabListVM.updateLastFocusedPane(slot, inTab: tabID)
+        }
     }
 
     /// Land a pane's newly-picked size preset in nav state. Wired here rather

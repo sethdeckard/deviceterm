@@ -222,6 +222,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// The owner records it in nav state, which is what carries the choice
     /// across the view controller being rebuilt.
     var onSizePresetChange: ((SimSizePreset) -> Void)?
+    /// Fires when keyboard focus arrives at this pane. The owner stamps
+    /// the tab's remembered pane so selecting the tab again comes back
+    /// here. Only the arriving edge, since losing focus to a sibling is
+    /// that sibling's turn to be remembered.
+    var onFocusGained: (() -> Void)?
 
     /// Held for the AX inspector path, since `paneAxPoint` lives on a
     /// separate role protocol that the VM doesn't need. Stored on the
@@ -437,6 +442,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // one-way copy of that answer, never a second source for it.
         wrapper.onFocusChange = { [weak self] focused in
             self?.chromeViewModel.isFocused = focused
+            if focused { self?.onFocusGained?() }
         }
         wrapperView = wrapper
         // Snapshot the entire wrapper (chrome + Metal sim view) when

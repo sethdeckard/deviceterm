@@ -248,11 +248,11 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
 
     /// Look up the terminal pane VC for a specific id. The owning
     /// `TabContentViewController` uses this to route tab-scoped
-    /// operations (`sendInput`, `captureScreen`, tab-switch focus)
-    /// at the **original** primary terminal (`TabState.primaryTerminal
-    /// .id`) instead of whatever leaf happens to be first in tree
-    /// order after a drag rearrange. "Primary" is a nav-state concept;
-    /// the layout controller doesn't define it.
+    /// operations (`sendInput`, `captureScreen`) at the **original**
+    /// primary terminal (`TabState.primaryTerminal.id`) instead of
+    /// whatever leaf happens to be first in tree order after a drag
+    /// rearrange. "Primary" is a nav-state concept; the layout
+    /// controller doesn't define it.
     func terminalVC(for id: TerminalPaneID) -> TerminalPaneViewController? {
         paneVCs[.terminal(id)] as? TerminalPaneViewController
     }
@@ -406,6 +406,25 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
         guard let slot,
             let paneVC = paneVCs[slot] else { return }
         paneVC.view.window?.makeFirstResponder(paneVC.view)
+    }
+
+    /// Restore focus after this tab's view tree has been re-mounted:
+    /// the remembered pane when it survived, else the primary terminal,
+    /// else the first mounted pane in display order.
+    ///
+    /// The controller owns `paneVCs` and `tree`, so it resolves what is
+    /// mounted and in what order; the choice among them is
+    /// `PaneFocusRestoreDecision`, which is pure and tested without a
+    /// window.
+    func restoreFocus(remembered: PaneSlot?, primaryTerminal: TerminalPaneID?) {
+        restoreFocus(
+            to: PaneFocusRestoreDecision.slot(
+                remembered: remembered,
+                primaryTerminal: primaryTerminal,
+                mounted: Set(paneVCs.keys),
+                order: PaneTreeOps.leavesInOrder(tree)
+            )
+        )
     }
 
     // MARK: - Hierarchy build
