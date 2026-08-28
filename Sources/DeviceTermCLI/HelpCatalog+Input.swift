@@ -189,7 +189,7 @@ extension HelpCatalog {
                   frame's w and h before querying it.
                   Example: deviceterm ax point 0.5 0.5
 
-              ax sweep [--step <0..1>]
+              ax sweep [--step <0..1>] [--budget <ms>]
                   Grid-walk the screen via objectAtPoint and aggregate
                   unique elements. Result mirrors `ax tree` shape with a
                   synthetic root role `AXSweepRoot`. Use when `ax tree`
@@ -205,12 +205,22 @@ extension HelpCatalog {
                   0.08 the samples sit 32pt apart on a 400pt-wide screen,
                   wide enough to skip a 25pt toolbar button.
 
-                  If the daemon finds its deadline expired before the
-                  grid is done, it stops before the next query and sets
-                  `truncated`. `sweepedPoints` counts the cells it
-                  reached, so an element missing from a truncated sweep
-                  is not evidence it isn't on screen.
-                  Example: deviceterm ax sweep --step 0.04
+                  `--budget` is how long the daemon may spend scheduling
+                  queries, default 10000, clamped into [0, 60000] and
+                  echoed as `budgetMs`. The 0.02 floor plans 2500
+                  queries and normally exhausts the default, so raise
+                  the budget when a floor sweep comes back truncated.
+                  Every `ax` verb waits out the 60000 ceiling, so no
+                  budget you can ask for outruns the client.
+
+                  When the budget goes before the grid is done, the
+                  daemon stops before the next query and sets
+                  `truncated` with a `note` saying what to try: a larger
+                  `--budget`, or a coarser `--step` if you were already at
+                  the ceiling. `sweepedPoints` counts the cells it
+                  reached, so an element missing from a truncated sweep is
+                  not evidence it isn't on screen.
+                  Example: deviceterm ax sweep --step 0.02 --budget 20000
             """
         )
     ]

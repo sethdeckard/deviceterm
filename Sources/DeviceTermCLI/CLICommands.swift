@@ -583,10 +583,14 @@ public enum CLICommands {
         if let raw = parsed.flags["step"], Double(raw) == nil {
             return .usage(message: "deviceterm: --step must be a number (normalized 0..1 fraction)")
         }
+        if let raw = parsed.flags["budget"], Int(raw) == nil {
+            return .usage(message: "deviceterm: --budget must be an integer (ms)")
+        }
         let durationMs = parsed.flags["duration"].flatMap { Int($0) }
         let holdMs = parsed.flags["hold"].flatMap { Int($0) }
         let velocity = parsed.flags["velocity"].flatMap { Double($0) }
         let step = parsed.flags["step"].flatMap { Double($0) }
+        let budgetMs = parsed.flags["budget"].flatMap { Int($0) }
 
         switch verb {
         case "tabs":
@@ -640,7 +644,8 @@ public enum CLICommands {
                 durationMs: durationMs,
                 holdMs: holdMs,
                 velocity: velocity,
-                step: step
+                step: step,
+                budgetMs: budgetMs
             ) ?? .usage(message: nil)
         }
     }

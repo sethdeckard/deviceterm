@@ -106,6 +106,17 @@ public enum AgentsText {
           `deviceterm ax sweep` grid-walks `objectAtPoint:` to
           discover the elements directly. Use `--step <0..1>` to
           control sweep density (default 0.05).
+        - A sweep carries a `note` of its own when it stopped at
+          its time budget with grid left, alongside
+          `truncated: true`. Read one before concluding an
+          element isn't on screen: part of the grid went
+          unqueried. The 0.02 floor plans 2500 cells and
+          normally exhausts the 10000ms default, so raise
+          `--budget <ms>` (up to 60000) when a floor sweep
+          comes back truncated. At the
+          ceiling the note changes, because there is no larger
+          budget to ask for: coarsen `--step` or retry when the
+          pane is serving fewer accessibility reads.
         - `deviceterm ax point <x> <y>` resolves a single element
           at a normalized point, in the same displayed space the
           coordinate-bearing input verbs take. Faster than a

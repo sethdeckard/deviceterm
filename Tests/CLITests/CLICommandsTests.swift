@@ -771,9 +771,10 @@ func panesListRequestShape() throws {
 
 @Test
 func parseAxSweepReturnsAxSweepWithNoStep() {
-    if case let .axSweep(udid, step) = CLICommands.parse(["deviceterm", "ax", "sweep"]) {
+    if case let .axSweep(udid, step, budgetMs) = CLICommands.parse(["deviceterm", "ax", "sweep"]) {
         #expect(udid == nil)
         #expect(step == nil)
+        #expect(budgetMs == nil)
     } else {
         Issue.record("expected .axSweep")
     }
@@ -781,11 +782,12 @@ func parseAxSweepReturnsAxSweepWithNoStep() {
 
 @Test
 func parseAxSweepAcceptsStepFlag() {
-    if case let .axSweep(udid, step) = CLICommands.parse(
+    if case let .axSweep(udid, step, budgetMs) = CLICommands.parse(
         ["deviceterm", "ax", "sweep", "--step", "0.1"]
     ) {
         #expect(udid == nil)
         #expect(step == 0.1)
+        #expect(budgetMs == nil)
     } else {
         Issue.record("expected .axSweep with step 0.1")
     }
@@ -802,8 +804,38 @@ func parseAxSweepRejectsNonNumericStep() {
 }
 
 @Test
+func parseAxSweepAcceptsBudgetFlag() {
+    if case let .axSweep(udid, step, budgetMs) = CLICommands.parse(
+        ["deviceterm", "ax", "sweep", "--step", "0.02", "--budget", "20000"]
+    ) {
+        #expect(udid == nil)
+        #expect(step == 0.02)
+        // Carried verbatim. Clamping is the daemon's alone; the CLI neither
+        // bounds this value nor sizes anything from it.
+        #expect(budgetMs == 20_000)
+    } else {
+        Issue.record("expected .axSweep with budget 20000")
+    }
+}
+
+@Test
+func parseAxSweepRejectsNonIntegerBudget() {
+    // Milliseconds, like `--duration`, so a fractional second reads as a
+    // usage error rather than truncating to a budget the caller didn't ask
+    // for.
+    for raw in ["abc", "1.5"] {
+        let result = CLICommands.parse(["deviceterm", "ax", "sweep", "--budget", raw])
+        guard case let .usage(message) = result else {
+            Issue.record("expected .usage for --budget \(raw), got \(result)")
+            continue
+        }
+        #expect(message?.contains("--budget") == true)
+    }
+}
+
+@Test
 func parseAxSweepAcceptsPane() {
-    if case let .axSweep(pane, step) = CLICommands.parse(
+    if case let .axSweep(pane, step, _) = CLICommands.parse(
         ["deviceterm", "ax", "sweep", "--pane", "ABCD-1234"]
     ) {
         #expect(pane == "ABCD-1234")
@@ -815,9 +847,9 @@ func parseAxSweepAcceptsPane() {
 
 @Test
 func parseAxSweepAcceptsPaneSelector() {
-    // The ax branch has its own valued-flag set (`pane`, `udid`,
-    // `step`); confirm `--pane` resolves the target.
-    if case let .axSweep(pane, step) = CLICommands.parse(
+    // The ax branch has its own valued-flag set (`pane`, `step`,
+    // `budget`); confirm `--pane` resolves the target.
+    if case let .axSweep(pane, step, _) = CLICommands.parse(
         ["deviceterm", "ax", "sweep", "--pane", "phn002"]
     ) {
         #expect(pane == "phn002")
@@ -829,7 +861,7 @@ func parseAxSweepAcceptsPaneSelector() {
 
 @Test
 func axSweepRequestShape() throws {
-    let envelope = try CLICommands.axSweepRequest(paneId: "PID", step: 0.1)
+    let envelope = try CLICommands.axSweepRequest(paneId: "PID", step: 0.1, budgetMs: 20_000)
     #expect(envelope.method == "pane.ax.sweep")
     guard case let .params(data) = envelope.body else {
         Issue.record("expected .params body, got \(envelope.body)")
@@ -838,17 +870,20 @@ func axSweepRequestShape() throws {
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     #expect(object?["paneId"] as? String == "PID")
     #expect(object?["step"] as? Double == 0.1)
+    #expect(object?["budgetMs"] as? Int == 20_000)
 }
 
 @Test
-func axSweepRequestOmitsNilStep() throws {
-    let envelope = try CLICommands.axSweepRequest(paneId: "PID", step: nil)
+func axSweepRequestOmitsNilStepAndBudget() throws {
+    let envelope = try CLICommands.axSweepRequest(paneId: "PID", step: nil, budgetMs: nil)
     guard case let .params(data) = envelope.body else {
         Issue.record("expected .params body, got \(envelope.body)")
         return
     }
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     #expect(object?["paneId"] as? String == "PID")
-    // nil step must be omitted so the daemon applies its default.
+    // Both must be omitted so the daemon applies its own defaults, and so a
+    // daemon predating `budgetMs` sees the request it always saw.
     #expect(object?["step"] == nil)
+    #expect(object?["budgetMs"] == nil)
 }

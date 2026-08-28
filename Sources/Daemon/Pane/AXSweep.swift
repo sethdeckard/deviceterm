@@ -47,19 +47,6 @@ enum AXSweep {
     /// blowing the 400-call ~2s budget.
     static let defaultStep: Double = 0.05
 
-    /// Deadline after which the sweep starts no further bridge calls.
-    ///
-    /// `minStep` admits a 2500-cell grid, which at the bridge's per-call
-    /// cost can exceed an ordinary request deadline. Undeadlined, the walk
-    /// keeps querying long after the caller stopped listening, and it holds
-    /// the pane's accessibility queue the whole time, so the next `ax` read
-    /// or the verb behind it waits out a result nobody wants. Answering
-    /// short gives the caller something to act on and gives the queue back.
-    ///
-    /// The CLI leaves five seconds of headroom beyond this, so the daemon
-    /// normally answers first.
-    static let maxDurationMs: Int = 10_000
-
     /// Decide whether one error from `SimAccessibility.elementAtPoint`
     /// is a per-cell miss or a systemic failure. The bridge's
     /// `objectAtPointNil` (`code 78` in `SimAccessibilityErrorDomain`)

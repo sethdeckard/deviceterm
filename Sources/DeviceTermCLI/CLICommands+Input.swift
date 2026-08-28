@@ -25,9 +25,9 @@ extension CLICommands {
     /// or return nil when `verb` is not an input verb (the caller then
     /// falls through to its own dispatch / usage error). The shared
     /// numeric flags are pre-validated and passed in already parsed:
-    /// `durationMs` / `holdMs` / `velocity` / `step`. A malformed
-    /// operand for an owned verb returns `.usage(...)` (not nil), so an
-    /// input verb typed wrong never leaks to the fallthrough.
+    /// `durationMs` / `holdMs` / `velocity` / `step` / `budgetMs`. A
+    /// malformed operand for an owned verb returns `.usage(...)` (not nil),
+    /// so an input verb typed wrong never leaks to the fallthrough.
     static func parseInputVerb(
         _ verb: String,
         positionals pos: [String],
@@ -35,7 +35,8 @@ extension CLICommands {
         durationMs: Int?,
         holdMs: Int?,
         velocity: Double?,
-        step: Double?
+        step: Double?,
+        budgetMs: Int?
     ) -> CLICommand? {
         switch verb {
         case "tap":
@@ -165,12 +166,12 @@ extension CLICommands {
                 return .axPoint(pane: pane, x: x, y: y)
             }
             if pos == ["sweep"] {
-                return .axSweep(pane: pane, step: step)
+                return .axSweep(pane: pane, step: step, budgetMs: budgetMs)
             }
             return .usage(
                 message:
                 "usage: deviceterm ax tree | ax point <x> <y> "
-                + "| ax sweep [--step <0..1>] [--pane <ref>]"
+                + "| ax sweep [--step <0..1>] [--budget <ms>] [--pane <ref>]"
                 )
 
         default:
@@ -356,7 +357,14 @@ extension CLICommands {
         try request(method: .paneAXPoint, body: AXPointParams(paneId: paneId, x: x, y: y))
     }
 
-    public static func axSweepRequest(paneId: String, step: Double?) throws -> RPCEnvelope {
-        try request(method: .paneAXSweep, body: AXSweepParams(paneId: paneId, step: step))
+    public static func axSweepRequest(
+        paneId: String,
+        step: Double?,
+        budgetMs: Int?
+    ) throws -> RPCEnvelope {
+        try request(
+            method: .paneAXSweep,
+            body: AXSweepParams(paneId: paneId, step: step, budgetMs: budgetMs)
+        )
     }
 }

@@ -240,6 +240,24 @@ func fishScriptCoversFlagsWithCompleteLNSyntax() {
 }
 
 @Test
+func axReachesTheFlagListInEveryShell() {
+    // Past the `ax` sub-verb position both shells have to reach the shared
+    // flag list, since that is where `--step` and `--budget` live.
+    let zsh = Completions.script(for: .zsh)
+    #expect(zsh.contains("_deviceterm_flags"))
+    // Both the `ax` branch and the catch-all reach the shared flag function.
+    #expect(zsh.components(separatedBy: "_deviceterm_flags").count - 1 >= 3)
+
+    let bash = Completions.script(for: .bash)
+    // The `ax` branch returns early only at the sub-verb position, so a later
+    // word falls out of the case to the shared `${flags}` completion.
+    #expect(bash.contains("""
+                ax)
+                    if [ "${COMP_CWORD}" -eq 2 ]; then
+        """))
+}
+
+@Test
 func zshScriptCarriesCompdefHeader() {
     // _deviceterm scripts live in zsh's site-functions; the
     // `#compdef deviceterm` header is the load-on-tab trigger.

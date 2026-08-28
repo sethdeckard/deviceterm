@@ -24,6 +24,43 @@ func watchOSEnumerationUnsupportedRawValueIsStable() {
 }
 
 @Test
+func sweepTruncationNotesAreStable() {
+    #expect(
+        AXTreeNote.sweepTruncated.rawValue ==
+        // swiftlint:disable:next line_length
+        "the sweep stopped at its time budget with part of the grid unqueried; 'sweepedPoints' counts what it reached, and 'deviceterm ax sweep --budget <ms>' buys a longer walk"
+    )
+    #expect(
+        AXTreeNote.sweepTruncatedAtMaxBudget.rawValue ==
+        // swiftlint:disable:next line_length
+        "the sweep stopped at the largest budget the daemon allows with part of the grid unqueried; 'sweepedPoints' counts what it reached, so widen 'deviceterm ax sweep --step <0..1>' or retry when the pane is serving fewer accessibility reads"
+    )
+}
+
+@Test(arguments: [
+    (0, AXTreeNote.sweepTruncated),
+    (AXSweepBudget.defaultMs, .sweepTruncated),
+    (AXSweepBudget.maxMs - 1, .sweepTruncated),
+    (AXSweepBudget.maxMs, .sweepTruncatedAtMaxBudget),
+    (AXSweepBudget.maxMs * 10, .sweepTruncatedAtMaxBudget)
+])
+func aSweepAtTheCeilingIsNotToldToRaiseItsBudget(budgetMs: Int, expected: AXTreeNote) {
+    // The ordinary note advises `--budget`, which is a dead end for a caller
+    // already at the maximum: it can only coarsen its step or wait for the
+    // pane's accessibility queue to quieten.
+    #expect(AXTreeNote.forTruncatedSweep(budgetMs: budgetMs) == expected)
+}
+
+@Test
+func onlyTheCeilingNoteAvoidsRecommendingTheBudgetFlag() {
+    // What separates the two, stated as behavior rather than as identity: a
+    // caller at the ceiling is pointed at a flag it can still move.
+    #expect(AXTreeNote.sweepTruncated.rawValue.contains("--budget"))
+    #expect(!AXTreeNote.sweepTruncatedAtMaxBudget.rawValue.contains("--budget"))
+    #expect(AXTreeNote.sweepTruncatedAtMaxBudget.rawValue.contains("--step"))
+}
+
+@Test
 func decodesFromRawString() throws {
     // Quote the raw value so JSONDecoder sees a JSON string literal.
     let raw = AXTreeNote.watchOSEnumerationUnsupported.rawValue

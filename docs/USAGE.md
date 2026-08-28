@@ -593,7 +593,7 @@ Accessibility commands operate on Simulator panes:
 ```sh
 deviceterm ax tree
 deviceterm ax point 0.5 0.5
-deviceterm ax sweep --step 0.04
+deviceterm ax sweep --step 0.02 --budget 20000
 ```
 
 `ax tree` reads the frontmost application's accessibility tree. `ax point`
@@ -611,17 +611,24 @@ A completed sweep makes `ceil(1/step)^2` point queries: 400 at the 0.05
 default, 2500 at the 0.02 floor. Steps outside `[0.02, 0.5]` are clamped
 silently, so read `step` in the result for what the daemon actually used.
 
+`--budget` bounds how long the daemon spends scheduling those queries, 10000ms
+by default and 60000ms at most, clamped as silently as `step` and echoed back as
+`budgetMs`. A 2500-query floor sweep normally exhausts the default, so raise it
+when the result comes back truncated.
+
 The step is also the sample spacing, so a control narrower than it can fall
 between samples and read as absent. At 0.08 the samples sit 32pt apart on a
 400pt-wide screen, wide enough to skip a 25pt toolbar button. If an element you
 can see doesn't appear, sweep again finer before concluding it has no
 accessibility node.
 
-The daemon checks a deadline between bridge calls and returns partial
-coverage when a check finds it expired before the grid is complete, rather than
+The daemon checks the budget between bridge calls and returns partial
+coverage when a check finds it spent before the grid is complete, rather than
 running on past the point you'd have given up.
 Check `truncated`: when it's true the sweep covers only `sweepedPoints` of its
-grid, and a missing element is not evidence it isn't on screen.
+grid, and a missing element is not evidence it isn't on screen. A truncated
+result also carries a `note` saying what to try: a larger `--budget`, or a
+coarser `--step` if you were already at the 60000 ceiling.
 
 All three always emit JSON. The wrapper fields are DeviceTerm contracts; the
 nested accessibility nodes come from Apple frameworks and can vary by

@@ -722,7 +722,8 @@ public enum PaneMethods {
                 sweepJSON = try await paneCoordinator.accessibilitySweep(
                     paneId: paneId,
                     as: principal,
-                    step: params.step
+                    step: params.step,
+                    budgetMs: params.budgetMs
                 )
             } catch let error as PaneError {
                 throw mapPaneError(error)

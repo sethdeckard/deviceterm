@@ -14,7 +14,7 @@ private func sweepRoot(
     backend: MockDeviceBackend,
     queue: BlockingWorkQueue = BlockingWorkQueue(label: "test.sweep.budget"),
     step: Double? = nil,
-    budgetMs: Int = AXSweep.maxDurationMs
+    budgetMs: Int? = nil
 ) async throws -> [String: Any] {
     let data = try await PaneAccessibility.sweep(
         backend: backend,
@@ -56,15 +56,17 @@ func aSweepThatFinishesReportsItsWholeGrid() async throws {
     let backend = phoneBackend()
     let cells = AXSweep.gridPoints(step: AXSweep.defaultStep).count
 
-    // An explicit, generous budget rather than the real one: this asserts
-    // a completed walk, and pinning it to a wall clock would let a loaded
-    // machine truncate the sweep and fail the test for no defect. The real
-    // constant is pinned below.
-    let root = try await sweepRoot(backend: backend, budgetMs: 600_000)
+    // The ceiling rather than the default: this asserts a completed walk, and
+    // pinning it to a tighter wall clock would let a loaded machine truncate
+    // the sweep and fail the test for no defect. The default is pinned below.
+    let root = try await sweepRoot(backend: backend, budgetMs: AXSweepBudget.maxMs)
 
     #expect(root["truncated"] as? Bool == false)
     #expect(root["sweepedPoints"] as? Int == cells)
     #expect(backend.accessibilityPoints.count == cells)
+    // A completed sweep says so and stays silent, so the note is a signal
+    // rather than boilerplate every response carries.
+    #expect(root["note"] == nil)
 }
 
 @Test
@@ -86,6 +88,61 @@ func aSweepOutOfBudgetAnswersShortAndSaysSo() async throws {
     // rather than a transport failure.
     #expect(root["role"] as? String == "AXSweepRoot")
     #expect(root["step"] as? Double == AXSweep.defaultStep)
+    #expect(root["budgetMs"] as? Int == 0)
+    // Truncation is what raises the note, including on the path that never
+    // reached the bridge: a caller reading only `note` still learns the
+    // coverage is partial. Which of the two it gets is `AXTreeNote`'s call,
+    // covered in `DaemonProtocolTests`.
+    #expect(root["note"] as? String
+        == AXTreeNote.forTruncatedSweep(budgetMs: 0).rawValue)
+}
+
+@Test
+func theBudgetTheSweepRanUnderIsEchoedBackPostClamp() async throws {
+    // The clamp is silent, the same way `step`'s is, so the echo is the only
+    // way a caller who asked for an hour can tell they got a minute.
+    let overCeiling = try await sweepRoot(
+        backend: phoneBackend(),
+        step: AXSweep.maxStep,
+        budgetMs: AXSweepBudget.maxMs * 60
+    )
+    #expect(overCeiling["budgetMs"] as? Int == AXSweepBudget.maxMs)
+
+    // A negative request is a zero-length walk, not a deadline in the past.
+    let negative = try await sweepRoot(backend: phoneBackend(), budgetMs: -5_000)
+    #expect(negative["budgetMs"] as? Int == 0)
+    #expect(negative["truncated"] as? Bool == true)
+
+    // An unspecified budget resolves the shared default, which is what makes
+    // the field readable without knowing whether the caller named one.
+    let unspecified = try await sweepRoot(
+        backend: phoneBackend(),
+        step: AXSweep.maxStep,
+        budgetMs: nil
+    )
+    #expect(unspecified["budgetMs"] as? Int == AXSweepBudget.defaultMs)
+}
+
+@Test
+func aLongerBudgetReachesCellsTheDefaultWouldHaveStoppedShortOf() async throws {
+    // A timing model in miniature: the same grid truncates when its per-cell
+    // cost outruns the budget and completes when the budget covers it. Four
+    // cells, the third of which is slow, stands in for a floor grid against
+    // the bridge's real cost.
+    let cells = AXSweep.gridPoints(step: AXSweep.maxStep).count
+
+    let cramped = phoneBackend()
+    cramped.slowElementCall = (index: 2, seconds: 1)
+    let short = try await sweepRoot(backend: cramped, step: AXSweep.maxStep, budgetMs: 200)
+    #expect(short["truncated"] as? Bool == true)
+    #expect((short["sweepedPoints"] as? Int ?? cells) < cells)
+
+    let paid = phoneBackend()
+    paid.slowElementCall = (index: 2, seconds: 1)
+    let full = try await sweepRoot(backend: paid, step: AXSweep.maxStep, budgetMs: 30_000)
+    #expect(full["truncated"] as? Bool == false)
+    #expect(full["sweepedPoints"] as? Int == cells)
+    #expect(full["note"] == nil)
 }
 
 @Test
@@ -138,13 +195,17 @@ func aGridHoldsCeilOfTheReciprocalSquared(step: Double, expected: Int) {
 }
 
 @Test
-func theSweepBudgetOutlastsTheDefaultGridAndBoundsTheFinestOne() {
+func theDefaultBudgetCoversTheDefaultGridButNotTheFinestOne() {
     // Under the bridge's approximate 5ms-per-cell cost, the default grid
-    // fits inside the daemon's deadline. Cell counts, not measured time.
+    // fits inside the default budget. Cell counts, not measured time.
     let defaultCells = AXSweep.gridPoints(step: AXSweep.defaultStep).count
     let finestCells = AXSweep.gridPoints(step: AXSweep.minStep).count
-    #expect(defaultCells * 5 < AXSweep.maxDurationMs)
-    // Under the same estimate, the finest grid exceeds that deadline, which
-    // is the case the deadline exists for.
-    #expect(finestCells * 5 > AXSweep.maxDurationMs)
+    #expect(defaultCells * 5 < AXSweepBudget.defaultMs)
+    // Under the same estimate the finest grid does not, which is what makes
+    // the budget worth buying. Live completion still turns on host latency;
+    // this pins the model the constants were chosen against.
+    #expect(finestCells * 5 > AXSweepBudget.defaultMs)
+    // The ceiling covers it under that model, so `--budget` is a real remedy
+    // rather than a knob that runs out before the finest legal step.
+    #expect(finestCells * 5 < AXSweepBudget.maxMs)
 }

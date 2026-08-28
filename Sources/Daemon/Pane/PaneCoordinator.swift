@@ -3071,7 +3071,8 @@ public actor PaneCoordinator {
     func accessibilitySweep(
         paneId: UUID,
         as principal: PaneAccessPrincipal,
-        step: Double?
+        step: Double?,
+        budgetMs: Int?
     ) async throws -> Data {
         let (record, backend) = try requireBackend(
             paneId: paneId,
@@ -3084,7 +3085,8 @@ public actor PaneCoordinator {
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
             orientation: { [record] in record.presentationOrientation },
-            step: step
+            step: step,
+            budgetMs: budgetMs
         )
         try revalidateAccessibility(
             record: record,

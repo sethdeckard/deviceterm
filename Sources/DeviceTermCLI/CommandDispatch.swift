@@ -365,7 +365,7 @@ func run(
             return try sendResolvedPrintingResult(
                 ref: pane,
                 transport: transport,
-                timeoutSeconds: AXTimeout.query
+                timeoutSeconds: AXTimeout.response
             ) {
                 try CLICommands.axTreeRequest(paneId: $0)
             }
@@ -375,20 +375,21 @@ func run(
             return try sendResolvedPrintingResult(
                 ref: pane,
                 transport: transport,
-                timeoutSeconds: AXTimeout.query
+                timeoutSeconds: AXTimeout.response
             ) {
                 try CLICommands.axPointRequest(paneId: $0, x: x, y: y)
             }
 
-        case let .axSweep(pane, step):
-            // `ax sweep` scales with grid density, so it waits 15 seconds
-            // rather than the default five.
+        case let .axSweep(pane, step, budgetMs):
+            // The daemon answers only once the walk has stopped, and the wait
+            // covers the largest budget it will honor, so `--budget` rides the
+            // wire without the client having to size anything from it.
             return try sendResolvedPrintingResult(
                 ref: pane,
                 transport: transport,
-                timeoutSeconds: AXTimeout.sweep
+                timeoutSeconds: AXTimeout.response
             ) {
-                try CLICommands.axSweepRequest(paneId: $0, step: step)
+                try CLICommands.axSweepRequest(paneId: $0, step: step, budgetMs: budgetMs)
             }
 
         case let .tabOpen(windowRef, cwd, cmd):

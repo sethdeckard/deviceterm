@@ -112,7 +112,8 @@ public enum CLICommand: Equatable, Sendable {
     case axSweep(
         pane:
         String?,
-        step: Double?
+        step: Double?,
+        budgetMs: Int?
         )
     /// Explicit help request: `deviceterm --help`, `deviceterm -h`, or
     /// `deviceterm help`. The command list and any known page write to

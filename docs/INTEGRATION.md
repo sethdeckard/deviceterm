@@ -229,7 +229,7 @@ protected tab.
 | `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
 | `tab capture --json` | `{text}` | Automation | Visible viewport captured | Stable-additive |
 | `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper; best-effort node |
-| `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep completed | Stable-additive wrapper; best-effort children |
+| `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep stopped, having finished the grid or spent its budget | Stable-additive wrapper; best-effort children |
 | `events` | JSON Lines stream | Session | Subscription remains active until EOF or termination | Stable-additive |
 | `with-pane` | Child-owned stdout and stderr | Session | Child process exited | Stable exit forwarding |
 | `pane rename`, `pane move` | No success shape | Session | Unsupported; command fails | Stable unsupported status |
@@ -925,6 +925,7 @@ and returns a DeviceTerm-owned wrapper:
     },
     "children": [],
     "step": 0.04,
+    "budgetMs": 10000,
     "sweepedPoints": 625,
     "truncated": false
   }
@@ -939,8 +940,10 @@ The synthetic object under `tree` has these stable-additive fields:
 | `frame` | object | Normalized placeholder, always `0, 0, 1, 1`; not the screen's frame |
 | `children` | array | Unique Apple accessibility nodes |
 | `step` | number | Clamped step used by the sweep |
+| `budgetMs` | integer | Clamped scheduling budget the walk ran under, in ms |
 | `sweepedPoints` | integer | Grid points this sweep queried |
 | `truncated` | boolean | True when the walk stopped before finishing the grid |
+| `note` | string | Present only when `truncated`; one of the `AXTreeNote` values |
 
 The objects inside `children` remain best-effort Apple node dictionaries.
 
@@ -958,6 +961,13 @@ queried rather than the grid that was planned. This is a successful
 response, so a client that ignores `truncated` reads partial coverage as
 complete. An element absent from a truncated sweep is not evidence it is absent
 from the screen.
+
+`budgetMs` is how long the daemon may spend scheduling queries. It defaults to
+10000 and is held inside `[0, 60000]`; like `step`, the clamp is silent, so read
+the echo for what you got. Raising it is the remedy for a truncated sweep, and
+the 0.02 step floor usually needs it: that grid plans 2500 queries, enough to
+exhaust the default budget at ordinary bridge-call costs. A sweep that truncates at the ceiling carries a
+different `note`, since raising the budget is no longer open to it.
 
 A sweep whose deadline passed before it reached the queue returns `truncated`
 true with `sweepedPoints` zero without querying the bridge at all, so that

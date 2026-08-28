@@ -111,15 +111,23 @@ coordinate-bearing input verbs take. Node frames are in that space but are
 not normalized: divide the centre's x and y by the root frame's width and
 height before querying it.
 .TP
-.B ax sweep " " [\fB--step\fR \fI0..1\fR]
+.B ax sweep " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR]
 Grid-walk the screen via objectAtPoint and aggregate unique elements.
 Default step 0.05, clamped silently into [0.02, 0.5]; the result echoes the
 step used. A completed sweep makes ceil(1/step)^2 point queries, and a
 control narrower than the step can fall between samples and read as absent.
-If the daemon finds its deadline expired before the grid is done, it stops
-before the next query and sets
+.B --budget
+bounds how long the daemon may spend scheduling those queries: default
+10000, clamped into [0, 60000], echoed as budgetMs in the result. The 0.02
+floor makes 2500 queries and normally exhausts the default, so raise it when
+the result comes back truncated.
+If the daemon finds its budget spent before the grid is done, it stops
+before the next query, sets
 .B truncated
-in the result.
+in the result, and adds a
+.B note
+saying what to try: a larger --budget, or a coarser --step when the budget
+was already at the ceiling.
 .SS Devices
 .TP
 .B devices list

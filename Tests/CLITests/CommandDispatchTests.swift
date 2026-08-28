@@ -515,26 +515,40 @@ func axCallGetsItsOwnBudgetWhilePaneResolutionKeepsTheDefault() throws {
         ref: nil,
         transport: fake,
         creds: testCreds,
-        timeoutSeconds: AXTimeout.query
+        timeoutSeconds: AXTimeout.response
     ) {
         try CLICommands.axTreeRequest(paneId: $0)
     }
     // Resolution is a cheap `panes.list`, so it keeps the short wait and a
     // wedged resolve still fails fast; only the AX envelope waits longer.
-    #expect(fake.timeouts == [AppCommandDeadline.cliRequestTimeoutSeconds, AXTimeout.query])
+    #expect(fake.timeouts == [AppCommandDeadline.cliRequestTimeoutSeconds, AXTimeout.response])
 }
 
 @Test
-func axBudgetsCoverWaitingOutASweep() {
-    // `AXSweep.maxDurationMs`, mirrored as a literal for the same reason
-    // `AXTimeout` mirrors it: `DeviceTermCLI` links `DaemonProtocol` and
-    // not the daemon. The daemon stops starting new sweep calls after ten
-    // seconds; an AX read may spend most of that interval queued behind it.
-    let sweepSchedulingBudgetSeconds = 10.0
-    #expect(AXTimeout.query > sweepSchedulingBudgetSeconds)
-    #expect(AXTimeout.sweep > sweepSchedulingBudgetSeconds)
-    #expect(AXTimeout.query > AppCommandDeadline.cliRequestTimeoutSeconds)
-    #expect(AXTimeout.sweep > AppCommandDeadline.cliRequestTimeoutSeconds)
+func theAXWaitCoversTheLongestSweepAnyoneCanBuy() {
+    // Every `ax` verb queues on the pane's one accessibility queue, so any of
+    // them can wait out another caller's sweep before its own work starts.
+    // Each wait therefore has to exceed `AXSweepBudget.maxMs`: anything sized
+    // to the default budget fails on a request the daemon goes on to answer
+    // whenever someone else holds the queue with a ceiling-budget sweep.
+    let ceilingSeconds = Double(AXSweepBudget.maxMs) / 1_000.0
+    #expect(AXTimeout.response > ceilingSeconds)
+    #expect(AXTimeout.response > AppCommandDeadline.cliRequestTimeoutSeconds)
+    // Headroom, not a second budget: covering the ceiling twice would mean a
+    // wedged bridge call hangs the caller for two minutes.
+    #expect(AXTimeout.response < ceilingSeconds * 2)
+}
+
+@Test
+func aSweepsOwnBudgetDoesNotAddToTheWaitItNeeds() {
+    // The daemon takes a sweep's deadline when the request arrives, not when
+    // it reaches the queue, so time spent queued is spent out of the budget
+    // rather than deferring it. Worst case is max(queue wait, own budget) and
+    // the same ceiling caps both, which is why one constant serves all three
+    // verbs and `--budget` needs no client-side arithmetic.
+    let ceilingSeconds = Double(AXSweepBudget.maxMs) / 1_000.0
+    #expect(AXTimeout.response > ceilingSeconds)
+    #expect(AXTimeout.response > Double(AXSweepBudget.defaultMs) / 1_000.0)
 }
 
 @Test
@@ -546,9 +560,12 @@ func errorOutcomeMappings() {
     #expect(errorOutcome(CLIError.transport("t")).exitCode == 1)
 }
 
-// MARK: - gesture response budgets
+// MARK: - response budgets for caller-paced verbs
 
-/// Verbs the daemon answers only once the gesture has finished dispatching.
+/// Verbs the daemon answers only once work the caller sized has finished: the
+/// paced gestures, and the sweep whose walk runs under a budget the caller can
+/// buy. Each can exceed the default five-second client wait, which is why each
+/// one overrides it.
 ///
 /// These drive `run` rather than reconstructing the `sendResolved` call the way
 /// the tap tests above do, because what needs pinning is the dispatch site's own
@@ -559,7 +576,7 @@ func errorOutcomeMappings() {
 /// environment and there is no seam for injecting them, so concurrent cases
 /// would race over a process-wide value. Each call restores what it found.
 @Suite(.serialized)
-struct GestureBudgetTests {
+struct ResponseBudgetTests {
     private func withTabEnv<T>(_ body: () throws -> T) rethrows -> T {
         let priorSession = ProcessInfo.processInfo.environment[DeviceTermEnv.session]
         let priorCap = ProcessInfo.processInfo.environment[DeviceTermEnv.sessionCap]
@@ -691,5 +708,18 @@ struct GestureBudgetTests {
         for command in commands {
             #expect(try actionBudget(for: command) > Double(durationMs) / 1_000)
         }
+    }
+
+    /// `ax sweep` takes `AXTimeout.response` whatever budget it asked for,
+    /// including none: the daemon answers only once the walk has stopped, and
+    /// the sweep can itself queue behind a ceiling-budget one. The budget does
+    /// not size the wait, but the wait must not fall back to the floor.
+    @Test(arguments: [30_000, nil])
+    func aSweepWaitsOutTheLongestWalkTheDaemonAllows(budgetMs: Int?) throws {
+        let budget = try actionBudget(
+            for: .axSweep(pane: nil, step: 0.02, budgetMs: budgetMs)
+        )
+        #expect(budget == AXTimeout.response)
+        #expect(budget > Double(AXSweepBudget.maxMs) / 1_000)
     }
 }

@@ -2,30 +2,71 @@
 
 import Foundation
 
-/// Finite wire-value vocabulary for the optional `note`
-/// field the daemon may inject into an `ax tree` response when the
-/// tree it gets back from the bridge is misleadingly empty.
+/// Finite wire-value vocabulary for the optional `note` field the daemon may
+/// inject into an `ax tree` or `ax sweep` response when the result on its own
+/// would read as more complete than it is.
 ///
-/// Why: on watchOS, `AXPMacPlatformElement`'s `accessibilityChildren`
-/// returns empty even when the screen has elements that `objectAtPoint:`
-/// can resolve. A bare `{"children": []}` response is indistinguishable
-/// from a legitimately empty tree, so a client has no way to tell the
-/// limitation from the fact. The note makes it explicit, so a client can
-/// detect it programmatically and branch to the grid-walk (`deviceterm ax
-/// sweep`, which aggregates `objectAtPoint:` calls across the screen) or
-/// to a single-point lookup (`deviceterm ax point <x> <y>`).
+/// Both verbs answer under the same `tree` key and carry the note in the same
+/// place, so one vocabulary covers them: a client decoding `tree["note"]` gets
+/// an `AXTreeNote` whichever verb it called. The cases say which verb they
+/// come from, since a note only ever accompanies the result that raised it.
 ///
-/// Lives in `DaemonProtocol` so agent-side decoders can pattern-match
-/// the enum instead of doing string compares. Unknown-key-tolerant on
-/// the wire: clients that don't decode `AXTreeNote` see a plain
-/// String at `tree["note"]` and can compare manually.
+/// Lives in `DaemonProtocol` so agent-side decoders can pattern-match the enum
+/// instead of doing string compares. Unknown-key-tolerant on the wire: clients
+/// that don't decode `AXTreeNote` see a plain String at `tree["note"]` and can
+/// compare manually.
 public enum AXTreeNote: String, Codable, Sendable, Equatable, CaseIterable {
     /// watchOS's `AXPMacPlatformElement.accessibilityChildren` returns
     /// empty regardless of on-screen state, so the recursive walk
-    /// produces a `{"children": []}` tree. Agents enumerate the
+    /// produces a `{"children": []}` tree, which is indistinguishable from a
+    /// legitimately empty one. Agents enumerate the
     /// screen via `deviceterm ax sweep` (grid-walks `objectAtPoint:`),
     /// or resolve a single point with `deviceterm ax point <x> <y>`.
     case watchOSEnumerationUnsupported =
         // swiftlint:disable:next line_length
         "AX tree enumeration is unsupported on watchOS; use 'deviceterm ax sweep' to grid-walk via objectAtPoint, or 'deviceterm ax point <x> <y>' for a single element"
+
+    /// The sweep's budget went before it finished its grid, so `children`
+    /// covers part of the screen and an element's absence proves nothing.
+    /// The finest legal step plans enough cells to exhaust the default budget
+    /// on an ordinary host, which is why a caller reads `truncated` rather
+    /// than assuming the step it asked for was walked.
+    ///
+    /// Static, like the case above. `truncated`, `sweepedPoints`, `step`, and
+    /// the echoed `budgetMs` report what was asked for and what was reached;
+    /// interpolating a suggested budget would put an estimate in among them.
+    /// Nothing here yields bridge throughput to base one on: `budgetMs` is a
+    /// limit that the wait for the pane's queue also spends, and a completed
+    /// sweep reports no elapsed time at all.
+    case sweepTruncated =
+        // swiftlint:disable:next line_length
+        "the sweep stopped at its time budget with part of the grid unqueried; 'sweepedPoints' counts what it reached, and 'deviceterm ax sweep --budget <ms>' buys a longer walk"
+
+    /// Same truncation, reached at `AXSweepBudget.maxMs`, where the advice
+    /// above is a dead end: there is no larger budget to ask for. A sweep can
+    /// land here two ways, and both are worth trying. The grid may genuinely
+    /// cost more than the ceiling on this host, which a coarser `--step`
+    /// fixes. Or the ceiling went waiting for the pane's accessibility queue
+    /// behind another read, which nothing about this request can fix and a
+    /// retry can.
+    ///
+    /// A separate case rather than a longer sentence on the one above,
+    /// because an agent branches differently on the two: raising a number it
+    /// already maxed out is the one response that cannot work.
+    case sweepTruncatedAtMaxBudget =
+        // swiftlint:disable:next line_length
+        "the sweep stopped at the largest budget the daemon allows with part of the grid unqueried; 'sweepedPoints' counts what it reached, so widen 'deviceterm ax sweep --step <0..1>' or retry when the pane is serving fewer accessibility reads"
+
+    /// Which truncation note a sweep gets, given the budget it ran under.
+    ///
+    /// Kept pure so the max-budget branch can be tested without spending
+    /// `AXSweepBudget.maxMs` of wall clock to reach it. `AXTreeAnnotator` is
+    /// split out of the tree walk for the same reason.
+    ///
+    /// `>=` rather than `==` so an over-ceiling budget still lands on the
+    /// note that doesn't tell its caller to raise one. The daemon clamps
+    /// before calling this; the comparison covers any caller that doesn't.
+    public static func forTruncatedSweep(budgetMs: Int) -> AXTreeNote {
+        budgetMs >= AXSweepBudget.maxMs ? .sweepTruncatedAtMaxBudget : .sweepTruncated
+    }
 }

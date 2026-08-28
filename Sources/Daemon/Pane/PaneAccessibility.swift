@@ -162,16 +162,27 @@ enum PaneAccessibility {
     /// the on-screen elements by sweeping with `objectAtPoint:`.
     /// Result shape mirrors `ax tree`: a synthetic root dict with
     /// `role: "AXSweepRoot"`, normalized full-screen frame, and a
-    /// `children` list of unique elements seen. Adds three non-tree
+    /// `children` list of unique elements seen. Adds four non-tree
     /// fields describing the walk that produced it: `step` (the clamped
-    /// step actually used), `sweepedPoints` (cells queried), and
-    /// `truncated`.
+    /// step actually used), `budgetMs` (the clamped budget it ran under),
+    /// `sweepedPoints` (cells queried), and `truncated`, plus a `note` on
+    /// the truncated ones.
     ///
     /// `truncated` is true when an expired deadline stopped the walk before
     /// its next query. That result covers part of the screen, so an element
     /// missing from a truncated sweep is not evidence it isn't there. A grid
     /// that finishes is never truncated, even when its last query ran past
-    /// the deadline, because nothing checks after the final cell.
+    /// the deadline, because nothing checks after the final cell. A truncated
+    /// result also carries one of `AXTreeNote`'s two sweep cases, so a client
+    /// that reads only the note vocabulary still learns the coverage is
+    /// partial and what it can do about it.
+    ///
+    /// `budgetMs` is the caller's, clamped by `AXSweepBudget`, defaulted when
+    /// they named none. Echoing it back is what makes the clamp visible: a
+    /// caller who asked for more than the ceiling can see they didn't get it.
+    /// It is a limit, not an elapsed time, and covers the wait for the queue
+    /// as well as the walk, so a completed sweep may have used very little of
+    /// it. `sweepedPoints` is the measured half of the pair.
     ///
     /// The deadline starts when the request does, so the wait for the
     /// pane's queue spends it, and a request whose deadline went while it
@@ -213,8 +224,9 @@ enum PaneAccessibility {
         paneId: UUID,
         orientation: @escaping @Sendable () -> Orientation,
         step: Double?,
-        budgetMs: Int = AXSweep.maxDurationMs
+        budgetMs: Int?
     ) async throws -> Data {
+        let budget = AXSweepBudget.clamp(budgetMs)
         // Started on arrival, not once the walk gets the queue. The queue is
         // serial and shared with every other `ax` read, so waiting for it is
         // most of what a busy pane spends. A deadline taken inside would let
@@ -222,13 +234,14 @@ enum PaneAccessibility {
         // waiting out that one's, and two fresh deadlines back to back would
         // exceed the CLI's own response wait, which is the failure this
         // bounds.
-        let deadline = ContinuousClock.now + .milliseconds(budgetMs)
+        let deadline = ContinuousClock.now + .milliseconds(budget)
         return try await queue.run {
             try sweepSynchronously(
                 backend: backend,
                 paneId: paneId,
                 orientation: orientation,
                 step: step,
+                budgetMs: budget,
                 deadline: deadline
             )
         }
@@ -239,6 +252,7 @@ enum PaneAccessibility {
         paneId: UUID,
         orientation: @Sendable () -> Orientation,
         step: Double?,
+        budgetMs: Int,
         deadline: ContinuousClock.Instant
     ) throws -> Data {
         // Spent before this reached the queue, so there is nothing left to
@@ -251,6 +265,7 @@ enum PaneAccessibility {
             return try sweepRoot(
                 paneId: paneId,
                 step: AXSweep.clampStep(step),
+                budgetMs: budgetMs,
                 unique: [],
                 swept: 0,
                 truncated: true
@@ -355,6 +370,7 @@ enum PaneAccessibility {
         return try sweepRoot(
             paneId: paneId,
             step: clampedStep,
+            budgetMs: budgetMs,
             unique: unique,
             swept: swept,
             truncated: cutShort
@@ -367,21 +383,32 @@ enum PaneAccessibility {
     private static func sweepRoot(
         paneId: UUID,
         step: Double,
+        budgetMs: Int,
         unique: [[String: Any]],
         swept: Int,
         truncated: Bool
     ) throws -> Data {
-        let root: [String: Any] = [
+        var root: [String: Any] = [
             "role": "AXSweepRoot",
             "frame": ["x": 0, "y": 0, "w": 1, "h": 1],
             "children": unique,
             "step": step,
+            // The budget this walk ran under, post-clamp, so a caller whose
+            // request was held down to the ceiling can tell.
+            "budgetMs": budgetMs,
             // Points this walk actually queried, which equals the grid it
             // planned unless `truncated` says it stopped early. Reporting the
             // plan instead would describe coverage the sweep didn't have.
             "sweepedPoints": swept,
             "truncated": truncated
         ]
+        // A sweep note follows truncation and the post-clamp budget, not the
+        // tree shape and device family `AXTreeAnnotator` reads. The pure
+        // selector is what keeps the ceiling case testable without spending
+        // the ceiling.
+        if truncated {
+            root["note"] = AXTreeNote.forTruncatedSweep(budgetMs: budgetMs).rawValue
+        }
         do {
             return try JSONSerialization.data(
                 withJSONObject: root,

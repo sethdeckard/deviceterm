@@ -53,8 +53,12 @@ enum VerbCatalog {
         Verb("text"),
         Verb("rotate"),
         Verb("crown", valuedFlags: ["pane", "duration", "velocity"]),
-        // `step` used by `ax sweep`; harmless on tree/point.
-        Verb("ax", valuedFlags: ["pane", "step"], subVerbs: ["tree", "point", "sweep"]),
+        // `step` and `budget` used by `ax sweep`; harmless on tree/point.
+        Verb(
+            "ax",
+            valuedFlags: ["pane", "step", "budget"],
+            subVerbs: ["tree", "point", "sweep"]
+        ),
         Verb("with-pane"),
         // Workspace verbs: the full set their sub-commands accept,
         // permissively shared across sub-commands (a flag not meaningful

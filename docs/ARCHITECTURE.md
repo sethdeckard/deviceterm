@@ -2012,7 +2012,7 @@ Returns the element under the normalized 0..1 point.
 
 #### `pane.ax.sweep`
 
-- Params: `{paneId, step?}`
+- Params: `{paneId, step?, budgetMs?}`
 - Result: `{tree}` with a synthetic root
 - Scope: session
 
@@ -2029,16 +2029,27 @@ wait, receives no payload.
 
 The result shape mirrors
 `pane.ax.tree` with a synthetic root `{role: "AXSweepRoot",
-frame: {x:0,y:0,w:1,h:1}, children: [unique elements], step,
-sweepedPoints, truncated}`. The `step` field echoes the actually-used
-post-clamp value.
+frame: {x:0,y:0,w:1,h:1}, children: [unique elements], step, budgetMs,
+sweepedPoints, truncated}`. The `step` and `budgetMs` fields echo the
+actually-used post-clamp values.
+
+The deadline is `budgetMs`: the caller's, defaulting to 10 000 and clamped into
+`[0, 60 000]`. The ceiling exists because the walk holds the pane's AX queue for
+its whole run, so an unbounded budget parks every other `ax` read on that pane
+behind it.
 
 The deadline starts when the sweep handler begins and is checked before the
 pre-flight and before each cell. The wait for the pane's serial AX queue
 consumes it, so a queued sweep does not start with a full one; an in-flight
 bridge call may still overrun it. When a check falls before the grid is
-complete and finds the deadline expired, the walk stops before the next query
-and sets `truncated`.
+complete and finds the deadline expired, the walk stops before the next query,
+sets `truncated`, and adds a `tree.note`: `AXTreeNote.sweepTruncated` normally,
+or `.sweepTruncatedAtMaxBudget` when the budget was already at the ceiling and
+there is no larger one to ask for.
+
+The 0.02 step floor plans 2500 queries, enough to exhaust the default budget
+at ordinary bridge-call costs. Whether it does is a property of the host, so a
+caller reads `truncated` and raises the budget when it is set.
 
 Per-cell "no element at this point" is a routine outcome: sparse AX
 coverage (a `Canvas + GeometryReader` composition with a few `Text(...)`
