@@ -8,7 +8,10 @@ import Foundation
 struct UDSTransport: CLITransport {
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data {
         guard let method = envelope.method else {
-            throw CLIError.transport("internal error: request envelope has no method")
+            throw CLIError.classified(
+                code: .internalError,
+                message: "internal error: request envelope has no method"
+            )
         }
         return try roundTrip(
             method: method,

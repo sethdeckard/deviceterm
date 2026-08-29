@@ -553,11 +553,17 @@ func aSweepsOwnBudgetDoesNotAddToTheWaitItNeeds() {
 
 @Test
 func errorOutcomeMappings() {
-    #expect(errorOutcome(CLIError.daemon(code: 7, message: "x"))
-        == CommandOutcome(stderr: "daemon error 7: x", exitCode: 1))
-    #expect(errorOutcome(CLIError.notInTab("no tab"))
-        == CommandOutcome(stderr: "no tab", exitCode: 1))
-    #expect(errorOutcome(CLIError.transport("t")).exitCode == 1)
+    let daemon = errorOutcome(CLIError.daemon(code: 7, message: "x"))
+    #expect(daemon.stderr == "daemon error 7: x")
+    #expect(daemon.failure?.code == .rpcError)
+
+    let notInTab = errorOutcome(CLIError.notInTab("no tab"))
+    #expect(notInTab.stderr == "no tab")
+    #expect(notInTab.failure?.code == .sessionRequired)
+
+    let transport = errorOutcome(CLIError.transport("t"))
+    #expect(transport.exitCode == 1)
+    #expect(transport.failure?.code == .transportInterrupted)
 }
 
 // MARK: - response budgets for caller-paced verbs

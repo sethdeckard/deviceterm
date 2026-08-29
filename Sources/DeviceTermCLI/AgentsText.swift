@@ -257,14 +257,22 @@ public enum AgentsText {
         receipts become JSON objects with the same fields as the
         human-mode echo line (synthesized with `encodeIfPresent`;
         nil fields are omitted rather than encoded as `null`).
-        Errors stay on stderr in human form regardless of mode,
-        so `deviceterm ... --json | jq` works on the happy path.
+
+        In JSON mode, typed failures emit a newline-terminated
+        `{"error": ...}` object on stdout. They preserve the human
+        diagnostic on stderr and the nonzero exit status. Branch
+        on `.error.code`; do not parse `.error.message` or stderr
+        prose. Command-specific failures not yet using the typed
+        contract may still produce empty stdout.
 
         Documentation commands (`deviceterm --help` and `deviceterm
         agents`) stay text-only; the `--json` flag is accepted
-        for consistency but the output is the same prose. AX
-        commands already emit JSON natively; `--json` is a
-        no-op there too.
+        for consistency but the output is the same prose. AX commands
+        always emit JSON. Successes use their usual `tree` or
+        `element` wrapper; typed failures use the `error` envelope
+        even without `--json`, including malformed AX invocations.
+        `events` keeps its JSON Lines stream and human-readable
+        stream errors.
 
       Identifiers
         Every tab + pane carries three identifiers:

@@ -27,25 +27,6 @@ func writeStderr(_ message: String) {
     FileHandle.standardError.write(message.data(using: .utf8) ?? Data())
 }
 
-/// Print the terse usage block (top-level help cue) to stderr and
-/// exit 1. Used for parse errors and unknown verbs; the caller got here
-/// because something went wrong, so this points at the command list
-/// rather than printing it. A mistyped verb should not bury the error
-/// message under every command deviceterm has.
-func usage() -> Never {
-    writeStderr(
-        """
-    usage: deviceterm <command> [args...]
-
-    Run `deviceterm help` for the command list, `deviceterm help <command>`
-    to read one in full, and `deviceterm agents` for the workflow + triage
-    guide.
-
-    """
-        )
-    exit(1)
-}
-
 /// Spawn `/usr/bin/which <command>` and return the resolved absolute
 /// path, or nil if `which` didn't find anything. Used by `deviceterm
 /// doctor` to check whether `xcrun` resolves to the per-session shim.
@@ -97,20 +78,30 @@ private func readOneEnvelope(
 ) throws -> RPCEnvelope {
     var buffer = Data()
     while true {
-        if let (payload, _) = try? RPCFraming.decodeNext(from: buffer) {
-            return try RPCEnvelope.decode(payload)
+        do {
+            if let (payload, _) = try RPCFraming.decodeNext(from: buffer) {
+                do {
+                    return try RPCEnvelope.decode(payload)
+                } catch {
+                    throw CLIError.invalidResponse("invalid daemon response: \(error)")
+                }
+            }
+        } catch let error as CLIError {
+            throw error
+        } catch {
+            throw CLIError.invalidResponse("invalid daemon response frame: \(error)")
         }
         guard UDSClientSocket.waitReadable(fd: fd, deadline: deadline) else {
-            throw CLIError.transport("timed out waiting for daemon response")
+            throw CLIError.transportTimeout("timed out waiting for daemon response")
         }
         let chunk: Data?
         do {
             chunk = try UDSClientSocket.readAvailable(fd: fd)
         } catch {
-            throw CLIError.transport("read failed: \(error)")
+            throw CLIError.transportInterrupted("read failed: \(error)")
         }
         guard let chunk else {
-            throw CLIError.transport("daemon closed the connection")
+            throw CLIError.transportInterrupted("daemon closed the connection")
         }
         buffer.append(chunk)
     }
@@ -137,7 +128,7 @@ private func authenticateConnection(
     do {
         try UDSClientSocket.writeAll(fd: fd, data: frame)
     } catch {
-        throw CLIError.transport("auth write failed: \(error)")
+        throw CLIError.transportInterrupted("auth write failed: \(error)")
     }
     let response = try readOneEnvelope(
         fd: fd,
@@ -188,7 +179,7 @@ private func roundTripOnce(method: String, params: Data?, timeoutSeconds: Double
     do {
         fd = try UDSClientSocket.connect(to: path)
     } catch {
-        throw CLIError.transport("cannot connect to daemon at \(path): \(error)")
+        throw CLIError.transportUnavailable("cannot connect to daemon at \(path): \(error)")
     }
     defer { UDSClientSocket.close(fd) }
 
@@ -213,12 +204,12 @@ private func roundTripOnce(method: String, params: Data?, timeoutSeconds: Double
     do {
         frame = try RPCFraming.encode(envelope.encode())
     } catch {
-        throw CLIError.transport("encode failed: \(error)")
+        throw CLIError.classified(code: .internalError, message: "encode failed: \(error)")
     }
     do {
         try UDSClientSocket.writeAll(fd: fd, data: frame)
     } catch {
-        throw CLIError.transport("write failed: \(error)")
+        throw CLIError.transportInterrupted("write failed: \(error)")
     }
 
     let response = try readOneEnvelope(
@@ -236,7 +227,7 @@ private func roundTripOnce(method: String, params: Data?, timeoutSeconds: Double
         throw CLIError.daemon(code: err.code, message: err.message)
 
     case .params:
-        throw CLIError.transport("unexpected params body on a response")
+        throw CLIError.invalidResponse("unexpected params body on a response")
     }
 }
 
@@ -275,7 +266,10 @@ func send(
     timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds
 ) throws -> Data {
     guard let method = envelope.method else {
-        throw CLIError.transport("internal error: request envelope has no method")
+        throw CLIError.classified(
+            code: .internalError,
+            message: "internal error: request envelope has no method"
+        )
     }
     return try roundTrip(
         method: method,
@@ -618,7 +612,10 @@ func doctorOutcome(output: OutputMode) -> CommandOutcome {
                 exitCode: doctorReport.ok ? 0 : 1
             )
         } catch {
-            return .failure("failed to encode JSON receipt: \(error)")
+            return .failure(
+                code: .internalError,
+                message: "failed to encode JSON receipt: \(error)"
+            )
         }
     }
 }
@@ -961,7 +958,14 @@ func completionsInstallOutcome(shell: Completions.Shell) -> CommandOutcome {
 // CommandOutcome (or terminates directly for the streaming / exec
 // verbs); the driver writes stdout / stderr and exits.
 let command = CLICommands.parse(CommandLine.arguments)
-let outcome = run(command, transport: UDSTransport(), output: output)
+var outcome = run(command, transport: UDSTransport(), output: output)
+outcome = outcome.renderingFailure(for: command, output: output)
 if !outcome.stdout.isEmpty { FileHandle.standardOutput.write(outcome.stdout) }
-if let message = outcome.stderr { writeStderr("deviceterm: \(message)\n") }
+if let message = outcome.stderr {
+    if command.emitsUnprefixedStderr {
+        writeStderr(message)
+    } else {
+        writeStderr("deviceterm: \(message)\n")
+    }
+}
 exit(outcome.exitCode)

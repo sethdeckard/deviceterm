@@ -18,6 +18,12 @@ func outputModeDefaultsToHuman() {
 }
 
 @Test
+func outputModeDefaultsAXFamilyToJSON() {
+    #expect(CLICommands.outputMode(for: ["deviceterm", "ax", "tree"]) == .json)
+    #expect(CLICommands.outputMode(for: ["deviceterm", "ax", "point", "bad"]) == .json)
+}
+
+@Test
 func outputModeDetectsJSONFlag() {
     #expect(CLICommands.outputMode(for: ["deviceterm", "tabs", "list", "--json"]) == .json)
     #expect(CLICommands.outputMode(for: ["deviceterm", "--json", "tabs", "list"]) == .json)

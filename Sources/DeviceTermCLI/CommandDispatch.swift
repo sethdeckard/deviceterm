@@ -21,26 +21,81 @@ func jsonOutcome(_ value: some Encodable) -> CommandOutcome {
     do {
         return .stdout(try encodeJSONReceipt(value))
     } catch {
-        return .failure("failed to encode JSON receipt: \(error)")
+        return .failure(
+            code: .internalError,
+            message: "failed to encode JSON receipt: \(error)"
+        )
     }
 }
 
-/// Map a thrown error to its stderr/exit shape. `.daemon` gets
-/// `daemon error <code>: <message>`; `.notInTab` and `.transport`
-/// surface their message verbatim (the wording the docs and help pages
-/// quote, e.g. `no device pane in this tab`); anything else prints
-/// the Swift error description. This wording is what `--json`-less
-/// consumers parse, so it is a contract.
+/// Map one numeric daemon failure onto the public CLI code namespace.
+private func daemonErrorCode(code: Int, message: String) -> CLIErrorCode {
+    if let separator = message.firstIndex(of: ":") {
+        let candidate = String(message[..<separator])
+        if candidate.hasPrefix("intent."),
+            candidate.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." }) {
+            return CLIErrorCode(rawValue: candidate)
+        }
+    }
+    switch code {
+    case -32_602:
+        return .rpcInvalidParams
+
+    case -32_601:
+        return .rpcMethodNotFound
+
+    case -32_600:
+        return .rpcInvalidRequest
+
+    case -32_020:
+        return .paneBridgeFailed
+
+    case -32_012:
+        return .paneUnavailable
+
+    case -32_011, -32_001:
+        return .sessionUnauthorized
+
+    case -32_002:
+        return .sessionNotReady
+
+    case -32_000:
+        return .rpcServerError
+
+    default:
+        return .rpcError
+    }
+}
+
+private func daemonErrorDetails(code: Int) -> Data? {
+    try? JSONSerialization.data(withJSONObject: ["rpcCode": code], options: [.sortedKeys])
+}
+
+/// Map a thrown error to its stable code plus the existing stderr shape.
 func errorOutcome(_ error: Error) -> CommandOutcome {
     switch error {
     case let CLIError.daemon(code, message):
-        return CommandOutcome(stderr: "daemon error \(code): \(message)", exitCode: 1)
+        return .failure(
+            code: daemonErrorCode(code: code, message: message),
+            message: message,
+            details: daemonErrorDetails(code: code),
+            stderr: "daemon error \(code): \(message)"
+        )
 
-    case let CLIError.notInTab(message), let CLIError.transport(message):
-        return CommandOutcome(stderr: message, exitCode: 1)
+    case let CLIError.notInTab(message):
+        return .failure(code: .sessionRequired, message: message)
+
+    case let CLIError.classified(code, message):
+        return .failure(code: code, message: message)
+
+    case let error as DecodingError:
+        return .failure(code: .protocolInvalidResponse, message: "\(error)")
+
+    case let error as EncodingError:
+        return .failure(code: .internalError, message: "\(error)")
 
     default:
-        return CommandOutcome(stderr: "\(error)", exitCode: 1)
+        return .failure(code: .internalError, message: "\(error)")
     }
 }
 
@@ -49,8 +104,8 @@ func errorOutcome(_ error: Error) -> CommandOutcome {
 /// injected `CLITransport`, reads no globals it can't be handed, and returns
 /// an outcome instead of writing to stdout/stderr and calling `exit`. Most
 /// verbs return a value; the streaming (`events`) and exec (`with-pane`)
-/// verbs, along with the terse `usage` path, own their I/O and terminate the
-/// process directly.
+/// verbs own their I/O and terminate the process directly. Usage returns a
+/// typed outcome so the driver can preserve its stderr block and add JSON.
 ///
 /// Env-derived inputs (current session, credentials) are read here and
 /// handed to the handlers so the handlers stay pure and unit-testable
@@ -623,8 +678,8 @@ func run(
             }
 
         // Meta / special verbs. The doc-dump and diagnostic verbs return
-        // a rendered outcome; `usage`, `with-pane`, and `events` own
-        // their I/O and terminate directly (never returning here).
+        // a rendered outcome; `with-pane` and `events` own their I/O and
+        // terminate directly (never returning here).
         case let .help(topic):
             return helpOutcome(topic: topic)
 
@@ -635,8 +690,7 @@ func run(
             return doctorOutcome(output: output)
 
         case let .usage(message):
-            if let message { writeStderr("\(message)\n") }
-            usage()
+            return CLIUsage.outcome(message: message)
 
         case let .withPane(ref, cmd):
             withPaneExec(ref: ref, cmd: cmd)
@@ -664,8 +718,9 @@ func run(
 /// Resolution order: explicit `--pane <ref>` (tiered `PaneRefResolver`),
 /// then the `DEVICETERM_TARGET_PANE` env key exported by `with-pane`
 /// (exact key match, no tier shadowing), then the tab's sole pane.
-/// Throws `CLIError.notInTab` out-of-tab and `.transport` on
-/// ambiguity / no match, so the driver surfaces a clear error.
+/// Throws `CLIError.notInTab` out-of-tab and a typed pane-resolution
+/// failure on ambiguity / no match, so JSON callers can branch without
+/// parsing the diagnostic.
 func resolvePane(
     ref: String?,
     transport: CLITransport,
@@ -682,13 +737,13 @@ func resolvePane(
             return ResolvedPane(paneId: pane.paneId, udid: pane.udid, shortId: pane.shortId)
 
         case let .ambiguous(hits):
-            throw CLIError.transport(
+            throw CLIError.paneAmbiguous(
                 "'\(refValue)' is ambiguous in this tab; matches:\n"
                 + paneRosterLines(hits)
             )
 
         case .sentinel, .notFound:
-            throw CLIError.transport(
+            throw CLIError.paneNotFound(
                 "no pane matching '\(refValue)' in this tab; "
                 + "run `deviceterm panes list`"
             )
@@ -705,7 +760,7 @@ func resolvePane(
     if let envKey = envValue(DeviceTermEnv.targetPane),
         !envKey.isEmpty {
         guard let pane = PaneRefResolver.exactKeyMatch(envKey, in: panes) else {
-            throw CLIError.transport(
+            throw CLIError.paneNotFound(
                 "no pane for exported target \(envKey) in this tab"
             )
         }
@@ -713,13 +768,13 @@ func resolvePane(
     }
     // 3. No ref anywhere → the tab's sole pane, else a clear error.
     guard panes.count <= 1 else {
-        throw CLIError.transport(
+        throw CLIError.paneAmbiguous(
             "multiple panes in this tab; pass --pane <ref>:\n"
             + paneRosterLines(panes)
         )
     }
     guard let pane = panes.first else {
-        throw CLIError.transport("no device pane in this tab")
+        throw CLIError.paneNotFound("no device pane in this tab")
     }
     return ResolvedPane(paneId: pane.paneId, udid: pane.udid, shortId: pane.shortId)
 }
@@ -996,8 +1051,9 @@ func handleTabsCurrent(
 ) throws -> CommandOutcome {
     guard let currentSession, !currentSession.isEmpty else {
         return .failure(
-            "not inside a deviceterm tab (\(DeviceTermEnv.session) unset); "
-            + "run `deviceterm tabs list` to see open tabs"
+            code: .sessionRequired,
+            message: "not inside a deviceterm tab (\(DeviceTermEnv.session) unset); "
+                + "run `deviceterm tabs list` to see open tabs"
         )
     }
     let result = try transport.send(CLICommands.tabsListRequest())

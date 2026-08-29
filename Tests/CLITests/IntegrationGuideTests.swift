@@ -75,6 +75,40 @@ func integrationGuidePinsOutputModeExceptions() throws {
 }
 
 @Test
+func integrationGuideDocumentsTypedJSONFailures() throws {
+    let contents = try integrationGuide()
+    let rules = try section(named: "Contract Rules", in: contents)
+    for field in [#""code""#, #""message""#, #""details""#] {
+        #expect(rules.contains(field), "JSON failure envelope missing field \(field)")
+    }
+    for code in [
+        "cli.invalidUsage",
+        "session.required",
+        "transport.unavailable",
+        "protocol.invalidResponse",
+        "pane.notFound",
+        "pane.bridgeFailed",
+        "rpc.invalidParams",
+        "intent.*"
+    ] {
+        #expect(rules.contains(code), "JSON failure contract missing code \(code)")
+    }
+    #expect(rules.contains("Branch on `error.code`"))
+    #expect(rules.contains("human-readable stderr diagnostic"))
+    #expect(rules.contains("nonzero exit status"))
+}
+
+@Test
+func integrationGuidePinsTypedFailureBoundary() throws {
+    let contents = try integrationGuide()
+    let rules = try section(named: "Contract Rules", in: contents)
+    #expect(rules.contains("Command-specific\nfailure paths that have not adopted"))
+    #expect(rules.contains("`events` retains its JSON Lines streaming behavior"))
+    #expect(rules.contains("`with-pane` continues to inherit its child process's"))
+    #expect(rules.contains("A failing `doctor --json` still returns its doctor report"))
+}
+
+@Test
 func integrationGuideSurfaceMatrixPinsScopeCategories() throws {
     let contents = try integrationGuide()
     let matrix = try section(named: "Surface Matrix", in: contents)

@@ -12,7 +12,7 @@ import Foundation
 /// `roundTrip(method:params:)` path (auto-auth handshake included).
 protocol CLITransport {
     /// Send a built request envelope and return the daemon's response
-    /// body bytes. Throws `CLIError.transport` / `CLIError.daemon` on
+    /// body bytes. Throws a classified `CLIError` or `CLIError.daemon` on
     /// failure, matching the free `send(_:)`'s contract.
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data
 }

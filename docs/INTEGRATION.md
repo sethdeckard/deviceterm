@@ -54,21 +54,106 @@ JSON independently.
 
 ### Read Stdout, Stderr, and Exit Status Separately
 
-Successful JSON goes to stdout with a trailing newline. Errors remain
-human-readable text on stderr, even when you pass `--json`.
+Successful JSON goes to stdout with a trailing newline.
 
-DeviceTerm does not emit JSON error envelopes. Check the process exit status
-before decoding stdout:
+When a JSON-capable, non-streaming command reports a typed failure, stdout
+contains a newline-terminated error envelope:
+
+```json
+{
+  "error": {
+    "code": "pane.notFound",
+    "message": "no device pane in this tab"
+  }
+}
+```
+
+The `error` object has these fields:
+
+| Field | Stability | Meaning |
+|---|---|---|
+| `code` | Stable | Dotted identifier intended for programmatic branching |
+| `message` | Best-effort | Human-readable diagnostic; do not parse it |
+| `details` | Stable-additive, optional | Structured context for the failure |
+
+Daemon failures include their numeric RPC code when available:
+
+```json
+{
+  "error": {
+    "code": "intent.automationRequired",
+    "message": "intent.automationRequired: tab.send-input requires automation authority",
+    "details": {
+      "rpcCode": -32011
+    }
+  }
+}
+```
+
+Current shared codes are:
+
+| Code | Meaning |
+|---|---|
+| `cli.invalidUsage` | The command invocation is malformed |
+| `cli.internalError` | The CLI could not encode or process its own result |
+| `session.required` | The command requires DeviceTerm tab context |
+| `session.unauthorized` | Session authentication or authority was refused |
+| `session.notReady` | The session exists but is not ready for the request |
+| `transport.unavailable` | The CLI could not connect to the daemon |
+| `transport.timeout` | The daemon did not answer before the request deadline |
+| `transport.interrupted` | An established daemon connection was interrupted |
+| `protocol.invalidResponse` | The daemon response could not be framed or decoded |
+| `pane.notFound` | No accessible pane matched the reference |
+| `pane.ambiguous` | More than one accessible pane matched the reference |
+| `pane.unavailable` | The resolved pane cannot currently perform the request |
+| `pane.bridgeFailed` | The pane's device bridge failed |
+| `rpc.invalidRequest` | The daemon rejected the RPC request shape |
+| `rpc.methodNotFound` | The daemon does not implement the requested RPC method |
+| `rpc.invalidParams` | The daemon rejected the RPC parameters |
+| `rpc.serverError` | The daemon reported an internal server failure |
+| `rpc.error` | The daemon returned an otherwise unclassified RPC error |
+
+An `intent.*` code supplied by the daemon passes through unchanged. Commands
+may define additional dotted codes for their own outcomes; those codes are
+documented with the command.
+
+The CLI preserves its human-readable stderr diagnostic and nonzero exit status
+when it emits an error envelope. Branch on `error.code`, not on the message or
+stderr text:
 
 ```sh
-if report=$(deviceterm doctor --json); then
-  printf '%s\n' "$report" | jq '.checks'
+if report=$(deviceterm tap 0.5 0.5 --json); then
+  printf '%s\n' "$report" | jq '.'
 else
   status=$?
-  printf '%s\n' "$report" | jq '.checks' 2>/dev/null || true
+  if code=$(printf '%s\n' "$report" | jq -er '.error.code'); then
+    case "$code" in
+      pane.notFound)
+        printf 'no accessible pane yet\n' >&2
+        ;;
+      transport.*|session.notReady)
+        printf 'DeviceTerm infrastructure is unavailable\n' >&2
+        ;;
+      *)
+        printf 'deviceterm failed: %s\n' "$code" >&2
+        ;;
+    esac
+  else
+    printf 'deviceterm returned an untyped failure\n' >&2
+  fi
   exit "$status"
 fi
 ```
+
+The shared typed paths currently cover usage, session context, transport,
+response decoding, pane resolution, and daemon errors. Command-specific
+failure paths that have not adopted the typed primitive still emit no JSON
+envelope. Check the exit status before decoding stdout, and treat empty stdout
+after failure as an untyped failure.
+
+`events` retains its JSON Lines streaming behavior and human-readable stream
+errors. `with-pane` continues to inherit its child process's stdout, stderr,
+and exit behavior.
 
 Most command, usage, transport, and daemon failures exit with status 1.
 Special cases are:
@@ -79,6 +164,9 @@ Special cases are:
 | `events` | 0 when the daemon closes the stream normally |
 | `with-pane` | Child exit status, or `128 + signal` when signaled |
 | `with-pane` spawn failure | 127 |
+
+A failing `doctor --json` still returns its doctor report rather than an error
+envelope. Its exit status indicates whether any check failed.
 
 Exact error sentences are diagnostic prose. Do not parse them as a structured
 contract.
@@ -667,8 +755,10 @@ proof that its methods are currently available.
 
 ## Action Receipts
 
-A successful action receipt contains `"ok": true`. A failed action prints an
-error to stderr, exits nonzero, and emits no success object.
+A successful action receipt contains `"ok": true`. A failed action never emits
+a success object. In JSON mode, typed failures follow the error-envelope
+contract above; command-specific failure paths that have not adopted it remain
+stderr-only.
 
 Input receipts identify the resolved pane. Workspace receipts usually echo the
 caller's unresolved reference.

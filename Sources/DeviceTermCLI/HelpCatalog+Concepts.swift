@@ -68,11 +68,20 @@ extension HelpCatalog {
               Data commands (lists, receipts) support `--json` for
               machine-readable output: lists become JSON arrays, receipts
               become JSON objects with the same fields as the human form.
-              Successful output goes to stdout; errors stay on stderr in
-              human form regardless of mode (so `deviceterm ... --json | jq`
-              works on the happy path). Documentation commands (`--help`,
-              `agents`) and AX commands are unaffected: `--help` and
-              `agents` are prose either way; AX already emits JSON.
+              Successful output goes to stdout.
+
+              In JSON mode, typed failures also emit a newline-terminated
+              JSON envelope on stdout under `error`. The human diagnostic
+              stays on stderr and the exit status stays nonzero. Branch on
+              `error.code`; do not parse `error.message` or stderr prose.
+              Command-specific failures not yet using the typed contract
+              may still produce empty stdout.
+
+              Documentation commands (`--help`, `agents`) remain prose.
+              AX commands always emit JSON: successes use their usual
+              `tree` or `element` wrapper, while typed failures use the
+              `error` envelope even without `--json`. `events` keeps its
+              JSON Lines stream and human-readable stream errors.
             """
         ),
         HelpTopic(

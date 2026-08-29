@@ -348,10 +348,11 @@ public enum CLICommands {
     /// Detect the requested output mode. `--json` anywhere in argv
     /// before a bare `--` terminator switches to JSON; tokens after
     /// `--` are literal (so `deviceterm text -- --json` types the
-    /// literal string and stays in human mode). Detection is
-    /// order-independent and works before `parse(_:)` strips the
-    /// flag. Both surfaces use the same predicate so they can't
-    /// drift.
+    /// literal string and stays in human mode). AX commands are always
+    /// JSON, including malformed invocations that parse as usage errors.
+    /// Detection is order-independent and works before `parse(_:)`
+    /// strips the flag. Both surfaces use the same predicate so they
+    /// can't drift.
     ///
     /// `with-pane` ignores `--json` in its post-verb tail. The tail
     /// is the child's argv, not deviceterm's. `--json` in
@@ -365,7 +366,9 @@ public enum CLICommands {
             return argv.prefix(through: verbIdx).contains(jsonFlag) ? .json : .human
         }
         let endIndex = argv.firstIndex(of: "--") ?? argv.endIndex
-        return argv[..<endIndex].contains(jsonFlag) ? .json : .human
+        let prefix = argv[..<endIndex]
+        if prefix.contains(jsonFlag) { return .json }
+        return prefix.dropFirst().first == "ax" ? .json : .human
     }
 
     /// Strip `--json` while preserving `deviceterm with-pane`'s child

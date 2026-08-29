@@ -161,6 +161,15 @@ func agentsDocumentationScopesJSONClaimToDataCommands() {
 }
 
 @Test
+func agentsDocumentationDescribesTypedJSONFailures() {
+    let documentation = AgentsText.documentation
+    #expect(documentation.contains(#"{"error": ...}"#))
+    #expect(documentation.contains("`.error.code`"))
+    #expect(documentation.contains("malformed AX invocations"))
+    #expect(documentation.contains("JSON Lines stream"))
+}
+
+@Test
 func agentsDocumentationCarriesCatEPhilosophyCalloutCMissingFromCLI() {
     // The Cat E "what's NOT in the deviceterm CLI by design" gate.
     // simctl wrappers, MCP layer, recipe library are all

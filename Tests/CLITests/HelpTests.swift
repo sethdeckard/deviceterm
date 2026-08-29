@@ -427,7 +427,16 @@ func helpScopesJSONClaimToDataCommands() {
     // contradiction with runtime behavior.
     let output = HelpCatalog.topic(named: "output")?.detail ?? ""
     #expect(output.contains("Data commands"))
-    #expect(output.contains("prose either way"))
+    #expect(output.contains("remain prose"))
+}
+
+@Test
+func helpDescribesTypedJSONFailures() {
+    let output = HelpCatalog.topic(named: "output")?.detail ?? ""
+    #expect(output.contains("typed failures"))
+    #expect(output.contains("`error.code`"))
+    #expect(output.contains("`error` envelope even without `--json`"))
+    #expect(output.contains("JSON Lines stream"))
 }
 
 @Test

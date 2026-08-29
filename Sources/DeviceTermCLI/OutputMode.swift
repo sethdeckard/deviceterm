@@ -9,9 +9,9 @@
 /// commands like `tap 0.5 0.5 --json` still parse with the expected
 /// positional arity.
 ///
-/// Errors stay on stderr with the same human-readable shape regardless
-/// of mode: jq pipelines work on stdout for success, and out-of-band
-/// failure messages don't surprise consumers reading JSON.
+/// Typed failures from JSON-capable commands emit a JSON error envelope
+/// on stdout while preserving their human-readable stderr diagnostic.
+/// AX commands always use JSON mode, including malformed invocations.
 public enum OutputMode: String, Equatable, Sendable {
     /// Tab-separated receipt lines, list rows, etc: the default
     /// since shipping a CLI for terminals.
