@@ -358,7 +358,7 @@ struct ReleaseNotesDocumentTests {
         // The debug fixture drives the real popover, so it has to parse.
         let blocks = ReleaseNotesDocument.parse(UpdateSimulator.sampleNotes)
         #expect(blocks.contains(where: isTitle))
-        #expect(blocks.filter(isBullet).count == 5)
+        #expect(blocks.filter(isBullet).count == 8)
         #expect(!texts(blocks).joined().contains("-apple-system"))
     }
 }

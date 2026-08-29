@@ -131,8 +131,14 @@ xattr <file>                                                        # expect emp
   stylesheet: `<h3>` section headings, `<p>`, `<ul>` with `<li>` (an `<ol>`
   renders as bullets too, not numbers), and inline `<b>`, `<i>`, `<code>`,
   `<a href>`, and `<br>`. The popover names the version above the notes, so
-  skip a title heading; `<h1>` and `<h2>` still render as one for older
-  notes that carry it.
+  skip a title heading; an `<h1>` or `<h2>` keeps its text and uses the
+  same font as an `<h3>`.
+
+  Consecutive `<ul>` or `<ol>` blocks with nothing between them render as
+  one list, so two distinct lists need an intervening `<h3>` or `<p>`.
+  `<code>` renders one step smaller than the text around it, which keeps a
+  monospaced span level with the prose rather than heavier; don't
+  compensate for that in the markup.
 
   Styles, scripts, comments, and declarations are dropped with their
   content. Any other unsupported tag loses its markup and keeps its text.
