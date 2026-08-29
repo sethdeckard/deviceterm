@@ -6,6 +6,13 @@ its own AppKit GUI (window/tab/pane chrome, status item, modal prompts, device
 picker), not just the CLI/daemon contract. The Claude and Codex `SKILL.md` files
 point here; this is the single source of truth.
 
+**Driving the device inside a pane is a different skill.** Touch, hardware
+input, rotation, and `ax tree`/`point`/`sweep` against a simulator or connected
+device belong to `.agents/skills/deviceterm-device-e2e/PLAYBOOK.md`. Its
+instrument is the shipped CLI, so it needs none of the preflight below: no
+harness, no TCC grants, no automation grant. Gating a sim run behind this
+skill's gate would refuse a machine that can run all of it.
+
 An ordinary tab is not enough. The scenarios open, select, and move tabs and
 windows, and those verbs require a live automation grant that only the GUI
 issues, when a person opens an Automation Tab (Shell > Open Automation Tab,
