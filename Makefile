@@ -222,7 +222,7 @@ probe:
 
 test:
 	@if find Tests -name '*.swift' 2>/dev/null | head -1 | grep -q .; then \
-	    swift test --no-parallel --skip CoreSimulatorLiveTests --skip DeviceLiveTests; \
+	    swift test --no-parallel --skip CoreSimulatorLiveTests --skip DeviceLiveTests || exit $$?; \
 	    echo "make test: live tracks skipped — run 'make test-live' / 'make test-device-live' deliberately"; \
 	else \
 	    echo "make test: no Tests/*.swift yet — skipping"; \
@@ -248,8 +248,8 @@ test-gui: bundle
 
 test-shim:
 	@ran=0; \
-	if [ -d Tests/ShimTests ]; then swift test --filter ShimTests; ran=1; fi; \
-	if [ -d Tests/CLITests ]; then swift test --filter CLITests; ran=1; fi; \
+	if [ -d Tests/ShimTests ]; then swift test --filter ShimTests || exit $$?; ran=1; fi; \
+	if [ -d Tests/CLITests ]; then swift test --filter CLITests || exit $$?; ran=1; fi; \
 	if [ "$$ran" -eq 0 ]; then \
 	    echo "make test-shim: Tests/ShimTests + Tests/CLITests do not exist — skipping"; \
 	fi
