@@ -31,6 +31,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let name: String?
         let role: SessionRole
         let initialProtected: Bool
+        let tabId: UUID?
     }
     struct CloseSessionCall: Equatable {
         let sessionId: String
@@ -571,10 +572,17 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         label: String?,
         name: String?,
         role: SessionRole,
-        initialProtected: Bool
+        initialProtected: Bool,
+        tabId: UUID? = nil
     ) async -> SessionCreateResponse {
         createSessionCalls.append(
-            .init(label: label, name: name, role: role, initialProtected: initialProtected)
+            .init(
+                label: label,
+                name: name,
+                role: role,
+                initialProtected: initialProtected,
+                tabId: tabId
+            )
         )
         await awaitCreateSessionGate()
         if !sessionSequence.isEmpty {

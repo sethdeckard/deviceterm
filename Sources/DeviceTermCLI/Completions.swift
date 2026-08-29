@@ -483,7 +483,7 @@ public enum Completions {
         lines.append("complete -c deviceterm -l velocity -d 'crown velocity'")
         lines.append("complete -c deviceterm -l step -d 'ax sweep step (0..1)'")
         lines.append("complete -c deviceterm -l budget -d 'ax sweep time budget in milliseconds'")
-        lines.append("complete -c deviceterm -l tab -d 'tab ref (sessionId / shortId / name / current)'")
+        lines.append("complete -c deviceterm -l tab -d 'tab ref (tabId / sessionId / shortId / name / current)'")
         lines.append(
             "complete -c deviceterm -l pane "
             + "-d 'target device pane (shortId/name/UDID/deviceId/paneId)'"

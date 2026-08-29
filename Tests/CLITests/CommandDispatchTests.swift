@@ -50,6 +50,7 @@ private func onePaneResponse() throws -> Data {
 }
 
 private let testCreds = (sessionId: "S1", cap: "C1")
+private let testTabId = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
 
 private func encoded(_ value: some Encodable) throws -> Data {
     try JSONEncoder().encode(value)
@@ -64,8 +65,8 @@ private func stdoutString(_ outcome: CommandOutcome) -> String {
 @Test
 func tabsListHumanMatchesFormatter() throws {
     let entries = [
-        TabsListEntry(sessionId: "S1", label: "L1", shortId: "s1", name: "n1"),
-        TabsListEntry(sessionId: "S2", label: "L2", shortId: "s2", name: nil)
+        TabsListEntry(sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"),
+        TabsListEntry(sessionId: "S2", label: "L2", tabId: testTabId, shortId: "s2", name: nil)
     ]
     let fake = FakeTransport(response: try encoded(entries))
     let outcome = try handleTabsList(transport: fake, output: .human, currentSession: "S1")
@@ -83,8 +84,12 @@ func tabsListHumanMatchesFormatter() throws {
 @Test
 func tabsListJSONEncodesRowsWithCurrentFlag() throws {
     let entries = [
-        TabsListEntry(sessionId: "S1", label: "L1", shortId: "s1", name: "n1"),
-        TabsListEntry(sessionId: "S2", label: "L2", shortId: "s2", name: nil)
+        TabsListEntry(
+            sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"
+        ),
+        TabsListEntry(
+            sessionId: "S2", label: "L2", tabId: testTabId, shortId: "s2", name: nil
+        )
     ]
     let fake = FakeTransport(response: try encoded(entries))
     let outcome = try handleTabsList(transport: fake, output: .json, currentSession: "S2")
@@ -96,7 +101,8 @@ func tabsListJSONEncodesRowsWithCurrentFlag() throws {
             name: "n1",
             displayTitle: nil,
             sessionId: "S1",
-            label: "L1"
+            label: "L1",
+            tabId: testTabId
         ),
         Receipt.TabsListRow(
             current: true,
@@ -104,7 +110,8 @@ func tabsListJSONEncodesRowsWithCurrentFlag() throws {
             name: nil,
             displayTitle: nil,
             sessionId: "S2",
-            label: "L2"
+            label: "L2",
+            tabId: testTabId
         )
     ]
     #expect(outcome.exitCode == 0)
@@ -121,6 +128,7 @@ func tabsListJSONCarriesTheLiveDisplayTitle() throws {
         TabsListEntry(
             sessionId: "S1",
             label: "L1",
+            tabId: testTabId,
             shortId: "s1",
             name: "branch",
             displayTitle: "vim foo.swift"
@@ -136,7 +144,8 @@ func tabsListJSONCarriesTheLiveDisplayTitle() throws {
             name: "branch",
             displayTitle: "vim foo.swift",
             sessionId: "S1",
-            label: "L1"
+            label: "L1",
+            tabId: testTabId
         )
     ]
     #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
@@ -150,6 +159,46 @@ func tabsListEmptyProducesNoOutput() throws {
     let fake = FakeTransport(response: try encoded([TabsListEntry]()))
     let outcome = try handleTabsList(transport: fake, output: .human, currentSession: nil)
     #expect(outcome == .ok)
+}
+
+@Test
+func tabsListJSONEmptyIsSuccessfulArray() throws {
+    let fake = FakeTransport(response: try encoded([TabsListEntry]()))
+    let outcome = try handleTabsList(transport: fake, output: .json, currentSession: nil)
+    #expect(outcome.exitCode == 0)
+    #expect(outcome.stdout == Data("[]\n".utf8))
+}
+
+@Test
+func tabsListJSONMissingTabIdIsInvalidResponse() throws {
+    let response = Data(#"[{"sessionId":"S1"}]"#.utf8)
+    let command = CLICommand.tabsList
+    let outcome = run(command, transport: FakeTransport(response: response), output: .json)
+        .renderingFailure(for: command, output: .json)
+    let document = try #require(
+        JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any]
+    )
+    let error = try #require(document["error"] as? [String: Any])
+    #expect(error["code"] as? String == "protocol.invalidResponse")
+    #expect(outcome.exitCode == 1)
+    #expect(outcome.stderr != nil)
+    #expect(outcome.stdout.last == 0x0A)
+}
+
+@Test
+func tabsListJSONMalformedTabIdIsInvalidResponse() throws {
+    let response = Data(#"[{"sessionId":"S1","tabId":"not-a-uuid"}]"#.utf8)
+    let command = CLICommand.tabsList
+    let outcome = run(command, transport: FakeTransport(response: response), output: .json)
+        .renderingFailure(for: command, output: .json)
+    let document = try #require(
+        JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any]
+    )
+    let error = try #require(document["error"] as? [String: Any])
+    #expect(error["code"] as? String == "protocol.invalidResponse")
+    #expect(outcome.exitCode == 1)
+    #expect(outcome.stderr != nil)
+    #expect(outcome.stdout.last == 0x0A)
 }
 
 // MARK: - tabs current
@@ -170,21 +219,61 @@ func tabsCurrentOutOfTabIsFailureWithHint() throws {
 @Test
 func tabsCurrentStaleSessionIsFailure() throws {
     let fake = FakeTransport(response: try encoded([
-        TabsListEntry(sessionId: "OTHER", label: nil)
+        TabsListEntry(sessionId: "OTHER", label: nil, tabId: testTabId)
     ]))
     let outcome = try handleTabsCurrent(transport: fake, output: .human, currentSession: "S1")
     #expect(outcome.exitCode == 1)
+    #expect(outcome.failure?.code == .sessionUnauthorized)
     #expect(outcome.stderr == "\(DeviceTermEnv.session)=S1 has no live tab; "
         + "the daemon may have restarted; try opening a fresh tab")
 }
 
 @Test
+func tabsCurrentJSONStaleSessionHasFailureEnvelope() throws {
+    let fake = FakeTransport(response: try encoded([
+        TabsListEntry(sessionId: "OTHER", label: nil, tabId: testTabId)
+    ]))
+    let command = CLICommand.tabsCurrent
+    let outcome = try handleTabsCurrent(transport: fake, output: .json, currentSession: "S1")
+        .renderingFailure(for: command, output: .json)
+    let document = try #require(
+        JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any]
+    )
+    let error = try #require(document["error"] as? [String: Any])
+    #expect(error["code"] as? String == "session.unauthorized")
+    #expect(outcome.exitCode == 1)
+    #expect(outcome.stderr != nil)
+    #expect(outcome.stdout.last == 0x0A)
+}
+
+@Test
 func tabsCurrentSuccessRendersRow() throws {
-    let entry = TabsListEntry(sessionId: "S1", label: "L1", shortId: "s1", name: "n1")
+    let entry = TabsListEntry(
+        sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"
+    )
     let fake = FakeTransport(response: try encoded([entry]))
     let outcome = try handleTabsCurrent(transport: fake, output: .human, currentSession: "S1")
     #expect(outcome.exitCode == 0)
     #expect(outcome == .stdout(TabsListFormatter.formatRow(entry: entry, isCurrent: true) + "\n"))
+}
+
+@Test
+func tabsCurrentJSONIncludesTabId() throws {
+    let entry = TabsListEntry(
+        sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"
+    )
+    let fake = FakeTransport(response: try encoded([entry]))
+    let outcome = try handleTabsCurrent(transport: fake, output: .json, currentSession: "S1")
+    let expected = Receipt.TabsListRow(
+        current: true,
+        shortId: "s1",
+        name: "n1",
+        displayTitle: nil,
+        sessionId: "S1",
+        label: "L1",
+        tabId: testTabId
+    )
+    #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
 }
 
 // MARK: - panes list

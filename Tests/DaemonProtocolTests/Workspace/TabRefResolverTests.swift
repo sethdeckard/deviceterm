@@ -83,6 +83,26 @@ func nameMatchHandlesAmbiguity() {
     #expect(matches.count == 2)
 }
 
+@Test
+func nameMatchDeduplicatesSessionsInTheSameTab() {
+    let primary = TabsListEntry(
+        sessionId: "44444444-4444-4444-4444-444444444441",
+        label: nil,
+        tabId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        shortId: "split1",
+        name: "shared"
+    )
+    let split = TabsListEntry(
+        sessionId: "44444444-4444-4444-4444-444444444442",
+        label: nil,
+        tabId: primary.tabId,
+        shortId: "split2",
+        name: "shared"
+    )
+
+    #expect(TabRefResolver.resolve("shared", in: [primary, split]) == .entry(primary))
+}
+
 // MARK: - UUID prefix tier
 
 @Test
@@ -104,6 +124,27 @@ func uuidPrefixMatchToleratesUppercase() {
     if case let .entry(matched) = TabRefResolver.resolve("3333", in: fixtures) {
         #expect(matched == unnamed)
     }
+}
+
+@Test
+func tabIdMatchResolvesSplitTabOnce() {
+    let primary = TabsListEntry(
+        sessionId: "44444444-4444-4444-4444-444444444441",
+        label: nil,
+        tabId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        shortId: "split1",
+        name: nil
+    )
+    let split = TabsListEntry(
+        sessionId: "44444444-4444-4444-4444-444444444442",
+        label: nil,
+        tabId: primary.tabId,
+        shortId: "split2",
+        name: nil
+    )
+
+    #expect(TabRefResolver.resolve(primary.tabId.uppercased(), in: [primary, split]) == .entry(primary))
+    #expect(TabRefResolver.resolve("aaaaaaaa", in: [primary, split]) == .entry(primary))
 }
 
 @Test
@@ -136,6 +177,38 @@ func uuidPrefixAmbiguity() {
         return
     }
     #expect(matches.count == 2)
+}
+
+@Test
+func uuidPrefixAmbiguityContainsOneEntryPerTab() {
+    let firstPrimary = TabsListEntry(
+        sessionId: "11111111-1111-1111-1111-111111111111",
+        label: nil,
+        tabId: "abcdef00-0000-0000-0000-000000000001",
+        shortId: "tab001",
+        name: nil
+    )
+    let firstSplit = TabsListEntry(
+        sessionId: "22222222-2222-2222-2222-222222222222",
+        label: nil,
+        tabId: firstPrimary.tabId,
+        shortId: "tab002",
+        name: nil
+    )
+    let second = TabsListEntry(
+        sessionId: "33333333-3333-3333-3333-333333333333",
+        label: nil,
+        tabId: "abcdef00-0000-0000-0000-000000000002",
+        shortId: "tab003",
+        name: nil
+    )
+
+    let result = TabRefResolver.resolve("abcdef", in: [firstPrimary, firstSplit, second])
+    guard case let .ambiguous(matches) = result else {
+        Issue.record("expected .ambiguous, got \(result)")
+        return
+    }
+    #expect(matches == [firstPrimary, second])
 }
 
 // MARK: - Sentinel tier

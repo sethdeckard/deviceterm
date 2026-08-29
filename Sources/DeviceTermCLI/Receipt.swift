@@ -133,14 +133,17 @@ public enum Receipt {
         public let durationMs: Int?
     }
 
-    /// One row of `tabs list --json`. Carries the five human-column
-    /// values plus JSON-only `displayTitle`; the `current` boolean
+    /// One row of `tabs list --json`. Carries the five human-column values plus
+    /// required JSON-only `tabId` and optional JSON-only `displayTitle`; the `current` boolean
     /// replaces the `*` / space marker. `tabs current --json` emits a
     /// single instance of this same type: JSON consumers can decode
     /// either list-mode or single-mode output with one struct.
     ///
-    /// `displayTitle` is JSON-only. The human columns are a pinned
-    /// tab-separated shape a sixth column would break. It is the GUI's
+    /// `tabId` is the required grouping UUID. Every terminal session in one
+    /// GUI tab shares it and may use it directly with `--tab`. A session
+    /// without a GUI tab uses its `sessionId`. The human columns are a pinned
+    /// tab-separated shape a sixth column would break.
+    /// `displayTitle` is the GUI's
     /// live tab label (the shell's OSC title, a manual rename) in the
     /// normalized, bounded form the daemon holds, so unlike `shortId` /
     /// `name` it is not an identifier and never resolves a `--tab <ref>`.
@@ -148,11 +151,30 @@ public enum Receipt {
     /// `name` doesn't, and for the non-primary terminals of a split tab.
     public struct TabsListRow: Encodable, Sendable {
         public let current: Bool
+        public let tabId: String
         public let shortId: String?
         public let name: String?
         public let displayTitle: String?
         public let sessionId: String
         public let label: String?
+
+        public init(
+            current: Bool,
+            shortId: String?,
+            name: String?,
+            displayTitle: String?,
+            sessionId: String,
+            label: String?,
+            tabId: String? = nil
+        ) {
+            self.current = current
+            self.tabId = tabId ?? sessionId
+            self.shortId = shortId
+            self.name = name
+            self.displayTitle = displayTitle
+            self.sessionId = sessionId
+            self.label = label
+        }
     }
 
     // MARK: - Workspace verb receipts

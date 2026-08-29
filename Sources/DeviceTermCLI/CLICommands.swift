@@ -118,7 +118,8 @@ public enum CLICommands {
     // `--tab` / `--pane` / `--window` value to the wire enum the
     // daemon's `IntentResolver` consumes. Discrimination rules:
     //   - Empty/nil/`current` → `.current`.
-    //   - UUID → `.sessionId` (tab) / `.paneId` (pane).
+    //   - UUID → `.sessionId` (a tab ID or terminal session ID); the GUI
+    //     resolves either to the containing tab. Panes use `.paneId`.
     //   - Short alphanumeric (≤ 12 chars) → `.shortId`.
     //   - Anything else → `.name` (tab only) or `.shortId` (pane).
     //   - Pure integer (window) → `.index`.

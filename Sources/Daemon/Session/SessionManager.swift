@@ -18,13 +18,10 @@ import Foundation
 /// the cap verifier + owner identity + the shared `terminalAnchorStore`; the
 /// provenance decision lives in the connection layer.
 ///
-/// Each session carries the three-layer identifier model: a `shortId`
-/// (6-char Crockford base32, daemon-minted with collision retry,
-/// immutable for the session's lifetime) and an optional `name`
-/// (supplied by the caller at create, likewise never rewritten: a
-/// manual tab title is separate GUI state). The fields ride through
-/// `tabs.list` + `session.create` so the CLI's `--tab <ref>` resolver
-/// (`TabRefResolver` in DaemonProtocol) can match against them.
+/// Each session carries a stable `tabId` grouping/reference UUID plus a
+/// `shortId` and optional `name`. These fields ride through `tabs.list` and
+/// `session.create`; callers holding a list snapshot can resolve them with
+/// `TabRefResolver`.
 public actor SessionManager {
     /// A session id's ordered lifecycle phase, carrying its incarnation.
     private enum Phase {
@@ -352,7 +349,7 @@ public actor SessionManager {
     ///    same-connection retry with a higher revision) corrects a stale protection
     ///    value, while a live `setProtectedBatch` the user issued after the restore
     ///    still wins (it carries the higher `.liveAuthority` tier). Immutable
-    ///    metadata (role/short id) is validated to match and left untouched.
+    ///    metadata (tab id / role / short id) is validated to match and left untouched.
     ///    Every in-batch session's assertion key is refreshed to this batch.
     /// 3. **Reconcile removals.** The batch is the complete inventory, so a live
     ///    session it OMITS whose assertion key is strictly dominated by this
@@ -432,9 +429,10 @@ public actor SessionManager {
                 guard live.capabilityVerifier.matches(entry.capability) else {
                     throw RestoreBatchError.verifierConflict(entry.id)
                 }
-                // Same verifier but disagreeing immutable metadata (short id /
-                // role): report the mismatch rather than silently rewrite it.
-                guard live.shortId == entry.shortId, live.role == entry.role else {
+                // Same verifier but disagreeing immutable metadata (tab id /
+                // short id / role): report the mismatch rather than silently rewrite it.
+                guard live.shortId == entry.shortId, live.role == entry.role,
+                    live.tabId == entry.tabId else {
                     throw RestoreBatchError.metadataConflict(entry.id)
                 }
             } else if let holder = liveShortIds[entry.shortId], holder != entry.id {
@@ -480,7 +478,8 @@ public actor SessionManager {
                     // Owner captured from the validated XPC peer (never the
                     // wire), so the restored session is owned by the live GUI.
                     ownerPID: owner?.pid,
-                    owner: owner
+                    owner: owner,
+                    tabId: entry.tabId
                 )
                 sessions[entry.id] = state
                 if entry.isProtected { protectedSessions.insert(entry.id) }
@@ -875,7 +874,8 @@ public actor SessionManager {
         owner: OwnerProcessIdentity? = nil,
         initialProtected: Bool = false,
         epoch: UInt64 = 0,
-        restorable: Bool = false
+        restorable: Bool = false,
+        tabId: UUID? = nil
     ) async throws -> CreatedSession {
         let id = UUID()
         let capability = try Capability.random()
@@ -892,7 +892,8 @@ public actor SessionManager {
             // the full identity. Both derive from the captured peer identity,
             // never a caller-supplied field.
             ownerPID: owner?.pid,
-            owner: owner
+            owner: owner,
+            tabId: tabId
         )
         sessions[id] = state
         // Seed protection in the SAME actor turn as `sessions[id]`, before ANY

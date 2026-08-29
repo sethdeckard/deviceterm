@@ -6,7 +6,9 @@
 /// thing it can be: short_id first, then name, then UUID prefix, then
 /// a reserved sentinel keyword. The resolver
 /// (`TabRefResolver.resolve(_:in:)`) walks this order against a
-/// `[TabsListEntry]` snapshot and returns the matching session.
+/// `[TabsListEntry]` snapshot and returns one representative session row for
+/// the matching tab. A UUID prefix may identify either a tab or one terminal
+/// session; split-session matches are grouped by `tabId` before resolution.
 ///
 /// Reserved sentinels (`current` and `all`) have the LOWEST priority,
 /// not the highest, so a tab named `current` would match by name before

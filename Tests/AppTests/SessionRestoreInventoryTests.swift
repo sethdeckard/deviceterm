@@ -55,8 +55,10 @@ func emitsOneEntryPerTerminalCarryingTabRoleAndTerminalFields() throws {
     #expect(inventory[0].name == "one")
     #expect(inventory[0].role == .automation)   // role is tab-wide
     #expect(inventory[0].isProtected == false)
+    #expect(inventory[0].tabId == onlyTab.cohortId.uuidString)
     #expect(inventory[1].sessionId == "S2")
     #expect(inventory[1].name == nil)
+    #expect(inventory[1].tabId == onlyTab.cohortId.uuidString)
 }
 
 @Test

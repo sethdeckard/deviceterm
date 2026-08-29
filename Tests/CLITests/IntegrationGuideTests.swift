@@ -134,6 +134,25 @@ func integrationGuideHandlesFailedVersionProbeSeparately() throws {
 }
 
 @Test
+func integrationGuideDocumentsTabGroupingContract() throws {
+    let contents = try integrationGuide()
+    let discovery = try section(named: "Discovery and State", in: contents)
+    for contract in [
+        #""tabId""#,
+        "group_by(.tabId)",
+        "unique | length",
+        "visible session groups",
+        "does not distinguish non-GUI groups",
+        "no daemon sessions are visible",
+        "`--tab`",
+        "`[]`",
+        "`protocol.invalidResponse`"
+    ] {
+        #expect(discovery.contains(contract), "tab grouping contract missing \(contract)")
+    }
+}
+
+@Test
 func integrationGuidePinsExternalSimMetadataFallback() throws {
     let contents = try integrationGuide()
     let events = try section(named: "Events", in: contents)

@@ -3,15 +3,12 @@
 /// One entry of the bare-array `tabs.list` result.
 /// Mirrors `SessionMethods.TabsListEntry`.
 ///
-/// `shortId` + `name` are the three-layer identifier model that
-/// rides alongside the always-present `sessionId` (UUID string).
-/// Both are Optional on this client-side shape so an older daemon
-/// (Sparkle update window) decodes cleanly; current daemons always
-/// emit `shortId` and emit `name` once a tab is named. Consumers
-/// prefer `shortId` for display and use `name` for disambiguation;
-/// `TabRefResolver` resolves user-supplied `--tab <ref>` strings
-/// against this triple in the documented order
-/// (short_id → name → UUID prefix → sentinel).
+/// `sessionId` identifies one daemon session. Required `tabId` is its grouping
+/// UUID. GUI terminal sessions in one tab share their tab UUID; a non-GUI
+/// session self-groups under `sessionId`. Consumers group rows by `tabId`.
+/// A GUI-backed group's `tabId` may be passed directly to `--tab <ref>`.
+/// `shortId` and `name` remain optional convenience identifiers used by the
+/// tiered resolver.
 ///
 /// `displayTitle` is the GUI's live tab label in the optional, bounded,
 /// normalized form that crosses the wire: the shell's OSC 0/2 title, a
@@ -27,6 +24,7 @@
 /// under the primary terminal's session.
 public struct TabsListEntry: Codable, Sendable, Equatable {
     public let sessionId: String
+    public let tabId: String
     public let shortId: String?
     public let name: String?
     public let displayTitle: String?
@@ -35,11 +33,13 @@ public struct TabsListEntry: Codable, Sendable, Equatable {
     public init(
         sessionId: String,
         label: String?,
+        tabId: String? = nil,
         shortId: String? = nil,
         name: String? = nil,
         displayTitle: String? = nil
     ) {
         self.sessionId = sessionId
+        self.tabId = tabId ?? sessionId
         self.shortId = shortId
         self.name = name
         self.displayTitle = displayTitle

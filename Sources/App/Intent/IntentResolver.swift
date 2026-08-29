@@ -78,6 +78,17 @@ struct IntentResolver {
             return try resolveCurrentTab()
 
         case let .sessionId(sid):
+            if let uuid = UUID(uuidString: sid) {
+                return try findUnique(
+                    kind: "tab",
+                    ref: sid,
+                    predicate: { tab in
+                        tab.cohortId == uuid || tab.terminals.contains { terminal in
+                            UUID(uuidString: terminal.sessionId) == uuid
+                        }
+                    }
+                )
+            }
             guard let hit = findBySession(sid), accessible(hit.tab) else {
                 throw IntentError.notFound(kind: "tab", ref: sid)
             }

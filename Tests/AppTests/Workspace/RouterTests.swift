@@ -52,11 +52,12 @@ struct RouterTests {
         #expect(workspace.windows.count == 1)
         #expect(workspace.selectedWindowID == WindowID(value: 1))
         #expect(workspace.windows.first?.tabs.tabs.count == 1)
-        #expect(
-            fake.createSessionCalls == [
-            .init(label: nil, name: nil, role: .agent, initialProtected: false)
-            ]
-            )
+        #expect(fake.createSessionCalls.count == 1)
+        #expect(fake.createSessionCalls.first?.label == nil)
+        #expect(fake.createSessionCalls.first?.name == nil)
+        #expect(fake.createSessionCalls.first?.role == .agent)
+        #expect(fake.createSessionCalls.first?.initialProtected == false)
+        #expect(fake.createSessionCalls.first?.tabId == workspace.windows.first?.tabs.tabs.first?.cohortId)
     }
 
     @Test
@@ -67,14 +68,15 @@ struct RouterTests {
         // populates the tab's `name` so the GUI's tabs strip + CLI
         // tabs list auto-label with the branch.
         let fake = FakeDaemonClient()
-        let (router, _) = makeRouter(fake, detectWorktreeName: { "feature-branch" })
+        let (router, workspace) = makeRouter(fake, detectWorktreeName: { "feature-branch" })
         router.dispatch(.openWindow())
         await settle()
-        #expect(
-            fake.createSessionCalls == [
-            .init(label: nil, name: "feature-branch", role: .agent, initialProtected: false)
-            ]
-            )
+        #expect(fake.createSessionCalls.count == 1)
+        #expect(fake.createSessionCalls.first?.label == nil)
+        #expect(fake.createSessionCalls.first?.name == "feature-branch")
+        #expect(fake.createSessionCalls.first?.role == .agent)
+        #expect(fake.createSessionCalls.first?.initialProtected == false)
+        #expect(fake.createSessionCalls.first?.tabId == workspace.windows.first?.tabs.tabs.first?.cohortId)
     }
 
     @Test
@@ -886,6 +888,8 @@ struct RouterTests {
         #expect(fake.createSessionCalls.count == 2)
         // The added terminal inherits the tab's role at create-time.
         #expect(fake.createSessionCalls[1].role == .agent)
+        #expect(fake.createSessionCalls[0].tabId == tab?.cohortId)
+        #expect(fake.createSessionCalls[1].tabId == tab?.cohortId)
     }
 
     @Test

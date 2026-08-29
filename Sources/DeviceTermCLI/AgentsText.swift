@@ -285,35 +285,40 @@ public enum AgentsText {
         stream errors.
 
       Identifiers
-        Every tab + pane carries three identifiers:
-        - `shortId` — 6-char Crockford base32 (lowercase, no
-          i/l/o/u). Immutable, daemon-minted, per-container
-          unique. The most-typeable handle; surfaced in `tabs
-          list`, `panes list`, and the pane= column of every
-          receipt.
-        - `name` — optional, and it means a different thing on
-          each container. A session's name is fixed at
-          `session.create` and never rewritten. The GUI derives
-          one from the git worktree branch, when it finds one, for
-          a new tab's first terminal session; terminals added to
-          an existing tab get their own sessions and start
-          unnamed. `deviceterm tab rename [<name>]` retitles the
-          tab in the GUI without touching the field, so `tabs
-          list` keeps reporting the original. A pane's name is its
-          own field and is nil today: `deviceterm pane rename` is
-          scaffolded but deferred to the linkage refinement.
-        - `sessionId` / `paneId` — canonical UUIDs. Always
-          unambiguous; use when scripting against output from
-          older daemons that may not emit `shortId`.
+        A `tabs list` row describes one live daemon session. Its
+        JSON form carries these grouping and session identifiers:
+        - `tabId`: required grouping UUID. Terminal sessions in one
+          GUI tab share its tab UUID. A session without a GUI tab
+          uses its `sessionId`.
+        - `shortId`: 6-char Crockford base32 (lowercase, no
+          i/l/o/u). Immutable, daemon-minted, and unique per
+          session or pane container. It remains the most-typeable
+          handle for a specific list row.
+        - `name`: optional, and it means a different thing on each
+          container. A session's name is fixed at `session.create`
+          and never rewritten. The GUI derives one from the git
+          worktree branch, when it finds one, for a new tab's first
+          terminal session; terminals added to an existing tab get
+          their own sessions and start unnamed. `deviceterm tab
+          rename [<name>]` retitles the tab in the GUI without
+          touching the field, so `tabs list` keeps reporting the
+          original. A pane's name is nil because `pane rename` is not
+          implemented.
+        - `sessionId` / `paneId`: canonical UUIDs for one daemon
+          session or pane. A split tab has multiple `sessionId`
+          values, so do not use them to group tab-wide work.
+
+        Group rows by `tabId`. GUI-backed groups correspond to tabs,
+        and their full `tabId` works directly with `--tab`. Distinct
+        groups can also include non-GUI sessions; the response does
+        not mark which groups are GUI-backed.
 
         `tabs list --json` also carries `displayTitle`: the GUI's
         live tab label (the shell's OSC title, a manual rename), in
-        the normalized, bounded form the daemon holds. It is NOT an
+        the normalized, bounded form the daemon holds. It is not an
         identifier and resolves no `--tab <ref>`, since it changes
         as often as the shell redraws its prompt, and it is null
-        whenever it would say nothing `name` doesn't already. Read
-        it to see what a tab is doing; key on `shortId` or
-        `sessionId` to act on one.
+        whenever it would say nothing `name` doesn't already.
 
       Daemon discovery
         The CLI talks to one socket, named by

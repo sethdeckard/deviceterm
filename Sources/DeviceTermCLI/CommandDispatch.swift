@@ -1006,8 +1006,9 @@ func handleTabCapture(
 
 // MARK: - Read-only listing handlers
 
-/// `deviceterm tabs list`. Column shape marker\tshort_id\tname\t
-/// sessionId\tlabel; `--json` emits an array of `TabsListRow`. The
+/// `deviceterm tabs list`. Human column shape marker\tshort_id\tname\t
+/// sessionId\tlabel remains fixed; `--json` emits `TabsListRow` values with a
+/// required, validated `tabId` grouping/reference UUID. The
 /// current row is decided from `currentSession` (the caller's
 /// `DEVICETERM_SESSION`), no daemon round-trip needed for it.
 func handleTabsList(
@@ -1016,7 +1017,7 @@ func handleTabsList(
     currentSession: String?
 ) throws -> CommandOutcome {
     let result = try transport.send(CLICommands.tabsListRequest())
-    let entries = try JSONDecoder().decode([TabsListEntry].self, from: result)
+    let entries = try decodeTabsListEntries(result)
     switch output {
     case .human:
         return .lines(
@@ -1034,16 +1035,17 @@ func handleTabsList(
                 name: entry.name,
                 displayTitle: entry.displayTitle,
                 sessionId: entry.sessionId,
-                label: entry.label
+                label: entry.label,
+                tabId: entry.tabId
             )
         }
         return .stdout(try encodeJSONReceipt(rows))
     }
 }
 
-/// `deviceterm tabs current`: the row matching `DEVICETERM_SESSION`.
-/// Out-of-tab or a stale session id is a domain error (stderr + exit 1)
-/// with a recovery hint, regardless of output mode.
+/// `deviceterm tabs current`: the row matching `DEVICETERM_SESSION`, with the
+/// same required JSON `tabId` as list mode. Out-of-tab or a stale session id is
+/// a typed domain error (stderr + exit 1) with a recovery hint.
 func handleTabsCurrent(
     transport: CLITransport,
     output: OutputMode,
@@ -1057,11 +1059,12 @@ func handleTabsCurrent(
         )
     }
     let result = try transport.send(CLICommands.tabsListRequest())
-    let entries = try JSONDecoder().decode([TabsListEntry].self, from: result)
+    let entries = try decodeTabsListEntries(result)
     guard let entry = entries.first(where: { $0.sessionId == currentSession }) else {
         return .failure(
-            "\(DeviceTermEnv.session)=\(currentSession) has no live tab; "
-            + "the daemon may have restarted; try opening a fresh tab"
+            code: .sessionUnauthorized,
+            message: "\(DeviceTermEnv.session)=\(currentSession) has no live tab; "
+                + "the daemon may have restarted; try opening a fresh tab"
         )
     }
     switch output {
@@ -1075,10 +1078,19 @@ func handleTabsCurrent(
             name: entry.name,
             displayTitle: entry.displayTitle,
             sessionId: entry.sessionId,
-            label: entry.label
+            label: entry.label,
+            tabId: entry.tabId
         )
         return .stdout(try encodeJSONReceipt(row))
     }
+}
+
+private func decodeTabsListEntries(_ data: Data) throws -> [TabsListEntry] {
+    let entries = try JSONDecoder().decode([TabsListEntry].self, from: data)
+    guard entries.allSatisfy({ UUID(uuidString: $0.tabId) != nil }) else {
+        throw CLIError.invalidResponse("tabs.list returned a malformed tabId")
+    }
+    return entries
 }
 
 /// `deviceterm panes list`. Human columns paneId\tudid\tstate\tfamily\t

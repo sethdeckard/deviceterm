@@ -7,8 +7,8 @@ import Foundation
 /// via `IntentResolver`. `current` reads the caller's session-env
 /// (CLI) or the GUI's key window's selected tab (menu).
 ///
-/// Callers name a tab by a user-facing identifier: its sessionId, shortId,
-/// or human-set name. The GUI-internal model speaks in
+/// Callers name a tab by a user-facing identifier: its tabId, sessionId,
+/// shortId, or human-set name. The GUI-internal model speaks in
 /// monotonically-allocated `WindowID` / `TabID` integers minted by the
 /// `Router`. This type is the boundary, alongside `PaneRef` and
 /// `WindowRef`: `IntentResolver` reads them and produces the GUI IDs the
@@ -23,6 +23,8 @@ enum TabRef: Sendable, Equatable {
     /// DEVICETERM_SESSION env matches; for in-process callers, the key
     /// window's selected tab.
     case current
+    /// Wire case for a full UUID-shaped tab ref. Resolution accepts either the
+    /// tab's `tabId` or a terminal's `sessionId`.
     case sessionId(String)
     case shortId(String)
     case name(String)

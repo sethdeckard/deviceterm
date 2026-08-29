@@ -26,12 +26,11 @@ import Foundation
 /// discovery snapshot).
 struct TabState: Identifiable, Equatable, Sendable {
     let id: TabID
-    /// The daemon-side session cohort standing for this tab: the id under
-    /// which the Router reconciles the tab's terminal sessions so siblings
-    /// may drive its device panes. Minted here, opaque to the daemon, and
-    /// stable for the tab's whole life, across daemon restarts included;
-    /// the emptied cohort record daemon-side stays revivable under the same
-    /// id, which is what a restore's re-reconcile relies on.
+    /// The stable UUID for this tab. It is both the daemon-side cohort id under
+    /// which the Router reconciles sibling terminal authority and the public
+    /// `tabId` stored on each session for listing/reference. Stable for the
+    /// tab's whole life, including daemon-only restarts; restore inventory and
+    /// cohort reconciliation both re-supply it.
     let cohortId: UUID
     /// Non-empty list of terminal panes. Index 0 is the primary
     /// terminal, the one created when the tab opened and the
@@ -145,11 +144,12 @@ struct TabState: Identifiable, Equatable, Sendable {
         simPanes: [SimPaneState],
         devicePanes: [DevicePaneState] = [],
         role: SessionRole = .agent,
-        isProtected: Bool = false
+        isProtected: Bool = false,
+        cohortId: UUID = UUID()
     ) {
         precondition(!terminals.isEmpty, "TabState must have at least one terminal pane")
         self.id = id
-        self.cohortId = UUID()
+        self.cohortId = cohortId
         self.terminals = terminals
         self.role = role
         self.simPanes = simPanes

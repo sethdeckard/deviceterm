@@ -239,6 +239,7 @@ DeviceTerm exposes several identifier layers:
 
 | Field | Meaning |
 |---|---|
+| `tabId` | Required grouping UUID. GUI terminal sessions share their tab UUID; other sessions use `sessionId`. A GUI-backed value is stable for the open tab's lifetime and accepted by `--tab` |
 | `sessionId` | Daemon session UUID. Each terminal session has one, so a split tab can have several |
 | `paneId` | UUID for one device pane |
 | `shortId` | Short display and reference handle. Optional during version skew |
@@ -432,6 +433,7 @@ with the same row shape:
 ```jsonc
 {
   "current": true,
+  "tabId": "11111111-1111-1111-1111-111111111111",
   "sessionId": "550E8400-E29B-41D4-A716-446655440000",
   "shortId": "abc123",               // optional
   "name": "auth-feature",            // optional
@@ -440,11 +442,32 @@ with the same row shape:
 }
 ```
 
-`current` and `sessionId` are required. Other keys are omitted when
+`current`, `tabId`, and `sessionId` are required. Other keys are omitted when
 unavailable.
 
-`tabs list` returns one row per live terminal session, not one row per GUI tab.
-A tab with split terminal panes can produce several rows.
+`tabs list` returns one row per live daemon session. Each GUI terminal pane has
+a session, so a split tab produces multiple rows with one shared `tabId`.
+Sessions without a GUI tab self-group under `sessionId`.
+
+Group rows and count visible session groups without follow-up calls:
+
+```sh
+rows=$(deviceterm tabs list --json) || exit $?
+
+printf '%s\n' "$rows" | jq 'sort_by(.tabId) | group_by(.tabId)'
+printf '%s\n' "$rows" | jq 'map(.tabId) | unique | length'
+```
+
+GUI-backed groups correspond to tabs, and their full `tabId` can be passed
+directly to `--tab`. The response does not distinguish non-GUI groups, so the
+distinct count is not always a GUI-tab count.
+
+Successful discovery always emits one newline-terminated JSON document. `[]`
+with exit 0 means no daemon sessions are visible to this caller. A failure
+exits nonzero and emits the shared `{"error": ...}` envelope, so it cannot be
+mistaken for an empty workspace. A response that cannot be decoded, omits
+required `tabId`, or contains a malformed `tabId` fails with
+`protocol.invalidResponse`.
 
 Unprotected sessions are visible to every caller. A protected session is
 visible only to its owner. An out-of-tab caller sees unprotected sessions and

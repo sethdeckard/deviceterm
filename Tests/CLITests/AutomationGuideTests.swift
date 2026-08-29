@@ -51,6 +51,24 @@ func automationGuideNormalizesSimulatorIDsInWaits() throws {
 }
 
 @Test
+func automationGuideGroupsAndTargetsTabsByTabId() throws {
+    let contents = try automationGuide()
+    let discovery = try section(named: "Discover State", in: contents)
+    #expect(discovery.contains("group_by(.tabId)"))
+    #expect(discovery.contains("unique | length"))
+    #expect(discovery.contains("visible session groups"))
+    #expect(discovery.contains("does\nnot mark non-GUI groups"))
+    #expect(discovery.contains("`[]` with exit 0"))
+
+    let driving = try section(named: "Drive Other Tabs", in: contents)
+    #expect(driving.contains("select(.name == \"auth-feature\") | .tabId"))
+    #expect(driving.contains("known to name a GUI-backed session"))
+    #expect(driving.contains("this selection is not reliable"))
+    #expect(driving.contains("tab send-input --tab \"$TARGET_TAB\""))
+    #expect(driving.contains("accepted anywhere `--tab <ref>` is accepted"))
+}
+
+@Test
 func automationGuideContentsMatchesH2Sections() throws {
     let contents = try automationGuide()
     let headings = contents.split(separator: "\n")

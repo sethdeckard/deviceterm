@@ -157,6 +157,19 @@ func agentsDocumentationCarriesIntegrationTips() {
 }
 
 @Test
+func agentsDocumentationExplainsTabGroupingIdentifier() {
+    let documentation = AgentsText.documentation
+    #expect(documentation.contains("`tabId`: required grouping UUID"))
+    #expect(documentation.contains("A session without a GUI tab"))
+    #expect(documentation.contains("GUI-backed groups correspond to tabs"))
+    #expect(documentation.contains("not mark which groups are GUI-backed"))
+    #expect(documentation.contains("do not use them to group tab-wide work"))
+    #expect(documentation.contains("A pane's name is nil because `pane rename` is not"))
+    #expect(documentation.contains("implemented."))
+    #expect(!documentation.contains("linkage refinement"))
+}
+
+@Test
 func agentsDocumentationScopesJSONClaimToDataCommands() {
     // Regression guard: the INTEGRATION TIPS section must not claim "every command"
     // supports --json when documentation commands (--help,

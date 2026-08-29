@@ -288,7 +288,7 @@ func tabsListRowEncodesCurrentMarker() throws {
     let json = try encode(row)
     let expected = #"{"current":true,"displayTitle":"vim foo.swift","label":"Alpha","#
         + #""name":"alpha","sessionId":"11111111-1111-1111-1111-111111111111","#
-        + #""shortId":"ab12cd"}"#
+        + #""shortId":"ab12cd","tabId":"11111111-1111-1111-1111-111111111111"}"#
     #expect(json == expected)
 }
 
@@ -311,6 +311,7 @@ func tabsListRowMarksNonCurrentFalse() throws {
     #expect(!json.contains("label"))
     #expect(!json.contains("displayTitle"))
     #expect(json.contains(#""shortId":"ef34gh""#))
+    #expect(json.contains(#""tabId":"22222222-2222-2222-2222-222222222222""#))
 }
 
 // MARK: - Workspace receipts

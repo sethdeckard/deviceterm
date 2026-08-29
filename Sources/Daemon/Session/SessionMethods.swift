@@ -11,11 +11,11 @@ import Foundation
 /// under a method name. Wire shapes match the schema in
 /// `docs/ARCHITECTURE.md`:
 ///
-///     session.create({label?, name?, role?, initialProtected?})
+///     session.create({label?, name?, role?, initialProtected?, tabId?})
 ///                        → {sessionId, capability, shortId, name?, role}
 ///     session.close({sessionId, cap, mode?})
 ///                        → {ok: true}
-///     tabs.list          → [{sessionId, shortId, name?, displayTitle?, label?}]
+///     tabs.list          → [{sessionId, tabId, shortId, name?, displayTitle?, label?}]
 ///
 /// `session.close` applies `mode` to an in-flight boot claim before removing
 /// the session. Existing pane shutdown still uses the GUI's per-pane fan-out.
@@ -24,6 +24,10 @@ public enum SessionMethods {
 
     public struct CreateParams: Codable, Sendable {
         public let label: String?
+        /// Full GUI tab UUID shared by every terminal session in that tab.
+        /// Optional on the wire; only a validated GUI may supply it, and an
+        /// omission asks the daemon to self-group under the new session id.
+        public let tabId: String?
         /// Optional session name. Mirrors the `name` field on
         /// `SessionState`, and this request is the only thing that
         /// ever sets it: nothing renames a session afterward. The GUI
@@ -57,9 +61,11 @@ public enum SessionMethods {
             label: String?,
             name: String? = nil,
             role: SessionRole? = nil,
-            initialProtected: Bool? = nil
+            initialProtected: Bool? = nil,
+            tabId: String? = nil
         ) {
             self.label = label
+            self.tabId = tabId
             self.name = name
             self.role = role
             self.initialProtected = initialProtected
@@ -90,15 +96,17 @@ public enum SessionMethods {
         public let mode: String?
     }
 
-    /// Mirrors the wire-side `DaemonProtocol.TabsListEntry`; the
-    /// CLI's `--tab <ref>` resolver (`TabRefResolver`) consumes the
-    /// `shortId` + `name` fields to map a
-    /// short_id / name / UUID-prefix ref to a concrete `sessionId`.
+    /// Mirrors the wire-side `DaemonProtocol.TabsListEntry`. `tabId` is the
+    /// required grouping UUID. Sessions in one GUI tab share it; a session
+    /// without a GUI tab uses its `sessionId`. GUI-backed groups support direct
+    /// `--tab` resolution. `shortId` and `name` remain per-session convenience
+    /// references.
     /// `displayTitle` is the normalized live label the GUI last pushed; it
     /// is never a ref, since it changes as often as the shell redraws its
     /// prompt.
     public struct TabsListEntry: Codable, Sendable, Equatable {
         public let sessionId: String
+        public let tabId: String
         public let shortId: String
         public let name: String?
         public let displayTitle: String?
@@ -111,6 +119,23 @@ public enum SessionMethods {
         { paramsJSON in
             let params = try JSONDecoder().decode(CreateParams.self, from: paramsJSON)
             let requestedRole = params.role ?? .agent
+            let requestedTabId: UUID?
+            if let rawTabId = params.tabId {
+                guard let parsed = UUID(uuidString: rawTabId) else {
+                    throw RPCMethodError.invalidParams("tabId must be a UUID string")
+                }
+                guard let context = DispatchPeerContext.current,
+                    context.transport == .xpc,
+                    context.validatedGUIPeer else {
+                    throw RPCMethodError(
+                        code: RPCMethodError.scopeViolationCode,
+                        message: "session.create tabId can only be supplied by the GUI"
+                    )
+                }
+                requestedTabId = parsed
+            } else {
+                requestedTabId = nil
+            }
             // Every XPC `session.create` (any role) must come from the VALIDATED
             // GUI: XPC is the GUI's transport, and only a validated session is
             // marked restorable (so its close leaves a tombstone that fences a
@@ -171,7 +196,8 @@ public enum SessionMethods {
                     owner: owner,
                     initialProtected: params.initialProtected ?? false,
                     epoch: epoch,
-                    restorable: restorable
+                    restorable: restorable,
+                    tabId: requestedTabId
                 )
             } catch {
                 throw RPCMethodError(
@@ -307,6 +333,7 @@ public enum SessionMethods {
             let entries = await manager.sessionsWithDisplayTitles(visibleTo: callerId).map {
                 TabsListEntry(
                     sessionId: $0.state.id.uuidString,
+                    tabId: $0.state.tabId.uuidString,
                     shortId: $0.state.shortId,
                     name: $0.state.name,
                     displayTitle: $0.displayTitle,
@@ -464,6 +491,15 @@ public enum SessionMethods {
                 guard let id = UUID(uuidString: wire.sessionId) else {
                     throw RPCMethodError.invalidParams("sessionId must be a UUID string")
                 }
+                let tabId: UUID
+                if let rawTabId = wire.tabId {
+                    guard let parsed = UUID(uuidString: rawTabId) else {
+                        throw RPCMethodError.invalidParams("tabId must be a UUID string")
+                    }
+                    tabId = parsed
+                } else {
+                    tabId = id
+                }
                 guard let capability = Capability(token: wire.capability) else {
                     throw RPCMethodError.invalidParams("cap must be base64-encoded bytes")
                 }
@@ -474,7 +510,8 @@ public enum SessionMethods {
                         shortId: wire.shortId,
                         role: wire.role,
                         name: wire.name,
-                        isProtected: wire.isProtected
+                        isProtected: wire.isProtected,
+                        tabId: tabId
                     )
                 )
             }

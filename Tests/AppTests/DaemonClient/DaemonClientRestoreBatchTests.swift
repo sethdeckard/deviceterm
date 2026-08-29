@@ -32,6 +32,7 @@ struct DaemonClientRestoreBatchTests {
     @Test
     func restoreBatchEncodesInventoryUnderTheRestoreMethod() async throws {
         let transport = RecordingTransport()
+        let tabId = UUID().uuidString
         let sessions = [
             RestoredSession(
                 sessionId: "S1",
@@ -39,7 +40,8 @@ struct DaemonClientRestoreBatchTests {
                 shortId: "aaa111",
                 role: .agent,
                 name: "one",
-                isProtected: false
+                isProtected: false,
+                tabId: tabId
             ),
             RestoredSession(
                 sessionId: "S2",
@@ -47,7 +49,8 @@ struct DaemonClientRestoreBatchTests {
                 shortId: "bbb222",
                 role: .automation,
                 name: nil,
-                isProtected: true
+                isProtected: true,
+                tabId: tabId
             )
         ]
         transport.reply = try JSONEncoder().encode(
@@ -67,5 +70,6 @@ struct DaemonClientRestoreBatchTests {
         // The bearer cap rides inside each entry by design (the daemon
         // re-derives the verifier from it).
         #expect(decoded.sessions[0].capability == "cap-1")
+        #expect(decoded.sessions.map(\.tabId) == [tabId, tabId])
     }
 }

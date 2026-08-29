@@ -2,6 +2,7 @@
 
 @testable import App
 import DaemonProtocol
+import Foundation
 import Testing
 
 /// Pin the happy-path + error-path behavior of
@@ -38,6 +39,7 @@ struct IntentResolverTests {
     private func tab(
         id: TabID,
         session: String,
+        tabId: UUID = UUID(),
         shortId: String? = nil,
         name: String? = nil,
         panes: [SimPaneState] = []
@@ -49,7 +51,7 @@ struct IntentResolverTests {
             shortId: shortId,
             name: name
         )
-        return TabState(id: id, terminals: [primary], simPanes: panes)
+        return TabState(id: id, terminals: [primary], simPanes: panes, cohortId: tabId)
     }
 
     private func pane(
@@ -151,6 +153,25 @@ struct IntentResolverTests {
         #expect(throws: IntentError.notFound(kind: "tab", ref: "S-X")) {
             try resolver.resolveTab(.sessionId("S-X"))
         }
+    }
+
+    @Test
+    func resolveTabByTabIdFindsMatch() throws {
+        let tabId = UUID()
+        let workspace = makeWorkspace(
+            windows: [
+                WindowFixture(
+                    id: WindowID(value: 1),
+                    tabs: [tab(id: TabID(value: 1), session: "S-A", tabId: tabId)],
+                    selected: true
+                )
+            ]
+        )
+        let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
+
+        let resolved = try resolver.resolveTab(.sessionId(tabId.uuidString.lowercased()))
+
+        #expect(resolved.tabID == TabID(value: 1))
     }
 
     @Test

@@ -5,6 +5,9 @@ import Foundation
 
 public struct SessionState: Sendable, Equatable {
     public let id: UUID
+    /// Stable grouping/reference UUID. Sessions in one GUI tab share it; a
+    /// session created without a tab UUID uses `id`.
+    public let tabId: UUID
     /// Non-recoverable verifier for this session's capability. The daemon
     /// stores this rather than the bearer token so in-memory state can't be
     /// replayed and no credential is ever written to disk; `validate`
@@ -74,9 +77,11 @@ public struct SessionState: Sendable, Equatable {
         createdAt: Date,
         role: SessionRole = .agent,
         ownerPID: pid_t? = nil,
-        owner: OwnerProcessIdentity? = nil
+        owner: OwnerProcessIdentity? = nil,
+        tabId: UUID? = nil
     ) {
         self.id = id
+        self.tabId = tabId ?? id
         self.capabilityVerifier = capabilityVerifier
         self.shortId = shortId
         self.label = label

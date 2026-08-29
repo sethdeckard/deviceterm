@@ -16,7 +16,8 @@ extension HelpCatalog {
     /// verbs it covers would contradict the `targeting` topic.
     static let refsLegend = """
       Refs on the workspace verbs (tab, tabs, pane, window, windows):
-        --tab     <sessionId-uuid> | <shortId> | "<name>" | current
+        --tab     <tabId-uuid> | <sessionId-uuid> | <shortId>
+                  | "<name>" | current
         --pane    <paneId-uuid>    | <shortId> | current
         --window  <1-based-index>  | current
 

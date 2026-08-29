@@ -211,6 +211,78 @@ func sessionCreateRejectsAutomationRoleOverUDS() async throws {
 }
 
 @Test
+func sessionCreateRejectsTabIdOverUDS() async throws {
+    let manager = SessionManager()
+    let envelope = RPCEnvelope(
+        id: 1,
+        type: .request,
+        method: RPCMethod.sessionCreate.rawValue,
+        body: .params(
+            try paramsBytes(
+                SessionMethods.CreateParams(
+                    label: nil,
+                    tabId: UUID().uuidString
+                )
+            )
+        )
+    )
+    let response = try await roundTrip(envelope, manager: manager)
+    guard case let .error(error) = response.body else {
+        Issue.record("expected .error body rejecting UDS tabId, got \(response.body)")
+        return
+    }
+    #expect(error.code == RPCMethodError.scopeViolationCode)
+    #expect(await manager.sessionCount == 0)
+}
+
+@Test
+func sessionCreateRejectsMalformedTabId() async throws {
+    let manager = SessionManager()
+    let envelope = RPCEnvelope(
+        id: 1,
+        type: .request,
+        method: RPCMethod.sessionCreate.rawValue,
+        body: .params(
+            try paramsBytes(
+                SessionMethods.CreateParams(label: nil, tabId: "not-a-uuid")
+            )
+        )
+    )
+    let response = try await roundTrip(envelope, manager: manager)
+    guard case let .error(error) = response.body else {
+        Issue.record("expected .error body rejecting malformed tabId, got \(response.body)")
+        return
+    }
+    #expect(error.code == RPCMethodError.invalidParamsCode)
+    #expect(await manager.sessionCount == 0)
+}
+
+@Test
+func sessionCreateAcceptsTabIdFromValidatedGUI() async throws {
+    let manager = SessionManager()
+    let tabId = UUID()
+    let handler = SessionMethods.create(using: manager)
+    let params = try paramsBytes(
+        SessionMethods.CreateParams(label: nil, tabId: tabId.uuidString)
+    )
+    let context = DispatchPeerContext(
+        transport: .xpc,
+        connectionId: 1,
+        authenticatedSession: nil,
+        validatedGUIPeer: true
+    )
+
+    let data = try await DispatchPeerContext.$current.withValue(context) {
+        try await handler(params)
+    }
+    let response = try JSONDecoder().decode(SessionMethods.CreateResponse.self, from: data)
+    let sessionId = try #require(UUID(uuidString: response.sessionId))
+    let capability = try #require(Capability(token: response.capability))
+    let state = try await manager.validate(sessionId: sessionId, capability: capability)
+    #expect(state.tabId == tabId)
+}
+
+@Test
 func sessionManagerStillSupportsInternalAutomationMinting() async throws {
     // The transport handler rejects unauthorized mints, while the
     // validated-GUI XPC path delegates to
@@ -448,6 +520,37 @@ func tabsListExposesLabelsButNotCapabilities() async throws {
     for entry in tabs {
         #expect(UUID(uuidString: entry.sessionId) != nil)
     }
+}
+
+@Test
+func tabsListGroupsSessionsByTabId() async throws {
+    let manager = SessionManager()
+    let sharedTabId = UUID()
+    let first = try await manager.createSession(label: nil, tabId: sharedTabId)
+    let second = try await manager.createSession(label: nil, tabId: sharedTabId)
+    let third = try await manager.createSession(label: nil)
+
+    let envelope = RPCEnvelope(
+        id: 7,
+        type: .request,
+        method: RPCMethod.tabsList.rawValue,
+        body: .empty
+    )
+    let response = try await roundTrip(envelope, manager: manager)
+    let tabs = try #require(
+        try decodeResult(response, as: [SessionMethods.TabsListEntry].self)
+    )
+
+    #expect(tabs.map(\.sessionId) == [
+        first.state.id.uuidString,
+        second.state.id.uuidString,
+        third.state.id.uuidString
+    ])
+    #expect(tabs.map(\.tabId) == [
+        sharedTabId.uuidString,
+        sharedTabId.uuidString,
+        third.state.id.uuidString
+    ])
 }
 
 @Test

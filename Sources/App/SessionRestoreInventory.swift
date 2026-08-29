@@ -10,7 +10,8 @@ import DaemonProtocol
 /// mapping is the authoritative source: one `RestoredSession` per terminal pane
 /// (each backs its own daemon session), assembled straight from the workspace's
 /// `TabState`s: not from `DaemonClient.liveSessions`, which retains only
-/// `(sessionId, cap)` and can't source role / short id / name / protection.
+/// `(sessionId, cap)` and can't source tab id / role / short id / name /
+/// protection.
 ///
 /// Protection is derived FAIL-CLOSED from `isEffectivelyProtected`, not
 /// committed `isProtected`: a tab mid-transition to protected
@@ -55,7 +56,8 @@ enum SessionRestoreInventory {
                         shortId: shortId,
                         role: tab.role,
                         name: terminal.name,
-                        isProtected: isProtected
+                        isProtected: isProtected,
+                        tabId: tab.cohortId.uuidString
                     )
                 )
             }

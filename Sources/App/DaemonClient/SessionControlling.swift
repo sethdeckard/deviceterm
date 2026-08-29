@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import DaemonProtocol
+import Foundation
 
 /// Role protocol: session lifecycle on the daemon.
 ///
@@ -25,12 +26,14 @@ protocol SessionControlling: AnyObject {
     /// create time: passed `true` for a terminal joining a tab that is
     /// already protected (or mid-transition to protected) so the new
     /// session is never observable as unprotected on `tabs.list`. The standard
-    /// tab-open path passes `false`.
+    /// tab-open path passes `false`. `tabId` is the GUI-minted UUID shared by
+    /// every terminal in the tab; nil asks the daemon to self-group the session.
     func createSession(
         label: String?,
         name: String?,
         role: SessionRole,
-        initialProtected: Bool
+        initialProtected: Bool,
+        tabId: UUID?
     ) async throws -> SessionCreateResponse
     /// `session.close`: `mode` is `.detach` (sims keep running) or
     /// `.shutdown`. The witness may default `mode`; the requirement

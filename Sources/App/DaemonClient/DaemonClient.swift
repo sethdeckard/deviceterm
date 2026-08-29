@@ -720,7 +720,8 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         label: String?,
         name: String?,
         role: SessionRole,
-        initialProtected: Bool = false
+        initialProtected: Bool = false,
+        tabId: UUID? = nil
     ) async throws -> SessionCreateResponse {
         // `compactMapValues { $0 }` strips nil entries before JSON
         // serialization so the wire shape carries optional fields
@@ -742,7 +743,8 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 "label": label as Any,
                 "name": name as Any,
                 "role": role.rawValue,
-                "initialProtected": initialProtected ? true : nil
+                "initialProtected": initialProtected ? true : nil,
+                "tabId": tabId?.uuidString as Any
             ].compactMapValues { $0 },
             options: []
         )

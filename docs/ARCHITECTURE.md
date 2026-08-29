@@ -808,7 +808,7 @@ DoS. Ordinary daemon lifecycle still uses idle exit, not this method.
 
 #### `session.create`
 
-- Params: `{label?, name?, role?, initialProtected?}`
+- Params: `{label?, name?, role?, initialProtected?, tabId?}`
 - Result: `{sessionId, capability, shortId, name?, role}`
 - Scope: daemon-wide
 
@@ -825,6 +825,14 @@ pid rides on the wire.
 resolver uses. `name` is stored verbatim from the request and never
 renamed afterward; the GUI supplies a worktree-derived branch when it
 detects one. `role` defaults to `"agent"`.
+
+`tabId` is an optional full UUID used to identify the GUI tab containing
+the session. The GUI mints it before creating the tab's primary terminal
+and supplies the same value when creating every split terminal. Only a
+validated GUI XPC peer may supply it; a UDS caller that does so is refused
+as a scope violation. When omitted, the daemon uses the new `sessionId`,
+preserving a distinct group for non-GUI and legacy creation paths. `tabId`
+is reference and grouping metadata, not authority.
 
 Every XPC `session.create`, whatever the role, must come from the
 validated GUI: XPC is the GUI's transport, and only a validated session is
@@ -931,7 +939,7 @@ simulator to a session whose close is already in flight.
 
 #### `session.restoreBatch`
 
-- Params: `{sessions: [{sessionId, capability, shortId, role, name?, isProtected}], revision}`
+- Params: `{sessions: [{sessionId, capability, shortId, role, name?, isProtected, tabId?}], revision}`
 - Result: `{restoredCount, sessionIds}`
 - Scope: validated GUI
 
@@ -948,6 +956,11 @@ and as ongoing authoritative reconciliation whenever its live session set
 changes. The daemon re-derives each session's non-recoverable verifier
 from the supplied bearer cap, so the in-tab cap keeps authenticating.
 
+The inventory carries each terminal's GUI `tabId`, preserving tab grouping
+across daemon-only restarts. All terminal sessions in one tab carry the same
+value. An omitted `tabId` self-groups the restored session under its
+`sessionId`; a malformed value rejects the batch as `invalidParams`.
+
 The batch is authoritative, `(epoch, tier, revision)`-fenced, and
 all-or-none. The connection id is the epoch and the GUI's monotonic
 `revision` orders same-connection retries; a restore carries the lower
@@ -956,10 +969,11 @@ membership stamp or `session.setProtectedBatch` at the same epoch. A
 strictly older restore key is rejected; an equal key may replay
 idempotently.
 
-It is otherwise validated in full: a malformed UUID, cap, or short-id, an
-in-batch duplicate id or short-id, a verifier conflicting with a live
-session, or a short-id colliding with a different live session are all
-rejected `invalidParams`. It then applies as one atomic actor segment.
+It validates the batch before mutation. A malformed session or tab UUID, cap,
+or short ID; an in-batch duplicate ID or short ID; a verifier conflict;
+immutable (`tabId`, `shortId`, or `role`) metadata disagreeing with a live
+session; or a short ID colliding with another live session rejects the batch as
+`invalidParams`. It then applies as one atomic actor segment.
 Absent sessions are inserted. A live session the complete inventory omits
 is reconciled away as an abandoned ghost (a lost `session.close`) when
 this batch's key strictly dominates the key that last asserted it, so a
@@ -1161,12 +1175,14 @@ never owned.
 
 A cohort is the set of sessions that jointly control a device pane, which is
 how pane authority reaches every terminal in a tab instead of only the
-terminal that attached the device. The daemon never learns that a cohort is
-a tab. It stores an opaque id the GUI mints, an ordered membership of
-verified session incarnations, and one representative used for attribution;
-nothing on the wire identifies a tab. The order of `members` is the GUI's
-nomination sequence: when a member closes before the GUI can renominate,
-the first surviving member in order inherits.
+terminal that attached the device. For GUI tabs, the GUI's stable `cohortId`
+is also the `tabId` stored on every session and exposed by `tabs.list`. The
+daemon stores that UUID, an ordered membership of verified session
+incarnations, and one representative used for attribution. The shared
+identifier describes grouping but grants no authority: only the validated GUI
+may curate cohort membership. The order of `members` is the GUI's nomination
+sequence: when a member closes before the GUI can renominate, the first
+surviving member in order inherits.
 
 Two operations share the method because they mutate the same cohort and have
 to order against each other on one revision sequence.
@@ -1255,13 +1271,24 @@ cohort answers to its own session, the compatibility path.
 #### `tabs.list`
 
 - Params: `{}` (body ignored)
-- Result: bare array `[{sessionId, shortId, name?, displayTitle?, label?}]`
+- Result: bare array `[{sessionId, tabId, shortId, name?, displayTitle?, label?}]`
 - Scope: daemon-wide
 
-One entry per live session; sessions are minted per terminal pane, not per
-tab. `name` is the session's worktree branch captured at `session.create`;
-`shortId` is the 6-char handle used by `--tab <ref>`. The result is a bare
-array, not a wrapper object.
+One entry is returned per live daemon session, not per GUI tab. `sessionId`
+identifies that daemon session. Each GUI terminal pane has a session, so a split
+tab produces multiple rows.
+
+Required `tabId` is the grouping UUID. Every terminal session in one GUI tab
+shares its tab UUID. It remains stable for the tab's lifetime, including
+daemon-only restarts and primary-terminal promotion, and is accepted directly
+by workspace verbs as `--tab <tabId>`.
+
+A session created or restored without a GUI tab UUID self-groups under its
+`sessionId`. Group rows by `tabId`; GUI-backed groups correspond to tabs.
+Distinct groups can also include non-GUI sessions, and the response does not
+distinguish them. `name` is the session's worktree branch captured at
+`session.create`; `shortId` is its six-character convenience reference. The
+result remains a bare array rather than a wrapper object.
 
 `displayTitle` is the GUI's live tab label as last pushed via
 `session.setDisplayTitle`, in the optional, bounded, normalized form
@@ -1278,9 +1305,10 @@ can see the tab.
 
 A fresh daemon starts with no sessions (nothing is rehydrated from disk);
 the list is populated by `session.create` and by the validated GUI's
-`session.restoreBatch` after a daemon-only restart, so it never
-accumulates a cross-restart graveyard. Protected sessions are visible only
-to their owner.
+`session.restoreBatch` after a daemon-only restart, so it never accumulates a
+cross-restart graveyard. Protected sessions remain visible only according to
+the existing caller-relative protection filter. An empty or shortened array
+is therefore a successful visibility projection, not an error.
 
 #### `panes.list`
 
@@ -2353,10 +2381,13 @@ publish-verb handler, and a typed `AppCommand` is published and awaited;
 the GUI's reply becomes the caller's result. The CLI never threads
 credentials in params; the wire shapes stay clean.
 
-Refs on the wire are typed `{type, value?}` objects: a tab ref's `type`
-is one of `current`, `sessionId`, `shortId`, or `name`; a pane ref's is
-one of `current`, `paneId`, `udid`, or `shortId`; a window ref's is one
-of `current`, `index` (the value is the stringified index), or `keyed`.
+Refs on the wire are typed `{type, value?}` objects. A tab ref's `type` is one
+of `current`, `sessionId`, `shortId`, or `name`. The `sessionId` tag represents
+a full UUID-shaped tab reference. The GUI resolver matches either a terminal's
+`sessionId` or the tab's shared `tabId`, allowing a GUI-backed `tabs.list`
+grouping key to be passed directly to `--tab`. A pane ref's type is one of
+`current`, `paneId`, `udid`, or `shortId`; a window ref's is one of `current`,
+`index` (the value is the stringified index), or `keyed`.
 `current` resolves origin-aware: an external caller's `.current` is its
 own tab or window, not the human's key window, and `.index` counts the
 caller-visible window projection (see "GUI command back-channel").
@@ -3021,7 +3052,7 @@ flowchart TD
     SRC1["CLI (back-channel)"] -->|AppCommand| CT[CLIIntentTranslator]
     SRC2["Deep link (future)"] -->|URL| DP["DeepLinkParser (future)"]
     SRC3["Menu (NSMenuItem action)"] -->|"RouteIntent built inline"| RI
-    CT --> RI["RouteIntent (source-agnostic; refs by sessionId / shortId / udid / name)"]
+    CT --> RI["RouteIntent (source-agnostic; refs by tabId / sessionId / shortId / udid / name)"]
     DP --> RI
     RI --> ID["IntentDispatcher: resolves refs to GUI IDs, validates, synthesizes Routes"]
     ID --> R["Router.dispatch(Route), the unchanged surface"]

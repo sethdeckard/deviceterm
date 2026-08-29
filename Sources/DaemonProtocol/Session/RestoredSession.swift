@@ -43,6 +43,9 @@ public struct RestoredSession: Codable, Sendable, Equatable {
     /// GUI's effective-hidden presentation (a mid-transition tab restores
     /// protected, never briefly unprotected).
     public let isProtected: Bool
+    /// The GUI tab UUID shared by every terminal session in that tab. Optional
+    /// on the internal restore wire; omission self-groups under `sessionId`.
+    public let tabId: String?
 
     public init(
         sessionId: String,
@@ -50,7 +53,8 @@ public struct RestoredSession: Codable, Sendable, Equatable {
         shortId: String,
         role: SessionRole,
         name: String?,
-        isProtected: Bool
+        isProtected: Bool,
+        tabId: String? = nil
     ) {
         self.sessionId = sessionId
         self.capability = capability
@@ -58,5 +62,6 @@ public struct RestoredSession: Codable, Sendable, Equatable {
         self.role = role
         self.name = name
         self.isProtected = isProtected
+        self.tabId = tabId
     }
 }

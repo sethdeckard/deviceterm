@@ -113,18 +113,27 @@ extension HelpCatalog {
             summary: "List every session you can see, or print your own",
             detail: """
               tabs list
-                  List every daemon session you can see. Five tab-separated
-                  columns:
+                  List every daemon session you can see. Human output uses
+                  only these five tab-separated columns:
                     <marker>  <short_id>  <name>  <sessionId>  <label>
-                  The marker is `*` on the caller's current tab (matches
-                  $DEVICETERM_SESSION), a space otherwise. Use the short_id for
-                  quick reference; sessionId is the canonical UUID.
-                  A protected session is listed only for its owner.
+                  The marker is `*` on the caller's current session (matches
+                  $DEVICETERM_SESSION), a space otherwise.
+
+                  With --json, every session row also has a required tabId.
+                  Terminal sessions in the same GUI tab share that full UUID;
+                  a session without a GUI tab uses its sessionId. Group rows
+                  by tabId. GUI-backed groups correspond to tabs and accept
+                  their tabId directly through --tab. A distinct tabId count
+                  can also include non-GUI session groups.
+                  An empty array is a successful visibility result; JSON
+                  failures use the shared error envelope and exit nonzero.
+
+                  A protected session is listed only when visible to the caller.
 
               tabs current
-                  Print the caller's own tab row (the one whose sessionId
-                  matches $DEVICETERM_SESSION). Same columns as `tabs list`;
-                  marker is always `*`. Errors when run outside a tab.
+                  Print the caller's own session row. Same human columns and
+                  JSON row shape as `tabs list`; marker is always `*`. Errors
+                  when run outside a tab or when the session is no longer live.
             """
         ),
         HelpTopic(

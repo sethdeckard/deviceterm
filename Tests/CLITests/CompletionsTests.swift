@@ -280,6 +280,12 @@ func fishScriptDisablesFileCompletion() {
 }
 
 @Test
+func fishScriptDocumentsTabIdReference() {
+    let script = Completions.script(for: .fish)
+    #expect(script.contains("tab ref (tabId / sessionId / shortId / name / current)"))
+}
+
+@Test
 func zshScriptCompletesCompletionsInstallShellArg() {
     let script = Completions.script(for: .zsh)
     #expect(script.contains("'completions subcommand'"))

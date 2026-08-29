@@ -4,11 +4,11 @@ import Foundation
 
 /// Pure-logic `--tab <ref>` resolution.
 ///
-/// Walks the documented priority (short_id → name → UUID prefix →
-/// sentinel) and returns the most-specific match. Lives in
-/// DaemonProtocol so CLI code (consuming `tabs.list`) and daemon code
-/// share the same matcher. No I/O, no optionals on the entry list
-/// shape: the caller fetches the list and hands it in.
+/// Walks the documented priority (short_id → name → tab/session UUID prefix
+/// → sentinel) and returns the most-specific tab match. Lives in
+/// DaemonProtocol as a pure matcher for callers holding a `tabs.list`
+/// snapshot. Matching rows are grouped by `tabId` before the resolver decides
+/// uniqueness or ambiguity.
 public enum TabRefResolver {
     public enum Resolution: Equatable, Sendable {
         case entry(TabsListEntry)
@@ -49,12 +49,13 @@ public enum TabRefResolver {
             return single
         }
 
-        // Tier 3: UUID prefix match (case-insensitive). Requires
-        // `minUUIDPrefixLength` chars to avoid noise on short inputs.
+        // Tier 3: tab or session UUID prefix match (case-insensitive).
+        // Requires `minUUIDPrefixLength` chars to avoid noise on short inputs.
         if ref.count >= minUUIDPrefixLength {
             let lowered = ref.lowercased()
             let uuidMatches = entries.filter {
-                $0.sessionId.lowercased().hasPrefix(lowered)
+                $0.tabId.lowercased().hasPrefix(lowered)
+                    || $0.sessionId.lowercased().hasPrefix(lowered)
             }
             if let single = uniqueOrAmbiguous(uuidMatches) {
                 return single
@@ -71,22 +72,26 @@ public enum TabRefResolver {
         return .notFound
     }
 
-    /// Translate a tier's hit list into a `Resolution`. Returns:
+    /// Group a tier's hit list by `tabId`, then translate it into a
+    /// `Resolution`. Returns:
     ///   - `.entry` when exactly one match (the happy path).
     ///   - `.ambiguous` when multiple hits; the caller surfaces the
     ///     conflict instead of guessing.
     ///   - `nil` when empty, letting `resolve` fall through to the
     ///     next tier.
     private static func uniqueOrAmbiguous(_ hits: [TabsListEntry]) -> Resolution? {
-        switch hits.count {
+        var seenTabIds = Set<String>()
+        let tabs = hits.filter { seenTabIds.insert($0.tabId.lowercased()).inserted }
+
+        switch tabs.count {
         case 0:
             return nil
 
         case 1:
-            return .entry(hits[0])
+            return .entry(tabs[0])
 
         default:
-            return .ambiguous(hits)
+            return .ambiguous(tabs)
         }
     }
 }

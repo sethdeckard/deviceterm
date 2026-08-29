@@ -78,6 +78,18 @@ func architectureGuideDocumentsEveryRPCMethod() throws {
 }
 
 @Test
+func architectureGuideDocumentsTabIdWireContract() throws {
+    let contents = try architectureGuide()
+    let rpc = try section(named: "RPC protocol", in: contents)
+    #expect(rpc.contains("{sessionId, tabId, shortId, name?, displayTitle?, label?}"))
+    #expect(rpc.contains("One entry is returned per live daemon session"))
+    #expect(rpc.contains("Distinct groups can also include non-GUI sessions"))
+    #expect(rpc.contains("immutable (`tabId`, `shortId`, or `role`) metadata"))
+    #expect(rpc.contains("An empty or shortened array\nis therefore a successful visibility projection"))
+    #expect(contents.contains("the tab's shared `tabId`"))
+}
+
+@Test
 func architectureGuideAvoidsEmAndEnDashes() throws {
     let contents = try architectureGuide()
     #expect(!contents.contains("—"), "architecture guide contains an em dash")

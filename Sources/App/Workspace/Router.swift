@@ -864,13 +864,15 @@ final class Router {
             // than the requested one so the tab's recorded role
             // matches what's actually on the wire.
             let name = detectWorktreeName()
+            let tabId = UUID()
             // A freshly-opened tab is always unprotected; a protected tab is only
             // ever reached by toggling protection after it exists.
             let session = try await daemon.createSession(
                 label: nil,
                 name: name,
                 role: role,
-                initialProtected: false
+                initialProtected: false,
+                tabId: tabId
             )
             let primary = TerminalPaneState(
                 id: allocateTerminalPaneID(),
@@ -885,7 +887,8 @@ final class Router {
                 id: allocateTabID(),
                 terminals: [primary],
                 simPanes: [],
-                role: session.role ?? role
+                role: session.role ?? role,
+                cohortId: tabId
             )
             window.tabs.append(tab)
             // Install the tab's cohort eagerly, so a device pane attached
@@ -1048,7 +1051,8 @@ final class Router {
                 label: nil,
                 name: nil,
                 role: tab.role,
-                initialProtected: createdProtected
+                initialProtected: createdProtected,
+                tabId: tab.cohortId
             )
             // Re-resolve the tab's window after the await: a cross-window
             // `tab move` runs on the main actor outside the route drain and

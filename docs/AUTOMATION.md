@@ -213,10 +213,31 @@ deviceterm windows list
 deviceterm devices list
 ```
 
-`tabs list` returns one row per live terminal session, so a split tab
-produces several rows. It shows unprotected sessions plus your own protected
-ones.
-`tabs current` prints only the caller's row.
+`tabs list` returns one row per live daemon session. Each GUI terminal pane has
+a session, so a split tab produces several rows. In JSON mode, every row has a
+required `tabId`. GUI terminal sessions in one tab share it; a session without
+a GUI tab uses its `sessionId`.
+
+Group rows without calling `tab info`:
+
+```sh
+rows=$(deviceterm tabs list --json) || exit $?
+
+printf '%s\n' "$rows" |
+  jq 'sort_by(.tabId) | group_by(.tabId)'
+
+printf '%s\n' "$rows" |
+  jq 'map(.tabId) | unique | length'
+```
+
+The second pipeline counts visible session groups. It equals the visible
+GUI-tab count only when every visible session is GUI-backed; `tabs.list` does
+not mark non-GUI groups.
+
+The command shows unprotected sessions plus the protected rows visible to the
+caller. `[]` with exit 0 is a successful empty visibility projection; failures
+exit nonzero and emit a JSON error envelope. `tabs current` prints only the
+caller's row.
 
 `panes list` returns the device panes of the caller's tab.
 `windows list` returns the caller's own window; add `--all` for every window
@@ -272,15 +293,33 @@ authority to itself.
 
 ### Send Input to Another Tab
 
-List the visible sessions and target one by short id:
+When `auth-feature` is known to name a GUI-backed session, discover its shared
+full `tabId` and use it when work must run once per GUI tab:
 
 ```sh
-deviceterm tabs list
-TARGET_TAB="abc123"
+rows=$(deviceterm tabs list --json) || exit $?
+
+TARGET_TAB=$(
+  printf '%s\n' "$rows" |
+    jq -er '
+      [.[] | select(.name == "auth-feature") | .tabId] |
+      unique |
+      if length == 1 then .[0]
+      else error("expected exactly one matching tab")
+      end
+    '
+)
+
 deviceterm tab send-input --tab "$TARGET_TAB" 'make test\n'
 ```
 
-Replace `abc123` with a short id printed by `tabs list`.
+`tabs.list` does not mark GUI-backed rows. If a non-GUI session can use the
+same name, this selection is not reliable and its `tabId` will not resolve in
+GUI workspace verbs.
+
+The full `tabId` is accepted anywhere `--tab <ref>` is accepted. Short IDs
+remain convenient for interactive use, but they identify individual session
+rows and are not the grouping key for split tabs.
 
 Instant input is dispatched before the command returns. With `--type-delay
 <ms>`, typing is animated one character at a time and the command returns as

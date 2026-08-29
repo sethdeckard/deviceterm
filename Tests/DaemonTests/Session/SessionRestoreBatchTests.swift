@@ -50,6 +50,7 @@ private actor TailGate {
 private func entry(
     capability: Capability,
     id: UUID = UUID(),
+    tabId: UUID? = nil,
     shortId: String = ShortID.generate(),
     role: SessionRole = .agent,
     name: String? = nil,
@@ -61,7 +62,8 @@ private func entry(
         shortId: shortId,
         role: role,
         name: name,
-        isProtected: isProtected
+        isProtected: isProtected,
+        tabId: tabId
     )
 }
 
@@ -149,6 +151,25 @@ func restoreInsertsSessionsAndReDerivesVerifierFromCap() async throws {
     await #expect(throws: Never.self) {
         _ = try await manager.validate(sessionId: entryB.id, capability: capB)
     }
+    let stateA = try await manager.validate(sessionId: entryA.id, capability: capA)
+    let stateB = try await manager.validate(sessionId: entryB.id, capability: capB)
+    #expect(stateA.tabId == entryA.id)
+    #expect(stateB.tabId == entryB.id)
+}
+
+@Test
+func restorePreservesSharedTabId() async throws {
+    let manager = SessionManager(startsPendingRestoration: true)
+    let tabId = UUID()
+    let first = entry(capability: try Capability.random(), tabId: tabId)
+    let second = entry(capability: try Capability.random(), tabId: tabId)
+
+    _ = try await manager.restoreBatch([first, second], owner: nil, epoch: 1, revision: 1)
+
+    let firstState = try await manager.validate(sessionId: first.id, capability: first.capability)
+    let secondState = try await manager.validate(sessionId: second.id, capability: second.capability)
+    #expect(firstState.tabId == tabId)
+    #expect(secondState.tabId == tabId)
 }
 
 @Test

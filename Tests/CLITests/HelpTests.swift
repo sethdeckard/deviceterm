@@ -340,6 +340,21 @@ func helpDocumentsShellCompletionInstall() {
 }
 
 @Test
+func workspaceRefsDocumentTabAndSessionUUIDs() {
+    #expect(HelpCatalog.refsLegend.contains("<tabId-uuid>"))
+    #expect(HelpCatalog.refsLegend.contains("<sessionId-uuid>"))
+}
+
+@Test
+func tabsHelpQualifiesNonGUIGrouping() {
+    let tabs = HelpCatalog.topic(named: "tabs")?.detail ?? ""
+    #expect(tabs.contains("Human output uses"))
+    #expect(tabs.contains("only these five tab-separated columns"))
+    #expect(tabs.contains("GUI-backed groups correspond to tabs"))
+    #expect(tabs.contains("include non-GUI session groups"))
+}
+
+@Test
 func helpContainsAtLeastOneExamplePerVerb() {
     // These representative device-input verbs should each retain an
     // inline `deviceterm <verb>` example. Not every operand-taking verb

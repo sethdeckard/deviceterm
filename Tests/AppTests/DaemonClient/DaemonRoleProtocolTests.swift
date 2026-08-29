@@ -2,6 +2,7 @@
 
 @testable import App
 import DaemonProtocol
+import Foundation
 import Testing
 
 /// Daemon-client role protocols + injection. Asserts that both the
@@ -65,16 +66,24 @@ struct DaemonRoleProtocolTests {
             sessionId: "sess",
             capability: "cap"
         )
+        let tabId = UUID()
         let session = await fake.createSession(
             label: "x",
             name: "n",
             role: .agent,
-            initialProtected: false
+            initialProtected: false,
+            tabId: tabId
         )
         #expect(session.sessionId == "sess")
         #expect(
             fake.createSessionCalls == [
-            .init(label: "x", name: "n", role: .agent, initialProtected: false)
+            .init(
+                label: "x",
+                name: "n",
+                role: .agent,
+                initialProtected: false,
+                tabId: tabId
+            )
             ]
             )
 

@@ -3,14 +3,13 @@
 import DaemonProtocol
 import Foundation
 
-/// One validated, parsed entry in a `session.restoreBatch`. The handler
-/// decodes the wire `RestoredSession`, parses each field (a malformed
-/// UUID / capability / role / short id rejects the whole batch before this
-/// is built), and hands the typed set to `SessionManager.restoreBatch`,
-/// which derives the verifier and performs the atomic conflict-checked
-/// insert.
+/// One parsed entry in a `session.restoreBatch`. The handler parses session
+/// and tab UUIDs and capabilities, then hands the entries to
+/// `SessionManager.restoreBatch`, which validates short IDs, derives the
+/// verifiers, and performs the atomic conflict-checked insert.
 public struct RestoreSessionEntry: Sendable {
     public let id: UUID
+    public let tabId: UUID
     public let capability: Capability
     public let shortId: String
     public let role: SessionRole
@@ -23,9 +22,11 @@ public struct RestoreSessionEntry: Sendable {
         shortId: String,
         role: SessionRole,
         name: String?,
-        isProtected: Bool
+        isProtected: Bool,
+        tabId: UUID? = nil
     ) {
         self.id = id
+        self.tabId = tabId ?? id
         self.capability = capability
         self.shortId = shortId
         self.role = role
