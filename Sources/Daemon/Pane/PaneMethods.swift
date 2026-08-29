@@ -800,8 +800,11 @@ public enum PaneMethods {
             let paneId = try requirePaneId(params.paneId)
             let target = try rotationTarget(params)
             let principal = try requirePrincipal()
-            return try await paneAck {
-                try await paneCoordinator.rotate(paneId: paneId, as: principal, target: target)
+            do {
+                let result = try await paneCoordinator.rotate(paneId: paneId, as: principal, target: target)
+                return try JSONEncoder().encode(result)
+            } catch let error as PaneError {
+                throw mapPaneError(error)
             }
         }
     }

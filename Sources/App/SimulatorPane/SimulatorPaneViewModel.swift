@@ -116,22 +116,21 @@ final class SimulatorPaneViewModel {
     /// daemon's `orientation.changed` pane event (`pane.subscribe`), never
     /// written by this VM's own rotate calls.
     ///
-    /// Observed from the simulator's display where the daemon has a source
-    /// for it, and inferred from a performed rotation where it doesn't. An
-    /// observed value describes the framebuffer rather than the device's
-    /// attitude, so a rotate can succeed while this correctly stays put
-    /// under an orientation-locked app; an inferred one can't distinguish
-    /// that case. Drives the render counter-rotation, the bezel, and input
-    /// mapping.
-    ///
-    /// The base a relative Rotate Left/Right advances from is the daemon's
-    /// separate control orientation, not this.
+    /// A Simulator reports observed display orientation. A physical device
+    /// reports a valid orientation returned by a DeviceTerm rotation reply.
+    /// The latter has no passive display source, so a rotation performed by
+    /// hand remains invisible. Drives render counter-rotation, the bezel, and
+    /// input mapping.
     private(set) var currentOrientation: Orientation = .portrait
 
     // Infrastructure, not observable state. Kept out of the registrar so
     // changes don't trigger renders and `deinit` can touch the task.
     @ObservationIgnored private let daemonClient: any PaneControlling & PaneSubscribing
     @ObservationIgnored private var subscriptionTask: Task<Void, Never>?
+    /// GUI rotation intents wait here in AppKit delivery order. A single pump
+    /// preserves click order while each RPC handles bounded daemon backpressure.
+    @ObservationIgnored private var pendingRotations: [RotationTarget] = []
+    @ObservationIgnored private var rotationTask: Task<Void, Never>?
     @ObservationIgnored private var pendingSurfaceUpdate: (
         sequence: UInt64,
         lease: SurfaceLease?
@@ -221,6 +220,7 @@ final class SimulatorPaneViewModel {
 
     deinit {
         subscriptionTask?.cancel()
+        rotationTask?.cancel()
         touchKeepaliveTask?.cancel()
         keyInputTask?.cancel()
         keyInputContinuation.finish()
@@ -328,13 +328,11 @@ final class SimulatorPaneViewModel {
             state = SimPaneReducer.reduce(state, .lifecycle(change.state))
 
         case let .orientationChanged(change):
-            // Adopt the presentation orientation the daemon reports, the
-            // only writer of this value. Where the daemon observes the
-            // display it arrives when the framebuffer turned, whatever
-            // turned it, so a rotate this VM sent shows up only if the
-            // display followed; where it can't observe, it arrives from a
-            // performed rotation instead. A fresh subscription replays the
-            // daemon's current value. An unknown value is ignored.
+            // Adopt the confirmed presentation orientation the daemon reports,
+            // the only writer of this value. A Simulator publishes display
+            // observation; a physical device publishes a rotation reply. A
+            // fresh subscription replays the daemon's current value. An unknown
+            // value is ignored.
             if let orientation = Orientation(rawValue: change.orientation) {
                 currentOrientation = orientation
             }
@@ -379,6 +377,9 @@ final class SimulatorPaneViewModel {
     func close(mode: PaneCloseMode = .detach) async {
         subscriptionTask?.cancel()
         subscriptionTask = nil
+        rotationTask?.cancel()
+        rotationTask = nil
+        pendingRotations.removeAll()
         liveTouchHeld = false
         stopTouchKeepalive()
         surfaceApplyTask?.cancel()
@@ -757,22 +758,38 @@ final class SimulatorPaneViewModel {
     /// Rotate 90° clockwise, matching Apple's Device > Rotate Right.
     func rotateRight() { sendRotation(.relative(.right)) }
 
-    /// Ask the daemon to rotate, and don't touch `currentOrientation`:
-    /// the daemon holds the base a relative step advances from, and the
-    /// `orientationChanged` event is what moves this VM.
+    /// Ask the daemon to rotate, and don't touch `currentOrientation`.
+    /// `orientationChanged` carries the confirmed presentation value.
     ///
     /// Writing it here optimistically would turn the pane on intent rather
-    /// than on the daemon's answer. The daemon is the side that decides
-    /// whether to update from an observed display or from a performed
-    /// command, and whether the rotation was performed at all. The RPC is
-    /// fire-and-forget; a failure leaves the pane where it is.
+    /// than on the daemon's answer. The daemon decides whether display
+    /// observation or a physical-device reply confirms the result. The GUI
+    /// presents no separate rotation error; presentation still follows any
+    /// confirmed orientationChanged event.
     private func sendRotation(_ target: RotationTarget) {
         guard capabilities.rotate else { return }
+        pendingRotations.append(target)
+        startRotationPump()
+    }
+
+    private func startRotationPump() {
+        guard rotationTask == nil else { return }
         let id = paneId
         let client = daemonClient
-        Task { @MainActor in
-            try? await client.paneInputRotate(paneId: id, target: target)
+        rotationTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let target = self?.dequeueRotation() else {
+                    self?.rotationTask = nil
+                    return
+                }
+                try? await client.paneInputRotate(paneId: id, target: target)
+            }
         }
+    }
+
+    private func dequeueRotation() -> RotationTarget? {
+        guard !pendingRotations.isEmpty else { return nil }
+        return pendingRotations.removeFirst()
     }
 
     /// Drive the watchOS Digital Crown. Delta units match the

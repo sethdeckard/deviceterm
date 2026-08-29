@@ -214,10 +214,15 @@ func rotateReceiptJSONShape() throws {
         paneId: "P",
         shortId: "rt1234",
         orientation: "landscapeLeft",
-        direction: nil
+        direction: nil,
+        targetOrientation: "landscapeLeft",
+        observedOrientation: "landscapeLeft"
     )
     let json = try encode(receipt)
-    #expect(json == #"{"ok":true,"orientation":"landscapeLeft","paneId":"P","shortId":"rt1234","udid":"U"}"#)
+    let expected =
+        #"{"observedOrientation":"landscapeLeft","ok":true,"orientation":"landscapeLeft","# +
+        #""paneId":"P","shortId":"rt1234","targetOrientation":"landscapeLeft","udid":"U"}"#
+    #expect(json == expected)
 }
 
 @Test
@@ -230,10 +235,15 @@ func relativeRotateReceiptReportsTheDirection() throws {
         paneId: "P",
         shortId: "rt1234",
         orientation: nil,
-        direction: "left"
+        direction: "left",
+        targetOrientation: "portraitUpsideDown",
+        observedOrientation: "portraitUpsideDown"
     )
     let json = try encode(receipt)
-    #expect(json == #"{"direction":"left","ok":true,"paneId":"P","shortId":"rt1234","udid":"U"}"#)
+    let expected =
+        #"{"direction":"left","observedOrientation":"portraitUpsideDown","ok":true,"paneId":"P","# +
+        #""shortId":"rt1234","targetOrientation":"portraitUpsideDown","udid":"U"}"#
+    #expect(json == expected)
 }
 
 // MARK: - Crown

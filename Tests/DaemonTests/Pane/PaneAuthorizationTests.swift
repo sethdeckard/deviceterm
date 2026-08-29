@@ -210,7 +210,7 @@ private final class GatingMockBackend: DeviceBackend, @unchecked Sendable {
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
 
-    // No display to observe; the pane keeps its last commanded orientation.
+    // No display or reply to observe; rotation confirmation is unsupported.
     func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
     func stopDisplayOrientation() {}
     func currentDisplayOrientation() -> Orientation? { nil }
@@ -233,8 +233,13 @@ private final class GatingMockBackend: DeviceBackend, @unchecked Sendable {
     func keyDown(hidUsage: UInt32, generation: UInt64) throws {}
     func keyUp(hidUsage: UInt32, generation: UInt64) throws {}
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {}
-    // swiftlint:disable:next async_without_await
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool { true }
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) throws -> BackendRotationOutcome {
+        .confirmationUnsupported(target: target.orientation)
+    }
     func rotateCrown(delta: Double, generation: UInt64) throws {}
     func accessibilityFrontmostTree() throws -> [String: Any] { [:] }
     func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }
@@ -306,7 +311,7 @@ private final class UnquiescableBackend: DeviceBackend, @unchecked Sendable {
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
 
-    // No display to observe; the pane keeps its last commanded orientation.
+    // No display or reply to observe; rotation confirmation is unsupported.
     func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
     func stopDisplayOrientation() {}
     func currentDisplayOrientation() -> Orientation? { nil }
@@ -319,8 +324,13 @@ private final class UnquiescableBackend: DeviceBackend, @unchecked Sendable {
     func keyDown(hidUsage: UInt32, generation: UInt64) throws {}
     func keyUp(hidUsage: UInt32, generation: UInt64) throws {}
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {}
-    // swiftlint:disable:next async_without_await
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool { true }
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) throws -> BackendRotationOutcome {
+        .confirmationUnsupported(target: target.orientation)
+    }
     func rotateCrown(delta: Double, generation: UInt64) throws {}
     func accessibilityFrontmostTree() throws -> [String: Any] { [:] }
     func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }
@@ -375,7 +385,7 @@ private final class RecoveringBackend: DeviceBackend, @unchecked Sendable {
     func stopFrames() {}
     func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
 
-    // No display to observe; the pane keeps its last commanded orientation.
+    // No display or reply to observe; rotation confirmation is unsupported.
     func startDisplayOrientation(onChange: @escaping @Sendable (Orientation) -> Void) -> Bool { false }
     func stopDisplayOrientation() {}
     func currentDisplayOrientation() -> Orientation? { nil }
@@ -393,8 +403,13 @@ private final class RecoveringBackend: DeviceBackend, @unchecked Sendable {
     func keyDown(hidUsage: UInt32, generation: UInt64) throws {}
     func keyUp(hidUsage: UInt32, generation: UInt64) throws {}
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {}
-    // swiftlint:disable:next async_without_await
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool { true }
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) throws -> BackendRotationOutcome {
+        .confirmationUnsupported(target: target.orientation)
+    }
     func rotateCrown(delta: Double, generation: UInt64) throws {}
     func accessibilityFrontmostTree() throws -> [String: Any] { [:] }
     func accessibilityElement(at pixelPoint: CGPoint) throws -> [String: Any] { [:] }

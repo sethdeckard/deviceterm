@@ -1908,56 +1908,50 @@ the daemon translates it to the USB HID usage code Indigo expects (see
 #### `pane.input.rotate`
 
 - Params: `{paneId, orientation}` or `{paneId, direction}`
-- Result: `{ok}`
+- Result: `{ok, status, targetOrientation?, observedOrientation?, deadlineMs?, reason?}`
 - Scope: session
 
 `orientation` is `portrait`, `portraitUpsideDown`, `landscapeLeft`, or
-`landscapeRight`. `direction` is `left` or `right`, one 90° step from the
-orientation the daemon last successfully commanded on that pane. Exactly one
-of the two is required; both or neither is `invalidParams`, because a request
-carrying both gives no way to tell which the daemon would honor.
+`landscapeRight`. `direction` is `left` or `right`. Exactly one of the two is
+required; both or neither is `invalidParams`, because a request carrying both
+gives no way to tell which the daemon would honor.
 
-The daemon keeps two orientations per pane, and they are not the same value.
+`status` is `confirmed`, `unconfirmed`, `confirmationUnsupported`, `refused`,
+or `unavailable`. Only `confirmed` carries `ok: true`. A confirmed result also
+carries the absolute `targetOrientation` and `observedOrientation`.
 
-**Control orientation** is the base a relative rotate steps from. It is
-tracked, not observed: written only when the backend reports it performed the
-rotation, and never from an observed display value. A pane starts assuming
-`portrait`, where an iOS device boots.
+`reason` is optional. `queueFull` is the only current value; it accompanies
+`unconfirmed` when the pane already has two rotations outstanding.
 
-Nothing observes it because on a simulator there is nothing to observe. A
-simulator has no physical attitude and no sensor, so its device orientation is
-whichever rotate command reached it last, and nothing in CoreSimulator
-accumulates that. The bridge's own rotate is a one-way GSEvent with no reply
-and no getter.
+Rotations serialize per pane, with at most two requests outstanding: one active
+and one waiting. A third request returns immediately without dispatch. Retry
+after one finishes. This keeps both client response deadlines larger than the
+maximum serialized confirmation work.
 
-Do not close that gap by adopting the display orientation. Display is the
-foreground app's interface orientation, so a portrait device running a
-landscape-locked app presents landscape, and taking that as the base would
-mis-target the next relative rotate.
+A Simulator resolves relative requests from its latest confirmed display
+orientation. After dispatch, an already-confirmed target succeeds immediately;
+otherwise the daemon waits up to four seconds for the ordered display observer.
+An absolute request always sends its target even when the display already
+matches, because display orientation is not proof of device attitude. A missing
+display observer reports `confirmationUnsupported`; a display that does not
+reach the target reports `unconfirmed` with the last observation and deadline.
 
-Attach to a device that is already turned, or let anything rotate it without
-going through DeviceTerm, and the first relative rotate steps from the wrong
-place. A successful send records its target as the next base, so a following
-relative rotate steps from that instead. An absolute rotate names its target
-directly and doesn't consult the base at all. Simulator delivery is not
-acknowledged, so none of this is confirmation the device moved.
+A physical device sends relative requests directly to the relay, without
+resolving them through daemon state. The relay reply supplies the absolute
+orientation where the device landed. Absolute requests establish the current
+orientation from that same reply channel and use bounded relative steps to
+reach the target. No cached command orientation becomes the base for a later
+physical-device request. A valid non-target reply still updates presentation
+and coordinate mapping before the command reports `unconfirmed`.
 
-**Presentation orientation** is the value `orientation.changed` carries, and
-what drives the render, the bezel, and the hit-test mapping. It is the
-framebuffer's observed orientation where a backend has a display source, and
-the last performed command where it hasn't.
+Confirmation is backend-specific. Simulator confirmation describes the
+presented display. Physical-device confirmation describes the orientation
+returned by the control relay; the backend still has no passive
+framebuffer-orientation source.
 
-A simulator pane observes it: read from the display port at attach, then a
-callback whenever it changes, so a rotation reaches the pane whatever caused
-it. For an observing pane a rotate publishes nothing by itself, because an
-orientation-locked app answers one without moving its framebuffer and a pane
-that turned on the command alone would counter-rotate a portrait image.
-
-The physical-device backend has no display source. There a performed
-DeviceTerm rotate supplies the pane's orientation instead, so the pane follows
-the orientation that was commanded rather than the framebuffer. Nothing
-reports a rotation it didn't command, so a device turned by hand keeps its
-pane's previous shape and presents the app's new layout rotated inside it.
+`orientation.changed` and coordinate mapping follow the latest confirmed
+orientation. A physical device turned by hand remains invisible until a
+DeviceTerm rotation returns a new orientation.
 
 #### `pane.input.pinch`
 
@@ -2241,11 +2235,12 @@ subscription's request-envelope id:
 - `surface.changed`: `{paneId, sequence}`, paired with a side-band
   surface payload for the same `(paneId, sequence)`.
 - `orientation.changed`: `{paneId, orientation}`, carrying the pane's
-  presentation orientation. That is what the framebuffer is presenting for a
-  pane whose backend has a display source, and the last performed command for
-  one that hasn't. Replayed once at subscribe, so a subscriber arriving after
-  it last changed starts correct, and sent again whenever it changes. A pane
-  that has neither been read nor rotated replays `portrait`.
+  confirmed presentation orientation. A Simulator publishes its observed
+  display orientation. A physical device publishes any valid orientation
+  returned by a DeviceTerm rotation, including a non-target result. Replayed
+  once at subscribe, so a subscriber arriving after it last changed starts
+  correct, and sent again whenever it changes. A pane that has neither been
+  read nor rotated replays `portrait`.
 
 The initial ack returns a `subscriptionToken` on every XPC subscription:
 the correlation key for the connection's side-band lane and, for a

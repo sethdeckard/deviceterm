@@ -42,6 +42,9 @@ struct DaemonClientDeadlineTests {
         /// modelling a create that lands but can't immediately be
         /// authenticated onto the connection. `.max` never accepts.
         var authenticateFailures = 0
+        /// Scripted rotation outcomes, consumed in order before the default
+        /// confirmed reply.
+        var rotateResults: [RotateResult] = []
         /// Sessions the daemon actually closed. Distinct from `methods`, which
         /// records the attempt: a `session.close` refused by the scope gate
         /// appears there but changes nothing, so only this proves cleanup.
@@ -70,6 +73,15 @@ struct DaemonClientDeadlineTests {
 
             case .sessionAuthenticate:
                 let response = SessionAuthenticateResponse(success: true, role: .agent)
+                return (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
+
+            case .paneInputRotate:
+                let response = RotateResult(
+                    success: true,
+                    status: .confirmed,
+                    targetOrientation: .portrait,
+                    observedOrientation: .portrait
+                )
                 return (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
 
             default:
@@ -104,6 +116,9 @@ struct DaemonClientDeadlineTests {
 
             default:
                 break
+            }
+            if method == RPCMethod.paneInputRotate.rawValue, !rotateResults.isEmpty {
+                return try JSONEncoder().encode(rotateResults.removeFirst())
             }
             return Self.reply(for: method)
         }
@@ -169,6 +184,71 @@ struct DaemonClientDeadlineTests {
             try await client.bootDevice(udid: "U")
         }
         await #expect(throws: Never.self) { try await client.shutdownDevice(udid: "U") }
+    }
+
+    @Test
+    func rotationOutlivesTheOrdinaryRequestBound() async {
+        let (client, transport) = makeClient(peerDelay: 100_000_000)
+
+        await #expect(throws: Never.self) {
+            try await client.paneInputRotate(
+                paneId: "P",
+                target: .absolute(.landscapeLeft)
+            )
+        }
+        #expect(transport.methods == [RPCMethod.paneInputRotate.rawValue])
+    }
+
+    @Test
+    func rotationRetriesOnlyQueueBackpressure() async {
+        let (client, transport) = makeClient(peerDelay: 0)
+        transport.rotateResults = [
+            RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: nil,
+                observedOrientation: .portrait,
+                reason: .queueFull
+            ),
+            RotateResult(
+                success: true,
+                status: .confirmed,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: .landscapeLeft
+            )
+        ]
+
+        await #expect(throws: Never.self) {
+            try await client.paneInputRotate(
+                paneId: "P",
+                target: .relative(.left)
+            )
+        }
+        #expect(transport.methods == [
+            RPCMethod.paneInputRotate.rawValue,
+            RPCMethod.paneInputRotate.rawValue
+        ])
+    }
+
+    @Test
+    func rotationDoesNotRetryDeviceNonconfirmation() async {
+        let (client, transport) = makeClient(peerDelay: 0)
+        transport.rotateResults = [
+            RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: .portrait
+            )
+        ]
+
+        await #expect(throws: Never.self) {
+            try await client.paneInputRotate(
+                paneId: "P",
+                target: .relative(.left)
+            )
+        }
+        #expect(transport.methods == [RPCMethod.paneInputRotate.rawValue])
     }
 
     @Test

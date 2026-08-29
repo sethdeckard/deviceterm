@@ -53,15 +53,12 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         case up(UInt16)
     }
 
-    /// A rotation enqueued on the rotation pump: the target orientation plus a
-    /// completion the pump resumes with this specific command's outcome:
-    /// `true` iff it was performed and the device reached the target, `false`
-    /// if a transfer fenced it or it never reached the target. Lets the
-    /// awaiting `rotate` caller report a per-command result, not a
-    /// generation-wide guess.
+    /// A rotation enqueued on the rotation pump with its one-shot completion.
+    /// The relay's returned orientation settles this request directly, without
+    /// a backend-wide command-history base.
     private struct RotationRequest: Sendable {
-        let orientation: Orientation
-        let completion: @Sendable (Bool) -> Void
+        let target: RotationTarget
+        let completion: @Sendable (Result<BackendRotationOutcome, any Error>) -> Void
     }
 
     /// One location mutation on the location pump. Carries a completion
@@ -297,6 +294,8 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         )
     }
 
+    let rotationConfirmationSupport = RotationConfirmationSupport.commandReply
+
     init(
         deviceId: String,
         feed: any DecodedFrameFeed,
@@ -372,34 +371,41 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
-    /// Step the device from `current` (nil ⇒ unknown) to `target`, returning the
-    /// orientation it ends at. Learns the current orientation with one step when
-    /// unknown, then steps the minimal direction; bounded so a stuck device can't
-    /// loop forever.
+    /// Perform one relative request directly, or converge an absolute request
+    /// from relay-returned orientations. Bounded so a stuck device cannot loop.
     private static func rotate(
         _ device: any InteractionRelaying,
-        current: Orientation?,
-        target: Orientation
-    ) async throws -> Orientation? {
-        // `try` (not `try?`): a thrown step is a real relay/tunnel failure and
-        // must propagate so the caller reports the rotation as *not performed*.
-        // Only a *successful* step that reports no absolute orientation
-        // (`.acknowledged` / `.orientation(nil)`) yields `nil` here, and that
-        // is the sole case the dead-reckoning fallback below fills in, never a
-        // thrown failure.
-        var here = current
-        if here == nil {
-            here = orientation(from: try await device.perform(.rotate(.left)))
-            guard here != nil else { return nil }
+        target: RotationTarget
+    ) async throws -> BackendRotationOutcome {
+        switch target {
+        case let .relative(direction):
+            let input: RotationInput = direction == .left ? .left : .right
+            guard let observed = orientation(from: try await device.perform(.rotate(input))) else {
+                return .confirmationUnsupported(target: nil)
+            }
+            return .confirmed(target: observed, observed: observed)
+
+        case let .absolute(targetOrientation):
+            var observed = orientation(from: try await device.perform(.rotate(.left)))
+            guard observed != nil else {
+                return .confirmationUnsupported(target: targetOrientation)
+            }
+            var steps = 0
+            while let current = observed, current != targetOrientation, steps < 4 {
+                steps += 1
+                guard let direction = DeviceOrientationMath.direction(from: current, to: targetOrientation) else {
+                    break
+                }
+                observed = orientation(from: try await device.perform(.rotate(direction)))
+                guard observed != nil else {
+                    return .confirmationUnsupported(target: targetOrientation)
+                }
+            }
+            guard observed == targetOrientation else {
+                return .unconfirmed(target: targetOrientation, observed: observed)
+            }
+            return .confirmed(target: targetOrientation, observed: targetOrientation)
         }
-        var steps = 0
-        while let now = here, now != target, steps < 4 {
-            steps += 1
-            guard let direction = DeviceOrientationMath.direction(from: now, to: target) else { break }
-            let reported = orientation(from: try await device.perform(.rotate(direction)))
-            here = reported ?? DeviceOrientationMath.step(now, direction)
-        }
-        return here
     }
 
     /// Translate a location failure into the backend vocabulary the
@@ -624,16 +630,14 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
-    /// The serial rotation pump: drains absolute-orientation targets and steps
-    /// the device to each. The device rotates only relative 90° steps, so the
-    /// pump tracks the current orientation (learned once, then updated from each
-    /// reply) and steps the minimal direction. Serial, so overlapping rotates
-    /// don't fight. Captures only `device` + the stream.
+    /// The serial rotation pump. Relative requests reach the relay unchanged;
+    /// absolute requests use only orientations returned during that request.
+    /// Serial execution keeps overlapping rotations from fighting. Captures
+    /// only `device` and the stream.
     private func startRotationPump() {
         let device = self.device
         let stream = rotationStream
         rotationPump = Task { [weak self] in
-            var current: Orientation?
             for await item in stream {
                 switch item {
                 case let .perform(generation, request):
@@ -641,23 +645,13 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     // and report *not performed* so the coordinator suppresses
                     // the broadcast.
                     guard self?.isInputGenerationCurrent(generation) == true else {
-                        request.completion(false)
+                        request.completion(.success(.unavailable(target: request.target.orientation)))
                         continue
                     }
                     do {
-                        let reached = try await Self.rotate(device, current: current, target: request.orientation)
-                        current = reached
-                        // Performed only if the device actually settled on the
-                        // requested orientation: a rotation that ran but never
-                        // reached the target reports `false`.
-                        request.completion(reached == request.orientation)
+                        request.completion(.success(try await Self.rotate(device, target: request.target)))
                     } catch {
-                        // A relay/tunnel failure on a step: the rotation did not
-                        // complete, so report not-performed and forget the
-                        // tracked orientation: the device's true orientation is
-                        // now unknown and the next rotation re-establishes it.
-                        current = nil
-                        request.completion(false)
+                        request.completion(.failure(error))
                     }
 
                 case let .barrier(signal):
@@ -943,17 +937,14 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     // MARK: Display orientation
     //
-    // Not observed on this backend, so the pane keeps the orientation from
-    // its last DeviceTerm command and a device rotated by hand leaves it
-    // showing the previous one.
+    // Not passively observed on this backend. A DeviceTerm rotation reply that
+    // carries a valid orientation publishes it; a device rotated by hand leaves
+    // the pane showing its previous orientation.
     //
-    // The nearest reachable source is the device-control orientation
-    // channel this backend already speaks: `HIDReports.orientationRequest`
-    // sends a `rotate` and the relay parses `currentDeviceOrientation` out
-    // of the reply (`InteractionRelay.sendRotation`). That reports attitude
-    // rather than the framebuffer, and a read-only form of the request has
-    // not been confirmed against a device, so neither is recorded here as
-    // fact.
+    // The command path uses `HIDReports.orientationRequest`, and
+    // `InteractionRelay.sendRotation` parses `currentDeviceOrientation` from
+    // its reply. That reports attitude rather than the framebuffer. No
+    // read-only form has been confirmed against a device.
 
     func startDisplayOrientation(
         onChange: @escaping @Sendable (Orientation) -> Void
@@ -1108,18 +1099,20 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         buttonContinuation.yield(.perform(generation: generation, press))
     }
 
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool {
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) async throws -> BackendRotationOutcome {
         guard device.support.rotation else {
             throw RealDeviceBackendError.unsupported(verb: "rotation")
         }
-        // Enqueue the rotation carrying a completion the pump resumes with the
-        // specific command's outcome (performed & reached target, or dropped),
-        // and await it, so the coordinator broadcasts only for a rotation the
-        // device truly made. A finished stream (torn-down pump) reports `false`.
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            let request = RotationRequest(orientation: orientation) { continuation.resume(returning: $0) }
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = RotationRequest(target: target) { continuation.resume(with: $0) }
             let outcome = rotationContinuation.yield(.perform(generation: generation, request))
-            if case .terminated = outcome { continuation.resume(returning: false) }
+            if case .terminated = outcome {
+                continuation.resume(returning: .unavailable(target: target.orientation))
+            }
         }
     }
 

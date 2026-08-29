@@ -27,17 +27,17 @@ private final class FakeTransport: CLITransport {
 
     /// Replay `responses` in order, one per send (for handlers that make
     /// more than one round-trip, e.g. resolve-then-act).
-    init(responses: [Data]) {
+    init(responses: [Data], error: CLIError? = nil) {
         self.queue = responses
         self.fallback = Data()
-        self.error = nil
+        self.error = error
     }
 
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data {
         sent.append(envelope)
         timeouts.append(timeoutSeconds)
-        if let error { throw error }
         if !queue.isEmpty { return queue.removeFirst() }
+        if let error { throw error }
         return fallback
     }
 }
@@ -585,6 +585,205 @@ func swipeDecodesAckAndTargetsPane() throws {
 }
 
 @Test
+func rotateJSONReportsTheConfirmedTargetAndObservation() throws {
+    let result = RotateResult(
+        success: true,
+        status: .confirmed,
+        targetOrientation: .landscapeLeft,
+        observedOrientation: .landscapeLeft
+    )
+    let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
+    let outcome = try handleRotate(
+        pane: nil,
+        target: .absolute(.landscapeLeft),
+        transport: fake,
+        output: .json,
+        creds: testCreds
+    )
+    let expected = Receipt.Rotate(
+        udid: "U1",
+        paneId: "p1",
+        shortId: "sh1",
+        orientation: "landscapeLeft",
+        direction: nil,
+        targetOrientation: "landscapeLeft",
+        observedOrientation: "landscapeLeft"
+    )
+
+    #expect(outcome == .stdout(try encodeJSONReceipt(expected)))
+    #expect(fake.sent.map(\.method) == [RPCMethod.panesList.rawValue, RPCMethod.paneInputRotate.rawValue])
+}
+
+@Test
+func relativeRotateHumanReceiptReportsWhereTheDeviceLanded() throws {
+    let result = RotateResult(
+        success: true,
+        status: .confirmed,
+        targetOrientation: .portraitUpsideDown,
+        observedOrientation: .portraitUpsideDown
+    )
+    let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
+    let outcome = try handleRotate(
+        pane: nil,
+        target: .relative(.left),
+        transport: fake,
+        output: .human,
+        creds: testCreds
+    )
+    let resolved = ResolvedPane(paneId: "p1", udid: "U1", shortId: "sh1")
+
+    #expect(outcome == .stdout(Echo.ok(
+        udid: "U1",
+        pane: resolved.displayLabel,
+        fields: [
+            ("direction", "left"),
+            ("targetOrientation", "portraitUpsideDown"),
+            ("observedOrientation", "portraitUpsideDown")
+        ]
+    ) + "\n"))
+}
+
+@Test(
+    "rotate failures carry their command-specific code",
+    arguments: [
+        (
+            RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: .portrait,
+                deadlineMs: 4_000
+            ),
+            "rotate.unconfirmed"
+        ),
+        (
+            RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: .portrait,
+                reason: .queueFull
+            ),
+            "rotate.unconfirmed"
+        ),
+        (
+            RotateResult(
+                success: false,
+                status: .confirmationUnsupported,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: nil
+            ),
+            "rotate.confirmationUnsupported"
+        ),
+        (
+            RotateResult(
+                success: false,
+                status: .refused,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: .portrait
+            ),
+            "input.refused"
+        ),
+        (
+            RotateResult(
+                success: false,
+                status: .unavailable,
+                targetOrientation: .landscapeLeft,
+                observedOrientation: nil
+            ),
+            "pane.unavailable"
+        )
+    ]
+)
+func rotateFailuresUseStableJSONCodes(result: RotateResult, expectedCode: String) throws {
+    let command = CLICommand.rotate(pane: nil, target: .absolute(.landscapeLeft))
+    let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
+    let failure = try handleRotate(
+        pane: nil,
+        target: .absolute(.landscapeLeft),
+        transport: fake,
+        output: .json,
+        creds: testCreds
+    )
+    let rendered = failure.renderingFailure(for: command, output: .json)
+
+    #expect(failure.exitCode == 1)
+    #expect(failure.failure?.code.rawValue == expectedCode)
+    #expect(stdoutString(rendered).hasSuffix("\n"))
+    #expect(stdoutString(rendered).contains(#"{"error":{"code":"\#(expectedCode)""#))
+    let detailsData = try #require(failure.failure?.details)
+    let details = try #require(
+        JSONSerialization.jsonObject(with: detailsData) as? [String: Any]
+    )
+    #expect(details["requestedOrientation"] as? String == "landscapeLeft")
+    #expect(details["targetOrientation"] as? String == "landscapeLeft")
+    #expect(details["observedOrientation"] as? String == result.observedOrientation?.rawValue)
+    #expect(details["deadlineMs"] as? Int == result.deadlineMs)
+    #expect(details["reason"] as? String == result.reason?.rawValue)
+}
+
+@Test
+func rotateInfrastructureFailuresKeepTheirSharedClassification() throws {
+    let failures: [(CLIError, CLIErrorCode)] = [
+        (
+            .daemon(code: -32_020, message: "pane.rotate: relay failed"),
+            .paneBridgeFailed
+        ),
+        (
+            .daemon(code: -32_011, message: "session authority revoked"),
+            .sessionUnauthorized
+        ),
+        (
+            .transportTimeout("timed out waiting for the daemon"),
+            .transportTimeout
+        )
+    ]
+
+    for (error, expectedCode) in failures {
+        let fake = FakeTransport(responses: [try onePaneResponse()], error: error)
+        do {
+            _ = try handleRotate(
+                pane: nil,
+                target: .absolute(.landscapeLeft),
+                transport: fake,
+                output: .json,
+                creds: testCreds
+            )
+            Issue.record("rotate unexpectedly converted an infrastructure failure to a result")
+        } catch {
+            let outcome = errorOutcome(error)
+            #expect(outcome.failure?.code == expectedCode)
+            #expect(outcome.failure?.code != .rotateUnconfirmed)
+            #expect(outcome.failure?.code != .rotateConfirmationUnsupported)
+        }
+    }
+}
+
+@Test
+func malformedRotateResultIsAProtocolFailure() throws {
+    let malformedResponses = [
+        Data(#"{"unexpected":true}"#.utf8),
+        Data(#"{"ok":true,"unexpected":true}"#.utf8)
+    ]
+
+    for response in malformedResponses {
+        let fake = FakeTransport(responses: [try onePaneResponse(), response])
+        do {
+            _ = try handleRotate(
+                pane: nil,
+                target: .absolute(.landscapeLeft),
+                transport: fake,
+                output: .json,
+                creds: testCreds
+            )
+            Issue.record("malformed rotate result unexpectedly succeeded")
+        } catch {
+            #expect(errorOutcome(error).failure?.code == .protocolInvalidResponse)
+        }
+    }
+}
+
+@Test
 func axTreeReturnsDaemonPayloadVerbatim() throws {
     let axPayload = Data(#"{"role":"window","children":[]}"#.utf8)
     let fake = FakeTransport(responses: [try onePaneResponse(), axPayload])
@@ -740,6 +939,36 @@ struct ResponseBudgetTests {
             for: .crown(pane: nil, delta: 100, velocity: nil, durationMs: 6_000)
         )
         #expect(budget == gestureTimeout(6_000))
+    }
+
+    @Test
+    func rotateWaitsOutItsBoundedQueueAndConfirmationWindow() throws {
+        let result = RotateResult(
+            success: true,
+            status: .confirmed,
+            targetOrientation: .landscapeLeft,
+            observedOrientation: .landscapeLeft
+        )
+        let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
+        let outcome = withTabEnv {
+            run(
+                .rotate(pane: nil, target: .absolute(.landscapeLeft)),
+                transport: fake,
+                output: .json
+            )
+        }
+        let confirmationSeconds = Double(RotationConfirmationDeadline.observationMilliseconds) / 1_000
+
+        #expect(outcome.exitCode == 0)
+        #expect(fake.timeouts == [
+            AppCommandDeadline.cliRequestTimeoutSeconds,
+            RotationConfirmationDeadline.clientResponseTimeoutSeconds
+        ])
+        #expect(RotationConfirmationDeadline.maximumOutstandingPerPane == 2)
+        #expect(
+            RotationConfirmationDeadline.clientResponseTimeoutSeconds
+                > 2 * confirmationSeconds + AppCommandDeadline.cliRequestTimeoutSeconds
+        )
     }
 
     /// An omitted `--duration` must resolve the daemon's own default, not the

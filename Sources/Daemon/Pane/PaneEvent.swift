@@ -29,13 +29,11 @@ public enum PaneEvent: Sendable {
     /// The pane's presentation orientation changed, so subscribers
     /// re-render, re-fit the bezel, and re-map input against it.
     ///
-    /// A presentation event, not a command receipt. Where it comes from
-    /// depends on the pane. One observing its display emits for any cause,
-    /// including a rotation from outside deviceterm, and stays silent when
-    /// an orientation-locked app answers a rotate without moving the
-    /// framebuffer. One with no display source emits from a performed
-    /// rotate instead, so external rotations are invisible to it and a
-    /// locked app turns it when it shouldn't.
+    /// A presentation event, not a command receipt. A Simulator emits from
+    /// display observation, including a rotation from outside DeviceTerm, and
+    /// stays silent when an orientation-locked app leaves the framebuffer in
+    /// place. A physical device emits from a valid rotation reply, including a
+    /// non-target observation, so an external rotation remains invisible.
     case orientationChanged(
         paneId:
         UUID,

@@ -13,9 +13,9 @@ import Foundation
 /// Dispatch queue because SimulatorKit waits synchronously for completion;
 /// physical-device sends join their relay pump.
 ///
-/// The one gesture with a state side effect stays on the actor: `rotate`
-/// here does only the backend call; the coordinator fans the
-/// `.orientationChanged` event out to subscribers.
+/// Rotation state stays on the actor. This type makes the backend call; the
+/// coordinator waits for any required observation and publishes the confirmed
+/// `.orientationChanged` event.
 enum SimInputSynthesis {
     /// What a paced loop does when it reaches its checkpoint.
     enum PacedStep: Equatable {
@@ -789,17 +789,22 @@ enum SimInputSynthesis {
         }
     }
 
-    /// Drive the backend rotation only. The coordinator fans the
-    /// resulting `.orientationChanged` event out to subscribers, which
-    /// touches pane state and stays on the actor.
+    /// Drive the backend rotation only. The coordinator interprets the
+    /// outcome, waits for display observation where required, and publishes
+    /// confirmed presentation changes on the actor.
     static func rotate(
         backend: any DeviceBackend,
         paneId: UUID,
         generation: UInt64,
-        orientation: Orientation
-    ) async throws -> Bool {
+        target: RotationTarget,
+        confirmedOrientation: Orientation?
+    ) async throws -> BackendRotationOutcome {
         do {
-            return try await backend.rotate(to: orientation, generation: generation)
+            return try await backend.rotate(
+                target: target,
+                confirmedOrientation: confirmedOrientation,
+                generation: generation
+            )
         } catch {
             throw PaneError.bridgeFailed(
                 paneId: paneId,

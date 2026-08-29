@@ -6,7 +6,7 @@
 /// CoreSimulatorBridge C enum (`bridgeValue`) lives in
 /// `Orientation+Bridge.swift` (Daemon). `CaseIterable` backs the daemon's
 /// validation error message.
-public enum Orientation: String, Sendable, Equatable, CaseIterable {
+public enum Orientation: String, Codable, Sendable, Equatable, CaseIterable {
     case portrait
     case portraitUpsideDown
     case landscapeLeft

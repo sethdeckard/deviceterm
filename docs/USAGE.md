@@ -438,10 +438,10 @@ a Simulator to landscape and `(0,0)` follows the picture: DeviceTerm watches
 the simulator's display and rotates your coordinate into the device's native
 frame on the way through.
 
-A physical device has no such source. DeviceTerm assumes a device pane is
-portrait until it performs a rotation itself, so turning the device by hand
-leaves that assumption stale and coordinates land as though it were still
-upright.
+A physical device has no passive orientation source. DeviceTerm starts its
+pane in portrait and replaces that assumption with an observed orientation
+returned by a DeviceTerm rotation. Turning the device by hand can still leave
+coordinate mapping stale.
 
 ```sh
 deviceterm tap 0.5 0.5
@@ -497,32 +497,28 @@ unsupported character instead of silently dropping it.
 portrait | portrait-upside-down | landscape-left | landscape-right
 ```
 
-or a relative direction, which turns the device 90 degrees from wherever
-DeviceTerm last put it:
+or a relative direction:
 
 ```text
 left | right
 ```
 
-`left` and `right` step from the orientation DeviceTerm last commanded, which
-is not always where the device is. Attach to a device that is already turned,
-or rotate it with something else, and the first `left` or `right` steps from
-the wrong place. DeviceTerm records the target it sent as the next base, so a
-following `left` or `right` steps from that. An absolute rotate names its
-target directly and doesn't use the base at all.
+`rotate` returns success only after DeviceTerm confirms the requested outcome.
 
-A simulator pane's picture is a separate matter, and follows the simulator's
-display rather than the command. Rotate a sim from outside DeviceTerm and the
-picture turns with it, upright and in the right proportions inside the pane it
-already had. An app that locks its own orientation keeps the picture where it
-is, because that is what the device is still showing, even though DeviceTerm
-sent the rotation command.
+On a Simulator, confirmation comes from the display observation that also
+drives rendering and coordinate mapping. Relative rotations start from the
+latest observed orientation. DeviceTerm waits up to four seconds for the
+display to reach the target; an orientation-locked app that leaves the display
+unchanged fails with `rotate.unconfirmed`.
 
-A physical-device pane doesn't follow its display. Rotate the hardware by hand
-and the mirror shows the app's new landscape layout lying on its side in a
-portrait-shaped pane, because nothing told DeviceTerm the device turned. Rotate
-through DeviceTerm and the pane follows the orientation you commanded; with no
-display to read, it can't tell when a locked interface disagrees.
+On a physical device, `left` and `right` are sent directly as relative
+operations. The relay returns the absolute orientation where the device landed,
+which becomes the pane's next coordinate-mapping orientation. Absolute requests
+use the same replies to converge on their target.
+
+A physical device that omits orientation from its reply fails with
+`rotate.confirmationUnsupported`. Turning it by hand remains invisible until a
+later DeviceTerm rotation returns an orientation.
 
 ### Turn the Digital Crown
 

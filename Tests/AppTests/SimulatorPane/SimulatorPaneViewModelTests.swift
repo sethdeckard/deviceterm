@@ -594,6 +594,31 @@ struct SimulatorPaneViewModelTests {
         #expect(viewModel.currentOrientation == .portrait)
     }
 
+    @Test
+    func quickRotationsWaitForEarlierGUIIntents() async {
+        let fake = FakeDaemonClient()
+        fake.holdRotateCalls = true
+        let viewModel = makeViewModel(fake)
+
+        viewModel.rotateLeft()
+        viewModel.rotateLeft()
+        viewModel.rotateRight()
+
+        #expect(await poll { fake.rotateCalls.count == 1 })
+        #expect(fake.waitingRotateCallCount == 1)
+        fake.releaseNextRotateCall()
+        #expect(await poll { fake.rotateCalls.count == 2 })
+        #expect(fake.waitingRotateCallCount == 1)
+        fake.releaseNextRotateCall()
+        #expect(await poll { fake.rotateCalls.count == 3 })
+        #expect(fake.rotateCalls.map(\.target) == [
+            .relative(.left),
+            .relative(.left),
+            .relative(.right)
+        ])
+        fake.releaseNextRotateCall()
+    }
+
     @Test(
         "the orientation event is the only writer of tracked orientation",
         arguments: Orientation.allCases

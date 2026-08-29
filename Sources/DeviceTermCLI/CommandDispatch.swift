@@ -347,32 +347,11 @@ func run(
             )
 
         case let .rotate(pane, target):
-            // The receipt echoes what was asked for. A relative rotate
-            // resolves against an orientation only the daemon holds, and the
-            // ack doesn't carry the result, so reporting a resulting
-            // orientation here would be a guess.
-            let requested: [(String, String)] = switch target {
-            case let .absolute(orientation):
-                [("orientation", orientation.rawValue)]
-
-            case let .relative(direction):
-                [("direction", direction.rawValue)]
-            }
-            return try sendResolved(
-                ref: pane,
-                output: output,
+            return try handleRotate(
+                pane: pane,
+                target: target,
                 transport: transport,
-                humanFields: { _ in requested },
-                jsonReceipt: { resolved in
-                    Receipt.Rotate(
-                        udid: resolved.udid,
-                        paneId: resolved.paneId,
-                        shortId: resolved.shortId,
-                        orientation: target.orientation?.rawValue,
-                        direction: target.direction?.rawValue
-                    )
-                },
-                build: { try CLICommands.rotateRequest(paneId: $0, target: target) }
+                output: output
             )
 
         case let .crown(pane, delta, velocity, durationMs):
@@ -825,6 +804,100 @@ func sendResolvedPrintingResult(
     var result = try transport.send(envelope, timeoutSeconds: timeoutSeconds)
     result.append(0x0A)
     return .stdout(result)
+}
+
+func handleRotate(
+    pane: String?,
+    target: RotationTarget,
+    transport: CLITransport,
+    output: OutputMode,
+    creds: (sessionId: String, cap: String)? = nil
+) throws -> CommandOutcome {
+    let resolved = try resolvePane(ref: pane, transport: transport, creds: creds)
+    let response = try transport.send(
+        try CLICommands.rotateRequest(paneId: resolved.paneId, target: target),
+        timeoutSeconds: RotationConfirmationDeadline.clientResponseTimeoutSeconds
+    )
+    let result = try JSONDecoder().decode(RotateResult.self, from: response)
+    guard result.success else {
+        return rotateFailureOutcome(result, requested: target)
+    }
+    guard result.status == .confirmed,
+        let targetOrientation = result.targetOrientation,
+        let observedOrientation = result.observedOrientation else {
+        throw CLIError.classified(
+            code: .protocolInvalidResponse,
+            message: "pane.input.rotate returned an invalid success result"
+        )
+    }
+    var fields: [(String, String)] = []
+    if let orientation = target.orientation { fields.append(("orientation", orientation.rawValue)) }
+    if let direction = target.direction { fields.append(("direction", direction.rawValue)) }
+    fields.append(("targetOrientation", targetOrientation.rawValue))
+    fields.append(("observedOrientation", observedOrientation.rawValue))
+    switch output {
+    case .human:
+        return .stdout(
+            Echo.ok(udid: resolved.udid, pane: resolved.displayLabel, fields: fields) + "\n"
+        )
+
+    case .json:
+        return .stdout(
+            try encodeJSONReceipt(
+                Receipt.Rotate(
+                    udid: resolved.udid,
+                    paneId: resolved.paneId,
+                    shortId: resolved.shortId,
+                    orientation: target.orientation?.rawValue,
+                    direction: target.direction?.rawValue,
+                    targetOrientation: targetOrientation.rawValue,
+                    observedOrientation: observedOrientation.rawValue
+                )
+            )
+        )
+    }
+}
+
+private func rotateFailureOutcome(_ result: RotateResult, requested: RotationTarget) -> CommandOutcome {
+    let code: CLIErrorCode
+    let message: String
+    switch result.status {
+    case .unconfirmed:
+        code = .rotateUnconfirmed
+        message = "the device did not confirm the requested rotation"
+
+    case .confirmationUnsupported:
+        code = .rotateConfirmationUnsupported
+        message = "rotation confirmation is unsupported by this daemon or device"
+
+    case .refused:
+        code = .inputRefused
+        message = "the device refused the rotation"
+
+    case .unavailable:
+        code = .paneUnavailable
+        message = "the pane became unavailable before rotation confirmation"
+
+    case .confirmed:
+        code = .protocolInvalidResponse
+        message = "pane.input.rotate returned a confirmed failure result"
+    }
+    return .failure(
+        code: code,
+        message: message,
+        details: rotateFailureDetails(result, requested: requested)
+    )
+}
+
+private func rotateFailureDetails(_ result: RotateResult, requested: RotationTarget) -> Data? {
+    var details: [String: Any] = [:]
+    if let orientation = requested.orientation { details["requestedOrientation"] = orientation.rawValue }
+    if let direction = requested.direction { details["requestedDirection"] = direction.rawValue }
+    if let target = result.targetOrientation { details["targetOrientation"] = target.rawValue }
+    if let observed = result.observedOrientation { details["observedOrientation"] = observed.rawValue }
+    if let deadlineMs = result.deadlineMs { details["deadlineMs"] = deadlineMs }
+    if let reason = result.reason { details["reason"] = reason.rawValue }
+    return try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys])
 }
 
 /// `deviceterm swipe`: a custom handler because it decodes its own ack

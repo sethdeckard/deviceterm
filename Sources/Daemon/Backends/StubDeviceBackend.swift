@@ -62,8 +62,8 @@ final class StubDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func pixelDimensions() -> (Int?, Int?) { (pixelWidth, pixelHeight) }
 
-    // No display to observe, so the pane keeps its last commanded
-    // orientation.
+    // No display or command reply exists, so rotation confirmation is
+    // unsupported.
     func startDisplayOrientation(
         onChange: @escaping @Sendable (Orientation) -> Void
     ) -> Bool { false }
@@ -85,10 +85,13 @@ final class StubDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) throws {}
 
-    // Gated off by `capabilities` (never reached through the coordinator); a
-    // no-op performs nothing, so it reports `false`.
-    // swiftlint:disable:next async_without_await
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool { false }
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) throws -> BackendRotationOutcome {
+        .confirmationUnsupported(target: target.orientation)
+    }
 
     func keyDown(hidUsage: UInt32, generation: UInt64) throws {}
 

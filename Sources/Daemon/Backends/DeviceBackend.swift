@@ -36,6 +36,9 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// App Switcher dispatch.
     var supportsSystemEdgeGesture: Bool { get }
 
+    /// The observation path that can settle a rotation request.
+    var rotationConfirmationSupport: RotationConfirmationSupport { get }
+
     // MARK: Frames
 
     /// Begin streaming frames. `onFrame` is invoked on the producer's
@@ -145,23 +148,20 @@ protocol DeviceBackend: AnyObject, Sendable {
     // MARK: Buttons / rotation / crown
 
     func pressHardwareButton(_ button: HardwareButton, generation: UInt64) async throws
-    /// Rotate to `orientation`, returning whether the rotation was
-    /// **performed** rather than fenced by a transfer that bumped the
-    /// generation.
+    /// Submit one absolute or relative rotation and report what the backend
+    /// can establish about its outcome.
     ///
-    /// How much `true` proves differs by backend, and it is weaker than it
-    /// looks for simulators. The physical-device backend awaits a
-    /// per-command reply and reports whether the device reached the target.
-    /// The CoreSimulator backend rotates with a one-way GSEvent that has no
-    /// reply, so `true` means only that the send cleared the generation
-    /// fence; nothing confirms the device moved, and nothing there can.
-    ///
-    /// It never says the display turned either way: an orientation-locked
-    /// app leaves the framebuffer where it was. Presentation follows
-    /// `startDisplayOrientation` where a backend has one; where it doesn't,
-    /// the coordinator falls back to this return value, and external
-    /// rotations are then invisible to that pane.
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool
+    /// A Simulator resolves relative input from `confirmedOrientation`, sends
+    /// its one-way GSEvent, and returns `.dispatched` for the coordinator's
+    /// display observer to settle. A physical device ignores that base for a
+    /// relative request, sends the direction directly, and settles from the
+    /// command reply. A stale generation returns `.unavailable` without
+    /// reaching the device.
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) async throws -> BackendRotationOutcome
     func rotateCrown(delta: Double, generation: UInt64) async throws
 
     // MARK: Accessibility (lazy acquisition lives in the backend)
@@ -314,6 +314,8 @@ protocol DeviceBackend: AnyObject, Sendable {
 }
 
 extension DeviceBackend {
+    var rotationConfirmationSupport: RotationConfirmationSupport { .unsupported }
+
     // Default: only the CoreSimulator backend routes a synthetic edge swipe
     // to the system recognizer. Physical devices fall back to the button
     // realization of the App Switcher.

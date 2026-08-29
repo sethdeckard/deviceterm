@@ -82,8 +82,8 @@ struct HelpTopic: Sendable, Equatable {
             case .drive:
                 "  Coords are normalized to what the device is showing:\n"
                     + "  (0,0) top-left, (1,1) bottom-right. A Simulator's\n"
-                    + "  observed rotation is followed; a physical device is\n"
-                    + "  assumed portrait until deviceterm rotates it.\n"
+                    + "  observed rotation is followed; a physical device\n"
+                    + "  updates from DeviceTerm rotation replies.\n"
                     + HelpCatalog.paneTargetNote
 
             case .hardware, .inspect:

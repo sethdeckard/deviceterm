@@ -131,6 +131,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     /// daemon module isn't linkable from the GUI, so the value is
     /// mirrored here with this pointer to its source of truth.
     private static let unauthorizedConnectionCode = -32_001
+
+    /// Delay between retries when the daemon's bounded per-pane rotation
+    /// admission queue is temporarily full.
+    private static let rotationBackpressureRetryNanoseconds: UInt64 = 50_000_000
     /// The daemon's "provenance not ready" code: retryable, distinct from a
     /// hard `-32001`. It surfaces when a transient XPC signature-validation
     /// blip leaves the peer momentarily unverified (an anchor-less session then
@@ -1757,10 +1761,18 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
 
     /// Set device orientation, absolutely or by one relative step.
     func paneInputRotate(paneId: String, target: RotationTarget) async throws {
-        try await paneInput(
-            .paneInputRotate,
-            body: RotateParams(paneId: paneId, target: target)
-        )
+        let params = try JSONEncoder().encode(RotateParams(paneId: paneId, target: target))
+        while true {
+            try Task.checkCancellation()
+            let data = try await request(method: .paneInputRotate, params: params)
+            let result = try decode(RotateResult.self, data)
+            guard !result.success,
+                result.status == .unconfirmed,
+                result.reason == .queueFull else {
+                return
+            }
+            try await Task.sleep(nanoseconds: Self.rotationBackpressureRetryNanoseconds)
+        }
     }
 
     /// Drive the watchOS Digital Crown. Delta is in the bridge's raw
@@ -1930,7 +1942,10 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 throw error
             }
         }
-        return try await bounded(method) { [self] in
+        let deadline = method == .paneInputRotate
+            ? RotationConfirmationDeadline.clientResponseTimeoutNanoseconds
+            : nil
+        return try await bounded(method, deadline: deadline) { [self] in
             try await transportRequest(method: method, params: params)
         }
     }

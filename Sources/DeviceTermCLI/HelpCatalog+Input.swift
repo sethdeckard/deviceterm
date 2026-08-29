@@ -119,18 +119,24 @@ extension HelpCatalog {
             summary: "Set device orientation",
             detail: """
               rotate <portrait|portrait-upside-down|landscape-left|landscape-right>
-                  Set device orientation. Names match UIKit's
-                  UIDeviceOrientation; kebab-case (canonical), snake_case,
-                  camelCase, and all lowercase are all accepted.
+                  Set device orientation and report success only after confirmation.
+                  Names match UIKit's UIDeviceOrientation; kebab-case
+                  (canonical), snake_case, camelCase, and all lowercase are
+                  all accepted.
                   Example: deviceterm rotate landscape-left
 
               rotate <left|right>
-                  Rotate 90 degrees from where DeviceTerm last put the
-                  device, the same step the Device menu's Rotate Left and
-                  Rotate Right take. DeviceTerm tracks only rotations it
-                  performed, so an app that forces its own orientation
-                  leaves that base stale.
+                  Rotate 90 degrees. A Simulator starts from its latest
+                  confirmed display orientation; a physical device receives
+                  the relative operation directly.
                   Example: deviceterm rotate left
+
+              A Simulator confirms through its observed display orientation;
+              a physical device confirms through the orientation returned by
+              its control relay. Success reports `targetOrientation` and
+              `observedOrientation`. An orientation-locked Simulator fails
+              after the four-second confirmation deadline instead of
+              returning a dispatch receipt.
             """
         ),
         HelpTopic(

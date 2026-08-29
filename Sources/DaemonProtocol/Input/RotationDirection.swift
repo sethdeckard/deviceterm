@@ -11,10 +11,9 @@ public enum RotationDirection: String, Sendable, Equatable, CaseIterable {
     /// 90° clockwise, matching the Device menu's Rotate Right.
     case right
 
-    /// The orientation this direction reaches from `orientation`. The
-    /// daemon applies it to the pane's tracked control orientation; a
-    /// client resolving its own would step from a base the daemon
-    /// doesn't hold.
+    /// The orientation this direction reaches from `orientation`.
+    /// Simulator rotation applies this to the pane's confirmed display
+    /// orientation; physical-device rotation forwards the direction instead.
     public func applied(to orientation: Orientation) -> Orientation {
         switch self {
         case .left:

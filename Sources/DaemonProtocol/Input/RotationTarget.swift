@@ -8,8 +8,9 @@
 public enum RotationTarget: Sendable, Equatable {
     /// Rotate to this orientation, wherever the device is now.
     case absolute(Orientation)
-    /// Rotate one 90° step from the pane's tracked control
-    /// orientation, which only the daemon holds.
+    /// Rotate one relative 90° step. A physical-device backend forwards the
+    /// direction directly; a Simulator resolves it from confirmed display
+    /// observation.
     case relative(RotationDirection)
 
     /// The absolute target, or nil when this is relative. Paired with

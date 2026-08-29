@@ -3,10 +3,9 @@
 /// The 90° step behind a relative rotate.
 ///
 /// `pane.input.rotate` takes either an absolute orientation or a
-/// direction; the daemon resolves a direction against the pane's
-/// tracked control orientation using these two steps, so the Device
-/// menu's Rotate Left/Right, `deviceterm rotate left`, and an agent all
-/// advance from the same value.
+/// direction. Simulator rotation resolves a direction against confirmed
+/// display observation using these two steps. Physical-device rotation sends
+/// the direction directly and learns the absolute result from the reply.
 ///
 /// Cycle reference is Apple's `UIDeviceOrientation` axis convention
 /// (`landscapeLeft` = home button on the right, when viewed by the
@@ -15,10 +14,9 @@
 /// `landscapeRight`. The cycle is closed under both directions, so
 /// repeated requests walk through every orientation and wrap.
 ///
-/// The steps are internal because `RotationDirection.applied(to:)` is
-/// their only caller. That method is public, so this doesn't stop a client
-/// resolving a direction itself; the reason to send a direction unresolved
-/// is that only the daemon holds the base worth resolving against.
+/// The steps are internal because `RotationDirection.applied(to:)` is their
+/// only caller. Send a relative request unresolved so the selected backend can
+/// preserve its own semantics.
 extension Orientation {
     /// The orientation reached by rotating 90° counterclockwise from
     /// this one.

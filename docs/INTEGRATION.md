@@ -308,7 +308,8 @@ protected tab.
 | `version --json` | Version report | Local, with optional daemon probe | Local report completed | Stable-additive |
 | `dump-config --json` | Configuration report | Local | Configuration file parsed | Stable-additive |
 | `tap`, `swipe`, `app-switcher`, `long-press`, `pinch` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
-| `button`, `key`, `text`, `rotate`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
+| `button`, `key`, `text`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
+| `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed | Stable-additive |
 | `tab rename` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab close` with `--json` | Workspace receipt | Session and sole-terminal tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab open`, `tab select`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
@@ -808,9 +809,9 @@ command took: `(0,0)` is the top-left of what the device is showing. The
 daemon converts to the device's native frame internally and does not report
 the converted value.
 
-That conversion follows a Simulator's observed display orientation. A
-physical-device pane exposes no orientation source, so it is treated as
-portrait until DeviceTerm performs a rotation on it.
+That conversion follows a Simulator's observed display orientation. A physical
+device has no passive orientation source, so its pane starts in portrait and
+updates when a DeviceTerm rotation result includes an observed orientation.
 
 The command adds these fields:
 
@@ -824,13 +825,58 @@ The command adds these fields:
 | `button` | `button` |
 | `key` | `keyCode`, `down` |
 | `text` | `bytes` |
-| `rotate` | `orientation?`, `direction?` (exactly one) |
+| `rotate` | `orientation?`, `direction?` (exactly one), `targetOrientation`, `observedOrientation` |
 | `crown` | `delta`, `velocity?`, `durationMs?` |
 
 A `rotate` receipt carries `orientation` when the command named one, and
-`direction` when it named `left` or `right`. The daemon's acknowledgment
-doesn't report where the device ended up, so a relative receipt echoes the
-direction asked for rather than a resulting orientation.
+`direction` when it named `left` or `right`. `targetOrientation` is the
+absolute target DeviceTerm resolved, and `observedOrientation` is the
+orientation that confirmed it. Both are required on success.
+
+Example relative rotate receipt:
+
+```json
+{
+  "direction": "left",
+  "observedOrientation": "landscapeLeft",
+  "ok": true,
+  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+  "shortId": "phn001",
+  "targetOrientation": "landscapeLeft",
+  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
+}
+```
+
+On a Simulator, confirmation is the display observation that also drives
+rendering and coordinate mapping. A relative request starts from the latest
+confirmed display orientation. DeviceTerm waits up to four seconds for the
+target; an orientation-locked app that leaves the display unchanged fails
+instead of producing a receipt. At most two rotations may be outstanding on a
+pane; another request fails immediately as `rotate.unconfirmed` without
+dispatch, and may be retried after a slot opens.
+
+On a physical device, `left` and `right` go directly to the relay. The reply
+supplies the absolute orientation where the device landed. An absolute request
+uses the same replies to converge on its target. A physical device turned by
+hand remains invisible until a DeviceTerm rotation returns another orientation.
+
+Rotate can fail with these outcomes. All exit with status 1:
+
+| Code | Meaning | Retryable |
+|---|---|---|
+| `rotate.unconfirmed` | The per-pane queue was full, the confirmation deadline expired, or the backend reported a different final orientation | Yes, after a queue slot opens or after checking whether the app permits rotation |
+| `rotate.confirmationUnsupported` | The daemon or backend cannot supply confirmation | No without changing or upgrading that component |
+| `input.refused` | The pane's backend rejects rotation support | No until device capability changes |
+| `pane.unavailable` | The pane disappeared or lost its live backend | Yes after restoring or reattaching the pane |
+| `session.unauthorized` | Session authority was revoked | No for the current authority |
+
+`rotate.unconfirmed` details may contain `requestedOrientation` or
+`requestedDirection`, `targetOrientation`, `observedOrientation`, `deadlineMs`,
+and `reason`.
+
+`reason` is `queueFull` when two rotations are already outstanding for the
+pane. The daemon did not dispatch the request. Retry after one finishes. Other
+`rotate.unconfirmed` outcomes omit `reason`.
 
 Example tap receipt:
 
@@ -874,7 +920,8 @@ ignores that option; the key is omitted when the option is absent.
 
 An input receipt confirms that the daemon completed its dispatch call. It does
 not confirm that the target application handled the input or that the screen
-changed.
+changed. Rotate is the exception: its receipt additionally confirms the
+orientation observation described above.
 
 ### Workspace Receipts
 

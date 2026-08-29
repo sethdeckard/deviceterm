@@ -159,15 +159,19 @@ approaches ruled out.
 - **Display orientation is not device attitude, and diverges in ordinary
   use.** The iPhone Home Screen never rotates at all; Safari tracked one
   rotation and then refused upside-down, leaving the display in landscape
-  while the device continued to `portraitUpsideDown`. This is why the
-  daemon keeps control and display as two values.
+  while the device continued to `portraitUpsideDown`.
 - **There is no control-orientation (attitude) source for a simulator, and
   this is not a gap in the search.** A simulator has no physical attitude,
   no sensor, and no ground truth; its device orientation is whatever rotate
   command was last sent, and nothing in CoreSimulator or SimulatorKit
   accumulates that. The bridge's own rotate is a one-way GSEvent with no
-  reply and no getter. So `controlOrientation` is command-sourced by
-  construction, not by preference.
+  reply and no getter. `pane.input.rotate` therefore confirms Simulator
+  outcomes through the existing `SimScreen.uiOrientation` observation. An
+  orientation-locked app leaves that observation unchanged, so the command
+  reports an unconfirmed outcome.
+- **Relative Simulator requests use the latest confirmed presented
+  orientation.** This avoids a command-only base drifting from the screen, but
+  does not turn display orientation into proof of physical attitude.
 
 ## Digital Crown (watchOS)
 

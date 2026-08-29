@@ -42,7 +42,8 @@ for the workflow and triage guide.
 .SS Drive the device
 Coords are normalized to what the device is showing; (0,0) top-left,
 (1,1) bottom-right. A Simulator's observed rotation is followed; a
-physical device is assumed portrait until deviceterm rotates it.
+physical device starts in portrait and updates from DeviceTerm rotation
+replies.
 .TP
 .B tap " " \fIx\fR " " \fIy\fR
 Single discrete tap.
@@ -80,16 +81,20 @@ kVK virtual key code (decimal or 0x-hex). Discrete events.
 Type an ASCII string.
 .TP
 .B rotate " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR|\fIleft\fR|\fIright\fR
-Set device orientation. Orientation names match UIKit's UIDeviceOrientation,
-in the same spellings
+Set device orientation and report success only after confirmation. Orientation names
+match UIKit's UIDeviceOrientation, in the same spellings
 .B button
 accepts.
 .I left
 and
 .I right
-turn the device 90 degrees from wherever DeviceTerm last put it. It tracks only
-the rotations it performed, so the first relative rotate after attaching to an
-already-turned device steps from the wrong place.
+turn the device 90 degrees. A Simulator starts from its latest confirmed
+display orientation; a physical device receives the relative operation
+directly. A Simulator confirms through its observed display orientation, and a
+physical device through the orientation returned by its control relay. Success
+reports targetOrientation and observedOrientation. An orientation-locked
+Simulator fails after the four-second confirmation deadline instead of
+returning a dispatch receipt.
 .TP
 .B crown " " \fIdelta\fR " " [\fB--velocity\fR \fIv\fR] " " [\fB--duration\fR \fIms\fR]
 Rotate the watchOS Digital Crown. Signed

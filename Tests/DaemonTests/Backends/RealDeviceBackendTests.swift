@@ -124,13 +124,20 @@ private actor FakeRelay: InteractionRelaying {
     /// establish step succeed (reporting an orientation) and then have a later
     /// step fail, exercising the thrown-step-vs-dead-reckoning distinction.
     private let rotateThrowsAfter: Int?
+    private var rotationOutcomes: [InteractionOutcome]
     private var rotateCount = 0
     private var log: [String] = []
 
-    init(support: InteractionSupport, failReleases: Bool = false, rotateThrowsAfter: Int? = nil) {
+    init(
+        support: InteractionSupport,
+        failReleases: Bool = false,
+        rotateThrowsAfter: Int? = nil,
+        rotationOutcomes: [InteractionOutcome] = []
+    ) {
         self.support = support
         self.failReleases = failReleases
         self.rotateThrowsAfter = rotateThrowsAfter
+        self.rotationOutcomes = rotationOutcomes
     }
 
     /// A release phase (touch lift, key up, button release): the intents the
@@ -167,8 +174,8 @@ private actor FakeRelay: InteractionRelaying {
         case let .button(input):
             "button.\(input.phase == .press ? "press" : "release")"
 
-        case .rotate:
-            "rotate"
+        case let .rotate(direction):
+            "rotate.\(direction.rawValue)"
         }
     }
 
@@ -179,7 +186,10 @@ private actor FakeRelay: InteractionRelaying {
             if let limit = rotateThrowsAfter, rotateCount > limit { throw RelayRotationFailure() }
         }
         log.append(Self.label(intent))
-        if case .rotate = intent { return .orientation("portrait") }
+        if case .rotate = intent {
+            if !rotationOutcomes.isEmpty { return rotationOutcomes.removeFirst() }
+            return .orientation("portrait")
+        }
         return .acknowledged
     }
 
@@ -283,7 +293,13 @@ func unwiredVerbsThrowRatherThanSilentlyNoOp() async {
     let device = backend(touchOnly)
     #expect(throws: (any Error).self) { try device.twoFingerDown(f1: .zero, f2: .zero, generation: 1) }
     #expect(throws: (any Error).self) { try device.pressHardwareButton(.home, generation: 1) }
-    await #expect(throws: (any Error).self) { _ = try await device.rotate(to: .portrait, generation: 1) }
+    await #expect(throws: (any Error).self) {
+        _ = try await device.rotate(
+            target: .absolute(.portrait),
+            confirmedOrientation: nil,
+            generation: 1
+        )
+    }
     #expect(throws: Never.self) { try device.keyDown(hidUsage: 4, generation: 1) }
     #expect(throws: Never.self) { try device.keyUp(hidUsage: 4, generation: 1) }
 }
@@ -317,9 +333,19 @@ func supportedButtonsEnqueueWhileApplePayAndCrownStayUnsupported() {
 
 @Test
 func rotatePerformsWhenSupportedElseThrows() async {
-    await #expect(throws: Never.self) { _ = try await backend(full).rotate(to: .landscapeLeft, generation: 1) }
+    await #expect(throws: Never.self) {
+        _ = try await backend(full).rotate(
+            target: .absolute(.landscapeLeft),
+            confirmedOrientation: nil,
+            generation: 1
+        )
+    }
     await #expect(throws: (any Error).self) {
-        _ = try await backend(touchOnly).rotate(to: .landscapeLeft, generation: 1)
+        _ = try await backend(touchOnly).rotate(
+            target: .absolute(.landscapeLeft),
+            confirmedOrientation: nil,
+            generation: 1
+        )
     }
 }
 
@@ -562,63 +588,104 @@ func quiesceReportsNotCleanWhenAHeldReleaseFails() async throws {
 }
 
 @Test
-func rotateReturnsTrueWhenTheDeviceReachesTheTarget() async throws {
-    // Per-command outcome, honored case: the pump performs the rotation and
-    // the device settles on the requested orientation, so `rotate` reports
-    // `true` and the coordinator broadcasts. Deterministic; `rotate` awaits
-    // its own command's completion; nothing races an independent pump. The
-    // fake relay reports `portrait`, so a rotate *to* portrait reaches target.
+func rotateConfirmsWhenTheDeviceReachesTheTarget() async throws {
+    // The fake relay reports portrait, so an absolute request to portrait
+    // confirms from that reply.
     let relay = FakeRelay(support: full)
     let device = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
 
-    let performed = try await device.rotate(to: .portrait, generation: device.currentInputGeneration())
-    #expect(performed)
-    #expect(await relay.performed().contains("rotate"))
+    let outcome = try await device.rotate(
+        target: .absolute(.portrait),
+        confirmedOrientation: nil,
+        generation: device.currentInputGeneration()
+    )
+    #expect(outcome == .confirmed(target: .portrait, observed: .portrait))
+    #expect(await relay.performed().contains("rotate.left"))
 }
 
 @Test
-func rotateReturnsFalseWhenTheDeviceCannotReachTheTarget() async throws {
-    // Per-command outcome, failure case: the relay never reports the requested
-    // orientation (it always reports `portrait`), so the pump can't settle on
-    // `landscapeLeft` and `rotate` reports `false`; a rotation that ran but
-    // failed to reach the target must NOT drive an orientationChanged
-    // broadcast. (Generation-only settlement would wrongly report `true` here.)
+func rotateReportsUnconfirmedWhenTheDeviceCannotReachTheTarget() async throws {
+    // The relay never reports landscapeLeft, so bounded convergence returns
+    // the last observation instead of dead-reckoning success.
     let relay = FakeRelay(support: full)
     let device = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
 
-    let performed = try await device.rotate(to: .landscapeLeft, generation: device.currentInputGeneration())
-    #expect(!performed)
+    let outcome = try await device.rotate(
+        target: .absolute(.landscapeLeft),
+        confirmedOrientation: nil,
+        generation: device.currentInputGeneration()
+    )
+    #expect(outcome == .unconfirmed(target: .landscapeLeft, observed: .portrait))
 }
 
 @Test
-func rotateReturnsFalseWhenAStepThrowsEvenIfDeadReckoningWouldReachTarget() async throws {
+func rotateReportsConfirmationUnsupportedWhenTheRelayOmitsOrientation() async throws {
+    let relay = FakeRelay(
+        support: full,
+        rotationOutcomes: [.orientation(nil)]
+    )
+    let device = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
+
+    let outcome = try await device.rotate(
+        target: .relative(.left),
+        confirmedOrientation: .landscapeRight,
+        generation: device.currentInputGeneration()
+    )
+
+    #expect(outcome == .confirmationUnsupported(target: nil))
+    #expect(await relay.performed() == ["rotate.left"])
+}
+
+@Test
+func rotatePropagatesARelayFailureWithoutDeadReckoning() async throws {
     // A thrown relay step is a real failure, not a dead-reckoned success: the
     // establish step succeeds (reports portrait), the next step throws, and
-    // even though the fallback would predict an orientation, `rotate` reports
-    // `false` because the step genuinely failed. No false orientationChanged.
+    // even though dead reckoning could predict an orientation, the relay error
+    // remains a genuine infrastructure failure.
     let relay = FakeRelay(support: full, rotateThrowsAfter: 1)
     let device = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
 
     // Target != portrait, so a second (throwing) step is required.
-    let performed = try await device.rotate(to: .landscapeLeft, generation: device.currentInputGeneration())
-    #expect(!performed)
+    await #expect(throws: RelayRotationFailure.self) {
+        try await device.rotate(
+            target: .absolute(.landscapeLeft),
+            confirmedOrientation: nil,
+            generation: device.currentInputGeneration()
+        )
+    }
 }
 
 @Test
-func rotateReturnsFalseWhenFencedByAStaleGeneration() async throws {
-    // Per-command outcome, fenced case: a transfer bumps the generation first,
-    // then a rotation carrying the now-stale generation is dropped by the pump
-    // and reports `false` without reaching the device. Deterministic; the
-    // quiesce completes before the rotate is enqueued, and the stale generation
-    // is passed explicitly, so no pump-timing race decides the outcome.
+func rotateReportsUnavailableWhenFencedByAStaleGeneration() async throws {
+    // A transfer bumps the generation first. The stale rotation is dropped by
+    // the pump and reports unavailable without reaching the device.
     let relay = FakeRelay(support: full)
     let device = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
     let stale = device.currentInputGeneration()
 
     _ = await device.quiesceInputForTransfer() // bumps the generation
-    let performed = try await device.rotate(to: .portrait, generation: stale)
-    #expect(!performed)
+    let outcome = try await device.rotate(
+        target: .absolute(.portrait),
+        confirmedOrientation: nil,
+        generation: stale
+    )
+    #expect(outcome == .unavailable(target: .portrait))
     #expect(await relay.performed().isEmpty, "a fenced rotation reached the device")
+}
+
+@Test
+func aRelativeRotationIsSentDirectlyWithoutAStaleAbsoluteBase() async throws {
+    let relay = FakeRelay(support: full)
+    let device = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
+
+    let outcome = try await device.rotate(
+        target: .relative(.right),
+        confirmedOrientation: .landscapeLeft,
+        generation: device.currentInputGeneration()
+    )
+
+    #expect(outcome == .confirmed(target: .portrait, observed: .portrait))
+    #expect(await relay.performed() == ["rotate.right"])
 }
 
 @Test

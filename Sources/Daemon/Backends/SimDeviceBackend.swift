@@ -53,6 +53,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     // The simulator's synthetic HID carries the `IndigoHIDEdge` tag, so an
     // edge swipe reaches SpringBoard's system-gesture recognizer directly.
     let supportsSystemEdgeGesture = true
+    let rotationConfirmationSupport = RotationConfirmationSupport.displayObservation
 
     // Ownership-transfer input fence. `inputWorkQueue` orders every simulator
     // send with transfer quiesce. A transfer bumps the generation there, and
@@ -449,18 +450,32 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
-    // Reports only that the send cleared the generation fence. The bridge
-    // rotates with a one-way GSEvent that carries no reply, so nothing here
-    // can confirm the device moved, let alone that the display followed;
-    // `true` means "sent, not dropped as stale" and no more. Presentation
-    // comes from `startDisplayOrientation` instead, which does observe.
-    func rotate(to orientation: Orientation, generation: UInt64) async throws -> Bool {
-        try await inputWorkQueue.run { [self] in
+    // A cleared generation fence reports `.dispatched`, never confirmation.
+    // The bridge rotates with a one-way GSEvent that carries no reply, so the
+    // coordinator waits for `startDisplayOrientation` to observe the target.
+    func rotate(
+        target: RotationTarget,
+        confirmedOrientation: Orientation?,
+        generation: UInt64
+    ) async throws -> BackendRotationOutcome {
+        let orientation: Orientation
+        switch target {
+        case let .absolute(value):
+            orientation = value
+
+        case let .relative(direction):
+            guard let confirmedOrientation else {
+                return .confirmationUnsupported(target: nil)
+            }
+            orientation = direction.applied(to: confirmedOrientation)
+        }
+        let sent = try await inputWorkQueue.run { [self] in
             try gatedSend(generation) {
                 guard let purpleClient else { throw DeviceBackendError.notActive }
                 try purpleClient.rotate(to: orientation.bridgeValue)
             }
         }
+        return sent ? .dispatched(target: orientation) : .unavailable(target: orientation)
     }
 
     // MARK: Accessibility

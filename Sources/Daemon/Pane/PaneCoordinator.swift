@@ -91,6 +91,12 @@ public actor PaneCoordinator {
     /// around without copying it. Only this actor mutates a record, so the
     /// `@unchecked Sendable` conformance is safe.
     private final class Record: @unchecked Sendable {
+        struct RotationConfirmationWaiter {
+            let id: UInt64
+            let target: Orientation
+            let continuation: CheckedContinuation<RotateResult, Never>
+        }
+
         /// What the most recent live edge `.down` resolved to. `edge` is
         /// nil when the orientation had no confirmed home-gesture edge, in
         /// which case the contact runs as a plain touch instead.
@@ -237,58 +243,33 @@ public actor PaneCoordinator {
         /// transfer clears the marker (so they never observe the
         /// half-transferred state). Resumed by `clearTransferring`.
         var transferCompletionWaiters: [CheckedContinuation<Void, Never>] = []
-        /// Tail of this pane's rotation chain. Rotations serialize
-        /// end-to-end through it so they reach the backend, and commit
-        /// their control base, in request order: the backend completes
-        /// rotations serially, but each `rotate` awaits its completion on
-        /// an independent task, and independent continuations aren't
-        /// guaranteed to resume in order. Each `rotate` awaits the prior
-        /// tail before running and signals its own when done (success,
-        /// skip, or throw), so B never reaches the backend or commits its
-        /// base before A finishes.
         /// Arbitration for the input verbs that hold digitizer contact.
         /// Created on the pane's first contact verb, so a pane that only ever
         /// rotates or types never builds one.
         var contactLane: ContactLane?
+        /// Tail of this pane's rotation chain. Each request waits for its
+        /// predecessor to settle before it reaches the backend, so confirmation
+        /// and the next relative request observe the same order.
         var rotationTail: SerialChainLink?
-        /// The orientation **deviceterm last successfully commanded** on
-        /// this pane's device, which a relative rotate advances from. It
-        /// starts at `.portrait` because that is where an iOS device
-        /// boots, not because anything read the device.
-        ///
-        /// Written only after the backend reports it performed the
-        /// rotation, so a fenced or failed one doesn't compound into the
-        /// next relative request. **A backend-reported performed command is
-        /// its only writer**, and `presentationOrientation` deliberately does not
-        /// correct it: display state is the foreground app's interface
-        /// orientation, so a portrait device running a landscape-locked
-        /// app would drive this to landscape and mis-target the next
-        /// relative rotate.
-        ///
-        /// Nothing observes it because for a simulator there is nothing to
-        /// observe. A simulator has no physical attitude, no sensor, no
-        /// ground truth; its device orientation is just whatever rotate
-        /// command was last sent, and nothing in CoreSimulator accumulates
-        /// that. So a rotation from any other tool leaves this stale and
-        /// nothing detects it. A later absolute rotate names its target
-        /// directly, so it doesn't depend on this base and records a fresh
-        /// one.
-        var controlOrientation: Orientation = .portrait
+        /// Active plus predecessor-waiting rotation requests. Admission is
+        /// bounded so client response deadlines cover the whole serial queue.
+        var outstandingRotationCount = 0
+        /// One Simulator rotation waiting for display observation. Rotation
+        /// serialization permits at most one waiter per pane.
+        var nextRotationConfirmationID: UInt64 = 0
+        var rotationConfirmationWaiter: RotationConfirmationWaiter?
+        /// The latest orientation established by display observation or a
+        /// physical-device command reply. Relative Simulator requests use this
+        /// value as their base; physical-device requests do not.
+        var confirmedOrientation: Orientation?
         /// The pane's **presentation** orientation, which is what the
-        /// render, the bezel, and the hit-test mapping follow. It describes
-        /// the framebuffer where the backend has a display source, and the
-        /// last performed command where it hasn't.
+        /// render, bezel, and hit-test mapping follow. A Simulator writes it
+        /// from display observation. A physical device writes it from the
+        /// valid orientation returned by a DeviceTerm rotation reply.
         ///
-        /// Written by observation where the backend has a display source,
-        /// and by a performed rotate where it hasn't. Under observation it
-        /// diverges from `controlOrientation` permanently and legitimately:
-        /// an orientation-locked app keeps a portrait framebuffer while the
-        /// device is turned to landscape. Under the fallback it can only
-        /// mirror the command, so an external rotation never reaches it and
-        /// a locked app moves it when the framebuffer didn't.
-        ///
-        /// Starts at `.portrait` for the same reason `controlOrientation`
-        /// does, and is corrected by the first seed or observation.
+        /// A physical device has no passive display source, so an external
+        /// rotation remains invisible. The value starts at `.portrait` and is
+        /// corrected by the first observation or confirmed command reply.
         ///
         /// Gated rather than stored plainly because the accessibility
         /// reads consume it from the pane's AX queue, off the actor, while
@@ -478,6 +459,17 @@ public actor PaneCoordinator {
         /// Stop display-orientation observation and finish its pump.
         /// Idempotent.
         func teardownOrientationPump(backend: DeviceBackend?) {
+            if let waiter = rotationConfirmationWaiter {
+                rotationConfirmationWaiter = nil
+                waiter.continuation.resume(
+                    returning: RotateResult(
+                        success: false,
+                        status: .unavailable,
+                        targetOrientation: waiter.target,
+                        observedOrientation: confirmedOrientation
+                    )
+                )
+            }
             if observingDisplayOrientation {
                 backend?.stopDisplayOrientation()
                 observingDisplayOrientation = false
@@ -645,6 +637,7 @@ public actor PaneCoordinator {
     /// per-record fan-out (no side-band surface payload: UDS
     /// can't carry an `xpc_object_t`).
     private let subscriptionRegistry: PaneSubscriptionRegistry?
+    private let rotationConfirmationTimeoutNanoseconds: UInt64
     /// Test-only seam captured when a pane creates its pump. Always nil in
     /// production.
     private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
@@ -680,11 +673,13 @@ public actor PaneCoordinator {
     public init(
         mintShortID: @Sendable @escaping () -> String = { ShortID.generate() },
         eventBroker: EventBroker? = nil,
-        subscriptionRegistry: PaneSubscriptionRegistry? = nil
+        subscriptionRegistry: PaneSubscriptionRegistry? = nil,
+        rotationConfirmationTimeoutNanoseconds: UInt64 = RotationConfirmationDeadline.observationNanoseconds
     ) {
         self.mintShortID = mintShortID
         self.eventBroker = eventBroker
         self.subscriptionRegistry = subscriptionRegistry
+        self.rotationConfirmationTimeoutNanoseconds = rotationConfirmationTimeoutNanoseconds
     }
 
     /// Test-only: install the ordered-pump race hook above.
@@ -2127,11 +2122,9 @@ public actor PaneCoordinator {
     /// arrives as a callback rather than disappearing into the gap between
     /// a snapshot and a subscription.
     ///
-    /// A backend with no source (a physical device, the stub, or a display
-    /// proxy that vends no orientation) leaves the record on its last known
-    /// orientation and the pane keeps rendering. That is a degraded mode,
-    /// not a failure: frames are untouched, and the pane still turns for
-    /// rotations deviceterm commands itself.
+    /// A backend with no display source leaves presentation at its existing
+    /// value. Rotation confirmation then depends on a command reply; a backend
+    /// with neither path reports it as unsupported.
     private func startDisplayOrientationObserver(
         record: Record,
         paneId: UUID,
@@ -2168,6 +2161,7 @@ public actor PaneCoordinator {
         }
         if let seed = backend.currentDisplayOrientation() {
             record.presentationOrientation = seed
+            record.confirmedOrientation = seed
         }
     }
 
@@ -2181,21 +2175,27 @@ public actor PaneCoordinator {
         publishPresentationOrientation(record: record, paneId: paneId, orientation: orientation)
     }
 
-    /// Commit a new presentation orientation and tell this pane's
-    /// subscribers. Observed deliveries and the command-derived fallback
-    /// both take this path. The observer's initial seed is assigned
-    /// directly instead, since it runs before the pane has any subscribers
-    /// to tell.
+    /// Commit a confirmed presentation orientation and tell this pane's
+    /// subscribers. Simulator observations and physical-device command replies
+    /// both take this path. The observer's initial seed is assigned directly,
+    /// since it runs before the pane has any subscribers to tell.
     ///
-    /// Deduplicates repeated values of either kind: the bridge reports the
-    /// current orientation after any screen-properties notification, not
-    /// only a rotation, and a command can name the orientation the pane is
-    /// already in.
-    ///
-    /// It is not what stops a commanded rotation emitting twice on an
-    /// observing pane. `rotate` suppresses the command-derived path there
-    /// outright, so only the observer publishes.
+    /// Deduplicates repeated values. The bridge reports the current orientation
+    /// after any screen-properties notification, not only a rotation, and a
+    /// command reply can name the orientation the pane already holds.
     private func publishPresentationOrientation(record: Record, paneId: UUID, orientation: Orientation) {
+        record.confirmedOrientation = orientation
+        if let waiter = record.rotationConfirmationWaiter, waiter.target == orientation {
+            record.rotationConfirmationWaiter = nil
+            waiter.continuation.resume(
+                returning: RotateResult(
+                    success: true,
+                    status: .confirmed,
+                    targetOrientation: orientation,
+                    observedOrientation: orientation
+                )
+            )
+        }
         guard record.presentationOrientation != orientation else { return }
         record.presentationOrientation = orientation
         for subscriber in record.subscribers.values {
@@ -2207,9 +2207,8 @@ public actor PaneCoordinator {
     //
     // Backend resolution (`inputBackend`) is the actor's one stateful step;
     // the gesture coordinate/timing math and HID sends are pure and live in
-    // `SimInputSynthesis`. `rotate` updates the pane's control orientation,
-    // and publishes a presentation event only for a pane whose backend has
-    // no display source to publish one instead.
+    // `SimInputSynthesis`. `rotate` additionally waits for its backend's
+    // confirmation source and publishes only a confirmed presentation value.
     //
     // `inputBackend` also hands back the operation's input generation, which
     // then rides through the synthesis into every primitive. Its ordering
@@ -2900,13 +2899,35 @@ public actor PaneCoordinator {
         )
     }
 
-    func rotate(paneId: UUID, as principal: PaneAccessPrincipal, target: RotationTarget) async throws {
-        let input = try inputBackend(
-            paneId: paneId,
-            as: principal,
-            supporting: \.rotate,
-            operation: .rotate
-        )
+    @discardableResult
+    func rotate(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        target: RotationTarget
+    ) async throws -> RotateResult {
+        let input: AuthorizedInput
+        do {
+            input = try inputBackend(
+                paneId: paneId,
+                as: principal,
+                supporting: \.rotate,
+                operation: .rotate
+            )
+        } catch PaneError.notFound, PaneError.paneNotActive {
+            return RotateResult(
+                success: false,
+                status: .unavailable,
+                targetOrientation: target.orientation,
+                observedOrientation: nil
+            )
+        } catch PaneError.unsupportedOperation {
+            return RotateResult(
+                success: false,
+                status: .refused,
+                targetOrientation: target.orientation,
+                observedOrientation: nil
+            )
+        }
         // Serialize this pane's rotations end-to-end so their broadcasts stay
         // in request order. This prefix runs with no `await`, so installing the
         // new tail is atomic on the actor; the next rotation then awaits *this*
@@ -2914,48 +2935,141 @@ public actor PaneCoordinator {
         // the chain. `await`/`signal` are actor-isolated (below), so no wakeup
         // is lost between a link's `done` check and its continuation register.
         let record = input.record
+        guard record.outstandingRotationCount < RotationConfirmationDeadline.maximumOutstandingPerPane else {
+            return RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: target.orientation,
+                observedOrientation: record.confirmedOrientation,
+                reason: .queueFull
+            )
+        }
+        record.outstandingRotationCount += 1
+        defer { record.outstandingRotationCount -= 1 }
         let priorRotation = record.rotationTail
         let thisRotation = SerialChainLink()
         record.rotationTail = thisRotation
         defer { signalChainLink(thisRotation) }
         if let priorRotation { await awaitChainLink(priorRotation) }
-        // Resolve a direction only now that the predecessor has finished and
-        // committed its own orientation. Reading the tracked value before the
-        // await would give two concurrent `left` requests the same base, so
-        // both would pick the same destination and one 90° step would vanish.
-        let orientation: Orientation
-        switch target {
-        case let .absolute(value):
-            orientation = value
-
-        case let .relative(direction):
-            orientation = direction.applied(to: record.controlOrientation)
+        if input.backend.rotationConfirmationSupport == .displayObservation {
+            guard record.observingDisplayOrientation else {
+                return RotateResult(
+                    success: false,
+                    status: .confirmationUnsupported,
+                    targetOrientation: target.orientation,
+                    observedOrientation: record.confirmedOrientation
+                )
+            }
         }
-        let performed = try await SimInputSynthesis.rotate(
+        let outcome = try await SimInputSynthesis.rotate(
             backend: input.backend,
             paneId: paneId,
             generation: input.generation,
-            orientation: orientation
+            target: target,
+            confirmedOrientation: record.confirmedOrientation
         )
-        guard performed else { return }
-        // Commit the new base for the next relative request. The chain link
-        // this rotation holds is signalled after it (on scope exit), so the
-        // successor resolves against it.
-        //
-        record.controlOrientation = orientation
-        // For a pane that is observing its display, the command stops here
-        // and publishes nothing: it says where the device was told to point,
-        // never what the display did, and an orientation-locked app answers
-        // a rotate by leaving the framebuffer where it was. Observation
-        // publishes instead, so the pane turns when the pixels turn.
-        //
-        // A pane with no display-orientation source has no such observation
-        // coming, so the command is the only evidence available and it
-        // publishes. That preserves command-driven rotation for
-        // non-observing backends; an orientation-locked interface stays
-        // unobservable to them.
-        guard !record.observingDisplayOrientation else { return }
-        publishPresentationOrientation(record: record, paneId: paneId, orientation: orientation)
+        switch outcome {
+        case let .dispatched(target):
+            return await waitForRotationConfirmation(record: record, paneId: paneId, target: target)
+
+        case let .confirmed(target, observed):
+            record.confirmedOrientation = observed
+            publishPresentationOrientation(record: record, paneId: paneId, orientation: observed)
+            return RotateResult(
+                success: true,
+                status: .confirmed,
+                targetOrientation: target,
+                observedOrientation: observed
+            )
+
+        case let .unconfirmed(target, observed):
+            if let observed {
+                publishPresentationOrientation(record: record, paneId: paneId, orientation: observed)
+            }
+            return RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: target,
+                observedOrientation: observed
+            )
+
+        case let .refused(target):
+            return RotateResult(
+                success: false,
+                status: .refused,
+                targetOrientation: target,
+                observedOrientation: record.confirmedOrientation
+            )
+
+        case let .unavailable(target):
+            return RotateResult(
+                success: false,
+                status: .unavailable,
+                targetOrientation: target,
+                observedOrientation: record.confirmedOrientation
+            )
+
+        case let .confirmationUnsupported(target):
+            return RotateResult(
+                success: false,
+                status: .confirmationUnsupported,
+                targetOrientation: target,
+                observedOrientation: record.confirmedOrientation
+            )
+        }
+    }
+
+    private func waitForRotationConfirmation(
+        record: Record,
+        paneId: UUID,
+        target: Orientation
+    ) async -> RotateResult {
+        if record.confirmedOrientation == target {
+            return RotateResult(
+                success: true,
+                status: .confirmed,
+                targetOrientation: target,
+                observedOrientation: target
+            )
+        }
+        record.nextRotationConfirmationID &+= 1
+        let confirmationID = record.nextRotationConfirmationID
+        return await withCheckedContinuation { continuation in
+            record.rotationConfirmationWaiter = Record.RotationConfirmationWaiter(
+                id: confirmationID,
+                target: target,
+                continuation: continuation
+            )
+            Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(nanoseconds: self.rotationConfirmationTimeoutNanoseconds)
+                await self.expireRotationConfirmation(
+                    paneId: paneId,
+                    confirmationID: confirmationID,
+                    target: target
+                )
+            }
+        }
+    }
+
+    private func expireRotationConfirmation(
+        paneId: UUID,
+        confirmationID: UInt64,
+        target: Orientation
+    ) {
+        guard let record = panes[paneId],
+            let waiter = record.rotationConfirmationWaiter,
+            waiter.id == confirmationID else { return }
+        record.rotationConfirmationWaiter = nil
+        waiter.continuation.resume(
+            returning: RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: target,
+                observedOrientation: record.confirmedOrientation,
+                deadlineMs: Int(rotationConfirmationTimeoutNanoseconds / 1_000_000)
+            )
+        )
     }
 
     /// Suspend until `link` is signalled (returns immediately if it already

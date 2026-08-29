@@ -230,6 +230,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     private(set) var crownCalls: [CrownCall] = []
     private(set) var buttonCalls: [ButtonCall] = []
     private(set) var rotateCalls: [RotateCall] = []
+    /// When true, each recorded rotate waits until the test releases it.
+    var holdRotateCalls = false
+    private var rotateContinuations: [CheckedContinuation<Void, Never>] = []
+    var waitingRotateCallCount: Int { rotateContinuations.count }
     private(set) var paneAxPointCalls: [PaneAxPointCall] = []
     private(set) var locationSetCalls: [LocationSetCall] = []
     /// Every `pane.location.state` call's paneId, in order.
@@ -1087,9 +1091,19 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         paneInputCalls.append((.paneInputText, paneId))
     }
 
-    func paneInputRotate(paneId: String, target: RotationTarget) {
+    func paneInputRotate(paneId: String, target: RotationTarget) async {
         paneInputCalls.append((.paneInputRotate, paneId))
         rotateCalls.append(RotateCall(paneId: paneId, target: target))
+        if holdRotateCalls {
+            await withCheckedContinuation { continuation in
+                rotateContinuations.append(continuation)
+            }
+        }
+    }
+
+    func releaseNextRotateCall() {
+        guard !rotateContinuations.isEmpty else { return }
+        rotateContinuations.removeFirst().resume()
     }
 
     func paneInputCrown(paneId: String, delta: Double, durationMs: Int) {

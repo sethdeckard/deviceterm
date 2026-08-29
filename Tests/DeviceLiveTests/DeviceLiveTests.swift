@@ -266,7 +266,11 @@ struct DeviceLiveTests {
 
             let backend = try await coordinator.resolveBackend(deviceId: device.deviceId)
             #expect(backend.capabilities.rotate)
-            _ = try await backend.rotate(to: .portrait, generation: backend.currentInputGeneration())
+            _ = try await backend.rotate(
+                target: .absolute(.portrait),
+                confirmedOrientation: nil,
+                generation: backend.currentInputGeneration()
+            )
             try await Task.sleep(for: .seconds(4)) // let the steps round-trip
             backend.shutdownBackend()
             await coordinator.releaseKeepalive(deviceId: device.deviceId)

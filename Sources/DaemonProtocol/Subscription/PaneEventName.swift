@@ -9,9 +9,8 @@
 public enum PaneEventName: String, Sendable, Equatable, CaseIterable {
     case surfaceChanged = "surface.changed"
     case stateChanged = "state.changed"
-    /// The device rotated. Broadcast on every `pane.input.rotate` so a
-    /// rotation triggered from outside the owning GUI (e.g. `deviceterm
-    /// rotate`) reaches the GUI, which re-renders and re-maps input to
-    /// the new orientation instead of drifting from the device.
+    /// The pane's confirmed presentation orientation changed. Simulator
+    /// display observation and physical-device rotation replies both publish
+    /// through this event.
     case orientationChanged = "orientation.changed"
 }

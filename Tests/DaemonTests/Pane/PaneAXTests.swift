@@ -221,11 +221,10 @@ func accessibilityElementReadsOrientationBesideTheTree() async throws {
         )
 }
 
-@Test("a pane with no display source maps through its commanded orientation")
-func accessibilityElementUsesTheCommandedOrientation() async throws {
-    // A backend that vends no orientation source never publishes an
-    // observation, so its pane turns only by command. The record is the
-    // only evidence there is, and the mapping has to follow it.
+@Test("a pane with no display source maps through its confirmed reply")
+func accessibilityElementUsesTheConfirmedReplyOrientation() async throws {
+    // A command-reply backend has no passive display source. Its returned
+    // orientation updates the same mapping the display observer would.
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()
     backend.displayOrientationAvailable = false
