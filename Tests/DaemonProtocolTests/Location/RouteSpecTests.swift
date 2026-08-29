@@ -34,6 +34,12 @@ private func route(
     RouteSpec(mode: mode, speed: speed, waypoints: waypoints)
 }
 
+private func waypoints(count: Int) -> [RouteWaypoint] {
+    (0..<count).map {
+        RouteWaypoint(latitude: 37.3349 + Double($0) / 100_000, longitude: -122.009)
+    }
+}
+
 // MARK: - Wire
 
 @Test("RouteSpec.Mode encodes to the pinned wire bytes", arguments: [
@@ -53,11 +59,12 @@ func routeSpecWireBytes() throws {
 }
 
 @Test("RouteSpec round-trips", arguments: [
-    route(),
-    route(mode: .distance(meters: 250), speed: 3.5),
-    route(waypoints: (0..<50).map { RouteWaypoint(latitude: Double($0) / 10, longitude: 0) })
+    (RouteSpec.Mode.interval(seconds: 1), 20.0, 2),
+    (.distance(meters: 250), 3.5, 2),
+    (.interval(seconds: 1), 20.0, 50)
 ])
-func routeSpecRoundTrips(spec: RouteSpec) throws {
+func routeSpecRoundTrips(mode: RouteSpec.Mode, speed: Double, count: Int) throws {
+    let spec = route(mode: mode, speed: speed, waypoints: waypoints(count: count))
     let data = try JSONEncoder().encode(spec)
     #expect(try JSONDecoder().decode(RouteSpec.self, from: data) == spec)
 }
@@ -65,11 +72,12 @@ func routeSpecRoundTrips(spec: RouteSpec) throws {
 // MARK: - Validation
 
 @Test("a well-formed route reports no defect", arguments: [
-    route(),
-    route(mode: .distance(meters: 0.5), speed: 0.1),
-    route(waypoints: Array(repeating: twoPoints[0], count: RouteSpec.maximumWaypoints))
+    (RouteSpec.Mode.interval(seconds: 1), 20.0, 2),
+    (.distance(meters: 0.5), 0.1, 2),
+    (.interval(seconds: 1), 20.0, RouteSpec.maximumWaypoints)
 ])
-func wellFormedRoutesHaveNoDefect(spec: RouteSpec) {
+func wellFormedRoutesHaveNoDefect(mode: RouteSpec.Mode, speed: Double, count: Int) {
+    let spec = route(mode: mode, speed: speed, waypoints: waypoints(count: count))
     #expect(spec.defect == nil)
 }
 
