@@ -33,5 +33,5 @@ public enum DaemonProtocolInfo {
     /// verdict for members about to close.
     /// Every process speaking this version ships and updates in the same
     /// bundle.
-    public static let wireVersion = "0.4.0"
+    public static let wireVersion = "0.5.0"
 }
