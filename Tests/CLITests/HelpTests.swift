@@ -396,6 +396,14 @@ func helpCarriesAXTreeEmptyPointer() {
 }
 
 @Test
+func helpCarriesReusableAccessibilityCoordinates() {
+    let axDetail = HelpCatalog.topic(named: "ax")?.detail ?? ""
+    #expect(axDetail.contains("`normalizedCenter.x` and `.y`"))
+    #expect(axDetail.contains("real preflight tree"))
+    #expect(axDetail.contains("has no `normalizedCenter`"))
+}
+
+@Test
 func helpCarriesSwipeTapPromotionNote() {
     // The swipe ack: a swipe < 32 ms collapses to a tap-shape and
     // surfaces `dispatched=tap`. Agents need to know this.

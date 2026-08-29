@@ -112,6 +112,15 @@ func manPageCoversTouchAndHardwareInputCommands() throws {
 }
 
 @Test
+func manPageCarriesReusableAccessibilityCoordinates() throws {
+    let url = try #require(locateManPage())
+    let contents = try String(contentsOf: url, encoding: .utf8)
+    #expect(contents.contains("Each usable node\nincludes\n.B normalizedCenter"))
+    #expect(contents.contains("can be passed directly to\nanother coordinate-bearing verb"))
+    #expect(contents.contains("synthetic sweep root remains a 0,0,1,1 placeholder"))
+}
+
+@Test
 func manPageCoversEveryTopLevelVerb() throws {
     // The man page is the full-text reference, so a verb absent from it
     // has no long-form home at all.

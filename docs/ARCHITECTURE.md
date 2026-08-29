@@ -1987,6 +1987,17 @@ takes only a delta. Backed by the optional, watchOS-only
 
 ### Pane accessibility
 
+The daemon preserves Apple `frame` values in displayed points and adds the
+DeviceTerm-owned optional `normalizedCenter` object to usable nodes. It divides
+the node frame's centre by the real frontmost tree's width and height, then
+keeps the result only when both coordinates fall inside the inclusive 0 through
+1 range.
+
+`pane.ax.tree` uses its returned root as that scale. `pane.ax.point` and
+`pane.ax.sweep` read the frontmost tree during their existing preflight and use
+it to annotate the point result or unique sweep children. The synthetic sweep
+root is not annotated.
+
 #### `pane.ax.tree`
 
 - Params: `{paneId}`
@@ -1994,8 +2005,8 @@ takes only a delta. Backed by the optional, watchOS-only
 - Scope: session
 
 `tree` is the recursive element tree; each node is
-`{role, frame, label?, identifier?, subrole?, value?, children}`, and
-the daemon may add a root-level `note`.
+`{role, frame, normalizedCenter?, label?, identifier?, subrole?, value?,
+children}`, and the daemon may add a root-level `note`.
 On watchOS the recursive walk returns `{children: []}` even when
 elements are present (an AXPMacPlatformElement limitation); the daemon
 annotates such responses with
@@ -2008,7 +2019,9 @@ via `pane.ax.sweep` instead.
 - Result: `{element}`
 - Scope: session
 
-Returns the element under the normalized 0..1 point.
+Returns the element under the normalized 0 through 1 point. The element carries
+`normalizedCenter` when its frame and the preflight root produce an on-screen
+centre.
 
 #### `pane.ax.sweep`
 
@@ -2032,6 +2045,10 @@ The result shape mirrors
 frame: {x:0,y:0,w:1,h:1}, children: [unique elements], step, budgetMs,
 sweepedPoints, truncated}`. The `step` and `budgetMs` fields echo the
 actually-used post-clamp values.
+
+Each usable child carries `normalizedCenter` computed from the preflight tree.
+The synthetic root's placeholder frame is retained and the root has no
+`normalizedCenter`.
 
 The deadline is `budgetMs`: the caller's, defaulting to 10 000 and clamped into
 `[0, 60 000]`. The ceiling exists because the walk holds the pane's AX queue for

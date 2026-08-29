@@ -604,12 +604,22 @@ deviceterm ax sweep --step 0.02 --budget 20000
 reads the element at one normalized coordinate. `ax sweep` samples the
 display with point queries and removes duplicate elements.
 
-Frames are in the same displayed space as input coordinates, but they are not
-normalized. Divide a frame's centre by the root frame's `w` and `h` before
-tapping it. No rotation of your own is needed in either direction.
+Node frames stay in displayed points and turn with the device, so no rotation
+of your own is needed. Use `frame.w` and `frame.h` when judging hit-target size
+against the 44pt guideline.
 
-`ax sweep` is the exception: its root frame is a placeholder, not the screen's,
-so take the scale from an `ax tree` root.
+A node whose geometry produces an on-screen centre also includes
+`normalizedCenter`. Its `x` and `y` are in the same normalized displayed space
+accepted by `tap`, `swipe`, `long-press`, `pinch`, and `ax point`. Pass them
+directly to those commands without scaling the frame yourself.
+
+`normalizedCenter` is optional. It is omitted when the root scale or node frame
+is unusable, the centre falls off-screen, or an older daemon produced the
+response.
+
+`ax sweep` children receive their normalized centres from the real tree used
+for the sweep's preflight. The synthetic sweep root remains a normalized
+0,0,1,1 placeholder and has no `normalizedCenter`.
 
 A completed sweep makes `ceil(1/step)^2` point queries: 400 at the 0.05
 default, 2500 at the 0.02 floor. Steps outside `[0.02, 0.5]` are clamped

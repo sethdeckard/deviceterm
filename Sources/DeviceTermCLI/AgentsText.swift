@@ -122,11 +122,18 @@ public enum AgentsText {
           at a normalized point, in the same displayed space the
           coordinate-bearing input verbs take. Faster than a
           sweep when you already know roughly where to look.
-        - Node frames are in that displayed space too, but they
-          are not normalized. Divide a frame's centre by the root
-          frame's `w` and `h` before handing it to `tap`. The
-          `ax sweep` root is a placeholder, not the screen, so
-          take the scale from an `ax tree` root.
+        - Node frames stay in displayed points so you can judge
+          hit-target size. A node whose geometry produces an on-screen
+          centre also carries `normalizedCenter: {x, y}` in the same
+          normalized displayed space the coordinate-bearing input verbs
+          take. Pass those values directly to `tap`, `ax point`, or
+          another coordinate input.
+        - `normalizedCenter` is optional. It is absent when the root
+          scale or node frame is unusable, the centre is off-screen, or
+          an older daemon produced the response. `ax sweep` children use
+          the real preflight tree for their scale. The synthetic
+          `AXSweepRoot` remains a 0,0,1,1 placeholder and has no
+          `normalizedCenter`.
 
       all input commands (tap, swipe, long-press, pinch, button,
       key, text, rotate, crown)
@@ -144,8 +151,11 @@ public enum AgentsText {
         deviceterm panes list                 # pane row appears
 
       Tap a UI element you've located:
-        deviceterm ax tree | jq '.tree'       # frames in displayed space
-        deviceterm tap 0.5 0.5                # normalize by the root frame
+        deviceterm ax tree | jq \\
+          '.tree.children[] | {label, frame, normalizedCenter}'
+        deviceterm tap 0.2 0.1275
+        # Copy normalizedCenter.x and normalizedCenter.y directly.
+        # Keep frame.w and frame.h for point-size checks.
 
       Swipe a scrollable list down:
         deviceterm swipe 0.5 0.8 0.5 0.2 --duration 250

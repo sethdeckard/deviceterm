@@ -43,6 +43,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the reachability probe satisfied for tests that only need the call to
     /// succeed; a test that cares about coordinate mapping sets a root frame.
     var frontmostTree: [String: Any] = [:]
+    /// What `accessibilityElement(at:)` answers after recording the query.
+    var accessibilityElement: [String: Any] = [:]
     /// Runs at the start of `accessibilityFrontmostTree()`, so a test can
     /// move state that the read is supposed to observe *after* the tree
     /// rather than before it.
@@ -331,7 +333,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
             Thread.sleep(forTimeInterval: slow.seconds)
         }
         accessibilityPoints.append(pixelPoint)
-        return [:]
+        return accessibilityElement
     }
 
     func shutdownBackend() { shutdownCalled = true }

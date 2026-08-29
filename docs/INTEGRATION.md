@@ -212,7 +212,9 @@ This guide uses three stability categories:
 
 DeviceTerm-owned JSON receipts, payloads, and wrapper fields are
 stable-additive unless this guide says otherwise. Human output, diagnostic
-details, and Apple-sourced accessibility nodes are best-effort.
+details, and Apple-sourced accessibility fields are best-effort.
+`normalizedCenter` is DeviceTerm-owned even though it appears inside an
+accessibility node.
 
 ### Separate Release and Wire Versions
 
@@ -316,8 +318,8 @@ protected tab.
 | `tab set-protected --json` | Protection receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
 | `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
 | `tab capture --json` | `{text}` | Automation | Visible viewport captured | Stable-additive |
-| `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper; best-effort node |
-| `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep stopped, having finished the grid or spent its budget | Stable-additive wrapper; best-effort children |
+| `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper and `normalizedCenter`; best-effort Apple fields |
+| `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep stopped, having finished the grid or spent its budget | Stable-additive wrapper and child `normalizedCenter`; best-effort Apple fields |
 | `events` | JSON Lines stream | Session | Subscription remains active until EOF or termination | Stable-additive |
 | `with-pane` | Child-owned stdout and stderr | Session | Child process exited | Stable exit forwarding |
 | `pane rename`, `pane move` | No success shape | Session | Unsupported; command fails | Stable unsupported status |
@@ -926,13 +928,27 @@ is showing, whichever way it is turned; the daemon converts to the device's
 native frame before querying.
 
 Node `frame` values are in that same displayed space, so they turn with the
-device and need no rotation of your own. They are not normalized: divide a
-frame's centre by the root node's `w` and `h` rather than by a screen dimension
-you got from somewhere else.
+device and need no rotation of your own. Keep them for point-size checks such
+as the 44pt hit-target guideline.
 
-The `ax sweep` root is the exception. Its frame is the normalized placeholder
-under [Sweep Wrapper](#sweep-wrapper), not the screen's, so take the scale from
-an `ax tree` root.
+When the root scale and node geometry are usable, DeviceTerm adds:
+
+```json
+"normalizedCenter": {"x": 0.2, "y": 0.1275}
+```
+
+Its `x` and `y` are the frame centre in normalized displayed space. Pass them
+directly to `tap`, `swipe`, `long-press`, `pinch`, or `ax point`.
+
+The field is omitted when the root lacks a positive finite width or height,
+the node lacks a finite origin or positive finite dimensions, or the resulting
+centre falls outside the inclusive 0 through 1 range. An older daemon can also
+omit it. Omission is a successful result, not an error.
+
+For `ax tree`, the tree root supplies the scale for every node. `ax point` and
+`ax sweep` use the real frontmost tree read during their preflight. The
+synthetic `AXSweepRoot` frame remains a 0,0,1,1 placeholder and is never used
+as the scale.
 
 ### Apple Node Dictionaries
 
@@ -946,18 +962,37 @@ same recursive shape as an accessibility tree.
 ```jsonc
 {
   "tree": {
-    "role": "Button",
-    "label": "Continue",
-    "identifier": "continue-button",
-    "subrole": "AXCloseButton",
-    "value": "Continue",
+    "role": "Application",
     "frame": {
-      "x": 20,
-      "y": 80,
-      "w": 120,
-      "h": 44
+      "x": 0,
+      "y": 0,
+      "w": 400,
+      "h": 800
     },
-    "children": []
+    "normalizedCenter": {
+      "x": 0.5,
+      "y": 0.5
+    },
+    "children": [
+      {
+        "role": "Button",
+        "label": "Continue",
+        "identifier": "continue-button",
+        "subrole": "AXCloseButton",
+        "value": "Continue",
+        "frame": {
+          "x": 20,
+          "y": 80,
+          "w": 120,
+          "h": 44
+        },
+        "normalizedCenter": {
+          "x": 0.2,
+          "y": 0.1275
+        },
+        "children": []
+      }
+    ]
   }
 }
 ```
@@ -974,6 +1009,10 @@ same recursive shape as an accessibility tree.
       "y": 80,
       "w": 120,
       "h": 44
+    },
+    "normalizedCenter": {
+      "x": 0.2,
+      "y": 0.1275
     }
   }
 }
@@ -988,11 +1027,13 @@ stable-additive. Current nested node fields are:
 - `subrole`, optional
 - `value`, optional
 - `frame` with `x`, `y`, `w`, and `h`
+- `normalizedCenter` with normalized `x` and `y`, optional and DeviceTerm-owned
 - `children` on tree nodes
 
-These dictionaries derive from private Apple accessibility frameworks. Their
-roles, values, nesting, availability, and field behavior are best-effort. Do
-not treat the nested node schema as a DeviceTerm-owned compatibility contract.
+With the exception of `normalizedCenter`, these dictionaries derive from
+private Apple accessibility frameworks. Their roles, values, nesting,
+availability, and field behavior are best-effort. `normalizedCenter` is a
+DeviceTerm-owned stable-additive field even though it appears inside the node.
 
 On watchOS, `ax tree` can return an empty `children` array even when elements
 are visible. The object under `tree` may include a diagnostic `note` directing
@@ -1036,6 +1077,9 @@ The synthetic object under `tree` has these stable-additive fields:
 | `note` | string | Present only when `truncated`; one of the `AXTreeNote` values |
 
 The objects inside `children` remain best-effort Apple node dictionaries.
+Each usable object receives `normalizedCenter` using the preflight tree's real
+frame. The synthetic root itself never receives the field. A missing child
+`normalizedCenter` remains a successful partial result.
 
 A successful empty `children` array with `truncated` false means the bridge
 responded but the sweep found no unique elements. A systemic bridge failure

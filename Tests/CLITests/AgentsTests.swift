@@ -101,6 +101,14 @@ func agentsDocumentationCarriesAXTreeWatchOSWorkaround() {
 }
 
 @Test
+func agentsDocumentationUsesAccessibilityCoordinatesDirectly() {
+    let documentation = AgentsText.documentation
+    #expect(documentation.contains("`normalizedCenter: {x, y}`"))
+    #expect(documentation.contains("Pass those values directly to `tap`"))
+    #expect(documentation.contains("Keep frame.w and frame.h for point-size checks"))
+}
+
+@Test
 func agentsDocumentationCarriesPermissionsAndLinkageSection() {
     // The guide carries a Permissions and linkage section covering
     // what the cap authorizes, what the roles are, and where the

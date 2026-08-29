@@ -151,6 +151,17 @@ func integrationGuideDocumentsAccessibilityEnvelopes() throws {
 }
 
 @Test
+func integrationGuideDocumentsReusableAccessibilityCoordinates() throws {
+    let contents = try integrationGuide()
+    let accessibility = try section(named: "Accessibility", in: contents)
+    #expect(accessibility.contains("optional and DeviceTerm-owned"))
+    #expect(accessibility.contains("Pass them\ndirectly to `tap`"))
+    #expect(accessibility.contains("node lacks a finite origin or positive finite dimensions"))
+    #expect(accessibility.contains("Omission is a successful result, not an error"))
+    #expect(accessibility.contains("synthetic root itself never receives the field"))
+}
+
+@Test
 func integrationGuideContentsMatchesH2Sections() throws {
     let contents = try integrationGuide()
     let headings = contents.split(separator: "\n")

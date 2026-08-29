@@ -186,9 +186,11 @@ extension HelpCatalog {
                   node minus children, and arrives under `element`
                   rather than `tree`.
 
-                  Node frames are in that space too but are not
-                  normalized. Divide a frame's centre by the root
-                  frame's w and h before querying it.
+                  Node frames stay in displayed points. When present,
+                  `normalizedCenter.x` and `.y` are ready to pass
+                  directly to `ax point`, `tap`, or another coordinate
+                  input. The field is omitted when the geometry cannot
+                  produce an on-screen centre.
                   Example: deviceterm ax point 0.5 0.5
 
               ax sweep [--step <0..1>] [--budget <ms>]
@@ -196,6 +198,10 @@ extension HelpCatalog {
                   unique elements. Result mirrors `ax tree` shape with a
                   synthetic root role `AXSweepRoot`. Use when `ax tree`
                   returns empty (the watchOS workaround).
+
+                  Sweep children receive `normalizedCenter` from the
+                  real preflight tree. The synthetic sweep root remains
+                  a 0,0,1,1 placeholder and has no `normalizedCenter`.
 
                   Default step 0.05, clamped into [0.02, 0.5]. The clamp
                   is silent; read `step` in the result for what was used.

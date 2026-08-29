@@ -50,7 +50,8 @@ enum PaneAccessibility {
                 message: BridgeMessage.unwrap(error)
             )
         }
-        let annotated = AXTreeAnnotator.annotate(tree: tree, family: family)
+        let noted = AXTreeAnnotator.annotate(tree: tree, family: family)
+        let annotated = AXCoordinateAnnotator.tree(noted)
         do {
             return try JSONSerialization.data(
                 withJSONObject: annotated,
@@ -138,9 +139,10 @@ enum PaneAccessibility {
                 message: BridgeMessage.unwrap(error)
             )
         }
+        let annotated = AXCoordinateAnnotator.element(element, rootTree: rootTree)
         do {
             return try JSONSerialization.data(
-                withJSONObject: element,
+                withJSONObject: annotated,
                 options: [.sortedKeys]
             )
         } catch {
@@ -367,11 +369,14 @@ enum PaneAccessibility {
             let key = AXSweep.dedupKey(element: element)
             if seen.insert(key).inserted { unique.append(element) }
         }
+        let annotated = unique.map {
+            AXCoordinateAnnotator.element($0, rootTree: rootTree)
+        }
         return try sweepRoot(
             paneId: paneId,
             step: clampedStep,
             budgetMs: budgetMs,
-            unique: unique,
+            unique: annotated,
             swept: swept,
             truncated: cutShort
         )

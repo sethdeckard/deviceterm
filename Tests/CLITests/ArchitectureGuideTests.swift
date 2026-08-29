@@ -85,6 +85,15 @@ func architectureGuideAvoidsEmAndEnDashes() throws {
 }
 
 @Test
+func architectureGuideDocumentsAccessibilityCoordinateAnnotation() throws {
+    let contents = try architectureGuide()
+    let rpc = try section(named: "RPC protocol", in: contents)
+    #expect(rpc.contains("DeviceTerm-owned optional `normalizedCenter`"))
+    #expect(rpc.contains("real frontmost tree's width and height"))
+    #expect(rpc.contains("The synthetic sweep\nroot is not annotated"))
+}
+
+@Test
 func architectureGuideFencesCarryInfoStrings() throws {
     let contents = try architectureGuide()
     var insideFence = false

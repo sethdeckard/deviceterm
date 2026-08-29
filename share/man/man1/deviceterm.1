@@ -100,19 +100,29 @@ is accepted on the wire but ignored at the daemon.
 .SS Inspect
 .TP
 .B ax tree
-Dump the frontmost iOS app's accessibility tree as JSON. On watchOS often
-returns an empty walk by design; use
+Dump the frontmost iOS app's accessibility tree as JSON. Each usable node
+includes
+.B normalizedCenter
+with x and y ready for a coordinate-bearing input verb. Its
+.B frame
+stays in displayed points for hit-target size checks. On watchOS the tree
+often returns an empty walk by design; use
 .B ax sweep
 as the documented workaround.
 .TP
 .B ax point " " \fIx\fR " " \fIy\fR
-Single AX element at a normalized point, in the same displayed space the
-coordinate-bearing input verbs take. Node frames are in that space but are
-not normalized: divide the centre's x and y by the root frame's width and
-height before querying it.
+Return one AX element at a normalized point. When present, the element's
+.B normalizedCenter
+uses the same displayed coordinate space and can be passed directly to
+another coordinate-bearing verb. The field is omitted when the geometry
+cannot produce an on-screen centre.
 .TP
 .B ax sweep " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR]
 Grid-walk the screen via objectAtPoint and aggregate unique elements.
+Usable children include
+.BR normalizedCenter .
+The synthetic sweep root remains a 0,0,1,1 placeholder and has no
+.BR normalizedCenter .
 Default step 0.05, clamped silently into [0.02, 0.5]; the result echoes the
 step used. A completed sweep makes ceil(1/step)^2 point queries, and a
 control narrower than the step can fall between samples and read as absent.

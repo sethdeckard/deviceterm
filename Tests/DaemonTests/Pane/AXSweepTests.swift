@@ -264,9 +264,9 @@ func nativePixelHitsKnownWatchOSElement() {
 
 @Test
 func nativePixelHitsALandscapeElementReadOutOfTheTree() {
-    // The recipe DeviceTerm publishes, end to end, in landscape: take a
-    // frame out of `ax tree`, normalize it by the root frame, hand the
-    // centre back as a query point.
+    // The underlying mapping that produces `normalizedCenter`, end to end,
+    // in landscape: scale the frame's centre by the real tree root and hand
+    // that normalized point back to the query path.
     //
     // The frame and the root are landscape-left interface space. The
     // element is a control near the displayed top-left. The query has
