@@ -197,6 +197,17 @@ extension CLICommands {
                         message: "deviceterm: wait ax requires exactly one of --identifier or --label"
                     )
                 }
+                guard let matchMode = CLICommand.WaitAXMatchMode(rawValue: flags["match"] ?? "exact") else {
+                    return .usage(message: "deviceterm: --match must be exact or contains")
+                }
+                // An empty needle is a legitimate exact query for an empty
+                // attribute, but under `contains` it matches every
+                // string-valued instance of that attribute.
+                if matchMode == .contains, (identifier ?? label)?.isEmpty == true {
+                    return .usage(
+                        message: "deviceterm: --match contains requires a non-empty --identifier or --label"
+                    )
+                }
                 guard let source = CLICommand.WaitAXSource(rawValue: flags["source"] ?? "tree") else {
                     return .usage(message: "deviceterm: --source must be tree or sweep")
                 }
@@ -211,6 +222,7 @@ extension CLICommands {
                         identifier: identifier,
                         label: label,
                         role: flags["role"],
+                        matchMode: matchMode,
                         source: source,
                         step: step,
                         budgetMs: budgetMs

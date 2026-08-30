@@ -149,11 +149,17 @@ was already at the ceiling.
 .B wait pane " " \fIbooting\fR|\fIrendering\fR|\fIshutdown\fR|\fIfailed\fR " " [\fB--timeout\fR \fIms\fR]
 Block until the selected pane reaches the named lifecycle state.
 .TP
-.B wait ax " " (\fB--identifier\fR \fIvalue\fR|\fB--label\fR \fIvalue\fR) " " [\fB--role\fR \fIvalue\fR] " " [\fB--source\fR \fItree\fR|\fIsweep\fR] " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
-Block until an exact accessibility identifier or label appears, optionally
-with an exact role. Tree is the default source. Step and budget apply only
-to sweep. The sweep budget is reduced to the time remaining before the
-overall wait deadline.
+.B wait ax " " (\fB--identifier\fR \fIvalue\fR|\fB--label\fR \fIvalue\fR) " " [\fB--role\fR \fIvalue\fR] " " [\fB--match\fR \fIexact\fR|\fIcontains\fR] " " [\fB--source\fR \fItree\fR|\fIsweep\fR] " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
+Block until an accessibility identifier or label appears, optionally with an
+exact role.
+.B --match contains
+matches a substring and folds case; the default is exact. Tree is the default
+source. Step and budget apply only to sweep. The sweep budget is reduced to
+the time remaining before the overall wait deadline. Under
+.B --json
+the receipt lists up to 20 matches with a matchCount for the true total,
+ranked presentational roles last, then entries carrying no normalizedCenter,
+then smallest frame first.
 .TP
 .B wait orientation " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR " " [\fB--timeout\fR \fIms\fR]
 Block until two consecutive observations report the requested confirmed

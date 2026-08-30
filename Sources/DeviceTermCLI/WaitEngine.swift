@@ -73,7 +73,178 @@ enum WaitEngine {
         let details: Data?
     }
 
+    /// A `wait ax` query with its needle folded once, ahead of the walk.
+    ///
+    /// The walk visits every node of every probe for the life of the wait, so
+    /// folding per node would repeat work the query fixes. Building this once
+    /// leaves the comparison itself a plain `==` or `contains`.
+    struct AXMatcher {
+        /// Locale-independent caseless folding, so a match does not depend on
+        /// the caller's `LANG`.
+        ///
+        /// `lowercased()` is not caseless matching: German "Straße" and
+        /// "STRASSE" lowercase to "straße" and "strasse", which never
+        /// compare equal. Folding maps both to "strasse". Turkish dotted and
+        /// dotless I stay distinct under any locale-independent rule.
+        static let foldingOptions: String.CompareOptions = [.caseInsensitive]
+
+        /// The element key the primary selector reads: `identifier` or `label`.
+        let attribute: String
+        /// The needle, case-folded when `mode` is `.contains`.
+        let needle: String
+        let mode: CLICommand.WaitAXMatchMode
+        /// Optional additional conjunct, exact and case-sensitive in both
+        /// modes. A role names a fixed vocabulary rather than app-authored
+        /// text, so there is nothing for a substring to reach.
+        let role: String?
+
+        /// Nil when the query names neither primary selector. The parser
+        /// admits exactly one, so callers treat nil as matching nothing
+        /// rather than as an error worth its own code.
+        init?(query: CLICommand.WaitAXQuery) {
+            let primary: (attribute: String, needle: String)
+            if let identifier = query.identifier {
+                primary = ("identifier", identifier)
+            } else if let label = query.label {
+                primary = ("label", label)
+            } else {
+                return nil
+            }
+            attribute = primary.attribute
+            needle = query.matchMode == .contains
+                ? primary.needle.folding(options: Self.foldingOptions, locale: nil)
+                : primary.needle
+            mode = query.matchMode
+            role = query.role
+        }
+
+        func matches(_ element: [String: Any]) -> Bool {
+            guard let candidate = element[attribute] as? String else { return false }
+            let primaryMatches: Bool
+            switch mode {
+            case .exact:
+                primaryMatches = candidate == needle
+
+            case .contains:
+                primaryMatches = candidate
+                    .folding(options: Self.foldingOptions, locale: nil)
+                    .contains(needle)
+            }
+            guard primaryMatches else { return false }
+            guard let role else { return true }
+            return element["role"] as? String == role
+        }
+    }
+
+    /// Orders the elements a `wait ax` probe matched, so `matches[0]` is the
+    /// node a caller can most likely act on.
+    ///
+    /// Three rules, in order. Presentational elements rank last, because a
+    /// control and the caption inside it routinely share a label and the
+    /// caption is the one that cannot be operated. Elements carrying no
+    /// `normalizedCenter` rank next-to-last, since a caller with no
+    /// coordinate cannot reach them. Everything else ranks by ascending
+    /// frame area, since among unrelated matches the most specific node
+    /// under a point is the control rather than the container holding it.
+    ///
+    /// Area alone would invert the first rule, because a caption nests
+    /// inside its control and is always the smaller of the two. It would
+    /// also miss the second: an off-screen element can have a perfectly
+    /// valid frame.
+    ///
+    /// The result is a heuristic. It cannot see whether an element is
+    /// enabled, obscured, or behind a modal, so a caller that must act
+    /// should still check the entry it picked.
+    enum MatchRanking {
+        /// Presentational last, then elements with no centre, then smallest
+        /// frame first, then discovery order.
+        struct SortKey: Comparable {
+            let isPresentational: Bool
+            /// The daemon omits `normalizedCenter` when a frame is positive
+            /// but its centre lands off-screen, so a small off-screen match
+            /// would otherwise outrank a larger one a caller can actually
+            /// reach. Area does not detect that case: it only sees a valid
+            /// frame.
+            ///
+            /// Ranked below the presentational test rather than above it. A
+            /// control whose centre is off-screen must still outrank its own
+            /// caption, or the defect this ranking exists to fix returns
+            /// wherever a control happens to sit at the screen edge.
+            let lacksCenter: Bool
+            /// `.infinity` when the element has no usable frame, which puts
+            /// it last within its group: it cannot be ranked by area and
+            /// cannot be tapped, but waiting on a status line is legitimate,
+            /// so it is ranked down rather than dropped.
+            let area: Double
+            /// Depth-first position, which breaks ties. Explicit because
+            /// `sorted(by:)` promises no stability and equal areas are
+            /// common among siblings.
+            let discovery: Int
+
+            static func < (lhs: SortKey, rhs: SortKey) -> Bool {
+                if lhs.isPresentational != rhs.isPresentational { return !lhs.isPresentational }
+                if lhs.lacksCenter != rhs.lacksCenter { return !lhs.lacksCenter }
+                if lhs.area != rhs.area { return lhs.area < rhs.area }
+                return lhs.discovery < rhs.discovery
+            }
+        }
+
+        /// Roles known to be presentational, which rank after everything
+        /// else.
+        ///
+        /// The test is membership, not absence: roles come from private
+        /// Apple frameworks, are best-effort, and shift between OS versions,
+        /// so demoting whatever is missing from a known-interactive list
+        /// would bury real controls the moment the vocabulary moves.
+        /// Demoting only a role known to be presentational fails safe, and
+        /// an unrecognized role is treated as actionable.
+        static let presentationalRoles: Set<String> = ["StaticText", "Image"]
+
+        /// Order `matches`, which arrive in depth-first discovery order.
+        static func ordered(_ matches: [[String: Any]]) -> [[String: Any]] {
+            matches
+                .enumerated()
+                .map { (key: sortKey(for: $0.element, discovery: $0.offset), element: $0.element) }
+                .sorted { $0.key < $1.key }
+                .map(\.element)
+        }
+
+        static func sortKey(for element: [String: Any], discovery: Int) -> SortKey {
+            SortKey(
+                isPresentational: presentationalRoles.contains(element["role"] as? String ?? ""),
+                lacksCenter: !(element["normalizedCenter"] is [String: Any]),
+                area: area(of: element) ?? .infinity,
+                discovery: discovery
+            )
+        }
+
+        /// The element's frame area, or nil when it has no usable frame.
+        static func area(of element: [String: Any]) -> Double? {
+            guard let frame = element["frame"] as? [String: Any],
+                let width = numeric(frame["w"]),
+                let height = numeric(frame["h"]),
+                width > 0,
+                height > 0
+            else { return nil }
+            return width * height
+        }
+
+        /// `JSONSerialization` hands back `NSNumber`, which bridges to either
+        /// spelling depending on how the daemon serialized the frame.
+        private static func numeric(_ value: Any?) -> Double? {
+            if let double = value as? Double { return double }
+            if let int = value as? Int { return Double(int) }
+            return nil
+        }
+    }
+
     static let cadenceNanoseconds: UInt64 = 100_000_000
+
+    /// Most matched elements a receipt carries. `matchCount` reports the true
+    /// total alongside, so a trimmed list is visibly trimmed rather than
+    /// quietly short. Ranking runs before truncation, so the entries dropped
+    /// are the lowest-ranked candidates.
+    static let maxReportedMatches = 20
 
     static func run(
         timeoutMs: Int,
@@ -160,7 +331,10 @@ func handleWaitAX(
     creds: (sessionId: String, cap: String)? = nil,
     runtime: WaitEngine.Runtime = .live
 ) throws -> CommandOutcome {
-    try handleWait(
+    // Built once per wait, not per probe: the needle's folded form is a
+    // property of the query, and every probe walks the tree with it.
+    let matcher = WaitEngine.AXMatcher(query: query)
+    return try handleWait(
         pane: pane,
         condition: "ax.appears",
         timeoutMs: timeoutMs,
@@ -228,10 +402,18 @@ func handleWaitAX(
             let root = envelope["tree"] as? [String: Any] else {
             throw CLIError.invalidResponse("accessibility response is not a JSON object")
         }
-        if let match = matchingAXElement(in: root, query: query) {
+        guard let matcher else { return .pending }
+        let matches = WaitEngine.MatchRanking.ordered(
+            matchingAXElements(in: root, matcher: matcher)
+        )
+        if !matches.isEmpty {
             return .satisfied(
                 pane: entry,
-                observation: ["source": query.source.rawValue, "element": match]
+                observation: [
+                    "source": query.source.rawValue,
+                    "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
+                    "matchCount": matches.count
+                ]
             )
         }
         if query.source == .sweep, root["truncated"] as? Bool == true {
@@ -440,32 +622,45 @@ private func resolveWaitPane(
     return panes.first
 }
 
-private func matchingAXElement(
+/// Every element matching `matcher`, in depth-first discovery order.
+///
+/// The walk descends into a matched element rather than stopping there. A
+/// control and the caption inside it routinely share a label, and the inner
+/// one is the match a caller must not be handed silently, so both are
+/// reported and `WaitEngine.MatchRanking` decides which leads.
+private func matchingAXElements(
     in value: Any,
-    query: CLICommand.WaitAXQuery
-) -> [String: Any]? {
+    matcher: WaitEngine.AXMatcher
+) -> [[String: Any]] {
+    var found: [[String: Any]] = []
+    collectAXMatches(in: value, matcher: matcher, into: &found)
+    return found
+}
+
+private func collectAXMatches(
+    in value: Any,
+    matcher: WaitEngine.AXMatcher,
+    into found: inout [[String: Any]]
+) {
     if let element = value as? [String: Any] {
-        let primaryMatches: Bool
-        if let identifier = query.identifier {
-            primaryMatches = element["identifier"] as? String == identifier
-        } else if let label = query.label {
-            primaryMatches = element["label"] as? String == label
-        } else {
-            primaryMatches = false
+        if matcher.matches(element) {
+            // Without this the entries nest: a matched container already
+            // carries every matched descendant, so the list would grow with
+            // the tree rather than with the match count.
+            var entry = element
+            entry.removeValue(forKey: "children")
+            found.append(entry)
         }
-        let roleMatches = query.role.map { element["role"] as? String == $0 } ?? true
-        if primaryMatches, roleMatches { return element }
         if let children = element["children"] as? [Any] {
             for child in children {
-                if let match = matchingAXElement(in: child, query: query) { return match }
+                collectAXMatches(in: child, matcher: matcher, into: &found)
             }
         }
     } else if let values = value as? [Any] {
         for child in values {
-            if let match = matchingAXElement(in: child, query: query) { return match }
+            collectAXMatches(in: child, matcher: matcher, into: &found)
         }
     }
-    return nil
 }
 
 private func waitSuccessOutcome(
@@ -475,9 +670,12 @@ private func waitSuccessOutcome(
 ) throws -> CommandOutcome {
     switch output {
     case .human:
+        // Only an AX wait observes a count; pane and orientation waits leave
+        // the field out rather than reporting a meaningless 1.
+        let matches = (completion.observation["matchCount"] as? Int).map { "matches=\($0) " } ?? ""
         return .stdout(
             "ok condition=\(condition) elapsedMs=\(completion.elapsedMs) "
-                + "attempts=\(completion.attempts) udid=\(completion.pane.udid) "
+                + "attempts=\(completion.attempts) \(matches)udid=\(completion.pane.udid) "
                 + "pane=\(completion.pane.shortId ?? completion.pane.paneId)\n"
         )
 

@@ -83,6 +83,64 @@ private func waitOutputObject(_ outcome: CommandOutcome) throws -> [String: Any]
     try #require(JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any])
 }
 
+private func axQuery(
+    identifier: String? = nil,
+    label: String? = nil,
+    role: String? = nil,
+    matchMode: CLICommand.WaitAXMatchMode = .exact
+) -> CLICommand.WaitAXQuery {
+    CLICommand.WaitAXQuery(
+        identifier: identifier,
+        label: label,
+        role: role,
+        matchMode: matchMode,
+        source: .tree,
+        step: nil,
+        budgetMs: nil
+    )
+}
+
+/// Run one `wait ax` against a fixed tree. The clock only advances when the
+/// engine sleeps, so a 1 ms timeout buys exactly one probe and a miss becomes
+/// `wait.timeout` without wall-clock cost.
+private func axWaitOutcome(
+    tree: String,
+    query: CLICommand.WaitAXQuery,
+    timeoutMs: Int = 1_000
+) throws -> CommandOutcome {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(tree.utf8))
+    ])
+    return try handleWaitAX(
+        pane: nil,
+        query: query,
+        timeoutMs: timeoutMs,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+}
+
+private func axMatches(
+    _ outcome: CommandOutcome
+) throws -> (matches: [[String: Any]], count: Int) {
+    let receipt = try waitOutputObject(outcome)
+    let observation = try #require(receipt["observation"] as? [String: Any])
+    return (
+        try #require(observation["matches"] as? [[String: Any]]),
+        try #require(observation["matchCount"] as? Int)
+    )
+}
+
+/// An `Application` root containing the supplied element JSON, as `ax tree`
+/// frames it.
+private func axTree(_ elements: String) -> String {
+    #"{"tree":{"role":"Application","children":[\#(elements)]}}"#
+}
+
 @Test
 func paneWaitProbesImmediatelyAndSucceeds() throws {
     let clock = WaitTestClock()
@@ -311,6 +369,7 @@ func axWaitMatchesARecursiveElementOnALaterProbe() throws {
         identifier: "save",
         label: nil,
         role: "Button",
+        matchMode: .exact,
         source: .tree,
         step: nil,
         budgetMs: nil
@@ -333,7 +392,7 @@ func axWaitMatchesARecursiveElementOnALaterProbe() throws {
 }
 
 @Test
-func axWaitReturnsTheFirstDepthFirstMatch() throws {
+func axWaitReportsEveryMatchAcrossSubtrees() throws {
     let clock = WaitTestClock()
     let tree = Data(
         #"""
@@ -358,6 +417,7 @@ func axWaitReturnsTheFirstDepthFirstMatch() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .tree,
         step: nil,
         budgetMs: nil
@@ -373,10 +433,310 @@ func axWaitReturnsTheFirstDepthFirstMatch() throws {
         runtime: clock.runtime
     )
 
-    let receipt = try waitOutputObject(outcome)
-    let observation = try #require(receipt["observation"] as? [String: Any])
-    let element = try #require(observation["element"] as? [String: Any])
-    #expect(element["label"] as? String == "Nested")
+    // Neither match carries a frame, so both fall to the unsized tier and
+    // keep depth-first discovery order relative to each other.
+    let (matches, count) = try axMatches(outcome)
+    #expect(count == 2)
+    #expect(matches.map { $0["label"] as? String } == ["Nested", "Sibling"])
+}
+
+@Test("substring matching reaches a decorated label", arguments: [
+    "Messages, 3 unread",
+    "Messages…",
+    "Unread Messages"
+])
+func containsReachesADecoratedLabel(label: String) throws {
+    let tree = axTree(#"{"role":"Button","label":"\#(label)","frame":{"w":10,"h":10}}"#)
+
+    let hit = try axWaitOutcome(tree: tree, query: axQuery(label: "Messages", matchMode: .contains))
+    #expect(hit.exitCode == 0)
+    let (matches, count) = try axMatches(hit)
+    #expect(count == 1)
+    #expect(matches.first?["label"] as? String == label)
+
+    // The same needle under the default mode is the miss this flag exists for.
+    let miss = try axWaitOutcome(tree: tree, query: axQuery(label: "Messages"), timeoutMs: 1)
+    #expect(miss.failure?.code == .waitTimeout)
+}
+
+@Test("contains folds case in both directions", arguments: [
+    ("messages", "Messages, 3 unread"),
+    ("MESSAGES", "Messages, 3 unread"),
+    ("Messages", "MESSAGES, 3 UNREAD"),
+    // Caseless folding, not lowercasing: these two lowercase to "straße"
+    // and "strasse" and would never compare equal.
+    ("STRASSE", "Hauptstraße 4"),
+    ("straße", "HAUPTSTRASSE 4")
+])
+func containsFoldsCase(needle: String, label: String) throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(#"{"role":"Button","label":"\#(label)","frame":{"w":10,"h":10}}"#),
+        query: axQuery(label: needle, matchMode: .contains)
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
+}
+
+@Test("exact admits neither a substring nor a case variant", arguments: [
+    "Message",
+    "messages",
+    "MESSAGES"
+])
+func exactRejectsSubstringsAndCaseVariants(needle: String) throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(#"{"role":"Button","label":"Messages","frame":{"w":10,"h":10}}"#),
+        query: axQuery(label: needle),
+        timeoutMs: 1
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+}
+
+@Test("role stays exact and conjunctive under contains", arguments: [
+    ("Butt", false),
+    ("button", false),
+    ("Button", true)
+])
+func roleStaysExactUnderContainsMatching(role: String, matches: Bool) throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(#"{"role":"Button","label":"Messages, 3 unread","frame":{"w":10,"h":10}}"#),
+        query: axQuery(label: "Messages", role: role, matchMode: .contains),
+        timeoutMs: matches ? 1_000 : 1
+    )
+
+    if matches {
+        #expect(outcome.exitCode == 0)
+    } else {
+        #expect(outcome.failure?.code == .waitTimeout)
+    }
+}
+
+@Test
+func containsAppliesToTheIdentifierSelector() throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(#"{"role":"Button","identifier":"save-button-primary","frame":{"w":10,"h":10}}"#),
+        query: axQuery(identifier: "save-button", matchMode: .contains)
+    )
+
+    #expect(outcome.exitCode == 0)
+    let (matches, count) = try axMatches(outcome)
+    #expect(count == 1)
+    #expect(matches.first?["identifier"] as? String == "save-button-primary")
+}
+
+@Test(
+    "a control outranks the caption inside it",
+    arguments: [CLICommand.WaitAXMatchMode.exact, .contains]
+)
+func aControlOutranksItsOwnCaption(matchMode: CLICommand.WaitAXMatchMode) throws {
+    // The caption nests inside its control and is therefore the smaller of
+    // the two, so area alone would hand back the node that cannot be operated.
+    let outcome = try axWaitOutcome(
+        tree: axTree(
+            #"""
+            {"role":"Button","label":"Save","frame":{"w":80,"h":40},
+             "children":[{"role":"StaticText","label":"Save","frame":{"w":40,"h":20}}]}
+            """#
+        ),
+        query: axQuery(label: "Save", matchMode: matchMode)
+    )
+
+    let (matches, count) = try axMatches(outcome)
+    #expect(count == 2)
+    #expect(matches.map { $0["role"] as? String } == ["Button", "StaticText"])
+}
+
+@Test
+func matchEntriesDropTheirChildren() throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(
+            #"""
+            {"role":"Button","label":"Save","frame":{"w":80,"h":40},
+             "children":[{"role":"StaticText","label":"Save","frame":{"w":40,"h":20}}]}
+            """#
+        ),
+        query: axQuery(label: "Save")
+    )
+
+    let (matches, _) = try axMatches(outcome)
+    #expect(matches.allSatisfy { $0["children"] == nil })
+    // Everything else the daemon annotated rides along, so a matched element
+    // stays as useful as the one `ax tree` reports.
+    #expect(matches.first?["frame"] is [String: Any])
+}
+
+@Test
+func matchListIsCappedButTheCountIsNot() throws {
+    let elements = (0..<25)
+        .map { #"{"role":"Button","label":"Item \#($0)","frame":{"w":\#(10 + $0),"h":10}}"# }
+        .joined(separator: ",")
+    let outcome = try axWaitOutcome(
+        tree: axTree(elements),
+        query: axQuery(label: "Item", matchMode: .contains)
+    )
+
+    let (matches, count) = try axMatches(outcome)
+    #expect(matches.count == WaitEngine.maxReportedMatches)
+    #expect(count == 25)
+    // Smallest first, so the cap drops the widest entries rather than a
+    // random tail.
+    #expect(matches.first?["label"] as? String == "Item 0")
+    #expect(matches.last?["label"] as? String == "Item 19")
+}
+
+@Test
+func aLoneMatchReportsACountOfOne() throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(#"{"role":"Button","label":"Save","frame":{"w":10,"h":10}}"#),
+        query: axQuery(label: "Save")
+    )
+
+    let (matches, count) = try axMatches(outcome)
+    #expect(matches.count == 1)
+    #expect(count == 1)
+}
+
+@Test
+func humanOutputReportsTheMatchCount() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(axTree(#"{"role":"Button","label":"Save","frame":{"w":10,"h":10}}"#).utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .human,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect((String(bytes: outcome.stdout, encoding: .utf8) ?? "").contains("matches=1"))
+}
+
+@Test
+func paneWaitHumanOutputOmitsTheMatchCount() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([.success(try waitData([waitPane()]))])
+    let outcome = try handleWaitPane(
+        pane: nil,
+        state: .rendering,
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .human,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(!(String(bytes: outcome.stdout, encoding: .utf8) ?? "").contains("matches="))
+}
+
+// MARK: - Match ranking
+
+@Test
+func rankingOrdersBySmallestFrameArea() {
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "large", "frame": ["w": 100, "h": 100]],
+        ["label": "small", "frame": ["w": 10, "h": 10]],
+        ["label": "medium", "frame": ["w": 50, "h": 50]]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["small", "medium", "large"])
+}
+
+@Test
+func rankingKeepsDiscoveryOrderForEqualAreas() {
+    let frame: [String: Any] = ["w": 10, "h": 10]
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "first", "frame": frame],
+        ["label": "second", "frame": frame],
+        ["label": "third", "frame": frame]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["first", "second", "third"])
+}
+
+@Test
+func rankingRanksUnsizedMatchesLastWithoutDroppingThem() {
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "noFrame"],
+        ["label": "zeroWidth", "frame": ["w": 0, "h": 40]],
+        ["label": "sized", "frame": ["w": 30, "h": 30]],
+        ["label": "negative", "frame": ["w": -5, "h": 40]]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String }
+        == ["sized", "noFrame", "zeroWidth", "negative"])
+}
+
+@Test("presentational roles rank last however small", arguments: ["StaticText", "Image"])
+func rankingDemotesPresentationalRoles(role: String) {
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "caption", "role": role, "frame": ["w": 1, "h": 1]],
+        ["label": "control", "role": "Button", "frame": ["w": 100, "h": 100]]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["control", "caption"])
+}
+
+@Test("an unrecognized role stays actionable", arguments: ["FutureControl", ""])
+func rankingTreatsAnUnknownRoleAsActionable(role: String) {
+    // Demoting on absence from a known-interactive list would bury a real
+    // control every time Apple's best-effort vocabulary shifts.
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "caption", "role": "StaticText", "frame": ["w": 1, "h": 1]],
+        ["label": "unknown", "role": role, "frame": ["w": 100, "h": 100]]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["unknown", "caption"])
+}
+
+@Test
+func rankingPrefersAMatchCarryingACenter() {
+    // The daemon omits normalizedCenter when a frame is positive but its
+    // centre lands off-screen, so area alone cannot tell these apart.
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "offscreen", "role": "Button", "frame": ["w": 10, "h": 10]],
+        [
+            "label": "reachable",
+            "role": "Button",
+            "frame": ["w": 100, "h": 100],
+            "normalizedCenter": ["x": 0.5, "y": 0.5]
+        ]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["reachable", "offscreen"])
+}
+
+@Test
+func rankingDemotesCaptionsAheadOfCheckingForACenter() {
+    // A control at the screen edge loses its centre. It must still outrank
+    // its own caption, or the caption/control defect returns wherever a
+    // control sits off-screen.
+    let ordered = WaitEngine.MatchRanking.ordered([
+        [
+            "label": "caption",
+            "role": "StaticText",
+            "frame": ["w": 10, "h": 10],
+            "normalizedCenter": ["x": 0.5, "y": 0.5]
+        ],
+        ["label": "offscreenControl", "role": "Button", "frame": ["w": 100, "h": 100]]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["offscreenControl", "caption"])
+}
+
+@Test
+func rankingReadsFractionalFrames() {
+    let ordered = WaitEngine.MatchRanking.ordered([
+        ["label": "big", "frame": ["w": 2.5, "h": 2.0]],
+        ["label": "small", "frame": ["w": 1.5, "h": 1.0]]
+    ])
+
+    #expect(ordered.map { $0["label"] as? String } == ["small", "big"])
 }
 
 @Test
@@ -390,6 +750,7 @@ func truncatedAXSweepWithoutAMatchIsInconclusive() throws {
         identifier: nil,
         label: "Save",
         role: nil,
+        matchMode: .exact,
         source: .sweep,
         step: 0.2,
         budgetMs: 500
@@ -424,6 +785,7 @@ func axSweepBudgetIsBoundedByTheRemainingWait(requestedBudgetMs: Int?) throws {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .sweep,
         step: 0.2,
         budgetMs: requestedBudgetMs
@@ -465,6 +827,7 @@ func axSweepBudgetExcludesConnectionAuthenticationTime() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .sweep,
         step: 0.2,
         budgetMs: nil
@@ -501,6 +864,7 @@ func malformedAXResponseFailsInsteadOfTimingOut() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .tree,
         step: nil,
         budgetMs: nil
@@ -533,6 +897,7 @@ func watchTreeWaitIsUnsupportedWithoutAnAXProbe() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .tree,
         step: nil,
         budgetMs: nil
@@ -563,6 +928,7 @@ func inaccessiblePaneWaitIsUnsupportedWithoutAnAXProbe() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .sweep,
         step: 0.1,
         budgetMs: 500

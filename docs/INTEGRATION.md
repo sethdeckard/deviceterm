@@ -1056,12 +1056,26 @@ deviceterm wait ax --identifier save-button
 deviceterm wait ax --label Save --role Button
 ```
 
-Matches are exact and recursive. `--role` adds an optional exact role match.
-The default source is `tree`.
+Matching is recursive. The default source is `tree`.
 
-One element is returned. If several elements match, DeviceTerm returns the
-first in depth-first response order, checking each `children` array from first
-to last.
+`--match` selects how the primary selector compares. `exact` is the default and
+requires the whole string. `contains` matches a substring and folds case, which
+reaches a control whose label carries an unread count or a truncation ellipsis:
+
+```sh
+deviceterm wait ax --label Messages --match contains
+```
+
+An empty `--identifier` or `--label` under `--match contains` is a usage error,
+because it matches every string-valued identifier or label.
+
+`--role` is always exact and case-sensitive, in both modes. A role names a
+fixed vocabulary rather than app-authored text.
+
+The walk finds every match rather than stopping at the first. It is
+depth-first, checking each `children` array from first to last, and it descends
+into an element that matched, because a control and the caption inside it can
+both match. That traversal order is what breaks ranking ties below.
 
 Use `--source sweep` with optional `--step` and `--budget` when tree observation
 is unavailable:
@@ -1077,7 +1091,45 @@ deadline. A matching element succeeds even when the sweep reports `truncated`.
 A truncated sweep without a match returns `wait.inconclusive`. Tree observation
 on watchOS returns `wait.unsupported`.
 
-The observation contains `source` and the matched `element`.
+The observation contains `source`, `matches`, and `matchCount`. `matches` holds
+the matched elements, up to 20 of them; `matchCount` is how many there were in
+total. A control and the caption inside it often share a label, so more than
+one match is ordinary rather than a caller error.
+
+`matches` is ordered so `matches[0]` is the element you are most likely able to
+operate. Elements whose role is known to be presentational (`StaticText`,
+`Image`) rank last. Elements carrying no `normalizedCenter` rank next to last,
+because a caller with no coordinate cannot reach them. Everything else ranks by
+ascending frame area, because the most specific node under a point is the
+control rather than the container holding it.
+
+The centre test sits below the role test on purpose. A control whose centre
+falls off-screen loses its `normalizedCenter` while keeping a valid frame, and
+it still has to outrank its own caption.
+
+An unrecognized role ranks as actionable. Demoting whatever is missing from a
+known-interactive list would bury real controls whenever Apple's best-effort
+role vocabulary shifts.
+
+Elements with no usable frame rank last within their group, and ties keep
+depth-first document order.
+
+The ordering is a heuristic. It cannot see whether an element is enabled,
+obscured, or behind a modal. To tap, take the first entry carrying a
+`normalizedCenter` rather than assuming `matches[0]` has one:
+
+```sh
+deviceterm wait ax --label Continue --match contains --json \
+  | jq -e 'first(.observation.matches[]
+                 | select(.normalizedCenter)).normalizedCenter'
+```
+
+Reporting `matchCount` separately is what makes a trimmed list visibly trimmed.
+Ranking runs before the cap, so the receipt keeps the 20 highest-ranked
+candidates.
+
+Each entry has the same shape as an `ax point` element: an `ax tree` node
+without `children`. When present, `normalizedCenter` is ready to pass to `tap`.
 
 ### Orientation Conditions
 

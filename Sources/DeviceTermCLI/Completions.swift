@@ -229,6 +229,7 @@ public enum Completions {
                 '--identifier[AX identifier to match]:value' \\
                 '--label[AX label to match]:value' \\
                 '--role[AX role to match]:value' \\
+                '--match[AX match mode: exact or contains]:(exact contains)' \\
                 '--source[AX observation source: tree or sweep]:(tree sweep)' \\
                 '--json[machine-readable JSON output]'
         }
@@ -333,7 +334,7 @@ public enum Completions {
         let waitSubs = subVerbList("wait")
         let flags = [
             "--duration", "--hold", "--velocity", "--step", "--budget",
-            "--timeout", "--identifier", "--label", "--role", "--source",
+            "--timeout", "--identifier", "--label", "--role", "--match", "--source",
             "--tab", "--pane", "--window", "--mode", "--to-tab",
             "--type-delay", "--all", "--json"
         ].joined(separator: " ")
@@ -562,6 +563,10 @@ public enum Completions {
         lines.append("complete -c deviceterm -l identifier -d 'AX identifier to match'")
         lines.append("complete -c deviceterm -l label -d 'AX label to match'")
         lines.append("complete -c deviceterm -l role -d 'AX role to match'")
+        lines.append(
+            "complete -c deviceterm -l match -d 'AX match mode: exact or contains' "
+                + "-a 'exact contains'"
+        )
         lines.append(
             "complete -c deviceterm -l source -d 'AX observation source: tree or sweep' "
                 + "-a 'tree sweep'"

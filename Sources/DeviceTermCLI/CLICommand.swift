@@ -361,10 +361,24 @@ public enum CLICommand: Equatable, Sendable {
         case sweep
     }
 
+    /// How `wait ax` compares its primary selector against an element's
+    /// `identifier` or `label`.
+    ///
+    /// `contains` folds case; `exact` does not. Live labels carry unread
+    /// counts, truncation ellipses, and interpolated names, so the substring
+    /// mode is what reaches a control whose displayed text the caller cannot
+    /// predict in full. The mode never applies to `--role`, which names a
+    /// fixed vocabulary rather than app-authored text.
+    public enum WaitAXMatchMode: String, Equatable, Sendable {
+        case exact
+        case contains
+    }
+
     public struct WaitAXQuery: Equatable, Sendable {
         public let identifier: String?
         public let label: String?
         public let role: String?
+        public let matchMode: WaitAXMatchMode
         public let source: WaitAXSource
         public let step: Double?
         public let budgetMs: Int?
@@ -373,6 +387,7 @@ public enum CLICommand: Equatable, Sendable {
             identifier: String?,
             label: String?,
             role: String?,
+            matchMode: WaitAXMatchMode,
             source: WaitAXSource,
             step: Double?,
             budgetMs: Int?
@@ -380,6 +395,7 @@ public enum CLICommand: Equatable, Sendable {
             self.identifier = identifier
             self.label = label
             self.role = role
+            self.matchMode = matchMode
             self.source = source
             self.step = step
             self.budgetMs = budgetMs

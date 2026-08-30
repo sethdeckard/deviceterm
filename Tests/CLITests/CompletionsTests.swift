@@ -245,7 +245,7 @@ func zshAndBashScriptsCoverFlagsWithDashDashSyntax() {
     // bare-name form (no `--`); pinned separately below.
     let flags = [
         "--duration", "--velocity", "--step", "--timeout", "--identifier",
-        "--label", "--role", "--source", "--json"
+        "--label", "--role", "--match", "--source", "--json"
     ]
     for shell in [Completions.Shell.zsh, .bash] {
         let script = Completions.script(for: shell)
@@ -266,7 +266,7 @@ func fishScriptCoversFlagsWithCompleteLNSyntax() {
     let script = Completions.script(for: .fish)
     for flag in [
         "duration", "velocity", "step", "timeout", "identifier", "label",
-        "role", "source", "json"
+        "role", "match", "source", "json"
     ] {
         #expect(
             script.contains("-l \(flag)"),

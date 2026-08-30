@@ -711,6 +711,7 @@ func parseWaitAXIdentifierDefaultsToTree() {
         identifier: "save",
         label: nil,
         role: nil,
+        matchMode: .exact,
         source: .tree,
         step: nil,
         budgetMs: nil
@@ -727,6 +728,7 @@ func parseWaitAXSweepCarriesItsProbeOptions() {
         identifier: nil,
         label: "Save",
         role: "Button",
+        matchMode: .exact,
         source: .sweep,
         step: 0.2,
         budgetMs: 800
@@ -739,6 +741,23 @@ func parseWaitAXSweepCarriesItsProbeOptions() {
     )
 }
 
+@Test("wait ax takes a substring match mode", arguments: [
+    ["deviceterm", "wait", "ax", "--identifier", "save", "--match", "contains"],
+    ["deviceterm", "wait", "ax", "--label", "Save", "--match", "contains"]
+])
+func parseWaitAXCarriesTheMatchMode(argv: [String]) {
+    let query = CLICommand.WaitAXQuery(
+        identifier: argv.contains("--identifier") ? "save" : nil,
+        label: argv.contains("--label") ? "Save" : nil,
+        role: nil,
+        matchMode: .contains,
+        source: .tree,
+        step: nil,
+        budgetMs: nil
+    )
+    #expect(CLICommands.parse(argv) == .waitAX(pane: nil, query: query, timeoutMs: 30_000))
+}
+
 @Test(
     "invalid waits are usage failures",
     arguments: [
@@ -749,6 +768,9 @@ func parseWaitAXSweepCarriesItsProbeOptions() {
         ["deviceterm", "wait", "ax", "--identifier", "save", "--label", "Save"],
         ["deviceterm", "wait", "ax", "--identifier", "save", "--source", "pixels"],
         ["deviceterm", "wait", "ax", "--identifier", "save", "--step", "0.2"],
+        ["deviceterm", "wait", "ax", "--identifier", "save", "--match", "fuzzy"],
+        ["deviceterm", "wait", "ax", "--label", "", "--match", "contains"],
+        ["deviceterm", "wait", "ax", "--identifier", "", "--match", "contains"],
         ["deviceterm", "wait", "pane", "rendering", "--timeout", "0"],
         ["deviceterm", "wait", "pane", "rendering", "--timeout", "soon"]
     ]

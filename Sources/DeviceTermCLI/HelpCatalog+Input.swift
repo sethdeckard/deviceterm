@@ -249,14 +249,24 @@ extension HelpCatalog {
                   Example: deviceterm wait pane rendering --pane phn001
 
               wait ax (--identifier <value>|--label <value>) [--role <value>]
-                      [--source <tree|sweep>] [--step <0..1>]
-                      [--budget <ms>] [--pane <ref>] [--timeout <ms>]
-                  Wait for an exact AX identifier or label, optionally with an
-                  exact role. Tree is the default source. Step and budget apply
-                  only to sweep.
+                      [--match <exact|contains>] [--source <tree|sweep>]
+                      [--step <0..1>] [--budget <ms>] [--pane <ref>]
+                      [--timeout <ms>]
+                  Wait for an AX identifier or label, optionally with a role.
+                  --match contains matches a substring and folds case; exact
+                  is the default. --role is always exact. Tree is the default
+                  source. Step and budget apply only to sweep.
                   For sweep, the requested or default budget is reduced to
                   the time remaining before the overall wait deadline.
-                  Example: deviceterm wait ax --identifier login-button
+                  With --json the receipt lists up to 20 matches under
+                  matches, with matchCount for the true total; human
+                  output reports only the count. Presentational roles rank
+                  last, entries without a normalizedCenter rank next to
+                  last, and smaller frames rank first, so matches[0] is
+                  the element you are most likely able to operate. The
+                  order is a heuristic: to tap, take the first entry
+                  carrying a normalizedCenter.
+                  Example: deviceterm wait ax --label Messages --match contains
 
               wait orientation
                    <portrait|portrait-upside-down|landscape-left|landscape-right>

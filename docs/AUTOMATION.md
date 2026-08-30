@@ -387,8 +387,9 @@ deviceterm wait ax --identifier login-button --role Button --pane "$UDID"
 ```
 
 Match by exactly one of `--identifier` or `--label`. `--role` adds an exact
-role match. Tree observation is the default. On a family where the tree walk
-is unavailable, use a sweep:
+role match. `--match contains` matches a substring and folds case, for a label
+carrying a count or an ellipsis. Tree observation is the default. On a family
+where the tree walk is unavailable, use a sweep:
 
 ```sh
 deviceterm wait ax --label Continue --source sweep \
@@ -399,6 +400,17 @@ For a sweep wait, DeviceTerm reduces the requested or default sweep budget to
 the milliseconds remaining before the overall wait deadline. A timed-out wait
 does not leave a longer sweep occupying the pane's accessibility queue, except
 for an already in-flight bridge call that cannot be interrupted.
+
+Read the matched elements with `--json`. Human output reports only the match
+count. The receipt lists up to 20 entries under `matches`, with `matchCount`
+for the true total.
+
+Presentational roles rank last, entries with no `normalizedCenter` rank next to
+last, and smaller frames rank first, so `matches[0]` is the element you are
+most likely able to operate.
+
+The ordering is a heuristic. To tap, take the first entry that carries a
+`normalizedCenter` rather than assuming `matches[0]` does.
 
 A truncated sweep that did not find the element is inconclusive rather than
 proof that the element is absent.

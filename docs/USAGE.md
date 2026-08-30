@@ -528,6 +528,7 @@ result is observable:
 ```sh
 deviceterm wait pane rendering --pane "$UDID"
 deviceterm wait ax --identifier save-button --role Button
+deviceterm wait ax --label Messages --match contains
 deviceterm wait orientation landscape-right
 ```
 
@@ -535,10 +536,22 @@ The default deadline is 30000 milliseconds. Override it with
 `--timeout <ms>`.
 
 `wait pane` observes `booting`, `rendering`, `shutdown`, or `failed`.
-`wait ax` matches an exact identifier or label, with an optional exact role,
-using `tree` by default or `sweep` when requested. `wait orientation` requires
-two consecutive observations of the requested confirmed orientation with the
-same positive surface dimensions.
+`wait ax` matches an identifier or label, with an optional exact role, using
+`tree` by default or `sweep` when requested. `--match contains` matches a
+substring and folds case, for a label carrying an unread count or a truncation
+ellipsis. `wait orientation` requires two consecutive observations of the
+requested confirmed orientation with the same positive surface dimensions.
+
+A `wait ax` receipt lists the matched elements, ordered so the one you are most
+likely able to operate comes first. Read them with `--json`, which reports up
+to 20 entries under `matches` plus a `matchCount` for the true total. Human
+output reports only the count.
+
+An entry keeps any `normalizedCenter` its tree or sweep observation supplied,
+ready to pass to `tap`. That field is optional. Presentational roles rank last;
+within each tier, entries carrying a `normalizedCenter` rank ahead of those
+that do not. The ordering is a heuristic, so to tap, take the first entry that
+has a `normalizedCenter` rather than assuming `matches[0]` does.
 
 A sweep-based AX wait reduces the requested or default sweep budget to the time
 remaining before the overall wait deadline. A short wait therefore cannot leave
