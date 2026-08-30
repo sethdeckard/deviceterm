@@ -742,13 +742,16 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         // `initialProtected` is sent only when true, so an ordinary
         // unprotected create carries no extra key (a nil is stripped by
         // `compactMapValues`, and the daemon reads absent as false).
+        // Smoke uses the degraded UDS transport, which cannot assert a
+        // GUI-curated cohort id. Let the daemon self-group that session.
+        let wireTabId = Self.isSmokeMode ? nil : tabId?.uuidString
         let params = try JSONSerialization.data(
             withJSONObject: [
                 "label": label as Any,
                 "name": name as Any,
                 "role": role.rawValue,
                 "initialProtected": initialProtected ? true : nil,
-                "tabId": tabId?.uuidString as Any
+                "tabId": wireTabId as Any
             ].compactMapValues { $0 },
             options: []
         )
