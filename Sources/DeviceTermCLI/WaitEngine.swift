@@ -354,17 +354,6 @@ func handleWaitAX(
                 ])
             )
         }
-        if query.source == .tree, entry.family?.lowercased() == "watch" {
-            throw WaitEngine.Failure(
-                code: .waitUnsupported,
-                message: "AX tree observation is unavailable for watch panes",
-                exitCode: 1,
-                details: waitDetails([
-                    "condition": "ax.appears",
-                    "source": query.source.rawValue
-                ])
-            )
-        }
         let data: Data
         switch query.source {
         case .tree:
@@ -406,6 +395,8 @@ func handleWaitAX(
         let matches = WaitEngine.MatchRanking.ordered(
             matchingAXElements(in: root, matcher: matcher)
         )
+        // A match wins, then incompleteness is explained. A found element is
+        // proof of presence whatever the observation failed to cover.
         if !matches.isEmpty {
             return .satisfied(
                 pane: entry,
@@ -416,16 +407,46 @@ func handleWaitAX(
                 ]
             )
         }
-        if query.source == .sweep, root["truncated"] as? Bool == true {
+        // A recognized code wins; otherwise a recognized sentence provides the
+        // fallback. Show the daemon's sentence when present, and the CLI's own
+        // wording only when it sent none: a newer daemon's wording can carry
+        // remediation advice this build predates, so substituting the compiled
+        // string would quietly stale it.
+        let daemonNote = root["note"] as? String
+        let daemonNoteCode = root["noteCode"] as? String
+        let note = daemonNoteCode.flatMap(AXTreeNote.init(code:))
+            ?? daemonNote.flatMap(AXTreeNote.init(rawValue:))
+        if note == .watchOSEnumerationUnsupported {
+            let message = daemonNote ?? AXTreeNote.watchOSEnumerationUnsupported.rawValue
             throw WaitEngine.Failure(
-                code: .waitInconclusive,
-                message: "AX sweep ended before covering the full grid",
+                code: .waitUnsupported,
+                message: message,
                 exitCode: 1,
                 details: waitDetails([
                     "condition": "ax.appears",
-                    "source": "sweep",
-                    "truncated": true
+                    "source": query.source.rawValue,
+                    "note": message,
+                    "noteCode": daemonNoteCode ?? AXTreeNote.watchOSEnumerationUnsupported.code
                 ])
+            )
+        }
+        if query.source == .sweep, root["truncated"] as? Bool == true {
+            // `truncated` is the coverage signal and the note rides along with
+            // it. Pass both fields through as sent, synthesizing a code only
+            // when the daemon supplied none, so an older response still gives
+            // its caller something to branch on.
+            var details: [String: Any] = [
+                "condition": "ax.appears",
+                "source": "sweep",
+                "truncated": true
+            ]
+            if let daemonNote { details["note"] = daemonNote }
+            if let code = daemonNoteCode ?? note?.code { details["noteCode"] = code }
+            throw WaitEngine.Failure(
+                code: .waitInconclusive,
+                message: daemonNote ?? "AX sweep ended before covering the full grid",
+                exitCode: 1,
+                details: waitDetails(details)
             )
         }
         return .pending

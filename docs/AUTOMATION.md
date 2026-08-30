@@ -413,7 +413,11 @@ The ordering is a heuristic. To tap, take the first entry that carries a
 `normalizedCenter` rather than assuming `matches[0]` does.
 
 A truncated sweep that did not find the element is inconclusive rather than
-proof that the element is absent.
+proof that the element is absent. The failure carries the daemon's note as its
+message, with `note` and `noteCode` in `details`. Branch on `noteCode`:
+`ax.sweepTruncated` means a larger `--budget` may help, and
+`ax.sweepTruncatedAtMaxBudget` means it cannot, so widen `--step` or retry when
+the pane is quieter.
 
 Wait for an observed orientation and a stable rendered surface:
 

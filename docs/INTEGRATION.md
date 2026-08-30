@@ -1088,8 +1088,15 @@ deviceterm wait ax --label Continue --source sweep \
 For `--source sweep`, the CLI applies the normal `[0, 60000]` sweep-budget
 clamp and reduces the result to the milliseconds remaining before the wait
 deadline. A matching element succeeds even when the sweep reports `truncated`.
-A truncated sweep without a match returns `wait.inconclusive`. Tree observation
-on watchOS returns `wait.unsupported`.
+A truncated sweep without a match returns `wait.inconclusive`. Its message is
+the daemon's own note, and `details` carries `note` and `noteCode`, so a caller
+can tell a sweep worth retrying with a larger budget from one already at the
+ceiling.
+
+A tree observation that comes back empty on watchOS returns `wait.unsupported`,
+carrying the same two fields. The refusal follows the daemon's note rather than
+the pane's device family, so it costs one accessibility probe, and a watch pane
+whose tree does enumerate is a legitimate match instead of a refusal.
 
 The observation contains `source`, `matches`, and `matchCount`. `matches` holds
 the matched elements, up to 20 of them; `matchCount` is how many there were in
@@ -1305,7 +1312,11 @@ DeviceTerm-owned stable-additive field even though it appears inside the node.
 
 On watchOS, `ax tree` can return an empty `children` array even when elements
 are visible. The object under `tree` may include a diagnostic `note` directing
-you to `ax sweep` or `ax point`.
+you to `ax sweep` or `ax point`, alongside a `noteCode` naming it.
+
+Both fields are DeviceTerm-owned and stable-additive, and they carry the same
+meanings here as in the sweep wrapper below. Branch on `noteCode`, which
+survives a rewording of the sentence; show `note`.
 
 ### Sweep Wrapper
 
@@ -1343,6 +1354,11 @@ The synthetic object under `tree` has these stable-additive fields:
 | `sweepedPoints` | integer | Grid points this sweep queried |
 | `truncated` | boolean | True when the walk stopped before finishing the grid |
 | `note` | string | Present only when `truncated`; one of the `AXTreeNote` values |
+| `noteCode` | string | Present whenever `note` is; a short stable token naming it |
+
+`note` is a sentence for a person to read. `noteCode` is the token to branch
+on, because the two truncation notes differ only in prose and share one error
+code. Compare `noteCode`; show `note`.
 
 The objects inside `children` remain best-effort Apple node dictionaries.
 Each usable object receives `normalizedCenter` using the preflight tree's real

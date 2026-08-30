@@ -12,9 +12,14 @@ import Foundation
 /// come from, since a note only ever accompanies the result that raised it.
 ///
 /// Lives in `DaemonProtocol` so agent-side decoders can pattern-match the enum
-/// instead of doing string compares. Unknown-key-tolerant on the wire: clients
-/// that don't decode `AXTreeNote` see a plain String at `tree["note"]` and can
-/// compare manually.
+/// instead of doing string compares.
+///
+/// The raw value is the sentence to show a person. `code` is the short stable
+/// token to branch on, written to `tree["noteCode"]` beside the sentence, and
+/// `init(code:)` reads it back. Identify a note by its code: a rewording
+/// changes the sentence and leaves the code alone. Unknown-key-tolerant on the
+/// wire, so a client that decodes neither still sees plain strings at both
+/// keys.
 public enum AXTreeNote: String, Codable, Sendable, Equatable, CaseIterable {
     /// watchOS's `AXPMacPlatformElement.accessibilityChildren` returns
     /// empty regardless of on-screen state, so the recursive walk
@@ -56,6 +61,40 @@ public enum AXTreeNote: String, Codable, Sendable, Equatable, CaseIterable {
     case sweepTruncatedAtMaxBudget =
         // swiftlint:disable:next line_length
         "the sweep stopped at the largest budget the daemon allows with part of the grid unqueried; 'sweepedPoints' counts what it reached, so widen 'deviceterm ax sweep --step <0..1>' or retry when the pane is serving fewer accessibility reads"
+
+    /// Short, stable token naming this note, for clients that branch on it.
+    ///
+    /// The raw values are whole sentences, so a JSON client with only `note`
+    /// must compare the entire sentence to tell `sweepTruncated` from
+    /// `sweepTruncatedAtMaxBudget`. Those are separate cases precisely so a
+    /// caller can branch, since at the ceiling "raise `--budget`" is the one
+    /// remedy that cannot work, and an error code alone does not separate
+    /// them. This is the identity to compare; the raw value is the sentence
+    /// to show a human.
+    ///
+    /// Stable in the same way the raw values are: rewording a sentence leaves
+    /// its code alone, and changing a code is a deliberate wire change.
+    public var code: String {
+        switch self {
+        case .watchOSEnumerationUnsupported:
+            "ax.watchOSEnumerationUnsupported"
+
+        case .sweepTruncated:
+            "ax.sweepTruncated"
+
+        case .sweepTruncatedAtMaxBudget:
+            "ax.sweepTruncatedAtMaxBudget"
+        }
+    }
+
+    /// The note a `code` names, or nil when it is unknown.
+    ///
+    /// When `noteCode` is absent, fall back to `init(rawValue:)` for
+    /// compatibility with older daemons.
+    public init?(code: String) {
+        guard let match = Self.allCases.first(where: { $0.code == code }) else { return nil }
+        self = match
+    }
 
     /// Which truncation note a sweep gets, given the budget it ran under.
     ///

@@ -19,6 +19,7 @@ import Testing
 // pins the exact rawValue, so reusing it here keeps the annotator
 // tests non-fragile across note-text rephrasings.
 private let expectedNote = AXTreeNote.watchOSEnumerationUnsupported.rawValue
+private let expectedNoteCode = AXTreeNote.watchOSEnumerationUnsupported.code
 
 @Test
 func injectsNoteOnEmptyWatchOSTree() {
@@ -29,6 +30,7 @@ func injectsNoteOnEmptyWatchOSTree() {
     ]
     let annotated = AXTreeAnnotator.annotate(tree: tree, family: .watch)
     #expect(annotated["note"] as? String == expectedNote)
+    #expect(annotated["noteCode"] as? String == expectedNoteCode)
     #expect((annotated["children"] as? [Any])?.isEmpty == true)
     #expect(annotated["role"] as? String == "Application")
 }
@@ -45,6 +47,7 @@ func doesNotInjectWhenWatchOSChildrenNonEmpty() {
     ]
     let annotated = AXTreeAnnotator.annotate(tree: tree, family: .watch)
     #expect(annotated["note"] == nil)
+    #expect(annotated["noteCode"] == nil)
 }
 
 @Test
@@ -70,6 +73,7 @@ func doesNotInjectWhenChildrenKeyMissing() {
     let tree: [String: Any] = ["role": "Application"]
     let annotated = AXTreeAnnotator.annotate(tree: tree, family: .watch)
     #expect(annotated["note"] == nil)
+    #expect(annotated["noteCode"] == nil)
 }
 
 @Test
@@ -94,4 +98,5 @@ func passesThroughOtherKeysUnchanged() {
     #expect(annotated["frame"] is [String: Any])
     #expect((annotated["children"] as? [Any])?.isEmpty == true)
     #expect(annotated["note"] as? String == expectedNote)
+    #expect(annotated["noteCode"] as? String == expectedNoteCode)
 }

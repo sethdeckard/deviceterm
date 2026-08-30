@@ -67,6 +67,7 @@ func aSweepThatFinishesReportsItsWholeGrid() async throws {
     // A completed sweep says so and stays silent, so the note is a signal
     // rather than boilerplate every response carries.
     #expect(root["note"] == nil)
+    #expect(root["noteCode"] == nil)
 }
 
 @Test
@@ -95,6 +96,10 @@ func aSweepOutOfBudgetAnswersShortAndSaysSo() async throws {
     // covered in `DaemonProtocolTests`.
     #expect(root["note"] as? String
         == AXTreeNote.forTruncatedSweep(budgetMs: 0).rawValue)
+    // The sentence is for a human; the token is what a client branches on,
+    // since the two truncation notes differ only in prose.
+    #expect(root["noteCode"] as? String
+        == AXTreeNote.forTruncatedSweep(budgetMs: 0).code)
 }
 
 @Test
@@ -143,6 +148,7 @@ func aLongerBudgetReachesCellsTheDefaultWouldHaveStoppedShortOf() async throws {
     #expect(full["truncated"] as? Bool == false)
     #expect(full["sweepedPoints"] as? Int == cells)
     #expect(full["note"] == nil)
+    #expect(full["noteCode"] == nil)
 }
 
 @Test

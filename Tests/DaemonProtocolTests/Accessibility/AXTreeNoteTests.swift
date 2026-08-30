@@ -61,6 +61,37 @@ func onlyTheCeilingNoteAvoidsRecommendingTheBudgetFlag() {
 }
 
 @Test
+func everyNoteCarriesAUniqueStableCode() {
+    let codes = AXTreeNote.allCases.map(\.code)
+    #expect(codes.allSatisfy { !$0.isEmpty })
+    #expect(Set(codes).count == AXTreeNote.allCases.count)
+    // Pinned like the raw values above: the code is the identity a JSON
+    // client branches on, so a change here is a deliberate wire change.
+    #expect(AXTreeNote.watchOSEnumerationUnsupported.code == "ax.watchOSEnumerationUnsupported")
+    #expect(AXTreeNote.sweepTruncated.code == "ax.sweepTruncated")
+    #expect(AXTreeNote.sweepTruncatedAtMaxBudget.code == "ax.sweepTruncatedAtMaxBudget")
+}
+
+@Test
+func everyCodeRoundTripsBackToItsNote() {
+    for note in AXTreeNote.allCases {
+        #expect(AXTreeNote(code: note.code) == note)
+    }
+    #expect(AXTreeNote(code: "ax.notANote") == nil)
+    #expect(AXTreeNote(code: "") == nil)
+    // The sentence is not a code, so the two initializers stay distinct.
+    #expect(AXTreeNote(code: AXTreeNote.sweepTruncated.rawValue) == nil)
+}
+
+@Test
+func theTwoTruncationNotesAreDistinguishableWithoutReadingProse() {
+    // The reason `code` exists. Both are `wait.inconclusive` and both are
+    // sentences, so without a token the only machine-readable difference
+    // between them is a paragraph.
+    #expect(AXTreeNote.sweepTruncated.code != AXTreeNote.sweepTruncatedAtMaxBudget.code)
+}
+
+@Test
 func decodesFromRawString() throws {
     // Quote the raw value so JSONDecoder sees a JSON string literal.
     let raw = AXTreeNote.watchOSEnumerationUnsupported.rawValue

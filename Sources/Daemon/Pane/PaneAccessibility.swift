@@ -412,7 +412,13 @@ enum PaneAccessibility {
         // selector is what keeps the ceiling case testable without spending
         // the ceiling.
         if truncated {
-            root["note"] = AXTreeNote.forTruncatedSweep(budgetMs: budgetMs).rawValue
+            // `note` is the sentence a human reads; `noteCode` is the token a
+            // client branches on. The two truncation notes differ only in
+            // prose, so without the token a caller deciding whether a larger
+            // budget is worth asking for has to match a paragraph.
+            let note = AXTreeNote.forTruncatedSweep(budgetMs: budgetMs)
+            root["note"] = note.rawValue
+            root["noteCode"] = note.code
         }
         do {
             return try JSONSerialization.data(

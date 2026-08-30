@@ -100,6 +100,22 @@ private func axQuery(
     )
 }
 
+private func axSweepQuery(
+    label: String,
+    step: Double? = 0.2,
+    budgetMs: Int? = 500
+) -> CLICommand.WaitAXQuery {
+    CLICommand.WaitAXQuery(
+        identifier: nil,
+        label: label,
+        role: nil,
+        matchMode: .exact,
+        source: .sweep,
+        step: step,
+        budgetMs: budgetMs
+    )
+}
+
 /// Run one `wait ax` against a fixed tree. The clock only advances when the
 /// engine sleeps, so a 1 ms timeout buys exactly one probe and a miss becomes
 /// `wait.timeout` without wall-clock cost.
@@ -122,6 +138,11 @@ private func axWaitOutcome(
         creds: waitCreds,
         runtime: clock.runtime
     )
+}
+
+private func waitFailureDetails(_ outcome: CommandOutcome) throws -> [String: Any] {
+    let data = try #require(outcome.failure?.details)
+    return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
 private func axMatches(
@@ -770,6 +791,122 @@ func truncatedAXSweepWithoutAMatchIsInconclusive() throws {
     #expect(transport.sent.map(\.method).last == RPCMethod.paneAXSweep.rawValue)
 }
 
+@Test("a truncated sweep reports the daemon's note", arguments: [
+    AXTreeNote.sweepTruncated,
+    AXTreeNote.sweepTruncatedAtMaxBudget
+])
+func truncatedAXSweepCarriesItsNoteAndCode(note: AXTreeNote) throws {
+    let clock = WaitTestClock()
+    let root = #"""
+    {"tree":{"role":"AXSweepRoot","truncated":true,"children":[],
+     "note":"\#(note.rawValue)","noteCode":"\#(note.code)"}}
+    """#
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(root.utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axSweepQuery(label: "Save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    // The two truncations differ only in prose under one error code, so the
+    // token is the branchable difference.
+    #expect(outcome.failure?.message == note.rawValue)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["note"] as? String == note.rawValue)
+    #expect(details["noteCode"] as? String == note.code)
+}
+
+@Test
+func aTruncatedSweepWithNoNoteKeepsTheCLIsOwnProse() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(#"{"tree":{"role":"AXSweepRoot","truncated":true,"children":[]}}"#.utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axSweepQuery(label: "Save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(outcome.failure?.message == "AX sweep ended before covering the full grid")
+    let details = try waitFailureDetails(outcome)
+    #expect(details["truncated"] as? Bool == true)
+    #expect(details["note"] == nil)
+    #expect(details["noteCode"] == nil)
+}
+
+@Test
+func anUnrecognizedNoteIsRelayedRatherThanReplaced() throws {
+    // A note this build has no case for is still the daemon's diagnostic, and
+    // more use to a caller than the CLI's generic sentence. It is relayed
+    // as-is, and no code is invented for it.
+    let clock = WaitTestClock()
+    let unknown = "a truncation this CLI has no case for"
+    let root = #"""
+    {"tree":{"role":"AXSweepRoot","truncated":true,"children":[],
+     "note":"\#(unknown)","noteCode":"ax.someFutureNote"}}
+    """#
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(root.utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axSweepQuery(label: "Save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(outcome.failure?.message == unknown)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["note"] as? String == unknown)
+    #expect(details["noteCode"] as? String == "ax.someFutureNote")
+}
+
+@Test
+func aMatchBeatsATruncatedSweep() throws {
+    let clock = WaitTestClock()
+    let root = #"""
+    {"tree":{"role":"AXSweepRoot","truncated":true,
+     "note":"\#(AXTreeNote.sweepTruncated.rawValue)",
+     "children":[{"role":"Button","label":"Save","frame":{"w":10,"h":10}}]}}
+    """#
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(root.utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axSweepQuery(label: "Save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
+}
+
 @Test("AX sweep budget is bounded by the wait", arguments: [nil, 60_000])
 func axSweepBudgetIsBoundedByTheRemainingWait(requestedBudgetMs: Int?) throws {
     let clock = WaitTestClock()
@@ -888,23 +1025,17 @@ func malformedAXResponseFailsInsteadOfTimingOut() throws {
 }
 
 @Test
-func watchTreeWaitIsUnsupportedWithoutAnAXProbe() throws {
+func watchTreeWaitIsUnsupportedWhenTheTreeSaysSo() throws {
     let clock = WaitTestClock()
+    let note = AXTreeNote.watchOSEnumerationUnsupported
+    let empty = #"{"tree":{"role":"Application","children":[],"note":"\#(note.rawValue)"}}"#
     let transport = WaitScriptTransport([
-        .success(try waitData([waitPane(family: "watch")]))
+        .success(try waitData([waitPane(family: "watch")])),
+        .success(Data(empty.utf8))
     ])
-    let query = CLICommand.WaitAXQuery(
-        identifier: "save",
-        label: nil,
-        role: nil,
-        matchMode: .exact,
-        source: .tree,
-        step: nil,
-        budgetMs: nil
-    )
     let outcome = try handleWaitAX(
         pane: nil,
-        query: query,
+        query: axQuery(identifier: "save"),
         timeoutMs: 1_000,
         transport: transport,
         output: .json,
@@ -913,7 +1044,104 @@ func watchTreeWaitIsUnsupportedWithoutAnAXProbe() throws {
     )
 
     #expect(outcome.failure?.code == .waitUnsupported)
-    #expect(transport.sent.map(\.method) == [RPCMethod.panesList.rawValue])
+    // The refusal depends on the AX response, so it requires one AX probe.
+    #expect(transport.sent.map(\.method) == [
+        RPCMethod.panesList.rawValue, RPCMethod.paneAXTree.rawValue
+    ])
+    let details = try waitFailureDetails(outcome)
+    #expect(details["note"] as? String == note.rawValue)
+    #expect(details["noteCode"] as? String == note.code)
+}
+
+@Test
+func aRewordedWatchNoteIsStillRecognizedByItsCode() throws {
+    // The reason the CLI reads `noteCode` first. A daemon that rephrases the
+    // sentence keeps the same code, and matching prose alone would turn this
+    // refusal into a wait that runs to its deadline.
+    let clock = WaitTestClock()
+    let code = AXTreeNote.watchOSEnumerationUnsupported.code
+    let reworded = #"""
+    {"tree":{"role":"Application","children":[],
+     "note":"some future rewording of the watchOS limitation",
+     "noteCode":"\#(code)"}}
+    """#
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane(family: "watch")])),
+        .success(Data(reworded.utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(identifier: "save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitUnsupported)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["noteCode"] as? String == code)
+    // The daemon's own wording surfaces, not this build's copy of it. A
+    // newer sentence can carry remediation advice this CLI predates.
+    #expect(details["note"] as? String == "some future rewording of the watchOS limitation")
+    #expect(outcome.failure?.message == "some future rewording of the watchOS limitation")
+}
+
+@Test
+func aRewordedTruncationNoteIsRelayedUnchanged() throws {
+    // The daemon's reworded truncation sentence and code are relayed
+    // unchanged. Both truncations answer with the same failure, so this
+    // pins relay rather than selection.
+    let clock = WaitTestClock()
+    let note = AXTreeNote.sweepTruncatedAtMaxBudget
+    let root = #"""
+    {"tree":{"role":"AXSweepRoot","truncated":true,"children":[],
+     "note":"some future rewording of the ceiling case",
+     "noteCode":"\#(note.code)"}}
+    """#
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(root.utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axSweepQuery(label: "Save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["noteCode"] as? String == note.code)
+    #expect(details["note"] as? String == "some future rewording of the ceiling case")
+    #expect(outcome.failure?.message == "some future rewording of the ceiling case")
+}
+
+@Test
+func aWatchPaneWithAPopulatedTreeStillMatches() throws {
+    // A watch pane with enumerable children can satisfy the wait; only the
+    // daemon's limitation note makes the observation unsupported.
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane(family: "watch")])),
+        .success(Data(axTree(#"{"role":"Button","identifier":"save","frame":{"w":10,"h":10}}"#).utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(identifier: "save"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
 }
 
 @Test

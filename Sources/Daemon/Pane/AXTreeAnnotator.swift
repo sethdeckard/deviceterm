@@ -33,7 +33,10 @@ enum AXTreeAnnotator {
             children.isEmpty
         else { return tree }
         var annotated = tree
+        // `note` is the sentence a human reads; `noteCode` is the token a
+        // client branches on, so neither has to substring-match the other.
         annotated["note"] = AXTreeNote.watchOSEnumerationUnsupported.rawValue
+        annotated["noteCode"] = AXTreeNote.watchOSEnumerationUnsupported.code
         return annotated
     }
 }

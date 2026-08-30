@@ -2065,7 +2065,8 @@ children}`, and the daemon may add a root-level `note`.
 On watchOS the recursive walk returns `{children: []}` even when
 elements are present (an AXPMacPlatformElement limitation); the daemon
 annotates such responses with
-`tree.note = AXTreeNote.watchOSEnumerationUnsupported`. Agents enumerate
+`tree.note = AXTreeNote.watchOSEnumerationUnsupported`, alongside
+`tree.noteCode` carrying that case's short token. Agents enumerate
 via `pane.ax.sweep` instead.
 
 #### `pane.ax.point`
@@ -2118,6 +2119,10 @@ complete and finds the deadline expired, the walk stops before the next query,
 sets `truncated`, and adds a `tree.note`: `AXTreeNote.sweepTruncated` normally,
 or `.sweepTruncatedAtMaxBudget` when the budget was already at the ceiling and
 there is no larger one to ask for.
+
+Both sites write `tree.noteCode` beside `tree.note`. The raw values are whole
+sentences, so the token is what lets a client separate the two truncation cases
+without matching prose.
 
 The 0.02 step floor plans 2500 queries. Whether they fit inside the default
 budget is a property of the host and the device, so a caller reads `truncated`
