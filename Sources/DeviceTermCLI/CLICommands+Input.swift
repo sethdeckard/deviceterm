@@ -45,6 +45,9 @@ extension CLICommands {
             guard pos.count == 2, let x = Double(pos[0]), let y = Double(pos[1]) else {
                 return .usage(message: "usage: deviceterm tap <x> <y> [--pane <ref>]")
             }
+            if let outside = firstCoordinateOutsideUnitRange([x, y]) {
+                return .usage(message: coordinateRangeUsage(outside))
+            }
             return .tap(pane: pane, x: x, y: y)
 
         case "swipe":
@@ -55,6 +58,9 @@ extension CLICommands {
                     "usage: deviceterm swipe <fromX> <fromY> <toX> <toY> "
                     + "[--duration <ms>] [--hold <ms>] [--pane <ref>]"
                     )
+            }
+            if let outside = firstCoordinateOutsideUnitRange(n) {
+                return .usage(message: coordinateRangeUsage(outside))
             }
             return .swipe(
                 pane: pane,
@@ -79,6 +85,9 @@ extension CLICommands {
                     "usage: deviceterm long-press <x> <y> [--duration <ms>] [--pane <ref>]"
                     )
             }
+            if let outside = firstCoordinateOutsideUnitRange([x, y]) {
+                return .usage(message: coordinateRangeUsage(outside))
+            }
             return .longPress(pane: pane, x: x, y: y, durationMs: durationMs)
 
         case "pinch":
@@ -89,6 +98,9 @@ extension CLICommands {
                     "usage: deviceterm pinch <f1x> <f1y> <f2x> <f2y> "
                     + "<tf1x> <tf1y> <tf2x> <tf2y> [--duration <ms>] [--pane <ref>]"
                     )
+            }
+            if let outside = firstCoordinateOutsideUnitRange(n) {
+                return .usage(message: coordinateRangeUsage(outside))
             }
             return .pinch(
                 pane: pane,
@@ -165,6 +177,9 @@ extension CLICommands {
             if pos == ["tree"] { return .axTree(pane: pane) }
             if pos.count == 3, pos[0] == "point",
                 let x = Double(pos[1]), let y = Double(pos[2]) {
+                if let outside = firstCoordinateOutsideUnitRange([x, y]) {
+                    return .usage(message: coordinateRangeUsage(outside))
+                }
                 return .axPoint(pane: pane, x: x, y: y)
             }
             if pos == ["sweep"] {
@@ -237,6 +252,32 @@ extension CLICommands {
         default:
             return nil
         }
+    }
+
+    /// The first coordinate outside the inclusive unit range, or nil when
+    /// every one is acceptable.
+    ///
+    /// Written as `ClosedRange.contains` rather than a comparison chain
+    /// because NaN compares false against both bounds: `v < 0 || v > 1`
+    /// admits it, and `Double("nan")` parses. Infinity fails the upper bound
+    /// under either spelling.
+    ///
+    /// The range is inclusive to match `normalizedCenter`, which the daemon
+    /// emits with the same inclusive test. An edge control legitimately
+    /// centres on 0 or 1, so tightening this to exclusive would refuse a
+    /// coordinate DeviceTerm had just handed the caller.
+    static func firstCoordinateOutsideUnitRange(_ values: [Double]) -> Double? {
+        values.first { !(0...1).contains($0) }
+    }
+
+    /// The usage error for a coordinate outside the unit range.
+    ///
+    /// Mentions points because an `ax tree` frame can be mistaken for a
+    /// normalized coordinate. An out-of-range value has to fail before
+    /// dispatch.
+    static func coordinateRangeUsage(_ value: Double) -> String {
+        "deviceterm: coordinates are normalized 0..1, got \(value); "
+            + "`ax tree` frames are in points, so pass `normalizedCenter`"
     }
 
     /// Resolve `rotate`'s single positional to a direction or an

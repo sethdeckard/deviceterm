@@ -1220,6 +1220,14 @@ coordinate-bearing input verbs take. `(0,0)` is the top-left of what the device
 is showing, whichever way it is turned; the daemon converts to the device's
 native frame before querying.
 
+`tap`, `swipe`, `long-press`, `pinch`, and `ax point` refuse a coordinate
+outside the inclusive 0 through 1 range, along with a non-numeric, NaN, or
+infinite one. The refusal is `cli.invalidUsage`, exits 1, and happens before
+any daemon round-trip.
+
+The range matches `normalizedCenter`, so every centre the daemon emits is
+accepted by the verbs above.
+
 Node `frame` values are in that same displayed space, so they turn with the
 device and need no rotation of your own. Keep them for point-size checks such
 as the 44pt hit-target guideline.

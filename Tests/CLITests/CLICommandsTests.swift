@@ -643,6 +643,61 @@ func parseTapNonNumericIsUsage() {
     }
 }
 
+@Test(
+    "coordinates outside the unit range are usage errors",
+    arguments: [
+        ["deviceterm", "tap", "5", "5"],
+        ["deviceterm", "tap", "0.5", "-0.2"],
+        ["deviceterm", "long-press", "1.5", "0.5"],
+        ["deviceterm", "swipe", "0.1", "0.1", "0.9", "42"],
+        ["deviceterm", "pinch", "0.4", "0.4", "0.6", "0.6", "0.2", "0.2", "0.8", "9"],
+        ["deviceterm", "ax", "point", "0.5", "2"]
+    ]
+)
+func coordinatesOutsideTheUnitRangeAreUsage(argv: [String]) {
+    // `ax tree` frames are displayed points. A frame value substituted for a
+    // normalized coordinate must fail before dispatch.
+    guard case .usage = CLICommands.parse(argv) else {
+        Issue.record("out-of-range coordinates should be .usage: \(argv)")
+        return
+    }
+}
+
+@Test(
+    "non-finite coordinates are usage errors",
+    arguments: ["nan", "NaN", "inf", "-inf", "infinity"]
+)
+func nonFiniteCoordinatesAreUsage(token: String) {
+    // `Double` parses all of these. The obvious guard spelling misses NaN,
+    // which compares false against both bounds, so a comparison chain would
+    // pass it straight through to the daemon.
+    #expect(Double(token) != nil)
+    guard case .usage = CLICommands.parse(["deviceterm", "tap", token, "0.5"]) else {
+        Issue.record("non-finite coordinate should be .usage: \(token)")
+        return
+    }
+}
+
+@Test
+func theUnitRangeBoundsThemselvesAreAccepted() {
+    // Inclusive, and it has to stay inclusive: the daemon emits
+    // `normalizedCenter` with the same inclusive test, so an edge control
+    // centres on exactly 0 or 1 legitimately. Tightening this to exclusive
+    // would refuse a coordinate `ax tree` had just reported.
+    #expect(
+        CLICommands.parse(["deviceterm", "tap", "0", "0"])
+        == .tap(pane: nil, x: 0, y: 0)
+        )
+    #expect(
+        CLICommands.parse(["deviceterm", "tap", "1", "1"])
+        == .tap(pane: nil, x: 1, y: 1)
+        )
+    #expect(
+        CLICommands.parse(["deviceterm", "ax", "point", "0", "1"])
+        == .axPoint(pane: nil, x: 0, y: 1)
+        )
+}
+
 @Test
 func parseTextMissingArgIsUsage() {
     guard case .usage = CLICommands.parse(["deviceterm", "text"]) else {

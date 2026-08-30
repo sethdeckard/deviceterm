@@ -433,6 +433,13 @@ target, and the agent speaks the same commands you would type.
 CLI coordinates are normalized. `(0,0)` is the top-left corner and `(1,1)` is
 the bottom-right corner regardless of pixel dimensions.
 
+A coordinate outside 0 through 1 is a usage error, and both ends are
+inclusive.
+
+`ax tree` frames are in points, and the check only catches the ones that land
+outside the range. A small frame value can pass and tap the wrong place, so use
+`normalizedCenter` rather than a frame value.
+
 They describe what the device is showing, not the panel underneath it. Turn
 a Simulator to landscape and `(0,0)` follows the picture: DeviceTerm watches
 the simulator's display and rotates your coordinate into the device's native
