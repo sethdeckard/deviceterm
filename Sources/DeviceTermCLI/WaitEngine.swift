@@ -349,114 +349,143 @@ func handleWaitAX(
         creds: creds,
         runtime: runtime
     ) { entry, context in
-        if entry.capabilities?.accessibility == false {
-            throw WaitEngine.Failure(
-                code: .waitUnsupported,
-                message: "accessibility observation is unavailable for this pane",
-                exitCode: 1,
-                details: waitDetails([
-                    "condition": "ax.appears",
-                    "source": query.source.rawValue
-                ])
-            )
-        }
-        let data: Data
-        switch query.source {
-        case .tree:
-            data = try sendWaitRequest(
-                try CLICommands.axTreeRequest(paneId: entry.paneId),
-                transport: transport,
-                context: context,
-                maximumSeconds: AXTimeout.response
-            )
-
-        case .sweep:
-            data = try sendWaitRequest(
-                transport: transport,
-                context: context,
-                maximumSeconds: AXTimeout.response
-            ) {
-                let budgetMs = min(
-                    AXSweepBudget.clamp(query.budgetMs),
-                    try context.remainingMilliseconds()
-                )
-                return try CLICommands.axSweepRequest(
-                    paneId: entry.paneId,
-                    step: query.step,
-                    budgetMs: budgetMs
-                )
-            }
-        }
-        let object: Any
-        do {
-            object = try JSONSerialization.jsonObject(with: data)
-        } catch {
-            throw CLIError.invalidResponse("invalid accessibility response: \(error)")
-        }
-        guard let envelope = object as? [String: Any],
-            let root = envelope["tree"] as? [String: Any] else {
-            throw CLIError.invalidResponse("accessibility response is not a JSON object")
-        }
-        guard let matcher else { return .pending }
-        let matches = WaitEngine.MatchRanking.ordered(
-            matchingAXElements(in: root, matcher: matcher)
+        let matches = try observeAXMatches(
+            entry: entry,
+            context: context,
+            query: query,
+            matcher: matcher,
+            transport: transport
         )
-        // A match wins, then incompleteness is explained. A found element is
-        // proof of presence whatever the observation failed to cover.
-        if !matches.isEmpty {
-            return .satisfied(
-                pane: entry,
-                observation: [
-                    "source": query.source.rawValue,
-                    "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
-                    "matchCount": matches.count
-                ]
-            )
-        }
-        // A recognized code wins; otherwise a recognized sentence provides the
-        // fallback. Show the daemon's sentence when present, and the CLI's own
-        // wording only when it sent none: a newer daemon's wording can carry
-        // remediation advice this build predates, so substituting the compiled
-        // string would quietly stale it.
-        let daemonNote = root["note"] as? String
-        let daemonNoteCode = root["noteCode"] as? String
-        let note = daemonNoteCode.flatMap(AXTreeNote.init(code:))
-            ?? daemonNote.flatMap(AXTreeNote.init(rawValue:))
-        if note == .watchOSEnumerationUnsupported {
-            let message = daemonNote ?? AXTreeNote.watchOSEnumerationUnsupported.rawValue
-            throw WaitEngine.Failure(
-                code: .waitUnsupported,
-                message: message,
-                exitCode: 1,
-                details: waitDetails([
-                    "condition": "ax.appears",
-                    "source": query.source.rawValue,
-                    "note": message,
-                    "noteCode": daemonNoteCode ?? AXTreeNote.watchOSEnumerationUnsupported.code
-                ])
-            )
-        }
-        if query.source == .sweep, root["truncated"] as? Bool == true {
-            // `truncated` is the coverage signal and the note rides along with
-            // it. Pass both fields through as sent, synthesizing a code only
-            // when the daemon supplied none, so an older response still gives
-            // its caller something to branch on.
-            var details: [String: Any] = [
-                "condition": "ax.appears",
-                "source": "sweep",
-                "truncated": true
+        guard !matches.isEmpty else { return .pending }
+        return .satisfied(
+            pane: entry,
+            observation: [
+                "source": query.source.rawValue,
+                "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
+                "matchCount": matches.count
             ]
-            if let daemonNote { details["note"] = daemonNote }
-            if let code = daemonNoteCode ?? note?.code { details["noteCode"] = code }
-            throw WaitEngine.Failure(
-                code: .waitInconclusive,
-                message: daemonNote ?? "AX sweep ended before covering the full grid",
-                exitCode: 1,
-                details: waitDetails(details)
+        )
+    }
+}
+
+/// One accessibility observation of `entry`, reduced to the elements
+/// `matcher` selects and ranked so the most operable comes first.
+///
+/// An empty result means the probe found nothing and the wait should keep
+/// going. Incompleteness the observation reported is thrown instead, and only
+/// after the match test, because a found element is proof of presence
+/// whatever the observation failed to cover.
+///
+/// A nil `matcher` is a query that can never match. After a successful fetch
+/// and parse it returns empty before the response-note and truncation checks,
+/// leaving the probe pending rather than classifying the observation as
+/// unsupported or inconclusive. The capability check, the fetch, and the parse
+/// run ahead of it and can still fail the wait.
+private func observeAXMatches(
+    entry: PanesListEntry,
+    context: WaitEngine.ProbeContext,
+    query: CLICommand.WaitAXQuery,
+    matcher: WaitEngine.AXMatcher?,
+    transport: CLITransport
+) throws -> [[String: Any]] {
+    if entry.capabilities?.accessibility == false {
+        throw WaitEngine.Failure(
+            code: .waitUnsupported,
+            message: "accessibility observation is unavailable for this pane",
+            exitCode: 1,
+            details: waitDetails([
+                "condition": "ax.appears",
+                "source": query.source.rawValue
+            ])
+        )
+    }
+    let data: Data
+    switch query.source {
+    case .tree:
+        data = try sendWaitRequest(
+            try CLICommands.axTreeRequest(paneId: entry.paneId),
+            transport: transport,
+            context: context,
+            maximumSeconds: AXTimeout.response
+        )
+
+    case .sweep:
+        data = try sendWaitRequest(
+            transport: transport,
+            context: context,
+            maximumSeconds: AXTimeout.response
+        ) {
+            let budgetMs = min(
+                AXSweepBudget.clamp(query.budgetMs),
+                try context.remainingMilliseconds()
+            )
+            return try CLICommands.axSweepRequest(
+                paneId: entry.paneId,
+                step: query.step,
+                budgetMs: budgetMs
             )
         }
-        return .pending
     }
+    let object: Any
+    do {
+        object = try JSONSerialization.jsonObject(with: data)
+    } catch {
+        throw CLIError.invalidResponse("invalid accessibility response: \(error)")
+    }
+    guard let envelope = object as? [String: Any],
+        let root = envelope["tree"] as? [String: Any] else {
+        throw CLIError.invalidResponse("accessibility response is not a JSON object")
+    }
+    guard let matcher else { return [] }
+    let matches = WaitEngine.MatchRanking.ordered(
+        matchingAXElements(in: root, matcher: matcher)
+    )
+    // A match wins, then incompleteness is explained. A found element is
+    // proof of presence whatever the observation failed to cover.
+    if !matches.isEmpty { return matches }
+    // A recognized code wins; otherwise a recognized sentence provides the
+    // fallback. Show the daemon's sentence when present, and the CLI's own
+    // wording only when it sent none: a newer daemon's wording can carry
+    // remediation advice this build predates, so substituting the compiled
+    // string would quietly stale it.
+    let daemonNote = root["note"] as? String
+    let daemonNoteCode = root["noteCode"] as? String
+    let note = daemonNoteCode.flatMap(AXTreeNote.init(code:))
+        ?? daemonNote.flatMap(AXTreeNote.init(rawValue:))
+    if note == .watchOSEnumerationUnsupported {
+        let message = daemonNote ?? AXTreeNote.watchOSEnumerationUnsupported.rawValue
+        throw WaitEngine.Failure(
+            code: .waitUnsupported,
+            message: message,
+            exitCode: 1,
+            details: waitDetails([
+                "condition": "ax.appears",
+                "source": query.source.rawValue,
+                "note": message,
+                "noteCode": daemonNoteCode ?? AXTreeNote.watchOSEnumerationUnsupported.code
+            ])
+        )
+    }
+    if query.source == .sweep, root["truncated"] as? Bool == true {
+        // `truncated` is the coverage signal and the note rides along with
+        // it. Pass both fields through as sent, synthesizing a code only
+        // when the daemon supplied none, so an older response still gives
+        // its caller something to branch on.
+        var details: [String: Any] = [
+            "condition": "ax.appears",
+            "source": "sweep",
+            "truncated": true
+        ]
+        if let daemonNote { details["note"] = daemonNote }
+        if let code = daemonNoteCode ?? note?.code { details["noteCode"] = code }
+        throw WaitEngine.Failure(
+            code: .waitInconclusive,
+            message: daemonNote ?? "AX sweep ended before covering the full grid",
+            exitCode: 1,
+            details: waitDetails(details)
+        )
+    }
+    return []
 }
 
 func handleWaitOrientation(
@@ -538,6 +567,34 @@ private func handleWait(
     runtime: WaitEngine.Runtime,
     conditionProbe: (PanesListEntry, WaitEngine.ProbeContext) throws -> WaitEngine.ProbeResult
 ) throws -> CommandOutcome {
+    do {
+        let completion = try runWait(
+            pane: pane,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime,
+            conditionProbe: conditionProbe
+        )
+        return try waitSuccessOutcome(completion, condition: condition, output: output)
+    } catch let failure as WaitEngine.Failure {
+        return waitFailureOutcome(failure, condition: condition)
+    }
+}
+
+/// Probe until `conditionProbe` reports the condition holds, or the deadline
+/// expires.
+///
+/// Resolves the pane on every probe rather than once, because a pane can
+/// appear while the wait runs.
+private func runWait(
+    pane: String?,
+    timeoutMs: Int,
+    transport: CLITransport,
+    creds: (sessionId: String, cap: String)?,
+    runtime: WaitEngine.Runtime,
+    conditionProbe: (PanesListEntry, WaitEngine.ProbeContext) throws -> WaitEngine.ProbeResult
+) throws -> WaitEngine.Completion {
     let credentials = try creds ?? readSessionCredentials()
     var resolvedPaneId: String?
     // Whether the *most recent* probe read a roster that named no pane the ref
@@ -547,7 +604,7 @@ private func handleWait(
     // went unobserved in that case, and a pane may well have appeared in it.
     var lastProbeNamedNoPane = false
     do {
-        let completion = try WaitEngine.run(timeoutMs: timeoutMs, runtime: runtime) { context in
+        return try WaitEngine.run(timeoutMs: timeoutMs, runtime: runtime) { context in
             lastProbeNamedNoPane = false
             let request = try CLICommands.panesListRequest(
                 sessionId: credentials.sessionId,
@@ -584,13 +641,6 @@ private func handleWait(
             resolvedPaneId = entry.paneId
             return try conditionProbe(entry, context)
         }
-        return try waitSuccessOutcome(completion, condition: condition, output: output)
-    } catch let failure as WaitEngine.Failure {
-        var details = failure.details.flatMap {
-            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-        } ?? [:]
-        details["condition"] = details["condition"] ?? condition
-        let encoded = try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys])
         // A deadline reached with the last roster naming no matching pane is a
         // missing pane, not an unmet condition, and `wait.timeout` sends the
         // reader to inspect a condition that never had anything to hold.
@@ -598,25 +648,39 @@ private func handleWait(
         // which is what lets a boot be followed by a wait on the pane it
         // creates. That is also why the ref can only be judged once the
         // deadline has passed, and only against a roster actually read.
-        if failure.code == .waitTimeout, resolvedPaneId == nil, lastProbeNamedNoPane {
-            return .failure(
-                code: .paneNotFound,
-                message: unresolvedPaneMessage(
-                    ref: pane,
-                    exportedTarget: envValue(DeviceTermEnv.targetPane),
-                    attempts: details["attempts"] as? Int
-                ),
-                details: encoded,
-                exitCode: 1
-            )
+    } catch let failure as WaitEngine.Failure
+        where failure.code == .waitTimeout && resolvedPaneId == nil && lastProbeNamedNoPane {
+        let details = failure.details.flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
         }
-        return .failure(
-            code: failure.code,
-            message: failure.message,
-            details: encoded,
-            exitCode: failure.exitCode
+        throw WaitEngine.Failure(
+            code: .paneNotFound,
+            message: unresolvedPaneMessage(
+                ref: pane,
+                exportedTarget: envValue(DeviceTermEnv.targetPane),
+                attempts: details?["attempts"] as? Int
+            ),
+            exitCode: 1,
+            details: failure.details
         )
     }
+}
+
+/// Render a wait failure, adding the `condition` every wait failure reports.
+private func waitFailureOutcome(
+    _ failure: WaitEngine.Failure,
+    condition: String
+) -> CommandOutcome {
+    var details = failure.details.flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    } ?? [:]
+    details["condition"] = details["condition"] ?? condition
+    return .failure(
+        code: failure.code,
+        message: failure.message,
+        details: try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys]),
+        exitCode: failure.exitCode
+    )
 }
 
 /// The message a wait reports when its deadline passed without the pane ref
