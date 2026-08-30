@@ -269,7 +269,13 @@ enum WaitEngine {
                 break
             }
             let afterProbe = runtime.nowNanoseconds()
-            if case let .satisfied(pane, observation) = result, afterProbe < deadline {
+            // A probe that observed the condition reports it however late it
+            // returned. Its request is bounded by the time left, so the daemon
+            // may answer at the deadline and the walk over that response runs
+            // afterwards; discarding the result here would report a timeout
+            // for a condition that was seen to hold. The receipt's `elapsedMs`
+            // may exceed `timeoutMs` as a result, which is the honest reading.
+            if case let .satisfied(pane, observation) = result {
                 return Completion(
                     elapsedMs: elapsedMilliseconds(from: start, to: afterProbe),
                     attempts: attempts,
@@ -534,8 +540,15 @@ private func handleWait(
 ) throws -> CommandOutcome {
     let credentials = try creds ?? readSessionCredentials()
     var resolvedPaneId: String?
+    // Whether the *most recent* probe read a roster that named no pane the ref
+    // matches. Cleared at the top of every probe, so a roster request that
+    // exhausts the deadline reports the timeout that actually ended the wait
+    // instead of a verdict drawn from an earlier roster. The last pane state
+    // went unobserved in that case, and a pane may well have appeared in it.
+    var lastProbeNamedNoPane = false
     do {
         let completion = try WaitEngine.run(timeoutMs: timeoutMs, runtime: runtime) { context in
+            lastProbeNamedNoPane = false
             let request = try CLICommands.panesListRequest(
                 sessionId: credentials.sessionId,
                 cap: credentials.cap
@@ -547,11 +560,25 @@ private func handleWait(
                 maximumSeconds: AppCommandDeadline.cliRequestTimeoutSeconds
             )
             let panes = try JSONDecoder().decode([PanesListEntry].self, from: data)
-            guard let entry = try resolveWaitPane(
-                ref: pane,
-                panes: panes,
-                resolvedPaneId: resolvedPaneId
-            ) else {
+            let resolved: PanesListEntry?
+            do {
+                resolved = try resolveWaitPane(
+                    ref: pane,
+                    panes: panes,
+                    resolvedPaneId: resolvedPaneId
+                )
+            } catch let CLIError.classified(code, message) {
+                // Convert resolution errors to `WaitEngine.Failure` so the
+                // wait envelope includes `condition`.
+                throw WaitEngine.Failure(
+                    code: code,
+                    message: message,
+                    exitCode: 1,
+                    details: nil
+                )
+            }
+            guard let entry = resolved else {
+                lastProbeNamedNoPane = true
                 return .pending
             }
             resolvedPaneId = entry.paneId
@@ -563,13 +590,58 @@ private func handleWait(
             try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
         } ?? [:]
         details["condition"] = details["condition"] ?? condition
+        let encoded = try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys])
+        // A deadline reached with the last roster naming no matching pane is a
+        // missing pane, not an unmet condition, and `wait.timeout` sends the
+        // reader to inspect a condition that never had anything to hold.
+        // Polling an unresolved ref is deliberate: a pane can appear mid-wait,
+        // which is what lets a boot be followed by a wait on the pane it
+        // creates. That is also why the ref can only be judged once the
+        // deadline has passed, and only against a roster actually read.
+        if failure.code == .waitTimeout, resolvedPaneId == nil, lastProbeNamedNoPane {
+            return .failure(
+                code: .paneNotFound,
+                message: unresolvedPaneMessage(
+                    ref: pane,
+                    exportedTarget: envValue(DeviceTermEnv.targetPane),
+                    attempts: details["attempts"] as? Int
+                ),
+                details: encoded,
+                exitCode: 1
+            )
+        }
         return .failure(
             code: failure.code,
             message: failure.message,
-            details: try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys]),
+            details: encoded,
             exitCode: failure.exitCode
         )
     }
+}
+
+/// The message a wait reports when its deadline passed without the pane ref
+/// ever naming a pane.
+///
+/// Mirrors `resolvePane`'s three arms, so the same unmatched target reads the
+/// same way whether a verb resolved it once or a wait polled it. Naming the
+/// exported target matters most: an env key that matches nothing would
+/// otherwise report an empty tab while other panes are listed right there.
+///
+/// `attempts` reports how many rosters were checked before the deadline.
+///
+/// `exportedTarget` is passed in rather than read here so the function stays
+/// pure. Reading `DEVICETERM_TARGET_PANE` inside it would leave no way to
+/// cover the arms except by mutating the process environment, which every
+/// concurrently running wait test would then observe.
+func unresolvedPaneMessage(ref: String?, exportedTarget: String?, attempts: Int?) -> String {
+    let polled = attempts.map { " after \($0) attempts" } ?? ""
+    if let ref, !ref.isEmpty {
+        return "no pane matching '\(ref)' in this tab\(polled); run `deviceterm panes list`"
+    }
+    if let exportedTarget, !exportedTarget.isEmpty {
+        return "no pane for exported target \(exportedTarget) in this tab\(polled)"
+    }
+    return "no device pane in this tab\(polled)"
 }
 
 private func sendWaitRequest(

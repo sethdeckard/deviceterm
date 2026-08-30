@@ -332,20 +332,21 @@ func paneAmbiguityFailsWithoutRetrying() throws {
     let panes = [waitPane(paneId: "ONE"), waitPane(paneId: "TWO")]
     let transport = WaitScriptTransport([.success(try waitData(panes))])
 
-    do {
-        _ = try handleWaitPane(
-            pane: nil,
-            state: .rendering,
-            timeoutMs: 1_000,
-            transport: transport,
-            output: .json,
-            creds: waitCreds,
-            runtime: clock.runtime
-        )
-        Issue.record("ambiguous wait unexpectedly succeeded")
-    } catch {
-        #expect(errorOutcome(error).failure?.code == .paneAmbiguous)
-    }
+    let outcome = try handleWaitPane(
+        pane: nil,
+        state: .rendering,
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .paneAmbiguous)
+    #expect(outcome.exitCode == 1)
+    // Routed through the wait envelope rather than thrown, so it carries the
+    // condition every other wait failure reports.
+    #expect(try waitFailureDetails(outcome)["condition"] as? String == "pane.rendering")
     #expect(transport.sent.count == 1)
     #expect(clock.sleeps.isEmpty)
 }
@@ -358,21 +359,150 @@ func aResolvedPaneDisappearingIsAQueryFailure() throws {
         .success(try waitData([]))
     ])
 
-    do {
-        _ = try handleWaitPane(
-            pane: nil,
-            state: .rendering,
-            timeoutMs: 1_000,
-            transport: transport,
-            output: .json,
-            creds: waitCreds,
-            runtime: clock.runtime
-        )
-        Issue.record("disappearing pane unexpectedly reached the condition")
-    } catch {
-        #expect(errorOutcome(error).failure?.code == .paneNotFound)
-    }
+    let outcome = try handleWaitPane(
+        pane: nil,
+        state: .rendering,
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .paneNotFound)
+    #expect(outcome.failure?.message == "the pane disappeared while waiting")
     #expect(transport.sent.count == 2)
+}
+
+@Test
+func aProbeThatObservedTheConditionLateStillReportsIt() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([.success(try waitData([waitPane()]))])
+    // The request is bounded by the time left, so the daemon may answer at the
+    // deadline and the walk over its response runs afterwards. Advancing the
+    // clock inside the send reproduces a probe that saw the condition hold and
+    // returned past the deadline.
+    transport.onSend = { clock.now += 2_000_000_000 }
+
+    let outcome = try handleWaitPane(
+        pane: nil,
+        state: .rendering,
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(outcome.failure == nil)
+    let object = try waitOutputObject(outcome)
+    #expect(object["ok"] as? Bool == true)
+    // Honest rather than clamped: the observation really did take longer than
+    // the deadline allowed.
+    #expect(object["elapsedMs"] as? Int == 2_000)
+    #expect(transport.sent.count == 1)
+}
+
+@Test
+func aRefThatNeverResolvesReportsTheMissingPaneNotTheDeadline() throws {
+    let clock = WaitTestClock()
+    let roster = try waitData([waitPane()])
+    let transport = WaitScriptTransport([
+        .success(roster),
+        .success(roster),
+        .success(roster)
+    ])
+
+    let outcome = try handleWaitPane(
+        pane: "nosuchpane",
+        state: .rendering,
+        timeoutMs: 250,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    // The condition was never the problem: no pane ever answered to the ref,
+    // so reporting the deadline would send the reader to inspect pane state
+    // that was never observed.
+    #expect(outcome.failure?.code == .paneNotFound)
+    #expect(outcome.exitCode == 1)
+    let message = try #require(outcome.failure?.message)
+    #expect(message.contains("'nosuchpane'"))
+    #expect(message.contains("after 3 attempts"))
+    let details = try waitFailureDetails(outcome)
+    #expect(details["condition"] as? String == "pane.rendering")
+    #expect(details["attempts"] as? Int == 3)
+}
+
+@Test
+func aRosterRequestExhaustingTheDeadlineStaysWaitTimeout() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .failure(.transportTimeout("timed out waiting for daemon response"))
+    ])
+    transport.onSend = { clock.now += 100_000_000 }
+
+    let outcome = try handleWaitPane(
+        pane: "nosuchpane",
+        state: .rendering,
+        timeoutMs: 250,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    // The first probe read a roster naming no match, but the second never read
+    // one at all. A pane may have appeared in the roster that went unobserved,
+    // so reporting `pane.notFound` here would assert a state nothing saw, and
+    // would hide the transport failure that actually ended the wait.
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+    #expect(transport.sent.count == 2)
+}
+
+@Test
+func anUnmatchedExportedTargetIsNamedRatherThanCalledAnEmptyTab() {
+    // The tab holds panes; the exported key names none of them. Reporting an
+    // empty tab would send the reader looking for a missing tab instead of a
+    // stale exported key.
+    let message = unresolvedPaneMessage(
+        ref: nil,
+        exportedTarget: "GONE-KEY",
+        attempts: 3
+    )
+
+    #expect(message == "no pane for exported target GONE-KEY in this tab after 3 attempts")
+}
+
+@Test
+func anExplicitRefOutranksAnExportedTargetInTheDiagnostic() {
+    let message = unresolvedPaneMessage(
+        ref: "nosuchpane",
+        exportedTarget: "GONE-KEY",
+        attempts: 3
+    )
+
+    #expect(message.contains("'nosuchpane'"))
+    #expect(!message.contains("GONE-KEY"))
+}
+
+@Test
+func noRefAndNoExportedTargetReportsAnEmptyTab() {
+    #expect(
+        unresolvedPaneMessage(ref: nil, exportedTarget: nil, attempts: 3)
+            == "no device pane in this tab after 3 attempts"
+    )
+    // An exported key set to empty is the same as unset, matching how
+    // resolution itself treats it.
+    #expect(
+        unresolvedPaneMessage(ref: "", exportedTarget: "", attempts: nil)
+            == "no device pane in this tab"
+    )
 }
 
 @Test

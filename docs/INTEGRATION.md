@@ -1031,6 +1031,10 @@ Successful waits produce:
 required. `pane.shortId` is optional. Observation fields depend on the
 condition and are stable-additive.
 
+A probe that observed the condition reports it even when it returns past the
+deadline, so `elapsedMs` can exceed `timeoutMs`. The alternative is reporting a
+timeout for a condition that was seen to hold.
+
 ### Pane Conditions
 
 Run:
@@ -1176,15 +1180,29 @@ The overall deadline returns:
 }
 ```
 
-`wait.timeout` exits 124. `wait.inconclusive` and `wait.unsupported` exit 1.
+`wait.timeout` exits 124. Every other wait failure exits 1, including
+`wait.inconclusive`, `wait.unsupported`, and `pane.notFound`.
 
 Each probe RPC receives the smaller of the time remaining before the wait
 deadline and its normal command-specific RPC ceiling. Authentication, response
 reads, and retryable session-readiness delays share that single RPC deadline. A
 timeout when the remaining overall time is limiting becomes `wait.timeout`; an
 earlier command-specific RPC deadline remains `transport.timeout`. Connection,
-authentication, pane-resolution, bridge, and response-decoding failures retain
-their shared codes and return immediately.
+authentication, bridge, and response-decoding failures retain their shared
+codes and return immediately.
+
+Pane resolution splits three ways. An ambiguous target returns
+`pane.ambiguous` on the first probe; waits retry absence, not ambiguity. A
+pane that resolved and then disappeared returns `pane.notFound` immediately.
+
+A target that matches nothing keeps probing, because a pane can appear while
+you wait. That's what lets `xcrun simctl boot` be followed by a wait on the
+pane it creates.
+
+If the last completed probe still finds no match at the deadline, the wait
+returns `pane.notFound` with the attempt count in `details`. If the roster
+request itself exhausts the deadline, it returns `wait.timeout`, because the
+final roster went unread.
 
 The implementation uses an immediate first probe followed by non-overlapping
 probes at a 100 ms cadence. The interval is internal rather than a CLI option.
