@@ -352,7 +352,16 @@ send input to it; your own sessions keep access. Automation grants do not
 bypass protection, so an automation tab cannot capture or type into a tab
 once that target is protected.
 
-Only a tab the caller owns a terminal in can be flipped. The receipt's
+Protecting a tab doesn't lock you out of it. Your own sessions still reach it,
+so you can unprotect it from inside:
+
+```sh
+deviceterm tab set-protected false
+```
+
+Only a tab the caller owns a terminal in can be flipped, in either direction.
+A caller that owns no terminal there is refused with `intent.ownerRequired`,
+and holding an automation grant doesn't change that. The receipt's
 `committed` field distinguishes a confirmed change from one the GUI is still
 converging on; see [set protection](INTEGRATION.md#set-protection).
 

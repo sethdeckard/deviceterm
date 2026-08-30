@@ -52,6 +52,16 @@ enum IntentError: Error, Sendable, Equatable {
     /// would be a confusing lie. Carries the verb for the hint.
     case automationRequired(verb: String)
 
+    /// The caller owns no terminal in the resolved tab, for a verb that
+    /// admits only an owner. Distinguishable from `notFound` on the same
+    /// reasoning as `automationRequired`: the gate sits behind resolution,
+    /// which already refused a foreign protected tab, so anything reaching
+    /// it is a tab the caller can see in `tabs list`. Distinct from
+    /// `automationRequired` too, because an automation grant does not widen
+    /// an owner gate: pointing the caller at an Automation Tab would send it
+    /// down a path that still refuses. Carries the verb for the hint.
+    case ownerRequired(verb: String)
+
     /// Internal invariant broken. Surfaces as a bug message
     /// pointing at the source-layer caller. Wraps an underlying
     /// description.
@@ -77,6 +87,9 @@ enum IntentError: Error, Sendable, Equatable {
             // Shared with the daemon, which remaps this one code onto
             // its own numeric scope refusal; the rest it only relays.
             return IntentErrorCode.automationRequired
+
+        case .ownerRequired:
+            return "intent.ownerRequired"
 
         case .internalError:
             return "intent.internalError"
@@ -104,6 +117,10 @@ enum IntentError: Error, Sendable, Equatable {
         case let .automationRequired(verb):
             return "\(verb) needs a live automation grant for this "
                 + "target; run it from an Automation Tab"
+
+        case let .ownerRequired(verb):
+            return "\(verb) needs a terminal inside the target tab; "
+                + "the caller owns none there"
 
         case let .internalError(description):
             return "internal: \(description)"

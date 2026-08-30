@@ -383,7 +383,8 @@ struct IntentAuthorityTests {
         RouteIntent.closeTab(.sessionId("S-B"), mode: .detach),
         RouteIntent.renameTab(.sessionId("S-B"), name: "yours"),
         RouteIntent.openPaneTerminal(inTab: .sessionId("S-B"), cwd: nil, cmd: nil),
-        RouteIntent.closePane(.paneId("P-foreign"), mode: .detach)
+        RouteIntent.closePane(.paneId("P-foreign"), mode: .detach),
+        RouteIntent.setTabProtected(.sessionId("S-B"), isProtected: false)
     ])
     func aGrantDoesNotWidenVisibility(intent: RouteIntent) async {
         // A grant never reaches a protected tab.

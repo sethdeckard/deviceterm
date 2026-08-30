@@ -198,6 +198,68 @@ struct IntentProtectionTests {
     }
 
     @Test
+    func setTabProtectedNonOwnerOfVisibleTabIsOwnerRequired() async {
+        // Both tabs are unprotected, so resolution succeeds and the owner
+        // gate is what refuses. The caller can see this tab in `tabs list`,
+        // so the refusal names its reason rather than claiming the tab
+        // doesn't exist.
+        let mine = tab(id: 1, session: "S-mine")
+        let theirs = tab(id: 2, session: "S-theirs")
+        let harness = makeHarness([[mine, theirs]])
+        let result = await harness.dispatcher.dispatch(
+            .setTabProtected(.sessionId("S-theirs"), isProtected: true),
+            origin: .external(sessionID: "S-mine", hasAutomationGrant: false)
+        )
+        await settle()
+        guard case let .error(error) = result else {
+            Issue.record("expected ownerRequired; got \(result)"); return
+        }
+        #expect(error.code == "intent.ownerRequired")
+        #expect(harness.fake.setProtectedBatchCalls.isEmpty)
+    }
+
+    @Test
+    func setTabProtectedGrantDoesNotWidenTheOwnerGate() async {
+        // The owner gate ignores the grant bit. A granted caller reaching a
+        // visible foreign tab is refused exactly like an ungranted one, so
+        // the hint must not be `automationRequired`: running this from an
+        // Automation Tab would still refuse.
+        let mine = tab(id: 1, session: "S-mine")
+        let theirs = tab(id: 2, session: "S-theirs")
+        let harness = makeHarness([[mine, theirs]])
+        let result = await harness.dispatcher.dispatch(
+            .setTabProtected(.sessionId("S-theirs"), isProtected: true),
+            origin: .external(sessionID: "S-mine", hasAutomationGrant: true)
+        )
+        await settle()
+        guard case let .error(error) = result else {
+            Issue.record("a grant reached a foreign tab's protection; got \(result)"); return
+        }
+        #expect(error.code == "intent.ownerRequired")
+        #expect(harness.fake.setProtectedBatchCalls.isEmpty)
+    }
+
+    @Test
+    func setTabProtectedOwnerUnsetsItsOwnProtectedTab() async {
+        // Protection is reversible by the session that owns the tab: the
+        // resolver reaches a caller's own protected tab and the owner gate
+        // admits it, so the unprotect commits.
+        let priv = tab(id: 1, session: "S-priv", isProtected: true)
+        let harness = makeHarness([[priv]])
+        let result = await harness.dispatcher.dispatch(
+            .setTabProtected(.sessionId("S-priv"), isProtected: false),
+            origin: .external(sessionID: "S-priv", hasAutomationGrant: false)
+        )
+        await settle()
+        guard case let .data(.tabSetProtected(outcome)) = result else {
+            Issue.record("expected committed data; got \(result)"); return
+        }
+        #expect(outcome.isProtected == false)
+        #expect(outcome.committed)
+        #expect(harness.fake.setProtectedBatchCalls.count == 1)
+    }
+
+    @Test
     func setTabProtectedExternalNilSessionRefused() async {
         let harness = makeHarness([[tab(id: 1, session: "S-A")]])
         let result = await harness.dispatcher.dispatch(
@@ -205,9 +267,12 @@ struct IntentProtectionTests {
             origin: .external(sessionID: nil, hasAutomationGrant: false)
         )
         await settle()
-        guard case .error = result else {
+        guard case let .error(error) = result else {
             Issue.record("expected error; got \(result)"); return
         }
+        // The tab is unprotected, so it resolves and the owner gate refuses
+        // a caller that owns no terminal anywhere.
+        #expect(error.code == "intent.ownerRequired")
         #expect(harness.fake.setProtectedBatchCalls.isEmpty)
     }
 

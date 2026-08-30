@@ -2525,8 +2525,15 @@ Owner-only on the GUI side: the `IntentDispatcher` handler for
 `RouteIntent.setTabProtected` rejects when the resolved tab's terminals
 don't include the caller's session id, judged by origin, so the human
 menu always passes and an external caller must own a terminal in the
-tab. The rejection is `intent.notFound` rather than anything that leaks
-the tab's existence.
+tab. An automation grant does not widen this gate; the handler ignores the
+grant bit.
+
+The rejection is `intent.ownerRequired`. The gate runs after resolution,
+which already refuses a foreign protected tab, so what reaches it is a tab the
+caller can see in `tabs list`, and naming the reason leaks nothing. If a
+non-owner reaches this gate with an effectively protected tab, the
+fail-closed fallback is `intent.notFound`; the accessibility predicate
+prevents that state.
 
 The GUI drives an awaited, fail-closed transition: an
 unprotected-to-protected request hides the tab immediately, before any

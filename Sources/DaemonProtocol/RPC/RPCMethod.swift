@@ -358,8 +358,10 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// Session-scoped (auth required) but owner-only enforcement
     /// happens GUI-side in the IntentDispatcher: it gates the
     /// dispatch when the resolved tab's terminals don't include
-    /// the caller's session id, returning `intent.notFound` rather
-    /// than leaking the tab's existence. The GUI resolves the tab to
+    /// the caller's session id, returning `intent.ownerRequired`. A
+    /// tab the caller can't reach at all never gets that far: the
+    /// resolver answers `intent.notFound` and leaks nothing about
+    /// the tab's existence. The GUI resolves the tab to
     /// its terminal-pane sessions and flips them atomically via the
     /// daemon's `session.setProtectedBatch`.
     case tabSetProtected = "tab.setProtected"

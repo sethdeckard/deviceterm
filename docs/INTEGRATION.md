@@ -1516,8 +1516,32 @@ Unconfirmed result:
 `committed: false` means the transition remains unconfirmed and the GUI may
 still be converging.
 
+Unprotect through the same command:
+
+```sh
+deviceterm tab set-protected false --json
+```
+
+Result:
+
+```json
+{
+  "committed": true,
+  "isProtected": false,
+  "ok": true,
+  "tab": "current"
+}
+```
+
 A definite rejection is a command failure, not a receipt with
 `committed: false`.
+
+Both directions need a terminal of yours in the target tab. A caller without
+one gets `intent.ownerRequired` and exit status 1. An automation grant does
+not satisfy this, unlike the per-target checks in
+[hold a live grant](#hold-a-live-grant). A tab the caller cannot see fails
+earlier, in resolution, as `intent.notFound`, which doesn't separate a
+protected foreign tab from one that isn't there.
 
 Protection behavior, including what other callers can no longer see or do, is
 described in [`AUTOMATION.md`](AUTOMATION.md#protect-a-tab).

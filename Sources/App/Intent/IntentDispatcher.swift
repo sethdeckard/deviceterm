@@ -555,7 +555,15 @@ final class IntentDispatcher {
                     resolved.tab.terminals.contains { $0.sessionId == sid }
                 } ?? false
                 guard isOwner else {
-                    throw IntentError.notFound(kind: "tab", ref: "set-protected")
+                    // Fail closed if resolution ever admits a foreign
+                    // protected tab: return notFound to keep it opaque.
+                    // The accessibility predicate prevents that path, so
+                    // every reachable non-owner refusal can name the owner
+                    // requirement.
+                    guard !resolved.tab.isEffectivelyProtected else {
+                        throw IntentError.notFound(kind: "tab", ref: "set-protected")
+                    }
+                    throw IntentError.ownerRequired(verb: "tab set-protected")
                 }
             }
             // Await the transition's first decisive outcome so the caller
