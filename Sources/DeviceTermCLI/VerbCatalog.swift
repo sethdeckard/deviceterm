@@ -59,6 +59,11 @@ enum VerbCatalog {
             valuedFlags: ["pane", "step", "budget"],
             subVerbs: ["tree", "point", "sweep"]
         ),
+        Verb(
+            "wait",
+            valuedFlags: ["pane", "timeout", "identifier", "label", "role", "source", "step", "budget"],
+            subVerbs: ["pane", "ax", "orientation"]
+        ),
         Verb("with-pane"),
         // Workspace verbs: the full set their sub-commands accept,
         // permissively shared across sub-commands (a flag not meaningful

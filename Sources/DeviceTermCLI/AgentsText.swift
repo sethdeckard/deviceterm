@@ -251,13 +251,25 @@ public enum AgentsText {
         deviceterm tab info --json | jq '.role'
         deviceterm windows list --json | jq 'length'
 
-      Boot-wait via the event stream (no polling):
+      Boot and wait for the pane to render:
+        xcrun simctl boot "$UDID"
+        deviceterm wait pane rendering --pane "$UDID"
+        # The wait probes current pane state immediately and blocks until
+        # rendering or its 30000ms default deadline. Use --timeout <ms>
+        # to choose another bound. wait.timeout exits 124; transport,
+        # authentication, pane resolution, and decode failures retain
+        # their own codes.
+
+      Wait for an app element after a launch or tap:
+        xcrun simctl launch "$UDID" com.example.App
+        deviceterm wait ax --identifier login-button --role Button
+
+      Observe a long-running event stream:
         deviceterm events | jq --unbuffered \\
-          'select(.type=="pane.stateChanged" and .state=="rendering")' \\
-          | head -n 1
-        # Blocks until the next pane reaches "rendering" state, then
-        # exits. Use jq's `select` to filter on type/state/udid/pane;
-        # `head -n 1` to one-shot, or omit to keep watching.
+          'select(.type=="pane.stateChanged")'
+        # Events have no replay or subscription-ready record. Use wait
+        # for one-shot convergence; use events as a latency signal or
+        # long-running observation stream.
 
     INTEGRATION TIPS
 
@@ -474,7 +486,7 @@ public enum AgentsText {
 
         https://github.com/sethdeckard/deviceterm/blob/main/docs/INTEGRATION.md
 
-      For workspace control, automation grants, and event-wait
+      For workspace control, waits, automation grants, and event
       workflows, read the automation guide:
 
         https://github.com/sethdeckard/deviceterm/blob/main/docs/AUTOMATION.md

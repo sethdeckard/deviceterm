@@ -16,6 +16,7 @@ events, and [`USAGE.md`](USAGE.md) for driving devices inside a tab.
 - [Surface Matrix](#surface-matrix)
 - [Discovery and State](#discovery-and-state)
 - [Action Receipts](#action-receipts)
+- [Waiting for State](#waiting-for-state)
 - [Accessibility](#accessibility)
 - [Automation](#automation)
 - [Events](#events)
@@ -107,6 +108,12 @@ Current shared codes are:
 | `pane.ambiguous` | More than one accessible pane matched the reference |
 | `pane.unavailable` | The resolved pane cannot currently perform the request |
 | `pane.bridgeFailed` | The pane's device bridge failed |
+| `input.refused` | A backend refused a valid input operation |
+| `rotate.unconfirmed` | The requested rotation target was not confirmed |
+| `rotate.confirmationUnsupported` | The command or backend cannot provide rotation confirmation |
+| `wait.timeout` | The wait's overall deadline expired |
+| `wait.inconclusive` | The observation completed without enough coverage to decide |
+| `wait.unsupported` | The selected pane or observation source cannot observe the condition |
 | `rpc.invalidRequest` | The daemon rejected the RPC request shape |
 | `rpc.methodNotFound` | The daemon does not implement the requested RPC method |
 | `rpc.invalidParams` | The daemon rejected the RPC parameters |
@@ -162,6 +169,7 @@ Special cases are:
 |---|---|
 | `doctor` | 0 when no check has `status: "fail"`; otherwise 1 |
 | `events` | 0 when the daemon closes the stream normally |
+| `wait` | 124 only when the overall deadline becomes `wait.timeout`; other failures use 1 |
 | `with-pane` | Child exit status, or `128 + signal` when signaled |
 | `with-pane` spawn failure | 127 |
 
@@ -310,6 +318,9 @@ protected tab.
 | `tap`, `swipe`, `app-switcher`, `long-press`, `pinch` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `button`, `key`, `text`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed | Stable-additive |
+| `wait pane <state>` with `--json` | Wait receipt | Session | Named pane state observed before the deadline | Stable-additive |
+| `wait ax` with `--json` | Wait receipt | Session | Matching accessibility element observed before the deadline | Stable-additive |
+| `wait orientation <orientation>` with `--json` | Wait receipt | Session | Confirmed orientation and stable surface observed before the deadline | Stable-additive |
 | `tab rename` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab close` with `--json` | Workspace receipt | Session and sole-terminal tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab open`, `tab select`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
@@ -535,6 +546,9 @@ Optional fields:
 | `name` | Optional pane name |
 | `capabilities` | Per-pane device capabilities; see below for what each flag gates |
 | `target` | Backend-neutral device discriminator |
+| `orientationConfirmationSupported` | Whether the backend can produce confirmed orientation evidence; absent for version skew |
+| `orientation` | Latest confirmed orientation; absent until confirmation is available |
+| `surface` | Current `{sequence, width, height}` surface metadata; absent before a surface exists |
 
 A physical-device target uses:
 
@@ -970,7 +984,9 @@ Example device attachment:
 
 The attachment receipt confirms that the GUI accepted the attachment request.
 It does not include the new `paneId` or confirm that a display stream is
-rendering. Observe `panes list --json` or `events` when readiness matters.
+rendering. Use `deviceterm wait pane rendering` when readiness matters. The
+event stream remains available for long-running observation and low-latency
+refresh signals.
 
 `tab open` does not return the new session ID. `pane open --terminal` does not
 return the new terminal session ID, and `window open` does not return a window
@@ -983,6 +999,136 @@ implemented. They fail with `intent.internalError`.
 
 Do not decode or depend on the dormant `PaneRename` or `PaneMove` receipt
 structs. No public success shape exists for these commands.
+
+## Waiting for State
+
+`wait` is a non-streaming CLI operation. It probes current state until the
+condition holds or its monotonic deadline expires. The default deadline is
+30000 milliseconds and `--timeout <ms>` must be positive.
+
+### Wait Receipt
+
+Successful waits produce:
+
+```json
+{
+  "attempts": 3,
+  "condition": "pane.rendering",
+  "elapsedMs": 200,
+  "observation": {
+    "state": "rendering"
+  },
+  "ok": true,
+  "pane": {
+    "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+    "shortId": "phn001",
+    "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
+  }
+}
+```
+
+`ok`, `condition`, `elapsedMs`, `attempts`, `pane`, and `observation` are
+required. `pane.shortId` is optional. Observation fields depend on the
+condition and are stable-additive.
+
+### Pane Conditions
+
+Run:
+
+```sh
+deviceterm wait pane rendering --pane phn001 --timeout 30000
+```
+
+Accepted states are `booting`, `rendering`, `shutdown`, and `failed`. The
+observation contains `state`.
+
+An explicit pane reference that has not appeared yet is an unsatisfied
+condition, not `pane.notFound`. Once a wait resolves a pane, it pins that pane
+ID. If the pane later disappears, the query fails with `pane.notFound`.
+Ambiguous resolution fails immediately with `pane.ambiguous`.
+
+### Accessibility Conditions
+
+Run exactly one primary match:
+
+```sh
+deviceterm wait ax --identifier save-button
+deviceterm wait ax --label Save --role Button
+```
+
+Matches are exact and recursive. `--role` adds an optional exact role match.
+The default source is `tree`.
+
+One element is returned. If several elements match, DeviceTerm returns the
+first in depth-first response order, checking each `children` array from first
+to last.
+
+Use `--source sweep` with optional `--step` and `--budget` when tree observation
+is unavailable:
+
+```sh
+deviceterm wait ax --label Continue --source sweep \
+  --step 0.05 --budget 20000
+```
+
+For `--source sweep`, the CLI applies the normal `[0, 60000]` sweep-budget
+clamp and reduces the result to the milliseconds remaining before the wait
+deadline. A matching element succeeds even when the sweep reports `truncated`.
+A truncated sweep without a match returns `wait.inconclusive`. Tree observation
+on watchOS returns `wait.unsupported`.
+
+The observation contains `source` and the matched `element`.
+
+### Orientation Conditions
+
+Run:
+
+```sh
+deviceterm wait orientation landscape-right
+```
+
+The pane must support rotation confirmation, expose the requested confirmed
+`orientation`, and have a current `surface`. The condition succeeds only after
+two consecutive probes report the requested orientation with the same positive
+width and height. The observation contains the orientation and final
+`{sequence, width, height}` surface metadata.
+
+A false `orientationConfirmationSupported` returns `wait.unsupported`. When
+support is true but `orientation` is absent, the wait continues probing because
+a later observer callback or confirmed rotation may populate it. A daemon that
+omits both fields is treated as unsupported.
+
+### Failure Classification
+
+The overall deadline returns:
+
+```json
+{
+  "error": {
+    "code": "wait.timeout",
+    "message": "wait deadline expired after 30000 ms",
+    "details": {
+      "attempts": 300,
+      "condition": "pane.rendering",
+      "elapsedMs": 30000,
+      "timeoutMs": 30000
+    }
+  }
+}
+```
+
+`wait.timeout` exits 124. `wait.inconclusive` and `wait.unsupported` exit 1.
+
+Each probe RPC receives the smaller of the time remaining before the wait
+deadline and its normal command-specific RPC ceiling. Authentication, response
+reads, and retryable session-readiness delays share that single RPC deadline. A
+timeout when the remaining overall time is limiting becomes `wait.timeout`; an
+earlier command-specific RPC deadline remains `transport.timeout`. Connection,
+authentication, pane-resolution, bridge, and response-decoding failures retain
+their shared codes and return immediately.
+
+The implementation uses an immediate first probe followed by non-overlapping
+probes at a 100 ms cadence. The interval is internal rather than a CLI option.
 
 ## Accessibility
 
@@ -1337,9 +1483,9 @@ deviceterm events \
   | jq --unbuffered 'select(.type == "pane.stateChanged")'
 ```
 
-Recipes that combine the stream with state polling, and the
-subscribe-before-triggering rule they follow, are in
-[`AUTOMATION.md`](AUTOMATION.md#wait-on-events).
+Use `deviceterm wait` for one-shot convergence. Recipes for waits and the
+separate event-stream role are in
+[`AUTOMATION.md`](AUTOMATION.md#wait-for-device-state).
 
 ### Event Shape
 
@@ -1391,9 +1537,9 @@ rather than leaving it unread.
 
 ### Loss and Restart Behavior
 
-The stream has no replay or durable journal, and the CLI emits no public
-readiness record. Events published before a subscription is established are
-not delivered later.
+The stream has no replay or durable journal. Events published before a
+subscription is established are not delivered later. The streaming CLI emits
+no subscription-readiness record.
 
 Events can be lost when:
 
@@ -1406,8 +1552,10 @@ Events can be lost when:
 A daemon restart closes the stream, and the CLI exits successfully on EOF.
 Events published during the restart window are unavailable.
 
-Use list commands as the source of current truth. Use events as a low-latency
-notification that tells you when to refresh that state.
+Use list commands as the source of current truth. Use `deviceterm wait` when a
+script must block until one supported condition holds. Use events as a
+low-latency notification that tells a long-running consumer when to refresh
+state.
 
 ### Scope and Privacy
 

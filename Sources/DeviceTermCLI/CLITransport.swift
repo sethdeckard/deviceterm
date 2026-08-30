@@ -15,11 +15,26 @@ protocol CLITransport {
     /// body bytes. Throws a classified `CLIError` or `CLIError.daemon` on
     /// failure, matching the free `send(_:)`'s contract.
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data
+
+    /// Send an envelope whose contents depend on the time left after connection
+    /// setup. Production invokes `buildingEnvelope` after any env-credential
+    /// authentication; simple test transports may use the default eager form.
+    func send(
+        timeoutSeconds: Double,
+        buildingEnvelope: () throws -> RPCEnvelope
+    ) throws -> Data
 }
 
 extension CLITransport {
     /// Default 5-second response timeout, matching the free `send(_:)`.
     func send(_ envelope: RPCEnvelope) throws -> Data {
         try send(envelope, timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds)
+    }
+
+    func send(
+        timeoutSeconds: Double,
+        buildingEnvelope: () throws -> RPCEnvelope
+    ) throws -> Data {
+        try send(try buildingEnvelope(), timeoutSeconds: timeoutSeconds)
     }
 }

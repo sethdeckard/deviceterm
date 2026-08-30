@@ -1313,7 +1313,8 @@ is therefore a successful visibility projection, not an error.
 #### `panes.list`
 
 - Params: `{sessionId, cap}`
-- Result: bare array `[{paneId, udid, state, family, shortId, name?, capabilities, target}]`
+- Result: bare array
+  `[{paneId, udid, state, family, shortId, name?, capabilities, target, orientationConfirmationSupported?, orientation?, surface?}]`
 - Scope: session
 
 The panes the session may drive: its cohort's, plus its own unbound ones.
@@ -1325,6 +1326,38 @@ class; `capabilities` and `target` are as in `pane.create`.
 Backs `deviceterm panes list` and the CLI's pane resolution: input
 commands resolve their target paneId through this (default is the
 tab's sole device pane, `--pane` to disambiguate).
+
+`orientationConfirmationSupported` reports whether the current backend can
+produce confirmed orientation evidence. It is true for a Simulator with a live
+display-orientation observer and for a physical device whose relay reports
+rotation outcomes. `orientation` remains absent until the first confirmation.
+A true support signal with absent orientation means no confirmation has been
+observed yet.
+
+`surface`, when a current rendered surface exists, is
+`{sequence, width, height}`. `sequence` is the pane-local surface sequence and
+the dimensions are the IOSurface pixel dimensions. The support, orientation,
+and surface fields are optional for version skew.
+
+The CLI implements waits without another RPC method. It probes current state
+immediately, then at a non-overlapping 100 ms cadence until its monotonic
+deadline. Each RPC receives the smaller of the remaining overall time and its
+normal command-specific RPC ceiling. Authentication, response reads, and
+retryable session-readiness delays spend that single RPC deadline. When the
+remaining overall time is the limiting deadline, expiry becomes `wait.timeout`.
+An earlier command-specific RPC deadline remains `transport.timeout`. Other
+failed queries return immediately under their shared classifications.
+
+An explicit pane reference may appear after a wait starts. After the first
+resolution, the CLI pins the wait to that pane ID. AX waits pair each pane-list
+probe with one tree or sweep query. Orientation waits require two consecutive
+matching observations with stable positive surface dimensions.
+
+For a sweep-based AX wait, the CLI reduces the requested or default daemon work
+budget to the milliseconds remaining before the overall wait deadline. A wait
+that times out therefore does not leave a longer sweep holding the pane's
+accessibility queue, apart from an already in-flight bridge call that the
+daemon cannot interrupt.
 
 ### Devices
 

@@ -426,6 +426,33 @@ func run(
                 try CLICommands.axSweepRequest(paneId: $0, step: step, budgetMs: budgetMs)
             }
 
+        case let .waitPane(pane, state, timeoutMs):
+            return try handleWaitPane(
+                pane: pane,
+                state: state,
+                timeoutMs: timeoutMs,
+                transport: transport,
+                output: output
+            )
+
+        case let .waitAX(pane, query, timeoutMs):
+            return try handleWaitAX(
+                pane: pane,
+                query: query,
+                timeoutMs: timeoutMs,
+                transport: transport,
+                output: output
+            )
+
+        case let .waitOrientation(pane, orientation, timeoutMs):
+            return try handleWaitOrientation(
+                pane: pane,
+                orientation: orientation,
+                timeoutMs: timeoutMs,
+                transport: transport,
+                output: output
+            )
+
         case let .tabOpen(windowRef, cwd, cmd):
             return try sendWorkspaceMutation(
                 transport: transport,

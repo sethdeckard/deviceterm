@@ -30,4 +30,13 @@ public struct PaneInfo: Sendable, Equatable {
     public let capabilities: PaneCapabilities
     /// Backend-neutral identity + kind discriminator.
     public let target: PaneTarget
+    /// Whether the pane's current backend can produce confirmed orientation
+    /// evidence.
+    public let orientationConfirmationSupported: Bool
+    /// Latest confirmed orientation. Simulator panes derive it from
+    /// framebuffer observation; physical panes derive it from a completed
+    /// relay reply. Nil means no confirmed observation is available.
+    public let orientation: Orientation?
+    /// Current rendered surface metadata. Nil before a surface exists.
+    public let surface: PanesListEntry.Surface?
 }

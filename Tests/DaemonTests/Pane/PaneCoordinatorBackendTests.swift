@@ -430,6 +430,29 @@ func createPaneStartsFramesAndListsThePane() async throws {
 }
 
 @Test
+func panesListObservationCarriesConfirmedOrientationAndSurface() async throws {
+    let coordinator = PaneCoordinator()
+    let sessionId = UUID()
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    backend.displayOrientation = .landscapeRight
+    _ = try await coordinator.createMockPane(
+        udid: "pane-observation",
+        sessionId: sessionId,
+        backend: backend
+    )
+    let onSurface = try #require(backend.onSurface)
+    onSurface(try makeTestPublished())
+    #expect(await waitForPaneState(.rendering, sessionId: sessionId, coordinator: coordinator))
+
+    let listed = try #require(await coordinator.panesForSession(sessionId).first)
+    #expect(listed.orientationConfirmationSupported)
+    #expect(listed.orientation == .landscapeRight)
+    #expect(listed.surface?.sequence == 1)
+    #expect(listed.surface?.width == 4)
+    #expect(listed.surface?.height == 4)
+}
+
+@Test
 func textRoutesAsOneValidatedKeystrokeBatch() async throws {
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()

@@ -2,9 +2,9 @@
 
 Use the `deviceterm` CLI to control DeviceTerm itself: open and arrange tabs,
 panes, and windows, inspect workspace state, drive other tabs from an
-automation tab, and wait on events. The caller can be a person at a prompt,
-a script, an agent, or a program coordinating several agents; the commands
-and the rules are the same.
+automation tab, wait for device state, and consume events. The caller can be a
+person at a prompt, a script, an agent, or a program coordinating several
+agents; the commands and rules are the same.
 
 Run these commands from a shell inside a DeviceTerm tab. The tab provides the
 session identity that authorizes them.
@@ -20,7 +20,7 @@ promises behind every command here are defined in
 - [Control the Workspace](#control-the-workspace)
 - [Discover State](#discover-state)
 - [Drive Other Tabs](#drive-other-tabs)
-- [Wait on Events](#wait-on-events)
+- [Wait for Device State](#wait-for-device-state)
 
 ## Understand Tabs, Sessions, and Authority
 
@@ -362,131 +362,87 @@ than what the daemon has confirmed: it appears the moment you protect a tab,
 and it stays on through an unprotect the daemon hasn't confirmed, so it can
 disagree with the receipt's `committed` field while a change converges.
 
-## Wait on Events
+## Wait for Device State
 
-### Choose Polling or Events
+### Use Wait for One-Shot Convergence
 
-`deviceterm events` streams the current session's pane transitions and
-session close, plus global Simulator boot and shutdown transitions, one JSON
-object per line:
+Commands that trigger device changes can return before the resulting state is
+observable. Use `deviceterm wait` when the next action depends on that state:
+
+```sh
+xcrun simctl boot "$UDID"
+deviceterm wait pane rendering --pane "$UDID" --timeout 30000
+```
+
+The default deadline is 30000 milliseconds. `--pane` accepts the same pane
+references as input commands. An explicit pane reference may appear after the
+wait starts. Once a pane resolves, the wait stays pinned to that pane and fails
+if it disappears.
+
+Wait for an accessibility element after launching an app or sending input:
+
+```sh
+xcrun simctl launch "$UDID" com.example.App
+deviceterm wait ax --identifier login-button --role Button --pane "$UDID"
+```
+
+Match by exactly one of `--identifier` or `--label`. `--role` adds an exact
+role match. Tree observation is the default. On a family where the tree walk
+is unavailable, use a sweep:
+
+```sh
+deviceterm wait ax --label Continue --source sweep \
+  --step 0.05 --budget 20000 --pane "$UDID"
+```
+
+For a sweep wait, DeviceTerm reduces the requested or default sweep budget to
+the milliseconds remaining before the overall wait deadline. A timed-out wait
+does not leave a longer sweep occupying the pane's accessibility queue, except
+for an already in-flight bridge call that cannot be interrupted.
+
+A truncated sweep that did not find the element is inconclusive rather than
+proof that the element is absent.
+
+Wait for an observed orientation and a stable rendered surface:
+
+```sh
+deviceterm wait orientation landscape-left --pane "$UDID"
+```
+
+Orientation waits require two consecutive observations with the requested
+confirmed orientation and the same positive surface dimensions. This prevents
+a transient or degenerate surface read from being accepted as settled.
+
+The three outcome classes are distinct:
+
+- success: the condition was observed before the deadline;
+- `wait.timeout`, exit 124: the overall wait deadline expired;
+- another nonzero failure: the observation was unsupported, inconclusive, or
+  its state query failed.
+
+An individual RPC deadline remains `transport.timeout`. A malformed response,
+connection failure, pane ambiguity, or other query failure returns immediately
+under its shared error code and is neither retried nor remapped to
+`wait.timeout`.
+
+### Use Events as a Latency Signal
+
+`deviceterm events` streams the current session's pane transitions and session
+close, plus global Simulator boot and shutdown transitions, one JSON object per
+line:
 
 ```sh
 deviceterm events
 ```
 
-Treat the list commands as the source of current truth and the stream as a
-low-latency signal to refresh that truth. Event shapes, ordering, and loss
-behavior are defined in [Events](INTEGRATION.md#events).
+The stream has no replay or durable journal. Events published before the
+subscription is established are not delivered later, and a daemon restart
+closes the stream.
+
+Use `deviceterm wait` when correctness depends on reaching a final observable
+condition. Use events for long-running observation or as a low-latency signal
+to refresh current state. Event shapes, ordering, and loss behavior are defined
+in [Events](INTEGRATION.md#events).
 
 An external Simulator can emit boot and shutdown events while staying absent
 from `devices list`; use `xcrun simctl` when you need its metadata.
-
-### Subscribe Before Triggering Work
-
-The stream has no replay or durable journal. Events published before the
-subscription is established are not delivered later.
-
-This sequence can miss the rendering transition and wait forever:
-
-```sh
-xcrun simctl boot "$UDID"
-deviceterm events \
-  | jq --unbuffered \
-      'select(.type == "pane.stateChanged" and .state == "rendering")'
-```
-
-Starting the subscriber first reduces the race, but the CLI does not emit a
-public readiness record. A fixed delay cannot prove that the subscription is
-active.
-
-The following recipes run `simctl boot` synchronously. Their deadline begins
-after that command returns, so it bounds the rendering wait but does not bound
-a stalled boot command. Apply a command timeout appropriate to your automation
-environment if that failure mode must also be bounded.
-
-### Poll for the Final State
-
-Use current-state polling when you only need the final state:
-
-```sh
-UDID="<simulator-udid>"
-
-if ! xcrun simctl boot "$UDID"; then
-  printf 'failed to boot Simulator %s\n' "$UDID" >&2
-  exit 1
-fi
-
-deadline=$(( $(date +%s) + 30 ))
-while ! deviceterm panes list --json \
-    | jq -e --arg udid "$UDID" \
-        'any(.[];
-          (.udid | ascii_downcase) == ($udid | ascii_downcase)
-          and .state == "rendering"
-        )' \
-    >/dev/null; do
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    printf 'timed out waiting for Simulator %s\n' "$UDID" >&2
-    exit 1
-  fi
-  sleep 0.2
-done
-```
-
-### Combine Events With Current State
-
-For lower latency without an indefinite rendering wait, start the subscriber
-first and poll the same target as a fallback:
-
-```sh
-UDID="<simulator-udid>"
-EVENT_FILE="$(mktemp -t deviceterm-events)"
-
-deviceterm events > "$EVENT_FILE" &
-EVENTS_PID=$!
-
-cleanup_events() {
-  trap - EXIT HUP INT TERM
-  kill "$EVENTS_PID" 2>/dev/null || true
-  wait "$EVENTS_PID" 2>/dev/null || true
-  rm -f "$EVENT_FILE"
-}
-trap cleanup_events EXIT
-trap 'exit 1' HUP INT TERM
-
-if ! xcrun simctl boot "$UDID"; then
-  printf 'failed to boot Simulator %s\n' "$UDID" >&2
-  exit 1
-fi
-
-DEADLINE=$(( $(date +%s) + 30 ))
-while ! jq -e -s --arg udid "$UDID" \
-    'any(.[];
-      .type == "pane.stateChanged"
-      and (((.udid? // "") | ascii_downcase) == ($udid | ascii_downcase))
-      and .state == "rendering"
-    )' \
-    "$EVENT_FILE" >/dev/null 2>&1; do
-  deviceterm panes list --json \
-    | jq -e --arg udid "$UDID" \
-        'any(.[];
-          (.udid | ascii_downcase) == ($udid | ascii_downcase)
-          and .state == "rendering"
-        )' \
-    >/dev/null && break
-
-  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-    printf 'timed out waiting for Simulator %s to render\n' "$UDID" >&2
-    exit 1
-  fi
-
-  sleep 0.2
-done
-
-cleanup_events
-```
-
-The state query covers an event that fired before subscription readiness. It
-also provides the recovery path if the daemon restarts and closes the stream.
-
-The cleanup function stops the whole subscriber process and waits for it. The
-deadline bounds the rendering wait after `simctl boot` returns.

@@ -115,6 +115,9 @@ public enum CLICommand: Equatable, Sendable {
         step: Double?,
         budgetMs: Int?
         )
+    case waitPane(pane: String?, state: PaneLifecycle, timeoutMs: Int)
+    case waitAX(pane: String?, query: WaitAXQuery, timeoutMs: Int)
+    case waitOrientation(pane: String?, orientation: Orientation, timeoutMs: Int)
     /// Explicit help request: `deviceterm --help`, `deviceterm -h`, or
     /// `deviceterm help`. The command list and any known page write to
     /// stdout and exit 0; an unknown topic fails with suggestions.
@@ -352,4 +355,34 @@ public enum CLICommand: Equatable, Sendable {
         message:
         String?
         )
+
+    public enum WaitAXSource: String, Equatable, Sendable {
+        case tree
+        case sweep
+    }
+
+    public struct WaitAXQuery: Equatable, Sendable {
+        public let identifier: String?
+        public let label: String?
+        public let role: String?
+        public let source: WaitAXSource
+        public let step: Double?
+        public let budgetMs: Int?
+
+        public init(
+            identifier: String?,
+            label: String?,
+            role: String?,
+            source: WaitAXSource,
+            step: Double?,
+            budgetMs: Int?
+        ) {
+            self.identifier = identifier
+            self.label = label
+            self.role = role
+            self.source = source
+            self.step = step
+            self.budgetMs = budgetMs
+        }
+    }
 }

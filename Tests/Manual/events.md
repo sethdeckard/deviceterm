@@ -69,7 +69,7 @@ to a session-scoped CLI subscriber.
 | # | Action | Expected |
 |---|--------|----------|
 | 5.1 | `deviceterm events \| jq -c .` | Every line is valid JSON; jq prints them back out compactly without errors. |
-| 5.2 | Background `deviceterm events \| jq --unbuffered 'select(.type=="pane.stateChanged" and .state=="rendering")' \| head -n 1`, then boot a sim from the same shell. | Prints one JSON line when the pane reaches `rendering`, then exits cleanly. This manual ordering demonstrates the stream; production integrations also need the state-query fallback in `docs/AUTOMATION.md`. |
+| 5.2 | Background `deviceterm events \| jq --unbuffered 'select(.type=="pane.stateChanged" and .state=="rendering")' \| head -n 1`, then boot a sim from the same shell. | Prints one JSON line when the pane reaches `rendering`, then exits cleanly. This validates live event delivery only. The stream has no replay and is not a reliable wait primitive; use `deviceterm wait pane rendering` for synchronization. |
 | 5.3 | `deviceterm events --json`: confirm `--json` is accepted but no-op (the stream is always JSON). | Same output as bare `deviceterm events`. |
 
 ## 6. Connection teardown
@@ -94,7 +94,8 @@ to a session-scoped CLI subscriber.
 - §2: A CLI runner sees only its **own** session's lifecycle; another tab's `session.created` is not visible to it.
 - §3: Shutdown fires `device.shutdown` (and `pane.stateChanged{shutdown}` if applicable).
 - §4: Same-session multi-subscriber fan-out works.
-- §5: Output is jq-pipeable; boot-wait pattern via `head -n 1` works.
+- §5: Output is jq-pipeable; live `pane.stateChanged` delivery works, with no
+  claim that the stream is a wait primitive.
 - §6: Clean teardown on daemon EOF or Ctrl-C.
 - §7: Out-of-tab `events` is rejected with the must-run-inside-a-tab message.
 

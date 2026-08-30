@@ -7,16 +7,22 @@ import Foundation
 /// `roundTrip`, including the env-cred auto-auth handshake.
 struct UDSTransport: CLITransport {
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data {
-        guard let method = envelope.method else {
-            throw CLIError.classified(
-                code: .internalError,
-                message: "internal error: request envelope has no method"
-            )
+        try send(timeoutSeconds: timeoutSeconds) { envelope }
+    }
+
+    func send(
+        timeoutSeconds: Double,
+        buildingEnvelope: () throws -> RPCEnvelope
+    ) throws -> Data {
+        try roundTrip(timeoutSeconds: timeoutSeconds) {
+            let envelope = try buildingEnvelope()
+            guard let method = envelope.method else {
+                throw CLIError.classified(
+                    code: .internalError,
+                    message: "internal error: request envelope has no method"
+                )
+            }
+            return (method, paramsData(envelope))
         }
-        return try roundTrip(
-            method: method,
-            params: paramsData(envelope),
-            timeoutSeconds: timeoutSeconds
-        )
     }
 }

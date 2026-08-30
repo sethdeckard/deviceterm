@@ -3,9 +3,9 @@
 import Foundation
 import Testing
 
-// Drift guards for docs/AUTOMATION.md: the wait recipes keep normalized
-// UDID matching and the stalled-boot caveat, and the contents list stays in
-// step with the H2 sections.
+// Drift guards for docs/AUTOMATION.md: the wait recipes use the CLI primitive
+// rather than hand-written polling, and the contents list stays in step with
+// the H2 sections.
 
 private func locateAutomationGuide() -> URL? {
     let testFile = URL(fileURLWithPath: #filePath)
@@ -42,12 +42,14 @@ private func section(
 }
 
 @Test
-func automationGuideNormalizesSimulatorIDsInWaits() throws {
+func automationGuideUsesTheCLIWaitPrimitive() throws {
     let contents = try automationGuide()
-    let events = try section(named: "Wait on Events", in: contents)
-    let normalizationCount = events.components(separatedBy: "ascii_downcase").count - 1
-    #expect(normalizationCount == 6)
-    #expect(events.contains("does not bound\na stalled boot command"))
+    let waits = try section(named: "Wait for Device State", in: contents)
+    #expect(waits.contains("deviceterm wait pane rendering"))
+    #expect(waits.contains("deviceterm wait ax"))
+    #expect(waits.contains("deviceterm wait orientation"))
+    #expect(!waits.contains("while ! deviceterm"))
+    #expect(waits.contains("An individual RPC deadline remains `transport.timeout`"))
 }
 
 @Test

@@ -590,11 +590,18 @@ public enum CLICommands {
         if let raw = parsed.flags["budget"], Int(raw) == nil {
             return .usage(message: "deviceterm: --budget must be an integer (ms)")
         }
+        if let raw = parsed.flags["timeout"], Int(raw) == nil {
+            return .usage(message: "deviceterm: --timeout must be an integer (ms)")
+        }
         let durationMs = parsed.flags["duration"].flatMap { Int($0) }
         let holdMs = parsed.flags["hold"].flatMap { Int($0) }
         let velocity = parsed.flags["velocity"].flatMap { Double($0) }
         let step = parsed.flags["step"].flatMap { Double($0) }
         let budgetMs = parsed.flags["budget"].flatMap { Int($0) }
+        let timeoutMs = parsed.flags["timeout"].flatMap { Int($0) } ?? 30_000
+        if timeoutMs <= 0 {
+            return .usage(message: "deviceterm: --timeout must be greater than zero")
+        }
 
         switch verb {
         case "tabs":
@@ -649,7 +656,9 @@ public enum CLICommands {
                 holdMs: holdMs,
                 velocity: velocity,
                 step: step,
-                budgetMs: budgetMs
+                budgetMs: budgetMs,
+                flags: parsed.flags,
+                timeoutMs: timeoutMs
             ) ?? .usage(message: nil)
         }
     }

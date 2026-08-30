@@ -680,6 +680,87 @@ func parseRotateMissingArgIsUsage() {
 }
 
 @Test
+func parseWaitPaneUsesDefaultDeadline() {
+    #expect(
+        CLICommands.parse(["deviceterm", "wait", "pane", "rendering"])
+            == .waitPane(pane: nil, state: .rendering, timeoutMs: 30_000)
+    )
+}
+
+@Test
+func parseWaitPaneAcceptsTargetAndDeadline() {
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "pane", "shutdown",
+            "--pane", "phone", "--timeout", "2500"
+        ]) == .waitPane(pane: "phone", state: .shutdown, timeoutMs: 2_500)
+    )
+}
+
+@Test
+func parseWaitOrientationNormalizesTheValue() {
+    #expect(
+        CLICommands.parse(["deviceterm", "wait", "orientation", "landscape-left"])
+            == .waitOrientation(pane: nil, orientation: .landscapeLeft, timeoutMs: 30_000)
+    )
+}
+
+@Test
+func parseWaitAXIdentifierDefaultsToTree() {
+    let query = CLICommand.WaitAXQuery(
+        identifier: "save",
+        label: nil,
+        role: nil,
+        source: .tree,
+        step: nil,
+        budgetMs: nil
+    )
+    #expect(
+        CLICommands.parse(["deviceterm", "wait", "ax", "--identifier", "save"])
+            == .waitAX(pane: nil, query: query, timeoutMs: 30_000)
+    )
+}
+
+@Test
+func parseWaitAXSweepCarriesItsProbeOptions() {
+    let query = CLICommand.WaitAXQuery(
+        identifier: nil,
+        label: "Save",
+        role: "Button",
+        source: .sweep,
+        step: 0.2,
+        budgetMs: 800
+    )
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "ax", "--label", "Save", "--role", "Button",
+            "--source", "sweep", "--step", "0.2", "--budget", "800"
+        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000)
+    )
+}
+
+@Test(
+    "invalid waits are usage failures",
+    arguments: [
+        ["deviceterm", "wait"],
+        ["deviceterm", "wait", "pane", "settled"],
+        ["deviceterm", "wait", "orientation", "diagonal"],
+        ["deviceterm", "wait", "ax"],
+        ["deviceterm", "wait", "ax", "--identifier", "save", "--label", "Save"],
+        ["deviceterm", "wait", "ax", "--identifier", "save", "--source", "pixels"],
+        ["deviceterm", "wait", "ax", "--identifier", "save", "--step", "0.2"],
+        ["deviceterm", "wait", "pane", "rendering", "--timeout", "0"],
+        ["deviceterm", "wait", "pane", "rendering", "--timeout", "soon"]
+    ]
+)
+func invalidWaitIsUsage(argv: [String]) {
+    guard case .usage = CLICommands.parse(argv) else {
+        Issue.record("expected usage for \(argv)")
+        return
+    }
+}
+
+@Test
 func parseAxPointMissingCoordsIsUsage() {
     guard case .usage = CLICommands.parse(
         ["deviceterm", "ax", "point"]

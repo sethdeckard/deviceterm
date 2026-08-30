@@ -209,11 +209,44 @@ func fishScriptCoversButtonAndRotateEnums() {
 }
 
 @Test
+func everyShellCompletesWaitConditionsAndValues() {
+    for shell in Completions.Shell.allCases {
+        let script = Completions.script(for: shell)
+        for subVerb in ["pane", "ax", "orientation"] {
+            #expect(script.contains(subVerb), "\(shell) missing wait condition '\(subVerb)'")
+        }
+        for value in Completions.waitPaneValues {
+            #expect(script.contains(value), "\(shell) missing wait pane state '\(value)'")
+        }
+        for value in Completions.waitOrientationValues {
+            #expect(script.contains(value), "\(shell) missing wait orientation '\(value)'")
+        }
+        #expect(script.contains("tree"))
+        #expect(script.contains("sweep"))
+    }
+}
+
+@Test
+func fishNestedCompletionsUseExactPositionalPaths() {
+    let script = Completions.script(for: .fish)
+
+    #expect(script.contains("-n '__deviceterm_on_path wait' -a 'pane ax orientation'"))
+    #expect(script.contains("-n '__deviceterm_on_path wait pane'"))
+    #expect(script.contains("-n '__deviceterm_on_path wait orientation'"))
+    #expect(script.contains("-n '__deviceterm_on_path pane'"))
+    #expect(script.contains("-n '__deviceterm_on_path ax'"))
+    #expect(!script.contains("__fish_seen_subcommand_from wait"))
+}
+
+@Test
 func zshAndBashScriptsCoverFlagsWithDashDashSyntax() {
     // zsh's `_arguments` and bash's `compgen -W` both spell flags
     // as literal `--name`. fish's `complete -l name` uses the
     // bare-name form (no `--`); pinned separately below.
-    let flags = ["--duration", "--velocity", "--step", "--json"]
+    let flags = [
+        "--duration", "--velocity", "--step", "--timeout", "--identifier",
+        "--label", "--role", "--source", "--json"
+    ]
     for shell in [Completions.Shell.zsh, .bash] {
         let script = Completions.script(for: shell)
         for flag in flags {
@@ -231,7 +264,10 @@ func fishScriptCoversFlagsWithCompleteLNSyntax() {
     // dashes in the script form). The user still types `--name`,
     // but the script declares it bare.
     let script = Completions.script(for: .fish)
-    for flag in ["duration", "velocity", "step", "json"] {
+    for flag in [
+        "duration", "velocity", "step", "timeout", "identifier", "label",
+        "role", "source", "json"
+    ] {
         #expect(
             script.contains("-l \(flag)"),
             "fish script missing `-l \(flag)`"

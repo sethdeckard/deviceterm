@@ -237,6 +237,39 @@ extension HelpCatalog {
                   not evidence it isn't on screen.
                   Example: deviceterm ax sweep --step 0.02 --budget 20000
             """
+        ),
+        HelpTopic(
+            "wait",
+            .command(.inspect),
+            summary: "Block until an observable device condition holds",
+            detail: """
+              wait pane <booting|rendering|shutdown|failed>
+                        [--pane <ref>] [--timeout <ms>]
+                  Wait for a pane lifecycle state.
+                  Example: deviceterm wait pane rendering --pane phn001
+
+              wait ax (--identifier <value>|--label <value>) [--role <value>]
+                      [--source <tree|sweep>] [--step <0..1>]
+                      [--budget <ms>] [--pane <ref>] [--timeout <ms>]
+                  Wait for an exact AX identifier or label, optionally with an
+                  exact role. Tree is the default source. Step and budget apply
+                  only to sweep.
+                  For sweep, the requested or default budget is reduced to
+                  the time remaining before the overall wait deadline.
+                  Example: deviceterm wait ax --identifier login-button
+
+              wait orientation
+                   <portrait|portrait-upside-down|landscape-left|landscape-right>
+                   [--pane <ref>] [--timeout <ms>]
+                  Wait for two consecutive observations of the requested
+                  confirmed orientation with stable positive surface
+                  dimensions.
+                  Example: deviceterm wait orientation landscape-left
+
+              The default timeout is 30000 ms. An overall deadline returns
+              wait.timeout and exits 124. Unsupported or inconclusive
+              observation and query failures remain distinct nonzero outcomes.
+            """
         )
     ]
 }

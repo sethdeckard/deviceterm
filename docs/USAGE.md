@@ -520,6 +520,38 @@ A physical device that omits orientation from its reply fails with
 `rotate.confirmationUnsupported`. Turning it by hand remains invisible until a
 later DeviceTerm rotation returns an orientation.
 
+### Wait for Observable State
+
+Use `wait` when a launch, tap, boot, or external change returns before its
+result is observable:
+
+```sh
+deviceterm wait pane rendering --pane "$UDID"
+deviceterm wait ax --identifier save-button --role Button
+deviceterm wait orientation landscape-right
+```
+
+The default deadline is 30000 milliseconds. Override it with
+`--timeout <ms>`.
+
+`wait pane` observes `booting`, `rendering`, `shutdown`, or `failed`.
+`wait ax` matches an exact identifier or label, with an optional exact role,
+using `tree` by default or `sweep` when requested. `wait orientation` requires
+two consecutive observations of the requested confirmed orientation with the
+same positive surface dimensions.
+
+A sweep-based AX wait reduces the requested or default sweep budget to the time
+remaining before the overall wait deadline. A short wait therefore cannot leave
+a longer sweep holding the pane's accessibility queue after the CLI exits,
+except for an already in-flight bridge call.
+
+An overall deadline reports `wait.timeout` and exits 124. Unsupported
+observation and inconclusive AX coverage use their own nonzero error codes. A
+request reaching its earlier command-specific RPC deadline remains
+`transport.timeout`. Other transport, authentication, pane-resolution, and
+response-decoding failures retain their shared classifications and return
+immediately.
+
 ### Turn the Digital Crown
 
 Use `crown` with a watchOS Simulator:

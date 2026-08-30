@@ -13,6 +13,19 @@
 /// strings against this triple in the documented order
 /// (short_id → name → UUID prefix → sentinel).
 public struct PanesListEntry: Codable, Sendable, Equatable {
+    /// Stable-additive metadata for the pane's current rendered surface.
+    public struct Surface: Codable, Sendable, Equatable {
+        public let sequence: UInt64
+        public let width: Int
+        public let height: Int
+
+        public init(sequence: UInt64, width: Int, height: Int) {
+            self.sequence = sequence
+            self.width = width
+            self.height = height
+        }
+    }
+
     public let paneId: String
     public let udid: String
     public let state: PaneLifecycle
@@ -34,6 +47,15 @@ public struct PanesListEntry: Codable, Sendable, Equatable {
     /// Backend-neutral identity + kind discriminator. Optional for
     /// skew; backs the CLI `type` column and `--pane` device matching.
     public let target: PaneTarget?
+    /// Whether the pane's current backend can produce confirmed orientation
+    /// evidence. Optional for version skew.
+    public let orientationConfirmationSupported: Bool?
+    /// Latest confirmed orientation. Simulator panes derive it from
+    /// framebuffer observation; physical panes derive it from a completed
+    /// relay reply. Nil means no confirmed observation is available.
+    public let orientation: Orientation?
+    /// Current rendered surface metadata. Nil before a surface exists.
+    public let surface: Surface?
 
     public init(
         paneId: String,
@@ -43,7 +65,10 @@ public struct PanesListEntry: Codable, Sendable, Equatable {
         shortId: String? = nil,
         name: String? = nil,
         capabilities: PaneCapabilities? = nil,
-        target: PaneTarget? = nil
+        target: PaneTarget? = nil,
+        orientationConfirmationSupported: Bool? = nil,
+        orientation: Orientation? = nil,
+        surface: Surface? = nil
     ) {
         self.paneId = paneId
         self.udid = udid
@@ -53,5 +78,8 @@ public struct PanesListEntry: Codable, Sendable, Equatable {
         self.name = name
         self.capabilities = capabilities
         self.target = target
+        self.orientationConfirmationSupported = orientationConfirmationSupported
+        self.orientation = orientation
+        self.surface = surface
     }
 }

@@ -115,7 +115,7 @@ private func authenticateConnection(
     fd: Int32,
     sessionId: String,
     cap: String,
-    timeoutSeconds: Double
+    deadline: Date
 ) throws {
     let params = SessionAuthenticateParams(sessionId: sessionId, cap: cap)
     let envelope = RPCEnvelope(
@@ -132,7 +132,7 @@ private func authenticateConnection(
     }
     let response = try readOneEnvelope(
         fd: fd,
-        deadline: Date().addingTimeInterval(timeoutSeconds)
+        deadline: deadline
     )
     if case let .error(err) = response.body {
         throw CLIError.daemon(code: err.code, message: err.message)
@@ -148,32 +148,54 @@ private func authenticateConnection(
 /// not the daemon's `RPCMethodError`.
 private let notReadyCode = -32_002
 
-/// Connect, (auto-)authenticate, and round-trip one request, retrying briefly
-/// on `notReadyCode`, the only retryable authentication outcome. Each retry
-/// is a fresh connection (a new fd re-runs the auth handshake). A hard auth
-/// failure (`-32001`) or any other error is surfaced immediately, never
-/// retried.
+/// Connect, authenticate, and round-trip one request under one deadline,
+/// retrying only the daemon's provenance-not-ready response. Authentication,
+/// the command response, and readiness retry delays all spend
+/// `timeoutSeconds`; no phase restarts the deadline. Each retry uses a fresh
+/// connection, while hard authentication and other failures return
+/// immediately.
 func roundTrip(
     method: String,
     params: Data?,
     timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds
 ) throws -> Data {
+    try roundTrip(timeoutSeconds: timeoutSeconds) { (method, params) }
+}
+
+/// Connect, perform any env-credential authentication, then build the request.
+/// A readiness retry reconnects and invokes the builder again, allowing
+/// deadline-sensitive payloads to recalculate against their captured deadline.
+func roundTrip(
+    timeoutSeconds: Double,
+    buildingRequest: () throws -> (method: String, params: Data?)
+) throws -> Data {
     let maxNotReadyRetries = 10
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
     var attempt = 0
     while true {
+        guard deadline.timeIntervalSinceNow > 0 else {
+            throw CLIError.transportTimeout("timed out waiting for daemon response")
+        }
         do {
-            return try roundTripOnce(method: method, params: params, timeoutSeconds: timeoutSeconds)
+            return try roundTripOnce(deadline: deadline, buildingRequest: buildingRequest)
         } catch let CLIError.daemon(code, message) {
             guard code == notReadyCode, attempt < maxNotReadyRetries else {
                 throw CLIError.daemon(code: code, message: message)
             }
             attempt += 1
-            usleep(100_000)  // 100 ms between bounded retry attempts.
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else {
+                throw CLIError.transportTimeout("timed out waiting for daemon readiness")
+            }
+            usleep(useconds_t(max(1, min(remaining, 0.1) * 1_000_000)))
         }
     }
 }
 
-private func roundTripOnce(method: String, params: Data?, timeoutSeconds: Double) throws -> Data {
+private func roundTripOnce(
+    deadline: Date,
+    buildingRequest: () throws -> (method: String, params: Data?)
+) throws -> Data {
     let path = daemonSocketPath()
     let fd: Int32
     do {
@@ -194,12 +216,17 @@ private func roundTripOnce(method: String, params: Data?, timeoutSeconds: Double
             fd: fd,
             sessionId: session,
             cap: cap,
-            timeoutSeconds: timeoutSeconds
+            deadline: deadline
         )
     }
 
-    let body: RPCEnvelope.Body = params.map { .params($0) } ?? .empty
-    let envelope = RPCEnvelope(id: 1, type: .request, method: method, body: body)
+    guard deadline.timeIntervalSinceNow > 0 else {
+        throw CLIError.transportTimeout("timed out waiting for daemon response")
+    }
+
+    let request = try buildingRequest()
+    let body: RPCEnvelope.Body = request.params.map { .params($0) } ?? .empty
+    let envelope = RPCEnvelope(id: 1, type: .request, method: request.method, body: body)
     let frame: Data
     do {
         frame = try RPCFraming.encode(envelope.encode())
@@ -214,7 +241,7 @@ private func roundTripOnce(method: String, params: Data?, timeoutSeconds: Double
 
     let response = try readOneEnvelope(
         fd: fd,
-        deadline: Date().addingTimeInterval(timeoutSeconds)
+        deadline: deadline
     )
     switch response.body {
     case let .result(data):
@@ -779,7 +806,7 @@ func eventsStream() -> Never {
                     fd: eventsFd,
                     sessionId: creds.session,
                     cap: creds.cap,
-                    timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds
+                    deadline: Date().addingTimeInterval(AppCommandDeadline.cliRequestTimeoutSeconds)
                 )
             } catch let CLIError.daemon(code, _) where code == notReadyCode && attempt < maxNotReadyRetries {
                 UDSClientSocket.close(eventsFd)

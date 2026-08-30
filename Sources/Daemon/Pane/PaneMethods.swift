@@ -162,6 +162,12 @@ public enum PaneMethods {
         public let capabilities: PaneCapabilities
         /// Backend-neutral identity + kind discriminator.
         public let target: PaneTarget
+        /// Whether the pane can produce confirmed orientation evidence.
+        public let orientationConfirmationSupported: Bool
+        /// Latest confirmed orientation, when the backend has reported one.
+        public let orientation: Orientation?
+        /// Current rendered surface metadata, when a surface exists.
+        public let surface: DaemonProtocol.PanesListEntry.Surface?
     }
 
     // Event method names that flow through `pane.subscribe` are the
@@ -901,7 +907,10 @@ public enum PaneMethods {
                     shortId: $0.shortId,
                     name: $0.name,
                     capabilities: $0.capabilities,
-                    target: $0.target
+                    target: $0.target,
+                    orientationConfirmationSupported: $0.orientationConfirmationSupported,
+                    orientation: $0.orientation,
+                    surface: $0.surface
                 )
             }
             return try JSONEncoder().encode(entries)

@@ -26,14 +26,20 @@ func panesListEntryJSONContract() throws {
         shortId: "phn001",
         name: "Primary",
         capabilities: .simulator,
-        target: .sim(udid: "SIM")
+        target: .sim(udid: "SIM"),
+        orientationConfirmationSupported: true,
+        orientation: .landscapeLeft,
+        surface: .init(sequence: 42, width: 1_200, height: 800)
     )
     let expected = #"{"capabilities":{"accessibility":true,"button":true,"#
         + #""crown":true,"key":true,"location":true,"rotate":true,"text":true,"#
-        + #""touch":true},"family":"phone","name":"Primary","paneId":"PANE","#
-        + #""shortId":"phn001","state":"rendering","target":{"sim":{"udid":"SIM"}},"#
-        + #""udid":"SIM"}"#
-    #expect(try contractJSON(pane) == expected)
+        + #""touch":true},"family":"phone","name":"Primary","orientation":"landscapeLeft","#
+        + #""orientationConfirmationSupported":true,"#
+        + #""paneId":"PANE","#
+        + #""shortId":"phn001","state":"rendering","surface":{"height":800,"sequence":42,"#
+        + #""width":1200},"target":{"sim":{"udid":"SIM"}},"udid":"SIM"}"#
+    let actual = try contractJSON(pane)
+    #expect(actual == expected)
 
     let minimal = PanesListEntry(paneId: "P", udid: "U", state: .failed)
     #expect(try contractJSON(minimal) == #"{"paneId":"P","state":"failed","udid":"U"}"#)

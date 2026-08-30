@@ -2,8 +2,11 @@
 
 /// Wire shape for `pane.input.rotate`.
 ///
-/// Sets device orientation, either absolutely (`orientation`) or one 90°
-/// step from where the daemon believes the device is (`direction`).
+/// Sets device orientation either absolutely with `orientation` or relatively
+/// with `direction`. A Simulator resolves a relative direction from its latest
+/// confirmed framebuffer orientation. A physical device sends the direction
+/// directly and uses the relay-reported landing orientation as its target.
+///
 /// Exactly one is required. Both stay raw strings on the wire so the
 /// daemon validates them in the handler and an unknown value surfaces as
 /// `invalidParams` with the accepted set, rather than a generic decode

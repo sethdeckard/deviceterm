@@ -36,7 +36,9 @@ extension CLICommands {
         holdMs: Int?,
         velocity: Double?,
         step: Double?,
-        budgetMs: Int?
+        budgetMs: Int?,
+        flags: [String: String],
+        timeoutMs: Int
     ) -> CLICommand? {
         switch verb {
         case "tap":
@@ -173,6 +175,52 @@ extension CLICommands {
                 "usage: deviceterm ax tree | ax point <x> <y> "
                 + "| ax sweep [--step <0..1>] [--budget <ms>] [--pane <ref>]"
                 )
+
+        case "wait":
+            if pos.count == 2, pos[0] == "pane",
+                let state = PaneLifecycle(rawValue: pos[1]) {
+                return .waitPane(pane: pane, state: state, timeoutMs: timeoutMs)
+            }
+            if pos.count == 2, pos[0] == "orientation",
+                let orientation = parseEnumArg(pos[1], as: Orientation.self) {
+                return .waitOrientation(
+                    pane: pane,
+                    orientation: orientation,
+                    timeoutMs: timeoutMs
+                )
+            }
+            if pos == ["ax"] {
+                let identifier = flags["identifier"]
+                let label = flags["label"]
+                guard (identifier == nil) != (label == nil) else {
+                    return .usage(
+                        message: "deviceterm: wait ax requires exactly one of --identifier or --label"
+                    )
+                }
+                guard let source = CLICommand.WaitAXSource(rawValue: flags["source"] ?? "tree") else {
+                    return .usage(message: "deviceterm: --source must be tree or sweep")
+                }
+                if source == .tree, step != nil || budgetMs != nil {
+                    return .usage(
+                        message: "deviceterm: --step and --budget require --source sweep"
+                    )
+                }
+                return .waitAX(
+                    pane: pane,
+                    query: .init(
+                        identifier: identifier,
+                        label: label,
+                        role: flags["role"],
+                        source: source,
+                        step: step,
+                        budgetMs: budgetMs
+                    ),
+                    timeoutMs: timeoutMs
+                )
+            }
+            return .usage(
+                message: "usage: deviceterm wait <pane|ax|orientation> ... [--timeout <ms>]"
+            )
 
         default:
             return nil

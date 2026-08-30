@@ -3518,16 +3518,42 @@ public actor PaneCoordinator {
     public func panesForSession(_ sessionId: UUID, incarnation: UInt64? = nil) -> [PaneInfo] {
         panes.values
             .filter { cohortAdmits(record: $0, sessionId: sessionId, requestIncarnation: incarnation) }
-            .map { PaneInfo(
-                paneId: $0.id,
-                udid: $0.target.key,
-                state: $0.state,
-                family: $0.family,
-                shortId: $0.shortId,
-                name: $0.name,
-                capabilities: $0.capabilities,
-                target: $0.target
-            )
+            .map { record in
+                let orientationConfirmationSupported = record.backend.map { backend in
+                    guard backend.capabilities.rotate else { return false }
+                    return switch backend.rotationConfirmationSupport {
+                    case .displayObservation:
+                        record.observingDisplayOrientation
+
+                    case .commandReply:
+                        true
+
+                    case .unsupported:
+                        false
+                    }
+                } ?? false
+                let surface = record.currentSurface.map { published in
+                    published.surface.withRef { surface in
+                        PanesListEntry.Surface(
+                            sequence: record.lastSequence,
+                            width: IOSurfaceGetWidth(surface),
+                            height: IOSurfaceGetHeight(surface)
+                        )
+                    }
+                }
+                return PaneInfo(
+                    paneId: record.id,
+                    udid: record.target.key,
+                    state: record.state,
+                    family: record.family,
+                    shortId: record.shortId,
+                    name: record.name,
+                    capabilities: record.capabilities,
+                    target: record.target,
+                    orientationConfirmationSupported: orientationConfirmationSupported,
+                    orientation: record.confirmedOrientation,
+                    surface: surface
+                )
             }
             .sorted { $0.paneId.uuidString < $1.paneId.uuidString }
     }

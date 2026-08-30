@@ -4,7 +4,7 @@
 .\" `deviceterm help` renders. Update both together when adding or
 .\" renaming a verb; HelpCatalogTests guards the verb set, not the
 .\" prose, so the wording here is maintained by hand.
-.TH DEVICETERM 1 "2026-08-03" "deviceterm" "DeviceTerm Manual"
+.TH DEVICETERM 1 "2026-08-29" "deviceterm" "DeviceTerm Manual"
 .SH NAME
 deviceterm \- macOS terminal where Apple devices behave as first-class panes
 .SH SYNOPSIS
@@ -144,6 +144,28 @@ in the result, and adds a
 .B note
 saying what to try: a larger --budget, or a coarser --step when the budget
 was already at the ceiling.
+.SS Wait for state
+.TP
+.B wait pane " " \fIbooting\fR|\fIrendering\fR|\fIshutdown\fR|\fIfailed\fR " " [\fB--timeout\fR \fIms\fR]
+Block until the selected pane reaches the named lifecycle state.
+.TP
+.B wait ax " " (\fB--identifier\fR \fIvalue\fR|\fB--label\fR \fIvalue\fR) " " [\fB--role\fR \fIvalue\fR] " " [\fB--source\fR \fItree\fR|\fIsweep\fR] " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
+Block until an exact accessibility identifier or label appears, optionally
+with an exact role. Tree is the default source. Step and budget apply only
+to sweep. The sweep budget is reduced to the time remaining before the
+overall wait deadline.
+.TP
+.B wait orientation " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR " " [\fB--timeout\fR \fIms\fR]
+Block until two consecutive observations report the requested confirmed
+orientation with stable positive surface dimensions.
+.PP
+Every wait accepts
+.B --pane
+.IR ref .
+The default timeout is 30000 ms. An overall deadline reports
+.B wait.timeout
+and exits 124. Unsupported observation, inconclusive coverage, and query
+failures remain distinct.
 .SS Devices
 .TP
 .B devices list
@@ -164,7 +186,8 @@ This is the only explicit-attach verb; there is no
 .BR "pane attach" .
 .TP
 .B panes list
-List the calling tab's device panes.
+List the calling tab's device panes. JSON rows may include the latest
+confirmed orientation and current surface sequence and pixel dimensions.
 .SS Manage the workspace
 Back-channel verbs.
 .TP
@@ -355,7 +378,10 @@ warnings alone still exit 0.
 .TP
 .B events
 Subscribe to this session's event stream as one JSON object per line.
-Long-running; exits on daemon EOF or Ctrl-C.
+Long-running; exits on daemon EOF or Ctrl-C. The stream has no replay or
+subscription-ready record. Use
+.B wait
+for one-shot convergence.
 .TP
 .B version
 Print versions of deviceterm + daemon + RPC wire + macOS.
@@ -383,15 +409,26 @@ Print the workflow and triage guide: how a device pane attaches to a
 tab, recipes for the common automation shapes, and the permission model
 behind the errors the CLI returns.
 .SH OUTPUT
-Data commands (lists, receipts) support
+Data commands support
 .B --json
-for machine-readable output: lists become JSON arrays, receipts become
-JSON objects with the same fields as the human form. Successful output
-goes to stdout; errors stay on stderr in human form. Documentation
-commands
+for machine-readable output. Successful lists remain arrays and successful
+receipts remain their command-specific objects.
+.PP
+In JSON mode, every non-streaming invocation that fails after selecting JSON
+emits one newline-terminated object on stdout:
+.BR {"error":{"code":"stable.dottedCode","message":"diagnostic","details":{...}}} .
+The command preserves its stderr diagnostic and nonzero exit status. Branch on
+.B error.code
+rather than stderr prose or exit 1. Optional
+.B details
+are command-specific and stable-additive.
+.PP
+Documentation commands
 .RB ( --help ,
 .BR agents )
-are prose either way; AX commands always emit JSON.
+remain prose. AX commands always emit JSON. The
+.B events
+command remains a JSON Lines stream rather than a single document.
 .SH ENVIRONMENT
 .TP
 .B DEVICETERM_SESSION

@@ -4,8 +4,8 @@ import Foundation
 
 public enum DaemonEventType {
     /// Pane lifecycle transition (booting / rendering / shutdown).
-    /// Most common event source: agents watching for
-    /// `state == "rendering"` get boot-wait without polling.
+    /// Wait commands observe current state through `panes.list`; this
+    /// non-replayed event remains a separate latency signal.
     public static let paneStateChanged = "pane.stateChanged"
     /// A device has booted (shim-intercept or external simctl boot
     /// detected by the daemon). Carries the UDID.
