@@ -1433,7 +1433,18 @@ Two requirements, and the difference matters. `tab rename`,
 yours in the target tab. `tab close` and `window close` need **sole-terminal
 ownership**, meaning you hold the tab's only terminal, and for a window
 every tab in it must satisfy that. A live automation grant satisfies either
-one.
+one, for those five.
+
+`tab set-protected` is the exception, and it appears in neither list above.
+It needs ownership like `tab rename`, but a live grant doesn't substitute for
+it, because the owner gate ignores the grant bit.
+
+A non-owner of a tab it can resolve receives `intent.ownerRequired`, not
+`intent.automationRequired`. Sending that caller to an Automation Tab would
+point it down a path that still refuses.
+
+A tab the caller can't resolve fails earlier, as `intent.notFound`. See
+[Set Protection](#set-protection).
 
 Only the GUI issues a grant, and the CLI cannot grant authority to itself.
 The grant lifecycle is described in
