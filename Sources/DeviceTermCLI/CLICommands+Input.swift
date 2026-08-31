@@ -241,6 +241,15 @@ extension CLICommands {
                         message: "deviceterm: --step and --budget require --source sweep"
                     )
                 }
+                let printMode: CLICommand.WaitAXPrint?
+                if let raw = flags["print"] {
+                    guard let mode = CLICommand.WaitAXPrint(rawValue: raw) else {
+                        return .usage(message: "deviceterm: --print must be center")
+                    }
+                    printMode = mode
+                } else {
+                    printMode = nil
+                }
                 return .waitAX(
                     pane: pane,
                     query: .init(
@@ -253,7 +262,8 @@ extension CLICommands {
                         step: step,
                         budgetMs: budgetMs
                     ),
-                    timeoutMs: timeoutMs
+                    timeoutMs: timeoutMs,
+                    printMode: printMode
                 )
             }
             return .usage(

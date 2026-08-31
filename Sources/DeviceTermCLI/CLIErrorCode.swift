@@ -22,6 +22,8 @@ struct CLIErrorCode: RawRepresentable, Codable, Hashable, Sendable {
     static let waitTimeout = CLIErrorCode(rawValue: "wait.timeout")
     static let waitInconclusive = CLIErrorCode(rawValue: "wait.inconclusive")
     static let waitUnsupported = CLIErrorCode(rawValue: "wait.unsupported")
+    static let waitUnreachable = CLIErrorCode(rawValue: "wait.unreachable")
+    static let waitAmbiguous = CLIErrorCode(rawValue: "wait.ambiguous")
     static let rpcInvalidRequest = CLIErrorCode(rawValue: "rpc.invalidRequest")
     static let rpcMethodNotFound = CLIErrorCode(rawValue: "rpc.methodNotFound")
     static let rpcInvalidParams = CLIErrorCode(rawValue: "rpc.invalidParams")

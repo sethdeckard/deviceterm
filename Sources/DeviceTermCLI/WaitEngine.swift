@@ -253,7 +253,7 @@ enum WaitEngine {
 
         /// `JSONSerialization` hands back `NSNumber`, which bridges to either
         /// spelling depending on how the daemon serialized the frame.
-        private static func numeric(_ value: Any?) -> Double? {
+        static func numeric(_ value: Any?) -> Double? {
             if let double = value as? Double { return double }
             if let int = value as? Int { return Double(int) }
             return nil
@@ -356,12 +356,34 @@ func handleWaitAX(
     timeoutMs: Int,
     transport: CLITransport,
     output: OutputMode,
+    printMode: CLICommand.WaitAXPrint? = nil,
     creds: (sessionId: String, cap: String)? = nil,
     runtime: WaitEngine.Runtime = .live
 ) throws -> CommandOutcome {
+    if printMode != nil, output == .json {
+        // `--json` promises stdout is a JSON document and `--print` promises
+        // a bare coordinate. Refuse before any round-trip rather than pick
+        // one, because the two also disagree on failure: a JSON failure
+        // writes an envelope to stdout, where `--print` writes nothing.
+        return .failure(
+            code: .invalidUsage,
+            message: "--print cannot be combined with --json"
+        )
+    }
     // Build the matcher once per wait: every probe uses the same prepared
     // selector and optional value filter.
     let matcher = WaitEngine.AXMatcher(query: query)
+    if printMode == .center {
+        return try printAXTargetCentre(
+            pane: pane,
+            query: query,
+            matcher: matcher,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime
+        )
+    }
     return try handleWait(
         pane: pane,
         condition: "ax.appears",
@@ -391,6 +413,113 @@ func handleWaitAX(
             observation["matchesTruncated"] = true
         }
         return .satisfied(pane: entry, observation: observation)
+    }
+}
+
+/// Block until the query names one eligible coordinate target, then write
+/// its centre to stdout and nothing else.
+///
+/// Bare `<x> <y>` so the result can be passed as a coordinate verb's two
+/// positional arguments, with no receipt to strip first.
+///
+/// A refusal emits no coordinate for an argument-forwarding caller to pass to
+/// `tap`, because it must never be handed one the selection did not make.
+private func printAXTargetCentre(
+    pane: String?,
+    query: CLICommand.WaitAXQuery,
+    matcher: WaitEngine.AXMatcher?,
+    timeoutMs: Int,
+    transport: CLITransport,
+    creds: (sessionId: String, cap: String)?,
+    runtime: WaitEngine.Runtime
+) throws -> CommandOutcome {
+    // Carried out of the probe so a refusal can describe the observation the
+    // deadline ended on, which the probe itself has no way to return.
+    var lastMatches: [[String: Any]] = []
+    do {
+        let completion = try runWait(
+            pane: pane,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime
+        ) { entry, context in
+            let matches = try observeAXMatches(
+                entry: entry,
+                context: context,
+                query: query,
+                matcher: matcher,
+                transport: transport
+            )
+            lastMatches = matches
+            // A match list without a unique coordinate target is not the
+            // condition this mode waits for. Keeping it pending lets a control
+            // still sliding in arrive, and the deadline classifies what was
+            // seen.
+            guard case let .target(target) = AXTarget.select(from: matches) else {
+                return .pending
+            }
+            return .satisfied(
+                pane: entry,
+                observation: ["x": target.x, "y": target.y]
+            )
+        }
+        guard let x = completion.observation["x"] as? Double,
+            let y = completion.observation["y"] as? Double else {
+            throw CLIError.invalidResponse("wait ax produced no coordinate")
+        }
+        // Fixed notation, not `String(_:)`: the shortest round-trip spelling
+        // of a small coordinate is exponential ("5e-05"), which standard
+        // `bc` downstream cannot read.
+        return .stdout(String(format: "%.6f %.6f\n", x, y))
+    } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
+        return waitFailureOutcome(
+            axSelectionFailure(from: lastMatches) ?? failure,
+            condition: "ax.appears"
+        )
+    } catch let failure as WaitEngine.Failure {
+        return waitFailureOutcome(failure, condition: "ax.appears")
+    }
+}
+
+/// Reclassify a deadline according to what the last observation held.
+///
+/// Nil when nothing matched, leaving the deadline to report itself: there was
+/// no element to reach or to choose between.
+private func axSelectionFailure(from matches: [[String: Any]]) -> WaitEngine.Failure? {
+    guard !matches.isEmpty else { return nil }
+    let roles = Array(Set(matches.compactMap { $0["role"] as? String })).sorted()
+    switch AXTarget.select(from: matches) {
+    case .target:
+        // Selection succeeded on the last observation but the deadline had
+        // already passed. Report the deadline: no coordinate was printed.
+        return nil
+
+    case .unreachable:
+        return WaitEngine.Failure(
+            code: .waitUnreachable,
+            message: "matched \(matches.count) element(s), none eligible as a coordinate target",
+            exitCode: 1,
+            details: waitDetails([
+                "condition": "ax.appears",
+                "matchCount": matches.count,
+                "roles": roles
+            ])
+        )
+
+    case let .ambiguous(candidates):
+        return WaitEngine.Failure(
+            code: .waitAmbiguous,
+            message: "matched \(candidates.count) unrelated elements; "
+                + "narrow with --role, --value, or --identifier",
+            exitCode: 1,
+            details: waitDetails([
+                "condition": "ax.appears",
+                "matchCount": matches.count,
+                "candidateCount": candidates.count,
+                "roles": roles
+            ])
+        )
     }
 }
 

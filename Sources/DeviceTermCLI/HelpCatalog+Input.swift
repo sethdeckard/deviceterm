@@ -250,8 +250,9 @@ extension HelpCatalog {
 
               wait ax (--identifier <value>|--label <value>) [--role <value>]
                       [--value <value>] [--match <exact|contains>]
-                      [--source <tree|sweep>] [--step <0..1>] [--budget <ms>]
-                      [--pane <ref>] [--timeout <ms>]
+                      [--print center] [--source <tree|sweep>]
+                      [--step <0..1>] [--budget <ms>] [--pane <ref>]
+                      [--timeout <ms>]
                   Wait for an AX identifier or label, optionally with a role.
                   --match contains matches a substring and folds case; exact
                   is the default. --role is always exact. Tree is the default
@@ -269,8 +270,14 @@ extension HelpCatalog {
                   last, entries without a normalizedCenter rank next to
                   last, and smaller frames rank first, so matches[0] is
                   the element you are most likely able to operate. The
-                  order is a heuristic: to tap, take the first entry
-                  carrying a normalizedCenter.
+                  order is a heuristic, and matches[0] may carry no
+                  normalizedCenter. Use --print center to select one
+                  eligible element and write a bare "x y",
+                  for passing as a coordinate verb's two positional
+                  arguments; it refuses
+                  with wait.unreachable or wait.ambiguous rather than
+                  guess, and writes nothing when it does. --print
+                  cannot be combined with --json.
                   Example: deviceterm wait ax --label Messages --match contains
 
               wait orientation

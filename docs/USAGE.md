@@ -561,8 +561,9 @@ output reports only the count.
 An entry keeps any `normalizedCenter` its tree or sweep observation supplied,
 ready to pass to `tap`. That field is optional. Presentational roles rank last;
 within each tier, entries carrying a `normalizedCenter` rank ahead of those
-that do not. The ordering is a heuristic, so to tap, take the first entry that
-has a `normalizedCenter` rather than assuming `matches[0]` does.
+that do not. The ordering is a heuristic, and `matches[0]` may carry no
+`normalizedCenter` at all. To tap, use `--print center`, which writes a bare
+`x y` for the one element it selects, or refuses and writes nothing.
 
 A sweep-based AX wait reduces the requested or default sweep budget to the time
 remaining before the overall wait deadline. A short wait therefore cannot leave

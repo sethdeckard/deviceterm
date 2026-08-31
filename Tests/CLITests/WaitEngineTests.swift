@@ -159,6 +159,12 @@ private func axMatches(
     )
 }
 
+/// One element serialized as the JSON `ax tree` would carry.
+private func jsonText(_ element: [String: Any]) throws -> String {
+    let data = try JSONSerialization.data(withJSONObject: element, options: [.sortedKeys])
+    return try #require(String(data: data, encoding: .utf8))
+}
+
 /// An `Application` root containing the supplied element JSON, as `ax tree`
 /// frames it.
 private func axTree(_ elements: String) -> String {
@@ -1545,4 +1551,259 @@ func aTruncatedSweepForwardsTheFieldsItsNoteNames() throws {
     #expect(details["sweepedPoints"] as? Int == 137)
     #expect(details["step"] as? Double == 0.05)
     #expect(details["budgetMs"] as? Int == 10_000)
+}
+
+// MARK: - Selecting a coordinate target
+
+private func element(
+    role: String,
+    x: Double,
+    y: Double,
+    width: Double,
+    height: Double,
+    centre: (Double, Double)?,
+    label: String = "Go"
+) -> [String: Any] {
+    var element: [String: Any] = [
+        "role": role,
+        "label": label,
+        "frame": ["x": x, "y": y, "w": width, "h": height]
+    ]
+    if let centre {
+        element["normalizedCenter"] = ["x": centre.0, "y": centre.1]
+    }
+    return element
+}
+
+@Test
+func selectionTakesTheInnermostOfANestedChain() {
+    let outer = element(role: "Button", x: 0, y: 0, width: 100, height: 100, centre: (0.5, 0.5))
+    let inner = element(role: "Button", x: 10, y: 10, width: 20, height: 20, centre: (0.2, 0.2))
+
+    guard case let .target(target) = AXTarget.select(from: [outer, inner]) else {
+        Issue.record("nested candidates should select")
+        return
+    }
+    #expect(target.x == 0.2)
+}
+
+@Test
+func selectionRefusesDisjointCandidates() {
+    // Two unrelated controls matching one query. Nothing in the observation
+    // says which was meant, so picking either would be a guess.
+    let first = element(role: "Button", x: 0, y: 0, width: 20, height: 20, centre: (0.1, 0.1))
+    let second = element(role: "Button", x: 50, y: 50, width: 20, height: 20, centre: (0.8, 0.8))
+
+    guard case let .ambiguous(candidates) = AXTarget.select(from: [first, second]) else {
+        Issue.record("disjoint candidates should refuse")
+        return
+    }
+    #expect(candidates.count == 2)
+}
+
+@Test
+func selectionRefusesWhenOnlyACaptionCarriesACentre() {
+    // The ranking demotes a caption but still lists it. Selection is the
+    // stricter question: a caption is not the control.
+    let control = element(role: "Button", x: 0, y: 0, width: 100, height: 100, centre: nil)
+    let caption = element(role: "StaticText", x: 10, y: 10, width: 20, height: 20, centre: (0.2, 0.2))
+
+    #expect(AXTarget.select(from: [control, caption]) == .unreachable)
+}
+
+@Test
+func selectionWorksOnAFlatSweepResult() {
+    // `ax sweep` returns every element as a sibling, so a structural nesting
+    // test would call this disjoint and refuse it. Containment does not.
+    let card = element(role: "Button", x: 0, y: 0, width: 100, height: 100, centre: (0.5, 0.5))
+    let field = element(role: "TextField", x: 5, y: 5, width: 10, height: 10, centre: (0.1, 0.1))
+
+    guard case let .target(target) = AXTarget.select(from: [card, field]) else {
+        Issue.record("a contained sweep sibling should select")
+        return
+    }
+    #expect(target.role == "TextField")
+}
+
+@Test
+func containmentToleratesRoundingAtTheEdge() {
+    // Layout rounding can put a caption a fraction outside its control.
+    let outer = element(role: "Button", x: 0, y: 0, width: 100, height: 100, centre: (0.5, 0.5))
+    let inner = element(role: "Button", x: -0.5, y: 0, width: 20, height: 20, centre: (0.2, 0.2))
+
+    guard case .target = AXTarget.select(from: [outer, inner]) else {
+        Issue.record("a half-point overhang should still nest")
+        return
+    }
+}
+
+@Test
+func aChainHoldsEvenWhereTheToleranceDoesNotCompose() {
+    // Each step is inside the next within one epsilon, but the outermost is
+    // not within one epsilon of the innermost. Selection checks a chain
+    // rather than every pair, so this nests. Requiring every pair would
+    // refuse a legitimate three-deep nesting purely from accumulated
+    // rounding slack.
+    let outer = element(role: "Button", x: 0, y: 0, width: 100, height: 100, centre: (0.5, 0.5))
+    let middle = element(
+        role: "Button", x: -0.9, y: 0, width: 50, height: 50, centre: (0.3, 0.3)
+    )
+    let inner = element(
+        role: "Button", x: -1.8, y: 0, width: 20, height: 20, centre: (0.1, 0.1)
+    )
+
+    #expect(AXTarget.contains(outer, middle))
+    #expect(AXTarget.contains(middle, inner))
+    #expect(!AXTarget.contains(outer, inner))
+
+    guard case let .target(target) = AXTarget.select(from: [outer, middle, inner]) else {
+        Issue.record("a containment chain should select")
+        return
+    }
+    #expect(target.x == 0.1)
+}
+
+@Test
+func identicalFramesAreAChainNotAnAmbiguity() {
+    // Stacked elements share a rectangle, so the coordinate is the same
+    // either way and there is nothing to choose between.
+    let lower = element(role: "Button", x: 0, y: 0, width: 20, height: 20, centre: (0.3, 0.3))
+    let upper = element(role: "Link", x: 0, y: 0, width: 20, height: 20, centre: (0.3, 0.3))
+
+    guard case let .target(target) = AXTarget.select(from: [lower, upper]) else {
+        Issue.record("identical frames should select")
+        return
+    }
+    #expect(target.x == 0.3)
+}
+
+// MARK: - Printing a centre
+
+private func printCentreOutcome(
+    tree: String,
+    query: CLICommand.WaitAXQuery,
+    timeoutMs: Int = 1,
+    output: OutputMode = .human
+) throws -> CommandOutcome {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(tree.utf8))
+    ])
+    return try handleWaitAX(
+        pane: nil,
+        query: query,
+        timeoutMs: timeoutMs,
+        transport: transport,
+        output: output,
+        printMode: .center,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+}
+
+@Test
+func printCentreWritesABareCoordinate() throws {
+    let button = element(
+        role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.9016009521, 0.1243781)
+    )
+    let outcome = try printCentreOutcome(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Go")
+    )
+
+    // Fixed notation and nothing else, so the result can be passed as a
+    // coordinate verb's two positional arguments. `String(_:)` would spell a
+    // small value "5e-05".
+    #expect(String(data: outcome.stdout, encoding: .utf8) == "0.901601 0.124378\n")
+    #expect(outcome.exitCode == 0)
+    #expect(outcome.failure == nil)
+}
+
+@Test
+func printCentreRefusesWhenNothingIsReachable() throws {
+    let caption = element(
+        role: "StaticText", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5)
+    )
+    let outcome = try printCentreOutcome(
+        tree: axTree(try jsonText(caption)),
+        query: axQuery(label: "Go")
+    )
+
+    // Silence must never read as the origin, so a refusal writes nothing.
+    #expect(outcome.stdout.isEmpty)
+    #expect(outcome.failure?.code == .waitUnreachable)
+    #expect(outcome.exitCode == 1)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["roles"] as? [String] == ["StaticText"])
+}
+
+@Test
+func printCentreRefusesWhenCandidatesAreDisjoint() throws {
+    let first = element(role: "Button", x: 0, y: 0, width: 20, height: 20, centre: (0.1, 0.1))
+    let second = element(role: "Button", x: 50, y: 50, width: 20, height: 20, centre: (0.8, 0.8))
+    let outcome = try printCentreOutcome(
+        tree: axTree(try jsonText(first) + "," + jsonText(second)),
+        query: axQuery(label: "Go")
+    )
+
+    #expect(outcome.stdout.isEmpty)
+    #expect(outcome.failure?.code == .waitAmbiguous)
+    #expect(outcome.exitCode == 1)
+    #expect(try waitFailureDetails(outcome)["candidateCount"] as? Int == 2)
+}
+
+@Test
+func printCentreOnNoMatchStaysWaitTimeout() throws {
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try printCentreOutcome(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Absent")
+    )
+
+    // Nothing matched at all, which is the deadline's own story to tell.
+    #expect(outcome.stdout.isEmpty)
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+}
+
+@Test
+func printCentreWithJSONIsUsageBeforeAnyRequest() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([])
+
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Go"),
+        timeoutMs: 1,
+        transport: transport,
+        output: .json,
+        printMode: .center,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .invalidUsage)
+    // The driver prefixes a non-usage outcome's stderr, so the message must
+    // not carry its own or it reads "deviceterm: deviceterm: ...".
+    #expect(outcome.failure?.message.hasPrefix("deviceterm:") == false)
+    // The two disagree about stdout on failure as well as on success, so the
+    // refusal has to land before anything is observed.
+    #expect(transport.sent.isEmpty)
+}
+
+@Test
+func plainWaitAXStillSucceedsOnACaptionOnlyMatch() throws {
+    // Coordinate selection applies only to `--print center`; plain `wait ax`
+    // succeeds on any match, including a presentational-only one.
+    let caption = element(
+        role: "StaticText", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5)
+    )
+    let outcome = try axWaitOutcome(
+        tree: axTree(try jsonText(caption)),
+        query: axQuery(label: "Go")
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
 }

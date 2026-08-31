@@ -774,7 +774,7 @@ func parseWaitAXIdentifierDefaultsToTree() {
     )
     #expect(
         CLICommands.parse(["deviceterm", "wait", "ax", "--identifier", "save"])
-            == .waitAX(pane: nil, query: query, timeoutMs: 30_000)
+            == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil)
     )
 }
 
@@ -794,7 +794,7 @@ func parseWaitAXSweepCarriesItsProbeOptions() {
         CLICommands.parse([
             "deviceterm", "wait", "ax", "--label", "Save", "--role", "Button",
             "--source", "sweep", "--step", "0.2", "--budget", "800"
-        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000)
+        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil)
     )
 }
 
@@ -813,7 +813,7 @@ func parseWaitAXCarriesTheMatchMode(argv: [String]) {
         step: nil,
         budgetMs: nil
     )
-    #expect(CLICommands.parse(argv) == .waitAX(pane: nil, query: query, timeoutMs: 30_000))
+    #expect(CLICommands.parse(argv) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil))
 }
 
 @Test
@@ -834,7 +834,7 @@ func parseWaitAXCarriesTheValueFilter() {
         CLICommands.parse([
             "deviceterm", "wait", "ax", "--label", "Email",
             "--value", "probe@example.com"
-        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000)
+        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil)
     )
 }
 

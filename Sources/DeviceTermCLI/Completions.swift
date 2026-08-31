@@ -230,6 +230,7 @@ public enum Completions {
                 '--label[AX label to match]:value' \\
                 '--role[AX role to match]:value' \\
                 '--value[AX value to match]:value' \\
+                '--print[wait ax output: bare coordinate]:(center)' \\
                 '--match[AX match mode: exact or contains]:(exact contains)' \\
                 '--source[AX observation source: tree or sweep]:(tree sweep)' \\
                 '--json[machine-readable JSON output]'
@@ -336,7 +337,7 @@ public enum Completions {
         let flags = [
             "--duration", "--hold", "--velocity", "--step", "--budget",
             "--timeout", "--identifier", "--label", "--role", "--value", "--match",
-            "--source",
+            "--source", "--print",
             "--tab", "--pane", "--window", "--mode", "--to-tab",
             "--type-delay", "--all", "--json"
         ].joined(separator: " ")
@@ -566,6 +567,10 @@ public enum Completions {
         lines.append("complete -c deviceterm -l label -d 'AX label to match'")
         lines.append("complete -c deviceterm -l role -d 'AX role to match'")
         lines.append("complete -c deviceterm -l value -d 'AX value to match'")
+        lines.append(
+            "complete -c deviceterm -l print -d 'wait ax output: bare coordinate' "
+                + "-a 'center'"
+        )
         lines.append(
             "complete -c deviceterm -l match -d 'AX match mode: exact or contains' "
                 + "-a 'exact contains'"

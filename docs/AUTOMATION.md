@@ -424,8 +424,9 @@ Presentational roles rank last, entries with no `normalizedCenter` rank next to
 last, and smaller frames rank first, so `matches[0]` is the element you are
 most likely able to operate.
 
-The ordering is a heuristic. To tap, take the first entry that carries a
-`normalizedCenter` rather than assuming `matches[0]` does.
+The ordering is a heuristic. To tap, use `--print center` rather than picking
+from the list; it selects one eligible element and writes a bare `x y`, or
+refuses with `wait.unreachable` or `wait.ambiguous` and writes nothing.
 
 A truncated sweep that did not find the element is inconclusive rather than
 proof that the element is absent. The failure carries the daemon's note as its

@@ -264,15 +264,14 @@ public enum AgentsText {
         xcrun simctl launch "$UDID" com.example.App
         deviceterm wait ax --identifier login-button --role Button
         # --match contains reaches a label carrying a count or an
-        # ellipsis. Human output reports only matches=N, so read
-        # the matched elements with --json:
-        deviceterm wait ax --label Continue --match contains --json \\
-          | jq -e 'first(.observation.matches[]
-                         | select(.normalizedCenter)).normalizedCenter'
-        # matches lists up to 20 entries, most likely operable
-        # first; matchCount is the true total. The order is a
-        # heuristic, so select the first entry carrying a
-        # normalizedCenter rather than assuming matches[0] has one.
+        # ellipsis. To act on a match, print its centre:
+        deviceterm wait ax --label Continue --match contains --print center
+        # Writes a bare "x y" for the one eligible element it
+        # selects, to pass as tap's two positional
+        # arguments. Refuses with wait.unreachable or wait.ambiguous
+        # rather than guess, and writes nothing when it does. Read the
+        # full match list with --json; matches[0] is not guaranteed to
+        # carry a coordinate.
 
       Observe a long-running event stream:
         deviceterm events | jq --unbuffered \\

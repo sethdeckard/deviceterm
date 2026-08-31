@@ -1136,14 +1136,51 @@ Elements with no usable frame rank last within their group, and ties keep
 depth-first document order.
 
 The ordering is a heuristic. It cannot see whether an element is enabled,
-obscured, or behind a modal. To tap, take the first entry carrying a
-`normalizedCenter` rather than assuming `matches[0]` has one:
+obscured, or behind a modal, and `matches[0]` is not guaranteed to carry a
+`normalizedCenter`.
+
+To act on a match, use `--print center` instead of picking from the list:
 
 ```sh
-deviceterm wait ax --label Continue --match contains --json \
-  | jq -e 'first(.observation.matches[]
-                 | select(.normalizedCenter)).normalizedCenter'
+deviceterm wait ax --label Continue --match contains --print center
 ```
+
+It writes a bare `<x> <y>` and nothing else, ready to pass as a coordinate
+verb's two positional arguments.
+
+### Selecting a Coordinate Target
+
+`--print center` discards every match that is presentational or carries no
+`normalizedCenter`. A centreless element supplies no ready coordinate, and a
+presentational one is excluded so a caption never stands in for the control
+wrapping it, even though a caption often carries a perfectly good centre. If
+what
+remains nests, it takes the innermost, which is the control rather than the
+container holding it.
+
+Nesting is frame containment, not position in the walk. `ax sweep` returns
+every element as a sibling of a synthetic root, so a structural test would call
+every multi-match sweep disjoint.
+
+If the survivors do not nest, the wait refuses with `wait.ambiguous` rather
+than choosing. Two unrelated controls matching one query is a query that named
+two things. Narrow it with `--role`, `--value`, or `--identifier`.
+
+If nothing survives, the wait refuses with `wait.unreachable`.
+
+Both exit 1 and write nothing to stdout, so a refusal piped onward supplies no
+coordinate. Both carry `matchCount` and the distinct `roles` observed, which is
+usually enough to see that a caption matched and the control did not.
+
+Selection is geometric: it needs the survivors to form a containment chain,
+and refuses when they do not, whatever the cause. A selected element is
+reachable by coordinate rather than proven operable, because the observation
+cannot say whether it is enabled or obscured.
+
+`--print center` cannot be combined with `--json`, which is a usage error.
+`--json` promises stdout is a JSON document and `--print` promises a bare
+coordinate, and the two also disagree on failure, where `--json` writes an
+error envelope to stdout and `--print` writes nothing.
 
 Reporting `matchCount` separately is what makes a trimmed list visibly trimmed.
 Ranking runs before the cap, so the receipt keeps the 20 highest-ranked

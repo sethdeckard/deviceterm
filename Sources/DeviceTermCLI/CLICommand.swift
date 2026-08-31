@@ -116,7 +116,12 @@ public enum CLICommand: Equatable, Sendable {
         budgetMs: Int?
         )
     case waitPane(pane: String?, state: PaneLifecycle, timeoutMs: Int)
-    case waitAX(pane: String?, query: WaitAXQuery, timeoutMs: Int)
+    case waitAX(
+        pane: String?,
+        query: WaitAXQuery,
+        timeoutMs: Int,
+        printMode: WaitAXPrint?
+    )
     case waitOrientation(pane: String?, orientation: Orientation, timeoutMs: Int)
     /// Explicit help request: `deviceterm --help`, `deviceterm -h`, or
     /// `deviceterm help`. The command list and any known page write to
@@ -372,6 +377,15 @@ public enum CLICommand: Equatable, Sendable {
     public enum WaitAXMatchMode: String, Equatable, Sendable {
         case exact
         case contains
+    }
+
+    /// What `wait ax` writes to stdout instead of its usual receipt line.
+    ///
+    /// Valued rather than a bare `--center` switch because the parser only
+    /// recognizes value-taking flags; a presence-only flag arrives as a
+    /// positional and would weaken `wait ax`'s exact-arity guard.
+    public enum WaitAXPrint: String, Equatable, Sendable {
+        case center
     }
 
     public struct WaitAXQuery: Equatable, Sendable {

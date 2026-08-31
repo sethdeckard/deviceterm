@@ -435,13 +435,14 @@ func run(
                 output: output
             )
 
-        case let .waitAX(pane, query, timeoutMs):
+        case let .waitAX(pane, query, timeoutMs, printMode):
             return try handleWaitAX(
                 pane: pane,
                 query: query,
                 timeoutMs: timeoutMs,
                 transport: transport,
-                output: output
+                output: output,
+                printMode: printMode
             )
 
         case let .waitOrientation(pane, orientation, timeoutMs):
