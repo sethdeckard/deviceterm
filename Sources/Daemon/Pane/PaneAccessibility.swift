@@ -12,8 +12,8 @@ import Foundation
 /// (not Sendable), so serialization happens here synchronously and only
 /// `Data` (Sendable) crosses back. The coordinator resolves the backend
 /// (its one stateful step) and hands it here with whatever else the op
-/// needs off the record: the pane's immutable `family` for `tree`, a
-/// reader for its presentation orientation for `element` and `sweep`.
+/// needs off the record: the pane's immutable `family` for `tree`, and a
+/// reader for its presentation orientation, which all three ops take.
 enum PaneAccessibility {
     /// AXP's callback bridge waits synchronously for each simulator reply.
     /// Keep the whole read and JSON conversion on the pane's serial Dispatch
@@ -22,21 +22,33 @@ enum PaneAccessibility {
 
     /// Serialize the frontmost iOS app's accessibility tree to JSON
     /// bytes, annotated for `family`.
+    ///
+    /// `orientation` is read late, beside the tree rather than when the
+    /// request entered the actor, for the reason `element` documents: the
+    /// completeness probe hit-tests a point, and a rotation while this waited
+    /// its turn on the queue would map that point through the previous screen.
     static func tree(
         backend: any DeviceBackend,
         queue: BlockingWorkQueue,
         paneId: UUID,
-        family: DeviceFamily
+        family: DeviceFamily,
+        orientation: @escaping @Sendable () -> Orientation
     ) async throws -> Data {
         try await queue.run {
-            try treeSynchronously(backend: backend, paneId: paneId, family: family)
+            try treeSynchronously(
+                backend: backend,
+                paneId: paneId,
+                family: family,
+                orientation: orientation
+            )
         }
     }
 
     private static func treeSynchronously(
         backend: any DeviceBackend,
         paneId: UUID,
-        family: DeviceFamily
+        family: DeviceFamily,
+        orientation: @Sendable () -> Orientation
     ) throws -> Data {
         let tree: [String: Any]
         do {
@@ -50,7 +62,16 @@ enum PaneAccessibility {
                 message: BridgeMessage.unwrap(error)
             )
         }
-        let noted = AXTreeAnnotator.annotate(tree: tree, family: family)
+        let noted = AXTreeAnnotator.annotate(
+            tree: tree,
+            family: family,
+            probedElement: probeForOmittedElement(
+                backend: backend,
+                tree: tree,
+                family: family,
+                orientation: orientation
+            )
+        )
         let annotated = AXCoordinateAnnotator.tree(noted)
         do {
             return try JSONSerialization.data(
@@ -64,6 +85,61 @@ enum PaneAccessibility {
                 message: "tree is not JSON-serializable: \(BridgeMessage.unwrap(error))"
             )
         }
+    }
+
+    /// Hit-test the one point `AXTreeAnnotator` nominates, so it can tell a
+    /// tree that is thin because the screen is from one that is thin because
+    /// the walk stopped short. Returns evidence the caller may annotate with,
+    /// or nil when there was no point worth asking about, nothing was there,
+    /// or the finding did not survive confirmation.
+    ///
+    /// Failures are absorbed rather than raised. `objectAtPointNil` is the
+    /// bridge's routine "nothing here" and it shares a code with a systemic
+    /// fault, and the probe is advisory: one that could turn a successful
+    /// tree read into `bridgeFailed` would trade the verb for a hint.
+    ///
+    /// A screen whose tree covers the sample point spends nothing. One that
+    /// does not spends a hit-test, and spends a second tree read only when
+    /// that hit-test is about to become a claim.
+    private static func probeForOmittedElement(
+        backend: any DeviceBackend,
+        tree: [String: Any],
+        family: DeviceFamily,
+        orientation: @Sendable () -> Orientation
+    ) -> [String: Any]? {
+        guard let probe = AXTreeAnnotator.probePoint(for: tree, family: family) else { return nil }
+        let interface = AXSweep.interfaceSize(fromTree: tree)
+            ?? CGSize(width: 1, height: 1)
+        let pixelPoint = AXSweep.nativePixel(
+            displayed: probe,
+            orientation: orientation(),
+            interface: interface
+        )
+        guard let element = try? backend.accessibilityElement(at: pixelPoint),
+            AXTreeAnnotator.provesIncompleteness(element, of: tree)
+        else { return nil }
+        // The tree and the hit-test are separate bridge calls. This queue
+        // keeps DeviceTerm's own reads in order but cannot hold the app
+        // still, so a transition between the two answers about a screen the
+        // tree never described, and annotating then makes a claim about the
+        // wrong one.
+        //
+        // Re-read and require the tree to be unchanged. Asking only whether
+        // the element is missing from the second tree too is not enough: a
+        // move from a complete screen to an incomplete one satisfies that and
+        // still annotates the complete screen. What has to hold is that the
+        // walk and the hit-test describe the same moment, and an identical
+        // tree is the evidence for it.
+        //
+        // Paid only here, on the path that is about to assert something. Any
+        // change at all withdraws the finding, including a clock tick or an
+        // animation, which is the direction to fail in: a withdrawn finding
+        // leaves the response unannotated, and a note on a healthy screen
+        // sends a caller to a sweep it does not need.
+        guard let confirmation = try? backend.accessibilityFrontmostTree(),
+            (confirmation as NSDictionary) == (tree as NSDictionary)
+        else { return nil }
+        return element
     }
 
     /// Serialize the single AX element at a normalized point. Same

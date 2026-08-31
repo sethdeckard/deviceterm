@@ -706,6 +706,12 @@ On watchOS, the child walk used by `ax tree` can return an empty tree. Use
 `ax sweep` to sample the display, or `ax point` when you need the element at
 one known coordinate.
 
+`ax tree` can also come back thin rather than empty. Safari, for example,
+can return its own controls and nothing from the page. The daemon hit-tests
+one point the tree does not cover and adds a `note` when that point holds an
+element the tree missed. Detection is best-effort, so a thin tree can arrive
+without one. Use `ax sweep` either way.
+
 Physical-device panes do not expose an accessibility service. All three
 accessibility commands return an unsupported-operation error for them; see
 [Know the Physical-Device Limits](#know-the-physical-device-limits).
@@ -1160,6 +1166,7 @@ DeviceTerm reports a restart it could not perform rather than claiming one.
 | The GUI and CLI disagree after an upgrade | The live daemon wire version differs from the bundled RPC wire version, or the version probe failed. | Run `deviceterm version --json` and compare `daemon` with `rpcWire`; see [the version report](INTEGRATION.md#version-report). Quit and reopen DeviceTerm. |
 | Tabs, windows, and device panes all stop responding | The background helper stopped answering. | Wait for DeviceTerm's restart prompt, or choose **DeviceTerm ▸ Restart Helper…**; see [Restart the Background Helper](#restart-the-background-helper). |
 | `ax tree` is empty on watchOS | The watch accessibility bridge returned no children. | Use `ax sweep` to sample the display or `ax point` for a known coordinate. |
+| `ax tree` returns a page's chrome but nothing from the page | The child walk does not enter web views. A confirmed omission adds `noteCode` `ax.treeIncomplete`. | Use `ax sweep` to sample the display, or `ax point` for a known coordinate, whether or not the note appears. |
 | A Digital Crown command does not move a tight SwiftUI binding | Positively paced events are below the recognizer's transition in that environment. | Remove `--duration` first. For fine placement, try a single value from 1 through 8. |
 | A Simulator pane shows a shutdown overlay | The Simulator shut down outside DeviceTerm while its pane remained open. | Choose **Reboot**, boot the same UDID from the owning tab, or close the pane. |
 | Simulator.app opens a second presentation of the same Simulator | Simulator.app is running while DeviceTerm owns the display pane. | Quit Simulator.app, or set `simulator-app-advisory = suppress` when the duplicate presentation is intentional. |

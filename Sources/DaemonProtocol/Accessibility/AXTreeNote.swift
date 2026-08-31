@@ -31,6 +31,27 @@ public enum AXTreeNote: String, Codable, Sendable, Equatable, CaseIterable {
         // swiftlint:disable:next line_length
         "AX tree enumeration is unsupported on watchOS; use 'deviceterm ax sweep' to grid-walk via objectAtPoint, or 'deviceterm ax point <x> <y>' for a single element"
 
+    /// Hit-testing one point the walk left uncovered returned an element the
+    /// walk never produced, so the tree describes less than the screen holds
+    /// and an element's absence from it proves nothing.
+    ///
+    /// Named for the evidence rather than a cause. The observed case is a web
+    /// view: `AXPMacPlatformElement.accessibilityChildren` does not cross into
+    /// `WKWebView`'s out-of-process subtree, so Safari's tree stops at its own
+    /// chrome while `objectAtPoint:` reaches the page. That is what motivated
+    /// the note, not the limit of what it detects, and a name like
+    /// "web content" would have callers reading a diagnosis into a screen that
+    /// is thin for some other reason.
+    ///
+    /// Only a positive finding earns this. A point the hit-test declines, and
+    /// one that answers with an element the tree already carries, both leave
+    /// the response unannotated: under-reporting leaves a successful tree
+    /// response as it stands, while a note on a healthy screen sends a caller
+    /// to a sweep it does not need.
+    case treeIncomplete =
+        // swiftlint:disable:next line_length
+        "hit-testing found an element this tree does not contain, so the walk did not reach everything on screen; use 'deviceterm ax sweep' to grid-walk via objectAtPoint, or 'deviceterm ax point <x> <y>' for a single element"
+
     /// The sweep's budget went before it finished its grid, so `children`
     /// covers part of the screen and an element's absence proves nothing.
     /// The finest legal step plans enough cells to exhaust the default budget
@@ -78,6 +99,9 @@ public enum AXTreeNote: String, Codable, Sendable, Equatable, CaseIterable {
         switch self {
         case .watchOSEnumerationUnsupported:
             "ax.watchOSEnumerationUnsupported"
+
+        case .treeIncomplete:
+            "ax.treeIncomplete"
 
         case .sweepTruncated:
             "ax.sweepTruncated"

@@ -1354,6 +1354,26 @@ Both fields are DeviceTerm-owned and stable-additive, and they carry the same
 meanings here as in the sweep wrapper below. Branch on `noteCode`, which
 survives a rewording of the sentence; show `note`.
 
+`ax tree` can also return a tree that reads as complete and is not. The
+daemon hit-tests one point the walk left uncovered and may set `note`, with
+`noteCode` `ax.treeIncomplete`, when that point holds an element the tree
+does not carry. A web view is one known case: `ax tree`
+returns the browser's chrome and nothing from the page, while `ax sweep`
+reaches the content.
+
+Do not use an empty `children` array as the signal. This note can accompany
+a populated tree, and an empty tree on a non-watch pane can earn it too.
+Read `noteCode` whatever `children` holds.
+
+The note reports what a hit-test found, never why the walk stopped, so do
+not read a cause into it. It also under-reports: one point is sampled, a
+finding the daemon cannot confirm against a second read is dropped, and an
+element missing from an unannotated tree is still not proof the element is
+off screen.
+
+The daemon carries one note at a time. On watchOS the empty-walk note above
+wins.
+
 ### Sweep Wrapper
 
 `ax sweep` samples the screen with point queries, removes duplicate elements,

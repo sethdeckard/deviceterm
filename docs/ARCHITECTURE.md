@@ -2069,6 +2069,48 @@ annotates such responses with
 `tree.noteCode` carrying that case's short token. Agents enumerate
 via `pane.ax.sweep` instead.
 
+The daemon also checks the walk against a hit-test. When no node below the
+root covers the screen centre, it queries `objectAtPoint:` there once,
+mapping the point through the pane's presentation orientation as the other
+coordinate-bearing reads do, and sets
+`tree.note = AXTreeNote.treeIncomplete` alongside `tree.noteCode` if that
+returns an element the walk did not produce and a confirming read agrees.
+Safari on a rendered page is
+the case this was built for: the walk stops at the browser's own chrome
+while `objectAtPoint:` reaches the document.
+
+A probe result has to clear two tests to be annotated. Its frame must be
+usable and strictly inside the root's, which rejects both an element
+`objectAtPoint:` fell back to, whose frame is the root's, and anything
+reaching outside the screen. And it must be absent from the walk, compared
+by the sweep's `role|identifier|label|frame` identity, because an element
+already in the tree proves the opposite of the note.
+
+The probe spends a hit-test only on a screen whose tree covers nothing at
+the centre, and a second tree read only when that hit-test is about to
+become a claim. A covered centre spends neither, and neither does a watchOS
+tree that already earned the note above.
+
+The confirming read exists because the tree and the hit-test are separate
+bridge calls. The pane's queue orders DeviceTerm's own reads but cannot
+hold the app still, so a transition between the two answers about a screen
+the tree never described.
+
+The daemon re-reads and keeps the finding only when the tree comes back
+unchanged. Asking instead whether the element is missing from the second
+tree too would not settle it, because a move from a complete screen to an
+incomplete one satisfies that and still annotates the complete screen. Any
+change at all withdraws the finding, a clock tick included, which fails
+toward silence.
+
+Either bridge call may fail without failing the request. `objectAtPoint:`
+reports "nothing here" with the code it also uses for a systemic fault, and
+the probe is advisory, so one that could fail the call would trade the
+method for a hint. A confirming read that throws drops the finding rather
+than raising it.
+
+`note` and `noteCode` carry one value. The watchOS rule is checked first.
+
 #### `pane.ax.point`
 
 - Params: `{paneId, x, y}`

@@ -45,6 +45,10 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     var frontmostTree: [String: Any] = [:]
     /// What `accessibilityElement(at:)` answers after recording the query.
     var accessibilityElement: [String: Any] = [:]
+    /// Thrown by `accessibilityElement(at:)` instead of answering, after the
+    /// query is recorded. Covers the bridge's routine "no element here",
+    /// which shares a code with a systemic fault.
+    var accessibilityElementError: (any Error)?
     /// Runs at the start of `accessibilityFrontmostTree()`, so a test can
     /// move state that the read is supposed to observe *after* the tree
     /// rather than before it.
@@ -376,6 +380,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
             Thread.sleep(forTimeInterval: slow.seconds)
         }
         accessibilityPoints.append(pixelPoint)
+        if let accessibilityElementError { throw accessibilityElementError }
         return accessibilityElement
     }
 

@@ -3113,8 +3113,8 @@ public actor PaneCoordinator {
     //
     // As with input, backend resolution is the actor's only stateful step,
     // and `accessibilityTree` reads the pane's immutable `family` alongside
-    // it. The two point-addressed reads need `presentationOrientation`
-    // instead, and take it as a closure rather than a value: a read can wait
+    // it. Every read also needs `presentationOrientation`, and takes it as a
+    // closure rather than a value: a read can wait
     // on the pane's serial AX queue for as long as a grid walk takes, so
     // anything sampled here would describe a screen that may since have
     // turned. `Record` gates that property so the closure can run off the
@@ -3129,8 +3129,9 @@ public actor PaneCoordinator {
     func accessibilityTree(paneId: UUID, as principal: PaneAccessPrincipal) async throws -> Data {
         // `requireBackend` authorizes ownership and hands back the record,
         // so the family read below is a single authorized lookup; no
-        // second unauthorized `panes[paneId]` read. Unknown family safely
-        // falls through `AXTreeAnnotator` without annotation.
+        // second unauthorized `panes[paneId]` read. An unknown family skips
+        // only the watch-specific inference; the completeness probe is
+        // family-independent and can still annotate.
         let (record, backend) = try requireBackend(
             paneId: paneId,
             as: principal,
@@ -3142,7 +3143,8 @@ public actor PaneCoordinator {
             backend: backend,
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
-            family: family
+            family: family,
+            orientation: { [record] in record.presentationOrientation }
         )
         try revalidateAccessibility(
             record: record,

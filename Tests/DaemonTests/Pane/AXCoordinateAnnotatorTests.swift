@@ -100,7 +100,8 @@ func treeResponseAnnotatesItsRootAndChildren() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.coordinates.tree"),
         paneId: UUID(),
-        family: .phone
+        family: .phone,
+        orientation: { .portrait }
     )
     let tree = try decodedObject(data)
     let children = try #require(tree["children"] as? [[String: Any]])

@@ -61,6 +61,40 @@ func onlyTheCeilingNoteAvoidsRecommendingTheBudgetFlag() {
 }
 
 @Test
+func treeIncompleteRawValueIsStable() {
+    // Pinned like the notes above, because the sentence reaches agents as the
+    // literal at `tree["note"]`. Match by enum case or by `noteCode`, never by
+    // string equality: this text can be reworded and the code cannot.
+    #expect(
+        AXTreeNote.treeIncomplete.rawValue ==
+        // swiftlint:disable:next line_length
+        "hit-testing found an element this tree does not contain, so the walk did not reach everything on screen; use 'deviceterm ax sweep' to grid-walk via objectAtPoint, or 'deviceterm ax point <x> <y>' for a single element"
+    )
+}
+
+@Test
+func theIncompletenessNoteReportsEvidenceRatherThanACause() {
+    // The note is named and worded for what a hit-test proved, not for the
+    // web view that motivated it. A caller reading a diagnosis of "web" into a
+    // screen thin for some other reason is the failure this wording avoids.
+    let note = AXTreeNote.treeIncomplete.rawValue
+    #expect(note.contains("hit-testing"))
+    #expect(!note.lowercased().contains("web"))
+}
+
+@Test
+func everyNoteNamesACommandThatAdvancesTheCaller() {
+    // A note exists to move someone forward, so each one names the verb that
+    // does it. The house prose rules out em and en dashes, and
+    // `IntegrationGuideTests` applies the same guard to `docs/INTEGRATION.md`.
+    for note in AXTreeNote.allCases {
+        #expect(note.rawValue.contains("deviceterm ax "))
+        #expect(!note.rawValue.contains("\u{2014}"))
+        #expect(!note.rawValue.contains("\u{2013}"))
+    }
+}
+
+@Test
 func everyNoteCarriesAUniqueStableCode() {
     let codes = AXTreeNote.allCases.map(\.code)
     #expect(codes.allSatisfy { !$0.isEmpty })
@@ -68,6 +102,7 @@ func everyNoteCarriesAUniqueStableCode() {
     // Pinned like the raw values above: the code is the identity a JSON
     // client branches on, so a change here is a deliberate wire change.
     #expect(AXTreeNote.watchOSEnumerationUnsupported.code == "ax.watchOSEnumerationUnsupported")
+    #expect(AXTreeNote.treeIncomplete.code == "ax.treeIncomplete")
     #expect(AXTreeNote.sweepTruncated.code == "ax.sweepTruncated")
     #expect(AXTreeNote.sweepTruncatedAtMaxBudget.code == "ax.sweepTruncatedAtMaxBudget")
 }
