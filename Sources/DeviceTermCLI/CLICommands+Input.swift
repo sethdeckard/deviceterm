@@ -223,6 +223,16 @@ extension CLICommands {
                         message: "deviceterm: --match contains requires a non-empty --identifier or --label"
                     )
                 }
+                // `--value` narrows an element the caller already named. It
+                // needs no requires-a-selector check of its own: the
+                // exactly-one guard above already refuses a `wait ax` with
+                // neither `--identifier` nor `--label`.
+                let value = flags["value"]
+                if matchMode == .contains, value?.isEmpty == true {
+                    return .usage(
+                        message: "deviceterm: --match contains requires a non-empty --value"
+                    )
+                }
                 guard let source = CLICommand.WaitAXSource(rawValue: flags["source"] ?? "tree") else {
                     return .usage(message: "deviceterm: --source must be tree or sweep")
                 }
@@ -237,6 +247,7 @@ extension CLICommands {
                         identifier: identifier,
                         label: label,
                         role: flags["role"],
+                        value: value,
                         matchMode: matchMode,
                         source: source,
                         step: step,

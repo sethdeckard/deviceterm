@@ -87,12 +87,14 @@ private func axQuery(
     identifier: String? = nil,
     label: String? = nil,
     role: String? = nil,
+    value: String? = nil,
     matchMode: CLICommand.WaitAXMatchMode = .exact
 ) -> CLICommand.WaitAXQuery {
     CLICommand.WaitAXQuery(
         identifier: identifier,
         label: label,
         role: role,
+        value: value,
         matchMode: matchMode,
         source: .tree,
         step: nil,
@@ -109,6 +111,7 @@ private func axSweepQuery(
         identifier: nil,
         label: label,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .sweep,
         step: step,
@@ -520,6 +523,7 @@ func axWaitMatchesARecursiveElementOnALaterProbe() throws {
         identifier: "save",
         label: nil,
         role: "Button",
+        value: nil,
         matchMode: .exact,
         source: .tree,
         step: nil,
@@ -568,6 +572,7 @@ func axWaitReportsEveryMatchAcrossSubtrees() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .tree,
         step: nil,
@@ -901,6 +906,7 @@ func truncatedAXSweepWithoutAMatchIsInconclusive() throws {
         identifier: nil,
         label: "Save",
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .sweep,
         step: 0.2,
@@ -1052,6 +1058,7 @@ func axSweepBudgetIsBoundedByTheRemainingWait(requestedBudgetMs: Int?) throws {
         identifier: "save",
         label: nil,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .sweep,
         step: 0.2,
@@ -1094,6 +1101,7 @@ func axSweepBudgetExcludesConnectionAuthenticationTime() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .sweep,
         step: 0.2,
@@ -1131,6 +1139,7 @@ func malformedAXResponseFailsInsteadOfTimingOut() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .tree,
         step: nil,
@@ -1286,6 +1295,7 @@ func inaccessiblePaneWaitIsUnsupportedWithoutAnAXProbe() throws {
         identifier: "save",
         label: nil,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .sweep,
         step: 0.1,
@@ -1420,4 +1430,119 @@ func transportDeadlineNeverMasqueradesAsWaitDeadline() {
         #expect(failure?.code != .waitTimeout)
     }
     #expect(transport.sent.count == 1)
+}
+
+// MARK: - Value filtering
+
+/// Two fields sharing a label, distinguished only by what they hold, plus a
+/// third whose value is a number rather than a string.
+private let valueTreeElements = """
+    {"label":"Email","role":"TextField","value":"probe@example.com",
+     "frame":{"x":0,"y":0,"w":10,"h":10}},
+    {"label":"Email","role":"TextField","value":"someone@else.test",
+     "frame":{"x":0,"y":20,"w":10,"h":10}},
+    {"label":"Email","role":"StaticText","value":42,
+     "frame":{"x":0,"y":40,"w":10,"h":10}}
+    """
+
+@Test
+func valueNarrowsToTheFieldHoldingIt() throws {
+    // Typing into a field puts the text in its `value`, not its label, so a
+    // label-only query matches every field sharing that label.
+    let outcome = try axWaitOutcome(
+        tree: axTree(valueTreeElements),
+        query: axQuery(label: "Email", value: "probe@example.com")
+    )
+
+    let (matches, count) = try axMatches(outcome)
+    #expect(count == 1)
+    #expect(matches[0]["value"] as? String == "probe@example.com")
+}
+
+@Test
+func valueObeysTheSameMatchMode() throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(valueTreeElements),
+        query: axQuery(label: "Email", value: "PROBE@", matchMode: .contains)
+    )
+
+    let (matches, count) = try axMatches(outcome)
+    #expect(count == 1)
+    #expect(matches[0]["value"] as? String == "probe@example.com")
+}
+
+@Test
+func aNonStringValueNeverMatches() throws {
+    // The third element's value is a number. The comparison is textual, so
+    // it matches nothing rather than being coerced.
+    let outcome = try axWaitOutcome(
+        tree: axTree(valueTreeElements),
+        query: axQuery(label: "Email", value: "42"),
+        timeoutMs: 1
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+}
+
+// MARK: - Receipt completeness
+
+@Test
+func aTrimmedMatchListSaysSo() throws {
+    let children = (0..<25).map {
+        #"{"label": "Row", "frame": {"x": 0, "y": \#($0), "w": 10, "h": 10}}"#
+    }
+    let outcome = try axWaitOutcome(
+        tree: axTree(children.joined(separator: ",")),
+        query: axQuery(label: "Row")
+    )
+
+    let receipt = try waitOutputObject(outcome)
+    let observation = try #require(receipt["observation"] as? [String: Any])
+    #expect(observation["matchCount"] as? Int == 25)
+    #expect((observation["matches"] as? [[String: Any]])?.count == 20)
+    // Without this the caller has to know the cap out of band to notice.
+    #expect(observation["matchesTruncated"] as? Bool == true)
+}
+
+@Test
+func anUntrimmedMatchListOmitsTheFlag() throws {
+    let outcome = try axWaitOutcome(
+        tree: axTree(valueTreeElements),
+        query: axQuery(label: "Email")
+    )
+
+    let receipt = try waitOutputObject(outcome)
+    let observation = try #require(receipt["observation"] as? [String: Any])
+    #expect(observation["matchCount"] as? Int == 3)
+    #expect(observation["matchesTruncated"] == nil)
+}
+
+@Test
+func aTruncatedSweepForwardsTheFieldsItsNoteNames() throws {
+    let clock = WaitTestClock()
+    let sweep = #"""
+    {"tree":{"role":"AXSweepRoot","truncated":true,"children":[],
+     "sweepedPoints":137,"step":0.05,"budgetMs":10000}}
+    """#
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])), .success(Data(sweep.utf8))
+    ])
+
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axSweepQuery(label: "Absent"),
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    // The truncation note tells the reader to consult `sweepedPoints`, so
+    // the failure has to carry it rather than name a field it drops.
+    #expect(outcome.failure?.code == .waitInconclusive)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["sweepedPoints"] as? Int == 137)
+    #expect(details["step"] as? Double == 0.05)
+    #expect(details["budgetMs"] as? Int == 10_000)
 }

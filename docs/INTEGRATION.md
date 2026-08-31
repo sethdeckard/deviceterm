@@ -1071,10 +1071,16 @@ deviceterm wait ax --label Messages --match contains
 ```
 
 An empty `--identifier` or `--label` under `--match contains` is a usage error,
-because it matches every string-valued identifier or label.
+because it matches every string-valued identifier or label. An empty `--value`
+under `--match contains` is a usage error for the same reason.
 
 `--role` is always exact and case-sensitive, in both modes. A role names a
 fixed vocabulary rather than app-authored text.
+
+`--value` is a filter, not a selector. It ANDs onto `--identifier` or
+`--label` and compares under the same `--match` mode, because a value carries
+the same counts and ellipses a label does. A non-string value never matches:
+the comparison is textual.
 
 The walk finds every match rather than stopping at the first. It is
 depth-first, checking each `children` array from first to last, and it descends
@@ -1106,6 +1112,10 @@ The observation contains `source`, `matches`, and `matchCount`. `matches` holds
 the matched elements, up to 20 of them; `matchCount` is how many there were in
 total. A control and the caption inside it often share a label, so more than
 one match is ordinary rather than a caller error.
+
+`matchesTruncated` is present and `true` only when the list was trimmed.
+Without it a caller has to compare `matchCount` against a cap it can only read
+here.
 
 `matches` is ordered so `matches[0]` is the element you are most likely able to
 operate. Elements whose role is known to be presentational (`StaticText`,

@@ -397,8 +397,14 @@ deviceterm wait ax --identifier login-button --role Button --pane "$UDID"
 
 Match by exactly one of `--identifier` or `--label`. `--role` adds an exact
 role match. `--match contains` matches a substring and folds case, for a label
-carrying a count or an ellipsis. Tree observation is the default. On a family
-where the tree walk is unavailable, use a sweep:
+carrying a count or an ellipsis.
+
+`--value` adds a filter on the element's own value, compared under the same
+`--match` mode. It narrows an element the selector already named rather than
+selecting one itself.
+
+Tree observation is the default. On a family where the tree walk is
+unavailable, use a sweep:
 
 ```sh
 deviceterm wait ax --label Continue --source sweep \

@@ -62,7 +62,8 @@ enum VerbCatalog {
         Verb(
             "wait",
             valuedFlags: [
-                "pane", "timeout", "identifier", "label", "role", "match", "source", "step", "budget"
+                "pane", "timeout", "identifier", "label", "role", "value",
+                "match", "source", "step", "budget"
             ],
             subVerbs: ["pane", "ax", "orientation"]
         ),

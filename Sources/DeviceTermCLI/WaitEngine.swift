@@ -73,7 +73,8 @@ enum WaitEngine {
         let details: Data?
     }
 
-    /// A `wait ax` query with its needle folded once, ahead of the walk.
+    /// Prepares a `wait ax` query's selector and optional value filter once,
+    /// ahead of the tree walk.
     ///
     /// The walk visits every node of every probe for the life of the wait, so
     /// folding per node would repeat work the query fixes. Building this once
@@ -97,6 +98,11 @@ enum WaitEngine {
         /// modes. A role names a fixed vocabulary rather than app-authored
         /// text, so there is nothing for a substring to reach.
         let role: String?
+        /// Optional conjunct on the element's `value`, folded and compared
+        /// under the same mode as the primary selector, because a value is
+        /// app-authored text and carries the same counts and ellipses a
+        /// label does.
+        let value: String?
 
         /// Nil when the query names neither primary selector. The parser
         /// admits exactly one, so callers treat nil as matching nothing
@@ -111,28 +117,44 @@ enum WaitEngine {
                 return nil
             }
             attribute = primary.attribute
-            needle = query.matchMode == .contains
-                ? primary.needle.folding(options: Self.foldingOptions, locale: nil)
-                : primary.needle
+            needle = Self.folded(primary.needle, mode: query.matchMode)
             mode = query.matchMode
             role = query.role
+            value = query.value.map { Self.folded($0, mode: query.matchMode) }
+        }
+
+        /// A needle prepared for `mode`: folded once for `contains`, left
+        /// alone for `exact`.
+        private static func folded(
+            _ needle: String,
+            mode: CLICommand.WaitAXMatchMode
+        ) -> String {
+            mode == .contains
+                ? needle.folding(options: foldingOptions, locale: nil)
+                : needle
         }
 
         func matches(_ element: [String: Any]) -> Bool {
-            guard let candidate = element[attribute] as? String else { return false }
-            let primaryMatches: Bool
+            guard let candidate = element[attribute] as? String,
+                textMatches(candidate, needle) else { return false }
+            if let role, element["role"] as? String != role { return false }
+            guard let value else { return true }
+            // A non-string value never matches. The comparison is textual,
+            // and a caller asking for one has a string in hand.
+            guard let candidateValue = element["value"] as? String else { return false }
+            return textMatches(candidateValue, value)
+        }
+
+        private func textMatches(_ candidate: String, _ folded: String) -> Bool {
             switch mode {
             case .exact:
-                primaryMatches = candidate == needle
+                return candidate == folded
 
             case .contains:
-                primaryMatches = candidate
+                return candidate
                     .folding(options: Self.foldingOptions, locale: nil)
-                    .contains(needle)
+                    .contains(folded)
             }
-            guard primaryMatches else { return false }
-            guard let role else { return true }
-            return element["role"] as? String == role
         }
     }
 
@@ -337,8 +359,8 @@ func handleWaitAX(
     creds: (sessionId: String, cap: String)? = nil,
     runtime: WaitEngine.Runtime = .live
 ) throws -> CommandOutcome {
-    // Built once per wait, not per probe: the needle's folded form is a
-    // property of the query, and every probe walks the tree with it.
+    // Build the matcher once per wait: every probe uses the same prepared
+    // selector and optional value filter.
     let matcher = WaitEngine.AXMatcher(query: query)
     return try handleWait(
         pane: pane,
@@ -357,14 +379,18 @@ func handleWaitAX(
             transport: transport
         )
         guard !matches.isEmpty else { return .pending }
-        return .satisfied(
-            pane: entry,
-            observation: [
-                "source": query.source.rawValue,
-                "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
-                "matchCount": matches.count
-            ]
-        )
+        var observation: [String: Any] = [
+            "source": query.source.rawValue,
+            "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
+            "matchCount": matches.count
+        ]
+        // Present only when the list was trimmed, so a caller learns it from
+        // the receipt instead of comparing `matchCount` against a cap it can
+        // only read in prose.
+        if matches.count > WaitEngine.maxReportedMatches {
+            observation["matchesTruncated"] = true
+        }
+        return .satisfied(pane: entry, observation: observation)
     }
 }
 
@@ -478,6 +504,11 @@ private func observeAXMatches(
         ]
         if let daemonNote { details["note"] = daemonNote }
         if let code = daemonNoteCode ?? note?.code { details["noteCode"] = code }
+        // Forward the coverage count and the applied sweep settings so a
+        // caller can act on the truncation note from the failure receipt.
+        if let swept = root["sweepedPoints"] { details["sweepedPoints"] = swept }
+        if let step = root["step"] { details["step"] = step }
+        if let budgetMs = root["budgetMs"] { details["budgetMs"] = budgetMs }
         throw WaitEngine.Failure(
             code: .waitInconclusive,
             message: daemonNote ?? "AX sweep ended before covering the full grid",

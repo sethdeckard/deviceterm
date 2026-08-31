@@ -249,17 +249,22 @@ extension HelpCatalog {
                   Example: deviceterm wait pane rendering --pane phn001
 
               wait ax (--identifier <value>|--label <value>) [--role <value>]
-                      [--match <exact|contains>] [--source <tree|sweep>]
-                      [--step <0..1>] [--budget <ms>] [--pane <ref>]
-                      [--timeout <ms>]
+                      [--value <value>] [--match <exact|contains>]
+                      [--source <tree|sweep>] [--step <0..1>] [--budget <ms>]
+                      [--pane <ref>] [--timeout <ms>]
                   Wait for an AX identifier or label, optionally with a role.
                   --match contains matches a substring and folds case; exact
                   is the default. --role is always exact. Tree is the default
                   source. Step and budget apply only to sweep.
+                  --value narrows to an element whose own value matches,
+                  under the same --match mode. Typing into a field puts the
+                  text in its value, not its label, so --label names the
+                  field and --value asserts what it now reads.
                   For sweep, the requested or default budget is reduced to
                   the time remaining before the overall wait deadline.
                   With --json the receipt lists up to 20 matches under
-                  matches, with matchCount for the true total; human
+                  matches, with matchCount for the true total, and
+                  matchesTruncated when the list was trimmed; human
                   output reports only the count. Presentational roles rank
                   last, entries without a normalizedCenter rank next to
                   last, and smaller frames rank first, so matches[0] is

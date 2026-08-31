@@ -766,6 +766,7 @@ func parseWaitAXIdentifierDefaultsToTree() {
         identifier: "save",
         label: nil,
         role: nil,
+        value: nil,
         matchMode: .exact,
         source: .tree,
         step: nil,
@@ -783,6 +784,7 @@ func parseWaitAXSweepCarriesItsProbeOptions() {
         identifier: nil,
         label: "Save",
         role: "Button",
+        value: nil,
         matchMode: .exact,
         source: .sweep,
         step: 0.2,
@@ -805,12 +807,35 @@ func parseWaitAXCarriesTheMatchMode(argv: [String]) {
         identifier: argv.contains("--identifier") ? "save" : nil,
         label: argv.contains("--label") ? "Save" : nil,
         role: nil,
+        value: nil,
         matchMode: .contains,
         source: .tree,
         step: nil,
         budgetMs: nil
     )
     #expect(CLICommands.parse(argv) == .waitAX(pane: nil, query: query, timeoutMs: 30_000))
+}
+
+@Test
+func parseWaitAXCarriesTheValueFilter() {
+    // `--value` is an optional conjunct; the existing exactly-one check
+    // still requires a primary selector.
+    let query = CLICommand.WaitAXQuery(
+        identifier: nil,
+        label: "Email",
+        role: nil,
+        value: "probe@example.com",
+        matchMode: .exact,
+        source: .tree,
+        step: nil,
+        budgetMs: nil
+    )
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "ax", "--label", "Email",
+            "--value", "probe@example.com"
+        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000)
+    )
 }
 
 @Test(
@@ -825,6 +850,7 @@ func parseWaitAXCarriesTheMatchMode(argv: [String]) {
         ["deviceterm", "wait", "ax", "--identifier", "save", "--step", "0.2"],
         ["deviceterm", "wait", "ax", "--identifier", "save", "--match", "fuzzy"],
         ["deviceterm", "wait", "ax", "--label", "", "--match", "contains"],
+        ["deviceterm", "wait", "ax", "--label", "Save", "--value", "", "--match", "contains"],
         ["deviceterm", "wait", "ax", "--identifier", "", "--match", "contains"],
         ["deviceterm", "wait", "pane", "rendering", "--timeout", "0"],
         ["deviceterm", "wait", "pane", "rendering", "--timeout", "soon"]

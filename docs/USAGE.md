@@ -549,6 +549,10 @@ substring and folds case, for a label carrying an unread count or a truncation
 ellipsis. `wait orientation` requires two consecutive observations of the
 requested confirmed orientation with the same positive surface dimensions.
 
+`--value` narrows to an element whose own value matches, under the same
+`--match` mode. Typing into a field puts the text in its value rather than its
+label, so `--label` names the field and `--value` asserts what it now reads.
+
 A `wait ax` receipt lists the matched elements, ordered so the one you are most
 likely able to operate comes first. Read them with `--json`, which reports up
 to 20 entries under `matches` plus a `matchCount` for the true total. Human

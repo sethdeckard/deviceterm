@@ -378,6 +378,11 @@ public enum CLICommand: Equatable, Sendable {
         public let identifier: String?
         public let label: String?
         public let role: String?
+        /// Optional filter on the element's own `value`, never a selector of
+        /// its own. It narrows an element already named by `identifier` or
+        /// `label`, which is what lets a caller assert that the field it
+        /// identified now reads a particular string.
+        public let value: String?
         public let matchMode: WaitAXMatchMode
         public let source: WaitAXSource
         public let step: Double?
@@ -387,6 +392,7 @@ public enum CLICommand: Equatable, Sendable {
             identifier: String?,
             label: String?,
             role: String?,
+            value: String?,
             matchMode: WaitAXMatchMode,
             source: WaitAXSource,
             step: Double?,
@@ -395,6 +401,7 @@ public enum CLICommand: Equatable, Sendable {
             self.identifier = identifier
             self.label = label
             self.role = role
+            self.value = value
             self.matchMode = matchMode
             self.source = source
             self.step = step
