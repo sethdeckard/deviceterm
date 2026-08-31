@@ -142,8 +142,10 @@ enum PaneAccessibility {
         return element
     }
 
-    /// Serialize the single AX element at a normalized point. Same
-    /// dict shape as `tree` minus the `children` key.
+    /// Serialize the single AX element at a normalized point. Same dict shape
+    /// as `tree` minus the `children` key, plus `rootFrame`: the pre-flight
+    /// screen frame this element's `normalizedCenter` was divided by, omitted
+    /// when that root carried no usable frame.
     ///
     /// `(x, y)` is normalized in `[0, 1]` in displayed space, the same
     /// space the coordinate-bearing input verbs take, with the origin at
@@ -215,7 +217,13 @@ enum PaneAccessibility {
                 message: BridgeMessage.unwrap(error)
             )
         }
-        let annotated = AXCoordinateAnnotator.element(element, rootTree: rootTree)
+        var annotated = AXCoordinateAnnotator.element(element, rootTree: rootTree)
+        // The frame this element's `normalizedCenter` was divided by, from the
+        // same pre-flight read rather than from a second one the caller would
+        // have to issue and could not line up with this one.
+        if let rootFrame = AXCoordinateAnnotator.rootFrame(of: rootTree) {
+            annotated["rootFrame"] = rootFrame
+        }
         do {
             return try JSONSerialization.data(
                 withJSONObject: annotated,
@@ -245,6 +253,12 @@ enum PaneAccessibility {
     /// step actually used), `budgetMs` (the clamped budget it ran under),
     /// `sweepedPoints` (cells queried), and `truncated`, plus a `note` on
     /// the truncated ones.
+    ///
+    /// A fifth non-tree field, `rootFrame`, describes the screen instead of
+    /// the walk: the pre-flight frame each child's `normalizedCenter` was
+    /// divided by, so a caller can carry one back to displayed points. It is
+    /// omitted whenever the pre-flight produced no usable frame, including a
+    /// sweep that expired before the pre-flight ran at all.
     ///
     /// `truncated` is true when an expired deadline stopped the walk before
     /// its next query. That result covers part of the screen, so an element
@@ -344,6 +358,8 @@ enum PaneAccessibility {
                 paneId: paneId,
                 step: AXSweep.clampStep(step),
                 budgetMs: budgetMs,
+                // No pre-flight ran, so there is no screen frame to report.
+                rootFrame: nil,
                 unique: [],
                 swept: 0,
                 truncated: true
@@ -452,6 +468,7 @@ enum PaneAccessibility {
             paneId: paneId,
             step: clampedStep,
             budgetMs: budgetMs,
+            rootFrame: AXCoordinateAnnotator.rootFrame(of: rootTree),
             unique: annotated,
             swept: swept,
             truncated: cutShort
@@ -465,12 +482,16 @@ enum PaneAccessibility {
         paneId: UUID,
         step: Double,
         budgetMs: Int,
+        rootFrame: [String: Double]?,
         unique: [[String: Any]],
         swept: Int,
         truncated: Bool
     ) throws -> Data {
         var root: [String: Any] = [
             "role": "AXSweepRoot",
+            // Normalized, and deliberately not the screen: this root is
+            // synthetic and spans the grid the walk laid out. `rootFrame`
+            // carries the screen's own measurements.
             "frame": ["x": 0, "y": 0, "w": 1, "h": 1],
             "children": unique,
             "step": step,
@@ -483,6 +504,14 @@ enum PaneAccessibility {
             "sweepedPoints": swept,
             "truncated": truncated
         ]
+        // Absent rather than defaulted. A synthesized `{w: 1, h: 1}` reads
+        // exactly like a genuine 1x1 screen, so it would hide the one thing
+        // the caller needs to know here, which is that no usable frame was
+        // available: either the pre-flight never ran, or what it read could
+        // not be published.
+        if let rootFrame {
+            root["rootFrame"] = rootFrame
+        }
         // A sweep note follows truncation and the post-clamp budget, not the
         // tree shape and device family `AXTreeAnnotator` reads. The pure
         // selector is what keeps the ceiling case testable without spending

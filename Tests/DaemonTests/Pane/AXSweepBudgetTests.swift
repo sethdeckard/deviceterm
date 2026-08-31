@@ -68,6 +68,8 @@ func aSweepThatFinishesReportsItsWholeGrid() async throws {
     // rather than boilerplate every response carries.
     #expect(root["note"] == nil)
     #expect(root["noteCode"] == nil)
+    // A completed sweep reports the screen its pre-flight measured.
+    #expect(root["rootFrame"] is [String: Double])
 }
 
 @Test
@@ -85,6 +87,10 @@ func aSweepOutOfBudgetAnswersShortAndSaysSo() async throws {
     // the pane's accessibility queue with new bridge work.
     #expect(backend.accessibilityPoints.isEmpty)
     #expect(probes.calls == 0)
+    // Nobody measured the screen, so nothing is published about it. A
+    // synthesized placeholder would read like a genuine 1x1 screen and hide
+    // exactly the fact this response exists to report.
+    #expect(root["rootFrame"] == nil)
     // Still a well-formed wrapper, so a caller reads a partial answer
     // rather than a transport failure.
     #expect(root["role"] as? String == "AXSweepRoot")
@@ -169,8 +175,10 @@ func timeSpentWaitingForTheQueueComesOutOfTheBudget() async throws {
     #expect(root["truncated"] as? Bool == true)
     #expect(backend.accessibilityPoints.isEmpty)
     // Not even the pre-flight: that probe is a synchronous bridge call with
-    // no bound, so making it would hold the queue past the deadline.
+    // no bound, so making it would hold the queue past the deadline. Because
+    // the pre-flight did not run, there is no screen frame to publish.
     #expect(probes.calls == 0)
+    #expect(root["rootFrame"] == nil)
 }
 
 @Test

@@ -1261,6 +1261,29 @@ For `ax tree`, the tree root supplies the scale for every node. `ax point` and
 synthetic `AXSweepRoot` frame remains a 0,0,1,1 placeholder and is never used
 as the scale.
 
+`ax point` and `ax sweep` also hand back the frame they used, as `rootFrame`:
+
+```json
+"rootFrame": {"x": 0, "y": 0, "w": 400, "h": 800}
+```
+
+Multiply a `normalizedCenter` by `rootFrame.w` and `rootFrame.h` to get
+displayed points back.
+
+When present, it appears once per response, at the top of the `ax point`
+element and on the `ax sweep` root, and never on a nested child. `ax tree`
+doesn't carry it, because its own root `frame` is already the scale.
+
+`rootFrame` is omitted when the preflight root had no usable frame, and on a
+sweep that expired before its preflight. There is no placeholder,
+since a synthesized 1x1 frame would be indistinguishable from a real 1x1
+screen.
+
+Don't read its absence as "this response has no centres". An unscalable root
+omits both, but a root with usable dimensions and an unusable origin can still
+produce `normalizedCenter` for usable nodes while `rootFrame` stays absent.
+Check for each field on its own.
+
 ### Apple Node Dictionaries
 
 DeviceTerm wraps each accessibility result under a command-specific top-level
@@ -1324,6 +1347,12 @@ same recursive shape as an accessibility tree.
     "normalizedCenter": {
       "x": 0.2,
       "y": 0.1275
+    },
+    "rootFrame": {
+      "x": 0,
+      "y": 0,
+      "w": 400,
+      "h": 800
     }
   }
 }
@@ -1341,10 +1370,15 @@ stable-additive. Current nested node fields are:
 - `normalizedCenter` with normalized `x` and `y`, optional and DeviceTerm-owned
 - `children` on tree nodes
 
-With the exception of `normalizedCenter`, these dictionaries derive from
-private Apple accessibility frameworks. Their roles, values, nesting,
-availability, and field behavior are best-effort. `normalizedCenter` is a
-DeviceTerm-owned stable-additive field even though it appears inside the node.
+With the exception of `normalizedCenter` and `rootFrame`, these dictionaries
+derive from private Apple accessibility frameworks. Their roles, values,
+nesting, availability, and field behavior are best-effort. Both exceptions are
+DeviceTerm-owned stable-additive fields even though they appear inside the
+node.
+
+`rootFrame` is absent from the list above because it isn't a nested node field.
+It appears once, on the top-level `ax point` element and on the `ax sweep`
+root, and on no child.
 
 On watchOS, `ax tree` can return an empty `children` array even when elements
 are visible. The object under `tree` may include a diagnostic `note` directing
@@ -1389,6 +1423,12 @@ and returns a DeviceTerm-owned wrapper:
       "w": 1,
       "h": 1
     },
+    "rootFrame": {
+      "x": 0,
+      "y": 0,
+      "w": 400,
+      "h": 800
+    },
     "children": [],
     "step": 0.04,
     "budgetMs": 10000,
@@ -1403,7 +1443,8 @@ The synthetic object under `tree` has these stable-additive fields:
 | Field | Type | Meaning |
 |---|---|---|
 | `role` | string | Always `"AXSweepRoot"` |
-| `frame` | object | Normalized placeholder, always `0, 0, 1, 1`; not the screen's frame |
+| `frame` | object | Normalized placeholder, always `0, 0, 1, 1`; not the screen's frame, which is `rootFrame` |
+| `rootFrame` | object | The preflight screen frame in displayed points; omitted unless the preflight yielded a finite origin and positive finite dimensions |
 | `children` | array | Unique Apple accessibility nodes |
 | `step` | number | Clamped step used by the sweep |
 | `budgetMs` | integer | Clamped scheduling budget the walk ran under, in ms |
@@ -1419,7 +1460,8 @@ code. Compare `noteCode`; show `note`.
 The objects inside `children` remain best-effort Apple node dictionaries.
 Each usable object receives `normalizedCenter` using the preflight tree's real
 frame. The synthetic root itself never receives the field. A missing child
-`normalizedCenter` remains a successful partial result.
+`normalizedCenter` remains a successful partial result. `rootFrame` runs the
+other way: it belongs to the root alone and appears on no child.
 
 A successful empty `children` array with `truncated` false means the bridge
 responded but the sweep found no unique elements. A systemic bridge failure
@@ -1445,9 +1487,9 @@ predicting it. A sweep that truncates at the ceiling carries a different `note`,
 since raising the budget is no longer open to it.
 
 A sweep whose deadline passed before it reached the queue returns `truncated`
-true with `sweepedPoints` zero without querying the bridge at all, so that
-result says nothing about whether accessibility is reachable. Retry it when the
-pane is quieter.
+true with `sweepedPoints` zero without querying the bridge at all, and carries
+no `rootFrame`, since nothing measured the screen. That result says nothing
+about whether accessibility is reachable. Retry it when the pane is quieter.
 
 ## Automation
 

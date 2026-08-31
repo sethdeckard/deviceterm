@@ -673,6 +673,13 @@ response.
 for the sweep's preflight. The synthetic sweep root remains a normalized
 0,0,1,1 placeholder and has no `normalizedCenter`.
 
+`ax point` and `ax sweep` also report the screen they measured, as `rootFrame`.
+Multiply a `normalizedCenter` by its `w` and `h` for displayed points, instead
+of running a second `ax tree` for the size.
+
+It's omitted when the daemon couldn't measure the screen. `ax tree` never
+carries it, since its own root frame is the scale.
+
 A completed sweep makes `ceil(1/step)^2` point queries: 400 at the 0.05
 default, 2500 at the 0.02 floor. Steps outside `[0.02, 0.5]` are clamped
 silently, so read `step` in the result for what the daemon actually used.

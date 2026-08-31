@@ -2051,7 +2051,36 @@ keeps the result only when both coordinates fall inside the inclusive 0 through
 `pane.ax.tree` uses its returned root as that scale. `pane.ax.point` and
 `pane.ax.sweep` read the frontmost tree during their existing preflight and use
 it to annotate the point result or unique sweep children. The synthetic sweep
-root is not annotated.
+root is not annotated with a `normalizedCenter`.
+
+Those two methods also publish the preflight frame itself, as `rootFrame`: a
+`{x, y, w, h}` object in displayed points, on the point element and on the
+sweep root.
+
+Multiplying a `normalizedCenter` by its `w` and `h` recovers the displayed
+centre. A caller that needs the screen scale can take it from here rather than
+from a second `pane.ax.tree`, which would be a separate read of a screen that
+may have moved between the two.
+
+The daemon rebuilds `rootFrame` from validated numbers rather than echoing the
+root's own `frame`. A null Apple frame carries an infinite origin, and
+`JSONSerialization` raises an uncatchable Objective-C exception on a non-finite
+number instead of returning an error, so passing one through would abort the
+daemon.
+
+`rootFrame` is omitted when the preflight root carried no usable frame, and
+when a sweep expired before its preflight and read no root at all.
+It is never defaulted, because a synthesized `{w: 1, h: 1}` reads exactly like
+a genuine 1x1 screen.
+
+One asymmetry with `normalizedCenter` is deliberate. A root whose width and
+height are usable while its origin is not can still produce centres, since the
+scale never reads the root's origin, and still omits `rootFrame`. The caller
+loses a convenience rather than receiving a repaired number.
+
+`pane.ax.tree` publishes no `rootFrame`, because its own root frame is the
+scale. The daemon strips the key from every node it annotates, so a colliding
+framework value never reaches a caller.
 
 #### `pane.ax.tree`
 
@@ -2119,7 +2148,7 @@ than raising it.
 
 Returns the element under the normalized 0 through 1 point. The element carries
 `normalizedCenter` when its frame and the preflight root produce an on-screen
-centre.
+centre, and `rootFrame` when that preflight root was measurable.
 
 #### `pane.ax.sweep`
 
@@ -2140,13 +2169,14 @@ wait, receives no payload.
 
 The result shape mirrors
 `pane.ax.tree` with a synthetic root `{role: "AXSweepRoot",
-frame: {x:0,y:0,w:1,h:1}, children: [unique elements], step, budgetMs,
-sweepedPoints, truncated}`. The `step` and `budgetMs` fields echo the
+frame: {x:0,y:0,w:1,h:1}, rootFrame?, children: [unique elements], step,
+budgetMs, sweepedPoints, truncated}`. The `step` and `budgetMs` fields echo the
 actually-used post-clamp values.
 
 Each usable child carries `normalizedCenter` computed from the preflight tree.
 The synthetic root's placeholder frame is retained and the root has no
-`normalizedCenter`.
+`normalizedCenter`. `rootFrame` beside that placeholder is the preflight screen
+those centres were divided by.
 
 The deadline is `budgetMs`: the caller's, defaulting to 10 000 and clamped into
 `[0, 60 000]`. The ceiling exists because the walk holds the pane's AX queue for
