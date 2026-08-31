@@ -171,6 +171,13 @@ private func axTree(_ elements: String) -> String {
     #"{"tree":{"role":"Application","children":[\#(elements)]}}"#
 }
 
+/// A sweep root that stopped before covering its grid, containing the supplied
+/// element JSON.
+private func truncatedSweep(_ elements: String) -> String {
+    #"{"tree":{"role":"AXSweepRoot","truncated":true,"sweepedPoints":137,"#
+        + #""step":0.05,"budgetMs":10000,"children":[\#(elements)]}}"#
+}
+
 @Test
 func paneWaitProbesImmediatelyAndSucceeds() throws {
     let clock = WaitTestClock()
@@ -1790,6 +1797,391 @@ func printCentreWithJSONIsUsageBeforeAnyRequest() throws {
     // The two disagree about stdout on failure as well as on success, so the
     // refusal has to land before anything is observed.
     #expect(transport.sent.isEmpty)
+}
+
+// MARK: - Tapping the selected element
+
+/// Run one `tap --label` against a fixed tree. The third scripted response is
+/// the tap ack, which a refusing run never reaches.
+private func tapElementRun(
+    tree: String,
+    query: CLICommand.WaitAXQuery,
+    output: OutputMode = .human
+) throws -> (outcome: CommandOutcome, sent: [RPCEnvelope]) {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(tree.utf8)),
+        .success(Data(#"{"ok":true}"#.utf8))
+    ])
+    let outcome = try handleTapElement(
+        pane: nil,
+        query: query,
+        timeoutMs: 1,
+        transport: transport,
+        output: output,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+    return (outcome, transport.sent)
+}
+
+@Test
+func tapBySelectorHitsTheSelectedElement() throws {
+    let button = element(
+        role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.9016009521, 0.1243781)
+    )
+    let (outcome, sent) = try tapElementRun(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Go")
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(sent.last?.method == RPCMethod.paneInputTap.rawValue)
+    guard case let .params(data) = try #require(sent.last).body else {
+        Issue.record("tap request should carry params")
+        return
+    }
+    let params = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    // The coordinate `--print center` would have written, sent straight to
+    // the daemon instead of through the shell.
+    #expect(params["x"] as? Double == 0.9016009521)
+    #expect(params["y"] as? Double == 0.1243781)
+    // The pane the wait resolved, not one resolved a second time.
+    #expect(params["paneId"] as? String == "PANE")
+}
+
+@Test
+func tapBySelectorEchoesTheElementWithoutItsLabel() throws {
+    let button = element(
+        role: "Button",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        centre: (0.9016009521, 0.1243781),
+        label: "Continue with Apple"
+    )
+    let (outcome, _) = try tapElementRun(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Continue with Apple")
+    )
+
+    // The echo line is space-separated `key=value` and is read by column
+    // position, so a label with spaces would shift every field after it.
+    #expect(
+        String(data: outcome.stdout, encoding: .utf8)
+        == "ok udid=DEVICE pane=abc123 x=0.901601 y=0.124378 role=Button matches=1\n"
+    )
+}
+
+@Test
+func tapBySelectorDropsARoleItCannotPrintUnquoted() throws {
+    let button = element(
+        role: "Text Field", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5)
+    )
+    let (outcome, _) = try tapElementRun(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Go")
+    )
+
+    // An absent `role=` is visible to a reader; a shifted column is not.
+    let line = try #require(String(data: outcome.stdout, encoding: .utf8))
+    #expect(!line.contains("role="))
+    #expect(line.contains("matches=1"))
+}
+
+@Test
+func tapBySelectorJSONCarriesTheElementItChose() throws {
+    let button = element(
+        role: "Button",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        centre: (0.25, 0.75),
+        label: "Continue with Apple"
+    )
+    let (outcome, _) = try tapElementRun(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Continue with Apple"),
+        output: .json
+    )
+
+    let receipt = try waitOutputObject(outcome)
+    #expect(receipt["x"] as? Double == 0.25)
+    #expect(receipt["role"] as? String == "Button")
+    // The label has somewhere to go in JSON, unlike the echo line.
+    #expect(receipt["label"] as? String == "Continue with Apple")
+    #expect(receipt["matchCount"] as? Int == 1)
+}
+
+@Test(
+    "a refused selection sends no tap",
+    arguments: [
+        (
+            "StaticText", 0.0, 0.0, "unreachable",
+            CLIErrorCode.waitUnreachable
+        ),
+        (
+            "Button", 50.0, 50.0, "ambiguous",
+            CLIErrorCode.waitAmbiguous
+        )
+    ]
+)
+func aRefusedSelectionSendsNoTap(
+    role: String,
+    secondX: Double,
+    secondY: Double,
+    label: String,
+    expected: CLIErrorCode
+) throws {
+    // The unreachable case matches one caption; the ambiguous case matches two
+    // disjoint buttons. Both must end the command with nothing dispatched: a
+    // query that named the wrong thing costs an exit code, never an input the
+    // caller cannot take back.
+    let first = element(role: role, x: 0, y: 0, width: 10, height: 10, centre: (0.1, 0.1))
+    let second = element(
+        role: "Button", x: secondX, y: secondY, width: 10, height: 10, centre: (0.8, 0.8)
+    )
+    let elements = try expected == .waitUnreachable
+        ? jsonText(first)
+        : jsonText(first) + "," + jsonText(second)
+    let (outcome, sent) = try tapElementRun(
+        tree: axTree(elements),
+        query: axQuery(label: "Go")
+    )
+
+    #expect(outcome.failure?.code == expected, "\(label)")
+    #expect(outcome.exitCode == 1)
+    #expect(outcome.stdout.isEmpty)
+    // Two requests: the roster and the tree. Never a third.
+    #expect(sent.count == 2)
+    #expect(!sent.contains { $0.method == RPCMethod.paneInputTap.rawValue })
+}
+
+@Test
+func tapBySelectorOnNoMatchStaysWaitTimeout() throws {
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let (outcome, sent) = try tapElementRun(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Absent")
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+    #expect(sent.count == 2)
+}
+
+// MARK: - Acting on an incomplete observation
+
+@Test(
+    "a selector never acts on a sweep that stopped short",
+    arguments: [
+        "one eligible target",
+        "a caption only",
+        "two disjoint candidates"
+    ]
+)
+func aSelectorRefusesEveryVerdictFromAnIncompleteSweep(shape: String) throws {
+    // Every verdict selection can reach is a claim about what did NOT match,
+    // and an unswept cell refutes each of them differently: it can hold a
+    // second control that makes a target ambiguous, the real control behind a
+    // caption, or the intermediate frame that turns two disjoint candidates
+    // into a containment chain. None survives partial coverage.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.1, 0.1))
+    let caption = element(
+        role: "StaticText", x: 0, y: 0, width: 10, height: 10, centre: (0.1, 0.1)
+    )
+    let distant = element(
+        role: "Button", x: 50, y: 50, width: 10, height: 10, centre: (0.8, 0.8)
+    )
+    let elements: String
+    switch shape {
+    case "one eligible target":
+        elements = try jsonText(button)
+
+    case "a caption only":
+        elements = try jsonText(caption)
+
+    default:
+        elements = try jsonText(button) + "," + (try jsonText(distant))
+    }
+    let (outcome, sent) = try tapElementRun(
+        tree: truncatedSweep(elements),
+        query: axSweepQuery(label: "Go")
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive, "\(shape)")
+    #expect(outcome.exitCode == 1)
+    // The whole point: no input reaches the device on an unproven observation.
+    #expect(sent.count == 2, "\(shape)")
+    #expect(!sent.contains { $0.method == RPCMethod.paneInputTap.rawValue })
+    // The coverage the caller needs to decide whether raising the budget helps.
+    let details = try waitFailureDetails(outcome)
+    #expect(details["truncated"] as? Bool == true)
+    #expect(details["sweepedPoints"] as? Int == 137)
+}
+
+/// A tree the daemon caught omitting an on-screen element, carrying the note
+/// and code it annotates such a response with.
+private func incompleteTree(_ elements: String) -> String {
+    #"{"tree":{"role":"Application","noteCode":"ax.treeIncomplete","#
+        + #""note":"\#(AXTreeNote.treeIncomplete.rawValue)","children":[\#(elements)]}}"#
+}
+
+@Test
+func aSelectorNeverActsOnATreeKnownToBeMissingSomething() throws {
+    // The daemon hit-tested an element its own walk never listed, which
+    // refutes uniqueness the same way an unswept cell does: the element it
+    // missed could be a second control matching this very selector.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let (outcome, sent) = try tapElementRun(
+        tree: incompleteTree(try jsonText(button)),
+        query: axQuery(label: "Go")
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(!sent.contains { $0.method == RPCMethod.paneInputTap.rawValue })
+    // The daemon's own sentence and code, so a caller branches on the note
+    // rather than on this build's wording.
+    let details = try waitFailureDetails(outcome)
+    #expect(details["noteCode"] as? String == AXTreeNote.treeIncomplete.code)
+}
+
+@Test
+func aThinTreeThatFillsInStillTaps() throws {
+    // The difference from a truncated sweep: treeIncomplete is retryable, so
+    // a later complete probe lets the tap proceed. Failing on the first thin
+    // tree would break `tap` against a page still loading, which is the case
+    // the selector form exists for.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.25, 0.75))
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(incompleteTree(try jsonText(button)).utf8)),
+        .success(try waitData([waitPane()])),
+        .success(Data(axTree(try jsonText(button)).utf8)),
+        .success(Data(#"{"ok":true}"#.utf8))
+    ])
+    let outcome = try handleTapElement(
+        pane: nil,
+        query: axQuery(label: "Go"),
+        timeoutMs: 200,
+        transport: transport,
+        output: .human,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(transport.sent.last?.method == RPCMethod.paneInputTap.rawValue)
+}
+
+@Test
+func aPresenceWaitIsUnaffectedByAThinTree() throws {
+    // Plain `wait ax` keeps match-wins, and a thin tree with no match keeps
+    // polling to its deadline rather than failing early.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let matched = try axWaitOutcome(
+        tree: incompleteTree(try jsonText(button)),
+        query: axQuery(label: "Go")
+    )
+    #expect(matched.exitCode == 0)
+
+    let missed = try axWaitOutcome(
+        tree: incompleteTree(try jsonText(button)),
+        query: axQuery(label: "Absent"),
+        timeoutMs: 1
+    )
+    #expect(missed.failure?.code == .waitTimeout)
+    #expect(missed.exitCode == 124)
+}
+
+@Test
+func aSelectorNeverActsOnATreeThatCouldNotBeEnumerated() throws {
+    // The root survives an unsupported walk, and it carries a label and a
+    // centre of its own, so a selector naming the app matches it and would tap
+    // the middle of the screen. The note has to refuse before selection runs,
+    // not only when nothing matched.
+    let root: [String: Any] = [
+        "role": "Application",
+        "label": "MyApp",
+        "noteCode": AXTreeNote.watchOSEnumerationUnsupported.code,
+        "note": AXTreeNote.watchOSEnumerationUnsupported.rawValue,
+        "frame": ["x": 0, "y": 0, "w": 100, "h": 100],
+        "normalizedCenter": ["x": 0.5, "y": 0.5],
+        "children": []
+    ]
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(#"{"tree":\#(try jsonText(root))}"#.utf8)),
+        .success(Data(#"{"ok":true}"#.utf8))
+    ])
+    let outcome = try handleTapElement(
+        pane: nil,
+        query: axQuery(label: "MyApp"),
+        timeoutMs: 1,
+        transport: transport,
+        output: .human,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    // Unsupported, not inconclusive: the remedy is another --source, never
+    // more time or a bigger budget.
+    #expect(outcome.failure?.code == .waitUnsupported)
+    #expect(!transport.sent.contains { $0.method == RPCMethod.paneInputTap.rawValue })
+}
+
+@Test
+func aPresenceWaitStillMatchesAnUnenumerableRoot() throws {
+    // Plain `wait ax` keeps match-wins here too. The root is a real element
+    // that really carries that label, so a presence question is answered.
+    let root: [String: Any] = [
+        "role": "Application",
+        "label": "MyApp",
+        "noteCode": AXTreeNote.watchOSEnumerationUnsupported.code,
+        "note": AXTreeNote.watchOSEnumerationUnsupported.rawValue,
+        "children": []
+    ]
+    let outcome = try axWaitOutcome(
+        tree: #"{"tree":\#(try jsonText(root))}"#,
+        query: axQuery(label: "MyApp")
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
+}
+
+@Test
+func printingACentreRefusesAnIncompleteSweepToo() throws {
+    // Same rule, same code path. Printing a coordinate the selection could not
+    // prove unique is the same defect as tapping one.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try printCentreOutcome(
+        tree: truncatedSweep(try jsonText(button)),
+        query: axSweepQuery(label: "Go")
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(outcome.stdout.isEmpty)
+}
+
+@Test
+func aPresenceWaitStillSucceedsOnAnIncompleteSweep() throws {
+    // The precedence that stays: a found element is proof of presence whatever
+    // went unswept, so plain `wait ax` is unaffected by the selector rule. No
+    // amount of missing coverage turns a sighting into an absence.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try axWaitOutcome(
+        tree: truncatedSweep(try jsonText(button)),
+        query: axSweepQuery(label: "Go")
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
 }
 
 @Test

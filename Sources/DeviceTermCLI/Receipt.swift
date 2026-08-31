@@ -6,10 +6,11 @@ import Foundation
 ///
 /// Each input command gets its own Encodable struct so the JSON shape
 /// is enforced at compile time and the test surface is one
-/// `JSONEncoder` invocation per command. Fields mirror the
-/// `Echo.ok(...)` receipt line: every command's JSON object has the
-/// stable `{ok, udid, paneId}` prefix plus the per-command fields the
-/// human receipt would show.
+/// `JSONEncoder` invocation per command. Every command's JSON object keeps
+/// the stable `{ok, udid, paneId}` prefix; the per-command fields need not
+/// match the human receipt. The echo line's `pane` is `paneId` and `shortId`
+/// here, its `matches` is `matchCount`, and a selector-driven tap carries a
+/// label and identifier the space-separated line cannot quote at all.
 ///
 /// **nil handling**: synthesized Encodable uses `encodeIfPresent`
 /// for Optional fields, so a nil value omits the key entirely rather
@@ -35,6 +36,43 @@ public enum Receipt {
         public let shortId: String?
         public let x: Double
         public let y: Double
+        /// The element a selector-driven tap (`tap --label` /
+        /// `tap --identifier`) resolved its coordinate from, and what the
+        /// wait cost to find it. A tap handed its coordinates omits all five,
+        /// so its receipt keeps the shape it has.
+        ///
+        /// `role`, `label`, and `identifier` are each absent when the element
+        /// carried no such attribute. `matchCount` counts every element the
+        /// query matched, not the candidates selection considered.
+        public let role: String?
+        public let label: String?
+        public let identifier: String?
+        public let matchCount: Int?
+        public let elapsedMs: Int?
+
+        public init(
+            udid: String,
+            paneId: String,
+            shortId: String?,
+            x: Double,
+            y: Double,
+            role: String? = nil,
+            label: String? = nil,
+            identifier: String? = nil,
+            matchCount: Int? = nil,
+            elapsedMs: Int? = nil
+        ) {
+            self.udid = udid
+            self.paneId = paneId
+            self.shortId = shortId
+            self.x = x
+            self.y = y
+            self.role = role
+            self.label = label
+            self.identifier = identifier
+            self.matchCount = matchCount
+            self.elapsedMs = elapsedMs
+        }
     }
 
     public struct Swipe: Encodable, Sendable {

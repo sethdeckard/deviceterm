@@ -264,13 +264,20 @@ public enum AgentsText {
         xcrun simctl launch "$UDID" com.example.App
         deviceterm wait ax --identifier login-button --role Button
         # --match contains reaches a label carrying a count or an
-        # ellipsis. To act on a match, print its centre:
+        # ellipsis. To act on a match, tap it directly:
+        deviceterm tap --label Continue --match contains
+        # Finds the element and taps it in one command, with no
+        # coordinate crossing the shell. To see the coordinate
+        # instead of tapping it:
         deviceterm wait ax --label Continue --match contains --print center
-        # Writes a bare "x y" for the one eligible element it
-        # selects, to pass as tap's two positional
-        # arguments. Refuses with wait.unreachable or wait.ambiguous
-        # rather than guess, and writes nothing when it does. Read the
-        # full match list with --json; matches[0] is not guaranteed to
+        # Writes a bare "x y" for the same element, to pass as tap's
+        # two positional arguments. Both refuse with
+        # wait.unreachable or wait.ambiguous rather than guess, and
+        # a refusal sends no tap either way. What it writes differs:
+        # --print center writes nothing at all, while tap --json
+        # writes the usual error envelope to stdout, so test the
+        # exit code rather than stdout emptiness. Read the full
+        # match list with --json; matches[0] is not guaranteed to
         # carry a coordinate.
 
       Observe a long-running event stream:
@@ -285,9 +292,13 @@ public enum AgentsText {
       Output modes
         Data commands (lists, receipts) support `--json` for
         machine-readable output. Lists become JSON arrays;
-        receipts become JSON objects with the same fields as the
-        human-mode echo line (synthesized with `encodeIfPresent`;
-        nil fields are omitted rather than encoded as `null`).
+        receipts become JSON objects. The keys are not always the
+        echo line's: `pane` splits into `paneId` and `shortId`, and
+        a tap's `matches` is `matchCount`. JSON also carries fields
+        the space-separated echo line has no way to quote, such as
+        a selector-driven tap's `label` and `identifier`.
+        Synthesized with `encodeIfPresent`, so nil fields are
+        omitted rather than encoded as `null`.
 
         In JSON mode, typed failures emit a newline-terminated
         `{"error": ...}` object on stdout. They preserve the human

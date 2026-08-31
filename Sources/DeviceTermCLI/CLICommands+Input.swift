@@ -19,6 +19,35 @@ import Foundation
 /// `parseEnumArg` / `parseKVKToken` token parsers, all `internal` in
 /// CLICommands.swift.
 extension CLICommands {
+    // MARK: - Accessibility selector grammar
+
+    /// The result of reading an accessibility selector off a verb's flags.
+    ///
+    /// A plain optional would collapse every rejection into one, and the
+    /// selector has six distinct ways to be wrong, each with its own message.
+    enum AXSelectorParse {
+        case query(CLICommand.WaitAXQuery)
+        case usage(String)
+    }
+
+    /// Both forms of `tap`, which take either operand but never both.
+    static let tapUsage = """
+    usage: deviceterm tap <x> <y> [--pane <ref>]
+           deviceterm tap (--identifier <value>|--label <value>) [--role <value>] \
+    [--value <value>] [--match <exact|contains>] [--source <tree|sweep>] \
+    [--step <0..1>] [--budget <ms>] [--timeout <ms>] [--pane <ref>]
+    """
+
+    /// Flags that say nothing until `tap` has a selector to narrow.
+    ///
+    /// A coordinate tap carrying one was written for the selector form, so
+    /// tapping the coordinates and ignoring the rest would run a command
+    /// nobody asked for. Ordered, not a set, so the message names the same
+    /// flag every time.
+    static let selectorOnlyTapFlags = [
+        "role", "value", "match", "source", "step", "budget", "timeout"
+    ]
+
     // MARK: - Input verb parsing
 
     /// Parse an input-family verb (`tap` … `ax`) into its `CLICommand`,
@@ -42,13 +71,14 @@ extension CLICommands {
     ) -> CLICommand? {
         switch verb {
         case "tap":
-            guard pos.count == 2, let x = Double(pos[0]), let y = Double(pos[1]) else {
-                return .usage(message: "usage: deviceterm tap <x> <y> [--pane <ref>]")
-            }
-            if let outside = firstCoordinateOutsideUnitRange([x, y]) {
-                return .usage(message: coordinateRangeUsage(outside))
-            }
-            return .tap(pane: pane, x: x, y: y)
+            return parseTap(
+                positionals: pos,
+                pane: pane,
+                flags: flags,
+                step: step,
+                budgetMs: budgetMs,
+                timeoutMs: timeoutMs
+            )
 
         case "swipe":
             let n = pos.compactMap { Double($0) }
@@ -205,41 +235,18 @@ extension CLICommands {
                 )
             }
             if pos == ["ax"] {
-                let identifier = flags["identifier"]
-                let label = flags["label"]
-                guard (identifier == nil) != (label == nil) else {
-                    return .usage(
-                        message: "deviceterm: wait ax requires exactly one of --identifier or --label"
-                    )
-                }
-                guard let matchMode = CLICommand.WaitAXMatchMode(rawValue: flags["match"] ?? "exact") else {
-                    return .usage(message: "deviceterm: --match must be exact or contains")
-                }
-                // An empty needle is a legitimate exact query for an empty
-                // attribute, but under `contains` it matches every
-                // string-valued instance of that attribute.
-                if matchMode == .contains, (identifier ?? label)?.isEmpty == true {
-                    return .usage(
-                        message: "deviceterm: --match contains requires a non-empty --identifier or --label"
-                    )
-                }
-                // `--value` narrows an element the caller already named. It
-                // needs no requires-a-selector check of its own: the
-                // exactly-one guard above already refuses a `wait ax` with
-                // neither `--identifier` nor `--label`.
-                let value = flags["value"]
-                if matchMode == .contains, value?.isEmpty == true {
-                    return .usage(
-                        message: "deviceterm: --match contains requires a non-empty --value"
-                    )
-                }
-                guard let source = CLICommand.WaitAXSource(rawValue: flags["source"] ?? "tree") else {
-                    return .usage(message: "deviceterm: --source must be tree or sweep")
-                }
-                if source == .tree, step != nil || budgetMs != nil {
-                    return .usage(
-                        message: "deviceterm: --step and --budget require --source sweep"
-                    )
+                let query: CLICommand.WaitAXQuery
+                switch parseAXSelector(
+                    verb: "wait ax",
+                    flags: flags,
+                    step: step,
+                    budgetMs: budgetMs
+                ) {
+                case let .usage(message):
+                    return .usage(message: message)
+
+                case let .query(parsed):
+                    query = parsed
                 }
                 let printMode: CLICommand.WaitAXPrint?
                 if let raw = flags["print"] {
@@ -252,16 +259,7 @@ extension CLICommands {
                 }
                 return .waitAX(
                     pane: pane,
-                    query: .init(
-                        identifier: identifier,
-                        label: label,
-                        role: flags["role"],
-                        value: value,
-                        matchMode: matchMode,
-                        source: source,
-                        step: step,
-                        budgetMs: budgetMs
-                    ),
+                    query: query,
                     timeoutMs: timeoutMs,
                     printMode: printMode
                 )
@@ -273,6 +271,107 @@ extension CLICommands {
         default:
             return nil
         }
+    }
+
+    /// Parse `tap`, which takes two positional coordinates or an
+    /// accessibility selector, never both.
+    ///
+    /// A selector flag is what picks the form. Two positionals and a selector
+    /// together is a usage error rather than a precedence rule, because a
+    /// caller who wrote both cannot be read as meaning either.
+    static func parseTap(
+        positionals pos: [String],
+        pane: String?,
+        flags: [String: String],
+        step: Double?,
+        budgetMs: Int?,
+        timeoutMs: Int
+    ) -> CLICommand {
+        if flags["identifier"] != nil || flags["label"] != nil {
+            guard pos.isEmpty else { return .usage(message: tapUsage) }
+            switch parseAXSelector(
+                verb: "tap",
+                flags: flags,
+                step: step,
+                budgetMs: budgetMs
+            ) {
+            case let .usage(message):
+                return .usage(message: message)
+
+            case let .query(query):
+                return .tapElement(pane: pane, query: query, timeoutMs: timeoutMs)
+            }
+        }
+        guard pos.count == 2, let x = Double(pos[0]), let y = Double(pos[1]) else {
+            return .usage(message: tapUsage)
+        }
+        if let orphan = selectorOnlyTapFlags.first(where: { flags[$0] != nil }) {
+            return .usage(
+                message: "deviceterm: --\(orphan) applies to `tap --identifier` or `tap --label`"
+            )
+        }
+        if let outside = firstCoordinateOutsideUnitRange([x, y]) {
+            return .usage(message: coordinateRangeUsage(outside))
+        }
+        return .tap(pane: pane, x: x, y: y)
+    }
+
+    /// Read the accessibility selector `wait ax` and `tap` share:
+    /// `--identifier` or `--label`, narrowed by `--role`, `--value`, and
+    /// `--match`, observed through `--source` with its `--step` and
+    /// `--budget`.
+    ///
+    /// One parser for both verbs, so a selector cannot come to mean one thing
+    /// to the wait and another to the tap that acts on it. `verb` names the
+    /// caller in the exactly-one-selector message, which is the only rejection
+    /// whose wording depends on who asked.
+    static func parseAXSelector(
+        verb: String,
+        flags: [String: String],
+        step: Double?,
+        budgetMs: Int?
+    ) -> AXSelectorParse {
+        let identifier = flags["identifier"]
+        let label = flags["label"]
+        guard (identifier == nil) != (label == nil) else {
+            return .usage("deviceterm: \(verb) requires exactly one of --identifier or --label")
+        }
+        guard let matchMode = CLICommand.WaitAXMatchMode(rawValue: flags["match"] ?? "exact") else {
+            return .usage("deviceterm: --match must be exact or contains")
+        }
+        // An empty needle is a legitimate exact query for an empty attribute,
+        // but under `contains` it matches every string-valued instance of that
+        // attribute.
+        if matchMode == .contains, (identifier ?? label)?.isEmpty == true {
+            return .usage(
+                "deviceterm: --match contains requires a non-empty --identifier or --label"
+            )
+        }
+        // `--value` narrows an element the caller already named. It needs no
+        // requires-a-selector check of its own: the exactly-one guard above
+        // already refuses a call with neither `--identifier` nor `--label`.
+        let value = flags["value"]
+        if matchMode == .contains, value?.isEmpty == true {
+            return .usage("deviceterm: --match contains requires a non-empty --value")
+        }
+        guard let source = CLICommand.WaitAXSource(rawValue: flags["source"] ?? "tree") else {
+            return .usage("deviceterm: --source must be tree or sweep")
+        }
+        if source == .tree, step != nil || budgetMs != nil {
+            return .usage("deviceterm: --step and --budget require --source sweep")
+        }
+        return .query(
+            CLICommand.WaitAXQuery(
+                identifier: identifier,
+                label: label,
+                role: flags["role"],
+                value: value,
+                matchMode: matchMode,
+                source: source,
+                step: step,
+                budgetMs: budgetMs
+            )
+        )
     }
 
     /// The first coordinate outside the inclusive unit range, or nil when

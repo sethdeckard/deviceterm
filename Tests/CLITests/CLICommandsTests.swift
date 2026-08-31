@@ -863,6 +863,107 @@ func invalidWaitIsUsage(argv: [String]) {
     }
 }
 
+// MARK: - Tapping by selector
+
+@Test
+func parseTapBySelectorTakesTheWaitAXGrammar() {
+    let query = CLICommand.WaitAXQuery(
+        identifier: nil,
+        label: "Continue",
+        role: "Button",
+        value: nil,
+        matchMode: .contains,
+        source: .tree,
+        step: nil,
+        budgetMs: nil
+    )
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "tap", "--label", "Continue",
+            "--role", "Button", "--match", "contains"
+        ]) == .tapElement(pane: nil, query: query, timeoutMs: 30_000)
+    )
+}
+
+@Test
+func parseTapBySelectorSweeps() {
+    // Web content is invisible to the tree walk, so a sweep is the primary
+    // path there rather than an edge case, and `tap` has to reach it.
+    let query = CLICommand.WaitAXQuery(
+        identifier: "submit",
+        label: nil,
+        role: nil,
+        value: nil,
+        matchMode: .exact,
+        source: .sweep,
+        step: 0.02,
+        budgetMs: 20_000
+    )
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "tap", "--identifier", "submit", "--source", "sweep",
+            "--step", "0.02", "--budget", "20000", "--timeout", "5000"
+        ]) == .tapElement(pane: nil, query: query, timeoutMs: 5_000)
+    )
+}
+
+@Test
+func aSelectorAndACoordinateAgreeOnWhatAQueryMeans() {
+    // One parser behind both, so `--print center` and `tap` cannot come to
+    // read the same flags as different queries.
+    let selector = ["--label", "Continue", "--match", "contains", "--value", "on"]
+    guard case let .waitAX(_, waitQuery, _, _) =
+        CLICommands.parse(["deviceterm", "wait", "ax"] + selector),
+        case let .tapElement(_, tapQuery, _) =
+        CLICommands.parse(["deviceterm", "tap"] + selector) else {
+        Issue.record("both verbs should parse the same selector")
+        return
+    }
+    #expect(waitQuery == tapQuery)
+}
+
+@Test(
+    "tap rejects a coordinate and a selector together",
+    arguments: [
+        ["deviceterm", "tap", "0.5", "0.5", "--label", "Continue"],
+        ["deviceterm", "tap", "0.5", "--label", "Continue"],
+        ["deviceterm", "tap", "--label", "A", "--identifier", "B"],
+        ["deviceterm", "tap", "--label", "", "--match", "contains"],
+        ["deviceterm", "tap", "--label", "A", "--source", "pixels"],
+        ["deviceterm", "tap", "--label", "A", "--step", "0.2"],
+        ["deviceterm", "tap", "--label", "A", "--match", "fuzzy"]
+    ]
+)
+func invalidTapSelectorIsUsage(argv: [String]) {
+    guard case .usage = CLICommands.parse(argv) else {
+        Issue.record("expected usage for \(argv)")
+        return
+    }
+}
+
+@Test(
+    "selector-only flags on a coordinate tap are usage errors",
+    arguments: ["role", "value", "match", "source", "step", "budget", "timeout"]
+)
+func aCoordinateTapRefusesSelectorOnlyFlags(flag: String) {
+    // Silently tapping the coordinates would run a command nobody wrote: the
+    // flag is only there because the caller meant the selector form.
+    guard case .usage = CLICommands.parse(
+        ["deviceterm", "tap", "0.5", "0.5", "--\(flag)", "Button"]
+    ) else {
+        Issue.record("--\(flag) on a coordinate tap should be .usage")
+        return
+    }
+}
+
+@Test
+func aPlainCoordinateTapIsUnchanged() {
+    #expect(
+        CLICommands.parse(["deviceterm", "tap", "0.5", "0.25", "--pane", "phn002"])
+        == .tap(pane: "phn002", x: 0.5, y: 0.25)
+    )
+}
+
 @Test
 func parseAxPointMissingCoordsIsUsage() {
     guard case .usage = CLICommands.parse(

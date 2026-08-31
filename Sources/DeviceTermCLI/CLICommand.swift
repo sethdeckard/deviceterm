@@ -33,6 +33,18 @@ public enum CLICommand: Equatable, Sendable {
         x: Double,
         y: Double
         )
+    /// `deviceterm tap (--identifier <value>|--label <value>) …`: block until
+    /// the selector names one eligible coordinate target, then tap its centre.
+    ///
+    /// Shares its selection with `wait ax --print center`, so the element that
+    /// mode names is the element this taps. Separate from `.tap` because the
+    /// two take different operands: one is handed a coordinate, the other
+    /// resolves one.
+    case tapElement(
+        pane: String?,
+        query: WaitAXQuery,
+        timeoutMs: Int
+        )
     case swipe(
         pane:
         String?,

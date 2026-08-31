@@ -48,6 +48,27 @@ replies.
 .B tap " " \fIx\fR " " \fIy\fR
 Single discrete tap.
 .TP
+.B tap " " (\fB--identifier\fR \fIvalue\fR|\fB--label\fR \fIvalue\fR) " " [\fB--role\fR \fIvalue\fR] " " [\fB--value\fR \fIvalue\fR] " " [\fB--match\fR \fIexact\fR|\fIcontains\fR] " " [\fB--source\fR \fItree\fR|\fIsweep\fR] " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
+Block until the accessibility selector resolves one eligible coordinate
+target, then tap its centre. Takes the
+.B wait ax
+selector and makes the same selection
+.B wait ax --print center
+makes, so both act on the same element and no coordinate crosses the shell.
+Refuses with
+.B wait.unreachable
+or
+.B wait.ambiguous
+rather than guess, and sends no tap when it does. A deadline after complete
+observations with nothing matching is
+.B wait.timeout
+and exit 124, also with no tap; an incomplete observation reports its own
+failure instead. The receipt adds the coordinate tapped, and the role when it
+is a single word; under
+.B --json
+it adds role, label, identifier, matchCount, and elapsedMs. These flags require a
+selector: a coordinate tap carrying one is a usage error.
+.TP
 .B swipe " " \fIfromX\fR " " \fIfromY\fR " " \fItoX\fR " " \fItoY\fR " " [\fB--duration\fR \fIms\fR] " " [\fB--hold\fR \fIms\fR]
 Interpolated drag at ~60 Hz. Default 200 ms.
 .B --hold

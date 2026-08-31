@@ -43,7 +43,15 @@ enum VerbCatalog {
         Verb("doctor"),
         Verb("agents"),
         Verb("help"),
-        Verb("tap"),
+        // The AX selector `wait ax` takes, so `tap --label` reads the same
+        // grammar the wait it blocks on does.
+        Verb(
+            "tap",
+            valuedFlags: [
+                "pane", "timeout", "identifier", "label", "role", "value",
+                "match", "source", "step", "budget"
+            ]
+        ),
         Verb("swipe", valuedFlags: ["pane", "duration", "hold"]),
         Verb("app-switcher"),
         Verb("long-press", valuedFlags: ["pane", "duration"]),

@@ -11,11 +11,36 @@ extension HelpCatalog {
         HelpTopic(
             "tap",
             .command(.drive),
-            summary: "Single discrete tap",
+            summary: "Single discrete tap, by coordinate or selector",
             detail: """
               tap <x> <y>
                   Single discrete tap.
                   Example: deviceterm tap 0.5 0.5
+
+              tap (--identifier <value>|--label <value>) [--role <value>]
+                  [--value <value>] [--match <exact|contains>]
+                  [--source <tree|sweep>] [--step <0..1>] [--budget <ms>]
+                  [--timeout <ms>]
+                  Block until the selector resolves one eligible coordinate
+                  target, then tap its centre. Takes `wait ax`'s selector and
+                  makes the same selection `wait ax --print center` makes, so
+                  both act on the same element, and no coordinate crosses the
+                  shell.
+
+                  Refuses with wait.unreachable or wait.ambiguous rather than
+                  guess, and sends no tap when it does. A deadline after
+                  complete observations with nothing matching is wait.timeout
+                  and exit 124, also with no tap; an incomplete observation
+                  reports its own failure instead.
+
+                  The receipt adds the coordinate tapped, and the role when
+                  it is a single word; --json adds role, label, identifier,
+                  matchCount, and elapsedMs. A label carrying a space stays
+                  out of the human line, which is read by column position.
+
+                  These flags need a selector. A coordinate tap carrying one
+                  is a usage error rather than a tap that ignores it.
+                  Example: deviceterm tap --label Continue --match contains
             """
         ),
         HelpTopic(

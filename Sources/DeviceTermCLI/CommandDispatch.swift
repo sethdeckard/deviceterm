@@ -171,6 +171,15 @@ func run(
                 build: { try CLICommands.tapRequest(paneId: $0, x: x, y: y) }
             )
 
+        case let .tapElement(pane, query, timeoutMs):
+            return try handleTapElement(
+                pane: pane,
+                query: query,
+                timeoutMs: timeoutMs,
+                transport: transport,
+                output: output
+            )
+
         case let .swipe(pane, fromX, fromY, toX, toY, durationMs, holdMs):
             return try handleSwipe(
                 pane: pane,

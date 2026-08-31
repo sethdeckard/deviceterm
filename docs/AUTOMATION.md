@@ -424,9 +424,35 @@ Presentational roles rank last, entries with no `normalizedCenter` rank next to
 last, and smaller frames rank first, so `matches[0]` is the element you are
 most likely able to operate.
 
-The ordering is a heuristic. To tap, use `--print center` rather than picking
-from the list; it selects one eligible element and writes a bare `x y`, or
-refuses with `wait.unreachable` or `wait.ambiguous` and writes nothing.
+The ordering is a heuristic. Don't pick from the list. Two commands act on a
+match, and both make the same selection:
+
+```sh
+deviceterm wait ax --label Continue --match contains --print center
+deviceterm tap --label Continue --match contains
+```
+
+`--print center` writes a bare `x y` and nothing else, ready to pass as a
+coordinate verb's two positional arguments. `tap` with the same selector taps
+that element directly, so no coordinate crosses the shell and the whole
+locate-and-tap is one command with one argument list. A tool that approves
+shell commands by matching a prefix can cover `deviceterm tap --label`; it
+cannot cover a `$(...)` substitution wrapped around `--print center`.
+
+Both refuse rather than guess. `wait.unreachable` means nothing eligible
+matched, `wait.ambiguous` means several unrelated elements did. Narrow with
+`--role`, `--value`, or `--identifier`. A refusal sends no tap either way, so
+a refused `tap` costs an exit code rather than an input you can't take back.
+
+What a refusal writes differs. `--print center` writes nothing at all, so one
+piped onward supplies no coordinate. `tap --json` writes the same error
+envelope every other JSON failure writes, so test the exit code rather than
+stdout emptiness.
+
+`tap` accepts the whole selector, `--source sweep` and its `--step` and
+`--budget` included. Its receipt reports the coordinate tapped, and the role
+when it is a single word; `--json` adds `role`, `label`, `identifier`,
+`matchCount`, and `elapsedMs`.
 
 A truncated sweep that did not find the element is inconclusive rather than
 proof that the element is absent. The failure carries the daemon's note as its

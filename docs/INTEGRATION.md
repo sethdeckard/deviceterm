@@ -831,7 +831,7 @@ The command adds these fields:
 
 | Command | Additional Fields |
 |---|---|
-| `tap` | `x`, `y` |
+| `tap` | `x`, `y`; a selector-driven tap adds `role?`, `label?`, `identifier?`, `matchCount?`, `elapsedMs?` |
 | `app-switcher` | `x`, `y`, containing the fixed gesture start at `0.5`, `0.99` |
 | `swipe` | `dispatched?`, `steps?`, `durationMs?` |
 | `long-press` | `x`, `y`, `durationMs?` |
@@ -1097,11 +1097,22 @@ deviceterm wait ax --label Continue --source sweep \
 
 For `--source sweep`, the CLI applies the normal `[0, 60000]` sweep-budget
 clamp and reduces the result to the milliseconds remaining before the wait
-deadline. A matching element succeeds even when the sweep reports `truncated`.
-A truncated sweep without a match returns `wait.inconclusive`. Its message is
-the daemon's own note, and `details` carries `note` and `noteCode`, so a caller
-can tell a sweep worth retrying with a larger budget from one already at the
-ceiling.
+deadline. What a truncated sweep means then depends on what you asked for.
+
+A plain `wait ax` asks whether an element is present, and a match answers that
+whatever went unswept, so it succeeds. Only a truncated sweep with no match
+returns `wait.inconclusive`.
+
+`--print center` and `tap` ask for a single coordinate target, which is a claim
+about what *didn't* match. An unswept cell can refute any verdict: it can hold
+a second control that would have made the target ambiguous, the real control
+behind a caption, or the intermediate frame that turns two disjoint candidates
+into a containment chain. So a truncated sweep is `wait.inconclusive` for
+these callers on every outcome, and no tap is dispatched.
+
+Either way the message is the daemon's own note, and `details` carries `note`,
+`noteCode`, `sweepedPoints`, `step`, and `budgetMs`, so a caller can tell a
+sweep worth retrying with a larger budget from one already at the ceiling.
 
 A tree observation that comes back empty on watchOS returns `wait.unsupported`,
 carrying the same two fields. The refusal follows the daemon's note rather than
@@ -1139,18 +1150,21 @@ The ordering is a heuristic. It cannot see whether an element is enabled,
 obscured, or behind a modal, and `matches[0]` is not guaranteed to carry a
 `normalizedCenter`.
 
-To act on a match, use `--print center` instead of picking from the list:
+To act on a match, don't pick from the list. Two commands make the same
+selection:
 
 ```sh
 deviceterm wait ax --label Continue --match contains --print center
+deviceterm tap --label Continue --match contains
 ```
 
-It writes a bare `<x> <y>` and nothing else, ready to pass as a coordinate
-verb's two positional arguments.
+`--print center` writes a bare `<x> <y>` and nothing else, ready to pass as a
+coordinate verb's two positional arguments. `tap` with the same selector taps
+that element directly, so no coordinate crosses the shell.
 
 ### Selecting a Coordinate Target
 
-`--print center` discards every match that is presentational or carries no
+Selection discards every match that is presentational or carries no
 `normalizedCenter`. A centreless element supplies no ready coordinate, and a
 presentational one is excluded so a caption never stands in for the control
 wrapping it, even though a caption often carries a perfectly good centre. If
@@ -1168,14 +1182,23 @@ two things. Narrow it with `--role`, `--value`, or `--identifier`.
 
 If nothing survives, the wait refuses with `wait.unreachable`.
 
-Both exit 1 and write nothing to stdout, so a refusal piped onward supplies no
-coordinate. Both carry `matchCount` and the distinct `roles` observed, which is
+Both exit 1 and carry `matchCount` and the distinct `roles` observed, which is
 usually enough to see that a caption matched and the control did not.
+
+What a refusal writes depends on the caller. Under `--print center` it writes
+nothing to stdout, so one piped onward supplies no coordinate. Under
+`tap --json` it writes the standard error envelope, so test the exit code
+rather than stdout emptiness.
 
 Selection is geometric: it needs the survivors to form a containment chain,
 and refuses when they do not, whatever the cause. A selected element is
 reachable by coordinate rather than proven operable, because the observation
 cannot say whether it is enabled or obscured.
+
+`tap --label` and `tap --identifier` run this same selection over the same
+wait, so the element `--print center` names is the element `tap` hits. A
+refusal ends the command before any input is dispatched: `wait.unreachable`
+and `wait.ambiguous` send no tap, and neither does a `wait.timeout`.
 
 `--print center` cannot be combined with `--json`, which is a usage error.
 `--json` promises stdout is a JSON document and `--print` promises a bare

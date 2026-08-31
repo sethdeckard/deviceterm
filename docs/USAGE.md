@@ -458,6 +458,16 @@ deviceterm pinch 0.45 0.5 0.55 0.5 0.30 0.5 0.70 0.5
 deviceterm app-switcher
 ```
 
+`tap` also takes an accessibility selector in place of a coordinate, which
+finds the element and taps it in one command:
+
+```sh
+deviceterm tap --label Continue --match contains
+```
+
+It blocks the same way `wait ax` does and refuses rather than guess. See
+[Wait for Observable State](#wait-for-observable-state).
+
 `swipe` defaults to 200 milliseconds and emits movement at about 60 Hz. A
 duration below the 32-millisecond frame floor becomes a tap. Its receipt
 reports `dispatched=tap`.
@@ -561,9 +571,23 @@ output reports only the count.
 An entry keeps any `normalizedCenter` its tree or sweep observation supplied,
 ready to pass to `tap`. That field is optional. Presentational roles rank last;
 within each tier, entries carrying a `normalizedCenter` rank ahead of those
-that do not. The ordering is a heuristic, and `matches[0]` may carry no
-`normalizedCenter` at all. To tap, use `--print center`, which writes a bare
-`x y` for the one element it selects, or refuses and writes nothing.
+that do not.
+
+The ordering is a heuristic, and `matches[0]` may carry no `normalizedCenter`
+at all. Don't pick from the list. Use `--print center`, which writes a bare
+`x y` for the one element it selects, or `tap` with the same selector, which
+taps that element without printing a coordinate at all:
+
+```sh
+deviceterm wait ax --label Continue --match contains --print center
+deviceterm tap --label Continue --match contains
+```
+
+Both make the same selection and both refuse rather than guess:
+`wait.unreachable` when nothing eligible matched, `wait.ambiguous` when
+several unrelated elements did. A refusal sends no tap either way. What it
+writes differs: `--print center` writes nothing at all, while `tap --json`
+writes the usual error envelope to stdout.
 
 A sweep-based AX wait reduces the requested or default sweep budget to the time
 remaining before the overall wait deadline. A short wait therefore cannot leave

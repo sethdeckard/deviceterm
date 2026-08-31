@@ -47,6 +47,55 @@ enum WaitEngine {
         let observation: [String: Any]
     }
 
+    /// One accessibility probe's result: what matched, and whether the
+    /// observation managed to see everything.
+    ///
+    /// Incompleteness travels as data rather than as a thrown failure because
+    /// the two waits built on it disagree about what it means, and only they
+    /// can decide. The failure is prepared here so that a caller which does
+    /// surface it need not rebuild the details.
+    struct AXObservation {
+        /// Why an observation cannot support a claim about what it did *not*
+        /// see.
+        ///
+        /// Three causes reach this, differing on whether this wait probes
+        /// again. A family whose walk is unsupported never enumerates, so the
+        /// remedy is another `--source`. A truncated sweep stops the wait by
+        /// policy: the wait never varies the step or budget it was asked for,
+        /// and caps each probe's budget at the time left, so no probe gets
+        /// more to work with than the one before. A tree caught omitting an
+        /// element says nothing about why, so this wait keeps probing in case
+        /// a later one is complete.
+        struct Incompleteness {
+            let failure: Failure
+            /// Whether this wait stops here rather than probing again.
+            ///
+            /// A policy, not a prediction. A truncated sweep may well finish
+            /// on a quieter pane, which is why the daemon's own note suggests
+            /// retrying; this wait still refuses to be the thing that retries
+            /// it, and leaves that to the caller.
+            let isTerminal: Bool
+        }
+
+        let matches: [[String: Any]]
+        /// Non-nil when the observation is known not to have seen everything:
+        /// enumeration unsupported for the family, a sweep that stopped short,
+        /// or a tree caught omitting an element the daemon hit-tested.
+        let incompleteness: Incompleteness?
+    }
+
+    /// What a coordinate-target wait produced.
+    ///
+    /// Carries the pane the wait resolved alongside the element, because a
+    /// caller acting on the coordinate has to act on the pane the element was
+    /// observed in rather than resolve one of its own.
+    struct AXTargetCompletion {
+        let target: AXTarget
+        let pane: PanesListEntry
+        let matchCount: Int
+        let elapsedMs: Int
+    }
+
     struct OrientationSnapshot {
         let paneId: String
         let orientation: Orientation
@@ -370,20 +419,19 @@ func handleWaitAX(
             message: "--print cannot be combined with --json"
         )
     }
-    // Build the matcher once per wait: every probe uses the same prepared
-    // selector and optional value filter.
-    let matcher = WaitEngine.AXMatcher(query: query)
     if printMode == .center {
         return try printAXTargetCentre(
             pane: pane,
             query: query,
-            matcher: matcher,
             timeoutMs: timeoutMs,
             transport: transport,
             creds: creds,
             runtime: runtime
         )
     }
+    // Build the matcher once per wait: every probe uses the same prepared
+    // selector and optional value filter.
+    let matcher = WaitEngine.AXMatcher(query: query)
     return try handleWait(
         pane: pane,
         condition: "ax.appears",
@@ -393,14 +441,26 @@ func handleWaitAX(
         creds: creds,
         runtime: runtime
     ) { entry, context in
-        let matches = try observeAXMatches(
+        let observed = try observeAXMatches(
             entry: entry,
             context: context,
             query: query,
             matcher: matcher,
             transport: transport
         )
-        guard !matches.isEmpty else { return .pending }
+        let matches = observed.matches
+        // A match wins, then incompleteness is explained. A found element is
+        // proof of presence whatever the observation failed to cover, and no
+        // amount of unswept screen can turn a sighting into an absence.
+        guard !matches.isEmpty else {
+            // An observation this wait will not probe again is reported now.
+            // One it will keeps waiting, so a tree that is merely part-way
+            // through gets the rest of the deadline to fill in.
+            if let incompleteness = observed.incompleteness, incompleteness.isTerminal {
+                throw incompleteness.failure
+            }
+            return .pending
+        }
         var observation: [String: Any] = [
             "source": query.source.rawValue,
             "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
@@ -427,15 +487,168 @@ func handleWaitAX(
 private func printAXTargetCentre(
     pane: String?,
     query: CLICommand.WaitAXQuery,
-    matcher: WaitEngine.AXMatcher?,
     timeoutMs: Int,
     transport: CLITransport,
     creds: (sessionId: String, cap: String)?,
     runtime: WaitEngine.Runtime
 ) throws -> CommandOutcome {
+    do {
+        let result = try awaitAXTarget(
+            pane: pane,
+            query: query,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime
+        )
+        // Fixed notation, not `String(_:)`: the shortest round-trip spelling
+        // of a small coordinate is exponential ("5e-05"), which standard
+        // `bc` downstream cannot read.
+        return .stdout(
+            String(format: "%.6f %.6f\n", result.target.x, result.target.y)
+        )
+    } catch let failure as WaitEngine.Failure {
+        return waitFailureOutcome(failure, condition: "ax.appears")
+    }
+}
+
+/// Block until the query names one eligible coordinate target, then tap its
+/// centre in the pane the wait resolved.
+///
+/// One command where a caller would otherwise pipe a coordinate through the
+/// shell, so no coordinate crosses that boundary and the whole locate-and-tap
+/// fits one approval prefix.
+///
+/// The tap goes to `result.pane`, not through `sendResolved`, which would ask
+/// for the roster a second time and could land on a pane other than the one
+/// observed.
+///
+/// A refusal sends no tap. `wait.unreachable`, `wait.ambiguous`, and
+/// `wait.inconclusive` all end the command with nothing dispatched, so a query
+/// that named the wrong thing, or an observation that could not prove it named
+/// one thing, costs an exit code rather than an input the caller cannot take
+/// back.
+func handleTapElement(
+    pane: String?,
+    query: CLICommand.WaitAXQuery,
+    timeoutMs: Int,
+    transport: CLITransport,
+    output: OutputMode,
+    creds: (sessionId: String, cap: String)? = nil,
+    runtime: WaitEngine.Runtime = .live
+) throws -> CommandOutcome {
+    let result: WaitEngine.AXTargetCompletion
+    do {
+        result = try awaitAXTarget(
+            pane: pane,
+            query: query,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime
+        )
+    } catch let failure as WaitEngine.Failure {
+        return waitFailureOutcome(failure, condition: "ax.appears")
+    }
+    _ = try transport.send(
+        try CLICommands.tapRequest(
+            paneId: result.pane.paneId,
+            x: result.target.x,
+            y: result.target.y
+        ),
+        timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds
+    )
+    switch output {
+    case .human:
+        return .stdout(
+            Echo.ok(
+                udid: result.pane.udid,
+                pane: result.pane.shortId ?? result.pane.paneId,
+                fields: tapElementEchoFields(result)
+            ) + "\n"
+        )
+
+    case .json:
+        return .stdout(
+            try encodeJSONReceipt(
+                Receipt.Tap(
+                    udid: result.pane.udid,
+                    paneId: result.pane.paneId,
+                    shortId: result.pane.shortId,
+                    x: result.target.x,
+                    y: result.target.y,
+                    role: result.target.role,
+                    label: result.target.label,
+                    identifier: result.target.identifier,
+                    matchCount: result.matchCount,
+                    elapsedMs: result.elapsedMs
+                )
+            )
+        )
+    }
+}
+
+/// The per-command fields on a selector-driven tap's echo line.
+///
+/// The label and identifier stay out of it. The line is space-separated
+/// `key=value` and reading it by column position is a documented property, so
+/// a label like `Continue with Apple` would shift every field after it. Both
+/// are in the `--json` receipt, which has somewhere to put a space.
+///
+/// The role is normally a single word, and is dropped rather than printed
+/// when it isn't, since the vocabulary comes from private frameworks and this
+/// line has no quoting to fall back on. An absent `role=` is something a
+/// reader can see; a shifted column is not.
+private func tapElementEchoFields(
+    _ result: WaitEngine.AXTargetCompletion
+) -> [(String, String)] {
+    var fields = [
+        ("x", String(format: "%.6f", result.target.x)),
+        ("y", String(format: "%.6f", result.target.y))
+    ]
+    if let role = result.target.role, !role.contains(where: \.isWhitespace) {
+        fields.append(("role", role))
+    }
+    fields.append(("matches", String(result.matchCount)))
+    return fields
+}
+
+/// Block until `query` names exactly one eligible coordinate target.
+///
+/// The single place a query becomes a coordinate, so `wait ax --print center`
+/// and `tap` cannot come to disagree about which element a query means.
+///
+/// A match list without a unique target leaves the wait pending rather than
+/// failing on the probe that saw it: a control still sliding in has a valid
+/// frame and a briefly off-screen centre, which is the transient a wait verb
+/// exists to absorb. The deadline then classifies what the last observation
+/// held.
+///
+/// An observation that did not see everything never selects, whatever it
+/// matched. Unsupported enumeration and a truncated sweep both fail on the
+/// probe that saw them, the first because it cannot succeed and the second
+/// because this wait never varies the step or budget it was given. A tree
+/// caught omitting one element keeps waiting instead, since the note does not
+/// say whether the omission is transient, and the deadline reports it if it
+/// persists.
+private func awaitAXTarget(
+    pane: String?,
+    query: CLICommand.WaitAXQuery,
+    timeoutMs: Int,
+    transport: CLITransport,
+    creds: (sessionId: String, cap: String)?,
+    runtime: WaitEngine.Runtime
+) throws -> WaitEngine.AXTargetCompletion {
+    // Built once per wait: every probe uses the same prepared selector and
+    // optional value filter.
+    let matcher = WaitEngine.AXMatcher(query: query)
     // Carried out of the probe so a refusal can describe the observation the
     // deadline ended on, which the probe itself has no way to return.
     var lastMatches: [[String: Any]] = []
+    // Reassigned every probe, so a tree that fills in leaves no stale
+    // incompleteness behind for the deadline to report.
+    var lastIncompleteness: WaitEngine.Failure?
+    var selected: AXTarget?
     do {
         let completion = try runWait(
             pane: pane,
@@ -444,49 +657,68 @@ private func printAXTargetCentre(
             creds: creds,
             runtime: runtime
         ) { entry, context in
-            let matches = try observeAXMatches(
+            let observed = try observeAXMatches(
                 entry: entry,
                 context: context,
                 query: query,
                 matcher: matcher,
                 transport: transport
             )
-            lastMatches = matches
-            // A match list without a unique coordinate target is not the
-            // condition this mode waits for. Keeping it pending lets a control
-            // still sliding in arrive, and the deadline classifies what was
-            // seen.
-            guard case let .target(target) = AXTarget.select(from: matches) else {
+            lastMatches = observed.matches
+            lastIncompleteness = observed.incompleteness?.failure
+            // Every verdict below is a claim about what did *not* match, and
+            // anything the observation missed refutes all of them: it can hold
+            // a second control that would have made a target ambiguous, the
+            // real control behind a caption, or the intermediate frame that
+            // turns two disjoint candidates into a containment chain. So an
+            // incomplete observation answers before selection does, whatever
+            // it managed to match. A tree whose walk never ran still carries
+            // its root, and a root can match a selector and carry a centre.
+            if let incompleteness = observed.incompleteness {
+                // Report it now when this wait will not probe again;
+                // otherwise keep going and let the deadline report it.
+                if incompleteness.isTerminal { throw incompleteness.failure }
                 return .pending
             }
-            return .satisfied(
-                pane: entry,
-                observation: ["x": target.x, "y": target.y]
-            )
+            guard case let .target(target) = AXTarget.select(from: observed.matches) else {
+                return .pending
+            }
+            selected = target
+            return .satisfied(pane: entry, observation: [:])
         }
-        guard let x = completion.observation["x"] as? Double,
-            let y = completion.observation["y"] as? Double else {
-            throw CLIError.invalidResponse("wait ax produced no coordinate")
+        // `runWait` returns only for a probe that reported `.satisfied`, and
+        // this probe reports it only after assigning `selected`.
+        guard let selected else {
+            throw CLIError.invalidResponse("wait ax reported a target it had not selected")
         }
-        // Fixed notation, not `String(_:)`: the shortest round-trip spelling
-        // of a small coordinate is exponential ("5e-05"), which standard
-        // `bc` downstream cannot read.
-        return .stdout(String(format: "%.6f %.6f\n", x, y))
-    } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
-        return waitFailureOutcome(
-            axSelectionFailure(from: lastMatches) ?? failure,
-            condition: "ax.appears"
+        return WaitEngine.AXTargetCompletion(
+            target: selected,
+            pane: completion.pane,
+            matchCount: lastMatches.count,
+            elapsedMs: completion.elapsedMs
         )
-    } catch let failure as WaitEngine.Failure {
-        return waitFailureOutcome(failure, condition: "ax.appears")
+    } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
+        throw axSelectionFailure(
+            from: lastMatches,
+            incompleteness: lastIncompleteness
+        ) ?? failure
     }
 }
 
 /// Reclassify a deadline according to what the last observation held.
 ///
-/// Nil when nothing matched, leaving the deadline to report itself: there was
-/// no element to reach or to choose between.
-private func axSelectionFailure(from matches: [[String: Any]]) -> WaitEngine.Failure? {
+/// Nil when nothing matched and the observation was complete, leaving the
+/// deadline to report itself: there was no element to reach or to choose
+/// between, and nothing went unseen that might have held one.
+///
+/// An observation that did not see everything outranks every verdict below it,
+/// including the deadline. Each of those verdicts asserts something about what
+/// did not match, which is exactly what such an observation cannot support.
+private func axSelectionFailure(
+    from matches: [[String: Any]],
+    incompleteness: WaitEngine.Failure?
+) -> WaitEngine.Failure? {
+    if let incompleteness { return incompleteness }
     guard !matches.isEmpty else { return nil }
     let roles = Array(Set(matches.compactMap { $0["role"] as? String })).sorted()
     switch AXTarget.select(from: matches) {
@@ -526,23 +758,29 @@ private func axSelectionFailure(from matches: [[String: Any]]) -> WaitEngine.Fai
 /// One accessibility observation of `entry`, reduced to the elements
 /// `matcher` selects and ranked so the most operable comes first.
 ///
-/// An empty result means the probe found nothing and the wait should keep
-/// going. Incompleteness the observation reported is thrown instead, and only
-/// after the match test, because a found element is proof of presence
-/// whatever the observation failed to cover.
+/// Empty matches mean the probe found nothing and the wait should keep going.
+/// Partial coverage rides back beside them rather than being thrown, because
+/// what it means depends on the question the caller asked, and only the caller
+/// knows that.
+///
+/// An observation that failed outright still throws: a pane without
+/// accessibility, and a response that will not parse. Unsupported enumeration
+/// comes back as incompleteness instead, beside whatever the root itself
+/// matched, because a caller asking only whether something is present is
+/// answered by that root.
 ///
 /// A nil `matcher` is a query that can never match. After a successful fetch
-/// and parse it returns empty before the response-note and truncation checks,
-/// leaving the probe pending rather than classifying the observation as
-/// unsupported or inconclusive. The capability check, the fetch, and the parse
-/// run ahead of it and can still fail the wait.
+/// and parse it returns empty before the response-note check, leaving the probe
+/// pending rather than classifying the observation as unsupported. The
+/// capability check, the fetch, and the parse run ahead of it and can still
+/// fail the wait.
 private func observeAXMatches(
     entry: PanesListEntry,
     context: WaitEngine.ProbeContext,
     query: CLICommand.WaitAXQuery,
     matcher: WaitEngine.AXMatcher?,
     transport: CLITransport
-) throws -> [[String: Any]] {
+) throws -> WaitEngine.AXObservation {
     if entry.capabilities?.accessibility == false {
         throw WaitEngine.Failure(
             code: .waitUnsupported,
@@ -591,13 +829,12 @@ private func observeAXMatches(
         let root = envelope["tree"] as? [String: Any] else {
         throw CLIError.invalidResponse("accessibility response is not a JSON object")
     }
-    guard let matcher else { return [] }
+    guard let matcher else {
+        return WaitEngine.AXObservation(matches: [], incompleteness: nil)
+    }
     let matches = WaitEngine.MatchRanking.ordered(
         matchingAXElements(in: root, matcher: matcher)
     )
-    // A match wins, then incompleteness is explained. A found element is
-    // proof of presence whatever the observation failed to cover.
-    if !matches.isEmpty { return matches }
     // A recognized code wins; otherwise a recognized sentence provides the
     // fallback. Show the daemon's sentence when present, and the CLI's own
     // wording only when it sent none: a newer daemon's wording can carry
@@ -607,45 +844,95 @@ private func observeAXMatches(
     let daemonNoteCode = root["noteCode"] as? String
     let note = daemonNoteCode.flatMap(AXTreeNote.init(code:))
         ?? daemonNote.flatMap(AXTreeNote.init(rawValue:))
-    if note == .watchOSEnumerationUnsupported {
-        let message = daemonNote ?? AXTreeNote.watchOSEnumerationUnsupported.rawValue
-        throw WaitEngine.Failure(
-            code: .waitUnsupported,
-            message: message,
-            exitCode: 1,
-            details: waitDetails([
-                "condition": "ax.appears",
-                "source": query.source.rawValue,
-                "note": message,
-                "noteCode": daemonNoteCode ?? AXTreeNote.watchOSEnumerationUnsupported.code
-            ])
+    return WaitEngine.AXObservation(
+        matches: matches,
+        incompleteness: observationIncompleteness(
+            root: root,
+            query: query,
+            note: daemonNote,
+            noteCode: daemonNoteCode ?? note?.code,
+            treeNote: note
         )
-    }
-    if query.source == .sweep, root["truncated"] as? Bool == true {
-        // `truncated` is the coverage signal and the note rides along with
-        // it. Pass both fields through as sent, synthesizing a code only
-        // when the daemon supplied none, so an older response still gives
-        // its caller something to branch on.
-        var details: [String: Any] = [
-            "condition": "ax.appears",
-            "source": "sweep",
-            "truncated": true
-        ]
-        if let daemonNote { details["note"] = daemonNote }
-        if let code = daemonNoteCode ?? note?.code { details["noteCode"] = code }
+    )
+}
+
+/// Why an observation cannot speak for what it did not see, or nil when it saw
+/// everything it set out to.
+///
+/// Built rather than thrown because the same fact answers different questions
+/// differently. A wait for presence is satisfied by any match, whatever went
+/// unseen. A wait for a single coordinate target is not: every verdict
+/// selection can reach is a claim about what did *not* match, and anything the
+/// observation missed refutes all of them.
+///
+/// Three causes, ordered so the widest is tested first: enumeration that never
+/// ran outranks a sweep that stopped short, which outranks a tree caught
+/// missing one element.
+///
+/// The daemon's note becomes the message and its code rides in `details`, both
+/// as sent, with a code synthesized only when the daemon supplied none, so an
+/// older response still gives its caller something to branch on.
+private func observationIncompleteness(
+    root: [String: Any],
+    query: CLICommand.WaitAXQuery,
+    note: String?,
+    noteCode: String?,
+    treeNote: AXTreeNote?
+) -> WaitEngine.AXObservation.Incompleteness? {
+    var details: [String: Any] = [
+        "condition": "ax.appears",
+        "source": query.source.rawValue
+    ]
+    if let noteCode { details["noteCode"] = noteCode }
+    let code: CLIErrorCode
+    let message: String
+    let isTerminal: Bool
+    if treeNote == .watchOSEnumerationUnsupported {
+        // The walk does not run on this family at all, so the remedy is a
+        // different `--source`, never more time. The tree still carries its
+        // root, which can match a selector and carries a centre of its own, so
+        // a caller asking for a coordinate has to be refused on the note
+        // rather than on whether anything matched.
+        code = .waitUnsupported
+        message = note ?? AXTreeNote.watchOSEnumerationUnsupported.rawValue
+        isTerminal = true
+        details["note"] = message
+        details["noteCode"] = noteCode ?? AXTreeNote.watchOSEnumerationUnsupported.code
+    } else if query.source == .sweep, root["truncated"] as? Bool == true {
+        code = .waitInconclusive
+        message = note ?? "AX sweep ended before covering the full grid"
+        // Terminal by policy. This wait never varies the requested step or
+        // budget, and caps each probe's budget at the time left, so no probe
+        // gets more than the one before. A fresh call with a larger budget, a
+        // coarser step, or a quieter pane may well finish, and that call is
+        // the caller's.
+        isTerminal = true
+        if let note { details["note"] = note }
+        details["truncated"] = true
         // Forward the coverage count and the applied sweep settings so a
         // caller can act on the truncation note from the failure receipt.
         if let swept = root["sweepedPoints"] { details["sweepedPoints"] = swept }
         if let step = root["step"] { details["step"] = step }
         if let budgetMs = root["budgetMs"] { details["budgetMs"] = budgetMs }
-        throw WaitEngine.Failure(
-            code: .waitInconclusive,
-            message: daemonNote ?? "AX sweep ended before covering the full grid",
+    } else if treeNote == .treeIncomplete {
+        code = .waitInconclusive
+        message = note ?? "the accessibility tree omitted an element that is on screen"
+        // The note does not say why the tree is short, so a later probe may
+        // see a complete one.
+        isTerminal = false
+        if let note { details["note"] = note }
+    } else {
+        return nil
+    }
+    return WaitEngine.AXObservation.Incompleteness(
+        failure: WaitEngine.Failure(
+            code: code,
+            message: message,
             exitCode: 1,
             details: waitDetails(details)
-        )
-    }
-    return []
+        ),
+        isTerminal: isTerminal
+    )
 }
 
 func handleWaitOrientation(

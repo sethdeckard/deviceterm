@@ -68,7 +68,11 @@ extension HelpCatalog {
             detail: """
               Data commands (lists, receipts) support `--json` for
               machine-readable output: lists become JSON arrays, receipts
-              become JSON objects with the same fields as the human form.
+              become JSON objects. The keys are not always the human
+              form's: `pane` splits into `paneId` and `shortId`, and a
+              tap's `matches` is `matchCount`. JSON also carries fields
+              the echo line has no room to quote, such as a
+              selector-driven tap's `label` and `identifier`.
               Successful output goes to stdout.
 
               In JSON mode, typed failures also emit a newline-terminated
