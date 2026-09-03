@@ -638,6 +638,9 @@ public actor PaneCoordinator {
     /// can't carry an `xpc_object_t`).
     private let subscriptionRegistry: PaneSubscriptionRegistry?
     private let rotationConfirmationTimeoutNanoseconds: UInt64
+    /// Builds sim backends off this actor, under a deadline and an admission
+    /// cap. Held rather than constructed per create so the cap spans attaches.
+    private let simBackendAcquirer: SimBackendAcquirer
     /// Test-only seam captured when a pane creates its pump. Always nil in
     /// production.
     private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
@@ -676,10 +679,30 @@ public actor PaneCoordinator {
         subscriptionRegistry: PaneSubscriptionRegistry? = nil,
         rotationConfirmationTimeoutNanoseconds: UInt64 = RotationConfirmationDeadline.observationNanoseconds
     ) {
+        self.init(
+            mintShortID: mintShortID,
+            eventBroker: eventBroker,
+            subscriptionRegistry: subscriptionRegistry,
+            rotationConfirmationTimeoutNanoseconds: rotationConfirmationTimeoutNanoseconds,
+            simBackendAcquirer: SimBackendAcquirer()
+        )
+    }
+
+    /// Designated initializer. Internal because `SimBackendAcquirer` is: the
+    /// deadline and admission cap are a daemon-internal policy, and the tests
+    /// that drive a parked acquisition are the only callers that set them.
+    init(
+        mintShortID: @Sendable @escaping () -> String,
+        eventBroker: EventBroker?,
+        subscriptionRegistry: PaneSubscriptionRegistry?,
+        rotationConfirmationTimeoutNanoseconds: UInt64,
+        simBackendAcquirer: SimBackendAcquirer
+    ) {
         self.mintShortID = mintShortID
         self.eventBroker = eventBroker
         self.subscriptionRegistry = subscriptionRegistry
         self.rotationConfirmationTimeoutNanoseconds = rotationConfirmationTimeoutNanoseconds
+        self.simBackendAcquirer = simBackendAcquirer
     }
 
     /// Test-only: install the ordered-pump race hook above.
@@ -717,7 +740,7 @@ public actor PaneCoordinator {
             ownerIncarnation: ownerIncarnation,
             requireConcreteIncarnation: requireConcreteIncarnation,
             isOwnerSessionAlive: isOwnerSessionAlive,
-            acquire: { try self.acquireSimBackend(udid: normalized) }
+            acquire: { try await self.simBackendAcquirer.acquire(udid: normalized) }
         )
     }
 
@@ -782,6 +805,21 @@ public actor PaneCoordinator {
     /// by the snapshotted prior owner. Any mismatch restarts the
     /// `while` so we re-evaluate against the new state.
     ///
+    /// `acquire` suspends too, for the same reason and with the same
+    /// consequences, so the fresh-create branch runs it and then restarts the
+    /// loop rather than falling through to the commit. Whichever pass reaches
+    /// the commit therefore does so having re-checked the target under no
+    /// intervening suspension.
+    ///
+    /// That suspension makes "acquire ran" and "the pane took what it built"
+    /// two different facts: two creates racing one target can both acquire,
+    /// and only one commits. `onUnused` reports the second case, handing the
+    /// backend back to the caller, and it is the caller's cue to release
+    /// anything it retained alongside it. The device path's tunnel keepalive is
+    /// balanced that way, against a create that cannot assume its backend was
+    /// consumed. The default closes the backend, which is all a sim create
+    /// holds. It runs at most once per create, and never after a commit.
+    ///
     /// `.shutdown` / `.failed` panes are skipped so an already-shut-
     /// down record doesn't block a reboot; a fresh `booted` event
     /// after a shutdown/boot cycle creates a fresh pane.
@@ -792,7 +830,8 @@ public actor PaneCoordinator {
         ownerIncarnation: UInt64? = nil,
         requireConcreteIncarnation: Bool = false,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil,
-        acquire: () throws -> AcquiredBackend
+        acquire: () async throws -> AcquiredBackend,
+        onUnused: (AcquiredBackend) -> Void = { $0.backend.shutdownBackend() }
     ) async throws -> PaneCreateResult {
         // Production pane ownership requires a CONCRETE target incarnation: the
         // handler resolves it from the target session's live phase (nil when the
@@ -836,6 +875,16 @@ public actor PaneCoordinator {
                 target: record.target
             )
         }
+        // A backend built for a create that then loses its target, whether to a
+        // racing create, an adoption, or a refused incarnation, has no pane
+        // record to close it, so ownership goes back to the caller on every
+        // exit except the commit. Handing it back rather than just closing it
+        // here is what lets a caller release whatever it retained *alongside*
+        // the backend: a device attach holds a tunnel keepalive that only it
+        // can balance.
+        var pendingBackend: AcquiredBackend?
+        defer { if let pendingBackend { onUnused(pendingBackend) } }
+        let acquired: AcquiredBackend
         // Resolve the target's current owner, re-checking after every
         // suspension. A pane whose close deferred still owns its device while
         // the gesture runs, and a live pane can become one of those inside any
@@ -847,6 +896,16 @@ public actor PaneCoordinator {
                 continue
             }
             guard let existing = panes.values.first(where: { isLiveTarget($0, target: target) }) else {
+                // Nothing holds this target, so this is a fresh create. Build
+                // the backend off this actor first, then re-run every check
+                // above before committing: acquiring suspends, and a racing
+                // create, adoption, or close lands in that window exactly as it
+                // can in the liveness await below.
+                guard let pending = pendingBackend else {
+                    pendingBackend = try await acquire()
+                    continue
+                }
+                acquired = pending
                 break
             }
             if existing.transferring {
@@ -948,14 +1007,13 @@ public actor PaneCoordinator {
             continue
         }
         // Synchronous active-incarnation check immediately before the fresh
-        // create commit (acquire + insert below run with no `await`): a create
-        // that resumed after its session's close sweep sees a cleared/newer
-        // active incarnation and is refused, so it can't mint a pane under a
-        // stale incarnation.
+        // create commit (the insert below runs with no `await`): a create that
+        // resumed after its session's close sweep sees a cleared/newer active
+        // incarnation and is refused, so it can't mint a pane under a stale
+        // incarnation.
         guard ownerIncarnationStillActive() else {
             throw PaneError.ownerNotReady(sessionId: sessionId)
         }
-        let acquired = try acquire()
         let paneId = UUID()
         let shortId = try allocateUniqueShortID()
         let record = Record(
@@ -983,6 +1041,9 @@ public actor PaneCoordinator {
             cohortState.cohortId(forMember: CohortMember(sessionId: sessionId, incarnation: $0))
         }
         panes[paneId] = record
+        // The record owns the backend from here, so the disposal above must
+        // not also claim it.
+        pendingBackend = nil
 
         // Stand up the per-pane ordered surface pump before starting
         // frames: the backend can fire its callback synchronously
@@ -1083,60 +1144,6 @@ public actor PaneCoordinator {
         record.target == target
             && record.state != .shutdown
             && record.state != .failed
-    }
-
-    /// Acquire the CoreSimulator bridge handles for a sim pane and wrap
-    /// them in a `SimDeviceBackend`. Classifies the device family +
-    /// human-readable type up front (best-effort: a lookup failure
-    /// leaves the pane usable, just family-"unknown") so every attach
-    /// path gets them from the daemon's response. Surfaces an
-    /// unusable sim (display/HID/Purple acquisition failure) before the
-    /// pane is recorded.
-    private func acquireSimBackend(udid normalized: String) throws -> AcquiredBackend {
-        let handle = try? SimDeviceHandle.handle(forUDID: normalized)
-        let family = (
-            handle
-            .map { DeviceFamilyClassifier.classify($0.deviceTypeIdentifier) }
-            ?? .unknown
-            ).rawValue
-        let deviceType: String? = handle.flatMap {
-            $0.deviceTypeName.isEmpty ? nil : $0.deviceTypeName
-        }
-        let displayHandle: SimDisplayHandle
-        do {
-            displayHandle = try SimDisplayHandle.handle(forUDID: normalized)
-        } catch {
-            throw PaneError.deviceNotFound(udid: normalized)
-        }
-        // Acquire HID + Purple clients up front. Both go through the
-        // same bridge load + sim lookup as the display handle, so
-        // failures here mean the sim isn't actually usable, so surface
-        // them before we record the pane.
-        let hidClient: SimHIDClient
-        do {
-            hidClient = try SimHIDClient.client(forUDID: normalized)
-        } catch {
-            throw PaneError.hidUnavailable(
-                udid: normalized,
-                message: BridgeMessage.unwrap(error)
-            )
-        }
-        let purpleClient: SimPurpleHID
-        do {
-            purpleClient = try SimPurpleHID.client(forUDID: normalized)
-        } catch {
-            throw PaneError.hidUnavailable(
-                udid: normalized,
-                message: BridgeMessage.unwrap(error)
-            )
-        }
-        let backend = SimDeviceBackend(
-            udid: normalized,
-            displayHandle: displayHandle,
-            hidClient: hidClient,
-            purpleClient: purpleClient
-        )
-        return AcquiredBackend(backend: backend, family: family, deviceType: deviceType)
     }
 
     // MARK: - Subscribe

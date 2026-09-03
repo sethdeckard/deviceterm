@@ -177,6 +177,22 @@ public enum PaneError: Error, Equatable, Sendable {
         sessionId:
         UUID
         )
+    /// The sim's display/HID handles did not arrive inside the acquisition
+    /// deadline. The attempt is abandoned by the *caller* only: nothing can
+    /// cancel a synchronous bridge call, so it keeps running and keeps its
+    /// admission slot until it returns. Retryable, and a retry that lands
+    /// after the bridge answers again succeeds normally.
+    case backendAcquireTimedOut(
+        udid:
+        String
+        )
+    /// All acquisition slots are in use, so this attach is refused before
+    /// starting bridge work. Distinct from a timeout: this caller never
+    /// waited. Retry after an in-flight attempt finishes.
+    case backendAcquireBusy(
+        udid:
+        String
+        )
 
     /// Translate a backend-level error into the wire-facing `PaneError`,
     /// adding the paneId context the backend doesn't carry. `operation` is

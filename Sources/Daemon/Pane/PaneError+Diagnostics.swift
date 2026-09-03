@@ -100,6 +100,12 @@ extension PaneError {
 
         case .ownerNotReady:
             return "owner-not-ready"
+
+        case .backendAcquireTimedOut:
+            return "backend-acquire-timed-out"
+
+        case .backendAcquireBusy:
+            return "backend-acquire-busy"
         }
     }
 }

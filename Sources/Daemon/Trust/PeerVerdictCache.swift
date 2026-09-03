@@ -25,10 +25,14 @@ import Darwin
 ///     the peer's identity couldn't be read) is returned but not
 ///     stored, so a legitimate GUI whose validation failed once isn't
 ///     pinned to a cached `false`.
-///   - Signature walks run on a concurrent Dispatch queue, NOT Swift's
-///     cooperative executor or this actor's critical section. Unrelated peers
-///     do not serialize behind one walk; same-key callers still dedup onto the
-///     one in-flight task.
+///   - Signature walks run on a serial Dispatch queue, NOT Swift's
+///     cooperative executor or this actor's critical section. Serial rather
+///     than concurrent because a walk that hangs parks its worker with nothing
+///     able to reclaim it, and a concurrent queue would answer every new key by
+///     parking another. Unrelated peers queue behind one walk, trading
+///     cross-key parallelism for a single worker if the Security services stop
+///     responding. Same-key callers dedup onto the one in-flight task before
+///     reaching the queue at all.
 actor PeerVerdictCache {
     /// Stable identity of a peer process: pid plus the pid-generation
     /// counter (`pidversion`). Two live processes never share a pid, and
@@ -86,9 +90,12 @@ actor PeerVerdictCache {
 
     init(capacity: Int = 256) {
         self.capacity = max(1, capacity)
+        // Serial. A signature walk that hangs parks its Dispatch worker with
+        // nothing able to reclaim it, and a concurrent queue answers each new
+        // key by adding another one. Distinct keys lose parallelism; the
+        // `inFlight` map already collapses same-key lookups.
         self.resolutionQueue = BlockingWorkQueue(
-            label: "com.deviceterm.daemon.peer-verdict",
-            attributes: .concurrent
+            label: "com.deviceterm.daemon.peer-verdict"
         )
     }
 

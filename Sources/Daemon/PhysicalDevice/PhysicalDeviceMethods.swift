@@ -174,6 +174,14 @@ public enum PhysicalDeviceMethods {
                             family: DeviceFamily.unknown.rawValue,
                             deviceType: nil
                         )
+                    },
+                    onUnused: { _ in
+                        // Acquiring suspends, so a concurrent attach can claim
+                        // the target after this one built its backend. The
+                        // create hands it back rather than consuming it, which
+                        // puts the release below back in charge of both the
+                        // backend and the keepalive retain.
+                        backendConsumed = false
                     }
                 )
             } catch let error as PhysicalDeviceError {

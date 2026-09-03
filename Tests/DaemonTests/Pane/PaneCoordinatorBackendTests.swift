@@ -635,6 +635,99 @@ func deviceReAttachInSameSessionSkipsAcquire() async throws {
     #expect(panes.count == 1)
 }
 
+/// One-shot rendezvous, so a create can be held inside `acquire` while
+/// another create commits the same target.
+private actor CreateLatch {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        opened = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+/// Which backends a create built and which came back unused. `onUnused` is
+/// synchronous, so this is lock-guarded rather than an actor.
+///
+/// `@unchecked Sendable`: every access goes through `lock`.
+private final class BackendLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var unusedBackends: [MockDeviceBackend] = []
+
+    var unused: [MockDeviceBackend] { lock.withLock { unusedBackends } }
+
+    func noteUnused(_ backend: MockDeviceBackend) {
+        lock.withLock { unusedBackends.append(backend) }
+    }
+}
+
+@Test
+func aBackendLostToAConcurrentCreateGoesBackToItsCaller() async throws {
+    // Acquiring suspends, so two creates can both build a backend while only
+    // one claims the target. Return the unused backend so its caller can
+    // release the matching tunnel keepalive; closing it here would strand that
+    // retain and hold the tunnel up after the pane closes.
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let latch = CreateLatch()
+    let acquiring = CreateLatch()
+    let log = BackendLog()
+    let loserBackend = MockDeviceBackend()
+
+    let loser = Task {
+        try await coordinator.createPane(
+            target: .device(deviceId: "dev-race"),
+            sessionId: session,
+            acquire: {
+                await acquiring.signal()
+                await latch.wait()
+                return PaneCoordinator.AcquiredBackend(
+                    backend: loserBackend,
+                    family: "phone",
+                    deviceType: "iPhone"
+                )
+            },
+            onUnused: { unused in
+                guard let backend = unused.backend as? MockDeviceBackend else { return }
+                log.noteUnused(backend)
+            }
+        )
+    }
+
+    // Hold the first create inside `acquire`, then let a second one commit the
+    // target underneath it.
+    await acquiring.wait()
+    let winner = try await coordinator.createPane(
+        target: .device(deviceId: "dev-race"),
+        sessionId: session,
+        acquire: {
+            PaneCoordinator.AcquiredBackend(
+                backend: MockDeviceBackend(),
+                family: "phone",
+                deviceType: "iPhone"
+            )
+        }
+    )
+    await latch.signal()
+
+    let lost = try await loser.value
+    #expect(lost.paneId == winner.paneId, "one target, one pane")
+    // The caller was told, and the coordinator did not close it behind their
+    // back: releasing it, and the keepalive, is the caller's job.
+    #expect(log.unused.count == 1)
+    #expect(log.unused.first === loserBackend)
+    #expect(!loserBackend.shutdownCalled)
+    let panes = await coordinator.panesForSession(session)
+    #expect(panes.count == 1)
+}
+
 @Test
 func stubDeviceBackendPaneReportsDeviceCapabilitiesAndTarget() async throws {
     let coordinator = PaneCoordinator()

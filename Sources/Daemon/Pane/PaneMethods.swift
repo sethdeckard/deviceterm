@@ -1146,6 +1146,27 @@ public enum PaneMethods {
                 message: "session not ready for pane ownership; retry shortly"
             )
 
+        case .backendAcquireTimedOut:
+            // The acquisition missed its deadline, so the attach was abandoned
+            // rather than allowed to park the pane actor. `serverError`, not
+            // `notReadyCode`: the request was well-formed and is worth
+            // retrying, but the client auto-retries `notReadyCode` on a tight
+            // loop, which is the last thing a stalled bridge needs. The GUI
+            // shows a failed attach as a Retry placeholder.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.create: CoreSimulator did not answer in time; retry"
+            )
+
+        case .backendAcquireBusy:
+            // All acquisition slots are in use, so the admission cap refuses
+            // another attempt. Same reasoning as the timeout above for the
+            // code.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.create: too many simulator acquisitions in flight; retry"
+            )
+
         case let .paneAlreadyAttached(udid, _):
             // The udid already has a live pane under a different
             // session. No CLI verb moves it; only the human (GUI
