@@ -201,7 +201,13 @@ Every wait accepts
 The default timeout is 30000 ms. An overall deadline reports
 .B wait.timeout
 and exits 124. Unsupported observation, inconclusive coverage, and query
-failures remain distinct.
+failures remain distinct. The accessibility flags belong to
+.BR "wait ax" ;
+passing one to
+.B wait pane
+or
+.B wait orientation
+is a usage error, not a flag that gets ignored.
 .SS Devices
 .TP
 .B devices list

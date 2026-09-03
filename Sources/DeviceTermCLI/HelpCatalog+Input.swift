@@ -316,6 +316,9 @@ extension HelpCatalog {
               The default timeout is 30000 ms. An overall deadline returns
               wait.timeout and exits 124. Unsupported or inconclusive
               observation and query failures remain distinct nonzero outcomes.
+              The accessibility flags belong to wait ax; passing one to
+              wait pane or wait orientation is a usage error, not a flag
+              that gets ignored.
             """
         )
     ]

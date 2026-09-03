@@ -79,8 +79,9 @@ enum VerbCatalog {
         // Workspace verbs: the full set their sub-commands accept,
         // permissively shared across sub-commands (a flag not meaningful
         // to a given sub-command is silently ignored by the dispatcher,
-        // matching the convention `swipe` uses for `--velocity`). `--cwd`
-        // and `--cmd` carry tab/pane open startup overrides.
+        // matching the convention `crown` uses for `--velocity`, which
+        // rides the wire and is ignored at the daemon). `--cwd` and
+        // `--cmd` carry tab/pane open startup overrides.
         Verb(
             "tab",
             valuedFlags: ["tab", "window", "mode", "cwd", "cmd", "to", "to-window", "type-delay"],

@@ -964,6 +964,84 @@ func aPlainCoordinateTapIsUnchanged() {
     )
 }
 
+// MARK: - Accessibility flags on a non-accessibility wait
+
+@Test(
+    "wait pane and wait orientation refuse ax-only flags",
+    arguments: [
+        ["--identifier", "save"],
+        ["--label", "Save"],
+        ["--role", "Button"],
+        ["--value", "x"],
+        ["--match", "contains"],
+        ["--source", "sweep"],
+        ["--print", "center"],
+        ["--step", "0.2"],
+        ["--budget", "500"]
+    ]
+)
+func nonAXWaitsRefuseAccessibilityFlags(flag: [String]) {
+    // `wait` registers these for the whole verb, so the parser accepts them
+    // and the pane and orientation arms would otherwise drop them. A dropped
+    // `--label` turns a wait for an element into a wait for the pane, which
+    // succeeds without ever looking.
+    for base in [
+        ["deviceterm", "wait", "pane", "rendering"],
+        ["deviceterm", "wait", "orientation", "portrait"]
+    ] {
+        guard case .usage = CLICommands.parse(base + flag) else {
+            Issue.record("expected usage for \(base + flag)")
+            return
+        }
+    }
+}
+
+@Test
+func nonAXWaitsStillTakeTheSharedFlags() {
+    // The guard covers accessibility flags only. Every wait reads `--pane`
+    // and `--timeout`, so neither may be caught by it.
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "pane", "rendering",
+            "--pane", "phn001", "--timeout", "5000"
+        ]) == .waitPane(pane: "phn001", state: .rendering, timeoutMs: 5_000)
+    )
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "orientation", "portrait",
+            "--pane", "phn001", "--timeout", "5000"
+        ]) == .waitOrientation(pane: "phn001", orientation: .portrait, timeoutMs: 5_000)
+    )
+}
+
+@Test
+func theRefusalNamesTheWaitThatWasWritten() throws {
+    // The likeliest cause is `pane` typed where `ax` was meant, so the
+    // message has to name both the flag and the wait it landed on.
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "wait", "pane", "rendering", "--label", "Save"]
+    ) else {
+        Issue.record("expected usage")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("--label"))
+    #expect(text.contains("wait ax"))
+    #expect(text.contains("wait pane"))
+}
+
+@Test
+func waitAXItselfStillTakesEveryAccessibilityFlag() {
+    guard case .waitAX = CLICommands.parse([
+        "deviceterm", "wait", "ax", "--label", "Save", "--role", "Button",
+        "--match", "contains", "--source", "sweep", "--step", "0.2",
+        "--budget", "500", "--timeout", "5000"
+    ]) else {
+        Issue.record("wait ax should accept its own flags")
+        return
+    }
+}
+
 @Test
 func parseAxPointMissingCoordsIsUsage() {
     guard case .usage = CLICommands.parse(

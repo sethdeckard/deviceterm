@@ -38,6 +38,26 @@ extension CLICommands {
     [--step <0..1>] [--budget <ms>] [--timeout <ms>] [--pane <ref>]
     """
 
+    /// Named accessibility flags that `wait pane` and `wait orientation`
+    /// reject.
+    ///
+    /// `wait` registers the accessibility set for the whole verb, so the
+    /// parser accepts these under any sub-verb and the two arms that cannot
+    /// read them would otherwise drop them.
+    ///
+    /// Separate from `selectorOnlyTapFlags`, which lists a different set for
+    /// a different reason. `tap` picks its form from `--identifier` and
+    /// `--label`, so that list omits those two and carries `--timeout`. A
+    /// wait picks its form from the sub-verb positional, so every
+    /// accessibility flag is an orphan here, while `--timeout` and `--pane`
+    /// never are: all three waits read both.
+    ///
+    /// `--step` and `--budget` reach the parser already converted, so
+    /// `firstWaitAXOnlyFlag` checks them as values rather than by name.
+    static let waitAXOnlyFlags = [
+        "identifier", "label", "role", "value", "match", "source", "print"
+    ]
+
     /// Flags that say nothing until `tap` has a selector to narrow.
     ///
     /// A coordinate tap carrying one was written for the selector form, so
@@ -222,12 +242,21 @@ extension CLICommands {
                 )
 
         case "wait":
+            // `wait` registers the accessibility flags for the whole verb, so
+            // the parser accepts them here and would otherwise drop them.
+            let axOnly = firstWaitAXOnlyFlag(in: flags, step: step, budgetMs: budgetMs)
             if pos.count == 2, pos[0] == "pane",
                 let state = PaneLifecycle(rawValue: pos[1]) {
+                if let axOnly {
+                    return .usage(message: waitAXOnlyFlagUsage(axOnly, on: "wait pane"))
+                }
                 return .waitPane(pane: pane, state: state, timeoutMs: timeoutMs)
             }
             if pos.count == 2, pos[0] == "orientation",
                 let orientation = parseEnumArg(pos[1], as: Orientation.self) {
+                if let axOnly {
+                    return .usage(message: waitAXOnlyFlagUsage(axOnly, on: "wait orientation"))
+                }
                 return .waitOrientation(
                     pane: pane,
                     orientation: orientation,
@@ -271,6 +300,26 @@ extension CLICommands {
         default:
             return nil
         }
+    }
+
+    /// The first accessibility flag this wait was given, whichever wait it
+    /// is. The lookup runs once ahead of sub-verb dispatch, so it answers
+    /// for `wait ax` as readily as for the other two; the pane and
+    /// orientation arms are the ones that treat a result as a refusal.
+    ///
+    /// Refusing rather than dropping, because dropping is not harmless.
+    /// `wait pane rendering --label Save` reads as a wait for a labelled
+    /// element and is a wait for the pane, reporting success without having
+    /// looked for the label at all.
+    static func firstWaitAXOnlyFlag(
+        in flags: [String: String],
+        step: Double?,
+        budgetMs: Int?
+    ) -> String? {
+        if let named = waitAXOnlyFlags.first(where: { flags[$0] != nil }) { return named }
+        if step != nil { return "step" }
+        if budgetMs != nil { return "budget" }
+        return nil
     }
 
     /// Parse `tap`, which takes two positional coordinates or an
@@ -372,6 +421,13 @@ extension CLICommands {
                 budgetMs: budgetMs
             )
         )
+    }
+
+    /// The usage error for an accessibility flag on a wait that cannot read
+    /// it. Names the wait that was written, since the likeliest cause is a
+    /// sub-verb typed where `ax` was meant.
+    static func waitAXOnlyFlagUsage(_ flag: String, on verb: String) -> String {
+        "deviceterm: --\(flag) applies to `wait ax`, not `\(verb)`"
     }
 
     /// The first coordinate outside the inclusive unit range, or nil when
