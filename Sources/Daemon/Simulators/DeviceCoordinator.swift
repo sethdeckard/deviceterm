@@ -75,6 +75,10 @@ public actor DeviceCoordinator {
 
     private struct InFlightDeviceRead {
         let token: UUID
+        /// Monotonic issue order. Read tasks may overlap, and their
+        /// completions can re-enter the actor in either order, so this is what
+        /// identifies the newer result.
+        let sequence: UInt64
         let generation: UInt64
         let startedAtNanoseconds: UInt64
         let task: Task<CoreSimulatorDeviceReadResult, Never>
@@ -85,6 +89,11 @@ public actor DeviceCoordinator {
 
     private static let defaultDeviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000
     private static let defaultDeviceSnapshotDeadlineNanoseconds: UInt64 = 3_000_000_000
+    /// Abandoned reads tolerated before a caller is refused without starting
+    /// another. The reader's queue is serial, so at most one bridge call is
+    /// ever parked and the rest are small queued closures; the cap is what
+    /// stops an unanswering service accumulating them without end.
+    private static let maxAbandonedDeviceReads = 2
     private static let bootClaimTerminalRetentionNanoseconds: UInt64 = 60_000_000_000
 
     /// UDID (lowercased) → the session attributed to it, or nil for one
@@ -181,11 +190,31 @@ public actor DeviceCoordinator {
     private let bootedUDIDsOverride: (@Sendable () -> Set<String>?)?
     private var cachedDeviceRead: CachedDeviceRead?
     private var inFlightDeviceRead: InFlightDeviceRead?
+    /// Timed-out reads whose completion has not yet been processed.
+    ///
+    /// A synchronous `SimDeviceSet.devices` cannot be cancelled, so a timed-out
+    /// read is set aside instead of occupying the live slot, which lets the
+    /// next caller start an attempt of its own. Each stays tracked until its
+    /// result is accounted for, which is what keeps the count below honest.
+    private var abandonedDeviceReads: [UUID: InFlightDeviceRead] = [:]
+    /// Issue counter for `InFlightDeviceRead.sequence`.
+    private var deviceReadSequence: UInt64 = 0
+    /// Sequence of the newest read whose result reached the cache. An older
+    /// read completing afterwards is discarded rather than allowed to replace
+    /// it, which would put a stale list (or a failure the retry already
+    /// recovered from) in front of every caller for a full TTL.
+    private var lastCachedReadSequence: UInt64 = 0
     /// Incremented synchronously with every observed or commanded device-state
     /// change. Completed reads from an older generation are discarded. Active
     /// waiters retry under the current generation; timed-out waiters retain
     /// their timeout result.
     private var deviceSnapshotGeneration: UInt64 = 0
+
+    /// Timed-out reads whose completion has not yet been processed. Each
+    /// entry clears in the same actor step that decides whether its result
+    /// reaches the cache. Diagnostic for tests; the daemon
+    /// never branches on it.
+    var abandonedDeviceReadCount: Int { abandonedDeviceReads.count }
 
     /// Diagnostic accessor: raw size of the ownership map, i.e. how
     /// many sims deviceterm considers itself the owner of. Tests only;
@@ -371,6 +400,12 @@ public actor DeviceCoordinator {
             cachedDeviceRead = nil
 
             if inFlightDeviceRead == nil {
+                // Refuse rather than start another once too many earlier reads
+                // are still parked in the bridge. This is the only path that
+                // reports a timeout without waiting for one.
+                guard abandonedDeviceReads.count < Self.maxAbandonedDeviceReads else {
+                    return .timedOut
+                }
                 startDeviceRead(generation: deviceSnapshotGeneration)
             }
 
@@ -394,6 +429,8 @@ public actor DeviceCoordinator {
     /// owns its eventual completion and accounts for its result.
     private func startDeviceRead(generation: UInt64) {
         let token = UUID()
+        deviceReadSequence += 1
+        let sequence = deviceReadSequence
         let startedAtNanoseconds = deviceSnapshotClock()
         let reader = deviceReader
         let task = Task { await reader.read() }
@@ -409,6 +446,7 @@ public actor DeviceCoordinator {
         }
         inFlightDeviceRead = InFlightDeviceRead(
             token: token,
+            sequence: sequence,
             generation: generation,
             startedAtNanoseconds: startedAtNanoseconds,
             task: task,
@@ -451,12 +489,19 @@ public actor DeviceCoordinator {
         let waiters = inFlightDeviceRead.waiters
         inFlightDeviceRead.waiters = []
         inFlightDeviceRead.timedOut = true
-        self.inFlightDeviceRead = inFlightDeviceRead
+        // Set it aside and leave the live slot empty, so the next caller starts
+        // a fresh read instead of inheriting this one's verdict. The call
+        // itself keeps running; only the waiting stopped.
+        self.inFlightDeviceRead = nil
+        abandonedDeviceReads[token] = inFlightDeviceRead
         let deadlineMilliseconds = deviceSnapshotDeadlineNanoseconds / 1_000_000
+        let abandoned = abandonedDeviceReads.count
+        let cap = Self.maxAbandonedDeviceReads
         DiagnosticLog.attach.error(
             """
             CoreSimulator device enumeration timed out after \
-            \(deadlineMilliseconds, privacy: .public)ms; circuit open
+            \(deadlineMilliseconds, privacy: .public)ms; \
+            \(abandoned, privacy: .public) of \(cap, privacy: .public) abandoned
             """
         )
         for waiter in waiters {
@@ -469,12 +514,24 @@ public actor DeviceCoordinator {
         generation: UInt64,
         result: CoreSimulatorDeviceReadResult
     ) {
-        guard let inFlightDeviceRead, inFlightDeviceRead.token == token else { return }
+        // The read is either still the live one or was set aside when its
+        // waiters gave up; both have to be accounted for, and an abandoned one
+        // frees its ledger place here.
+        let inFlightDeviceRead: InFlightDeviceRead
+        if let live = self.inFlightDeviceRead, live.token == token {
+            inFlightDeviceRead = live
+            self.inFlightDeviceRead = nil
+        } else if let abandoned = abandonedDeviceReads.removeValue(forKey: token) {
+            inFlightDeviceRead = abandoned
+        } else {
+            return
+        }
         inFlightDeviceRead.timeoutTask.cancel()
-        self.inFlightDeviceRead = nil
 
         let isCurrent = deviceSnapshotGeneration == generation
-        if isCurrent {
+        let isNewest = inFlightDeviceRead.sequence > lastCachedReadSequence
+        if isCurrent, isNewest {
+            lastCachedReadSequence = inFlightDeviceRead.sequence
             cachedDeviceRead = CachedDeviceRead(
                 result: result,
                 completedAtNanoseconds: deviceSnapshotClock()
@@ -485,7 +542,14 @@ public actor DeviceCoordinator {
             since: inFlightDeviceRead.startedAtNanoseconds
         ) / 1_000_000
         if inFlightDeviceRead.timedOut {
-            let disposition = isCurrent ? "cached" : "discarded after invalidation"
+            let disposition: String
+            if !isCurrent {
+                disposition = "discarded after invalidation"
+            } else if !isNewest {
+                disposition = "discarded as superseded"
+            } else {
+                disposition = "cached"
+            }
             DiagnosticLog.attach.notice(
                 """
                 CoreSimulator device enumeration returned after timeout in \

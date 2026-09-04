@@ -88,6 +88,25 @@ private final class DeviceReadDeadlineFixture: @unchecked Sendable {
     }
 }
 
+/// The first caller claims the token; later calls return false.
+///
+/// A `DispatchSemaphore` would be the obvious one-shot token, but one left
+/// below its initial value traps libdispatch when it deallocates.
+///
+/// `@unchecked Sendable`: `claimed` is guarded by `lock`.
+private final class FirstEntryToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            if claimed { return false }
+            claimed = true
+            return true
+        }
+    }
+}
+
 private func makeCoordinator(
     fixture: DeviceReadFixture,
     readerQueue: DispatchQueue = DispatchQueue(
@@ -236,15 +255,23 @@ func concurrentDeviceSnapshotMissesShareOneRead() async throws {
 }
 
 @Test
-func blockedDeviceSnapshotTimesOutAllWaitersAndOpensCircuit() async {
+func blockedDeviceSnapshotTimesOutEveryWaiterThenRetries() async {
     let fixture = DeviceReadFixture()
     let deadline = DeviceReadDeadlineFixture()
     let entered = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
-    let coordinator = makeCoordinator(fixture: fixture, deadline: deadline) {
-        entered.signal()
-        release.wait()
-    }
+    let completed = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        deadline: deadline,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        },
+        afterRead: { completed.signal() }
+    )
 
     let first = Task { try await coordinator.listAll() }
     await waitOffExecutor(for: entered)
@@ -252,14 +279,163 @@ func blockedDeviceSnapshotTimesOutAllWaitersAndOpensCircuit() async {
     for _ in 0..<10 { await Task.yield() }
     deadline.fire()
 
+    // Both waiters on the one read give up together.
     await #expect(throws: DeviceError.listTimedOut) { try await first.value }
     await #expect(throws: DeviceError.listTimedOut) { try await second.value }
+
+    // A caller arriving afterwards gets its own attempt rather than the
+    // abandoned read's verdict, so it waits for a deadline of its own instead
+    // of being answered instantly.
+    let third = Task { try await coordinator.listAll() }
+    deadline.fire()
+    await #expect(throws: DeviceError.listTimedOut) { try await third.value }
+    // No attempt has reached `fixture.read()`: the first closure holds the
+    // serial reader queue and the rest are queued behind it.
+    #expect(fixture.hasNoReads)
+
+    release.signal()
+    await waitOffExecutor(for: completed)
+    #expect(await awaitRecoveredRead(from: coordinator) != nil)
+}
+
+/// Drive `count` attempts until each reports a timeout. Attempts started
+/// before the ledger fills are abandoned; later ones are refused immediately.
+/// The first accepted attempt parks in the bridge and the other accepted ones
+/// queue behind it on the reader's serial queue, so none of those reaches
+/// `fixture.read()`.
+private func abandonReads(
+    count: Int,
+    on coordinator: DeviceCoordinator,
+    deadline: DeviceReadDeadlineFixture,
+    entered: DispatchSemaphore
+) async {
+    for index in 0..<count {
+        let read = Task { try await coordinator.listAll() }
+        if index == 0 {
+            await waitOffExecutor(for: entered)
+        } else {
+            for _ in 0..<10 { await Task.yield() }
+        }
+        deadline.fire()
+        await #expect(throws: DeviceError.listTimedOut) { try await read.value }
+    }
+}
+
+@Test
+func theAbandonedReadLedgerRefusesOnceItIsFull() async {
+    let fixture = DeviceReadFixture()
+    let deadline = DeviceReadDeadlineFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let completed = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        deadline: deadline,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        },
+        afterRead: { completed.signal() }
+    )
+
+    await abandonReads(count: 2, on: coordinator, deadline: deadline, entered: entered)
+
+    // The cap is reached, so this caller is refused without starting a third
+    // attempt. No deadline is fired for it: returning at all is the proof,
+    // since a started read would still be waiting on one.
     await #expect(throws: DeviceError.listTimedOut) { try await coordinator.listAll() }
     #expect(fixture.hasNoReads)
 
     release.signal()
+}
+
+@Test
+func aLateReadFreesItsLedgerSlot() async {
+    let fixture = DeviceReadFixture()
+    let deadline = DeviceReadDeadlineFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let completed = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        deadline: deadline,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        },
+        afterRead: { completed.signal() }
+    )
+
+    await abandonReads(count: 2, on: coordinator, deadline: deadline, entered: entered)
+    await #expect(throws: DeviceError.listTimedOut) { try await coordinator.listAll() }
+
+    // The parked call returns, which drains the queue behind it and gives the
+    // ledger its places back. The refusal above was temporary, not a latch.
+    release.signal()
+    await waitOffExecutor(for: completed)
+    // Invalidate the old generation so this call reaches the bridge whether
+    // or not a drained read has already cached its result. While the ledger
+    // was full the same call was refused outright.
+    await coordinator.noteExternalBoot(udid: UUID().uuidString)
     #expect(await awaitRecoveredRead(from: coordinator) != nil)
-    #expect(fixture.count == 1)
+}
+
+@Test
+func aLateAbandonedReadCannotReplaceANewerSnapshot() async throws {
+    // Overlapping reads complete through separate tasks, and nothing orders
+    // their re-entry into the actor, so an abandoned read can land after the
+    // retry that superseded it. Both carry the same generation, so generation
+    // alone can't tell them apart: without a sequence watermark the older
+    // result would sit in the cache for a full TTL, in front of every caller.
+    //
+    // A concurrent reader queue is what makes the ordering controllable here.
+    // In production the queue is serial, which orders the bridge calls but
+    // still not the completions.
+    let fixture = DeviceReadFixture(results: [
+        .success([]),
+        .failure(CoreSimulatorDeviceReadFailure(message: "stale failure"))
+    ])
+    let deadline = DeviceReadDeadlineFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let firstEntry = FirstEntryToken()
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        readerQueue: DispatchQueue(
+            label: "com.deviceterm.tests.device-cache-overlap",
+            qos: .default,
+            attributes: .concurrent
+        ),
+        deadline: deadline,
+        beforeRead: {
+            guard firstEntry.claim() else { return }
+            entered.signal()
+            release.wait()
+        }
+    )
+
+    let abandoned = Task { try await coordinator.listAll() }
+    await waitOffExecutor(for: entered)
+    deadline.fire()
+    await #expect(throws: DeviceError.listTimedOut) { try await abandoned.value }
+
+    // The retry runs past the parked read and caches the newer snapshot.
+    _ = try await coordinator.listAll()
+
+    // Now let the abandoned read finish. Its result is older and is a failure,
+    // so a regression here is visible as the next call throwing.
+    release.signal()
+    // Wait on the coordinator, not the fixture. The read counter advances
+    // inside the bridge call, well before its continuation resumes and before
+    // the completion re-enters the actor; the ledger only empties in the same
+    // step that decides whether the late result is cached, so this is the
+    // point after which the assertion means something.
+    #expect(try await poll(timeout: 2) { await coordinator.abandonedDeviceReadCount == 0 })
+    _ = try await coordinator.listAll()
 }
 
 @Test
@@ -268,10 +444,18 @@ func ownershipRestorePropagatesDeviceSnapshotTimeout() async {
     let deadline = DeviceReadDeadlineFixture()
     let entered = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
-    let coordinator = makeCoordinator(fixture: fixture, deadline: deadline) {
-        entered.signal()
-        release.wait()
-    }
+    let completed = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        deadline: deadline,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        },
+        afterRead: { completed.signal() }
+    )
     let claims = [UUID().uuidString.lowercased(): UUID?.none]
 
     let restore = Task { try await coordinator.restoreOwnership(claims) }
@@ -279,7 +463,10 @@ func ownershipRestorePropagatesDeviceSnapshotTimeout() async {
     deadline.fire()
 
     await #expect(throws: DeviceError.listTimedOut) { try await restore.value }
+    // Wait until the released reader has produced its fixture result before
+    // polling for recovery.
     release.signal()
+    await waitOffExecutor(for: completed)
     #expect(await awaitRecoveredRead(from: coordinator) != nil)
 }
 
@@ -307,15 +494,14 @@ func invalidationCannotQueueBehindTimedOutDeviceRead() async {
     deadline.fire()
     await #expect(throws: DeviceError.listTimedOut) { try await first.value }
 
+    // Reaching the actor is the assertion: the blocking bridge call runs
+    // off-executor, so invalidation stays responsive while enumeration is
+    // parked.
     await coordinator.noteExternalBoot(udid: UUID().uuidString)
-    await #expect(throws: DeviceError.listTimedOut) { try await coordinator.listAll() }
+
     release.signal()
     await waitOffExecutor(for: completed)
-    for _ in 0..<10 { await Task.yield() }
-    #expect(fixture.count == 1)
-
     #expect(await awaitRecoveredRead(from: coordinator) != nil)
-    #expect(fixture.count == 2)
 }
 
 @Test
