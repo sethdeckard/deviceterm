@@ -27,8 +27,10 @@ import Testing
 // The track NEVER reboots or shuts down the device. Prerequisites: an iPhone/iPad
 // plugged in, unlocked, and trusted, with Device Hub / Xcode's "Devices and
 // Simulators" window **closed**. The whole point is that deviceterm holds the
-// tunnel up on its own (via `TunnelKeepalive`); a Device-Hub "view screen" would
-// also consume the single video stream the mirror needs.
+// tunnel up on its own (via `TunnelKeepalive`). A Device-Hub "view screen"
+// contends with touch input and may disturb the other input trials; it does not
+// block the mirror, because both apps can stream video concurrently. See
+// `Tests/Manual/device-hub-coexistence.md`.
 
 /// Frame tally the `@Sendable` surface callback bumps from arbitrary tasks.
 private actor FrameSink {

@@ -12,9 +12,10 @@
 # Prerequisites (the device-interaction protocol):
 #   • an iPhone/iPad plugged in, UNLOCKED, and trusted;
 #   • Device Hub / Xcode's "Devices and Simulators" window CLOSED — deviceterm
-#     holds the tunnel up on its own now; a Device-Hub "view screen" would
-#     also consume the single video stream the mirror needs. (The tunnel may
-#     be down at start — the track brings it up.)
+#     holds the tunnel up on its own, and a Device-Hub "view screen" contends
+#     with touch input, so close it to give the track a known starting owner.
+#     Video is not the problem: both apps can mirror concurrently.
+#     (The tunnel may be down at start — the track brings it up.)
 #
 # This track NEVER reboots or shuts down the device. It fails loudly when no
 # device is connected — it does not silently no-op.
@@ -22,8 +23,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The physical device and its CoreDevice tunnel are shared hardware:
-# two concurrent tracks would fight over the single video stream. One
+# The physical device and its CoreDevice tunnel are shared hardware: two
+# concurrent tracks would fight over the device's input, and over the tunnel
+# each brings up and tears down. One
 # device lock across this user's checkouts; a concurrent run fails fast
 # with a BUSY block. The
 # precheck also runs while holding the lock so the whole track has one
