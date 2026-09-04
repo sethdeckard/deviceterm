@@ -307,6 +307,43 @@ func deviceSubscribeRegistersLeaseToken() async throws {
     #expect(await backend.pool.tokenState(token) == .active)
 }
 
+@Test("a simulator pane registers its lease token, so its leased frames reach the side-band")
+func simSubscribeRegistersLeaseTokenAndDelivers() async throws {
+    // Registration keyed off the pane's target rather than its backend drops
+    // every frame from a backend whose pool the target didn't predict: the
+    // frame carries a lease, the leased path asks for a hold, and an
+    // unregistered token can't be granted one.
+    let registry = PaneSubscriptionRegistry()
+    let coordinator = PaneCoordinator(subscriptionRegistry: registry)
+    let backend = LeasingMockBackend()
+    let result = try await coordinator.createPane(
+        target: .sim(udid: UUID().uuidString.lowercased()),
+        sessionId: UUID(),
+        acquire: {
+            PaneCoordinator.AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone")
+        }
+    )
+    let onSurface = try #require(backend.onSurface)
+
+    let token = UUID()
+    let probe = DeliveryProbe()
+    let context = SubscriptionContext(
+        subscriptionToken: token,
+        connectionId: 7,
+        lifecycle: SubscriptionLifecycle(),
+        surfaceDelivery: { _ in probe.bump() }
+    )
+    _ = try await coordinator.subscribe(paneId: result.paneId, as: .guiPeer, context: context)
+
+    #expect(backend.registeredTokens.first?.token == token)
+    #expect(await backend.pool.tokenState(token) == .active)
+
+    // The consequence, not just the call: a leased frame has to arrive.
+    let leased = try #require(await backend.pool.acquire(width: 4, height: 4))
+    onSurface(leased)
+    #expect(try await poll(timeout: 2) { probe.value == 1 })
+}
+
 @Test("the initial replay is token-targeted — a new subscription doesn't re-deliver to existing ones")
 func initialReplayTargetsOnlyTheNewToken() async throws {
     let registry = PaneSubscriptionRegistry()

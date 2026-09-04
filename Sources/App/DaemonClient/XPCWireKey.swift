@@ -19,8 +19,8 @@ enum XPCWireKey {
     static let rpcValue = "rpc"
     static let surfaceValue = "surface"
 
-    // Correlation token (every XPC pane subscription, sim + device) plus the
-    // device-only lease overlay (leased/leaseEpoch).
+    // Correlation token (every XPC pane subscription) plus the per-frame
+    // lease overlay (leased/leaseEpoch).
     static let subscriptionToken = "subscriptionToken"
     static let leased = "leased"
     static let leaseEpoch = "leaseEpoch"

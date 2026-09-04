@@ -218,8 +218,8 @@ final class SimulatorMetalRenderer {
             }
         }
         // The ownership edge: retain the lease until this command buffer
-        // completes. For a leased device frame that's what keeps its pool
-        // slot from being recycled while the GPU is still sampling it; an
+        // completes. For a leased frame that's what keeps its pool slot
+        // from being recycled while the GPU is still sampling it; an
         // unleased frame is retained the same way but has no release
         // bookkeeping, so it's a cheap no-op. Metal fires completion
         // handlers even on error/timeout, so the ref is always dropped.

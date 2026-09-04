@@ -85,7 +85,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     }
 
     /// One half of a surface-pair slot. The `lease` is built when the
-    /// side-band lands; for a leased device frame that means its use-count
+    /// side-band lands; for a leased frame that means its use-count
     /// bump + accountant `acquire` happen immediately (even before the JSON
     /// half or the subscribe response), while an unleased frame takes
     /// neither. The JSON `event` half arrives on the subscription's stream.
@@ -1098,10 +1098,10 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         else { return }
         let leased = xpc_dictionary_get_bool(event, XPCWireKey.leased)
         let leaseEpoch = UInt64(xpc_dictionary_get_uint64(event, XPCWireKey.leaseEpoch))
-        // Build the lease NOW: for a leased device frame its use-count bump
+        // Build the lease NOW: for a leased frame its use-count bump
         // and accountant `acquire` happen before the pair resolves, so a
         // release (deinit) can never precede its acquire, even if the frame is
-        // dropped; an unleased (sim / kill-switched) frame takes neither.
+        // dropped; a kill-switched (unleased) frame takes neither.
         let lease = await makeLease(
             paneId: paneId,
             token: token,
@@ -1117,10 +1117,9 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         tryFulfillSurfacePair(paneId: paneId, sequence: sequence, token: token, inboundLease: lease)
     }
 
-    /// Build a `SurfaceLease`. A leased device frame registers its
-    /// generation with the accountant and installs a release sink; an
-    /// unleased frame (simulator, or kill switch off) takes no use-count
-    /// and no sink.
+    /// Build a `SurfaceLease`. A leased frame registers its generation with
+    /// the accountant and installs a release sink; an unleased frame (kill
+    /// switch off) takes no use-count and no sink.
     private func makeLease(
         paneId: String,
         token: UUID,

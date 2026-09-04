@@ -1220,14 +1220,18 @@ public actor PaneCoordinator {
             }
         }
 
-        // Device panes register the subscription's lease token with the
-        // pool and install the lifecycle's pool teardown BEFORE the
-        // surface replay, so a token-bearing side-band observes a
-        // registered token and any teardown cause that raced the
-        // subscribe applies to a wired token. Sim panes carry the token
-        // for correlation but take no pool registration; UDS (nil
+        // Register the subscription's lease token with the backend's pool and
+        // install the lifecycle's pool teardown BEFORE the surface replay, so a
+        // token-bearing side-band observes a registered token and any teardown
+        // cause that raced the subscribe applies to a wired token. UDS (nil
         // context) skips both.
-        if let context, case .device = record.target, let backend = record.backend {
+        //
+        // Every pane kind registers. A frame that carries a lease is delivered
+        // through a hold on that token, so gating this on the target would drop
+        // every frame from a backend whose pool the target didn't predict. A
+        // backend without a pool inherits the protocol's no-op forwarders,
+        // which is what makes registering unconditionally safe.
+        if let context, let backend = record.backend {
             await backend.registerLeaseToken(
                 context.subscriptionToken,
                 connectionId: context.connectionId
@@ -1332,7 +1336,7 @@ public actor PaneCoordinator {
         return (subscriptionId, stream)
     }
 
-    /// Apply a cumulative surface-release watermark to a device pane's
+    /// Apply a cumulative surface-release watermark to the pane's backend
     /// pool. The pool honors it only from the connection that registered
     /// the token (`connectionId`), so a foreign peer's ack (including any
     /// UDS peer, which registers no token) is a counted no-op.

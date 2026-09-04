@@ -261,6 +261,14 @@ whether a backend is needed, so an attach that fails there would otherwise
 fail a re-attach that never needed one. The failure is raised from `acquire`,
 which runs only on a genuine fresh create.
 
+Running it is not the same as the pane keeping what it built, though.
+Acquiring a sim backend suspends, so two creates
+racing one target can both acquire before either sees the other's pane, and
+only one commits. The default closes an unused simulator backend.
+Physical-device attach overrides `onUnused` so it can release both the backend
+and the tunnel keepalive it took alongside it, which only the caller can
+balance.
+
 The resurrect path (detach + re-attach in place) covers a different case: a
 pane that lost its device under a live daemon and can get it back. A sim
 qualifies once `device.list` reports it Booted again; a physical device once
@@ -453,9 +461,10 @@ daemon wraps each `IOSurfaceRef` via
 `IOSurfaceLookupFromXPCObject`: zero-copy, no `kIOSurfaceIsGlobal` mirror
 surface, no per-process visibility. The pairing threshold is 250 ms,
 swept roughly every 100 ms; a JSON-only timeout yields a `(_, nil)` event
-and the GUI holds its last good frame. For a **device** pane the surface is *leased*;
-see "Surface lifecycle" under Data flows for the ownership contract that
-keeps a slot from being overwritten while the GPU still reads it.
+and the GUI holds its last good frame. By default the surface is *leased*; the
+surface-leasing kill switch sends it without a subscription hold. See "Surface
+lifecycle" under Data flows for the ownership contract that keeps a slot from
+being overwritten while the GPU still reads it.
 
 Control requests and pane traffic use different XPC peers. Surface traffic
 therefore cannot wait ahead of `device.list` or another one-shot reply on the
@@ -599,6 +608,15 @@ to hand it the record being closed. That fence covers the GUI's wait on the
 close. Past it the outcome is unknown, so every close the GUI issues also
 carries `expectedAttachment`: a close whose admission has been superseded is
 refused daemon-side, which is what makes a late one harmless.
+
+**No process observes sleep or wake.** Neither the GUI nor the daemon registers
+for sleep/wake notifications, deliberately. Waking is one trigger among several
+for the two conditions that actually matter: CoreSimulator stopped answering,
+or a consumer stopped draining. Each is bounded where it happens. The
+acquisition deadline bounds CoreSimulator calls, and with per-frame leasing
+enabled the surface pool bounds a consumer that stops draining. Recovery
+therefore doesn't depend on having noticed the wake, and the same bounds cover
+the causes that have nothing to do with sleep.
 
 **An expiry starts the detection; it doesn't decide it.** A call reaching its
 deadline says something went unanswered, which a call running long for its own
@@ -3281,22 +3299,29 @@ and creates the pane, then `pane.subscribe(paneId)` starts the
 
 The daemon sends the GUI an `IOSurface` per frame; the GUI aliases it as an
 `MTLTexture` (`MTLDevice.makeTexture(descriptor:iosurface:plane:)`) and
-samples it on the GPU. Zero-copy through kernel shared memory. There are two
-frame kinds with different ownership contracts.
+samples it on the GPU. Zero-copy through kernel shared memory.
 
-**Simulator frames are unleased.** CoreSimulator owns the current surface and
-may mutate or replace it, firing a change callback; the daemon retains and
-use-counts each callback surface and passes it through, and the GUI re-samples
-the alias at display rate. No lease and no acknowledgement control
-CoreSimulator's reuse; the sim's own producer/consumer timing is Apple's
-design.
-
-**Device frames are leased**, because the daemon *copies* each decoded frame
-into a pool slot it owns and later reuses that slot. A bare use count would
-not prevent the daemon overwriting a slot while the GPU still reads it
+**Every production frame is copied into a daemon-owned surface pool**, and
+with per-frame leasing enabled its delivery also commits a subscription hold.
+The copy is what makes the hold necessary: the daemon reuses those slots, and a
+bare use count would not prevent it overwriting one while the GPU still reads it
 (`IOSurfaceIncrementUseCount` is a recycling advisory, not a write lease), so
 a stalled consumer could sample a coherent-but-wrong-generation frame. The
 leased surface pool supplies the missing happens-before edge.
+
+Both producers copy from storage owned by their upstream source. A device frame
+comes from the decoder's buffer, which VideoToolbox recycles. A simulator frame
+comes from the surface CoreSimulator owns and keeps writing to, which the daemon
+cannot stop it mutating. Either way the copy is what gives the consumer a frame
+that holds still, and what makes an acknowledgement mean anything. The two
+pipelines differ in more than that (buffering, crop detection, tracing, and
+whether a disconnect is possible at all), which is why they stay separate.
+
+Leasing is also what bounds a stalled consumer. One that stops acknowledging
+keeps its slots, the pool runs out, and the producer drops frames rather than
+queueing them. Sustained exhaustion retires the epoch once and then fails the
+pane, which the GUI renders with Retry. Without it an unacknowledged stream
+grows inside the daemon for as long as the consumer stays away.
 
 **Vocabulary.**
 
@@ -3306,9 +3331,8 @@ leased surface pool supplies the missing happens-before edge.
 - **epoch**: a per-pool `UInt64` bumped on resize and on controlled
   recovery. Old- and new-epoch leases coexist during churn, so holds,
   watermarks, and acks are keyed by `(epoch, token)`.
-- **token**: the `subscriptionToken` minted per XPC pane subscription. For a
-  device pane it also keys the pool's per-subscription lease state; sims carry
-  it only for side-band correlation.
+- **token**: the `subscriptionToken` minted per XPC pane subscription. It also
+  keys the pool's per-subscription lease state.
 - **holder**: a slot's holders are a set (`.daemonCurrent` |
   `.subscription(token)`), at most once each. A slot returns to the free list
   when its holder set empties.
@@ -3317,7 +3341,7 @@ leased surface pool supplies the missing happens-before edge.
   watermark acknowledgement removes an exposed hold; orphaning pins outstanding
   holds while preventing new grants.
 
-**Producer (daemon).** `LeasedSurfacePool` (device panes only) hands out the
+**Producer (daemon).** `LeasedSurfacePool` hands out the
 least-recently-freed slot with a fresh generation, or drops the frame when
 none is free (never blocks decode, never allocates unboundedly). Delivery to
 a token runs as one **per-token serial transaction** so exposure order equals

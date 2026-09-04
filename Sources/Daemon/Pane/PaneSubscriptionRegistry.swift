@@ -13,14 +13,14 @@ import Foundation
 /// into an `xpc_object_t` and ships it), and the registry routes per-pane
 /// surface fan-out to the right closures.
 ///
-/// For a **device** pane with leasing enabled, the registry runs the pool
-/// grant transaction for each subscription before the send (acquire a
-/// provisional hold, commit it *before* exposing the surface, then send)
-/// so a slot can't be reused while the GUI still holds the frame. The
-/// transaction is serialized per subscription through a bounded,
-/// latest-only worker, so exposure order equals reservation order and a
-/// stalled commit can't accumulate a backlog. Simulator frames (no lease)
-/// and the kill-switched path take no hold and send straight through.
+/// A frame carrying lease metadata, with leasing enabled, goes through the
+/// pool grant transaction before the send (acquire a provisional hold, commit
+/// it *before* exposing the surface, then send) so a slot can't be reused
+/// while the GUI still holds the frame. The transaction is serialized per
+/// subscription through a bounded, latest-only worker, so exposure order
+/// equals reservation order and a stalled commit can't accumulate a backlog.
+/// A frame without lease metadata, and every frame on the kill-switched path,
+/// takes no hold and sends straight through.
 public actor PaneSubscriptionRegistry {
     /// The synchronous, non-reentrant send: it only marshals the surface
     /// and calls `xpc_connection_send_message`. Kept synchronous so no
@@ -34,12 +34,12 @@ public actor PaneSubscriptionRegistry {
         public let paneId: UUID
         public let sequence: UInt64
         public let surface: RetainedSurface
-        /// Correlation key for this subscription's side-band lane (and,
-        /// for a device pane, the pool lease token).
+        /// Correlation key for this subscription's side-band lane, and the
+        /// pool lease token.
         public let subscriptionToken: UUID
-        /// True when a pool hold is committed for this frame (device pane,
-        /// leasing on); the GUI takes a lease and acks it. False for a
-        /// simulator frame or the kill-switched path: no hold, no ack.
+        /// True when a pool hold is committed for this frame; the GUI takes
+        /// a lease and acks it. False on the kill-switched path: no hold,
+        /// no ack.
         public let leased: Bool
         /// The pool epoch the hold belongs to; meaningful only when
         /// `leased`.
@@ -86,7 +86,7 @@ public actor PaneSubscriptionRegistry {
         }
     }
 
-    /// Per-subscription delivery worker for the leased device path. At
+    /// Per-subscription delivery worker for the leased path. At
     /// most one transaction runs at a time plus one newest-queued frame
     /// (the queue keeps the greater generation; an older arrival is
     /// dropped). Bounds retention and preserves exposure == reservation
@@ -113,8 +113,8 @@ public actor PaneSubscriptionRegistry {
     private var active: Set<UUID> = []
 
     /// Global per-frame leasing switch (`DEVICETERM_SURFACE_LEASES`). When
-    /// off, device frames deliver like simulator frames (no holds, no
-    /// acks) but the token/drain subscription lifecycle stays on.
+    /// off, frames deliver unacknowledged (no holds, no acks) but the
+    /// token/drain subscription lifecycle stays on.
     private let leasingEnabled: Bool
 
     public init(leasingEnabled: Bool = true) {
@@ -264,9 +264,9 @@ public actor PaneSubscriptionRegistry {
         dispatchDelivery(subscriptionId: subscriptionId, published: published, sequence: sequence)
     }
 
-    /// Route one frame to one subscription: through the grant worker for a
-    /// leased device frame, or straight to the send for a simulator frame
-    /// / the kill-switched path.
+    /// Route one frame to one subscription: through the grant worker when it
+    /// carries lease metadata and leasing is on, or straight to the send when
+    /// it carries none or leasing is kill-switched off.
     private func dispatchDelivery(subscriptionId: UUID, published: PublishedSurface, sequence: UInt64) {
         // A dormant (registered-but-not-yet-activated) entry never delivers.
         guard active.contains(subscriptionId),

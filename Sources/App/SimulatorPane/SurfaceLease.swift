@@ -3,12 +3,13 @@
 import Foundation
 import IOSurface
 
-/// The GUI's ownership handle on one daemon-delivered
-/// surface (leased for a device pane, unleased for a simulator pane or a
-/// kill-switched device). The inverse of the daemon's `RetainedSurface`.
+/// The GUI's ownership handle on one daemon-delivered surface. A frame is
+/// leased when the daemon committed a pool hold for it; otherwise this handle
+/// owns only its local surface reference. The inverse of the daemon's
+/// `RetainedSurface`.
 ///
-/// On a **leased** surface (a device frame the daemon committed a pool
-/// hold for), `init` bumps the IOSurface use count and `deinit` decrements
+/// On a **leased** surface (one the daemon committed a pool hold for),
+/// `init` bumps the IOSurface use count and `deinit` decrements
 /// it and signals "this generation is released" into the accountant sink,
 /// exactly once, by ARC, with no manual flag. The lease dies, and only then is
 /// its release signalled, when the surface is no longer current *and*
@@ -17,7 +18,7 @@ import IOSurface
 /// happens-before edge between GPU completion and lease release, so the
 /// daemon can't recycle a slot the GPU is still sampling.
 ///
-/// On an **unleased** surface (every simulator frame, and every device
+/// On an **unleased** surface (a frame from a backend with no pool, or any
 /// frame when `DEVICETERM_SURFACE_LEASES` is off) the sink is nil: no
 /// use-count bump, no release, semantically identical to handing around a
 /// bare `IOSurfaceRef`.

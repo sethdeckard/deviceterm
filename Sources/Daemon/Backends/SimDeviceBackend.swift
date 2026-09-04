@@ -25,6 +25,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         case twoFinger(CGPoint, CGPoint)
     }
 
+    /// Consecutive failed acquires before one controlled pool recovery. The
+    /// device path's figure, for the same reason: long enough that an ordinary
+    /// stall rides through, short enough that a pool which stays unusable is
+    /// caught in about two seconds at 60 Hz.
+    private static let exhaustionRecoveryThreshold = 120
+    private static let defaultPoolSlots = 6
+
     /// The CoreSimulator UDID: needed for the lazy AX-client lookup.
     private let udid: String
     private var displayHandle: SimDisplayHandle?
@@ -71,6 +78,19 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     )
 
     private let inputGate = DispatchQueue(label: "com.deviceterm.sim.input-gate")
+    /// Slots the published frames are copied into, so a consumer holds a
+    /// surface the daemon owns rather than the one CoreSimulator keeps writing.
+    private let pool: LeasedSurfacePool
+    // Fences frame/fatal callback eligibility against teardown. `startFrames`
+    // captures the current `frameToken`; teardown bumps it (both under
+    // `frameGate`). A callback fires only while its captured token is still
+    // current, so no publish or fatal escapes after stop, with no
+    // check-then-act window a bare cancellation check would leave.
+    private let frameGate = DispatchQueue(label: "com.deviceterm.sim.frame-gate")
+    private var frameToken: UInt64 = 0
+    private var frameTask: Task<Void, Never>?
+    /// Hands surfaces from the bridge's callback queue to the copy pump.
+    private var surfaceContinuation: AsyncStream<RetainedSurface>.Continuation?
     /// Whether new lazy bridge work may begin. AX work reads this from its
     /// serial blocking queue while teardown writes it on the coordinator.
     private var backendActive = true
@@ -95,6 +115,67 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.displayHandle = displayHandle
         self.hidClient = hidClient
         self.purpleClient = purpleClient
+        let slotCount = ProcessInfo.processInfo.environment[DeviceTermEnv.surfacePoolSlots]
+            .flatMap(Int.init) ?? Self.defaultPoolSlots
+        self.pool = LeasedSurfacePool(slotCount: slotCount)
+    }
+
+    /// Copy each surface from `surfaces` into a pooled slot and publish it.
+    ///
+    /// Separate from `startFrames` so the exhaustion policy is reachable
+    /// without a live CoreSimulator display: the loop needs the stream and the
+    /// pool, and nothing from the bridge.
+    ///
+    /// Unreleased subscription holds are one expected cause of sustained
+    /// exhaustion; `acquire` also returns nil when an epoch rotation exceeds
+    /// the quarantine budget or a slot allocation fails. The pump attempts one
+    /// controlled recovery and fails the pane through `fail` on a second bout,
+    /// whatever the cause. Failing is the point: it bounds what a pool that
+    /// stopped yielding slots can cost the daemon, and the pane recovers by
+    /// re-attaching.
+    static func pumpFrames(
+        surfaces: AsyncStream<RetainedSurface>,
+        pool: LeasedSurfacePool,
+        recoveryThreshold: Int,
+        publish: @Sendable (PublishedSurface) -> Void,
+        fail: @Sendable (String) -> Void
+    ) async {
+        var consecutiveDrops = 0
+        for await source in surfaces {
+            let dims = source.withRef { (IOSurfaceGetWidth($0), IOSurfaceGetHeight($0)) }
+            guard let published = await pool.acquire(width: dims.0, height: dims.1) else {
+                consecutiveDrops += 1
+                if consecutiveDrops >= recoveryThreshold {
+                    consecutiveDrops = 0
+                    switch await pool.recoverFromExhaustion() {
+                    case .recovered:
+                        DiagnosticLog.attach.notice(
+                            """
+                            surface pool unavailable; recovery will retry on \
+                            the next frame
+                            """
+                        )
+
+                    case .exhausted:
+                        fail("surface pool stayed unavailable after "
+                            + "recovery; the mirror can't continue")
+                        return
+                    }
+                }
+                continue
+            }
+            consecutiveDrops = 0
+            // CoreSimulator owns the source and keeps writing to it, so the
+            // published frame is a copy into the pool slot rather than the live
+            // alias. That is what the lease accounts for, and it also keeps the
+            // consumer from reading a surface while it is being written.
+            published.surface.withRef { destination in
+                source.withRef { origin in
+                    _ = SurfaceCopy.copy(from: origin, to: destination)
+                }
+            }
+            publish(published)
+        }
     }
 
     // MARK: Ownership-transfer input fence
@@ -235,28 +316,104 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     // MARK: Frames
 
+    /// Publish leased copies of the display's surface.
+    ///
+    /// `onDisconnect` never fires: a sim doesn't disconnect, and one that shuts
+    /// down is reported through CoreSimulator's own notification, which reaches
+    /// `markPanesShutdown(forUDID:)`. `onFatal` does, on sustained pool
+    /// exhaustion, which is how a pane whose pool stops yielding slots fails
+    /// instead of growing the daemon without bound.
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
         onFatal: @escaping @Sendable (String) -> Void,
         onDisconnect: @escaping @Sendable () -> Void
     ) throws {
-        // A sim pane has no leased pool, so `onFatal` never fires.
-        // `onDisconnect` doesn't either: a sim doesn't disconnect, and a sim
-        // that shuts down is reported through CoreSimulator's own
-        // notification, which reaches `markPanesShutdown(forUDID:)`.
         guard let displayHandle else { throw DeviceBackendError.notActive }
-        // Wrap on the bridge's queue so the retain/use-count pairing
-        // happens before the autoreleased source ref escapes. A sim frame
-        // takes no lease: the surface is a live CoreSimulator alias the
-        // daemon doesn't own, sampled in place at 60 Hz.
+        let pool = self.pool
+        let recoveryThreshold = Self.exhaustionRecoveryThreshold
+        // Install a fresh run token; teardown bumps it to fence late callbacks.
+        // Checked and invoked together under `frameGate`, so teardown and a
+        // publish are mutually ordered with no window between them.
+        let gate = frameGate
+        let token = gate.sync {
+            frameToken += 1
+            return frameToken
+        }
+        let publish: @Sendable (PublishedSurface) -> Void = { [weak self] published in
+            guard let self else { return }
+            gate.sync { if token == self.frameToken { onFrame(published) } }
+        }
+        let fail: @Sendable (String) -> Void = { [weak self] reason in
+            guard let self else { return }
+            gate.sync { if token == self.frameToken { onFatal(reason) } }
+        }
+        // The callback fires on the bridge's own queue and must not block it,
+        // so it only hands the surface over. Latest-only: the pump copies at
+        // whatever rate the pool allows, and an older frame waiting behind a
+        // newer one has no value on a mirror.
+        let (surfaces, continuation) = AsyncStream.makeStream(
+            of: RetainedSurface.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        surfaceContinuation?.finish()
+        surfaceContinuation = continuation
+        frameTask = Task {
+            await Self.pumpFrames(
+                surfaces: surfaces,
+                pool: pool,
+                recoveryThreshold: recoveryThreshold,
+                publish: publish,
+                fail: fail
+            )
+        }
+        // Wrap on the bridge's queue so the retain/use-count pairing happens
+        // before the autoreleased source ref escapes.
         try displayHandle.start { surfaceRef in
             guard let surfaceRef else { return }
-            onFrame(PublishedSurface(owned: LeasedSurface(surface: RetainedSurface(surfaceRef)), lease: nil))
+            continuation.yield(RetainedSurface(surfaceRef))
         }
     }
 
     func stopFrames() {
+        invalidateFrameRun()
         displayHandle?.stop()
+        surfaceContinuation?.finish()
+        surfaceContinuation = nil
+        frameTask?.cancel()
+        frameTask = nil
+    }
+
+    // MARK: Lease forwarders (to the pool)
+
+    func registerLeaseToken(_ token: UUID, connectionId: UInt64) async {
+        await pool.registerToken(token, connectionId: connectionId)
+    }
+
+    func unregisterLeaseTokenIfUnused(_ token: UUID) async -> Bool {
+        await pool.unregisterTokenIfUnused(token)
+    }
+
+    func releaseWatermark(token: UUID, epoch: UInt64, lowestHeld: UInt64, connectionId: UInt64) async {
+        await pool.applyWatermark(
+            token: token,
+            epoch: epoch,
+            lowestHeld: lowestHeld,
+            connectionId: connectionId
+        )
+    }
+
+    func drain(token: UUID) async {
+        await pool.beginDrain(token)
+    }
+
+    func orphan(token: UUID) async {
+        await pool.orphan(token)
+    }
+
+    /// Retire the current frame run so any publish or fatal still in flight from
+    /// it is dropped. Serialised with the callbacks on `frameGate`.
+    private func invalidateFrameRun() {
+        frameGate.sync { frameToken += 1 }
     }
 
     func pixelDimensions() -> (Int?, Int?) {
@@ -619,9 +776,16 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // Stop admitting lazy bridge work before releasing the display.
         inputGate.sync { backendActive = false }
         // Stop the frame stream and drop the display handle immediately: the
-        // IOSurface use-count must release so the kernel can reclaim it.
+        // IOSurface use-count must release so the kernel can reclaim it. The
+        // run token retires first, so a publish already in flight from the pump
+        // is dropped rather than reaching a pane that is going away.
+        invalidateFrameRun()
         displayHandle?.stop()
         displayHandle = nil
+        surfaceContinuation?.finish()
+        surfaceContinuation = nil
+        frameTask?.cancel()
+        frameTask = nil
         // An AX call already queued before teardown owns this backend until it
         // returns. Keep its client stable; the pane's AX queue clears it after
         // all admitted reads finish.

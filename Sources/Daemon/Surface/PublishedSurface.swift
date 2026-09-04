@@ -8,14 +8,15 @@ import Foundation
 /// It explicitly retains its `LeasedSurface` (the daemon-current owner):
 /// `Record.currentSurface` holds a `PublishedSurface`, so assigning a newer
 /// one drops the prior `owned` by ARC and releases its `.daemonCurrent`
-/// hold. A device frame carries `lease` metadata (epoch + generation +
-/// the hold-reservation entry point); a simulator frame sets `lease` to nil
-/// and an `owned` whose release sink is nil, the simulator live-alias path.
+/// hold. A pooled frame carries `lease` metadata (epoch + generation + the
+/// hold-reservation entry point). `lease` is nil only for a frame published
+/// without a pool behind it, whose `owned` has no release sink.
 struct PublishedSurface: Sendable {
     /// Retains the slot's `LeasedSurface`; its `deinit` releases the
     /// `.daemonCurrent` hold. Never dropped before this value is.
     let owned: LeasedSurface
-    /// Device-only lease overlay. Nil for a simulator frame.
+    /// Per-frame lease overlay. Nil for a frame published without a pool
+    /// behind it.
     let lease: LeaseMetadata?
     /// Off-by-default instrumentation stamp assigned at the producer copy
     /// site; nil unless surface tracing is enabled.

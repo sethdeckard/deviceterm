@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Device-only per-frame lease identity. `acquireHold` reserves a
+/// Per-frame lease identity. `acquireHold` reserves a
 /// subscription hold for a token on this exact `(epoch, generation)`.
 struct LeaseMetadata: Sendable {
     let epoch: UInt64

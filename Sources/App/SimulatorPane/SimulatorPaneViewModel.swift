@@ -99,10 +99,9 @@ final class SimulatorPaneViewModel {
     private(set) var currentSequence: UInt64?
     /// The lease on the surface the view renders. Nil until the first pair
     /// arrives; replaced in place as the daemon yields new frames. A leased
-    /// device frame's lease holds a pool slot until it (and every command
-    /// buffer that sampled it) is released. An unleased frame (every
-    /// simulator frame, and every device frame under the kill switch)
-    /// carries a lease that holds nothing.
+    /// frame's lease holds a pool slot until it (and every command buffer
+    /// that sampled it) is released. An unleased frame (under the kill
+    /// switch) carries a lease that holds nothing.
     private(set) var currentSurface: SurfaceLease?
     /// The sequence of `currentSurface`, advanced only when a non-nil
     /// surface is accepted, unlike `currentSequence` which also advances on
@@ -814,9 +813,9 @@ final class SimulatorPaneViewModel {
 
     private func enqueueSurface(sequence: UInt64, lease: SurfaceLease?) {
         // A superseded, un-flushed lease is dropped here and releases by
-        // ARC. For a leased device frame that frees the daemon's hold on
-        // that generation without it ever reaching the view; an unleased
-        // frame just drops with no bookkeeping.
+        // ARC. For a leased frame that frees the daemon's hold on that
+        // generation without it ever reaching the view; an unleased frame
+        // just drops with no bookkeeping.
         pendingSurfaceUpdate = (sequence, lease)
         guard surfaceApplyTask == nil else { return }
         surfaceApplyTask = Task { @MainActor [weak self] in

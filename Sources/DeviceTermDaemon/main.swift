@@ -133,8 +133,8 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         // manifest so old credential material can't linger at rest.
         Self.scrubLegacyStateManifest()
         // Per-frame surface leasing is on unless the kill switch is set to
-        // "0", then device frames deliver like simulator frames (no holds,
-        // no acks), while the token/drain subscription lifecycle stays on.
+        // "0", then frames deliver unacknowledged (no holds, no acks), while
+        // the token/drain subscription lifecycle stays on.
         let leasingEnabled = ProcessInfo.processInfo
             .environment[DeviceTermEnv.surfaceLeases] != "0"
         let subscriptionRegistry = PaneSubscriptionRegistry(leasingEnabled: leasingEnabled)

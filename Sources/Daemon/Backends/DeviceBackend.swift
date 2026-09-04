@@ -248,12 +248,13 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// becomes current again (ABA-safe across a quiesce+resume).
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool
 
-    // MARK: Surface-lease overlay (device panes only)
+    // MARK: Surface-lease overlay
     //
     // A backend that owns a leased surface pool registers each XPC
     // subscription's token, applies its cumulative release acks, and drains
-    // or orphans it on teardown. Sim/stub backends have no pool and inherit
-    // the default no-ops below.
+    // or orphans it on teardown. A backend with no pool inherits the default
+    // no-ops below, which is why the coordinator registers against every
+    // backend rather than deciding from the pane's target which ones have one.
 
     /// Register a subscription token so the pool admits grants for it.
     func registerLeaseToken(_ token: UUID, connectionId: UInt64) async
