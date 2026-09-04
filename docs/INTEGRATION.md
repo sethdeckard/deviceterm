@@ -321,6 +321,7 @@ protected tab.
 | `wait pane <state>` with `--json` | Wait receipt | Session | Named pane state observed before the deadline | Stable-additive |
 | `wait ax` with `--json` | Wait receipt | Session | The requested accessibility condition, present or absent, observed before the deadline | Stable-additive |
 | `wait orientation <orientation>` with `--json` | Wait receipt | Session | Confirmed orientation and stable surface observed before the deadline | Stable-additive |
+| `wait surface quiescent` with `--json` | Wait receipt | Session | Rendered surface unchanged for the settle window before the deadline | Stable-additive |
 | `tab rename` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab close` with `--json` | Workspace receipt | Session and sole-terminal tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab open`, `tab select`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
@@ -1251,6 +1252,32 @@ A false `orientationConfirmationSupported` returns `wait.unsupported`. When
 support is true but `orientation` is absent, the wait continues probing because
 a later observer callback or confirmed rotation may populate it. A daemon that
 omits both fields is treated as unsupported.
+
+### Surface Conditions
+
+Run:
+
+```sh
+deviceterm wait surface quiescent --settle 800
+```
+
+The observation contains `surface` (`sequence`, `width`, `height`) and the
+`settleMs` the wait was given. `--settle` defaults to 500 and accepts 0, which
+asks for two agreeing observations rather than a window.
+
+Quiescence is the surface being *unchanged*, never advanced by a given amount.
+A Simulator increments `sequence` once per frame; a physical device reports
+lease generations that jump. Nothing portable can be read from the size of a
+step, so only equality is tested. Width and height join `sequence` in that
+test, so a resize inside the window restarts it.
+
+A pane carrying no `surface` is an unmet condition rather than a quiescent
+one. Nothing drawn is not the same as nothing moving, and `wait pane rendering`
+is what waits for a first frame.
+
+This is not a rotation signal. Surface dimensions do not swap when a device
+turns, so a rotation can complete without either dimension changing; use
+`wait orientation`.
 
 ### Failure Classification
 

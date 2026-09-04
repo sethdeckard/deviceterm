@@ -455,6 +455,15 @@ func run(
                 state: state
             )
 
+        case let .waitSurfaceQuiescent(pane, settleMs, timeoutMs):
+            return try handleWaitSurfaceQuiescent(
+                pane: pane,
+                settleMs: settleMs,
+                timeoutMs: timeoutMs,
+                transport: transport,
+                output: output
+            )
+
         case let .waitOrientation(pane, orientation, timeoutMs):
             return try handleWaitOrientation(
                 pane: pane,

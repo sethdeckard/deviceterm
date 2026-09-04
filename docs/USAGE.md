@@ -547,6 +547,7 @@ deviceterm wait pane rendering --pane "$UDID"
 deviceterm wait ax --identifier save-button --role Button
 deviceterm wait ax --label Messages --match contains
 deviceterm wait orientation landscape-right
+deviceterm wait surface quiescent --settle 800
 ```
 
 The default deadline is 30000 milliseconds. Override it with
@@ -558,6 +559,16 @@ The default deadline is 30000 milliseconds. Override it with
 substring and folds case, for a label carrying an unread count or a truncation
 ellipsis. `wait orientation` requires two consecutive observations of the
 requested confirmed orientation with the same positive surface dimensions.
+
+`wait surface quiescent` waits for the picture to settle when there's no
+element to wait for: a Dynamic Type change, a theme flip, an animation
+finishing, the cases where the alternative is `sleep` and you're guessing.
+`--settle` is the window of stillness required, 500 milliseconds by default.
+
+Stillness means the surface hasn't changed, not that it changed by some
+amount. A pane that hasn't drawn anything yet isn't quiescent, it's pending,
+so use `wait pane rendering` for a first frame. And it won't tell you a
+rotation finished: the surface dimensions don't swap when a device turns.
 
 `--value` narrows to an element whose own value matches, under the same
 `--match` mode. Typing into a field puts the text in its value rather than its

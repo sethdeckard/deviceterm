@@ -1014,10 +1014,70 @@ func aPlainCoordinateTapIsUnchanged() {
     )
 }
 
+// MARK: - Waiting for surface quiescence
+
+@Test
+func parseWaitSurfaceQuiescentDefaultsItsSettleWindow() {
+    #expect(
+        CLICommands.parse(["deviceterm", "wait", "surface", "quiescent"])
+        == .waitSurfaceQuiescent(pane: nil, settleMs: 500, timeoutMs: 30_000)
+    )
+}
+
+@Test
+func parseWaitSurfaceQuiescentCarriesItsFlags() {
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "surface", "quiescent",
+            "--settle", "1200", "--timeout", "9000", "--pane", "phn001"
+        ]) == .waitSurfaceQuiescent(pane: "phn001", settleMs: 1_200, timeoutMs: 9_000)
+    )
+}
+
+@Test
+func aZeroSettleParses() {
+    // Zero is a legitimate ask: no window, just two agreeing observations.
+    #expect(
+        CLICommands.parse(["deviceterm", "wait", "surface", "quiescent", "--settle", "0"])
+        == .waitSurfaceQuiescent(pane: nil, settleMs: 0, timeoutMs: 30_000)
+    )
+}
+
+@Test(
+    "invalid surface waits are usage failures",
+    arguments: [
+        ["deviceterm", "wait", "surface"],
+        ["deviceterm", "wait", "surface", "still"],
+        ["deviceterm", "wait", "surface", "quiescent", "--settle", "soon"],
+        ["deviceterm", "wait", "surface", "quiescent", "--settle", "-1"]
+    ]
+)
+func invalidSurfaceWaitIsUsage(argv: [String]) {
+    guard case .usage = CLICommands.parse(argv) else {
+        Issue.record("expected usage for \(argv)")
+        return
+    }
+}
+
+@Test
+func aBareSurfaceWaitNamesItsOwnShape() throws {
+    // `wait surface` alone is a half-typed command, not an unknown verb, so
+    // the generic four-sub-verb line would answer a question nobody asked.
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "wait", "surface"]
+    ) else {
+        Issue.record("expected usage")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("wait surface quiescent"))
+    #expect(!text.contains("wait <pane"))
+}
+
 // MARK: - Accessibility flags on a non-accessibility wait
 
 @Test(
-    "wait pane and wait orientation refuse ax-only flags",
+    "non-accessibility waits refuse accessibility flags",
     arguments: [
         ["--identifier", "save"],
         ["--label", "Save"],
@@ -1033,18 +1093,39 @@ func aPlainCoordinateTapIsUnchanged() {
 )
 func nonAXWaitsRefuseAccessibilityFlags(flag: [String]) {
     // `wait` registers these for the whole verb, so the parser accepts them
-    // and the pane and orientation arms would otherwise drop them. A dropped
-    // `--label` turns a wait for an element into a wait for the pane, which
-    // succeeds without ever looking.
+    // and every arm that cannot read them would otherwise drop them. A
+    // dropped `--label` turns a wait for an element into a wait for the
+    // pane, which succeeds without ever looking.
     for base in [
         ["deviceterm", "wait", "pane", "rendering"],
-        ["deviceterm", "wait", "orientation", "portrait"]
+        ["deviceterm", "wait", "orientation", "portrait"],
+        ["deviceterm", "wait", "surface", "quiescent"]
     ] {
         guard case .usage = CLICommands.parse(base + flag) else {
             Issue.record("expected usage for \(base + flag)")
             return
         }
     }
+}
+
+@Test(
+    "--settle belongs to wait surface alone",
+    arguments: [
+        ["deviceterm", "wait", "pane", "rendering"],
+        ["deviceterm", "wait", "orientation", "portrait"],
+        ["deviceterm", "wait", "ax", "--label", "Save"]
+    ]
+)
+func otherWaitsRefuseTheSettleFlag(base: [String]) throws {
+    // The same rule the accessibility flags get, applied the other way: a
+    // wait that cannot read `--settle` refuses rather than dropping it.
+    guard case let .usage(message) = CLICommands.parse(base + ["--settle", "500"]) else {
+        Issue.record("expected usage for \(base)")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("--settle"))
+    #expect(text.contains("wait surface"))
 }
 
 @Test
@@ -1066,9 +1147,9 @@ func aStateFlagOnANonAXWaitIsRefusedByName() throws {
 @Test
 func aStateFlagHoldingThePaneLifecycleGetsTheRightUsage() throws {
     // `wait pane --state rendering` is the natural mis-spelling: the flag
-    // eats the lifecycle, leaving a lone `pane` positional. The generic
-    // three-sub-verb usage line explains that badly, so point at the shape
-    // the caller was reaching for.
+    // eats the lifecycle, leaving a lone `pane` positional. The generic wait
+    // usage line explains that badly, so point at the shape the caller was
+    // reaching for.
     guard case let .usage(message) = CLICommands.parse(
         ["deviceterm", "wait", "pane", "--state", "rendering"]
     ) else {
@@ -1078,7 +1159,9 @@ func aStateFlagHoldingThePaneLifecycleGetsTheRightUsage() throws {
     let text = try #require(message)
     #expect(text.contains("wait pane"))
     #expect(text.contains("rendering"))
-    #expect(!text.contains("<pane|ax|orientation>"))
+    // Not the generic line, whose sub-verb list grows and would otherwise
+    // make this assertion pass by having drifted.
+    #expect(!text.contains("wait <pane"))
 }
 
 @Test
@@ -1087,7 +1170,7 @@ func aStateFlagHoldingSomethingElseKeepsTheGenericUsage() {
     // genuine typo has no business being told about `wait pane`.
     guard case let .usage(message) = CLICommands.parse(
         ["deviceterm", "wait", "pane", "--state", "nonsense"]
-    ), message?.contains("<pane|ax|orientation>") == true else {
+    ), message?.contains("wait <pane") == true else {
         Issue.record("expected the generic wait usage")
         return
     }
@@ -1095,7 +1178,7 @@ func aStateFlagHoldingSomethingElseKeepsTheGenericUsage() {
 
 @Test
 func nonAXWaitsStillTakeTheSharedFlags() {
-    // The guard covers accessibility flags only. Every wait reads `--pane`
+    // The guard covers flags another wait owns. Every wait reads `--pane`
     // and `--timeout`, so neither may be caught by it.
     #expect(
         CLICommands.parse([

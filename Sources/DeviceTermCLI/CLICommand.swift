@@ -139,6 +139,13 @@ public enum CLICommand: Equatable, Sendable {
         state: WaitAXState
     )
     case waitOrientation(pane: String?, orientation: Orientation, timeoutMs: Int)
+    /// `deviceterm wait surface quiescent [--settle <ms>]`: block until the
+    /// pane's rendered surface has stopped changing for `settleMs`.
+    ///
+    /// The condition after a change with no element to wait for: a Dynamic
+    /// Type switch, a theme flip, an animation settling. The alternative is
+    /// `sleep`, which is either too short or wasted time.
+    case waitSurfaceQuiescent(pane: String?, settleMs: Int, timeoutMs: Int)
     /// Explicit help request: `deviceterm --help`, `deviceterm -h`, or
     /// `deviceterm help`. The command list and any known page write to
     /// stdout and exit 0; an unknown topic fails with suggestions.

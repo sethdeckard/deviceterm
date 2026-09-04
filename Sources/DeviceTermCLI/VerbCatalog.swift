@@ -71,9 +71,10 @@ enum VerbCatalog {
             "wait",
             valuedFlags: [
                 "pane", "timeout", "identifier", "label", "role", "value",
-                "match", "source", "step", "budget", "print", "state"
+                "match", "source", "step", "budget", "print", "state",
+                "settle"
             ],
-            subVerbs: ["pane", "ax", "orientation"]
+            subVerbs: ["pane", "ax", "orientation", "surface"]
         ),
         Verb("with-pane"),
         // Workspace verbs: the full set their sub-commands accept,

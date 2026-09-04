@@ -210,6 +210,19 @@ with
 .B wait orientation " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR " " [\fB--timeout\fR \fIms\fR]
 Block until two consecutive observations report the requested confirmed
 orientation with stable positive surface dimensions.
+.TP
+.B wait surface quiescent " " [\fB--settle\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
+Block until the pane's rendered surface has stopped changing for
+.B --settle
+milliseconds, default 500. For a change with no element to wait for: a
+Dynamic Type switch, a theme flip, an animation settling. Stillness is the
+surface being unchanged rather than advanced by any amount, because a
+Simulator bumps its sequence per frame while a device reports lease
+generations that jump. A pane with no surface yet is pending rather than
+quiescent; use
+.B wait pane rendering
+to wait for a first frame. This is not a rotation signal, since surface
+dimensions do not swap when a device turns.
 .PP
 Every wait accepts
 .B --pane
@@ -217,13 +230,12 @@ Every wait accepts
 The default timeout is 30000 ms. An overall deadline reports
 .B wait.timeout
 and exits 124. Unsupported observation, inconclusive coverage, and query
-failures remain distinct. The accessibility flags belong to
-.BR "wait ax" ;
-passing one to
-.B wait pane
-or
-.B wait orientation
-is a usage error, not a flag that gets ignored.
+failures remain distinct. Each sub-verb reads its own flags beyond
+.B --pane
+and
+.BR --timeout ,
+and passing one to a wait that does not read it is a usage error rather than
+a flag that gets ignored.
 .SS Devices
 .TP
 .B devices list

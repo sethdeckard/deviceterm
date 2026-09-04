@@ -232,6 +232,7 @@ public enum Completions {
                 '--value[AX value to match]:value' \\
                 '--print[wait ax output: bare coordinate]:(center)' \\
                 '--state[wait ax direction: present or absent]:(present absent)' \\
+                '--settle[wait surface stillness window in milliseconds]:ms' \\
                 '--match[AX match mode: exact or contains]:(exact contains)' \\
                 '--source[AX observation source: tree or sweep]:(tree sweep)' \\
                 '--json[machine-readable JSON output]'
@@ -276,6 +277,8 @@ public enum Completions {
                         _values 'pane state' \(waitPanes)
                     elif (( CURRENT == 4 )) && [[ "${words[3]}" == orientation ]]; then
                         _values 'orientation' \(waitOrientations)
+                    elif (( CURRENT == 4 )) && [[ "${words[3]}" == surface ]]; then
+                        _values 'surface condition' quiescent
                     else
                         _deviceterm_flags
                     fi
@@ -338,7 +341,7 @@ public enum Completions {
         let flags = [
             "--duration", "--hold", "--velocity", "--step", "--budget",
             "--timeout", "--identifier", "--label", "--role", "--value", "--match",
-            "--source", "--print", "--state",
+            "--source", "--print", "--state", "--settle",
             "--tab", "--pane", "--window", "--mode", "--to-tab",
             "--type-delay", "--all", "--json"
         ].joined(separator: " ")
@@ -398,6 +401,9 @@ public enum Completions {
                         return 0
                     elif [ "${COMP_CWORD}" -eq 3 ] && [ "${COMP_WORDS[2]}" = "orientation" ]; then
                         COMPREPLY=( $(compgen -W "\(waitOrientations)" -- "${cur}") )
+                        return 0
+                    elif [ "${COMP_CWORD}" -eq 3 ] && [ "${COMP_WORDS[2]}" = "surface" ]; then
+                        COMPREPLY=( $(compgen -W "quiescent" -- "${cur}") )
                         return 0
                     fi
                     ;;
@@ -522,6 +528,10 @@ public enum Completions {
                 + "-a '\(waitOrientationValues.joined(separator: " "))'"
         )
         lines.append(
+            "complete -c deviceterm -n '__deviceterm_on_path wait surface' "
+                + "-a 'quiescent'"
+        )
+        lines.append(
             "complete -c deviceterm -n '__deviceterm_on_path completions' "
             + "-a '\(subVerbList("completions"))'"
         )
@@ -568,6 +578,10 @@ public enum Completions {
         lines.append("complete -c deviceterm -l label -d 'AX label to match'")
         lines.append("complete -c deviceterm -l role -d 'AX role to match'")
         lines.append("complete -c deviceterm -l value -d 'AX value to match'")
+        lines.append(
+            "complete -c deviceterm -l settle "
+            + "-d 'wait surface stillness window in milliseconds'"
+        )
         lines.append(
             "complete -c deviceterm -l state -d 'wait ax direction: present or absent' "
             + "-a 'present absent'"

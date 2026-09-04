@@ -488,6 +488,21 @@ Orientation waits require two consecutive observations with the requested
 confirmed orientation and the same positive surface dimensions. This prevents
 a transient or degenerate surface read from being accepted as settled.
 
+Wait for the rendered surface to hold still:
+
+```sh
+deviceterm wait surface quiescent --settle 800 --pane "$UDID"
+```
+
+The condition is `surface.quiescent`, and the observation reports the
+`surface` it settled on plus the `settleMs` it was given.
+
+Use it after a change that leaves nothing specific to wait for. Quiescence is
+the surface being unchanged rather than advanced by a known amount, because
+the increment is backend-dependent. A pane with no surface is pending, not
+quiescent. It is not a rotation signal, since dimensions do not swap on a
+turn.
+
 The three outcome classes are distinct:
 
 - success: the condition was observed before the deadline;

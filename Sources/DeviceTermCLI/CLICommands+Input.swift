@@ -38,25 +38,27 @@ extension CLICommands {
     [--step <0..1>] [--budget <ms>] [--timeout <ms>] [--pane <ref>]
     """
 
-    /// Named accessibility flags that `wait pane` and `wait orientation`
-    /// reject.
+    /// The flags each `wait` sub-verb reads on its own, keyed by sub-verb.
     ///
-    /// `wait` registers the accessibility set for the whole verb, so the
-    /// parser accepts these under any sub-verb and the two arms that cannot
-    /// read them would otherwise drop them.
+    /// `wait` registers the union for the whole verb, so the parser accepts
+    /// any of them under any sub-verb and each arm has to refuse the ones
+    /// belonging to another. `--pane` and `--timeout` are absent because
+    /// every wait reads both.
     ///
     /// Separate from `selectorOnlyTapFlags`, which lists a different set for
     /// a different reason. `tap` picks its form from `--identifier` and
     /// `--label`, so that list omits those two and carries `--timeout`. A
-    /// wait picks its form from the sub-verb positional, so every
-    /// accessibility flag is an orphan here, while `--timeout` and `--pane`
-    /// never are: all three waits read both.
+    /// wait picks its form from the sub-verb positional, so nothing here
+    /// selects a form and everything is an orphan somewhere else.
     ///
     /// `--step` and `--budget` reach the parser already converted, so
-    /// `firstWaitAXOnlyFlag` checks them as values rather than by name.
-    static let waitAXOnlyFlags = [
-        "identifier", "label", "role", "value", "match", "source", "print",
-        "state"
+    /// `foreignWaitFlagRefusal` checks them as values rather than by name.
+    static let waitExclusiveFlags: [String: [String]] = [
+        "ax": [
+            "identifier", "label", "role", "value", "match", "source",
+            "print", "state"
+        ],
+        "surface": ["settle"]
     ]
 
     /// Flags that say nothing until `tap` has a selector to narrow.
@@ -88,7 +90,8 @@ extension CLICommands {
         step: Double?,
         budgetMs: Int?,
         flags: [String: String],
-        timeoutMs: Int
+        timeoutMs: Int,
+        settleMs: Int
     ) -> CLICommand? {
         switch verb {
         case "tap":
@@ -243,28 +246,47 @@ extension CLICommands {
                 )
 
         case "wait":
-            // `wait` registers the accessibility flags for the whole verb, so
-            // the parser accepts them here and would otherwise drop them.
-            let axOnly = firstWaitAXOnlyFlag(in: flags, step: step, budgetMs: budgetMs)
+            // `wait` registers every sub-verb's flags for the whole verb, so
+            // the parser accepts any of them here and each arm refuses the
+            // ones another wait owns.
+            func foreignFlag(_ subVerb: String) -> CLICommand? {
+                foreignWaitFlagRefusal(
+                    subVerb: subVerb,
+                    flags: flags,
+                    step: step,
+                    budgetMs: budgetMs
+                )
+            }
             if pos.count == 2, pos[0] == "pane",
                 let state = PaneLifecycle(rawValue: pos[1]) {
-                if let axOnly {
-                    return .usage(message: waitAXOnlyFlagUsage(axOnly, on: "wait pane"))
-                }
+                if let refusal = foreignFlag("pane") { return refusal }
                 return .waitPane(pane: pane, state: state, timeoutMs: timeoutMs)
             }
             if pos.count == 2, pos[0] == "orientation",
                 let orientation = parseEnumArg(pos[1], as: Orientation.self) {
-                if let axOnly {
-                    return .usage(message: waitAXOnlyFlagUsage(axOnly, on: "wait orientation"))
-                }
+                if let refusal = foreignFlag("orientation") { return refusal }
                 return .waitOrientation(
                     pane: pane,
                     orientation: orientation,
                     timeoutMs: timeoutMs
                 )
             }
+            if pos == ["surface", "quiescent"] {
+                if let refusal = foreignFlag("surface") { return refusal }
+                return .waitSurfaceQuiescent(
+                    pane: pane,
+                    settleMs: settleMs,
+                    timeoutMs: timeoutMs
+                )
+            }
+            if pos.first == "surface" {
+                return .usage(
+                    message: "usage: deviceterm wait surface quiescent "
+                        + "[--settle <ms>] [--pane <ref>] [--timeout <ms>]"
+                )
+            }
             if pos == ["ax"] {
+                if let refusal = foreignFlag("ax") { return refusal }
                 let query: CLICommand.WaitAXQuery
                 switch parseAXSelector(
                     verb: "wait ax",
@@ -313,7 +335,8 @@ extension CLICommands {
                 )
             }
             return .usage(
-                message: "usage: deviceterm wait <pane|ax|orientation> ... [--timeout <ms>]"
+                message: "usage: deviceterm wait <pane|ax|orientation|surface> ... "
+                    + "[--timeout <ms>]"
             )
 
         default:
@@ -321,23 +344,36 @@ extension CLICommands {
         }
     }
 
-    /// The first accessibility flag this wait was given, whichever wait it
-    /// is. The lookup runs once ahead of sub-verb dispatch, so it answers
-    /// for `wait ax` as readily as for the other two; the pane and
-    /// orientation arms are the ones that treat a result as a refusal.
+    /// The usage error for a wait carrying a flag another wait owns, or nil
+    /// when every flag it was given belongs to it.
     ///
     /// Refusing rather than dropping, because dropping is not harmless.
     /// `wait pane rendering --label Save` reads as a wait for a labelled
     /// element and is a wait for the pane, reporting success without having
     /// looked for the label at all.
-    static func firstWaitAXOnlyFlag(
-        in flags: [String: String],
+    ///
+    /// Owners are visited in sorted order so the same argv always names the
+    /// same flag.
+    static func foreignWaitFlagRefusal(
+        subVerb: String,
+        flags: [String: String],
         step: Double?,
         budgetMs: Int?
-    ) -> String? {
-        if let named = waitAXOnlyFlags.first(where: { flags[$0] != nil }) { return named }
-        if step != nil { return "step" }
-        if budgetMs != nil { return "budget" }
+    ) -> CLICommand? {
+        func refusal(_ flag: String, owner: String) -> CLICommand {
+            .usage(
+                message: "deviceterm: --\(flag) applies to `wait \(owner)`, "
+                    + "not `wait \(subVerb)`"
+            )
+        }
+        for owner in waitExclusiveFlags.keys.sorted() where owner != subVerb {
+            if let named = waitExclusiveFlags[owner]?.first(where: { flags[$0] != nil }) {
+                return refusal(named, owner: owner)
+            }
+        }
+        guard subVerb != "ax" else { return nil }
+        if step != nil { return refusal("step", owner: "ax") }
+        if budgetMs != nil { return refusal("budget", owner: "ax") }
         return nil
     }
 
@@ -451,13 +487,6 @@ extension CLICommands {
     /// badly.
     static func waitPaneStateMisplaced(positionals pos: [String], flags: [String: String]) -> Bool {
         pos == ["pane"] && flags["state"].map { PaneLifecycle(rawValue: $0) != nil } == true
-    }
-
-    /// The usage error for an accessibility flag on a wait that cannot read
-    /// it. Names the wait that was written, since the likeliest cause is a
-    /// sub-verb typed where `ax` was meant.
-    static func waitAXOnlyFlagUsage(_ flag: String, on verb: String) -> String {
-        "deviceterm: --\(flag) applies to `wait ax`, not `\(verb)`"
     }
 
     /// The first coordinate outside the inclusive unit range, or nil when

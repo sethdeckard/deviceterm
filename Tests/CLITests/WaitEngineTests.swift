@@ -1973,6 +1973,127 @@ func tapBySelectorOnNoMatchStaysWaitTimeout() throws {
     #expect(sent.count == 2)
 }
 
+// MARK: - Waiting for the surface to hold still
+
+private func surface(
+    _ sequence: UInt64,
+    width: Int = 1_206,
+    height: Int = 2_622
+) -> PanesListEntry.Surface {
+    PanesListEntry.Surface(sequence: sequence, width: width, height: height)
+}
+
+/// Run one `wait surface quiescent` over a scripted run of rosters, one per
+/// probe. The clock only moves when the engine sleeps, so each entry is
+/// exactly 100 ms after the one before it.
+private func quiescenceOutcome(
+    _ surfaces: [PanesListEntry.Surface?],
+    settleMs: Int = 500,
+    timeoutMs: Int = 5_000
+) throws -> CommandOutcome {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport(
+        try surfaces.map { .success(try waitData([waitPane(surface: $0)])) }
+    )
+    return try handleWaitSurfaceQuiescent(
+        pane: nil,
+        settleMs: settleMs,
+        timeoutMs: timeoutMs,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+}
+
+@Test
+func aStillSurfaceSatisfiesOnceTheWindowHasPassed() throws {
+    // First sighting starts the window; the 100 ms cadence means six probes
+    // cover the 500 ms it asks for.
+    let outcome = try quiescenceOutcome(Array(repeating: surface(7), count: 8))
+
+    #expect(outcome.exitCode == 0)
+    let receipt = try waitOutputObject(outcome)
+    #expect(receipt["condition"] as? String == "surface.quiescent")
+    let observation = try #require(receipt["observation"] as? [String: Any])
+    #expect(observation["settleMs"] as? Int == 500)
+    let reported = try #require(observation["surface"] as? [String: Any])
+    #expect(reported["sequence"] as? Int == 7)
+    #expect(reported["width"] as? Int == 1_206)
+}
+
+@Test
+func aMovingSurfaceNeverAccumulatesAWindow() throws {
+    // A new sequence every probe models a pane that keeps producing frames.
+    // The window restarts each time, so the deadline arrives first.
+    let outcome = try quiescenceOutcome(
+        (1...12).map { surface(UInt64($0)) },
+        timeoutMs: 1_000
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+    #expect(try waitFailureDetails(outcome)["condition"] as? String == "surface.quiescent")
+}
+
+@Test
+func aLateChangeRestartsTheWindow() throws {
+    // Still for four probes, then one frame, then still again. The run before
+    // the change must not count toward the run after it.
+    let outcome = try quiescenceOutcome(
+        [surface(3), surface(3), surface(3), surface(3), surface(4)] +
+            Array(repeating: surface(4), count: 3),
+        timeoutMs: 800
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+}
+
+@Test
+func aResizeCountsAsMovement() throws {
+    // Same sequence, different dimensions. The receipt reports the size it
+    // settled on, so a size that changed inside the window has to restart it.
+    let outcome = try quiescenceOutcome(
+        [surface(5), surface(5), surface(5, width: 800)] +
+            Array(repeating: surface(5, width: 800), count: 2),
+        timeoutMs: 500
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+}
+
+@Test
+func aPaneWithNoSurfaceIsPendingRatherThanStill() throws {
+    // Nothing drawn yet is not stillness. Waiting for a first frame is
+    // `wait pane rendering`, and reporting quiescence here would let a caller
+    // act on a pane that has never rendered.
+    let outcome = try quiescenceOutcome(
+        Array(repeating: nil, count: 12),
+        settleMs: 0,
+        timeoutMs: 1_000
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+}
+
+@Test
+func aZeroSettleStillNeedsTwoAgreeingObservations() throws {
+    // Zero asks for no window, not for no evidence: the first probe records
+    // the surface and the second confirms it is the same one.
+    let outcome = try quiescenceOutcome(
+        [surface(9), surface(9)],
+        settleMs: 0,
+        timeoutMs: 5_000
+    )
+
+    #expect(outcome.exitCode == 0)
+    let observation = try #require(
+        try waitOutputObject(outcome)["observation"] as? [String: Any]
+    )
+    #expect(observation["settleMs"] as? Int == 0)
+}
+
 // MARK: - Waiting for a match to disappear
 
 /// Run one `wait ax --state absent` against a fixed tree.
@@ -2329,4 +2450,19 @@ func plainWaitAXStillSucceedsOnACaptionOnlyMatch() throws {
 
     #expect(outcome.exitCode == 0)
     #expect(try axMatches(outcome).count == 1)
+}
+
+@Test
+func anAbsurdSettleWindowTimesOutRatherThanTrapping() throws {
+    // The parser admits any non-negative `Int`, and converting milliseconds
+    // to nanoseconds by a plain multiply traps long before `Int.max`. A
+    // window that saturates never elapses, which is the honest outcome.
+    let outcome = try quiescenceOutcome(
+        Array(repeating: surface(1), count: 5),
+        settleMs: Int.max,
+        timeoutMs: 300
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
 }

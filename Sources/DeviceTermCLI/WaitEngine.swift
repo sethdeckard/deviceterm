@@ -96,6 +96,17 @@ enum WaitEngine {
         let elapsedMs: Int
     }
 
+    /// A surface seen unchanged, and when that run started.
+    ///
+    /// `since` is the first sighting of this exact surface, not the latest,
+    /// so the window measures how long it has held rather than resetting
+    /// every probe.
+    struct SurfaceHold {
+        let paneId: String
+        let surface: PanesListEntry.Surface
+        let since: UInt64
+    }
+
     struct OrientationSnapshot {
         let paneId: String
         let orientation: Orientation
@@ -1020,6 +1031,80 @@ private func observationIncompleteness(
     )
 }
 
+/// Block until the pane's rendered surface has held still for `settleMs`.
+///
+/// Stillness is the surface being *unchanged*, never advanced by some
+/// amount. The increment is backend-dependent: a Simulator bumps the
+/// sequence by one per frame, a physical device reports lease generations
+/// that jump, so a delta means nothing across both.
+///
+/// Width and height join the sequence in the comparison. A resize produces
+/// new frames anyway, so this rarely differs, and the receipt reports the
+/// dimensions it settled on: a caller reading them should know they were
+/// stable for the whole window rather than merely current at the end.
+///
+/// The probe cadence is 100 ms, so two consecutive observations prove only
+/// about that much stillness. `--settle` is what makes the window a
+/// caller's choice instead of the engine's.
+func handleWaitSurfaceQuiescent(
+    pane: String?,
+    settleMs: Int,
+    timeoutMs: Int,
+    transport: CLITransport,
+    output: OutputMode,
+    creds: (sessionId: String, cap: String)? = nil,
+    runtime: WaitEngine.Runtime = .live
+) throws -> CommandOutcome {
+    // Saturating, the same way the overall deadline converts. The parser
+    // admits any non-negative `Int`, and a plain multiply traps well before
+    // `Int.max`. A saturated window simply never elapses, so an absurd
+    // `--settle` reaches the deadline instead of killing the process.
+    let converted = UInt64(clamping: settleMs).multipliedReportingOverflow(by: 1_000_000)
+    let settleNanoseconds = converted.overflow ? UInt64.max : converted.partialValue
+    var held: WaitEngine.SurfaceHold?
+    return try handleWait(
+        pane: pane,
+        condition: "surface.quiescent",
+        timeoutMs: timeoutMs,
+        transport: transport,
+        output: output,
+        creds: creds,
+        runtime: runtime
+    ) { entry, context in
+        // No surface means nothing has been drawn, which is not the same as
+        // being still. Waiting for a first frame is `wait pane rendering`.
+        guard let surface = entry.surface else {
+            held = nil
+            return .pending
+        }
+        let now = context.runtime.nowNanoseconds()
+        guard let held, held.paneId == entry.paneId, held.surface == surface else {
+            // Either the first sighting or a change. Both start the window
+            // over, so a surface that keeps moving never accumulates one.
+            held = WaitEngine.SurfaceHold(
+                paneId: entry.paneId,
+                surface: surface,
+                since: now
+            )
+            return .pending
+        }
+        guard now >= held.since, now - held.since >= settleNanoseconds else {
+            return .pending
+        }
+        return .satisfied(
+            pane: entry,
+            observation: [
+                "surface": [
+                    "sequence": surface.sequence,
+                    "width": surface.width,
+                    "height": surface.height
+                ],
+                "settleMs": settleMs
+            ]
+        )
+    }
+}
+
 func handleWaitOrientation(
     pane: String?,
     orientation: Orientation,
@@ -1357,8 +1442,8 @@ private func waitSuccessOutcome(
 ) throws -> CommandOutcome {
     switch output {
     case .human:
-        // Only an AX wait observes a count; pane and orientation waits leave
-        // the field out rather than reporting a meaningless 1.
+        // Only an AX wait observes a count; every other wait leaves the
+        // field out rather than reporting a meaningless 1.
         let matches = (completion.observation["matchCount"] as? Int).map { "matches=\($0) " } ?? ""
         return .stdout(
             "ok condition=\(condition) elapsedMs=\(completion.elapsedMs) "

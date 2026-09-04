@@ -593,6 +593,9 @@ public enum CLICommands {
         if let raw = parsed.flags["timeout"], Int(raw) == nil {
             return .usage(message: "deviceterm: --timeout must be an integer (ms)")
         }
+        if let raw = parsed.flags["settle"], Int(raw) == nil {
+            return .usage(message: "deviceterm: --settle must be an integer (ms)")
+        }
         let durationMs = parsed.flags["duration"].flatMap { Int($0) }
         let holdMs = parsed.flags["hold"].flatMap { Int($0) }
         let velocity = parsed.flags["velocity"].flatMap { Double($0) }
@@ -601,6 +604,12 @@ public enum CLICommands {
         let timeoutMs = parsed.flags["timeout"].flatMap { Int($0) } ?? 30_000
         if timeoutMs <= 0 {
             return .usage(message: "deviceterm: --timeout must be greater than zero")
+        }
+        // Zero is a legitimate ask: one unchanged observation rather than a
+        // window of stillness. Negative is not.
+        let settleMs = parsed.flags["settle"].flatMap { Int($0) } ?? 500
+        if settleMs < 0 {
+            return .usage(message: "deviceterm: --settle cannot be negative")
         }
 
         switch verb {
@@ -658,7 +667,8 @@ public enum CLICommands {
                 step: step,
                 budgetMs: budgetMs,
                 flags: parsed.flags,
-                timeoutMs: timeoutMs
+                timeoutMs: timeoutMs,
+                settleMs: settleMs
             ) ?? .usage(message: nil)
         }
     }

@@ -327,12 +327,29 @@ extension HelpCatalog {
                   dimensions.
                   Example: deviceterm wait orientation landscape-left
 
+              wait surface quiescent [--settle <ms>]
+                        [--pane <ref>] [--timeout <ms>]
+                  Wait for the pane's rendered surface to stop changing
+                  for --settle milliseconds, default 500. The condition
+                  after a change with no element to wait for: a Dynamic
+                  Type switch, a theme flip, an animation settling.
+                  Stillness is the surface being unchanged, never
+                  advanced by some amount: a Simulator bumps its sequence
+                  per frame and a device reports lease generations that
+                  jump, so a delta means nothing across both. A pane with
+                  no surface yet is pending rather than quiescent, since
+                  nothing drawn is not the same as nothing moving; wait
+                  pane rendering is what waits for a first frame. Not a
+                  rotation signal, because surface dimensions do not swap
+                  when a device turns; wait orientation confirms that.
+                  Example: deviceterm wait surface quiescent --settle 800
+
               The default timeout is 30000 ms. An overall deadline returns
               wait.timeout and exits 124. Unsupported or inconclusive
               observation and query failures remain distinct nonzero outcomes.
-              The accessibility flags belong to wait ax; passing one to
-              wait pane or wait orientation is a usage error, not a flag
-              that gets ignored.
+              Each sub-verb reads its own flags beyond --pane and
+              --timeout, and passing one to a wait that does not read it
+              is a usage error rather than a flag that gets ignored.
             """
         )
     ]

@@ -230,9 +230,10 @@ func everyShellCompletesWaitConditionsAndValues() {
 func fishNestedCompletionsUseExactPositionalPaths() {
     let script = Completions.script(for: .fish)
 
-    #expect(script.contains("-n '__deviceterm_on_path wait' -a 'pane ax orientation'"))
+    #expect(script.contains("-n '__deviceterm_on_path wait' -a 'pane ax orientation surface'"))
     #expect(script.contains("-n '__deviceterm_on_path wait pane'"))
     #expect(script.contains("-n '__deviceterm_on_path wait orientation'"))
+    #expect(script.contains("-n '__deviceterm_on_path wait surface'"))
     #expect(script.contains("-n '__deviceterm_on_path pane'"))
     #expect(script.contains("-n '__deviceterm_on_path ax'"))
     #expect(!script.contains("__fish_seen_subcommand_from wait"))
