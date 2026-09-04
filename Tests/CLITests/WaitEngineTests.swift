@@ -1973,6 +1973,137 @@ func tapBySelectorOnNoMatchStaysWaitTimeout() throws {
     #expect(sent.count == 2)
 }
 
+// MARK: - Waiting for a match to disappear
+
+/// Run one `wait ax --state absent` against a fixed tree.
+private func absenceOutcome(
+    tree: String,
+    query: CLICommand.WaitAXQuery,
+    timeoutMs: Int = 1
+) throws -> CommandOutcome {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(tree.utf8))
+    ])
+    return try handleWaitAX(
+        pane: nil,
+        query: query,
+        timeoutMs: timeoutMs,
+        transport: transport,
+        output: .json,
+        state: .absent,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+}
+
+@Test
+func anAbsentWaitSucceedsWhenNothingMatches() throws {
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try absenceOutcome(
+        tree: axTree(try jsonText(button)),
+        query: axQuery(label: "Spinner")
+    )
+
+    #expect(outcome.exitCode == 0)
+    let receipt = try waitOutputObject(outcome)
+    #expect(receipt["condition"] as? String == "ax.disappears")
+    let observation = try #require(receipt["observation"] as? [String: Any])
+    #expect(observation["matchCount"] as? Int == 0)
+    #expect(observation["source"] as? String == "tree")
+    // Present and absent publish the same observation shape, so `matches` is
+    // an empty array rather than a missing key. A consumer reading it should
+    // not have to check the condition first to know whether it is there.
+    #expect(observation["matches"] is [[String: Any]])
+    #expect((observation["matches"] as? [[String: Any]])?.isEmpty == true)
+}
+
+@Test
+func anAbsentWaitTimesOutWhileTheElementIsStillThere() throws {
+    let spinner = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try absenceOutcome(
+        tree: axTree(try jsonText(spinner)),
+        query: axQuery(label: "Go")
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+    #expect(try waitFailureDetails(outcome)["condition"] as? String == "ax.disappears")
+}
+
+@Test
+func anAbsentWaitNeverConcludesFromAnIncompleteObservation() throws {
+    // The whole point of the flag is a claim about what is *not* there, so a
+    // sweep that skipped cells cannot support it: the element may be sitting
+    // in one of them. Reporting absence here would be the same defect as
+    // tapping an unproven target.
+    let other = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try absenceOutcome(
+        tree: truncatedSweep(try jsonText(other)),
+        query: axSweepQuery(label: "Spinner")
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(outcome.exitCode == 1)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["truncated"] as? Bool == true)
+    // The condition has to name the wait that was actually asked for. A
+    // verification script branches on this field, and reporting `ax.appears`
+    // for a wait the caller spelled `--state absent` sends it the wrong way.
+    #expect(details["condition"] as? String == "ax.disappears")
+}
+
+@Test(
+    "every wait failure reports the condition it was asked for",
+    arguments: [
+        ("ax.disappears", CLICommand.WaitAXState.absent),
+        ("ax.appears", CLICommand.WaitAXState.present)
+    ]
+)
+func aWaitFailureNamesItsOwnCondition(
+    condition: String,
+    state: CLICommand.WaitAXState
+) throws {
+    // An unobservable pane fails inside `observeAXMatches`, which is shared by
+    // both directions, so it is the shortest path to a details dictionary that
+    // could carry the wrong one.
+    let clock = WaitTestClock()
+    var capabilities = PaneCapabilities.simulator
+    capabilities.accessibility = false
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane(capabilities: capabilities)]))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Go"),
+        timeoutMs: 1,
+        transport: transport,
+        output: .json,
+        state: state,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitUnsupported)
+    #expect(try waitFailureDetails(outcome)["condition"] as? String == condition)
+}
+
+@Test
+func anAbsentWaitTrustsASightingOverAnyIncompleteness() throws {
+    // Seeing the element is proof it is still there, whatever else the same
+    // observation failed to cover, so this is an ordinary deadline rather
+    // than an inconclusive one.
+    let spinner = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try absenceOutcome(
+        tree: truncatedSweep(try jsonText(spinner)),
+        query: axSweepQuery(label: "Go")
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+}
+
 // MARK: - Acting on an incomplete observation
 
 @Test(

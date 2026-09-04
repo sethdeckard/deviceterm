@@ -170,15 +170,31 @@ was already at the ceiling.
 .B wait pane " " \fIbooting\fR|\fIrendering\fR|\fIshutdown\fR|\fIfailed\fR " " [\fB--timeout\fR \fIms\fR]
 Block until the selected pane reaches the named lifecycle state.
 .TP
-.B wait ax " " (\fB--identifier\fR \fIvalue\fR|\fB--label\fR \fIvalue\fR) " " [\fB--role\fR \fIvalue\fR] " " [\fB--value\fR \fIvalue\fR] " " [\fB--match\fR \fIexact\fR|\fIcontains\fR] " " [\fB--print\fR \fIcenter\fR] " " [\fB--source\fR \fItree\fR|\fIsweep\fR] " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
-Block until an accessibility identifier or label appears, optionally with an
-exact role.
+.B wait ax " " (\fB--identifier\fR \fIvalue\fR|\fB--label\fR \fIvalue\fR) " " [\fB--role\fR \fIvalue\fR] " " [\fB--value\fR \fIvalue\fR] " " [\fB--match\fR \fIexact\fR|\fIcontains\fR] " " [\fB--state\fR \fIpresent\fR|\fIabsent\fR] " " [\fB--print\fR \fIcenter\fR] " " [\fB--source\fR \fItree\fR|\fIsweep\fR] " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR] " " [\fB--timeout\fR \fIms\fR]
+Block until the accessibility query matches, or matches nothing under
+.BR "--state absent" ,
+optionally with an exact role.
 .B --match contains
 matches a substring and folds case; the default is exact. Tree is the default
 source. Step and budget apply only to sweep. The sweep budget is reduced to
 the time remaining before the overall wait deadline.
 .B --value
 narrows to an element whose own value matches, under the same match mode.
+.B --state absent
+waits for the query to match nothing and reports the condition
+.BR ax.disappears .
+Absence is a claim about what is not there, so an observation that did not
+see everything cannot support it. A truncated sweep reports
+.B wait.inconclusive
+at once, and an unsupported walk reports
+.BR wait.unsupported .
+An incomplete tree is retried instead, and reports
+.B wait.inconclusive
+only if no complete observation arrives before the deadline. An element still
+matching at the deadline is an ordinary
+.BR wait.timeout .
+It cannot be combined with
+.BR "--print center" .
 Under
 .B --json
 the receipt lists up to 20 matches with a matchCount for the true total and

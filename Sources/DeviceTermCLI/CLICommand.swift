@@ -128,11 +128,15 @@ public enum CLICommand: Equatable, Sendable {
         budgetMs: Int?
         )
     case waitPane(pane: String?, state: PaneLifecycle, timeoutMs: Int)
+    /// `state` is the condition, not part of the query, which is why it does
+    /// not live on `WaitAXQuery`: `tap` takes the same selector and has no
+    /// use for a direction to wait in.
     case waitAX(
         pane: String?,
         query: WaitAXQuery,
         timeoutMs: Int,
-        printMode: WaitAXPrint?
+        printMode: WaitAXPrint?,
+        state: WaitAXState
     )
     case waitOrientation(pane: String?, orientation: Orientation, timeoutMs: Int)
     /// Explicit help request: `deviceterm --help`, `deviceterm -h`, or
@@ -389,6 +393,22 @@ public enum CLICommand: Equatable, Sendable {
     public enum WaitAXMatchMode: String, Equatable, Sendable {
         case exact
         case contains
+    }
+
+    /// Which way round `wait ax` reads its query.
+    ///
+    /// `absent` is the assertion a verification step actually needs: the
+    /// spinner went, the error banner cleared, the sheet dismissed. Without
+    /// it the only expression of absence is a `present` wait timing out,
+    /// which conflates gone with never-looked-long-enough and with an
+    /// observation that failed.
+    ///
+    /// Valued rather than a bare `--absent` switch for the same parser reason
+    /// as `--print`: a presence-only flag arrives as a positional and would
+    /// weaken `wait ax`'s exact-arity guard.
+    public enum WaitAXState: String, Equatable, Sendable {
+        case present
+        case absent
     }
 
     /// What `wait ax` writes to stdout instead of its usual receipt line.

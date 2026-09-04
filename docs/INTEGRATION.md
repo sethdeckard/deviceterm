@@ -319,7 +319,7 @@ protected tab.
 | `button`, `key`, `text`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed | Stable-additive |
 | `wait pane <state>` with `--json` | Wait receipt | Session | Named pane state observed before the deadline | Stable-additive |
-| `wait ax` with `--json` | Wait receipt | Session | Matching accessibility element observed before the deadline | Stable-additive |
+| `wait ax` with `--json` | Wait receipt | Session | The requested accessibility condition, present or absent, observed before the deadline | Stable-additive |
 | `wait orientation <orientation>` with `--json` | Wait receipt | Session | Confirmed orientation and stable surface observed before the deadline | Stable-additive |
 | `tab rename` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab close` with `--json` | Workspace receipt | Session and sole-terminal tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
@@ -1073,6 +1073,27 @@ deviceterm wait ax --label Messages --match contains
 An empty `--identifier` or `--label` under `--match contains` is a usage error,
 because it matches every string-valued identifier or label. An empty `--value`
 under `--match contains` is a usage error for the same reason.
+
+`--state` chooses which way the query is read. The default `present` waits for
+a match and reports the condition `ax.appears`. `absent` waits for the query to
+match nothing, reports `ax.disappears`, and carries `matchCount` 0 in the
+observation:
+
+```sh
+deviceterm wait ax --label "Saving..." --match contains --state absent
+```
+
+An absent wait will not conclude from an observation that did not see
+everything, because the element could be in the part that went unseen. A
+truncated sweep returns `wait.inconclusive` at once, and an unsupported tree
+walk returns `wait.unsupported`. An incomplete tree is retried, and returns
+`wait.inconclusive` only if no complete observation arrives before the
+deadline. An element still matching at the deadline returns `wait.timeout`, since
+a sighting settles the question whatever else the observation missed.
+
+`--state absent` cannot be combined with `--print center`. There is no element
+left to take a coordinate from, and succeeding with empty stdout would be
+indistinguishable from a refusal.
 
 `--role` is always exact and case-sensitive, in both modes. A role names a
 fixed vocabulary rather than app-authored text.

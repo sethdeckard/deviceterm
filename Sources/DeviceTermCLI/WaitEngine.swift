@@ -406,6 +406,7 @@ func handleWaitAX(
     transport: CLITransport,
     output: OutputMode,
     printMode: CLICommand.WaitAXPrint? = nil,
+    state: CLICommand.WaitAXState = .present,
     creds: (sessionId: String, cap: String)? = nil,
     runtime: WaitEngine.Runtime = .live
 ) throws -> CommandOutcome {
@@ -432,6 +433,18 @@ func handleWaitAX(
     // Build the matcher once per wait: every probe uses the same prepared
     // selector and optional value filter.
     let matcher = WaitEngine.AXMatcher(query: query)
+    if state == .absent {
+        return try awaitAXAbsence(
+            pane: pane,
+            query: query,
+            matcher: matcher,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            output: output,
+            creds: creds,
+            runtime: runtime
+        )
+    }
     return try handleWait(
         pane: pane,
         condition: "ax.appears",
@@ -473,6 +486,82 @@ func handleWaitAX(
             observation["matchesTruncated"] = true
         }
         return .satisfied(pane: entry, observation: observation)
+    }
+}
+
+/// Block until the query matches nothing.
+///
+/// Presence is an existential claim: something matched. Absence is a universal
+/// one: nothing did. A partial observation is sufficient evidence for the
+/// first and structurally insufficient for the second, which is why this wait
+/// sits with selection rather than with presence. An element missing from a
+/// truncated sweep may sit in an unswept cell, and one missing from a tree the
+/// daemon caught omitting something may be the very thing omitted. Either way
+/// the query matching nothing is not the element being gone.
+///
+/// Read the other way, a sighting is existential evidence, so nothing unseen
+/// can touch it and the still-present path stays an ordinary deadline.
+private func awaitAXAbsence(
+    pane: String?,
+    query: CLICommand.WaitAXQuery,
+    matcher: WaitEngine.AXMatcher?,
+    timeoutMs: Int,
+    transport: CLITransport,
+    output: OutputMode,
+    creds: (sessionId: String, cap: String)?,
+    runtime: WaitEngine.Runtime
+) throws -> CommandOutcome {
+    let condition = "ax.disappears"
+    // Carried out of the probe so a deadline reached on an observation that
+    // could not see everything reports that, rather than reporting absence
+    // was never achieved.
+    var lastIncompleteness: WaitEngine.Failure?
+    do {
+        let completion = try runWait(
+            pane: pane,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime
+        ) { entry, context in
+            let observed = try observeAXMatches(
+                entry: entry,
+                context: context,
+                query: query,
+                matcher: matcher,
+                transport: transport
+            )
+            guard observed.matches.isEmpty else {
+                // Still there, and seen to be. Any incompleteness the same
+                // observation reported says nothing about a match in hand.
+                lastIncompleteness = nil
+                return .pending
+            }
+            lastIncompleteness = observed.incompleteness?.failure
+            if let incompleteness = observed.incompleteness {
+                // Report it now when this wait will not probe again;
+                // otherwise keep going and let the deadline report it.
+                if incompleteness.isTerminal { throw incompleteness.failure }
+                return .pending
+            }
+            return .satisfied(
+                pane: entry,
+                observation: [
+                    "source": query.source.rawValue,
+                    // Empty rather than absent. Both directions of `wait ax`
+                    // publish the same observation shape, so a caller reading
+                    // `matches` does not have to branch on the condition
+                    // first to know whether the key is there.
+                    "matches": [[String: Any]](),
+                    "matchCount": 0
+                ]
+            )
+        }
+        return try waitSuccessOutcome(completion, condition: condition, output: output)
+    } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
+        return waitFailureOutcome(lastIncompleteness ?? failure, condition: condition)
+    } catch let failure as WaitEngine.Failure {
+        return waitFailureOutcome(failure, condition: condition)
     }
 }
 
@@ -733,7 +822,6 @@ private func axSelectionFailure(
             message: "matched \(matches.count) element(s), none eligible as a coordinate target",
             exitCode: 1,
             details: waitDetails([
-                "condition": "ax.appears",
                 "matchCount": matches.count,
                 "roles": roles
             ])
@@ -746,7 +834,6 @@ private func axSelectionFailure(
                 + "narrow with --role, --value, or --identifier",
             exitCode: 1,
             details: waitDetails([
-                "condition": "ax.appears",
                 "matchCount": matches.count,
                 "candidateCount": candidates.count,
                 "roles": roles
@@ -787,7 +874,6 @@ private func observeAXMatches(
             message: "accessibility observation is unavailable for this pane",
             exitCode: 1,
             details: waitDetails([
-                "condition": "ax.appears",
                 "source": query.source.rawValue
             ])
         )
@@ -880,7 +966,6 @@ private func observationIncompleteness(
     treeNote: AXTreeNote?
 ) -> WaitEngine.AXObservation.Incompleteness? {
     var details: [String: Any] = [
-        "condition": "ax.appears",
         "source": query.source.rawValue
     ]
     if let noteCode { details["noteCode"] = noteCode }
@@ -960,9 +1045,7 @@ func handleWaitOrientation(
                 code: .waitUnsupported,
                 message: "this pane cannot report a confirmed orientation",
                 exitCode: 1,
-                details: waitDetails([
-                    "condition": "orientation.\(orientation.rawValue)"
-                ])
+                details: waitDetails([:])
             )
         }
         guard let observed = entry.orientation else {

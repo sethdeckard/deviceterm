@@ -275,9 +275,9 @@ extension HelpCatalog {
 
               wait ax (--identifier <value>|--label <value>) [--role <value>]
                       [--value <value>] [--match <exact|contains>]
-                      [--print center] [--source <tree|sweep>]
-                      [--step <0..1>] [--budget <ms>] [--pane <ref>]
-                      [--timeout <ms>]
+                      [--state <present|absent>] [--print center]
+                      [--source <tree|sweep>] [--step <0..1>] [--budget <ms>]
+                      [--pane <ref>] [--timeout <ms>]
                   Wait for an AX identifier or label, optionally with a role.
                   --match contains matches a substring and folds case; exact
                   is the default. --role is always exact. Tree is the default
@@ -286,6 +286,20 @@ extension HelpCatalog {
                   under the same --match mode. Typing into a field puts the
                   text in its value, not its label, so --label names the
                   field and --value asserts what it now reads.
+                  --state absent waits for the query to match nothing, and
+                  reports the condition ax.disappears. That is the assertion
+                  a check usually wants: the spinner went, the error banner
+                  cleared. Absence is a claim about what is not there, so an
+                  observation that did not see everything cannot support it.
+                  A truncated sweep reports wait.inconclusive at once, and an
+                  unsupported walk reports wait.unsupported. An incomplete
+                  tree is retried instead, and reports wait.inconclusive only
+                  if no complete observation arrives before the deadline.
+                  Still seeing the element at the deadline is an ordinary
+                  wait.timeout,
+                  because a sighting settles the question whatever else
+                  went unseen.
+                  --state absent cannot be combined with --print center.
                   For sweep, the requested or default budget is reduced to
                   the time remaining before the overall wait deadline.
                   With --json the receipt lists up to 20 matches under

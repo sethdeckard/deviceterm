@@ -563,6 +563,23 @@ requested confirmed orientation with the same positive surface dimensions.
 `--match` mode. Typing into a field puts the text in its value rather than its
 label, so `--label` names the field and `--value` asserts what it now reads.
 
+`--state absent` waits for the query to match nothing instead:
+
+```sh
+deviceterm wait ax --label "Saving..." --match contains --state absent
+```
+
+That's usually what a check wants: the spinner went, the error banner cleared,
+the sheet dismissed. Without it the only way to say "gone" is a `present` wait
+timing out, which can't distinguish gone from didn't-look-long-enough.
+
+Absence is a claim about what isn't there, so an observation that didn't see
+everything can't support it. A truncated sweep reports `wait.inconclusive`
+straight away, and an unsupported tree walk reports `wait.unsupported`. An
+incomplete tree is retried instead, and reports `wait.inconclusive` only if no
+complete observation arrives before the deadline. Still seeing the element at
+the deadline is an ordinary `wait.timeout`.
+
 A `wait ax` receipt lists the matched elements, ordered so the one you are most
 likely able to operate comes first. Read them with `--json`, which reports up
 to 20 entries under `matches` plus a `matchCount` for the true total. Human

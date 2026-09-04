@@ -403,6 +403,23 @@ carrying a count or an ellipsis.
 `--match` mode. It narrows an element the selector already named rather than
 selecting one itself.
 
+Wait for something to go away with `--state absent`:
+
+```sh
+deviceterm wait ax --label "Saving..." --match contains --state absent
+```
+
+Human output reports `condition=ax.disappears` and `matches=0`. With `--json`
+the receipt's condition is `ax.disappears` and `observation.matchCount` is 0.
+
+DeviceTerm won't conclude absence from an observation that didn't see
+everything, because the element could be in the part that went unseen. A
+truncated sweep reports `wait.inconclusive` at once, and an unsupported tree
+walk reports `wait.unsupported`. An incomplete tree is retried, and reports
+`wait.inconclusive` only if no complete observation arrives before the
+deadline. An element still matching at the deadline is an ordinary `wait.timeout`,
+because a sighting settles the question whatever else the observation missed.
+
 Tree observation is the default. On a family where the tree walk is
 unavailable, use a sweep:
 

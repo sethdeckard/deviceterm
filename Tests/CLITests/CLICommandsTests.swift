@@ -774,7 +774,7 @@ func parseWaitAXIdentifierDefaultsToTree() {
     )
     #expect(
         CLICommands.parse(["deviceterm", "wait", "ax", "--identifier", "save"])
-            == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil)
+            == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil, state: .present)
     )
 }
 
@@ -794,7 +794,7 @@ func parseWaitAXSweepCarriesItsProbeOptions() {
         CLICommands.parse([
             "deviceterm", "wait", "ax", "--label", "Save", "--role", "Button",
             "--source", "sweep", "--step", "0.2", "--budget", "800"
-        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil)
+        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil, state: .present)
     )
 }
 
@@ -813,7 +813,16 @@ func parseWaitAXCarriesTheMatchMode(argv: [String]) {
         step: nil,
         budgetMs: nil
     )
-    #expect(CLICommands.parse(argv) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil))
+    #expect(
+        CLICommands.parse(argv)
+            == .waitAX(
+                pane: nil,
+                query: query,
+                timeoutMs: 30_000,
+                printMode: nil,
+                state: .present
+            )
+    )
 }
 
 @Test
@@ -834,7 +843,7 @@ func parseWaitAXCarriesTheValueFilter() {
         CLICommands.parse([
             "deviceterm", "wait", "ax", "--label", "Email",
             "--value", "probe@example.com"
-        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil)
+        ]) == .waitAX(pane: nil, query: query, timeoutMs: 30_000, printMode: nil, state: .present)
     )
 }
 
@@ -857,6 +866,47 @@ func parseWaitAXCarriesTheValueFilter() {
     ]
 )
 func invalidWaitIsUsage(argv: [String]) {
+    guard case .usage = CLICommands.parse(argv) else {
+        Issue.record("expected usage for \(argv)")
+        return
+    }
+}
+
+@Test
+func parseWaitAXCarriesTheAbsentState() {
+    let query = CLICommand.WaitAXQuery(
+        identifier: nil,
+        label: "Saving",
+        role: nil,
+        value: nil,
+        matchMode: .exact,
+        source: .tree,
+        step: nil,
+        budgetMs: nil
+    )
+    #expect(
+        CLICommands.parse([
+            "deviceterm", "wait", "ax", "--label", "Saving", "--state", "absent"
+        ]) == .waitAX(
+            pane: nil,
+            query: query,
+            timeoutMs: 30_000,
+            printMode: nil,
+            state: .absent
+        )
+    )
+}
+
+@Test(
+    "invalid --state combinations are usage failures",
+    arguments: [
+        ["deviceterm", "wait", "ax", "--label", "X", "--state", "gone"],
+        ["deviceterm", "wait", "ax", "--label", "X", "--state", "absent", "--print", "center"]
+    ]
+)
+func invalidWaitAXStateIsUsage(argv: [String]) {
+    // Printing a centre for something that is gone has nothing to print, and
+    // succeeding with empty stdout is indistinguishable from a refusal.
     guard case .usage = CLICommands.parse(argv) else {
         Issue.record("expected usage for \(argv)")
         return
@@ -912,7 +962,7 @@ func aSelectorAndACoordinateAgreeOnWhatAQueryMeans() {
     // One parser behind both, so `--print center` and `tap` cannot come to
     // read the same flags as different queries.
     let selector = ["--label", "Continue", "--match", "contains", "--value", "on"]
-    guard case let .waitAX(_, waitQuery, _, _) =
+    guard case let .waitAX(_, waitQuery, _, _, _) =
         CLICommands.parse(["deviceterm", "wait", "ax"] + selector),
         case let .tapElement(_, tapQuery, _) =
         CLICommands.parse(["deviceterm", "tap"] + selector) else {
@@ -976,6 +1026,7 @@ func aPlainCoordinateTapIsUnchanged() {
         ["--match", "contains"],
         ["--source", "sweep"],
         ["--print", "center"],
+        ["--state", "absent"],
         ["--step", "0.2"],
         ["--budget", "500"]
     ]
@@ -993,6 +1044,52 @@ func nonAXWaitsRefuseAccessibilityFlags(flag: [String]) {
             Issue.record("expected usage for \(base + flag)")
             return
         }
+    }
+}
+
+@Test
+func aStateFlagOnANonAXWaitIsRefusedByName() throws {
+    // `--state` joins the same orphan set the moment it exists. Before the
+    // guard this parsed and waited for pane rendering with the flag dropped,
+    // which is the inverse of what the caller wrote.
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "wait", "pane", "rendering", "--state", "absent"]
+    ) else {
+        Issue.record("expected usage")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("--state"))
+    #expect(text.contains("wait ax"))
+}
+
+@Test
+func aStateFlagHoldingThePaneLifecycleGetsTheRightUsage() throws {
+    // `wait pane --state rendering` is the natural mis-spelling: the flag
+    // eats the lifecycle, leaving a lone `pane` positional. The generic
+    // three-sub-verb usage line explains that badly, so point at the shape
+    // the caller was reaching for.
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "wait", "pane", "--state", "rendering"]
+    ) else {
+        Issue.record("expected usage")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("wait pane"))
+    #expect(text.contains("rendering"))
+    #expect(!text.contains("<pane|ax|orientation>"))
+}
+
+@Test
+func aStateFlagHoldingSomethingElseKeepsTheGenericUsage() {
+    // Only a value that names a lifecycle earns the targeted message. A
+    // genuine typo has no business being told about `wait pane`.
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "wait", "pane", "--state", "nonsense"]
+    ), message?.contains("<pane|ax|orientation>") == true else {
+        Issue.record("expected the generic wait usage")
+        return
     }
 }
 

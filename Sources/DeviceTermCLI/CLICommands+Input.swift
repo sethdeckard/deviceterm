@@ -55,7 +55,8 @@ extension CLICommands {
     /// `--step` and `--budget` reach the parser already converted, so
     /// `firstWaitAXOnlyFlag` checks them as values rather than by name.
     static let waitAXOnlyFlags = [
-        "identifier", "label", "role", "value", "match", "source", "print"
+        "identifier", "label", "role", "value", "match", "source", "print",
+        "state"
     ]
 
     /// Flags that say nothing until `tap` has a selector to narrow.
@@ -286,11 +287,29 @@ extension CLICommands {
                 } else {
                     printMode = nil
                 }
+                guard let state = CLICommand.WaitAXState(rawValue: flags["state"] ?? "present") else {
+                    return .usage(message: "deviceterm: --state must be present or absent")
+                }
+                // Nothing to print once the element is gone, and refusing is
+                // clearer than succeeding with empty stdout, which is what a
+                // refusal looks like.
+                if state == .absent, printMode != nil {
+                    return .usage(
+                        message: "deviceterm: --print cannot be combined with --state absent"
+                    )
+                }
                 return .waitAX(
                     pane: pane,
                     query: query,
                     timeoutMs: timeoutMs,
-                    printMode: printMode
+                    printMode: printMode,
+                    state: state
+                )
+            }
+            if waitPaneStateMisplaced(positionals: pos, flags: flags) {
+                return .usage(
+                    message: "usage: deviceterm wait pane "
+                        + "<booting|rendering|shutdown|failed> [--timeout <ms>]"
                 )
             }
             return .usage(
@@ -421,6 +440,17 @@ extension CLICommands {
                 budgetMs: budgetMs
             )
         )
+    }
+
+    /// Whether a wait was written with its state in `--state` rather than
+    /// as the positional it belongs in.
+    ///
+    /// `wait pane --state rendering` is the natural mis-spelling once
+    /// `--state` exists, and it parses as a lone `pane` positional with the
+    /// lifecycle eaten by the flag, which the generic wait usage explains
+    /// badly.
+    static func waitPaneStateMisplaced(positionals pos: [String], flags: [String: String]) -> Bool {
+        pos == ["pane"] && flags["state"].map { PaneLifecycle(rawValue: $0) != nil } == true
     }
 
     /// The usage error for an accessibility flag on a wait that cannot read
