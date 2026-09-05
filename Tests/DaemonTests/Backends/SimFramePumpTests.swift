@@ -109,23 +109,61 @@ func anUnackedSimStreamRecoversOnceThenFailsThePane() async throws {
     #expect(sink.count >= 1)
 }
 
+/// Frames delivered one at a time. Before sending the next, wait until the
+/// pump has published the preceding one and the pool reports a free slot.
+///
+/// `Task.yield()` alone is not enough: it offers the scheduler a chance to run
+/// the release hop without requiring it, so the producer can outrun the pool
+/// and the pump's drop count becomes a property of the scheduler rather than
+/// of the code. Neither condition here names a particular frame's release, and
+/// a free slot may be one the pump never took, but together they are enough
+/// for the next acquire to find a slot.
+private func makePacedStream(
+    frames: Int,
+    pool: LeasedSurfacePool,
+    sink: PublishSink
+) -> AsyncStream<RetainedSurface> {
+    AsyncStream { continuation in
+        let task = Task {
+            var sent = 0
+            for _ in 0..<frames {
+                guard let surface = SurfaceCopy.makeSurface(width: 32, height: 32) else { continue }
+                continuation.yield(RetainedSurface(surface))
+                sent += 1
+                // Bounded, so a pump that stops consuming or a slot that never
+                // comes back fails this test instead of hanging it.
+                var spins = 0
+                while spins < 100_000 {
+                    if sink.count >= sent, await pool.freeSlotCount() > 0 { break }
+                    await Task.yield()
+                    spins += 1
+                }
+            }
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in task.cancel() }
+    }
+}
+
 @Test
 func aDrainingConsumerKeepsTheSimStreamPublishing() async {
-    // The same pump with a consumer that releases each frame: every one of
-    // them publishes, and nothing fails.
+    // The same pool and the same threshold as the unacked case, isolating the
+    // one difference that decides the outcome: this consumer releases each
+    // frame.
     let pool = LeasedSurfacePool(slotCount: 3)
     let sink = PublishSink(retaining: false)
 
     await SimDeviceBackend.pumpFrames(
-        surfaces: makeSourceStream(frames: 40),
+        surfaces: makePacedStream(frames: 40, pool: pool, sink: sink),
         pool: pool,
         recoveryThreshold: 2,
         publish: sink.publish,
         fail: sink.fail
     )
 
-    #expect(sink.failure == nil)
-    // Every frame got through: a pool of 3 sustains an unbounded stream as
-    // long as its slots come back.
+    // The count catches any dropped frame; a failure means a recovery attempt
+    // came back exhausted. Slot selection and reuse belong to
+    // `leastRecentlyFreedReuse`.
     #expect(sink.count == 40)
+    #expect(sink.failure == nil)
 }
