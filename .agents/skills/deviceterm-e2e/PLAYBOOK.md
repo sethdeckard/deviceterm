@@ -73,7 +73,8 @@ Write screenshots to a scratch path you control (your session scratch dir, or
 `/tmp/e2e-*.png`; substitute your own.
 
 The harness client speaks to a resident harness process over a private socket.
-Replies are JSON on stdout; a non-zero exit means failure. Reply shapes:
+A reply is JSON on stdout; a non-zero exit means failure, and not every failure
+produces a reply (see below). Reply shapes:
 
 | verb | on success |
 |---|---|
@@ -85,6 +86,37 @@ Replies are JSON on stdout; a non-zero exit means failure. Reply shapes:
 | `drive key <shortcut>` | `{ok:true, shortcut, bundleId, pid}` |
 | `drive click <x> <y>` | `{ok:true, bundleId, x, y, screenX, screenY}` |
 | `drive click --ax <label>` | `{ok:true, ax, bundleId}` |
+
+**The two tools report failure differently, and neither is stdout-only, so
+read both streams and lead with the exit status.**
+
+The harness answers a *serviced* refusal with `{"ok":false,"error":…}` on
+**stdout**, which is why the helpers redirect rather than pipe: a refusal that
+lands in a file can still be quoted. But a request that never reached the
+resident has no reply to render, and those paths write a human line to
+**stderr** and produce no JSON at all. `helpers/uitest.sh` exits **3** with a
+build hint when the harness is not there, and `doctor` prints a multi-line
+grant-remediation block to stderr on top of its report. Decoding stdout without
+checking the status will hand you an empty string on exactly the failures you
+most need the reason for.
+
+The `deviceterm` CLI emits a typed envelope on stdout instead:
+
+```json
+{"error": {"code": "intent.ownerRequired", "message": "…"}}
+```
+
+Assert on `code`; the wording is not stable. **Whether you get one depends on
+the output mode, which is decided from argv before anything is parsed.** The
+mode is JSON when argv carries `--json`, and also for any `ax` command, whose
+verb alone selects it. So `ax` verbs produce an envelope without the flag, and
+a *malformed* invocation still produces one whenever the mode says JSON,
+parse failure and all. Only outside both cases is a failure just the human line
+on stderr with nothing on stdout.
+
+Exit status is 1 for everything here except `wait.timeout`, which exits 124 —
+and note that is the code, not the verb: a `deviceterm wait` can fail for other
+reasons and exit 1 like anything else.
 
 `<shortcut>` is like `cmd+t`, `cmd+shift+right`, `cmd+w`. `drive click <x> <y>`
 takes **window-normalized** coordinates in `0..1` (0,0 = window top-left).
@@ -180,9 +212,6 @@ one.
   verify`" does not apply while you *are* the test subject. If a scenario
   finds a bug, report it and stop — fixing it is separate work, outside the
   tab.
-- **Never boot or shut down the user's simulators without explicit approval.**
-  Game-dev and other work may depend on running sims. Scenarios marked
-  *needs a sim* require the user to nominate a throwaway sim first.
 - **Close only tabs this run opened, and never your own.** `--tab` defaults to
   `current`, which is the tab your shell is running in, so a bare
   `deviceterm tab close` ends your own session and takes the run with it. Name
@@ -232,6 +261,19 @@ protected is missing from your `tabCount` and your `tabs list`, while its pill
 is still in the strip and still in the dump. Run the cross-check on a workspace
 with no protected tabs, or expect AX to exceed the CLI by exactly the tabs you
 cannot see.
+
+**Refusals differ behind that, if you go on to touch such a tab.** A tab you
+cannot resolve at all fails in resolution as `intent.notFound`, which
+deliberately does not distinguish a protected foreign tab from one that isn't
+there.
+
+A tab you *can* resolve but own no terminal in refuses too, and **which refusal
+depends on the verb**. Most tab-targeted operations answer
+`intent.automationRequired`, and a live automation grant is precisely what
+satisfies them. `tab set-protected` is the exception: its owner gate ignores the
+grant bit, so a non-owner gets `intent.ownerRequired` and holding a grant does
+not change that. Protecting your own tab never locks you out of it, so you can
+always unprotect from inside.
 
 **Count pills by identifier, never by role.** A pill is a node whose
 `identifier` starts `deviceterm.tab.`, does not end `.close` (that is a pill's
@@ -379,6 +421,20 @@ machine everything here may well settle inside a couple of hundred milliseconds
 and you will never see a retry; that is not evidence the bound is unnecessary,
 only that nothing was in flight.
 
+**`deviceterm wait` does not replace any of this.** It exists, and the device
+playbook uses it throughout, but every one of its conditions is scoped to a
+*device pane*: a pane's lifecycle state, that pane's accessibility tree, its
+confirmed orientation, its rendered surface. **None of the sources this section
+names is one of those.** Tab counts, window state, titles, and deviceterm's own
+AppKit tree have no wait verb, so the bounded poll above is still the instrument
+here.
+
+Scenario 3 is the one place a `wait` appears, and even there it is a
+*precondition* rather than the assertion: it settles the daemon's view of the
+pane, and the placeholder it goes on to check is the GUI's. Daemon-side
+readiness does not imply the window has caught up, so the pixel and AX
+assertions still poll on their own.
+
 **Record a baseline before you mutate.** The counting and state-transition
 assertions in the scenario library are *deltas*: "its length grew by 1",
 "re-assert the count dropped", "count deltas, not absolutes". None of those is
@@ -442,8 +498,18 @@ not from the receipt.
   tab that is already selected and pass without moving anything.
 - **Mutate:** `deviceterm tab open`
 - **Assert:** `deviceterm tabs list --json` is an array of
-  `{current, shortId?, name?, displayTitle?, sessionId, label?}` across the whole
-  workspace, filtered to what your session may see; its length grew by 1.
+  `{current, tabId, sessionId, shortId?, name?, displayTitle?, label?}` across
+  the whole workspace, filtered to what your session may see; its length grew by
+  1. **`current`, `tabId`, and `sessionId` are required**, the rest are omitted
+  when unavailable, and a response that omits or malforms `tabId` fails as
+  `protocol.invalidResponse` rather than decoding — which is what keeps an
+  incompatible daemon distinct from a legitimately empty `[]`.
+
+  **`tabId` is the durable tab handle**, minted per tab and stable for that
+  tab's lifetime, so unlike a `shortId` it does not move when closing a primary
+  terminal promotes a survivor. `--tab` accepts one. Scenario 2's setup records
+  it for exactly that reason.
+
   Separately,
   `deviceterm windows list --all --json`'s `tabCount` for the window you opened
   into grew by 1 (in the recommended single-window setup, the sole row). Treat
@@ -454,8 +520,28 @@ not from the receipt.
   caller-visible terminal *session*, `tabCount` counts caller-visible GUI
   *tabs*, and the pills show every tab in the window whether you can see it via
   the CLI or not. With no protected tabs a split tab is therefore several
-  session rows, one `tabCount`, and one pill, with all three correct. Use
-  `tabCount` and the pills when you mean tabs.
+  session rows, one `tabCount`, and one pill, with all three correct.
+
+  **`tabId` is what reconciles the first two.** Sessions sharing a GUI tab share
+  a `tabId`, and a session with no GUI tab self-groups under its own
+  `sessionId`, so grouping the rows collapses a split tab back to one:
+
+  ```sh
+  rows=$(deviceterm tabs list --json) || { echo "tabs list failed" >&2; exit 1; }
+  printf '%s\n' "$rows" | jq 'map(.tabId) | unique | length'
+  ```
+
+  **Capture and check before you decode**, for the same reason the flagship
+  cross-check says redirect rather than pipe. A failed `tabs list` prints its
+  error envelope on stdout, and `map(.tabId)` over that object yields `[null]`,
+  so the pipeline prints `1` and exits 0: a refusal reads as a workspace with
+  one tab. `pipefail` is off by default in both bash and zsh, so the CLI's
+  status is discarded unless you take it yourself.
+
+  **That count equals the GUI tab count only when every visible session is
+  GUI-backed**, because `tabs list` does not mark which rows are. It is a better
+  answer than counting rows and still not the authority; `tabCount` and the
+  pills are, so use them when you mean tabs.
 - **Observe:** `.agents/skills/deviceterm-e2e/helpers/tab-pills.sh
   >/tmp/e2e-pills.txt && wc -l </tmp/e2e-pills.txt` counts the pills, taking its
   own dump. **Redirect, don't pipe** — see the flagship cross-check: piping to
@@ -586,9 +672,49 @@ not from the receipt.
   `<before>` is worse than none, because the cleanup at the end would read the
   operator's own tabs as tabs this scenario opened. Not just the count: that
   cleanup needs to know which tabs were already theirs, and only a set can tell
-  it that. Then
-  `deviceterm tab open`, and note the new tab's `shortId` as
-  `<work>`. Everything below runs against `<work>`, never your own tab: the
+  it that. Then open the tab and **capture its `tabId` as a real shell
+  variable**, because the cleanup at the end closes by it:
+
+  ```sh
+  rows=$(deviceterm tabs list --json) || { echo "tabs list failed" >&2; exit 1; }
+  printf '%s\n' "$rows" | jq -r '.[].tabId' | sort -u > /tmp/e2e-tabids-before.txt
+
+  deviceterm tab open
+
+  # `tab open` is fire-and-forget and the id is minted GUI-side, so re-read
+  # until it appears. The bound matches `session.create`'s 15 s client deadline.
+  work_id=
+  for _ in $(seq 30); do
+      rows=$(deviceterm tabs list --json) || { echo "tabs list failed" >&2; exit 1; }
+      printf '%s\n' "$rows" | jq -r '.[].tabId' | sort -u > /tmp/e2e-tabids-after.txt
+      new=$(comm -13 /tmp/e2e-tabids-before.txt /tmp/e2e-tabids-after.txt)
+      count=$(printf '%s' "$new" | grep -c .)
+      if [ "$count" -gt 1 ]; then
+          echo "more than one new tab appeared; cannot tell which is mine" >&2
+          exit 1
+      fi
+      if [ "$count" -eq 1 ]; then work_id=$new; break; fi
+      sleep 0.5
+  done
+  [ -n "$work_id" ] || { echo "no new tabId after tab open" >&2; exit 1; }
+  ```
+
+  **Abort on more than one rather than picking**, which is the same fail-closed
+  rule the cleanup diff uses. And know what this does *not* establish: `tab open`
+  returns no id, so nothing ties the new row to your call. A tab opened by
+  someone else between the baseline and your row appearing is indistinguishable
+  from yours, and if it lands first it becomes `work_id` and cleanup closes it.
+  The abort narrows that to the window where exactly one foreign tab exists and
+  yours has not arrived; it does not close it. **Run this on a workspace nobody
+  else is opening tabs in**, which is the same idleness the `drive` steps
+  already need.
+
+  What the id *does* buy is durability after acquisition: unlike a `shortId`, a
+  `tabId` survives the primary-terminal promotion this scenario deliberately
+  causes.
+
+  Note the same tab's `shortId` as `<work>` for the steps that need one.
+  Everything below runs against `<work>`, never your own tab: the
   GUI-only steps close panes by focus and can escalate to closing the whole tab,
   so a split made in your own tab puts the run one keystroke from ending itself.
   Select `<work>` (`deviceterm tab select --tab <work>`) so the GUI steps, which
@@ -605,7 +731,11 @@ not from the receipt.
 - **Observe (this is the real assertion):** every pane's root view is an
   `AXGroup` whose `identifier` is `deviceterm.pane.<kind>.<key>`, one of
   `deviceterm.pane.terminal.4`, `deviceterm.pane.sim.<udid>`,
-  `deviceterm.pane.device.<deviceId>`, `deviceterm.pane.pending.<n>`. Count those
+  `deviceterm.pane.device.<deviceId>`, `deviceterm.pane.pending.<n>`. **The
+  `<udid>` is the canonical lowercase form**, which the GUI interpolates
+  verbatim; `xcrun simctl` prints uppercase, so anything you build from a
+  simctl-pasted UDID has to be lowercased first or compared case-insensitively.
+  Count those
   nodes in `ax dump` for the pane count, and `capture window` to see the split.
   The rendering and these nodes are the ground truth here, not a roster row.
   Count **deltas**, not absolutes: only the selected tab's panes are in the view
@@ -658,10 +788,38 @@ not from the receipt.
   `deviceterm tab close --tab <work> --mode detach` if it is, which is what the
   identification below is for.
 
-  **Identify it by what is new, not by what is selected.** `opt+cmd+w` may
-  already have taken the whole tab, and a ⌘W that closed the primary pane will
-  have promoted the survivor, so the Setup identifier can name a terminal that no
-  longer exists. Take the set again and let `<new>` be the difference:
+  **Close by `work_id` if you recorded it**, which is the short path, because a
+  `tabId` outlives the promotion described next:
+
+  ```sh
+  [ -n "$work_id" ] || { echo "no work_id; use the set diff below" >&2; }
+  rows=$(deviceterm tabs list --json) || { echo "tabs list failed" >&2; exit 1; }
+  if [ -n "$work_id" ] &&
+     printf '%s\n' "$rows" | jq -e --arg t "$work_id" 'any(.[]; .tabId == $t)' >/dev/null
+  then
+      deviceterm tab close --tab "$work_id" --mode detach
+  else
+      echo "work_id absent or already closed; nothing to close by id"
+  fi
+  ```
+
+  **The emptiness guard is not defensive padding.** `--tab` defaults to
+  `current`, which is *your own tab*, so an unset `work_id` expands to `--tab ""`
+  and closes the session running this scenario. That is the same rule as the
+  safety bullet about naming the target explicitly, and a variable that was never
+  set is how it gets violated by accident.
+
+  **Check presence before closing, rather than closing and reading the error.**
+  On a run where `opt+cmd+w` already took the whole tab, the tab is legitimately
+  gone and a direct close answers `intent.notFound` — a failure line in an
+  otherwise clean run. Absence here is a success condition, not an error to
+  interpret.
+
+  **Otherwise identify it by what is new, never by what is selected.**
+  `opt+cmd+w` may already have taken the whole tab, and a ⌘W that closed the
+  primary pane will have promoted the survivor, so a Setup *`shortId`* can name a
+  terminal that no longer exists. Take the set again and let `<new>` be the
+  difference:
   `.agents/skills/deviceterm-e2e/helpers/tab-pills.sh >/tmp/e2e-after.txt` then
   `comm -13 /tmp/e2e-before.txt /tmp/e2e-after.txt`, which needs both sides
   sorted and the helper sorts what it prints. **If that run exits non-zero you
@@ -677,21 +835,36 @@ not from the receipt.
     short-id-shaped, so the parser classifies it as a tab *name* and resolves it
     against tab names instead: not-found at best, and the wrong tab if one
     happens to carry that name.
+
+    **`tabId` avoids that class of mistake entirely.** `--tab` accepts one
+    anywhere it accepts a short id, and a UUID cannot be read as a name, so if
+    you can carry the `tabId` from the `tabs list` row rather than reconstructing
+    a ref from an AX identifier, do. The pill identifier remains the only handle
+    the AX side gives you, which is why the strip is still spelled out here.
   - `<new>` has **more than one** → something you did not expect happened. Close
     nothing and report the set.
 
-  This is the only recovery here that is safe to write down. Every tab the
-  operator already had is in `<before>` by construction, so it can never be a
-  candidate no matter what else moves. Do **not** substitute "the selected tab":
-  closing a tab makes DeviceTerm select a *neighbour*, which is the operator's,
-  and the AX pill and `selectedTabShortId` will then agree with each other about
-  it perfectly. Nor is a tab count enough, because the close is asynchronous: a
-  count read a moment too early still shows the tab present, and by the AX read
-  it is gone and a neighbour is selected.
+  The set diff is the **fallback for when `work_id` is not in hand** — an
+  interrupted run, a recovery you did not record for, a tab opened through a GUI
+  path rather than a `tabs list` row you kept. Every tab the operator already
+  had is in `<before>` by construction, so it can never become a candidate no
+  matter what else moves.
 
-  **Do not go looking for it in `tabs list`** either. Those rows are terminal
-  sessions with no tab grouping of any kind, so after a promotion nothing in a
-  surviving row tells you which tab it belongs to.
+  That covers everything present at Setup, and nothing opened after it. A tab
+  someone else opens mid-run is not in `<before>` either, so it lands in
+  `<new>` exactly like yours — the `>1` arm below refuses rather than guessing,
+  but a single foreign tab arriving after yours has already closed is
+  indistinguishable from yours still being open. It is the same exposure the
+  Setup capture has, and the same answer: run this where nobody else is opening
+  tabs.
+
+  **What neither route may ever be replaced by is "the selected tab".** Closing
+  a tab makes DeviceTerm select a *neighbour*, which is the operator's, and the
+  AX pill and `selectedTabShortId` will then agree with each other about it
+  perfectly. Nor is a tab count enough, because the close is asynchronous: a
+  count read a moment too early still shows the tab present, and by the AX read
+  it is gone and a neighbour is selected. That rule is what this section is for,
+  and `tabId` does not soften it.
 
   If you stop early, do all of this before you report, and say so if a close
   fails.
@@ -704,14 +877,50 @@ not from the receipt.
 The instant loading placeholder that swaps to a rendered pane is a pure-GUI
 behavior; the CLI only sees the final lifecycle state.
 
-- **Mutate:** attach a sim so a pane goes through pending (e.g. boot an
-  **approved** throwaway sim; the shim auto-attaches it).
+- **Mutate:** attach a sim so a pane goes through pending (e.g. boot a sim of
+  your own; the shim auto-attaches it).
 - **Observe (fast):** immediately `capture window` — the placeholder shows a
   large `ProgressView`, the pane label, and the text **`Connecting…`**; `ax dump`
-  names that text.
-- **Observe (after attach):** `capture window` again — the placeholder has
-  swapped to the rendered sim pane; `deviceterm panes list --json` shows the
-  pane `state` advanced (e.g. to `rendering`), and the pixels show the sim.
+  names that text. **This one is deliberately a race** and stays that way: the
+  placeholder is what you are trying to catch, so there is nothing to wait for
+  first, and missing it is a result to report rather than a failure.
+- **Observe (after attach):** two steps, because they observe different things.
+  First the daemon side, naming the sim you booted by UDID:
+
+  ```sh
+  SIM=            # the udid of the sim you booted; never the literal "booted"
+  [ -n "$SIM" ] || { echo "set SIM to the udid you booted" >&2; exit 1; }
+  deviceterm wait pane rendering --pane "$SIM"
+  ```
+
+  **Name it explicitly and guard the variable.** An empty `--pane` is not an
+  error: the ref falls through to whatever the tab's exported target or sole
+  device pane happens to be, so an unset variable silently observes a pane you
+  did not mean, or fails ambiguously with two of them. A UDID resolves against a
+  device key and survives the sim reboots that reissue short refs.
+
+  **That wait is a precondition, not the thing you are asserting.** It reads the
+  daemon's roster, and this scenario's subject is the GUI. The placeholder is
+  replaced on the app's own path, after its attach response and reconciliation,
+  so `state` can read `rendering` while the window still shows `Connecting…`.
+  Capturing on the daemon's word is the cross-observer mistake *Mutations land
+  after the CLI returns* warns about, in a scenario explicitly marked GUI-only.
+
+  So poll the source you are actually asserting on. Bound it, and take a fresh
+  `ax dump` each time until the pane's own node stops being the pending one:
+  pane roots are `deviceterm.pane.<kind>.<key>`, so `deviceterm.pane.pending.<n>`
+  gives way to `deviceterm.pane.sim.<udid>`. Wait for **that identifier to
+  appear** rather than for the pending one to vanish, since the positive form
+  cannot be satisfied by a dump that failed or came back short.
+
+  **Lowercase `$SIM` before you build that identifier**, per the case rule in
+  scenario 2: a UDID pasted from `xcrun simctl` is uppercase, the identifier
+  carries the lowercase form, and an exact poll on the mismatch matches nothing
+  and simply times out. `$(echo "$SIM" | tr 'A-Z' 'a-z')`, or compare the suffix
+  case-insensitively.
+
+  Only then `capture window` again — the placeholder has swapped to the rendered
+  sim pane, and the pixels show the sim.
 - **Failure variant (advanced):** if an attach fails, the pane shows
   **`Couldn't connect to <label>`** with **`Retry`** and **`Close`** buttons.
   Drive `Close` via `drive click --ax "Close"` to dismiss. Forcing a failure is
@@ -719,7 +928,7 @@ behavior; the CLI only sees the final lifecycle state.
 
 ### 4. Status item badge *(needs a sim — menu bar, daemon-owned)*
 
-- **Mutate:** with an **approved** sim booted and owned by deviceterm.
+- **Mutate:** with a sim **you booted**, owned by deviceterm.
 - **Assert:** `deviceterm panes list --json` / `devices list --json` reflect the
   owned booted sim(s); count = N.
 - **Observe:** `deviceterm-uitest capture status-item --out /tmp/e2e-badge.png`.
@@ -764,8 +973,10 @@ one. Press by title.
 
 #### 5b. Sim disposition *(needs a sim)*
 
-- **Precondition:** a tab that booted an **approved** sim, with no window,
-  session, or persistent sim-close disposition active.
+- **Precondition:** a tab that booted a sim **you booted**, with no window,
+  session, or persistent sim-close disposition active. This arm ends in a
+  disposition prompt over that sim, so it has to be one you own — see the
+  device playbook's rule against shutting down a simulator you did not boot.
 - **Trigger:** same ⌥⌘W. (With the sim pane focused, ⌘W would detach the
   mirror and never raise the prompt.)
 - **Reads:** message **`Close this tab?`**, informative *"Detach keeps any
