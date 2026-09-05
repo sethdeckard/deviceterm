@@ -119,7 +119,7 @@ func methodsForRoleIncludesSubscriptions() {
             "b.subscribe":
                 .session { _, _ in MethodRegistry.SubscriptionResult(
                     initialResult: Data("{}".utf8),
-                    events: AsyncStream { _ in },
+                    events: SubscriptionEventStream(AsyncStream { _ in }),
                     onCancel: {}
                 )
                 }

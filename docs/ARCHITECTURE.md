@@ -3806,8 +3806,11 @@ split adds a pane and an arrow moves focus through exactly this.
   bridge call continues and keeps its queue occupied.
 - Long-lived async events use `AsyncSequence` or `AsyncStream`. One-shot async
   work uses `async throws` returning a value. The pane-subscription event stream
-  (`AsyncStream<PaneEvent>` inside the daemon, surfaced to the GUI as RPC `evt`
-  frames) is the canonical shape.
+  (`PaneEventStream` inside the daemon, surfaced to the GUI as RPC `evt`
+  frames) is the canonical shape. It is pull-based rather than an
+  `AsyncStream`: a stream's continuation accepts every yield whatever the
+  consumer is doing, so the conflating channel it reads is the only
+  producer-side event buffer before transport delivery.
 
 ## Reactive state
 

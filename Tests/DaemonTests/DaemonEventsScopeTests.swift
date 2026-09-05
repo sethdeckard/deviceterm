@@ -30,7 +30,7 @@ private func makeRegistry() -> MethodRegistry {
 private func subscribeAsSession(
     broker: EventBroker,
     session: SessionState
-) async throws -> AsyncStream<MethodRegistry.SubscriptionEvent> {
+) async throws -> SubscriptionEventStream {
     let handler = DaemonEventsMethods.subscribe(broker: broker)
     let context = DispatchPeerContext(transport: .uds, connectionId: 1)
         .withAuthenticatedSession(session)
@@ -41,7 +41,7 @@ private func subscribeAsSession(
 }
 
 private func firstEvent(
-    _ stream: AsyncStream<MethodRegistry.SubscriptionEvent>
+    _ stream: SubscriptionEventStream
 ) async -> DaemonEvent? {
     var iterator = stream.makeAsyncIterator()
     guard let event = await iterator.next() else { return nil }

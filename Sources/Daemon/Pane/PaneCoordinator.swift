@@ -50,19 +50,22 @@ public actor PaneCoordinator {
     // daemon-only `bridgeValue` mappings to the CoreSimulatorBridge C
     // enums live in HardwareButton+Bridge.swift / Orientation+Bridge.swift.
 
-    /// One subscription on a pane record. Beyond the JSON `PaneEvent`
-    /// continuation it carries the authorizing `principal` and, for an
+    /// One subscription on a pane record. Beyond the pane-event channel
+    /// it carries the authorizing `principal` and, for an
     /// XPC subscriber, the surface-lane `subscriptionToken`, its
     /// registering `connectionId`, and the `lifecycle` box. Together they
     /// let an ownership transfer revoke a subscription *completely*:
-    /// synchronously finish the continuation and drop the record (the
+    /// synchronously finish the channel and drop the record (the
     /// entire teardown for a UDS subscriber), and for an XPC subscriber
     /// additionally fire the lifecycle drain and unregister its surface
     /// token so the pool hold and side-band hook are released. UDS
     /// subscribers carry a nil token/connectionId/lifecycle (UDS vends no
     /// surface lane).
     struct Subscriber {
-        let continuation: AsyncStream<PaneEvent>.Continuation
+        /// This subscriber's pending events. Reference semantics because the
+        /// struct is copied out of the dictionary to send, and the queue has
+        /// to be the same one the consumer drains.
+        let channel: ConflatingEventChannel
         let principal: PaneAccessPrincipal
         let subscriptionToken: UUID?
         let connectionId: UInt64?
@@ -1152,14 +1155,14 @@ public actor PaneCoordinator {
     /// lets callers explicitly unsubscribe; in practice the RPC
     /// layer detects client disconnect and uses the `onCancel` hook.
     ///
-    /// The producer-side continuation is finished when:
-    ///   - The consumer explicitly unsubscribes.
-    ///   - `close(paneId:as:mode:)` runs.
+    /// The channel is finished whenever the subscription is revoked: an
+    /// explicit unsubscribe, `close(paneId:as:mode:)`, an ownership transfer,
+    /// or session teardown.
     func subscribe(
         paneId: UUID,
         as principal: PaneAccessPrincipal,
         context: SubscriptionContext? = nil
-    ) async throws -> (subscriptionId: UUID, stream: AsyncStream<PaneEvent>) {
+    ) async throws -> (subscriptionId: UUID, stream: PaneEventStream) {
         // Ownership gate (`gatesInput: false`, because this is presentation, not
         // input, so a validated GUI keeps rendering across a transfer; a
         // `.session` principal is still denied while `transferring`).
@@ -1178,20 +1181,20 @@ public actor PaneCoordinator {
         defer { finishPendingSetup(record: record, nonce: setupNonce) }
 
         let subscriptionId = UUID()
-        let (stream, continuation) = AsyncStream<PaneEvent>.makeStream()
+        let channel = ConflatingEventChannel()
+        let stream = PaneEventStream(coordinator: self, channel: channel)
         record.subscribers[subscriptionId] = Subscriber(
-            continuation: continuation,
+            channel: channel,
             principal: principal,
             subscriptionToken: context?.subscriptionToken,
             connectionId: context?.connectionId,
             lifecycle: context?.lifecycle
         )
-        let recordId = paneId
-        continuation.onTermination = { [weak self] _ in
-            Task { [weak self] in
-                await self?.unsubscribe(paneId: recordId, subscriptionId: subscriptionId)
-            }
-        }
+        // No termination hook: a pull-based sequence has nothing to report
+        // when its reader walks away. `PaneMethods` arms the same unsubscribe
+        // through `onCancel`, which every transport already invokes, and a
+        // subscriber removed here has its channel finished so a parked reader
+        // is released.
         // The initial-state replay is deferred to *after* the terminal /
         // transfer re-checks below: a subscription that lost its
         // authorization mid-setup must throw, not hand back a stream that
@@ -1287,7 +1290,7 @@ public actor PaneCoordinator {
         if let context {
             await subscriptionRegistry?.activate(subscriptionId: context.subscriptionToken)
         }
-        continuation.yield(.stateChanged(paneId: paneId, state: record.state))
+        channel.send(.stateChanged(paneId: paneId, state: record.state))
         // Replay the pane's presentation orientation too, before any frame:
         // a subscriber that wasn't listening when it last changed (a
         // reconnect gap, a GUI that relaunched onto a pane the daemon kept)
@@ -1296,12 +1299,12 @@ public actor PaneCoordinator {
         // framebuffer where the backend is observed, and reflects the last
         // performed command where it isn't. Before the first seed,
         // observation, or command it is the `.portrait` assumption.
-        continuation.yield(
+        channel.send(
             .orientationChanged(paneId: paneId, orientation: record.presentationOrientation)
         )
 
         if record.lastSequence > 0, let published = record.currentSurface {
-            continuation.yield(
+            channel.send(
                 .surfaceChanged(
                 paneId: paneId,
                 sequence: record.lastSequence
@@ -1359,8 +1362,43 @@ public actor PaneCoordinator {
     public func unsubscribe(paneId: UUID, subscriptionId: UUID) {
         guard let record = panes[paneId] else { return }
         if let subscriber = record.subscribers.removeValue(forKey: subscriptionId) {
-            subscriber.continuation.finish()
+            subscriber.channel.finish()
         }
+    }
+
+    /// One pull from a subscriber's channel, parking until something arrives.
+    ///
+    /// The queue check and the park happen in one actor turn with no await
+    /// between them, so a `send` cannot slip past a consumer on its way to
+    /// sleep. A finished channel answers nil once its queued events drain,
+    /// which is what ends the reader's loop.
+    func nextEvent(from channel: ConflatingEventChannel) async -> PaneEvent? {
+        if let event = channel.take() { return event }
+        if channel.isFinished { return nil }
+        return await withCheckedContinuation { continuation in
+            channel.park(continuation)
+        }
+    }
+
+    /// Whether a subscriber's reader is parked waiting for its next event.
+    /// Tests wait on this before sending the event meant to wake it, so they
+    /// exercise the continuation rather than a queue that was already full.
+    func isReaderParked(paneId: UUID, subscriptionId: UUID) -> Bool {
+        panes[paneId]?.subscribers[subscriptionId]?.channel.hasParkedReader ?? false
+    }
+
+    /// Pending pane events across every subscriber, and how many surface
+    /// notices conflation has folded away. Used by tests.
+    func subscriptionQueueDepth() -> (pending: Int, conflated: Int) {
+        var pending = 0
+        var conflated = 0
+        for record in panes.values {
+            for subscriber in record.subscribers.values {
+                pending += subscriber.channel.pendingCount
+                conflated += subscriber.channel.conflatedSurfaceCount
+            }
+        }
+        return (pending, conflated)
     }
 
     /// Number of active subscribers on a pane. Used by tests.
@@ -1371,7 +1409,7 @@ public actor PaneCoordinator {
     // MARK: - Ownership transfer (adoption)
 
     /// Revoke one subscription completely. Synchronously removes it from
-    /// the record and finishes its JSON continuation. That is the *entire*
+    /// the record and finishes its event channel. That is the *entire*
     /// teardown for a UDS subscriber, which has no surface lane. For an
     /// XPC subscriber, the surface token's `unregister` runs **before** the
     /// lifecycle drain: `unregister` removes the registry entry, discards
@@ -1385,7 +1423,7 @@ public actor PaneCoordinator {
     /// unregister idempotent. Idempotent overall.
     private func revokeSubscriber(record: Record, subscriptionId: UUID) async {
         guard let subscriber = record.subscribers.removeValue(forKey: subscriptionId) else { return }
-        subscriber.continuation.finish()
+        subscriber.channel.finish()
         if let token = subscriber.subscriptionToken {
             await subscriptionRegistry?.unregister(subscriptionId: token)
         }
@@ -1846,7 +1884,7 @@ public actor PaneCoordinator {
         }
 
         for subscriber in record.subscribers.values {
-            subscriber.continuation.yield(.stateChanged(paneId: record.id, state: state))
+            subscriber.channel.send(.stateChanged(paneId: record.id, state: state))
         }
         // Publish to the event stream, scoped to the sessions permitted to
         // drive the pane, so their `deviceterm events` subscribers see pane
@@ -1958,9 +1996,9 @@ public actor PaneCoordinator {
             deviceTunnelToRelease = nil
         }
         // Revoke every subscriber *fully* before tearing the backend down:
-        // finish the JSON continuation, and for an XPC subscriber fire its
+        // finish the event channel, and for an XPC subscriber fire its
         // lifecycle teardown (pool drain) and unregister its surface hook.
-        // finishing the continuation alone would leak the pool token and the
+        // finishing the channel alone would leak the pool token and the
         // side-band delivery entry. Done while the backend is still live so
         // the pool drain lands.
         for subscriptionId in Array(record.subscribers.keys) {
@@ -2210,7 +2248,7 @@ public actor PaneCoordinator {
         guard record.presentationOrientation != orientation else { return }
         record.presentationOrientation = orientation
         for subscriber in record.subscribers.values {
-            subscriber.continuation.yield(.orientationChanged(paneId: paneId, orientation: orientation))
+            subscriber.channel.send(.orientationChanged(paneId: paneId, orientation: orientation))
         }
     }
 
@@ -3616,7 +3654,7 @@ public actor PaneCoordinator {
         if record.state == .booting {
             record.state = .rendering
             for (_, subscriber) in record.subscribers {
-                subscriber.continuation.yield(.stateChanged(paneId: paneId, state: .rendering))
+                subscriber.channel.send(.stateChanged(paneId: paneId, state: .rendering))
             }
             // Publish the booting→rendering transition to the event
             // stream, scoped to the sessions permitted to drive the
@@ -3636,12 +3674,12 @@ public actor PaneCoordinator {
         } else {
             statePublication = nil
         }
-        // JSON evt path: yield to the per-record subscribers map
-        // (the existing UDS fan-out). The same yield drives the
-        // PaneMethods.subscribe adapter that emits the wire-level
-        // `surface.changed` payload: JSON only.
+        // JSON evt path: into the per-record subscribers' channels, where a
+        // frame notice folds into the pending one if the reader is behind.
+        // The same send is what `PaneMethods.subscribe` encodes into the
+        // wire-level `surface.changed` payload: JSON only.
         for (_, subscriber) in record.subscribers {
-            subscriber.continuation.yield(.surfaceChanged(paneId: paneId, sequence: sequence))
+            subscriber.channel.send(.surfaceChanged(paneId: paneId, sequence: sequence))
         }
         // The ordered pump handles the cross-actor side-band path after this
         // turn. UDS subscribers have no delivery handle registered, so the

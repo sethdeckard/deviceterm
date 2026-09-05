@@ -429,9 +429,12 @@ New code follows these project-wide defaults.
   consumers when the producer might change).
 - One-shot async work uses `async throws` returning a value. Don't reach for
   `AsyncSequence` for single-result calls.
-- Daemon pane-subscription events (`AsyncStream<PaneEvent>` inside the
-  daemon, surfaced to the GUI as RPC `evt` frames) are the canonical
-  example.
+- Daemon pane-subscription events (`PaneEventStream` inside the daemon,
+  surfaced to the GUI as RPC `evt` frames) are the canonical example. It is
+  pull-based rather than an `AsyncStream`, because a stream's continuation
+  accepts every yield however far behind the consumer is. The channel it reads
+  keeps only the newest surface notice; lifecycle and orientation events queue
+  in full.
 
 ## SwiftUI / AppKit boundary
 

@@ -1300,6 +1300,142 @@ func subscribeReplaysTheDisplaysOrientation() async throws {
     #expect(replayed == [.landscapeRight])
 }
 
+/// Wait until `subscriptionId`'s reader is actually parked, rather than
+/// sleeping and hoping. Bounded, so a reader that never parks fails its test.
+private func waitForParkedReader(
+    _ coordinator: PaneCoordinator,
+    paneId: UUID,
+    subscriptionId: UUID
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if await coordinator.isReaderParked(paneId: paneId, subscriptionId: subscriptionId) {
+            return true
+        }
+        await Task.yield()
+    }
+    return false
+}
+
+/// Release a reader after `seconds` by tearing its subscription down.
+///
+/// Cancelling the reader's task would not do it: it is suspended on a checked
+/// continuation, which cancellation does not resume. Unsubscribing finishes the
+/// channel, which does, so a broken wake-up fails the assertion instead of
+/// hanging the suite.
+private func watchdogUnsubscribe(
+    _ coordinator: PaneCoordinator,
+    paneId: UUID,
+    subscriptionId: UUID,
+    after seconds: Double = 5
+) -> Task<Void, Never> {
+    Task {
+        try? await Task.sleep(for: .seconds(seconds))
+        guard !Task.isCancelled else { return }
+        await coordinator.unsubscribe(paneId: paneId, subscriptionId: subscriptionId)
+    }
+}
+
+@Test
+func aParkedReaderIsWokenByTheNextPaneEvent() async throws {
+    // The pull model's core promise: a reader that has drained everything
+    // sleeps inside the coordinator and is woken by the next send. Driving it
+    // through `subscribe` keeps every touch of the channel on the actor, which
+    // is the invariant its `@unchecked Sendable` rests on.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    let pane = try await coordinator.createMockPane(
+        udid: "parked-reader",
+        sessionId: UUID(),
+        backend: backend
+    )
+    let (subscriptionId, stream) = try await coordinator.subscribe(
+        paneId: pane.paneId,
+        as: .guiPeer
+    )
+    let received = Task { () -> [Orientation] in
+        var seen: [Orientation] = []
+        for await event in stream {
+            if case let .orientationChanged(_, orientation) = event {
+                seen.append(orientation)
+                if seen.count == 2 { return seen }
+            }
+        }
+        return seen
+    }
+    // Proof the replay was drained and the reader is asleep. Without this the
+    // rotation could land in a queue the reader had not reached, and the test
+    // would pass without ever exercising the wake-up.
+    #expect(await waitForParkedReader(
+        coordinator,
+        paneId: pane.paneId,
+        subscriptionId: subscriptionId
+    ))
+    let watchdog = watchdogUnsubscribe(
+        coordinator,
+        paneId: pane.paneId,
+        subscriptionId: subscriptionId
+    )
+    backend.emitDisplayOrientation(.landscapeRight)
+    #expect(await received.value == [.portrait, .landscapeRight])
+    watchdog.cancel()
+}
+
+@Test
+func unsubscribingReleasesAReaderWithNothingLeftToRead() async throws {
+    // Teardown has to finish an empty channel so a parked reader resumes and
+    // its loop ends. Otherwise it waits forever.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(
+        udid: "released-reader",
+        sessionId: UUID(),
+        backend: backend
+    )
+    let (subscriptionId, stream) = try await coordinator.subscribe(
+        paneId: pane.paneId,
+        as: .guiPeer
+    )
+    let drained = Task { () -> Int in
+        var count = 0
+        for await _ in stream { count += 1 }
+        return count
+    }
+    #expect(await waitForParkedReader(
+        coordinator,
+        paneId: pane.paneId,
+        subscriptionId: subscriptionId
+    ))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    // Returns at all, which is the assertion; the replay is what it counted.
+    #expect(await drained.value >= 1)
+}
+
+@Test
+func aStalledSubscriberQueuesItsEventsInTheCoordinator() async throws {
+    // The coordinator's sends land in the per-subscriber channel that
+    // `subscriptionQueueDepth` reports. Orientations are lossless, so a
+    // subscriber that never reads accumulates one per change rather than
+    // losing them to conflation.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    let pane = try await coordinator.createMockPane(
+        udid: "stalled-sub",
+        sessionId: UUID(),
+        backend: backend
+    )
+    // Subscribe and deliberately never iterate the stream.
+    _ = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    let replayed = await coordinator.subscriptionQueueDepth().pending
+    let rotations: [Orientation] = [.landscapeLeft, .portrait, .landscapeRight]
+    for orientation in rotations {
+        backend.emitDisplayOrientation(orientation)
+        try await Task.sleep(for: .milliseconds(50))
+    }
+    let depth = await coordinator.subscriptionQueueDepth()
+    #expect(depth.pending == replayed + rotations.count)
+    #expect(depth.conflated == 0)
+}
+
 @Test
 func attachSeedsTheDisplayOrientationBeforeAnySubscriber() async throws {
     // Mounting a pane onto a device whose display is already landscape has

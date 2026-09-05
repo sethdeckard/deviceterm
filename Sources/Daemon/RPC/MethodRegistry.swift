@@ -11,9 +11,9 @@ import Foundation
 ///     dispatcher sends a single `.response` envelope and is done.
 ///
 ///   - Subscription: `(paramsJSON, SubscriptionContext?) async throws ->
-///     SubscriptionResult`. The handler returns the initial `.result` body plus an
-///     `AsyncStream<SubscriptionEvent>` that the dispatcher drains,
-///     emitting each yielded value as an `.event` envelope sharing the
+///     SubscriptionResult`. The handler returns the initial `.result` body plus a
+///     `SubscriptionEventStream` that the dispatcher drains, emitting each
+///     value as an `.event` envelope sharing the
 ///     original request's `id`. The handler also returns an
 ///     `onCancel` closure that the dispatcher calls when the client
 ///     disconnects or the connection otherwise tears the subscription
@@ -52,18 +52,22 @@ public struct MethodRegistry: Sendable {
     /// body, the stream of subsequent events, and a hook the
     /// dispatcher calls when the subscription is torn down.
     ///
-    /// `onCancel` is the pool-free producer unsubscribe: it tears down
-    /// the coordinator subscriber and the event adapter, and runs for
-    /// every transport (UDS, XPC sim, XPC device). The device pool
-    /// teardown rides `SubscriptionContext.lifecycle`, layered on top.
+    /// `onCancel` releases the producer-side subscription the handler
+    /// created, and runs on transport teardown for every transport (UDS, XPC
+    /// sim, XPC device). For `pane.subscribe` it is also what releases a
+    /// reader parked on the pane's channel. The device pool teardown rides
+    /// `SubscriptionContext.lifecycle`, layered on top.
     public struct SubscriptionResult: Sendable {
         public let initialResult: Data
-        public let events: AsyncStream<SubscriptionEvent>
+        /// Erased rather than a concrete `AsyncStream`, because
+        /// `pane.subscribe` vends a pull-based source instead. See
+        /// `SubscriptionEventStream`.
+        public let events: SubscriptionEventStream
         public let onCancel: @Sendable () -> Void
 
         public init(
             initialResult: Data,
-            events: AsyncStream<SubscriptionEvent>,
+            events: SubscriptionEventStream,
             onCancel: @escaping @Sendable () -> Void
         ) {
             self.initialResult = initialResult

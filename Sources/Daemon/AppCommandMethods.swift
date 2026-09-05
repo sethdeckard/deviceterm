@@ -72,7 +72,7 @@ public enum AppCommandMethods {
             }
             return MethodRegistry.SubscriptionResult(
                 initialResult: Data(#"{"ok":true}"#.utf8),
-                events: mapped,
+                events: SubscriptionEventStream(mapped),
                 onCancel: onCancel
             )
         }

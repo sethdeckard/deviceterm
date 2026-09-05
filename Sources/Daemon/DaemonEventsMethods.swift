@@ -45,9 +45,9 @@ public enum DaemonEventsMethods {
             let encoder = JSONEncoder()
             // Adapter: drain the broker's typed stream, JSON-encode
             // each event, fan to the dispatcher's untyped wire stream.
-            // Discarding the Task value (with `_ = adapter`) matches
-            // PaneMethods.subscribe's pattern: the AsyncStream
-            // termination closes the adapter via the `for await` loop.
+            // Discarding the Task value (with `_ = adapter`) is safe: the
+            // broker finishes `eventStream` on unsubscribe, the `for await`
+            // loop ends, and the adapter finishes `rpcContinuation`.
             let adapter = Task {
                 for await event in eventStream {
                     if let encoded = try? encoder.encode(event) {
@@ -66,7 +66,7 @@ public enum DaemonEventsMethods {
             let initialAck = try JSONEncoder().encode(RPCAck(success: true))
             return MethodRegistry.SubscriptionResult(
                 initialResult: initialAck,
-                events: rpcStream,
+                events: SubscriptionEventStream(rpcStream),
                 onCancel: { [weak broker] in
                     Task { [weak broker] in
                         await broker?.unsubscribe(subscriptionId)

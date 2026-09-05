@@ -314,7 +314,7 @@ public enum PaneMethods {
             }
             let principal = try requirePrincipal()
             let subscriptionId: UUID
-            let paneStream: AsyncStream<PaneEvent>
+            let paneStream: PaneEventStream
             do {
                 (subscriptionId, paneStream) = try await paneCoordinator.subscribe(
                     paneId: paneId,
@@ -325,66 +325,32 @@ public enum PaneMethods {
                 throw mapPaneError(error)
             }
 
-            // Adapt the PaneEvent stream into RPC SubscriptionEvents.
-            let (eventStream, eventContinuation) =
-                AsyncStream<MethodRegistry.SubscriptionEvent>.makeStream()
-            let encoder = JSONEncoder()
+            // Encode lazily rather than pumping through a second stream. An
+            // adapter task would pull from the coordinator's channel as fast
+            // as it could and push into an `AsyncStream` that accepts every
+            // yield, so the conflation upstream would only move the pile-up
+            // one hop along. Mapping in place leaves the channel as the only
+            // handler-side event buffer, and the transport's reads drive it.
             let paneIdString = paneId.uuidString
-            let adapter = Task {
-                for await event in paneStream {
-                    switch event {
-                    case let .surfaceChanged(_, sequence):
-                        let payload = SurfaceChangedEvent(
-                            paneId: paneIdString,
-                            sequence: sequence
-                        )
-                        if let encoded = try? encoder.encode(payload) {
-                            eventContinuation.yield(
-                                MethodRegistry.SubscriptionEvent(
-                                method: PaneEventName.surfaceChanged.rawValue,
-                                params: encoded
-                            )
-                                )
-                        }
-
-                    case let .stateChanged(_, state):
-                        let payload = StateChangedEvent(
-                            paneId: paneIdString,
-                            state: state.rawValue
-                        )
-                        if let encoded = try? encoder.encode(payload) {
-                            eventContinuation.yield(
-                                MethodRegistry.SubscriptionEvent(
-                                method: PaneEventName.stateChanged.rawValue,
-                                params: encoded
-                            )
-                                )
-                        }
-
-                    case let .orientationChanged(_, orientation):
-                        let payload = OrientationChangedEvent(
-                            paneId: paneIdString,
-                            orientation: orientation.rawValue
-                        )
-                        if let encoded = try? encoder.encode(payload) {
-                            eventContinuation.yield(
-                                MethodRegistry.SubscriptionEvent(
-                                method: PaneEventName.orientationChanged.rawValue,
-                                params: encoded
-                            )
-                                )
-                        }
+            let channel = paneStream.channel
+            let events = SubscriptionEventStream { [weak paneCoordinator] in
+                // Skip an event that fails to encode rather than ending the
+                // subscription on it. A coordinator that has gone away ends it,
+                // which is the same answer its channel would give.
+                guard let paneCoordinator else { return nil }
+                while let event = await paneCoordinator.nextEvent(from: channel) {
+                    if let encoded = encodeSubscriptionEvent(event, paneId: paneIdString) {
+                        return encoded
                     }
                 }
-                eventContinuation.finish()
+                return nil
             }
 
-            // Compose the idempotent, pool-free producer cleanup: cancel
-            // the event adapter and unsubscribe the coordinator
-            // subscriber. Every transport (UDS, XPC sim, XPC device) uses
+            // Compose the idempotent, pool-free producer cleanup: unsubscribe
+            // the coordinator subscriber, which finishes its channel and so
+            // releases a reader parked in `nextEvent`. Every transport (UDS, XPC sim, XPC device) uses
             // it; the device pool teardown rides the lifecycle on top.
             let cleanup = FireOnce { [weak paneCoordinator] in
-                adapter.cancel()
                 Task { [weak paneCoordinator] in
                     await paneCoordinator?.unsubscribe(
                         paneId: paneId,
@@ -404,7 +370,7 @@ public enum PaneMethods {
             var armed: (@Sendable () -> Void)? = { cleanup() }
             defer { armed?() }
 
-            let initialResult = try encoder.encode(
+            let initialResult = try JSONEncoder().encode(
                 PaneSubscribeAck(
                 success: true,
                 subscriptionToken: context?.subscriptionToken.uuidString
@@ -422,7 +388,7 @@ public enum PaneMethods {
             armed = nil
             return MethodRegistry.SubscriptionResult(
                 initialResult: initialResult,
-                events: eventStream,
+                events: events,
                 onCancel: { cleanup() }
             )
         }
@@ -1181,5 +1147,44 @@ public enum PaneMethods {
                 + "session; only the human can move it (drag in GUI)"
             )
         }
+    }
+}
+
+/// Render one pane event as its wire envelope, or nil if it cannot be encoded.
+///
+/// A free function so the mapping closure stays `Sendable`: a `JSONEncoder`
+/// captured from the enclosing scope would not be.
+private func encodeSubscriptionEvent(
+    _ event: PaneEvent,
+    paneId: String
+) -> MethodRegistry.SubscriptionEvent? {
+    let encoder = JSONEncoder()
+    switch event {
+    case let .surfaceChanged(_, sequence):
+        let payload = SurfaceChangedEvent(paneId: paneId, sequence: sequence)
+        guard let encoded = try? encoder.encode(payload) else { return nil }
+        return MethodRegistry.SubscriptionEvent(
+            method: PaneEventName.surfaceChanged.rawValue,
+            params: encoded
+        )
+
+    case let .stateChanged(_, state):
+        let payload = StateChangedEvent(paneId: paneId, state: state)
+        guard let encoded = try? encoder.encode(payload) else { return nil }
+        return MethodRegistry.SubscriptionEvent(
+            method: PaneEventName.stateChanged.rawValue,
+            params: encoded
+        )
+
+    case let .orientationChanged(_, orientation):
+        let payload = OrientationChangedEvent(
+            paneId: paneId,
+            orientation: orientation.rawValue
+        )
+        guard let encoded = try? encoder.encode(payload) else { return nil }
+        return MethodRegistry.SubscriptionEvent(
+            method: PaneEventName.orientationChanged.rawValue,
+            params: encoded
+        )
     }
 }

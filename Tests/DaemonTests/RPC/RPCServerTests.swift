@@ -408,7 +408,7 @@ func subscriptionStreamsEventsCorrelatedByRequestId() async throws {
                 }
                 return MethodRegistry.SubscriptionResult(
                     initialResult: Data("{\"started\":true}".utf8),
-                    events: stream,
+                    events: SubscriptionEventStream(stream),
                     onCancel: {}
                 )
             }
@@ -475,7 +475,7 @@ func subscriptionOnCancelFiresWhenClientDisconnects() async throws {
                 let trackerRef = tracker
                 return MethodRegistry.SubscriptionResult(
                     initialResult: Data("{}".utf8),
-                    events: stream,
+                    events: SubscriptionEventStream(stream),
                     onCancel: {
                         Task { await trackerRef.tick() }
                     }
