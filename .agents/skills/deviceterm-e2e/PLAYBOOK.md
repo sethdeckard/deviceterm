@@ -400,6 +400,19 @@ GUI-derived state may be stale. Poll a fresh `ax dump` instead, and see
 scenario 5 for which prompts are app-modal and which are sheets that keep
 answering.
 
+**One of those alerts is not a prompt you triggered.** Attaching a pane while
+Device Hub or Simulator.app is running raises a coexistence advisory, so any
+sim-attaching scenario here can stall behind a modal nobody in the scenario
+asked for, with the GUI-backed verbs starved exactly as above. At most one
+appears per launch, and Device Hub's outranks Simulator.app's when both apply.
+
+It is easiest to take out of the picture before the run rather than handle
+mid-scenario: dismiss it once with "Don't show again", or set
+`device-hub-advisory = suppress` and `simulator-app-advisory = suppress`. Set
+**both** if both of Apple's apps are around, because the keys are independent
+and Simulator.app's advisory is outranked rather than disabled, so suppressing
+Device Hub's is what makes the other one eligible.
+
 **Poll for the expected delta rather than reading once**, on whichever source
 you are asserting against (`tabs list --json`, `windows list --all --json`, a
 fresh `ax dump`, a fresh capture). Bound the wait, and report a timeout as a
@@ -884,6 +897,13 @@ behavior; the CLI only sees the final lifecycle state.
   names that text. **This one is deliberately a race** and stays that way: the
   placeholder is what you are trying to catch, so there is nothing to wait for
   first, and missing it is a result to report rather than a failure.
+
+  **Settle the coexistence advisory before you get here**, per *Mutations land
+  after the CLI returns*. This scenario attaches a pane, which is the trigger,
+  so with Device Hub or Simulator.app running the capture you take "immediately"
+  can be of the alert rather than the placeholder, and the `ax dump` will name
+  the alert's text instead. Suppress it ahead of the run rather than dismissing
+  it here, since dismissing costs the race you came for.
 - **Observe (after attach):** two steps, because they observe different things.
   First the daemon side, naming the sim you booted by UDID:
 
