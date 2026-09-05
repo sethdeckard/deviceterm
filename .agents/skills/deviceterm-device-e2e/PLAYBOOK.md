@@ -96,6 +96,22 @@ rotation reports the orientation it read back as its own target, so it cannot
 disagree with itself. So drive the phone from one app. Closing the other is not
 required.
 
+**DeviceTerm warns about this itself now, and the warning is a modal.**
+Attaching a pane while Device Hub is running raises an advisory naming the
+hazard for that pane's kind: shutdown-on-quit for a simulator, exclusive control
+for a physical device. Expect it on attach, and expect it to block a run that
+was not looking for it, the same way any app-modal alert does. At most one
+coexistence advisory appears per launch, and Device Hub's wins over
+Simulator.app's when both apply. Dismiss it with "Don't show again", or set
+`device-hub-advisory = suppress` beforehand, if an unattended run cannot afford
+to stop for it.
+
+**Suppressing that one can promote the other.** The two keys are independent,
+and Simulator.app's advisory is only *outranked* rather than disabled, so it
+becomes eligible the moment Device Hub's is suppressed or Device Hub is not
+running. An unattended run with both of Apple's apps around wants
+`simulator-app-advisory = suppress` as well, or Simulator.app closed.
+
 Two limits on the above, from `Tests/Manual/device-hub-coexistence.md`, which is
 where these come from: only tapping was exercised, so keyboard, button, and
 rotation arbitration are **unverified**, and that section has never been run end
@@ -283,12 +299,18 @@ The envelope appears only when you asked for JSON. `ax tree`, `ax point`, and
 `ax sweep` emit JSON by default and so produce one without the flag; every other
 verb, **`wait` included**, needs an explicit `--json`.
 
-**That default belongs to the parsed command, not to the verb's name.** An
-invocation refused during parsing — bad arity, an unparseable number, a
-coordinate outside the unit range — never becomes an `ax` command at all, so it
-prints its usage block to stderr and no envelope, even under a verb that would
-otherwise have emitted one. `deviceterm ax point 5 5` is `cli.invalidUsage` with
-nothing on stdout unless you passed `--json`.
+**The output mode is chosen from argv before anything is parsed**, so a
+*malformed* invocation still gets an envelope whenever the mode says JSON. The
+mode is JSON for a **DeviceTerm-level** `--json`, and independently for any `ax`
+verb, which selects it on its own. So `deviceterm ax point 5 5` is
+`cli.invalidUsage` **with an envelope on stdout**, no flag needed, and
+`deviceterm tap 5 5 --json` likewise. Only outside both cases is a parse failure
+just the usage block on stderr with nothing on stdout.
+
+"DeviceTerm-level" rules out two positions where the token is not yours to
+interpret: anything after a bare `--` is a literal, and under `with-pane`
+only the argv up to the verb counts, because the rest belongs to the child
+command. A `--json` sitting in either place leaves the mode human.
 
 **`events` is the exception that produces no envelope at all.** Its connection,
 authentication, and subscription failures write a human line to stderr and exit
@@ -767,7 +789,10 @@ deviceterm ax tree --pane "$DT_PANE" > $DT_DIR/before-coord.json
 read -r cx cy < <(deviceterm wait ax --label "Map Modes" --match contains \
                     --print center --pane "$DT_PANE")
 
-deviceterm ax point "$cx" "$cy" --pane "$DT_PANE" | jq '.element'
+point=$(deviceterm ax point "$cx" "$cy" --pane "$DT_PANE") \
+  || { echo "ax point failed: $point" >&2; exit 1; }
+printf '%s\n' "$point" | jq '.element'
+
 deviceterm tap "$cx" "$cy" --pane "$DT_PANE" --json
 deviceterm wait surface quiescent --pane "$DT_PANE"
 deviceterm ax tree --pane "$DT_PANE" > $DT_DIR/after-coord.json
@@ -775,8 +800,15 @@ deviceterm ax tree --pane "$DT_PANE" > $DT_DIR/after-coord.json
 
 `ax point` must return the element you took the coordinate from: compare `role`
 and `label`, and `identifier` when the node carries one. A different element
-means you took the coordinate off a different node than you meant to, and `null`
-means check you read `.element` and not `.tree`.
+means you took the coordinate off a different node than you meant to.
+
+**A `null` here never means "nothing at that coordinate."** A miss is not a
+successful empty answer: the bridge throws and the verb exits nonzero as
+`pane.bridgeFailed`. So on a run that exited 0, `null` means you read `.tree`
+where the answer is under `.element`; on a run that did not, it means you
+decoded the error envelope, which has no `.element` at all. Capture the output
+and check the status before reading the key, exactly as above, or `jq`'s own
+exit 0 will hide the difference.
 
 **That check is not the assertion either.** It proves the coordinate resolved to
 the right element *before* the tap, and the receipt proves only dispatch, so
@@ -865,10 +897,24 @@ end up instead of where you started.
 ### 3. App Switcher
 
 ```sh
+labels() {
+  local tree
+  tree=$(deviceterm ax tree --pane "$DT_PANE") || return 1
+  printf '%s\n' "$tree" \
+    | jq -r '[.tree | recurse(.children[]?)] | map(.label // empty) | .[]'
+}
+
 deviceterm app-switcher --pane "$DT_PANE" --json
 deviceterm wait surface quiescent --pane "$DT_PANE"
-deviceterm ax tree --pane "$DT_PANE" | jq -r '[.tree | recurse(.children[]?)] | map(.label // empty) | .[]'
+labels || { echo "ax tree failed" >&2; exit 1; }
 ```
+
+**Capture the tree and check the status before decoding it.** Piping
+`ax tree` straight into `jq` discards the CLI's exit status, and a failed read
+prints an error envelope whose `.tree` is null, so the pipeline emits an **empty
+label set** and exits 0. Every assertion in this section is about which labels
+are present, and the `button home` one below passes on an empty set by design,
+so a failed read there is indistinguishable from a pass.
 
 **Settle before reading.** The switcher animates in, and a tree read taken while
 it does shows the app you started from — indistinguishable here from a gesture
@@ -892,19 +938,26 @@ field or nothing at all. So every step below names its own read-back.
 **`button home`** leaves the app:
 
 ```sh
+before=$(labels) || { echo "baseline ax tree failed" >&2; exit 1; }
 deviceterm button home --pane "$DT_PANE"
 deviceterm wait surface quiescent --pane "$DT_PANE"
-deviceterm ax tree --pane "$DT_PANE" \
-  | jq -r '[.tree | recurse(.children[]?)] | map(.label // empty) | .[]'
+after=$(labels) || { echo "ax tree failed" >&2; exit 1; }
 ```
+
+**Use `labels` from scenario 3, and check its status both times.** This is the
+assertion in the playbook most exposed to a failed read: it passes when the
+app's labels are *absent*, and a piped `ax tree` that fails prints nothing and
+exits 0, which is that pass exactly. A read that failed must abort, not be
+mistaken for a screen that changed.
 
 The settle matters as much here as anywhere: the dismissal animates, and a tree
 read during it still carries the app's own labels, which is exactly the "the
 button did nothing" reading you are trying to rule out.
 
-Assert the app's controls are **gone**, not that anything specific appeared:
-SpringBoard's own labels vary by OS version and Home Screen contents, while the
-disappearance of the label set you recorded before pressing is unambiguous.
+Assert the app's controls are **gone** from `$after`, not that anything specific
+appeared: SpringBoard's own labels vary by OS version and Home Screen contents,
+while the disappearance of the labels in `$before` is unambiguous. Assert
+`$before` was non-empty too; an empty baseline makes the disappearance vacuous.
 
 **`text` needs focus, and a coordinate is not a durable handle on the field.**
 Focusing it raises the keyboard, which reflows the layout, so a coordinate that
