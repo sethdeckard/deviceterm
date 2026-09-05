@@ -58,9 +58,7 @@ final class HeadlessAdvisoryViewModel {
     }
 
     private static let defaultIsSimulatorAppRunning: @MainActor () -> Bool = {
-        !NSRunningApplication
-            .runningApplications(withBundleIdentifier: SimulatorDetachPolicy.simulatorBundleID)
-            .isEmpty
+        CoexistenceApp.simulator.isRunning()
     }
 
     private static let defaultWelcomeShownThisLaunch: @MainActor () -> Bool = {

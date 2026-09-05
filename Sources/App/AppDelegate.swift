@@ -1470,6 +1470,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         WelcomeCoordinator.shared.present(id: WelcomeCatalog.simulatorCoexistenceID)
     }
 
+    /// Help > Working with Apple's Device Hub: the Xcode 27 counterpart.
+    /// Ungated the same way, and also ungated on Device Hub being
+    /// installed: the automatic presentation is the part that checks, and
+    /// someone reading up before they install Xcode 27 asked for this by
+    /// name.
+    @objc
+    func openDeviceHubCoexistenceWelcome(_ sender: Any?) {
+        WelcomeCoordinator.shared.present(id: WelcomeCatalog.deviceHubCoexistenceID)
+    }
+
     /// Gate the one app-menu item that can be dispatched into a dead end.
     ///
     /// The app menu leaves `autoenablesItems` at its default `true`, so AppKit

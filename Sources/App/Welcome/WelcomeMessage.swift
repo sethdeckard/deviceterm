@@ -27,6 +27,20 @@ struct WelcomeMessage {
     /// The welcome window's title.
     let title: String
 
+    /// Whether this welcome applies to the machine it's running on.
+    ///
+    /// The coexistence welcomes each explain one of Apple's apps, and
+    /// Xcode 26 and Xcode 27 ship different ones, so a machine with only
+    /// one of them should never be handed the other's explanation.
+    /// Consulted only by the automatic path: an irrelevant welcome is
+    /// skipped *without* being recorded as seen, so installing the other
+    /// Xcode later arms it. The Help menu ignores this entirely, because
+    /// the user asked for that topic by name.
+    ///
+    /// Evaluated per launch rather than captured, since the answer
+    /// changes when Xcode is installed or removed.
+    let isRelevant: @MainActor () -> Bool
+
     /// Builds the message's content, given how it is being presented
     /// and a dismiss action to wire to its own button. Dismissal is a
     /// closure because the window controller owns the window's
@@ -35,4 +49,23 @@ struct WelcomeMessage {
     /// A message that reads the same either way can ignore the
     /// presentation: `{ _, dismiss in … }`.
     let content: (_ presentation: WelcomePresentation, _ dismiss: @escaping () -> Void) -> AnyView
+
+    /// Spelled out rather than left to the memberwise initializer so
+    /// `isRelevant` can default to "applies everywhere". A welcome that
+    /// isn't about another app has nothing to gate on, and tests that
+    /// exercise the selection rules shouldn't have to say so.
+    init(
+        id: String,
+        title: String,
+        isRelevant: @escaping @MainActor () -> Bool = { true },
+        content: @escaping (
+            _ presentation: WelcomePresentation,
+            _ dismiss: @escaping () -> Void
+        ) -> AnyView
+    ) {
+        self.id = id
+        self.title = title
+        self.isRelevant = isRelevant
+        self.content = content
+    }
 }

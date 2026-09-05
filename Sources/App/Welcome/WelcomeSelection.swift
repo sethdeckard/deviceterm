@@ -21,19 +21,30 @@ enum WelcomeSelection {
     /// cheap-gates-first shape: the two latches short-circuit before we
     /// walk the catalog.
     ///
+    /// Within the catalog the same shape holds: `seen` is a set lookup and
+    /// `isRelevant` reaches Launch Services, so the cheap test comes first
+    /// and the expensive one runs only for ids that could actually show. A
+    /// call-counting test pins that, the way `HeadlessAdvisoryDecision`'s
+    /// does.
+    ///
     /// - Parameters:
     ///   - catalog: every known welcome id, in presentation order.
     ///   - seen: ids already shown, from `WelcomeSeenStore`.
+    ///   - isRelevant: whether an id applies to this machine. A welcome it
+    ///     rejects is passed over and **not** recorded as seen, so it is
+    ///     still waiting if the answer changes.
     ///   - isSuppressed: `welcome-messages = suppress`, the master opt-out.
     ///   - shownThisLaunch: whether a welcome already appeared this launch.
+    @MainActor
     static func next(
         catalog: [String],
         seen: Set<String>,
+        isRelevant: (String) -> Bool,
         isSuppressed: Bool,
         shownThisLaunch: Bool
     ) -> String? {
         guard !shownThisLaunch else { return nil }
         guard !isSuppressed else { return nil }
-        return catalog.first { !seen.contains($0) }
+        return catalog.first { !seen.contains($0) && isRelevant($0) }
     }
 }

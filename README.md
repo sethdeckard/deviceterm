@@ -57,8 +57,8 @@ interact with it:
 - scroll or drag the watch bezel to turn the Digital Crown.
 
 Commands that DeviceTerm does not observe continue to behave exactly as Apple's
-tools define them. A Simulator booted from Xcode, Simulator.app, or another
-terminal remains independent until explicitly attached.
+tools define them. A Simulator booted from Xcode, Simulator.app, Device Hub, or
+another terminal remains independent until explicitly attached.
 
 ## Advanced CLI and JSON
 

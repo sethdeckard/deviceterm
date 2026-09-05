@@ -59,6 +59,15 @@ DeviceTerm copy mentioning it as documented rather than verified.
   pgrep -x Simulator
   ```
 
+- `pgrep -x Simulator` won't see Device Hub, which is a separate app with its
+  own checklist (`device-hub-coexistence.md`). If Xcode 27 is installed, check
+  for that too, because quitting it shuts down every booted sim and would
+  confound these trials:
+
+  ```sh
+  pgrep -f MacOS/DeviceHub
+  ```
+
 - Your current values recorded, so you can put them back:
 
   ```sh
@@ -97,13 +106,17 @@ rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/deviceterm/welcome-seen"
 and falls back to `~/.cache`, so the command above would clear a file the app
 never reads.
 
+DeviceTerm has two coexistence welcomes, and only one appears per launch. On a
+machine with both Xcodes, with both unseen, the Simulator one comes first and
+the Device Hub one waits for the next launch.
+
 | # | Action | Expected |
 |---|--------|----------|
 | 2.1 | `make run` on a machine with no seen cache. | The welcome appears. **No DeviceTerm window yet.** |
 | 2.2 | Click the DeviceTerm Dock icon while the welcome is up. | The welcome comes forward. No terminal window opens behind it. |
 | 2.3 | Press ⌘N and ⌘T while the welcome is up. | Same: the welcome surfaces, no window opens. |
 | 2.4 | Click Continue. | The first DeviceTerm window opens. |
-| 2.5 | Quit and relaunch. | No welcome, and the window opens immediately. |
+| 2.5 | Quit and relaunch. | With Xcode 26 only, no welcome and the window opens immediately. With Xcode 27 also installed, the Device Hub welcome appears instead. Relaunch once more for no welcome. |
 | 2.6 | Choose Help ▸ Working with Apple's Simulator.app. | The welcome opens again, even though it's been seen. |
 | 2.7 | Set `welcome-messages = suppress`, clear the cache, relaunch. | No welcome. The window opens immediately. Help still opens it. |
 

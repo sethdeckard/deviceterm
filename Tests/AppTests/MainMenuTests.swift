@@ -761,4 +761,53 @@ struct MainMenuTests {
         #expect(item.action == #selector(AppDelegate.openThirdPartyNotices(_:)))
         #expect(item.target == nil)
     }
+
+    @Test
+    func helpMenuOffersBothCoexistenceWelcomes() throws {
+        // Both items are unconditional, whichever Xcode is installed:
+        // the automatic presentation is the part that gates on that, and
+        // a Help menu whose contents change with the toolchain is worse
+        // than one that explains an app you don't have.
+        //
+        // Titles come from `WelcomeCatalog` rather than literals here,
+        // because the window's own heading comes from the same constant
+        // and the point is that the two can't drift. That also keeps the
+        // table out of `arguments:`, which is evaluated off the main
+        // actor and so can't read the catalog at all.
+        let help = try #require(helpMenu(), "Help submenu missing")
+
+        let simulator = try #require(
+            help.items.first(where: { $0.title == WelcomeCatalog.simulatorCoexistenceTitle }),
+            "Simulator.app welcome item missing"
+        )
+        #expect(simulator.action == #selector(AppDelegate.openSimulatorCoexistenceWelcome(_:)))
+        #expect(simulator.target == nil, "welcome items should target the responder chain")
+
+        let deviceHub = try #require(
+            help.items.first(where: { $0.title == WelcomeCatalog.deviceHubCoexistenceTitle }),
+            "Device Hub welcome item missing"
+        )
+        #expect(deviceHub.action == #selector(AppDelegate.openDeviceHubCoexistenceWelcome(_:)))
+        #expect(deviceHub.target == nil, "welcome items should target the responder chain")
+    }
+
+    @Test
+    func helpMenuKeepsTheWelcomesAboveTheSeparator() throws {
+        // The separator divides the welcomes from Third-Party Notices,
+        // which is a different kind of item. A welcome appended after it
+        // would read as belonging with the notices.
+        let help = try #require(helpMenu(), "Help submenu missing")
+        let separator = try #require(
+            help.items.firstIndex(where: { $0.isSeparatorItem }),
+            "separator missing"
+        )
+        // Device Hub leads here, which is deliberately the opposite of
+        // `WelcomeCatalog.messages`. That order picks the welcome a first
+        // launch shows; this one is about what a reader reaches for.
+        let above = help.items.prefix(separator).map(\.title)
+        #expect(above == [
+            WelcomeCatalog.deviceHubCoexistenceTitle,
+            WelcomeCatalog.simulatorCoexistenceTitle
+        ])
+    }
 }

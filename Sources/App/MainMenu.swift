@@ -471,14 +471,32 @@ func makeMainMenu() -> NSMenu {
     // `NSApp.helpMenu`, because that adds the Spotlight-style Help
     // search field, which makes no sense for a couple of static items.
     //
-    // The welcome item is the permanent entry point to the coexistence
-    // explanation, which appears automatically only until its id is
-    // recorded. The advisory's Learn More… button also reopens it, but
-    // that appears only while a sim is attached and Simulator.app is
+    // The welcome items are the permanent entry points to the coexistence
+    // explanations, which appear automatically only until their ids are
+    // recorded. An advisory's Learn More… button also reopens one, but
+    // that appears only while a pane is attached and Apple's app is
     // running.
+    //
+    // Both items are here unconditionally, even though the automatic
+    // presentation is gated on the matching app being installed. A menu
+    // item that appears and disappears with the installed Xcode is worse
+    // than one that explains an app you don't have: it makes the Help
+    // menu's contents a moving target, and someone reading up before
+    // installing Xcode 27 has a reason to open it.
     let helpMenuItem = NSMenuItem()
     mainMenu.addItem(helpMenuItem)
     let helpMenu = NSMenu(title: "Help")
+    // Device Hub first: it's the current toolchain's app, and the one a
+    // reader is most likely to be looking for. That deliberately differs
+    // from `WelcomeCatalog.messages`, which puts Simulator.app first
+    // because that order decides which welcome a first launch shows.
+    helpMenu.addItem(
+        NSMenuItem(
+            title: WelcomeCatalog.deviceHubCoexistenceTitle,
+            action: #selector(AppDelegate.openDeviceHubCoexistenceWelcome(_:)),
+            keyEquivalent: ""
+        )
+    )
     helpMenu.addItem(
         NSMenuItem(
             title: WelcomeCatalog.simulatorCoexistenceTitle,

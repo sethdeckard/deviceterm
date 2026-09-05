@@ -3142,6 +3142,13 @@ so a device is selectable the moment it's plugged in and trusted; the
 tunnel is brought up lazily on attach and the device's `tunnelIPAddress`
 (from `devicectl list`) correlates the UDID to its `utun`.
 
+Device Hub being open doesn't break the mirror either: both apps can stream
+the same device's video at once. What they can't share is control.
+Interacting from the app that doesn't hold it does nothing for a while,
+then control transfers and the other goes dead. Tapping is what has been
+exercised; keyboard, button, and rotation arbitration are untested. See
+`Tests/Manual/device-hub-coexistence.md`.
+
 Three properties hold for physical panes:
 
 - **Real UDID, resolved tunnel.** `deviceId` is the device's real

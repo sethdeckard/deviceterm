@@ -118,6 +118,11 @@ final class WelcomeCoordinator {
         let id = WelcomeSelection.next(
             catalog: catalog.map(\.id),
             seen: seenReader(),
+            // An id the catalog doesn't carry can't be relevant. It can't
+            // arrive either, since the catalog is where the ids came from.
+            isRelevant: { id in
+                catalog.first { $0.id == id }?.isRelevant() ?? false
+            },
             isSuppressed: isSuppressedReader(),
             shownThisLaunch: didShowThisLaunch
         )
@@ -152,6 +157,15 @@ final class WelcomeCoordinator {
         // completion is still pending, so New Window could then open one
         // window and Continue a second.
         if presentedMessageID == message.id {
+            windowController?.showWelcome()
+            return
+        }
+
+        // Keep the gating welcome in front when Help asks for the other
+        // topic. Falling through would clear the gate and overwrite
+        // `windowController`, stranding the launch completion that window
+        // carries. A second Help topic is what makes this reachable.
+        if isGatingLaunch {
             windowController?.showWelcome()
             return
         }

@@ -35,10 +35,6 @@ import Foundation
 /// started has not been tested; the manual checklist relaunches
 /// DeviceTerm between cases rather than relying on it.
 struct SimulatorDetachPolicy: Sendable, Equatable {
-    /// Apple's Simulator.app bundle identifier, which is also its
-    /// preferences domain.
-    static let simulatorBundleID = "com.apple.iphonesimulator"
-
     /// Closing one device window detaches instead of shutting the sim
     /// down. Only reached when other device windows remain open; the
     /// last one routes through quit.
@@ -67,7 +63,7 @@ struct SimulatorDetachPolicy: Sendable, Equatable {
     private static func flag(_ key: String) -> Bool? {
         let value = CFPreferencesCopyAppValue(
             key as CFString,
-            simulatorBundleID as CFString
+            CoexistenceApp.simulator.bundleID as CFString
         )
         return (value as? NSNumber)?.boolValue
     }

@@ -170,6 +170,10 @@ nothing to resolve against; see
 
 ### Coexist With Simulator.app
 
+Simulator.app ships with Xcode 26 and earlier. Xcode 27 replaces it with Device
+Hub, which behaves differently; see
+[Coexist With Device Hub](#coexist-with-device-hub).
+
 Booting a Simulator while Apple's Simulator.app is already running gets you the
 same Simulator in two windows. Simulator.app watches for boots and attaches its
 own window to any Simulator that starts, including one DeviceTerm booted. No
@@ -215,6 +219,43 @@ Simulator is still exposed to a Simulator.app shutdown. The warning names only
 the routes still open, and doesn't appear at all once both keys above are set,
 or once you've told it not to. Reopen the explanation any time from
 **Help ▸ Working with Apple's Simulator.app**.
+
+### Coexist With Device Hub
+
+Xcode 27 drops Simulator.app and ships Device Hub instead. With both Xcodes
+installed, you have both apps.
+
+Device Hub lists every Simulator and device in one window, and doesn't open a
+window per Simulator, so there's no duplicate window to close.
+
+Quitting Device Hub shuts down every booted Simulator. Not only the ones you
+opened in it, and not only the one you have selected: a Simulator DeviceTerm
+booted and you never touched in Device Hub goes down with the rest, and its
+DeviceTerm pane closes with it.
+
+Hold ⌥ with the Device Hub menu open and Quit becomes **Quit and Keep
+Simulators Running** (⌥⌘Q). It's a one-time choice rather than a setting, so the
+next quit shuts them down again. There's nothing to configure instead: Device
+Hub's Settings pane isn't reachable in Xcode 27 beta 4, and ⌘, opens nothing.
+
+Quit Device Hub before booting and the Simulator runs headless in DeviceTerm
+alone. Press ⌘Q while it's frontmost, or right-click its Dock icon and choose
+Quit.
+
+On a physical device, Device Hub and DeviceTerm can both mirror the same phone
+at once, and neither mirror drops. Control is what they can't share. Interact
+from the other app and nothing happens for a while, then control moves there and
+the first app goes dead. Keep going and it moves back.
+
+Drive the device from one app. You don't have to close the other.
+
+Only tapping has been exercised. Whether keyboard, button, and rotation input
+arbitrate the same way is untested.
+
+DeviceTerm explains this at startup once, on a machine where Device Hub is
+installed. Only one explanation appears per launch, so with Simulator.app also
+installed and its explanation still unread, this one waits for the next launch.
+Reopen it any time from **Help ▸ Working with Apple's Device Hub**.
 
 ## Understand Simulator Ownership
 
@@ -831,6 +872,9 @@ when their optional services open successfully.
 Location actions use the physical-device location service when it is
 available.
 
+Device Hub can mirror the same device at the same time, but only one app can
+drive it. See [Coexist With Device Hub](#coexist-with-device-hub).
+
 These operations do not have physical-device implementations:
 
 - `pinch`
@@ -1155,6 +1199,11 @@ Simulator panes use CoreSimulator and SimulatorKit from the active developer
 directory. The compatibility probe checks the private symbols DeviceTerm
 requires.
 
+Xcode 26 and earlier ship Simulator.app; Xcode 27 replaces it with Device Hub.
+`simctl` and `devicectl` are unchanged, and DeviceTerm drives neither app, so
+the split changes how you coexist with Apple's tooling rather than what
+DeviceTerm supports.
+
 Recorded environments and live observations are in
 [`Sources/CoreSimulatorBridge/as-tested.md`](../Sources/CoreSimulatorBridge/as-tested.md).
 A successful symbol probe does not establish live behavior or guarantee that
@@ -1218,7 +1267,7 @@ DeviceTerm reports a restart it could not perform rather than claiming one.
 |---|---|---|
 | `no device pane in this tab` | Your tab shows no attached device pane. | Boot a Simulator from this tab, mirror a physical device, or attach one explicitly. |
 | `xcrun simctl boot` succeeds but no pane appears | The command bypassed DeviceTerm's per-session `xcrun` shim, or it did not produce a new boot transition. | Run `deviceterm doctor` and check the shim result; see [Understand the xcrun Shim](#understand-the-xcrun-shim). Attach an already booted Simulator by UDID. |
-| A Simulator was booted from Xcode or Simulator.app | External boots are not claimed automatically. | Find the Simulator with `xcrun simctl list devices booted` and pass its UDID to `deviceterm device attach`. |
+| A Simulator was booted from Xcode, Simulator.app, or Device Hub | External boots are not claimed automatically. | Find the Simulator with `xcrun simctl list devices booted` and pass its UDID to `deviceterm device attach`. |
 | Attaching an external Simulator by name fails | `devices list` contains only owned booted Simulators, so it cannot resolve an unclaimed external name. | Use the Simulator UDID rather than its name. |
 | `multiple panes in this tab; pass --pane <ref>` | Your tab shows more than one device pane. | Run `deviceterm panes list`, pass a pane reference with `--pane`, or use `with-pane`. |
 | No physical devices appear in the picker | The device is disconnected, locked, untrusted, or was connected after the picker opened. | Connect and unlock it, trust the Mac, then choose **Refresh**. |
@@ -1230,6 +1279,8 @@ DeviceTerm reports a restart it could not perform rather than claiming one.
 | A Digital Crown command does not move a tight SwiftUI binding | Positively paced events are below the recognizer's transition in that environment. | Remove `--duration` first. For fine placement, try a single value from 1 through 8. |
 | A Simulator pane shows a shutdown overlay | The Simulator shut down outside DeviceTerm while its pane remained open. | Choose **Reboot**, boot the same UDID from the owning tab, or close the pane. |
 | Simulator.app opens a second presentation of the same Simulator | Simulator.app is running while DeviceTerm owns the display pane. | Quit Simulator.app, or set `simulator-app-advisory = suppress` when the duplicate presentation is intentional. |
+| Taps do nothing on a physical-device pane | Device Hub has control of the device. | Keep tapping in DeviceTerm until control moves back, or quit Device Hub. |
+| Quitting Device Hub shut down a Simulator DeviceTerm booted | Device Hub shuts down every booted Simulator when it quits, including ones it never opened. | Quit Device Hub before booting, or hold ⌥ at quit (⌥⌘Q). |
 
 Run `deviceterm agents` for additional automation recipes and command-specific
 input diagnostics.

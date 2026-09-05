@@ -16,11 +16,12 @@ takes priority.
 
 2. **DeviceTerm owns what it boots; everything else is borrowed.** A Simulator
    booted through `xcrun simctl` inside a DeviceTerm tab is attached to that tab.
-   A Simulator booted from Xcode, Simulator.app, or another terminal stays alone
-   until the user explicitly attaches it. Physical devices are always borrowed,
-   however the mirror was mounted: the GUI picker, `deviceterm device attach`,
-   or a `devicectl` deploy the shim observed. This boundary lets Apple's tools
-   and DeviceTerm coexist without competing for ownership.
+   A Simulator booted from Xcode, Simulator.app, Device Hub, or another terminal
+   stays alone until the user explicitly attaches it. Physical devices are
+   always borrowed, however the mirror was mounted: the GUI picker,
+   `deviceterm device attach`, or a `devicectl` deploy the shim observed. This
+   boundary lets Apple's tools and DeviceTerm coexist without competing for
+   ownership.
 
 3. **Do not reimplement Apple's tools or established Unix tools.** Most users
    continue to run `xcrun simctl` and `xcrun devicectl`; DeviceTerm observes the

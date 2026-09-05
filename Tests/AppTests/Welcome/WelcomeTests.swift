@@ -15,6 +15,7 @@ struct WelcomeSelectionTests {
         let next = WelcomeSelection.next(
             catalog: ["a", "b"],
             seen: [],
+            isRelevant: { _ in true },
             isSuppressed: false,
             shownThisLaunch: false
         )
@@ -26,6 +27,7 @@ struct WelcomeSelectionTests {
         let next = WelcomeSelection.next(
             catalog: ["a", "b"],
             seen: ["a"],
+            isRelevant: { _ in true },
             isSuppressed: false,
             shownThisLaunch: false
         )
@@ -37,10 +39,75 @@ struct WelcomeSelectionTests {
         let next = WelcomeSelection.next(
             catalog: ["a", "b"],
             seen: ["a", "b"],
+            isRelevant: { _ in true },
             isSuppressed: false,
             shownThisLaunch: false
         )
         #expect(next == nil)
+    }
+
+    @Test
+    func skipsAWelcomeThatDoesNotApplyToThisMachine() {
+        // Xcode 26 only: the Device Hub welcome explains an app that
+        // isn't installed, so it's passed over rather than shown.
+        let next = WelcomeSelection.next(
+            catalog: ["a", "b"],
+            seen: [],
+            isRelevant: { $0 == "b" },
+            isSuppressed: false,
+            shownThisLaunch: false
+        )
+        #expect(next == "b")
+    }
+
+    @Test
+    func nothingWhenNoWelcomeApplies() {
+        let next = WelcomeSelection.next(
+            catalog: ["a", "b"],
+            seen: [],
+            isRelevant: { _ in false },
+            isSuppressed: false,
+            shownThisLaunch: false
+        )
+        #expect(next == nil)
+    }
+
+    @Test
+    func relevanceIsNotConsultedForSeenIds() {
+        // Ordering is contract, not an implementation detail: `seen` is a
+        // set lookup and `isRelevant` reaches Launch Services. An id
+        // already recorded can't be shown whatever the answer, so the
+        // expensive test must not run for it.
+        var asked: [String] = []
+        let next = WelcomeSelection.next(
+            catalog: ["a", "b"],
+            seen: ["a"],
+            isRelevant: { asked.append($0); return true },
+            isSuppressed: false,
+            shownThisLaunch: false
+        )
+        #expect(next == "b")
+        #expect(asked == ["b"])
+    }
+
+    @Test("neither latch reaches the catalog", arguments: [
+        (true, false),
+        (false, true)
+    ])
+    func latchesShortCircuitBeforeCheckingRelevance(
+        isSuppressed: Bool,
+        shownThisLaunch: Bool
+    ) {
+        var asked = 0
+        let next = WelcomeSelection.next(
+            catalog: ["a"],
+            seen: [],
+            isRelevant: { _ in asked += 1; return true },
+            isSuppressed: isSuppressed,
+            shownThisLaunch: shownThisLaunch
+        )
+        #expect(next == nil)
+        #expect(asked == 0)
     }
 
     @Test
@@ -50,6 +117,7 @@ struct WelcomeSelectionTests {
         let next = WelcomeSelection.next(
             catalog: ["a"],
             seen: [],
+            isRelevant: { _ in true },
             isSuppressed: true,
             shownThisLaunch: false
         )
@@ -64,6 +132,7 @@ struct WelcomeSelectionTests {
         let next = WelcomeSelection.next(
             catalog: ["a", "b"],
             seen: [],
+            isRelevant: { _ in true },
             isSuppressed: false,
             shownThisLaunch: true
         )
@@ -123,8 +192,13 @@ struct WelcomeSeenStoreTests {
 /// injected presenter that records which message it was handed.
 @MainActor
 struct WelcomeCoordinatorTests {
-    private static func message(_ id: String) -> WelcomeMessage {
-        WelcomeMessage(id: id, title: id, content: { _, _ in AnyView(EmptyView()) })
+    private static func message(_ id: String, isRelevant: Bool = true) -> WelcomeMessage {
+        WelcomeMessage(
+            id: id,
+            title: id,
+            isRelevant: { isRelevant },
+            content: { _, _ in AnyView(EmptyView()) }
+        )
     }
 
     /// Coordinator over an in-memory seen set with a recording
@@ -184,6 +258,35 @@ struct WelcomeCoordinatorTests {
         #expect(presented.isEmpty)
         #expect(seen().isEmpty, "a welcome that never appeared isn't recorded as seen")
         #expect(!coordinator.didShowThisLaunch)
+    }
+
+    @Test
+    func irrelevantWelcomeIsSkippedWithoutBeingRecorded() {
+        // Installing the other Xcode later has to arm the welcome that
+        // was passed over, so one that never appeared must not land in
+        // the seen file.
+        var presented: [String] = []
+        let (coordinator, seen) = Self.makeCoordinator(
+            catalog: [Self.message("a", isRelevant: false), Self.message("b")],
+            shown: { message, _, finish in presented.append(message.id); finish() }
+        )
+        coordinator.presentIfNeeded()
+        #expect(presented == ["b"])
+        #expect(seen() == ["b"], "the skipped welcome is still waiting")
+    }
+
+    @Test
+    func manualOpenIgnoresRelevance() {
+        // Both coexistence items sit in the Help menu unconditionally,
+        // including the one for an Xcode that isn't installed. Someone
+        // reading up before they install it asked for it by name.
+        var presented: [String] = []
+        let (coordinator, _) = Self.makeCoordinator(
+            catalog: [Self.message("a", isRelevant: false)],
+            shown: { message, _, finish in presented.append(message.id); finish() }
+        )
+        coordinator.present(id: "a")
+        #expect(presented == ["a"])
     }
 
     @Test
@@ -309,6 +412,48 @@ struct WelcomeCoordinatorTests {
     }
 
     @Test
+    func helpReopenOfAnotherTopicDoesNotClearAnActiveLaunchGate() {
+        // The two-topic version of the case above. With a second Help
+        // item, the requested id can differ from the one on screen, which
+        // walks past the same-id re-front and into the assignments that
+        // clear the gate and replace the retained window controller. That
+        // drops the reference to the gating window and strands the launch
+        // completion it carries.
+        var presentedCount = 0
+        var windowOpened = 0
+        let coordinator = WelcomeCoordinator(
+            catalog: [Self.message("a"), Self.message("b")],
+            seen: { [] },
+            recordSeen: { _ in },
+            isSuppressed: { false },
+            // Never finishes: models a welcome the user hasn't dismissed.
+            present: { _, _, _ in presentedCount += 1 }
+        )
+
+        coordinator.presentIfNeeded { windowOpened += 1 }
+        #expect(coordinator.isGatingLaunch)
+
+        coordinator.present(id: "b")
+        #expect(coordinator.isGatingLaunch, "the other topic must not end the gate")
+        #expect(presentedCount == 1, "the gating welcome stays up; nothing replaces it")
+        #expect(windowOpened == 0, "the gate's completion stays pending")
+    }
+
+    @Test
+    func anotherTopicOpensOnceTheGateIsDone() {
+        // The refusal above lasts only as long as the gate. Once the
+        // first-run welcome closes, Help works normally.
+        var presented: [String] = []
+        let (coordinator, _) = Self.makeCoordinator(
+            catalog: [Self.message("a"), Self.message("b")],
+            shown: { message, _, finish in presented.append(message.id); finish() }
+        )
+        coordinator.presentIfNeeded()
+        coordinator.present(id: "b")
+        #expect(presented == ["a", "b"])
+    }
+
+    @Test
     func unknownIdIsIgnored() {
         // An unknown explicit message id, which a renamed Help action or
         // Learn More… target would pass, must not crash or present some
@@ -333,7 +478,14 @@ struct WelcomeCatalogTests {
         // Ids are written into the seen cache. Renaming one re-shows
         // that welcome to everybody who already dismissed it.
         #expect(WelcomeCatalog.simulatorCoexistenceID == "simulator-coexistence")
-        #expect(WelcomeCatalog.messages.map(\.id) == ["simulator-coexistence"])
+        #expect(WelcomeCatalog.deviceHubCoexistenceID == "device-hub-coexistence")
+        #expect(
+            WelcomeCatalog.messages.map(\.id) == [
+                "simulator-coexistence",
+                "device-hub-coexistence"
+            ],
+            "presentation order: with both unseen, a machine with both Xcodes sees Simulator first"
+        )
     }
 
     @Test

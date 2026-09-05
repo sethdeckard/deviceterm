@@ -121,9 +121,11 @@ Drive the phone from one app. Closing the other isn't required.
 
 Delete the scratch sim when you're done.
 
-**Launching Device Hub installs a login item.** On first launch it registers
-`DevicesMenu.app` as a menu bar extra through BTM. Remove it in System Settings
-▸ General ▸ Login Items if you don't want it.
+Device Hub registers no login item on this machine. Its binary references a
+`DevicesMenu.app` menu bar extra, but that app doesn't ship in Xcode 27 beta 4
+and Device Hub logs "DevicesMenu.app is not available. Skipping menu extra
+initialization." Two launches added nothing to System Settings ▸ General ▸
+Login Items. Check again against a later Xcode.
 
 The first `xcrun simctl boot` after an idle CoreSimulator can fail with
 `Invalid argument`. Retrying worked. Seen once, so treat it as an annoyance to
@@ -197,3 +199,24 @@ Use the absolute form. A relative rotation reports confirmed whenever the reply
 carries an orientation, because that observation becomes its own target, so it
 cannot disagree with itself. A reply without one reports
 `.confirmationUnsupported`, and transport failures throw.
+
+## 3. Which welcome appears
+
+Both coexistence welcomes are gated on their app being installed, and only one
+appears per launch. On a machine with both Xcodes, that means two launches.
+
+```sh
+rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/deviceterm/welcome-seen"
+```
+
+| # | Action | Expected |
+|---|--------|----------|
+| 3.1 | Clear the seen cache, then `make run`. | The Simulator.app welcome appears. The Device Hub one waits. |
+| 3.2 | Quit and relaunch. | The Device Hub welcome appears. |
+| 3.3 | Quit and relaunch again. | No welcome. |
+| 3.4 | Choose Help ▸ Working with Apple's Device Hub. | It opens, whether or not Device Hub is installed. |
+
+A machine with only one of the two Xcodes sees only that app's welcome, and the
+other stays out of the seen cache, so installing the other Xcode later arms it.
+Confirming that needs a machine without Xcode 27, which these steps don't
+cover.
