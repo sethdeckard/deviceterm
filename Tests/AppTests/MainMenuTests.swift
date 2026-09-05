@@ -792,22 +792,57 @@ struct MainMenuTests {
     }
 
     @Test
-    func helpMenuKeepsTheWelcomesAboveTheSeparator() throws {
-        // The separator divides the welcomes from Third-Party Notices,
-        // which is a different kind of item. A welcome appended after it
-        // would read as belonging with the notices.
-        let help = try #require(helpMenu(), "Help submenu missing")
-        let separator = try #require(
-            help.items.firstIndex(where: { $0.isSeparatorItem }),
-            "separator missing"
-        )
-        // Device Hub leads here, which is deliberately the opposite of
+    func helpMenuGroupsItemsBetweenSeparators() throws {
+        // Three groups, in this order: the book, the coexistence
+        // welcomes, then Third-Party Notices. The separators are what
+        // keep a welcome from reading as one of the notices, or the book
+        // as one of the welcomes.
+        //
+        // Device Hub leads its group, deliberately the opposite of
         // `WelcomeCatalog.messages`. That order picks the welcome a first
         // launch shows; this one is about what a reader reaches for.
-        let above = help.items.prefix(separator).map(\.title)
-        #expect(above == [
-            WelcomeCatalog.deviceHubCoexistenceTitle,
-            WelcomeCatalog.simulatorCoexistenceTitle
+        let help = try #require(helpMenu(), "Help submenu missing")
+        let groups = help.items
+            .split(whereSeparator: { $0.isSeparatorItem })
+            .map { $0.map(\.title) }
+        #expect(groups == [
+            ["DeviceTerm Help"],
+            [
+                WelcomeCatalog.deviceHubCoexistenceTitle,
+                WelcomeCatalog.simulatorCoexistenceTitle
+            ],
+            ["Third-Party Notices"]
         ])
+    }
+
+    @Test
+    func deviceTermHelpOpensTheBundledBook() throws {
+        // No action of ours behind it: `showHelp:` goes through the
+        // responder chain to AppKit, which resolves the book from the app
+        // plist's CFBundleHelpBookName. ⌘? is the system binding.
+        let help = try #require(helpMenu(), "Help submenu missing")
+        let item = try #require(
+            help.items.first(where: { $0.title == "DeviceTerm Help" }),
+            "DeviceTerm Help missing"
+        )
+        #expect(item.action == #selector(NSApplication.showHelp(_:)))
+        #expect(item.keyEquivalent == "?")
+        #expect(item.target == nil, "showHelp: should reach AppKit through the responder chain")
+    }
+
+    @Test
+    func theAppDeclaresItsHelpBook() throws {
+        // The menu item is inert without these. `CFBundleHelpBookName`
+        // has to equal the book's own `HPDBookTitle`, which
+        // `scripts/make-help-book.sh` writes, or Help Viewer opens
+        // nothing at all.
+        let info = try #require(Bundle.main.infoDictionary, "no Info.plist")
+        // `swift test` runs unbundled, so the keys are absent here and
+        // this asserts nothing. When a bundled run does supply the
+        // folder, both values are checked.
+        if let folder = info["CFBundleHelpBookFolder"] as? String {
+            #expect(folder == "DeviceTerm.help")
+            #expect(info["CFBundleHelpBookName"] as? String == "DeviceTerm Help")
+        }
     }
 }

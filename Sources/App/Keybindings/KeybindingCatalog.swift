@@ -84,6 +84,16 @@ enum KeybindingCatalog {
             selector: #selector(NSApplication.terminate(_:)),
             responders: [NSApplication.self]
         ),
+        // ⌘? is macOS's own binding for an app's help book. AppKit
+        // resolves the book from the app plist, so nothing of ours
+        // answers this selector.
+        KeybindingEntry(
+            action: .showHelp,
+            chord: KeyChord("?", .command),
+            title: "DeviceTerm Help",
+            selector: #selector(NSApplication.showHelp(_:)),
+            responders: [NSApplication.self]
+        ),
 
         // MARK: Tabs, windows, lifecycle
 

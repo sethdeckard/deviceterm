@@ -159,6 +159,7 @@ struct KeybindingCatalogTests {
             (.hideApp, "⌘H"),
             (.hideOthers, "⌥⌘H"),
             (.quit, "⌘Q"),
+            (.showHelp, "⌘?"),
             (.newWindow, "⌘N"),
             (.newTab, "⌘T"),
             (.openAutomationTab, "⇧⌘T"),

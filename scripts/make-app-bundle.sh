@@ -145,6 +145,19 @@ else
     echo "make-app-bundle: warning: THIRD_PARTY_NOTICES.md not found — skipping" >&2
 fi
 
+# Help book, generated from docs/USAGE.md. The app plist names it in
+# CFBundleHelpBookFolder, and CFBundleHelpBookName has to equal the
+# book's own HPDBookTitle or Help Viewer opens nothing. Hard failure:
+# with the keys present and the book absent, Help is a dead menu item
+# rather than a missing feature.
+"$ROOT/scripts/make-help-book.sh" "$CONFIG"
+if [ ! -d "$BUILD/DeviceTerm.help" ]; then
+    echo "make-app-bundle: error: help book not built at $BUILD/DeviceTerm.help" >&2
+    exit 1
+fi
+rm -rf "$APP/Contents/Resources/DeviceTerm.help"
+cp -R "$BUILD/DeviceTerm.help" "$APP/Contents/Resources/DeviceTerm.help"
+
 # Full texts of the long licenses THIRD_PARTY_NOTICES.md points at.
 # Apache-2.0 section 4(a) and LGPL-2.1 section 6 both require a copy of
 # the license to travel with the binary, not just a URL, so these are a

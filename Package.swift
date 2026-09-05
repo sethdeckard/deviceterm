@@ -34,6 +34,7 @@ let package = Package(
         // has to; an in-tab agent drives it to screenshot / introspect /
         // gesture-drive the GUI. Never bundled into the release DMG.
         .executable(name: "deviceterm-uitest", targets: ["DeviceTermUITest"]),
+        .executable(name: "deviceterm-helpbook", targets: ["HelpBookGen"]),
     ],
     dependencies: [
         // libghostty (Ghostty's renderer + input + parser + surface C
@@ -50,6 +51,17 @@ let package = Package(
         .package(
             url: "https://github.com/sparkle-project/Sparkle",
             from: "2.6.0"
+        ),
+        // swift-markdown: Apple's CommonMark + GFM parser, backed by
+        // cmark-gfm. Used only by the build-time help book generator, so
+        // it is a dependency of no shipped target and links into nothing
+        // the user runs. A tested CommonMark/GFM parser is what keeps
+        // the guide's tables and fenced code from converting wrong:
+        // docs/USAGE.md is mostly those, and a hand-rolled converter
+        // that mangles one is invisible until a reader hits it.
+        .package(
+            url: "https://github.com/apple/swift-markdown.git",
+            from: "0.8.0"
         ),
     ],
     targets: [
@@ -544,6 +556,27 @@ let package = Package(
             name: "DeviceTermCLI",
             dependencies: ["DaemonProtocol"],
             path: "Sources/DeviceTermCLI",
+            swiftSettings: strictWarnings
+        ),
+
+        // Build-time only: turns docs/USAGE.md into the HTML topic pages
+        // of DeviceTerm.help, so the guide stays the single source for
+        // the website, the repo, and Help Viewer. Depended on by nothing
+        // that ships; `scripts/make-help-book.sh` runs it.
+        .executableTarget(
+            name: "HelpBookGen",
+            dependencies: [.product(name: "Markdown", package: "swift-markdown")],
+            path: "Sources/HelpBookGen",
+            swiftSettings: strictWarnings
+        ),
+
+        // The conversion is where this can fail silently: a dropped
+        // table, a fence rendered as prose, a cross-reference pointing at
+        // a page that doesn't exist. All of that is pure and testable.
+        .testTarget(
+            name: "HelpBookGenTests",
+            dependencies: ["HelpBookGen"],
+            path: "Tests/HelpBookGenTests",
             swiftSettings: strictWarnings
         ),
 

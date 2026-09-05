@@ -32,6 +32,13 @@ func installMainMenu() {
     if let window = menu.items.first(where: { $0.submenu?.title == "Window" })?.submenu {
         NSApp.windowsMenu = window
     }
+    // Naming the Help menu puts Spotlight for Help in it deliberately.
+    // Left nil, AppKit still installs that field, into a menu of its own
+    // choosing that it will not name back. Same field either way; this
+    // decides where.
+    if let help = menu.items.first(where: { $0.submenu?.title == "Help" })?.submenu {
+        NSApp.helpMenu = help
+    }
 }
 
 /// Construct the main menu without touching `NSApp`. Split out so
@@ -476,8 +483,11 @@ func makeMainMenu() -> NSMenu {
     // move, assigning a menu that never appears in the menu bar. See
     // `NSApplication.h` on `helpMenu`.
     //
-    // DeviceTerm registers no Help book, so that field's Help Topics half
-    // answers out of macOS's own book rather than this app's.
+    // DeviceTerm Help opens the bundled book, generated from
+    // docs/USAGE.md by `scripts/make-help-book.sh`. `showHelp:` goes
+    // through the responder chain to AppKit, which resolves the book from
+    // the app plist's CFBundleHelpBookName, so there is no action of ours
+    // behind it. ⌘? is the system-wide binding for it.
     //
     // The welcome items are the permanent entry points to the coexistence
     // explanations, which appear automatically only until their ids are
@@ -494,6 +504,14 @@ func makeMainMenu() -> NSMenu {
     let helpMenuItem = NSMenuItem()
     mainMenu.addItem(helpMenuItem)
     let helpMenu = NSMenu(title: "Help")
+    helpMenu.addItem(
+        NSMenuItem(
+            title: "DeviceTerm Help",
+            action: #selector(NSApplication.showHelp(_:)),
+            keyEquivalent: "?"
+        )
+    )
+    helpMenu.addItem(NSMenuItem.separator())
     // Device Hub first: it's the current toolchain's app, and the one a
     // reader is most likely to be looking for. That deliberately differs
     // from `WelcomeCatalog.messages`, which puts Simulator.app first

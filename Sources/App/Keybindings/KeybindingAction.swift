@@ -19,6 +19,7 @@ enum KeybindingAction: String, CaseIterable, Sendable {
     case hideApp = "hide-app"
     case hideOthers = "hide-others"
     case quit
+    case showHelp = "show-help"
 
     // Tabs, windows, and session lifecycle
     case newWindow = "new-window"

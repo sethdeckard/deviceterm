@@ -1103,7 +1103,7 @@ Saved locations use the separate `locations` file described in
 Every shortcut also appears in a menu. **Shell** creates and closes workspace
 surfaces. **Edit** handles text. **View** controls presentation and pane
 layout. **Window** handles navigation and rearrangement. **Device** controls
-the selected device pane.
+the selected device pane. **Help** opens the built-in guide.
 
 ### DeviceTerm
 
@@ -1186,6 +1186,12 @@ which action will run.
 | ⇧⌘→ | Move Pane Right |
 | ⌘1 through ⌘8 | Select Tab 1 through Tab 8 |
 | ⌘9 | Select Last Tab |
+
+### Help
+
+| Shortcut | Action |
+|---|---|
+| ⌘? | DeviceTerm Help |
 
 ### Understand Focused Shortcuts
 

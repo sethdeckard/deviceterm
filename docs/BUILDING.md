@@ -110,6 +110,23 @@ XCTest UI target: by project tenet (no `.xcodeproj`) this script is the
 only GUI gate; modal prompts, real-sim flows, the status item, and ⌘Q live
 in `Tests/Manual`.
 
+**Help book.** `make bundle` generates `DeviceTerm.help` from
+`docs/USAGE.md` and copies it into the app. `scripts/make-help-book.sh`
+does the work: it builds `deviceterm-helpbook` (a build-time target that
+never links into the app), converts the guide to one HTML page per `##`
+section, and indexes the result with Apple's `hiutil`. `make help-book`
+rebuilds only the book, which is faster while you're changing the
+converter.
+
+The guide is the single source. Editing `docs/USAGE.md` changes what
+ships in Help, and a new `##` section becomes a new topic page with no
+other step. `## Contents` is the one section that doesn't, because the
+book generates its own index.
+
+`helpd` caches which bundle owns which book, so a rebuilt debug bundle
+can leave Help Viewer showing an older copy or nothing at all. `killall
+helpd` clears it, and the symptom looks identical to a broken book.
+
 ## Working in multiple worktrees
 
 Add one the ordinary way:

@@ -23,6 +23,10 @@
     <string>0.0.0</string>
     <key>CFBundleVersion</key>
     <string>0.0.0</string>
+    <key>CFBundleHelpBookFolder</key>
+    <string>DeviceTerm.help</string>
+    <key>CFBundleHelpBookName</key>
+    <string>DeviceTerm Help</string>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Seth Deckard</string>
     <key>LSMinimumSystemVersion</key>

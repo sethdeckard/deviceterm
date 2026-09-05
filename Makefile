@@ -16,6 +16,7 @@ SHELL := /usr/bin/env bash
 
 .PHONY: help \
         build bundle run run-default kill-daemon daemon cli shim probe \
+        help-book \
         run-libghostty-harness \
         uitest uitest-bundle uitest-run uitest-stop \
         test test-int test-shim test-gui test-live test-device-live test-uitest \
@@ -50,6 +51,8 @@ help:
 	@echo "  make daemon      Build deviceterm-daemon"
 	@echo "  make cli         Build deviceterm-cli"
 	@echo "  make shim        Build deviceterm-shim"
+	@echo "  make help-book   Build DeviceTerm.help from docs/USAGE.md"
+	@echo "                   (make bundle does this already)"
 	@echo "  make uitest      Build deviceterm-uitest (UI-test harness)"
 	@echo "  make uitest-bundle  Bundle the harness without launching it"
 	@echo "  make uitest-run  Bundle + launch the harness; report TCC grants"
@@ -89,6 +92,15 @@ bundle: build
 	    ./scripts/make-app-bundle.sh debug; \
 	else \
 	    echo "make bundle: Sources/App/ does not exist — skipping"; \
+	fi
+
+# Standalone for iterating on the converter. `make bundle` runs this
+# itself, so a normal build never needs it.
+help-book:
+	@if [ -d Sources/HelpBookGen ]; then \
+	    ./scripts/make-help-book.sh debug; \
+	else \
+	    echo "make help-book: Sources/HelpBookGen/ does not exist — skipping"; \
 	fi
 
 # Stop THIS checkout's running deviceterm app + embedded daemon. The daemon
