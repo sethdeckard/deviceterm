@@ -467,9 +467,17 @@ func makeMainMenu() -> NSMenu {
     )
     windowMenuItem.submenu = windowMenu
 
-    // Help menu: the last top-level menu. Deliberately not set as
-    // `NSApp.helpMenu`, because that adds the Spotlight-style Help
-    // search field, which makes no sense for a couple of static items.
+    // Help menu: the last top-level menu.
+    //
+    // Leaving `NSApp.helpMenu` unset does *not* keep the Spotlight-style
+    // Help search field away. AppKit installs that field into a menu of
+    // its own choosing when the property is nil, and the menu it picks is
+    // not readable back from `helpMenu`; suppressing it is the opposite
+    // move, assigning a menu that never appears in the menu bar. See
+    // `NSApplication.h` on `helpMenu`.
+    //
+    // DeviceTerm registers no Help book, so that field's Help Topics half
+    // answers out of macOS's own book rather than this app's.
     //
     // The welcome items are the permanent entry points to the coexistence
     // explanations, which appear automatically only until their ids are
