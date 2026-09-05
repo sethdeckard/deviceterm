@@ -44,7 +44,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,
     PaneAccessibilityControlling, PaneLocationControlling,
     AppCommandControlling, TerminalBinding,
-    ReconnectObserving, DisplayTitlePublishing {
+    ReconnectObserving, DisplayTitlePublishing, HelperHealthReporting {
     /// The helper instance a startup recovery is working against: the
     /// connection generation that answered the mismatched ping, and the pid of
     /// the process that answered it.
@@ -2066,14 +2066,26 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         reportedSilentGeneration = nil
     }
 
+    /// Report that a call this client did not bound reached its caller's
+    /// deadline unanswered.
+    ///
+    /// The attaches are the only calls in that shape: they are exempt from
+    /// `bounded` so a cancelled transport can't discard the reply naming what
+    /// was minted, which leaves their expiry the one kind this client cannot
+    /// observe for itself. It is treated exactly like an expiry `bounded`
+    /// raised, fences and all: the probe still asks rather than concludes, and
+    /// a stale generation still drops the report.
+    func noteCallerBoundedCallExpired(sentOn generation: Int) {
+        noteHelperSilent(sentOn: generation)
+    }
+
     /// Route a failed control-lane call to the health accounting.
     ///
     /// `bounded` and `createSession` both classify through here so the call
-    /// that bounds itself can't drift from the ones `bounded` wraps. The
-    /// Router's attach deadline does not: that bound is raised in the Router
-    /// and never reaches this client, so an attach that expires starts no
-    /// probe. Its reply still counts when one arrives, since that comes back
-    /// through `rawRequest`.
+    /// that bounds itself can't drift from the ones `bounded` wraps. So does
+    /// the Router's attach deadline, which is raised outside this client and
+    /// arrives through `noteCallerBoundedCallExpired`; its eventual reply
+    /// counts separately, coming back through `rawRequest`.
     ///
     /// `sentOn` is the connection the call was going to, which only the expiry
     /// case uses; a reply is a reply whichever peer generation produced it.

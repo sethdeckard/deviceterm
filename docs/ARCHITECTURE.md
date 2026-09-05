@@ -651,10 +651,13 @@ The ping rides the control lane, so a daemon backlogged enough to starve that
 lane fails the probe the way a wedged one does. It's a cheaper question, not a
 different one: the bounds can't tell busy from wedged either.
 
-The Router's attach deadline enters none of this. It's raised in the Router and
-never reaches the client, so an attach that expires starts no probe, though its
-eventual reply still counts as one. Detection changes nothing about what the
-client does either way: it keeps issuing and bounding calls.
+The Router's attach deadline feeds this too. The attaches are bounded there
+rather than in the client, because cancelling the transport would discard the
+reply naming the pane the daemon minted, so the client cannot see that expiry
+for itself and is told about it instead. It counts as an expiry like any other,
+through the same fences, and the eventual reply still counts separately when it
+arrives. Detection changes nothing about what the client does: it keeps issuing
+and bounding calls.
 
 GUI RPC timings go to Apple unified logging under the `rpc-performance`
 category. Debug attempt records contain method, lane, outcome, and elapsed

@@ -61,7 +61,10 @@ struct SimulatorPaneViewModelTests {
             displayName: "iPhone",
             family: "phone",
             capabilities: capabilities,
-            reconnectBackoffNs: reconnectBackoffNs
+            reconnectPolicy: RetryPolicy(
+                initialDelayNanoseconds: reconnectBackoffNs,
+                maximumDelayNanoseconds: reconnectBackoffNs
+            )
         )
     }
 
@@ -734,6 +737,71 @@ struct SimulatorPaneViewModelTests {
         if case .failed = viewModel.state {
             Issue.record("transient transport failure must not fail the pane")
         }
+    }
+
+    @Test
+    func theResubscribeBackoffGrowsWhileTheConnectionStaysDown() async {
+        // A daemon that never comes back would otherwise be asked twice a
+        // second for as long as the pane is open, one loop per mirrored pane.
+        let fake = FakeDaemonClient()
+        fake.subscribePaneFailures = Array(
+            repeating: DaemonClientError.transport("connection closed"),
+            count: 20
+        )
+        let viewModel = SimulatorPaneViewModel(
+            paneId: "p1",
+            daemonClient: fake,
+            udid: "U",
+            displayName: "iPhone",
+            family: "phone",
+            reconnectPolicy: RetryPolicy(
+                initialDelayNanoseconds: 30_000_000,
+                maximumDelayNanoseconds: 10_000_000_000
+            )
+        )
+        viewModel.start()
+        // 30 + 60 + 120ms of waiting covers 150ms with room to spare, so four
+        // attempts is the ceiling and a flat 30ms schedule (six) is out of
+        // reach. A slow machine lands under the bound, never over it.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        #expect(fake.subscribePaneCalls.count <= 4)
+        #expect(fake.subscribePaneCalls.count >= 2)
+    }
+
+    @Test
+    func aDeliveredEventPutsTheResubscribeBackoffBackToTheStart() async {
+        // The backoff is about a connection that will not answer. One that
+        // answered and dropped again is a different situation, and inheriting
+        // the old wait would make a single bad patch slow the pane down for
+        // the rest of its life.
+        let fake = FakeDaemonClient()
+        fake.subscribePaneFailures = Array(
+            repeating: DaemonClientError.transport("connection closed"),
+            count: 6
+        )
+        let viewModel = SimulatorPaneViewModel(
+            paneId: "p1",
+            daemonClient: fake,
+            udid: "U",
+            displayName: "iPhone",
+            family: "phone",
+            reconnectPolicy: RetryPolicy(
+                initialDelayNanoseconds: 2_000_000,
+                maximumDelayNanoseconds: 10_000_000_000
+            )
+        )
+        viewModel.start()
+        // Six failures spend 2+4+8+16+32+64ms and leave the next wait at
+        // 128ms; the seventh subscribe succeeds.
+        #expect(await poll { fake.subscribePaneCalls.count == 7 })
+        fake.lastPaneEventContinuation?.yield(
+            .stateChanged(StateChangedEvent(paneId: "p1", state: .rendering))
+        )
+        #expect(await poll { viewModel.state == .rendering })
+        fake.lastPaneEventContinuation?.finish()
+        // Back to 2ms. Without the reset the eighth subscribe is 128ms out,
+        // well past this bound.
+        #expect(await poll(maxIterations: 15) { fake.subscribePaneCalls.count == 8 })
     }
 
     @Test

@@ -36,7 +36,7 @@ final class Router {
     let workspace: WorkspaceViewModel
 
     private let daemon: any SessionControlling & DeviceControlling & PaneControlling
-        & PhysicalDeviceControlling
+        & PhysicalDeviceControlling & HelperHealthReporting
     /// Shared with `DaemonClient` so caller-owned attach deadlines land in the
     /// same method/lane windows as ordinary client-owned bounds. Nil in Router
     /// tests that do not exercise diagnostics.
@@ -64,7 +64,17 @@ final class Router {
     /// its await, which keeps every reply on one reconciliation path rather
     /// than splitting it between that path and `Deadline.wait`'s late cleanup
     /// (see `cancelPendingPane`).
-    private var attachTasks: [PendingPaneID: Task<Bool, Never>] = [:]
+    ///
+    /// Each entry carries the token of the attempt that installed it. A retry
+    /// reuses the placeholder's id while the attempt it replaced may still be
+    /// running, so an attempt clears the slot only while the token in it is
+    /// still its own; otherwise the older one's completion would unregister
+    /// the live attach and put it out of quit's reach.
+    private var attachTasks: [PendingPaneID: AttachRegistration] = [:]
+    /// Automatic attach retries already spent per (normalized) target. Cleared
+    /// when a pane for the target mounts and when the user retries by hand,
+    /// the two events that say the situation is not the one being backed off.
+    private var attachRetries: [PaneTarget: Int] = [:]
     /// In-flight orphan-reattach batch owners, keyed by tab and then by a
     /// per-batch token (one batch per adopted record, and a tab can adopt
     /// several). Each owner spawns the record's attaches, aggregates their
@@ -189,6 +199,19 @@ final class Router {
     /// is still reconciled (detached, or kept if something has since claimed
     /// its target) rather than stranded. Tests shorten it.
     var attachDeadlineNanos: UInt64 = 120_000_000_000
+    /// Backoff and budget for automatic attach retries, per target. Recovery
+    /// retries every failed placeholder on every reconnect, and a helper that
+    /// is not answering fails them all again, so without these a flapping
+    /// connection turns each failed pane into a standing attach loop. The
+    /// first retry is immediate and the schedule starts at the second.
+    /// Reaching the budget leaves the placeholder failed with its Retry
+    /// button, which is the affordance that then clears the count. Tests
+    /// shorten them.
+    var attachRetryPolicy = RetryPolicy(
+        initialDelayNanoseconds: 1_000_000_000,
+        maximumDelayNanoseconds: 30_000_000_000
+    )
+    var maximumAutomaticAttachRetries = 5
     /// Backoff between owned-sim re-assertion attempts, from 200ms doubling to
     /// a 2s cap, and the wall-clock window they run inside. Thirty seconds
     /// bounds how long an UNANSWERED request may keep being retried; a request
@@ -213,7 +236,7 @@ final class Router {
     init(
         workspace: WorkspaceViewModel,
         daemon: any SessionControlling & DeviceControlling & PaneControlling
-        & PhysicalDeviceControlling,
+        & PhysicalDeviceControlling & HelperHealthReporting,
         rpcPerformance: RPCPerformanceDiagnostics? = nil,
         detectWorktreeName: @escaping @MainActor () -> String? = {
             WorktreeName.detect(cwd: FileManager.default.currentDirectoryPath)
@@ -269,7 +292,7 @@ final class Router {
         // process on its way out. Best-effort is the right trade here and only
         // here, because the GUI is going away, so there's nobody to show the
         // pane to, and the daemon idle-exits and reaps orphans anyway.
-        for task in attachTasks.values { task.cancel() }
+        for registration in attachTasks.values { registration.task.cancel() }
         attachTasks.removeAll()
         for batch in orphanBatchTasks.values {
             for task in batch.values { task.cancel() }
@@ -552,7 +575,11 @@ final class Router {
                             inTab: tab.id
                         )
                     }
-                    retryPendingPane(tab: tab.id, pendingId: pending.id)
+                    retryPendingPane(
+                        tab: tab.id,
+                        pendingId: pending.id,
+                        automatic: true
+                    )
                 }
             }
         }
@@ -994,23 +1021,64 @@ final class Router {
     /// Start a placeholder's attach RPC off the serial drain and register it
     /// under `pendingId`, which is how quit reaches it to cancel. Returns the
     /// task for the one caller that needs the outcome.
+    ///
+    /// `delayNanoseconds` holds the attach back before sending, which is how a
+    /// retried attach backs off. The wait happens inside the registered task
+    /// so quit still reaches it, and the placeholder shows attaching
+    /// throughout, which is what it is doing.
+    ///
+    /// A retry still inside that wait has sent nothing, so a placeholder the
+    /// user closed meanwhile simply never sends. `cancelPendingPane` leaves a
+    /// *running* attach alone for the opposite reason: the daemon is already
+    /// doing the work and its reply has to be reconciled, which abandoning the
+    /// wait would not change. Here there is no work and no reply to reconcile.
     @discardableResult
     private func spawnAttach(
         tab tabID: TabID,
         pendingId: PendingPaneID,
-        spec: PendingAttachSpec
+        spec: PendingAttachSpec,
+        delayNanoseconds: UInt64 = 0
     ) -> Task<Bool, Never> {
+        let token = UUID()
         let task = Task { @MainActor [weak self] in
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+                guard !Task.isCancelled,
+                    self?.isPlaceholderPresent(pendingId, inTab: tabID) == true else {
+                    self?.clearAttachRegistration(pendingId, token: token)
+                    return false
+                }
+            }
             let mounted = await self?.runAttach(
                 tab: tabID,
                 pendingId: pendingId,
                 spec: spec
             ) ?? false
-            self?.attachTasks[pendingId] = nil
+            self?.clearAttachRegistration(pendingId, token: token)
             return mounted
         }
-        attachTasks[pendingId] = task
+        attachTasks[pendingId] = AttachRegistration(token: token, task: task)
         return task
+    }
+
+    /// Whether `pendingId`'s placeholder is still in the tab. Closing it (or
+    /// its tab) removes the record, which is what a delayed retry reads to
+    /// decide it is no longer wanted.
+    private func isPlaceholderPresent(
+        _ pendingId: PendingPaneID,
+        inTab tabID: TabID
+    ) -> Bool {
+        workspace.windowContaining(tab: tabID)?
+            .tabs.tab(id: tabID)?.pendingPanes
+            .contains { $0.id == pendingId } == true
+    }
+
+    /// Release an attach's registration, but only while the slot is still the
+    /// one this attempt installed. A retry reusing the placeholder's id may
+    /// have taken it over while this attempt was finishing.
+    private func clearAttachRegistration(_ pendingId: PendingPaneID, token: UUID) {
+        guard attachTasks[pendingId]?.token == token else { return }
+        attachTasks[pendingId] = nil
     }
 
     /// Add an additional terminal pane to an existing tab. Mints a
@@ -1957,6 +2025,11 @@ final class Router {
         guard let primary = workspace.windowContaining(tab: tabID)?
             .tabs.tab(id: tabID)?.primaryTerminal else { return false }
         let startedAt = rpcPerformance?.now()
+        // The connection this attach is going to, read before sending. An
+        // expiry that lands after a reconnect is evidence about the peer that
+        // went away, and the client drops a report naming a generation that
+        // has since moved.
+        let sentOn = daemon.connectionGeneration
         do {
             // The bound lives here, not in `DaemonClient`, because only this
             // layer can say whether a pane that arrives late is still wanted.
@@ -2025,6 +2098,7 @@ final class Router {
                 return false
             }
             spec.mount(window, pendingId, response, resolvedName)
+            attachRetries[targetKey(spec.target)] = nil
             // A pane can mount into the window where the cohort install
             // raced it: the reconcile snapshotted no panes, and auto-bind at
             // admission saw no cohort yet. Re-kick the tab's reconcile so
@@ -2043,6 +2117,12 @@ final class Router {
                     error: error,
                     severeDelayNanoseconds: 10_000_000_000
                 )
+            }
+            // An attach is bounded here rather than in the client, so the
+            // client never sees this expiry unless it is told. It starts a
+            // question (one `daemon.ping`) rather than deciding anything.
+            if case DaemonClientError.timedOut = error {
+                daemon.noteCallerBoundedCallExpired(sentOn: sentOn)
             }
             logError("\(spec.failureLog): \(error)")
             workspace.windowContaining(tab: tabID)?.tabs.failPendingPane(
@@ -2089,7 +2169,7 @@ final class Router {
         // would take a live pane away from whoever is showing it.
         if isPaneMounted(paneId) { return }
         guard !isTargetClaimed(target, ignoring: pendingId) else {
-            deferredDetaches[detachKey(target), default: []].insert(
+            deferredDetaches[targetKey(target), default: []].insert(
                 DeferredDetach(paneId: paneId, attachment: response.attachment)
             )
             return
@@ -2116,7 +2196,7 @@ final class Router {
         target: PaneTarget,
         expecting attachment: UInt64?
     ) async {
-        let key = detachKey(target)
+        let key = targetKey(target)
         let close = Task { @MainActor [daemon] in
             _ = try? await daemon.closePane(
                 paneId: paneId,
@@ -2138,7 +2218,7 @@ final class Router {
     /// placeholder synchronously before `runAttach` runs, so from here on the
     /// target reads as claimed and no further detach can decide to close it.
     private func awaitDetach(of target: PaneTarget) async {
-        guard let inFlight = detachTasks[detachKey(target)] else { return }
+        guard let inFlight = detachTasks[targetKey(target)] else { return }
         await inFlight.value
     }
 
@@ -2152,7 +2232,7 @@ final class Router {
     /// past its own deadline isn't waited for here: whatever it returns
     /// arrives at `detachUnclaimedPane` on its own.
     private func reconcileDeferredDetaches(for target: PaneTarget) async {
-        let key = detachKey(target)
+        let key = targetKey(target)
         guard let deferred = deferredDetaches.removeValue(forKey: key) else { return }
         guard !isTargetAttaching(target) else {
             deferredDetaches[key] = deferred
@@ -2202,10 +2282,11 @@ final class Router {
         }
     }
 
-    /// Registry key for a target. Sim UDID casing varies across the attach
-    /// paths, so it is normalized here the way the presence checks compare it;
-    /// two spellings of one sim must not key two entries.
-    private func detachKey(_ target: PaneTarget) -> PaneTarget {
+    /// Registry key for a target, shared by every per-target table here. Sim
+    /// UDID casing varies across the attach paths, so it is normalized the way
+    /// the presence checks compare it; two spellings of one sim must not key
+    /// two entries.
+    private func targetKey(_ target: PaneTarget) -> PaneTarget {
         switch target {
         case let .sim(udid):
             return .sim(udid: udid.lowercased())
@@ -2335,11 +2416,35 @@ final class Router {
     /// Retry a failed pending pane: re-run the attach whose first try
     /// threw. Guarded on the `.failed` phase so a stray retry while an
     /// attach is already in flight is a no-op (re-entrancy).
-    private func retryPendingPane(tab tabID: TabID, pendingId: PendingPaneID) {
+    ///
+    /// A retry the user asked for goes immediately and clears the target's
+    /// backoff. One that recovery drove waits that backoff out first, and is
+    /// refused outright once the budget is spent, which leaves the placeholder
+    /// failed and the Retry button in front of the user.
+    private func retryPendingPane(
+        tab tabID: TabID,
+        pendingId: PendingPaneID,
+        automatic: Bool = false
+    ) {
         guard let window = workspace.windowContaining(tab: tabID),
             let pending = window.tabs.tab(id: tabID)?.pendingPanes
                 .first(where: { $0.id == pendingId }),
             case .failed = pending.phase else { return }
+        let key = targetKey(pending.target)
+        var delayNanoseconds: UInt64 = 0
+        if automatic {
+            let spent = attachRetries[key] ?? 0
+            guard spent < maximumAutomaticAttachRetries else { return }
+            // The first retry goes at once: one reconnect that lands mid-way
+            // through a helper restart is the ordinary case, and it recovers
+            // by trying again. Only a target that keeps failing waits.
+            if spent > 0 {
+                delayNanoseconds = attachRetryPolicy.delayNanoseconds(forAttempt: spent - 1)
+            }
+            attachRetries[key] = spent + 1
+        } else {
+            attachRetries[key] = nil
+        }
         window.tabs.retryPendingPane(id: pendingId, inTab: tabID)
         // No cancel of the previous attempt: reaching `.failed` is what proves
         // it already finished, and cancelling an attach anywhere but quit
@@ -2365,7 +2470,12 @@ final class Router {
         // session back its existing pane for the same target rather than
         // minting a second, and whichever attach ends up unclaimed detaches
         // only if nothing is showing that target (`detachUnclaimedPane`).
-        spawnAttach(tab: tabID, pendingId: pendingId, spec: spec)
+        spawnAttach(
+            tab: tabID,
+            pendingId: pendingId,
+            spec: spec,
+            delayNanoseconds: delayNanoseconds
+        )
     }
 
     /// Close a pending pane: drop the placeholder leaf and leave the in-flight
@@ -2608,6 +2718,13 @@ private extension Router {
     struct DeferredDetach: Hashable {
         let paneId: String
         let attachment: UInt64?
+    }
+
+    /// One registered attach, tagged with the attempt that installed it so a
+    /// completion can tell whether the slot is still its own.
+    struct AttachRegistration {
+        let token: UUID
+        let task: Task<Bool, Never>
     }
 
     /// One in-flight tab-protection transition. `generation` is monotonic per

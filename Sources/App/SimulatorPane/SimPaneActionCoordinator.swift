@@ -313,6 +313,10 @@ final class SimPaneActionCoordinator {
         }
         paneVC.onReboot = { [weak self] in
             guard let self else { return }
+            // Asking for this sim by hand re-arms automatic resurrect for it,
+            // so a boot the user drove is never the one refused for having
+            // spent the budget.
+            self.paneResurrect.rearm(target: .sim(udid: udid))
             let (sessionId, capability) = self.credentials
             Task { @MainActor in
                 await self.bootAndReconcileOwnership(

@@ -60,9 +60,13 @@ final class SimulatorPaneViewModel {
 
     private static let surfaceCoalesceIntervalNs: UInt64 = 16_000_000
     /// Default backoff before resubscribing after the daemon connection
-    /// drops mid-stream. Keeps a flapping connection from busy-looping.
-    /// Overridable per-instance (tests inject a tiny value).
-    private static let defaultReconnectBackoffNs: UInt64 = 500_000_000
+    /// drops mid-stream. Keeps a flapping connection from busy-looping, and
+    /// grows so a connection that never comes back stops being asked several
+    /// times a second. Overridable per-instance (tests inject a tiny value).
+    static let defaultReconnectPolicy = RetryPolicy(
+        initialDelayNanoseconds: 500_000_000,
+        maximumDelayNanoseconds: 8_000_000_000
+    )
     /// Live-touch keepalive re-report cadence (~30 Hz). Faster than
     /// necessary risks redundant sends; slower than a couple frames lets
     /// the OS see a stutter. 33ms sits comfortably between.
@@ -192,8 +196,8 @@ final class SimulatorPaneViewModel {
     @ObservationIgnored private let liveStream: AsyncStream<LiveLifecycle>
     @ObservationIgnored private let liveContinuation: AsyncStream<LiveLifecycle>.Continuation
     @ObservationIgnored private var liveTask: Task<Void, Never>?
-    /// Backoff before a resubscribe attempt after the connection drops.
-    @ObservationIgnored private let reconnectBackoffNs: UInt64
+    /// Backoff schedule for resubscribe attempts after the connection drops.
+    @ObservationIgnored private let reconnectPolicy: RetryPolicy
 
     init(
         paneId: String,
@@ -203,7 +207,7 @@ final class SimulatorPaneViewModel {
         family: String,
         attachment: UInt64? = nil,
         capabilities: PaneCapabilities? = nil,
-        reconnectBackoffNs: UInt64 = SimulatorPaneViewModel.defaultReconnectBackoffNs
+        reconnectPolicy: RetryPolicy = SimulatorPaneViewModel.defaultReconnectPolicy
     ) {
         self.paneId = paneId
         self.attachment = attachment
@@ -212,7 +216,7 @@ final class SimulatorPaneViewModel {
         self.displayName = displayName
         self.family = family
         self.capabilities = capabilities ?? .missingBlockFallback
-        self.reconnectBackoffNs = reconnectBackoffNs
+        self.reconnectPolicy = reconnectPolicy
         (keyInputStream, keyInputContinuation) = AsyncStream<KeyInput>.makeStream()
         (liveStream, liveContinuation) = AsyncStream<LiveLifecycle>.makeStream()
     }
@@ -240,9 +244,13 @@ final class SimulatorPaneViewModel {
         guard subscriptionTask == nil else { return }
         let id = paneId
         let client = daemonClient
-        // Captured locally so the retry sleep never touches `self`.
-        let backoff = reconnectBackoffNs
+        // Captured locally so the retry sleep never touches `self`. The
+        // attempt count lives in the task for the same reason: a delivered
+        // event resets it from inside the drain loop, where `self` is already
+        // promoted, so the backoff needs no reference of its own.
+        let policy = reconnectPolicy
         subscriptionTask = Task { @MainActor [weak self] in
+            var attempt = 0
             // Resubscribe across daemon connection drops so a mirror doesn't
             // freeze forever on a transient XPC interruption. Each pass
             // subscribes and drains the stream; when the stream ends the
@@ -269,7 +277,10 @@ final class SimulatorPaneViewModel {
                     // `decode`/version fault is a definitive answer no retry
                     // changes, so it fails the pane.
                     if case DaemonClientError.transport = error {
-                        try? await Task.sleep(nanoseconds: backoff)
+                        try? await Task.sleep(
+                            nanoseconds: policy.delayNanoseconds(forAttempt: attempt)
+                        )
+                        attempt += 1
                         continue
                     }
                     if let self {
@@ -286,6 +297,10 @@ final class SimulatorPaneViewModel {
                     // strong binding falls out of scope before the next
                     // `for await` suspension.
                     guard let self else { return }
+                    // A delivered event is the proof this subscription works,
+                    // so the next drop starts its backoff over rather than
+                    // inheriting the wait that got us here.
+                    attempt = 0
                     self.handleSubscriptionEvent(event)
                 }
                 if Task.isCancelled { return }
@@ -305,7 +320,10 @@ final class SimulatorPaneViewModel {
                     return
                 }
                 guard shouldRetry else { return }
-                try? await Task.sleep(nanoseconds: backoff)
+                try? await Task.sleep(
+                    nanoseconds: policy.delayNanoseconds(forAttempt: attempt)
+                )
+                attempt += 1
             }
         }
     }

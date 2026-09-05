@@ -2828,6 +2828,36 @@ struct RouterTests {
         #expect(fake.closePaneCalls.isEmpty)
     }
 
+    @Test
+    func anExpiredAttachTellsTheClientTheHelperWentQuiet() async {
+        // The attach bound is raised here rather than in the client, so this
+        // is the one expiry the client cannot see for itself. It asks a
+        // question with it (one `daemon.ping`), it does not conclude anything.
+        let fake = FakeDaemonClient()
+        fake.attachError = DaemonClientError.timedOut(
+            method: RPCMethod.deviceAttach.rawValue
+        )
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        #expect(fake.callerBoundedExpiries == [fake.connectionGeneration])
+    }
+
+    @Test
+    func anAttachThatFailedForItsOwnReasonsReportsNothing() async {
+        // A refusal is an answer, and an answered helper is not a quiet one.
+        let fake = FakeDaemonClient()
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        #expect(fake.callerBoundedExpiries.isEmpty)
+    }
+
     // MARK: - Recovering panes after a helper restart
 
     /// A workspace with one tab holding a mounted sim pane, which is the
@@ -3273,6 +3303,137 @@ struct RouterTests {
         #expect(simPanes(workspace, tab: TabID(value: 1)).map(\.udid) == ["A"])
         #expect(simPanes(workspace, tab: TabID(value: 2)).map(\.udid) == ["B"])
         #expect(fake.attachDeviceCalls.map(\.udid) == ["A", "B", "A", "B"])
+    }
+
+    // MARK: - Backing off automatic attach retries
+
+    /// A window whose one attach failed, leaving a failed placeholder for
+    /// recovery to keep retrying, with the retry wait taken out of the way.
+    private func makeFailedPlaceholder(
+        _ fake: FakeDaemonClient,
+        budget: Int
+    ) async -> (Router, WorkspaceViewModel) {
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, workspace) = makeRouter(fake)
+        router.attachRetryPolicy = RetryPolicy(
+            initialDelayNanoseconds: 0,
+            maximumDelayNanoseconds: 0
+        )
+        router.maximumAutomaticAttachRetries = budget
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 1)
+        return (router, workspace)
+    }
+
+    @Test
+    func recoveryStopsRetryingAPlaceholderOnceItsBudgetIsSpent() async {
+        // Recovery retries every failed placeholder on every reconnect, and a
+        // helper that is not answering fails them all again, so a flapping
+        // connection would otherwise keep one attach loop running per failed
+        // pane for as long as it flaps.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeFailedPlaceholder(fake, budget: 2)
+        for _ in 0 ..< 4 {
+            router.dispatch(.recoverPanes)
+            await settle()
+        }
+        #expect(fake.attachDeviceCalls.count == 3)  // the first try plus two
+        // The placeholder is still there, still failed, still offering Retry.
+        guard case .failed = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected the placeholder to be left failed")
+            return
+        }
+    }
+
+    @Test
+    func aRetryTheUserAskedForClearsTheBudget() async {
+        // The spent budget leaves the Retry button in front of the user, so
+        // pressing it has to mean something: it goes immediately, and recovery
+        // gets its allowance back.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeFailedPlaceholder(fake, budget: 1)
+        router.dispatch(.recoverPanes)
+        await settle()
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 2)  // the first try plus one
+        guard let pendingId = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a failed pending pane")
+            return
+        }
+        router.dispatch(.retryPendingPane(tab: TabID(value: 1), pendingId: pendingId))
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 3)
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 4)
+    }
+
+    @Test
+    func aRetryStillWaitingOutItsBackoffIsCancelledByQuit() async {
+        // The wait happens inside the registered attach task, which is how
+        // quit reaches it. A retry sleeping outside that registration would
+        // send its attach into a GUI that is already gone.
+        let fake = FakeDaemonClient()
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, _) = makeRouter(fake)
+        router.attachRetryPolicy = RetryPolicy(
+            initialDelayNanoseconds: 500_000_000,
+            maximumDelayNanoseconds: 500_000_000
+        )
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        // The first retry is immediate; the second is the one that waits.
+        router.dispatch(.recoverPanes)
+        await settle()
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 2)  // the second is still waiting
+        await router.shutdown()
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        #expect(fake.attachDeviceCalls.count == 2)
+    }
+
+    @Test
+    func aPlaceholderClosedDuringItsBackoffNeverSendsTheRetry() async {
+        // Closing a placeholder deliberately leaves a *running* attach alone,
+        // because the daemon is already working and its reply has to be
+        // reconciled. A retry still waiting has sent nothing, so it must not
+        // go on to mint a pane the user has to have detached again.
+        let fake = FakeDaemonClient()
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, workspace) = makeRouter(fake)
+        router.attachRetryPolicy = RetryPolicy(
+            initialDelayNanoseconds: 500_000_000,
+            maximumDelayNanoseconds: 500_000_000
+        )
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        // The first retry is immediate; the second is the one that waits.
+        router.dispatch(.recoverPanes)
+        await settle()
+        router.dispatch(.recoverPanes)
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 2)
+        guard let pendingId = pendingPanes(workspace).first?.id else {
+            Issue.record("expected a pending pane waiting out its backoff")
+            return
+        }
+        router.dispatch(
+            .cancelPendingPane(tab: TabID(value: 1), pendingId: pendingId, mode: .detach)
+        )
+        await settle()
+        #expect(pendingPanes(workspace).isEmpty)
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        #expect(fake.attachDeviceCalls.count == 2)
+        #expect(fake.closePaneCalls.isEmpty)
     }
 
     // MARK: - Restoring ownership of sims no pane carries

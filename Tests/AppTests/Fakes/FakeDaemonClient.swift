@@ -14,7 +14,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     PhysicalDeviceControlling, PaneControlling, PaneSubscribing,
     PaneAccessibilityControlling, PaneLocationControlling,
     TerminalBinding, ReconnectObserving,
-    AutomationGranting, DisplayTitlePublishing {
+    AutomationGranting, DisplayTitlePublishing, HelperHealthReporting {
     // MARK: - Recorded calls
 
     struct BindTerminalCall: Equatable {
@@ -176,6 +176,8 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// observers run. The numbering is the fake's own: production's first
     /// connection is already 1.
     private(set) var connectionGeneration = 0
+    /// Generations reported by callers that bound a call themselves, in order.
+    private(set) var callerBoundedExpiries: [Int] = []
     private(set) var createSessionCalls: [CreateSessionCall] = []
     private(set) var closeSessionCalls: [CloseSessionCall] = []
     private(set) var deviceListCalls: [DeviceListCall] = []
@@ -1221,5 +1223,11 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     func simulateReconnect() {
         connectionGeneration += 1
         for observer in reconnectObservers.values { observer() }
+    }
+
+    // MARK: - HelperHealthReporting
+
+    func noteCallerBoundedCallExpired(sentOn generation: Int) {
+        callerBoundedExpiries.append(generation)
     }
 }
