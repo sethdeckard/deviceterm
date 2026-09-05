@@ -106,6 +106,16 @@ public enum AgentsText {
           `deviceterm ax sweep` grid-walks `objectAtPoint:` to
           discover the elements directly. Use `--step <0..1>` to
           control sweep density (default 0.05).
+        - A tree can come back short where the walk did run. The
+          daemon hit-tests the screen centre when no descendant
+          covers it; an element there that the tree never listed
+          means the walk didn't reach everything, and the response
+          carries `noteCode: "ax.treeIncomplete"` pointing at the
+          same `deviceterm ax sweep` remedy. Absence from a tree
+          carrying that note isn't evidence the element is off
+          screen. One sample can prove an omission and can't rule
+          one out, so an unnoted tree can still be short. Sweep
+          before concluding an element isn't there.
         - A sweep carries a `note` of its own when it stopped at
           its time budget with grid left, alongside
           `truncated: true`. Read one before concluding an
@@ -134,6 +144,14 @@ public enum AgentsText {
           the real preflight tree for their scale. The synthetic
           `AXSweepRoot` remains a 0,0,1,1 placeholder and has no
           `normalizedCenter`.
+        - When their preflight yields a usable screen frame,
+          `ax point` and `ax sweep` report it as `rootFrame`, in
+          displayed points. Multiply a `normalizedCenter` by its
+          `w` and `h` for point coordinates without a second
+          `ax tree` call. It's absent when that frame was
+          unusable, and on a sweep whose budget went before the
+          preflight ran. `ax tree` publishes no `rootFrame`,
+          because its own root frame is the scale.
 
       all input commands (tap, swipe, long-press, pinch, button,
       key, text, rotate, crown)
@@ -279,6 +297,15 @@ public enum AgentsText {
         # exit code rather than stdout emptiness. Read the full
         # match list with --json; matches[0] is not guaranteed to
         # carry a coordinate.
+        # A wait that ends on an observation which couldn't see
+        # the whole pane reports that rather than wait.timeout.
+        # wait.inconclusive means coverage fell short, and
+        # carries the daemon's note and noteCode.
+        # wait.unsupported means full coverage was unavailable:
+        # either the pane has no accessibility capability and
+        # nothing was observed, or the family's tree walk didn't
+        # enumerate and the root it returned carries a noteCode.
+        # That root is observable, so a query it matches succeeds.
 
       Observe a long-running event stream:
         deviceterm events | jq --unbuffered \\

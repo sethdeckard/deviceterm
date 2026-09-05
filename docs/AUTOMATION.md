@@ -471,12 +471,25 @@ stdout emptiness.
 when it is a single word; `--json` adds `role`, `label`, `identifier`,
 `matchCount`, and `elapsedMs`.
 
-A truncated sweep that did not find the element is inconclusive rather than
-proof that the element is absent. The failure carries the daemon's note as its
-message, with `note` and `noteCode` in `details`. Branch on `noteCode`:
-`ax.sweepTruncated` means a larger `--budget` may help, and
-`ax.sweepTruncatedAtMaxBudget` means it cannot, so widen `--step` or retry when
-the pane is quieter.
+An observation that didn't see everything isn't proof the element is absent.
+Where a plain `wait ax` has nothing else to report, it reports that observation
+instead of a bare `wait.timeout`, with the daemon's note as the message and
+`note` and `noteCode` in `details`.
+
+The error code says which kind. `wait.inconclusive` means coverage fell short of
+the screen. `wait.unsupported` means full coverage was unavailable, two ways: a
+pane with no accessibility capability yields no observation at all, while a
+family whose tree walk doesn't enumerate still returns its root and carries a
+`noteCode`. That field is what tells them apart, and only the second is helped
+by another `--source`.
+
+Because the root survives the second case, a query the root itself matches
+succeeds rather than reporting `wait.unsupported`.
+
+Branch on `noteCode` for the remedy. `ax.watchOSEnumerationUnsupported` and
+`ax.treeIncomplete` both send you to `--source sweep`. `ax.sweepTruncated`
+means a larger `--budget` may help, and `ax.sweepTruncatedAtMaxBudget` means it
+can't, so widen `--step` or retry when the pane is quieter.
 
 Wait for an observed orientation and a stable rendered surface:
 

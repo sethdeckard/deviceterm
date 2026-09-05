@@ -131,17 +131,29 @@ includes
 .B normalizedCenter
 with x and y ready for a coordinate-bearing input verb. Its
 .B frame
-stays in displayed points for hit-target size checks. On watchOS the tree
-often returns an empty walk by design; use
-.B ax sweep
-as the documented workaround.
+stays in displayed points for hit-target size checks. The response carries a
+.B note
+sentence and a
+.B noteCode
+token to branch on where the daemon has evidence the tree is short of the
+screen. The walk returns empty by design on watchOS. Elsewhere the daemon
+hit-tests the screen centre when no descendant covers it, and notes the tree
+only when that point holds an element the tree lacks. One sample can prove an
+omission and cannot rule one out, so an unnoted tree is not a tree known to be
+complete. Both notes point at
+.BR "ax sweep" .
 .TP
 .B ax point " " \fIx\fR " " \fIy\fR
 Return one AX element at a normalized point. When present, the element's
 .B normalizedCenter
 uses the same displayed coordinate space and can be passed directly to
 another coordinate-bearing verb. The field is omitted when the geometry
-cannot produce an on-screen centre.
+cannot produce an on-screen centre. The result also carries
+.BR rootFrame ,
+the screen the daemon measured, in displayed points. Multiply a normalized
+centre by its width and height for point coordinates, without a second
+.B ax tree
+call. It is omitted when the preflight root carried no usable frame.
 .TP
 .B ax sweep " " [\fB--step\fR \fI0..1\fR] " " [\fB--budget\fR \fIms\fR]
 Grid-walk the screen via objectAtPoint and aggregate unique elements.
@@ -149,6 +161,10 @@ Usable children include
 .BR normalizedCenter .
 The synthetic sweep root remains a 0,0,1,1 placeholder and has no
 .BR normalizedCenter .
+When the preflight yields a usable frame,
+.B rootFrame
+sits beside that placeholder and carries it. A sweep whose budget went before
+the preflight ran reports none.
 Default step 0.05, clamped silently into [0.02, 0.5]; the result echoes the
 step used. A completed sweep makes ceil(1/step)^2 point queries, and a
 control narrower than the step can fall between samples and read as absent.
@@ -180,6 +196,13 @@ source. Step and budget apply only to sweep. The sweep budget is reduced to
 the time remaining before the overall wait deadline.
 .B --value
 narrows to an element whose own value matches, under the same match mode.
+A match answers a presence wait whatever the observation missed. Nothing
+matching is a claim about everything it covered, so a wait that ends on an
+observation which could not see the whole pane reports that, carrying the
+daemon's note and noteCode, rather than a bare
+.BR wait.timeout .
+It reports on the probe that saw it when probing again cannot help, and at the
+deadline when it can.
 .B --state absent
 waits for the query to match nothing and reports the condition
 .BR ax.disappears .

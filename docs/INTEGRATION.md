@@ -1122,8 +1122,19 @@ clamp and reduces the result to the milliseconds remaining before the wait
 deadline. What a truncated sweep means then depends on what you asked for.
 
 A plain `wait ax` asks whether an element is present, and a match answers that
-whatever went unswept, so it succeeds. Only a truncated sweep with no match
-returns `wait.inconclusive`.
+whatever went unseen, so it succeeds.
+
+Nothing matching is a claim about everything the observation covered, so the
+failure reports the observation rather than the deadline. A truncated sweep
+with no match returns `wait.inconclusive` on the probe that saw it. A tree the
+daemon noted as incomplete is retried instead: if the deadline arrives with no
+match and the last observation still carried the note, the wait returns
+`wait.inconclusive` in place of `wait.timeout`. A match on a still-noted tree
+succeeds, because presence needs no more coverage than the sighting.
+
+That substitution needs an observation this wait actually reached. A probe that
+dies in one of its own requests produces none, so the wait reports the deadline
+rather than a verdict drawn from an earlier probe.
 
 `--print center` and `tap` ask for a single coordinate target, which is a claim
 about what *didn't* match. An unswept cell can refute any verdict: it can hold
@@ -1132,9 +1143,10 @@ behind a caption, or the intermediate frame that turns two disjoint candidates
 into a containment chain. So a truncated sweep is `wait.inconclusive` for
 these callers on every outcome, and no tap is dispatched.
 
-Either way the message is the daemon's own note, and `details` carries `note`,
-`noteCode`, `sweepedPoints`, `step`, and `budgetMs`, so a caller can tell a
-sweep worth retrying with a larger budget from one already at the ceiling.
+In every case the message is the daemon's own note, and `details` carries
+`note` and `noteCode`, plus `sweepedPoints`, `step`, and `budgetMs` when a
+sweep raised it, so a caller can tell a sweep worth retrying with a larger
+budget from one already at the ceiling.
 
 A tree observation that comes back empty on watchOS returns `wait.unsupported`,
 carrying the same two fields. The refusal follows the daemon's note rather than

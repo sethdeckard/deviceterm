@@ -2331,23 +2331,126 @@ func aThinTreeThatFillsInStillTaps() throws {
 }
 
 @Test
-func aPresenceWaitIsUnaffectedByAThinTree() throws {
-    // Plain `wait ax` keeps match-wins, and a thin tree with no match keeps
-    // polling to its deadline rather than failing early.
+func aPresenceWaitStillMatchesInsideAThinTree() throws {
+    // Match-wins, whatever the note says. The element was seen, which is the
+    // whole question a presence wait asks, so what the walk missed elsewhere
+    // cannot unmake the sighting.
     let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
-    let matched = try axWaitOutcome(
+    let outcome = try axWaitOutcome(
         tree: incompleteTree(try jsonText(button)),
         query: axQuery(label: "Go")
     )
-    #expect(matched.exitCode == 0)
 
-    let missed = try axWaitOutcome(
+    #expect(outcome.exitCode == 0)
+    #expect(try axMatches(outcome).count == 1)
+}
+
+@Test
+func aPresenceWaitReportsAThinTreeAtItsDeadline() throws {
+    // Nothing matched in a tree the daemon caught omitting something, so the
+    // element may have been on screen the whole time and simply unpublished.
+    // A bare `wait.timeout` would send the reader to inspect their app; the
+    // daemon's own sentence sends them to `ax sweep` instead.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let outcome = try axWaitOutcome(
         tree: incompleteTree(try jsonText(button)),
         query: axQuery(label: "Absent"),
         timeoutMs: 1
     )
-    #expect(missed.failure?.code == .waitTimeout)
-    #expect(missed.exitCode == 124)
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(outcome.exitCode == 1)
+    #expect(outcome.failure?.message == AXTreeNote.treeIncomplete.rawValue)
+    let details = try waitFailureDetails(outcome)
+    #expect(details["noteCode"] as? String == AXTreeNote.treeIncomplete.code)
+    #expect(details["condition"] as? String == "ax.appears")
+}
+
+@Test
+func aPresenceWaitOnATreeThatFillsInReportsItsDeadline() throws {
+    // Two things at once. The thin tree does not fail the wait on the probe
+    // that saw it, and the complete one that follows clears it, so a deadline
+    // reached on a tree that reached everything reports the deadline.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(incompleteTree(try jsonText(button)).utf8)),
+        .success(try waitData([waitPane()])),
+        .success(Data(axTree(try jsonText(button)).utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Absent"),
+        timeoutMs: 150,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+}
+
+@Test
+func aProbeThatDiesLeavesNoEarlierObservationToReportWith() throws {
+    // The first probe sees a thin tree. The second dies in its roster request,
+    // so the wait never learns what the pane held at the end. Standing in the
+    // earlier observation would report coverage nobody checked, which is the
+    // rule `lastProbeNamedNoPane` already follows for pane resolution.
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(incompleteTree(try jsonText(button)).utf8)),
+        .failure(.transportTimeout("timed out waiting for daemon response"))
+    ])
+    // Spend the rest of the deadline inside the request that fails.
+    transport.onSend = { if transport.sent.count == 3 { clock.now += 200_000_000 } }
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Absent"),
+        timeoutMs: 150,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.exitCode == 124)
+}
+
+@Test
+func aDeadProbeAlsoWithdrawsTheMatchesASelectorWouldJudge() throws {
+    // Same rule, and the case it protects hardest. `--print center` classifies
+    // its deadline from the last match list, so a stale one turns an
+    // unobserved window into a positive verdict about what didn't match.
+    let first = element(role: "Button", x: 0, y: 0, width: 40, height: 40, centre: (0.2, 0.2))
+    let second = element(role: "Button", x: 60, y: 60, width: 40, height: 40, centre: (0.8, 0.8))
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .success(Data(axTree(try jsonText(first) + "," + (try jsonText(second))).utf8)),
+        .failure(.transportTimeout("timed out waiting for daemon response"))
+    ])
+    transport.onSend = { if transport.sent.count == 3 { clock.now += 200_000_000 } }
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Go"),
+        timeoutMs: 150,
+        transport: transport,
+        output: .human,
+        printMode: .center,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    // Two disjoint matches would be `wait.ambiguous` had the last probe seen
+    // them. It didn't, so the deadline is what there is to report.
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(outcome.stdout.isEmpty)
 }
 
 @Test

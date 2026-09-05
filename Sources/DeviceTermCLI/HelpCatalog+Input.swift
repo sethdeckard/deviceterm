@@ -205,9 +205,15 @@ extension HelpCatalog {
             detail: """
               ax tree
                   Dump the frontmost iOS app's accessibility tree as JSON.
-                  On watchOS the bridge's accessibilityChildren walk often
-                  returns empty by design; the response carries a `note`
-                  field pointing at `ax sweep` as the workaround.
+                  The response carries a `note` sentence and a `noteCode`
+                  token to branch on where the daemon has evidence the
+                  tree is short of the screen. The walk returns empty by
+                  design on watchOS. Elsewhere the daemon hit-tests the
+                  screen centre when no descendant covers it, and notes
+                  the tree only when that point holds an element the
+                  tree lacks. One sample can prove an omission and cannot rule
+                  one out, so an unnoted tree is not a tree known to be
+                  complete. Both notes point at `ax sweep`.
                   Example: deviceterm ax tree
 
               ax point <x> <y>
@@ -222,6 +228,12 @@ extension HelpCatalog {
                   directly to `ax point`, `tap`, or another coordinate
                   input. The field is omitted when the geometry cannot
                   produce an on-screen centre.
+
+                  `rootFrame` reports the screen the daemon measured, in
+                  displayed points. Multiply a normalized centre by its
+                  `w` and `h` for point coordinates, without a second
+                  `ax tree` call. It's omitted when the preflight root
+                  carried no usable frame.
                   Example: deviceterm ax point 0.5 0.5
 
               ax sweep [--step <0..1>] [--budget <ms>]
@@ -233,6 +245,10 @@ extension HelpCatalog {
                   Sweep children receive `normalizedCenter` from the
                   real preflight tree. The synthetic sweep root remains
                   a 0,0,1,1 placeholder and has no `normalizedCenter`.
+                  When the preflight yields a usable frame, `rootFrame`
+                  sits beside that placeholder and carries it in
+                  displayed points. A sweep whose budget went before the
+                  preflight ran reports none.
 
                   Default step 0.05, clamped into [0.02, 0.5]. The clamp
                   is silent; read `step` in the result for what was used.
@@ -286,6 +302,14 @@ extension HelpCatalog {
                   under the same --match mode. Typing into a field puts the
                   text in its value, not its label, so --label names the
                   field and --value asserts what it now reads.
+                  A match answers a presence wait whatever the observation
+                  missed. Nothing matching is a claim about everything it
+                  covered, so a wait that ends on an observation which
+                  couldn't see the whole pane reports that, carrying the
+                  daemon's note and noteCode, rather than a bare
+                  wait.timeout. It reports on the probe that saw it when
+                  probing again can't help, and at the deadline when it
+                  can.
                   --state absent waits for the query to match nothing, and
                   reports the condition ax.disappears. That is the assertion
                   a check usually wants: the spinner went, the error banner

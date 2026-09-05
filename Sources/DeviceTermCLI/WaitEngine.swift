@@ -84,6 +84,25 @@ enum WaitEngine {
         let incompleteness: Incompleteness?
     }
 
+    /// The most recent accessibility observation a wait made, for classifying
+    /// its deadline once the probe that took it has returned.
+    ///
+    /// A reference type so `runWait` can drop it at the top of every probe
+    /// while the caller keeps reading it after the wait ends. That drop is the
+    /// point: a probe that dies in one of its own requests produces no
+    /// observation, and the window it failed to look at is exactly the one a
+    /// verdict would be describing. `runWait` treats its own
+    /// `lastProbeNamedNoPane` the same way, for the same reason.
+    final class LastObservation {
+        var matches: [[String: Any]] = []
+        var incompleteness: Failure?
+
+        func clear() {
+            matches = []
+            incompleteness = nil
+        }
+    }
+
     /// What a coordinate-target wait produced.
     ///
     /// Carries the pane the wait resolved alongside the element, because a
@@ -456,47 +475,90 @@ func handleWaitAX(
             runtime: runtime
         )
     }
-    return try handleWait(
+    return try awaitAXPresence(
         pane: pane,
-        condition: "ax.appears",
+        query: query,
+        matcher: matcher,
         timeoutMs: timeoutMs,
         transport: transport,
         output: output,
         creds: creds,
         runtime: runtime
-    ) { entry, context in
-        let observed = try observeAXMatches(
-            entry: entry,
-            context: context,
-            query: query,
-            matcher: matcher,
-            transport: transport
-        )
-        let matches = observed.matches
-        // A match wins, then incompleteness is explained. A found element is
-        // proof of presence whatever the observation failed to cover, and no
-        // amount of unswept screen can turn a sighting into an absence.
-        guard !matches.isEmpty else {
-            // An observation this wait will not probe again is reported now.
-            // One it will keeps waiting, so a tree that is merely part-way
-            // through gets the rest of the deadline to fill in.
-            if let incompleteness = observed.incompleteness, incompleteness.isTerminal {
-                throw incompleteness.failure
+    )
+}
+
+/// Block until the query matches something.
+///
+/// A match wins over incompleteness. Presence is an existential claim, and a
+/// found element proves it whatever the observation failed to cover: no amount
+/// of unswept screen turns a sighting into an absence.
+///
+/// A deadline reached without a match is the other case. Nothing matched is a
+/// claim about everything the observation covered, so when the last one could
+/// not see the whole pane it reports that rather than the deadline. A bare
+/// `wait.timeout` there would send the reader to inspect an app that may have
+/// been drawing the element the whole time, in a tree that never published it.
+///
+/// A late match still wins. `WaitEngine.run` honours a probe that reported
+/// `.satisfied` after the deadline, so incompleteness only ever stands in for a
+/// wait that matched nothing.
+private func awaitAXPresence(
+    pane: String?,
+    query: CLICommand.WaitAXQuery,
+    matcher: WaitEngine.AXMatcher?,
+    timeoutMs: Int,
+    transport: CLITransport,
+    output: OutputMode,
+    creds: (sessionId: String, cap: String)?,
+    runtime: WaitEngine.Runtime
+) throws -> CommandOutcome {
+    let condition = "ax.appears"
+    let last = WaitEngine.LastObservation()
+    do {
+        let completion = try runWait(
+            pane: pane,
+            timeoutMs: timeoutMs,
+            transport: transport,
+            creds: creds,
+            runtime: runtime,
+            carrying: last
+        ) { entry, context in
+            let observed = try observeAXMatches(
+                entry: entry,
+                context: context,
+                query: query,
+                matcher: matcher,
+                transport: transport
+            )
+            let matches = observed.matches
+            guard !matches.isEmpty else {
+                last.incompleteness = observed.incompleteness?.failure
+                // An observation this wait will not probe again is reported
+                // now. One it will keeps waiting, so a tree that is merely
+                // part-way through gets the rest of the deadline to fill in.
+                if let incompleteness = observed.incompleteness, incompleteness.isTerminal {
+                    throw incompleteness.failure
+                }
+                return .pending
             }
-            return .pending
+            var observation: [String: Any] = [
+                "source": query.source.rawValue,
+                "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
+                "matchCount": matches.count
+            ]
+            // Present only when the list was trimmed, so a caller learns it
+            // from the receipt instead of comparing `matchCount` against a cap
+            // it can only read in prose.
+            if matches.count > WaitEngine.maxReportedMatches {
+                observation["matchesTruncated"] = true
+            }
+            return .satisfied(pane: entry, observation: observation)
         }
-        var observation: [String: Any] = [
-            "source": query.source.rawValue,
-            "matches": Array(matches.prefix(WaitEngine.maxReportedMatches)),
-            "matchCount": matches.count
-        ]
-        // Present only when the list was trimmed, so a caller learns it from
-        // the receipt instead of comparing `matchCount` against a cap it can
-        // only read in prose.
-        if matches.count > WaitEngine.maxReportedMatches {
-            observation["matchesTruncated"] = true
-        }
-        return .satisfied(pane: entry, observation: observation)
+        return try waitSuccessOutcome(completion, condition: condition, output: output)
+    } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
+        return waitFailureOutcome(last.incompleteness ?? failure, condition: condition)
+    } catch let failure as WaitEngine.Failure {
+        return waitFailureOutcome(failure, condition: condition)
     }
 }
 
@@ -523,17 +585,18 @@ private func awaitAXAbsence(
     runtime: WaitEngine.Runtime
 ) throws -> CommandOutcome {
     let condition = "ax.disappears"
-    // Carried out of the probe so a deadline reached on an observation that
-    // could not see everything reports that, rather than reporting absence
-    // was never achieved.
-    var lastIncompleteness: WaitEngine.Failure?
+    // Carried so a deadline reached on an observation that could not see
+    // everything reports that, rather than reporting absence was never
+    // achieved.
+    let last = WaitEngine.LastObservation()
     do {
         let completion = try runWait(
             pane: pane,
             timeoutMs: timeoutMs,
             transport: transport,
             creds: creds,
-            runtime: runtime
+            runtime: runtime,
+            carrying: last
         ) { entry, context in
             let observed = try observeAXMatches(
                 entry: entry,
@@ -544,11 +607,11 @@ private func awaitAXAbsence(
             )
             guard observed.matches.isEmpty else {
                 // Still there, and seen to be. Any incompleteness the same
-                // observation reported says nothing about a match in hand.
-                lastIncompleteness = nil
+                // observation reported says nothing about a match in hand, so
+                // it stays dropped.
                 return .pending
             }
-            lastIncompleteness = observed.incompleteness?.failure
+            last.incompleteness = observed.incompleteness?.failure
             if let incompleteness = observed.incompleteness {
                 // Report it now when this wait will not probe again;
                 // otherwise keep going and let the deadline report it.
@@ -570,7 +633,7 @@ private func awaitAXAbsence(
         }
         return try waitSuccessOutcome(completion, condition: condition, output: output)
     } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
-        return waitFailureOutcome(lastIncompleteness ?? failure, condition: condition)
+        return waitFailureOutcome(last.incompleteness ?? failure, condition: condition)
     } catch let failure as WaitEngine.Failure {
         return waitFailureOutcome(failure, condition: condition)
     }
@@ -742,12 +805,9 @@ private func awaitAXTarget(
     // Built once per wait: every probe uses the same prepared selector and
     // optional value filter.
     let matcher = WaitEngine.AXMatcher(query: query)
-    // Carried out of the probe so a refusal can describe the observation the
-    // deadline ended on, which the probe itself has no way to return.
-    var lastMatches: [[String: Any]] = []
-    // Reassigned every probe, so a tree that fills in leaves no stale
-    // incompleteness behind for the deadline to report.
-    var lastIncompleteness: WaitEngine.Failure?
+    // Carried so a refusal can describe the observation the deadline ended on,
+    // which the probe itself has no way to return.
+    let last = WaitEngine.LastObservation()
     var selected: AXTarget?
     do {
         let completion = try runWait(
@@ -755,7 +815,8 @@ private func awaitAXTarget(
             timeoutMs: timeoutMs,
             transport: transport,
             creds: creds,
-            runtime: runtime
+            runtime: runtime,
+            carrying: last
         ) { entry, context in
             let observed = try observeAXMatches(
                 entry: entry,
@@ -764,8 +825,8 @@ private func awaitAXTarget(
                 matcher: matcher,
                 transport: transport
             )
-            lastMatches = observed.matches
-            lastIncompleteness = observed.incompleteness?.failure
+            last.matches = observed.matches
+            last.incompleteness = observed.incompleteness?.failure
             // Every verdict below is a claim about what did *not* match, and
             // anything the observation missed refutes all of them: it can hold
             // a second control that would have made a target ambiguous, the
@@ -794,13 +855,13 @@ private func awaitAXTarget(
         return WaitEngine.AXTargetCompletion(
             target: selected,
             pane: completion.pane,
-            matchCount: lastMatches.count,
+            matchCount: last.matches.count,
             elapsedMs: completion.elapsedMs
         )
     } catch let failure as WaitEngine.Failure where failure.code == .waitTimeout {
         throw axSelectionFailure(
-            from: lastMatches,
-            incompleteness: lastIncompleteness
+            from: last.matches,
+            incompleteness: last.incompleteness
         ) ?? failure
     }
 }
@@ -1208,6 +1269,7 @@ private func runWait(
     transport: CLITransport,
     creds: (sessionId: String, cap: String)?,
     runtime: WaitEngine.Runtime,
+    carrying last: WaitEngine.LastObservation? = nil,
     conditionProbe: (PanesListEntry, WaitEngine.ProbeContext) throws -> WaitEngine.ProbeResult
 ) throws -> WaitEngine.Completion {
     let credentials = try creds ?? readSessionCredentials()
@@ -1221,6 +1283,11 @@ private func runWait(
     do {
         return try WaitEngine.run(timeoutMs: timeoutMs, runtime: runtime) { context in
             lastProbeNamedNoPane = false
+            // An observation a caller carries goes stale on the same terms, so
+            // it is dropped here rather than where it was set. Either request
+            // below can consume the deadline, and a probe that dies in one
+            // produces no observation to classify it with.
+            last?.clear()
             let request = try CLICommands.panesListRequest(
                 sessionId: credentials.sessionId,
                 cap: credentials.cap
