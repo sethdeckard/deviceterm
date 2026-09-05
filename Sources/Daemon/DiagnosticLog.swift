@@ -4,16 +4,17 @@ import os
 
 /// The daemon's unified-logging channels, named once.
 ///
-/// Four categories, each answering a different question:
+/// Five categories, each answering a different question:
 ///
 ///   lifecycle  when did this daemon instance start, and why did it exit?
 ///   xpc        did one connection drop, or did the process go away?
 ///   attach     what was the daemon doing, and in which phase?
 ///   session    was a session torn down underneath a pane?
+///   footprint  what was it holding, sampled on a fixed cadence?
 ///
 /// Separate categories rather than one channel because they are read
 /// separately. `lifecycle` alone answers "did it restart". Correlating a pane
-/// failure means interleaving all four by timestamp, together with the GUI's own
+/// failure means interleaving them by timestamp, together with the GUI's own
 /// `com.deviceterm` categories.
 ///
 /// PRIVACY: correlation ids, phase names, pids, and counts are `.public` so they
@@ -36,4 +37,8 @@ public enum DiagnosticLog {
 
     /// Session readiness, teardown, and subscription revocation.
     public static let session = Logger(subsystem: subsystem, category: "session")
+
+    /// Periodic footprint and queue-depth samples. `.notice` so abnormal
+    /// growth can be diagnosed from `log show` without `--info`.
+    public static let footprint = Logger(subsystem: subsystem, category: "footprint")
 }

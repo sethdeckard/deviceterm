@@ -160,6 +160,9 @@ public actor XPCConnection {
     /// entered and suspended. A contact-lane waiter parked behind a long
     /// gesture is exactly that, and cancellation is what wakes it.
     private var inFlightRequests: [UInt64: Task<Void, Never>] = [:]
+    /// Inbound XPC event handlers not yet retired. Read by the daemon's
+    /// periodic self-check.
+    var inFlightRequestCount: Int { inFlightRequests.count }
     private var nextRequestId: UInt64 = 1
     private var closed: Bool = false
 

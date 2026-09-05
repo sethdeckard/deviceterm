@@ -912,6 +912,10 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         await pool.beginDrain(token)
     }
 
+    func poolCounters() async -> SurfacePoolCounters? {
+        await pool.snapshotCounters()
+    }
+
     func orphan(token: UUID) async {
         await pool.orphan(token)
     }

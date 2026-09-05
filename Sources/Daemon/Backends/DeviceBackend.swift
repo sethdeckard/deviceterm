@@ -273,6 +273,14 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// force-freed; late acks still drain them).
     func orphan(token: UUID) async
 
+    /// This backend's surface-pool counters, or nil when it owns no pool.
+    /// Read by the daemon's periodic self-check; never on a frame path.
+    ///
+    /// A requirement, not extension-only: `PaneCoordinator` holds backends as
+    /// `any DeviceBackend`, and an extension-only method dispatches statically
+    /// to the nil default for every one of them.
+    func poolCounters() async -> SurfacePoolCounters?
+
     // MARK: Location simulation
 
     // The mutations carry `generation:` for the same reason the input
@@ -375,6 +383,7 @@ extension DeviceBackend {
     func releaseWatermark(token: UUID, epoch: UInt64, lowestHeld: UInt64, connectionId: UInt64) async {}
     func drain(token: UUID) async {}
     func orphan(token: UUID) async {}
+    func poolCounters() async -> SurfacePoolCounters? { nil }
     // swiftlint:enable async_without_await
 
     // Default input fence: a backend whose input is synchronous and holds

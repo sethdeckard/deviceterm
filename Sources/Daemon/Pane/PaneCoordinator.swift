@@ -1387,12 +1387,53 @@ public actor PaneCoordinator {
         panes[paneId]?.subscribers[subscriptionId]?.channel.hasParkedReader ?? false
     }
 
+    /// Live and retiring pane-record counts, for the periodic self-check.
+    ///
+    /// `retiring` is counted separately rather than folded in. A record stays
+    /// there until backend teardown, external cleanup, and finalization have
+    /// all finished, so a count that persists across samples points at slow or
+    /// stuck teardown.
+    func paneCounts() -> (live: Int, retiring: Int) {
+        (panes.count, retiring.count)
+    }
+
+    /// Subscribers across every record, retiring ones included.
+    func totalSubscriberCount() -> Int {
+        let live = panes.values.reduce(0) { $0 + $1.subscribers.count }
+        return retiring.values.reduce(live) { $0 + $1.subscribers.count }
+    }
+
+    /// Simulator lookups currently inside CoreSimulator. A value that stays
+    /// nonzero across samples suggests an acquisition is wedged.
+    func acquiresInFlight() async -> Int {
+        await simBackendAcquirer.inFlight
+    }
+
+    /// The three pool counters the footprint sample carries, summed across
+    /// live and retiring records that still have a backend. Backends without a
+    /// pool contribute nothing, and a record whose backend teardown has already
+    /// run contributes nothing either.
+    func poolCountersTotal() async -> SurfacePoolCounters {
+        var total = SurfacePoolCounters()
+        for record in Array(panes.values) + Array(retiring.values) {
+            guard let counters = await record.backend?.poolCounters() else { continue }
+            total.exhaustionDrops += counters.exhaustionDrops
+            total.reuseWhileInUse += counters.reuseWhileInUse
+            total.delinquentObserved += counters.delinquentObserved
+        }
+        return total
+    }
+
     /// Pending pane events across every subscriber, and how many surface
-    /// notices conflation has folded away. Used by tests.
+    /// notices conflation has folded away. Read by the periodic footprint
+    /// sample.
+    ///
+    /// Retiring records included: a subscriber whose close is stuck still
+    /// holds its queue.
     func subscriptionQueueDepth() -> (pending: Int, conflated: Int) {
         var pending = 0
         var conflated = 0
-        for record in panes.values {
+        for record in Array(panes.values) + Array(retiring.values) {
             for subscriber in record.subscribers.values {
                 pending += subscriber.channel.pendingCount
                 conflated += subscriber.channel.conflatedSurfaceCount

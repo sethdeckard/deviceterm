@@ -67,6 +67,19 @@ public actor XPCServer {
         connections.count
     }
 
+    /// Inbound XPC event handlers registered across live connections and not
+    /// yet retired. A total that climbs while `connectionCount` holds steady is
+    /// work arriving faster than the daemon finishes it.
+    public var inFlightRequestCount: Int {
+        get async {
+            var total = 0
+            for connection in connections.values {
+                total += await connection.inFlightRequestCount
+            }
+            return total
+        }
+    }
+
     public init(
         methods: MethodRegistry,
         authValidator: AuthValidator? = nil,

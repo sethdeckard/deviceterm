@@ -38,6 +38,7 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
     private var subscriptionRegistry: PaneSubscriptionRegistry?
     private var statusItem: StatusItemController?
     private var idleMonitor: IdleMonitor?
+    private var footprintMonitor: DaemonFootprintMonitor?
     private var sessionManager: SessionManager?
     private var deviceCoordinator: DeviceCoordinator?
     private var paneCoordinator: PaneCoordinator?
@@ -400,6 +401,17 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         )
         await idleMonitor.start()
 
+        // Write down what the daemon is holding, once a minute, whether or not
+        // anything looks wrong. The monitor samples the counts these actors
+        // already maintain, so it adds no per-frame work; it does take the
+        // pane coordinator and each pane's pool briefly on every tick.
+        let footprintMonitor = DaemonFootprintMonitor(
+            paneCoordinator: paneCoordinator,
+            deviceCoordinator: deviceCoordinator,
+            xpcServer: xpcServer
+        )
+        await footprintMonitor.start()
+
         // Retain references so ARC keeps the actors alive for the
         // process's lifetime.
         self.sessionManager = sessionManager
@@ -411,6 +423,7 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         self.subscriptionRegistry = subscriptionRegistry
         self.statusItem = statusItem
         self.idleMonitor = idleMonitor
+        self.footprintMonitor = footprintMonitor
     }
 }
 

@@ -672,6 +672,43 @@ reply, timeout, and failure counts plus average and maximum latency. The timer
 flushes a burst even when no later RPC arrives. A request after an idle
 boundary starts the next bucket.
 
+The daemon writes a sample of its own every 60 seconds, under the `footprint`
+category of `com.deviceterm.daemon`. Each line carries the process's
+`phys_footprint` (which includes IOSurface and compressed-memory accounting
+that `resident_size` may not represent consistently) alongside the depths that
+name a growth path: panes, panes whose close is still running, subscribers,
+queued pane events and folded surface notices, simulator lookups in flight,
+abandoned device reads, registered inbound XPC handlers and connections, and
+the surface pools' exhaustion drops and in-use reuses.
+
+Retiring panes are counted separately because a pane stays retiring until
+backend teardown, external cleanup, and finalization finish, so a count that
+persists across samples points at slow or stuck teardown.
+
+The line also carries delinquent-hold sightings, which are cumulative and
+physical-device only: the watchdog that produces them runs in the device
+backend, so a simulator pool always reports zero, and one stuck hold is counted
+again on every sweep. A rise means the watchdog observed at least one
+delinquent hold since the previous sample; it is not a current hold count.
+
+The logical depths and counters come from existing actor state; the process
+footprint is queried at sampling time. No per-frame work is added, though
+sampling does take the pane coordinator's actor, and each pane's pool actor,
+briefly once a minute.
+
+The line logs at notice level, because info records don't survive `log show`
+without `--info`, and a sample nobody can retrieve afterwards is the gap this
+closes. At or above 8 GiB the wording escalates, so a reader scanning for
+trouble finds it without knowing what a normal footprint looks like. The threshold changes
+phrasing and nothing else: no reading sheds load or throttles anything, because
+the bounds that act live in the paths they bound.
+
+The first sample lands one interval after startup, so a daemon that dies inside
+its first minute leaves no footprint line at all.
+
+Nothing in the sample identifies a device, session, or capability, so the whole
+line is public.
+
 Timing belongs to the layer that owns the deadline. `session.create` and pane
 attaches record at their `Deadline.wait` boundary, while pane authentication
 and `pane.subscribe` are separate attempts. This prevents an outer timeout
