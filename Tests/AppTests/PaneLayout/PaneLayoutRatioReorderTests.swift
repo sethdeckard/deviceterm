@@ -267,7 +267,8 @@ struct PaneLayoutRatioReorderTests {
                 pixelHeight: 2_622
             ),
             daemonClient: FakeDaemonClient(),
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 
@@ -282,7 +283,8 @@ struct PaneLayoutRatioReorderTests {
                 pixelHeight: 2_622
             ),
             daemonClient: FakeDaemonClient(),
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 

@@ -90,7 +90,8 @@ struct SimulatorPaneRotationLayoutTests {
                 pixelHeight: 2_622
             ),
             daemonClient: fake,
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
         let controller = PaneLayoutViewController(
             tabID: TabID(value: 1),

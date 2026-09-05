@@ -16,6 +16,16 @@ import Testing
 /// noise.
 @MainActor
 struct HeadlessAdvisoryTests {
+    /// A boolean a `@Sendable` closure can keep reading as it changes.
+    @MainActor
+    final class MutableFlag {
+        var value: Bool
+
+        init(_ value: Bool) {
+            self.value = value
+        }
+    }
+
     /// Neither preference set: the observed Simulator.app default,
     /// where both routes shut a booted sim down.
     private static let hazardous = SimulatorDetachPolicy(
@@ -28,19 +38,27 @@ struct HeadlessAdvisoryTests {
         detachOnAppQuit: true
     )
 
+    /// A fresh latch per view model, never `.shared`. The latch is
+    /// process-global in production, so a test that reaches for the
+    /// shared one leaves every later test in the suite latched off and
+    /// passing for the wrong reason.
     private static func makeViewModel(
+        latch: CoexistenceAdvisoryLatch = CoexistenceAdvisoryLatch(),
         isSuppressed: @escaping @MainActor () -> Bool = { false },
         recordSuppressed: @escaping @MainActor (Bool) -> Void = { _ in },
         isSimulatorAppRunning: @escaping @MainActor () -> Bool = { true },
         welcomeShownThisLaunch: @escaping @MainActor () -> Bool = { false },
-        detachPolicy: @escaping @MainActor () -> SimulatorDetachPolicy = { hazardous }
+        detachPolicy: @escaping @MainActor () -> SimulatorDetachPolicy = { hazardous },
+        deviceHubWillWarn: @escaping @MainActor (Bool) -> Bool = { _ in false }
     ) -> HeadlessAdvisoryViewModel {
         HeadlessAdvisoryViewModel(
+            latch: latch,
             isSuppressed: isSuppressed,
             recordSuppressed: recordSuppressed,
             isSimulatorAppRunning: isSimulatorAppRunning,
             welcomeShownThisLaunch: welcomeShownThisLaunch,
-            detachPolicy: detachPolicy
+            detachPolicy: detachPolicy,
+            deviceHubWillWarn: deviceHubWillWarn
         )
     }
 
@@ -49,7 +67,7 @@ struct HeadlessAdvisoryTests {
         // Default case: Simulator.app is up and neither detach
         // preference is set, so both routes can kill the sim.
         let viewModel = Self.makeViewModel()
-        #expect(viewModel.decision == .warn(hazard: .both))
+        #expect(viewModel.decision(isPhysicalDevice: false) == .warn(hazard: .both))
     }
 
     @Test
@@ -57,14 +75,14 @@ struct HeadlessAdvisoryTests {
         // The user previously checked "Don't show again", so the flag is
         // sticky across launches.
         let viewModel = Self.makeViewModel(isSuppressed: { true })
-        #expect(viewModel.decision == .skip)
+        #expect(viewModel.decision(isPhysicalDevice: false) == .skip)
     }
 
     @Test
     func suppressedWhenSimulatorAppNotRunning() {
         // No dual-display condition, so the advisory is irrelevant.
         let viewModel = Self.makeViewModel(isSimulatorAppRunning: { false })
-        #expect(viewModel.decision == .skip)
+        #expect(viewModel.decision(isPhysicalDevice: false) == .skip)
     }
 
     @Test
@@ -72,7 +90,110 @@ struct HeadlessAdvisoryTests {
         // The coexistence welcome already explained this in this
         // session; stacking a modal on top gets both dismissed unread.
         let viewModel = Self.makeViewModel(welcomeShownThisLaunch: { true })
-        #expect(viewModel.decision == .skip)
+        #expect(viewModel.decision(isPhysicalDevice: false) == .skip)
+    }
+
+    @Test
+    func skipsPhysicalDevicePanes() {
+        // Simulator.app attaches to sims. A mirrored phone can't be
+        // opened in it however it's configured, so warning that "this sim
+        // is now open in both DeviceTerm and Apple's Simulator.app" is
+        // describing something that didn't happen.
+        let viewModel = Self.makeViewModel()
+        #expect(viewModel.decision(isPhysicalDevice: true) == .skip)
+        #expect(viewModel.decision(isPhysicalDevice: false) == .warn(hazard: .both))
+    }
+
+    @Test
+    func devicePaneSkipsEveryExpensiveQuery() {
+        // The pane-kind gate is first, ahead of the latches, because it
+        // is a parameter rather than a read. A device pane must not scan
+        // running applications or open Simulator.app's preferences.
+        var runningCalls = 0
+        var policyCalls = 0
+        let viewModel = Self.makeViewModel(
+            isSimulatorAppRunning: {
+                runningCalls += 1
+                return true
+            },
+            detachPolicy: {
+                policyCalls += 1
+                return Self.hazardous
+            }
+        )
+        _ = viewModel.decision(isPhysicalDevice: true)
+        #expect(runningCalls == 0)
+        #expect(policyCalls == 0)
+    }
+
+    @Test
+    func yieldsToDeviceHubWhenBothWouldFire() {
+        // Only one coexistence warning appears per launch, so when both
+        // apply one has to lose. Device Hub's hazard reaches further: its
+        // quit shuts down every booted Simulator, including ones it never
+        // opened, where Simulator.app's reach is bounded by the device
+        // windows it attached.
+        let yielding = Self.makeViewModel(deviceHubWillWarn: { _ in true })
+        #expect(yielding.decision(isPhysicalDevice: false) == .skip)
+
+        let firing = Self.makeViewModel(deviceHubWillWarn: { _ in false })
+        #expect(firing.decision(isPhysicalDevice: false) == .warn(hazard: .both))
+    }
+
+    @Test
+    func theYieldIsAGateNotACallOrder() {
+        // Regression: sequencing the two presenters would decide this by
+        // which statement ran first, and starve the loser in every
+        // launch rather than deferring it. Deciding it here means the
+        // Simulator.app advisory becomes reachable the moment Device
+        // Hub's stops applying, with no ordering change anywhere.
+        // A reference box, because the reader is `@Sendable` and a
+        // captured `var` can't be mutated after capture. The point of
+        // the test is that the answer is read per call rather than
+        // captured once, so two view models wouldn't show it.
+        let applies = MutableFlag(true)
+        let viewModel = Self.makeViewModel(deviceHubWillWarn: { _ in applies.value })
+
+        #expect(viewModel.decision(isPhysicalDevice: false) == .skip)
+        applies.value = false
+        #expect(viewModel.decision(isPhysicalDevice: false) == .warn(hazard: .both))
+    }
+
+    @Test
+    func deviceHubIsNotConsultedUntilThisAdvisoryWouldFire() {
+        // The check costs a second running-application scan, so it sits
+        // last: an advisory that is suppressed, or has no hazard left,
+        // never asks.
+        var calls = 0
+        let viewModel = Self.makeViewModel(
+            isSuppressed: { true },
+            deviceHubWillWarn: { _ in
+                calls += 1
+                return true
+            }
+        )
+        _ = viewModel.decision(isPhysicalDevice: false)
+        #expect(calls == 0)
+    }
+
+    @Test
+    func aSharedLatchSilencesTheOtherAdvisory() {
+        // One coexistence warning per launch, whichever fires first. With
+        // both Apple apps running, a single sim attach satisfies both
+        // advisories, and two stacked modals get both dismissed unread.
+        let latch = CoexistenceAdvisoryLatch()
+        let simulator = Self.makeViewModel(latch: latch)
+        let deviceHub = DeviceHubAdvisoryViewModel(
+            latch: latch,
+            isSuppressed: { false },
+            recordSuppressed: { _ in },
+            isDeviceHubRunning: { true },
+            welcomeShownThisLaunch: { false }
+        )
+
+        #expect(simulator.decision(isPhysicalDevice: false) == .warn(hazard: .both))
+        simulator.markPresented()
+        #expect(deviceHub.decision(isPhysicalDevice: false) == .skip)
     }
 
     @Test
@@ -80,7 +201,7 @@ struct HeadlessAdvisoryTests {
         // Both preferences set, so Simulator.app going away no longer
         // takes the sim with it and there is no hazard left to name.
         let viewModel = Self.makeViewModel(detachPolicy: { Self.safe })
-        #expect(viewModel.decision == .skip)
+        #expect(viewModel.decision(isPhysicalDevice: false) == .skip)
     }
 
     @Test("hazard named from the live route", arguments: [
@@ -113,9 +234,9 @@ struct HeadlessAdvisoryTests {
         // short-circuit, which protects against a burst of attach events
         // re-firing the modal.
         let viewModel = Self.makeViewModel()
-        #expect(viewModel.decision == .warn(hazard: .both))
+        #expect(viewModel.decision(isPhysicalDevice: false) == .warn(hazard: .both))
         viewModel.markPresented()
-        #expect(viewModel.decision == .skip)
+        #expect(viewModel.decision(isPhysicalDevice: false) == .skip)
     }
 
     @Test
@@ -139,10 +260,10 @@ struct HeadlessAdvisoryTests {
     }
 
     @Test
-    func decisionSkipsExpensiveQueriesWhenLatched() {
-        // Performance latch: when the cheap gates short-circuit, neither
-        // the NSRunningApplication scan nor the cross-process
-        // preferences read runs. Verify by counting calls.
+    func decisionSkipsExpensiveQueriesWhenSuppressed() {
+        // Persistent suppression short-circuits before both the
+        // NSRunningApplication scan and the cross-process preferences
+        // read. Verify by counting calls.
         var runningCalls = 0
         var policyCalls = 0
         let viewModel = Self.makeViewModel(
@@ -156,7 +277,7 @@ struct HeadlessAdvisoryTests {
                 return Self.hazardous
             }
         )
-        _ = viewModel.decision
+        _ = viewModel.decision(isPhysicalDevice: false)
         #expect(runningCalls == 0)
         #expect(policyCalls == 0)
     }
@@ -173,7 +294,7 @@ struct HeadlessAdvisoryTests {
                 return Self.hazardous
             }
         )
-        _ = viewModel.decision
+        _ = viewModel.decision(isPhysicalDevice: false)
         #expect(policyCalls == 0)
     }
 

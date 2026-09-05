@@ -12,8 +12,9 @@ import Observation
 ///
 /// Supplies the state `HeadlessAdvisoryDecision` resolves:
 ///
-///   - `shownThisLaunch`: in-process latch so a burst of sim-pane
-///     attaches doesn't fire the modal more than once per launch.
+///   - the shared once-per-launch latch, so a burst of sim-pane attaches
+///     doesn't fire the modal more than once, and this advisory and
+///     Device Hub's can't both land on a single attach.
 ///   - whether a welcome already ran this launch. A session where the
 ///     coexistence welcome already explained this gets no alert stacked
 ///     on top of it.
@@ -39,10 +40,10 @@ final class HeadlessAdvisoryViewModel {
     /// re-prompt every existing user.
     static let suppressKey = "simulator-app-advisory"
 
-    /// Shared instance the presenter uses by default. The latch in
-    /// `shownThisLaunch` is process-global, so all sim-pane attaches
-    /// route through the same VM and the modal fires at most once
-    /// per launch.
+    /// Shared instance the presenter uses by default. It carries the
+    /// process-wide `CoexistenceAdvisoryLatch`, so every pane attach
+    /// routes through the same flag and one coexistence modal fires at
+    /// most once per launch.
     static let shared = HeadlessAdvisoryViewModel()
 
     private static let defaultIsSuppressed: @MainActor () -> Bool = {
@@ -69,32 +70,24 @@ final class HeadlessAdvisoryViewModel {
         SimulatorDetachPolicy.current()
     }
 
-    /// True once the presenter has shown the modal in this launch.
-    /// In-process latch; not persisted.
-    private(set) var shownThisLaunch: Bool = false
+    /// Whether Device Hub's advisory would fire for the same pane, in
+    /// which case this one yields to it. Asks the shared Device Hub view
+    /// model rather than duplicating its gates, so suppression and the
+    /// running check stay in one place.
+    private static let defaultDeviceHubWillWarn: @MainActor (Bool) -> Bool = { isPhysicalDevice in
+        DeviceHubAdvisoryViewModel.shared.decision(isPhysicalDevice: isPhysicalDevice) != .skip
+    }
 
+    private let latch: CoexistenceAdvisoryLatch
     private let isSuppressedReader: @MainActor () -> Bool
     private let suppressedWriter: @MainActor (Bool) -> Void
     private let isSimulatorAppRunningReader: @MainActor () -> Bool
     private let welcomeShownReader: @MainActor () -> Bool
     private let detachPolicyReader: @MainActor () -> SimulatorDetachPolicy
-
-    /// Whether to present, and which hazard to name. The readers are
-    /// passed through as closures rather than called here, so
-    /// `HeadlessAdvisoryDecision` keeps the cheap-gates-first order: no
-    /// `NSRunningApplication` scan or cross-process preferences read
-    /// happens when a latch already says skip.
-    var decision: HeadlessAdvisoryDecision {
-        HeadlessAdvisoryDecision.resolve(
-            shownThisLaunch: shownThisLaunch,
-            welcomeShownThisLaunch: welcomeShownReader(),
-            isSuppressed: isSuppressedReader,
-            isSimulatorAppRunning: isSimulatorAppRunningReader,
-            policy: detachPolicyReader
-        )
-    }
+    private let deviceHubWillWarnReader: @MainActor (Bool) -> Bool
 
     init(
+        latch: CoexistenceAdvisoryLatch = .shared,
         isSuppressed: @escaping @MainActor () -> Bool = HeadlessAdvisoryViewModel.defaultIsSuppressed,
         recordSuppressed: @escaping @MainActor (Bool) -> Void = HeadlessAdvisoryViewModel.defaultRecordSuppressed,
         isSimulatorAppRunning: @escaping @MainActor () -> Bool
@@ -102,21 +95,48 @@ final class HeadlessAdvisoryViewModel {
         welcomeShownThisLaunch: @escaping @MainActor () -> Bool
             = HeadlessAdvisoryViewModel.defaultWelcomeShownThisLaunch,
         detachPolicy: @escaping @MainActor () -> SimulatorDetachPolicy
-            = HeadlessAdvisoryViewModel.defaultDetachPolicy
+            = HeadlessAdvisoryViewModel.defaultDetachPolicy,
+        deviceHubWillWarn: @escaping @MainActor (Bool) -> Bool
+            = HeadlessAdvisoryViewModel.defaultDeviceHubWillWarn
     ) {
+        self.latch = latch
         self.isSuppressedReader = isSuppressed
         self.suppressedWriter = recordSuppressed
         self.isSimulatorAppRunningReader = isSimulatorAppRunning
         self.welcomeShownReader = welcomeShownThisLaunch
         self.detachPolicyReader = detachPolicy
+        self.deviceHubWillWarnReader = deviceHubWillWarn
     }
 
-    /// Latch in-process so a burst of sim attaches doesn't reopen
-    /// the modal. Persisted suppression is separate (writes
-    /// `simulator-app-advisory = suppress` via
+    /// Whether to present for a pane of this kind, and which hazard to
+    /// name. The I/O-backed readers are passed through as closures rather
+    /// than called here, so `HeadlessAdvisoryDecision` keeps the
+    /// cheap-gates-first order: no `NSRunningApplication` scan or
+    /// cross-process preferences read happens when a latch already says
+    /// skip. The two in-memory flags are read eagerly, since a closure
+    /// would buy nothing.
+    ///
+    /// A function rather than a property because the answer depends on
+    /// the pane, and one shared view model serves every pane.
+    func decision(isPhysicalDevice: Bool) -> HeadlessAdvisoryDecision {
+        HeadlessAdvisoryDecision.resolve(
+            isPhysicalDevice: isPhysicalDevice,
+            advisoryShownThisLaunch: latch.didShowThisLaunch,
+            welcomeShownThisLaunch: welcomeShownReader(),
+            isSuppressed: isSuppressedReader,
+            isSimulatorAppRunning: isSimulatorAppRunningReader,
+            policy: detachPolicyReader,
+            deviceHubWillWarn: { self.deviceHubWillWarnReader(isPhysicalDevice) }
+        )
+    }
+
+    /// Latch in-process so a burst of sim attaches doesn't reopen the
+    /// modal, and so Device Hub's advisory doesn't fire straight after
+    /// this one on the same attach. Persisted suppression is separate
+    /// (writes `simulator-app-advisory = suppress` via
     /// `recordDismiss(suppressForever: true)`).
     func markPresented() {
-        shownThisLaunch = true
+        latch.markPresented()
     }
 
     /// Called by the presenter after the alert dismisses. If the

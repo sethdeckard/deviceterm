@@ -59,6 +59,14 @@ public enum DeviceTermConfigDefaults {
                 + "hides it."
         ),
         ConfigKeySpec(
+            key: "device-hub-advisory",
+            defaultValue: "show",
+            allowedValues: ["show", "suppress"],
+            summary: "Whether to show the Device Hub coexistence advisory when a pane is "
+                + "attached while Xcode 27's Device Hub is also running. suppress hides "
+                + "it."
+        ),
+        ConfigKeySpec(
             key: "welcome-messages",
             defaultValue: "show",
             allowedValues: ["show", "suppress"],

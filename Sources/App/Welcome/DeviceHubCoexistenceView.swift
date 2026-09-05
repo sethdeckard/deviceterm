@@ -33,10 +33,8 @@ import SwiftUI
 /// The window chrome, the title block, and the button belong to
 /// `WelcomeScaffold`; this view supplies the hero and the prose.
 struct DeviceHubCoexistenceView: View {
-    /// Whether this is the first-run gate or an explicit Help-menu reopen.
-    /// Help is the only way back to this topic; the Learn More… button
-    /// that also reopens the Simulator welcome belongs to an advisory
-    /// Device Hub doesn't have.
+    /// Whether this is the first-run gate or an explicit reopen, from the
+    /// Help menu or the Device Hub advisory's Learn More… button.
     let presentation: WelcomePresentation
 
     let onDismiss: () -> Void

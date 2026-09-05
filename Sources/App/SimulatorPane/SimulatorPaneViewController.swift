@@ -251,6 +251,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// block the suite.
     private let advisory: HeadlessAdvisoryViewModel
 
+    /// Device Hub's counterpart, injected for the same reason. Both are
+    /// consulted on every pane, of either kind, and the shared latch in
+    /// `CoexistenceAdvisoryLatch` is what keeps them from both firing.
+    private let deviceHubAdvisory: DeviceHubAdvisoryViewModel
+
     /// Build a sim pane view from already-attached daemon state. The
     /// Router does device.attach (in its attachSimPane handler) and
     /// records the SimPaneState; the glue then creates this VC for it.
@@ -259,13 +264,15 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         daemonClient: any PaneControlling & PaneSubscribing & PaneAccessibilityControlling
             & PaneLocationControlling,
         locations: any LocationsStoring = LocationsFileStore(),
-        advisory: HeadlessAdvisoryViewModel = .shared
+        advisory: HeadlessAdvisoryViewModel = .shared,
+        deviceHubAdvisory: DeviceHubAdvisoryViewModel = .shared
     ) {
         self.init(
             mirroredPane: simPane,
             daemonClient: daemonClient,
             locations: locations,
-            advisory: advisory
+            advisory: advisory,
+            deviceHubAdvisory: deviceHubAdvisory
         )
     }
 
@@ -286,9 +293,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         daemonClient: any PaneControlling & PaneSubscribing & PaneAccessibilityControlling
             & PaneLocationControlling,
         locations: any LocationsStoring = LocationsFileStore(),
-        advisory: HeadlessAdvisoryViewModel = .shared
+        advisory: HeadlessAdvisoryViewModel = .shared,
+        deviceHubAdvisory: DeviceHubAdvisoryViewModel = .shared
     ) {
         self.advisory = advisory
+        self.deviceHubAdvisory = deviceHubAdvisory
         self.restoredPreset = mirroredPane.sizePreset
         self.viewModel = SimulatorPaneViewModel(
             paneId: mirroredPane.paneId,
@@ -495,11 +504,29 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // the empty starting snapshot.
         locationViewModel.refresh()
         // Run after viewDidLoad returns so the pane finishes layout
-        // before the modal appears. This is Apple's Simulator.app
-        // coexistence advisory, gated to fire at most once per launch (and once
-        // ever if the user checks "Don't show again").
-        Task { @MainActor [advisory] in
-            HeadlessAdvisory.presentIfNeeded(viewModel: advisory)
+        // before the modal appears. These are the coexistence advisories
+        // for Apple's two device apps, each gated to fire at most once
+        // per launch (and once ever if the user checks "Don't show
+        // again"). At most one of the two appears, however many of
+        // Apple's apps are running, and which one doesn't depend on the
+        // order below.
+        //
+        // Two separate mechanisms get that. When both would fire,
+        // `HeadlessAdvisoryDecision` yields to Device Hub, whose hazard
+        // reaches further, so the first call here returns without
+        // presenting. Once either has presented, the shared
+        // `CoexistenceAdvisoryLatch` stops the other. Deciding the
+        // priority by call order instead would starve whichever ran
+        // second, every launch.
+        Task { @MainActor [advisory, deviceHubAdvisory, isPhysicalDevice] in
+            HeadlessAdvisory.presentIfNeeded(
+                viewModel: advisory,
+                isPhysicalDevice: isPhysicalDevice
+            )
+            DeviceHubAdvisory.presentIfNeeded(
+                viewModel: deviceHubAdvisory,
+                isPhysicalDevice: isPhysicalDevice
+            )
         }
     }
 

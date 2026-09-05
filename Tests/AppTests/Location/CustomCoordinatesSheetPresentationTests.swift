@@ -59,7 +59,8 @@ struct CustomCoordinatesSheetPresentationTests {
             simPane: pane,
             daemonClient: client,
             locations: locations,
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),

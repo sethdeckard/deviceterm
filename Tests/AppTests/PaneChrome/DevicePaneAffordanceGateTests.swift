@@ -34,7 +34,8 @@ struct DevicePaneAffordanceGateTests {
                 capabilities: deviceCaps
             ),
             daemonClient: FakeDaemonClient(),
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 
@@ -47,7 +48,8 @@ struct DevicePaneAffordanceGateTests {
                 family: "phone"
             ),
             daemonClient: FakeDaemonClient(),
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 

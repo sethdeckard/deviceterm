@@ -57,7 +57,8 @@ struct SimulatorPaneChromeMountTests {
         return SimulatorPaneViewController(
             simPane: pane,
             daemonClient: fake,
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 

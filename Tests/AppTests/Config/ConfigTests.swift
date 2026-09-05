@@ -15,10 +15,11 @@ func canonicalDefaultsCoverCloseKeys() {
 }
 
 @Test
-func canonicalDefaultsCoverAdvisoryKey() {
-    // The Simulator.app advisory's "Don't show again" state lives in
-    // the config file (not UserDefaults); default shows the advisory.
+func canonicalDefaultsCoverAdvisoryKeys() {
+    // Each coexistence advisory's "Don't show again" state lives in the
+    // config file (not UserDefaults); both default to showing.
     #expect(Config.defaultValue(for: "simulator-app-advisory") == "show")
+    #expect(Config.defaultValue(for: "device-hub-advisory") == "show")
 }
 
 @Test

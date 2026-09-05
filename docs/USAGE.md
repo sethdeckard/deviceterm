@@ -257,6 +257,10 @@ installed. Only one explanation appears per launch, so with Simulator.app also
 installed and its explanation still unread, this one waits for the next launch.
 Reopen it any time from **Help ▸ Working with Apple's Device Hub**.
 
+It also warns when a pane attaches while Device Hub is running, naming the
+hazard for that pane's kind. Tick "Don't show again" in the alert, or set
+`device-hub-advisory = suppress`, to stop it.
+
 ## Understand Simulator Ownership
 
 DeviceTerm distinguishes Simulators it controls from devices that remain under
@@ -1074,8 +1078,18 @@ default genuinely applies while the key is absent, so it reports
 | `tab-close-multi-pane` | `ask` | `ask`, `close` | Confirms before a GUI close of a tab that holds more than one pane, and of a window when any of its tabs does. `close` skips the confirmation. Never stacks with the Simulator prompt on the same close. |
 | `quit-with-sims-default` | `keep` | `keep`, `shutdown` | Chooses what quitting does while owned Simulators remain booted. Setting it suppresses the Quit prompt. |
 | `simulator-app-advisory` | `show` | `show`, `suppress` | Controls the warning shown when a Simulator is attached while Simulator.app is running. The warning names only the routes that can still shut the Simulator down, and stays silent when Simulator.app is set to detach on both. |
+| `device-hub-advisory` | `show` | `show`, `suppress` | Controls the warning shown when a pane is attached while Device Hub is running. It names the hazard for that pane's kind: a Simulator can be shut down when Device Hub quits, and a physical device can be driven by only one app at a time. |
 | `welcome-messages` | `show` | `show`, `suppress` | Controls first-run welcome windows. `suppress` hides all of them, including ones not yet shown. Each stays available from the **Help** menu. |
 | `auto-update` | `check` | `off`, `check`, `download` | Controls automatic update checks and downloads. `off` leaves manual update checks available. |
+
+At most one coexistence advisory appears per launch. When both apply, you get
+Device Hub's, because its hazard reaches further: quitting Device Hub shuts down
+every booted Simulator, including ones it never opened, while Simulator.app's
+reach is bounded by the device windows it attached. Simulator.app's advisory
+becomes reachable once Device Hub isn't running, or once you've suppressed
+Device Hub's.
+
+The two keys are independent, so suppressing one leaves the other showing.
 
 Terminal appearance and terminal-local key bindings remain in the Ghostty
 configuration domain; see

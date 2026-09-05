@@ -85,7 +85,8 @@ struct SimulatorPanePresetRestoreTests {
                 sizePreset: sizePreset
             ),
             daemonClient: FakeDaemonClient(),
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 }

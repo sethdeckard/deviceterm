@@ -80,8 +80,9 @@ command could take control back part-way through and report confirmed. Step 2.4
 is there to find out which happens. Until it has been run, don't build anything
 on it.
 
-DeviceTerm does not implement a Device Hub warning. The available signals cannot
-observe a takeover, so such a warning could only be an attach-time advisory.
+DeviceTerm warns at attach, not on the takeover, because the available signals
+cannot observe one. The alert says what may happen; it has not detected
+anything. Section 4 covers it.
 
 Drive the phone from one app. Closing the other isn't required.
 
@@ -220,3 +221,35 @@ A machine with only one of the two Xcodes sees only that app's welcome, and the
 other stays out of the seen cache, so installing the other Xcode later arms it.
 Confirming that needs a machine without Xcode 27, which these steps don't
 cover.
+
+## 4. Advisory
+
+The advisory fires when a pane attaches while Device Hub is running. A welcome
+shown in the same launch silences it, so make sure both welcome ids are already
+in the seen cache before starting, rather than clearing it.
+
+Each case needs its own launch, because the per-launch latch is shared across
+both advisories.
+
+| # | Action | Expected |
+|---|--------|----------|
+| 4.1 | Device Hub running, both welcomes already seen. Boot a sim from a DeviceTerm tab. | One alert, naming the shutdown-on-quit hazard and the ⌥⌘Q escape. |
+| 4.2 | Attach a second sim pane in the same launch. | No second alert. |
+| 4.3 | Relaunch. Attach a physical device with Device Hub running. | The alert names control contention, not shutdown, and does not say the mirror will fail. |
+| 4.4 | Relaunch with Simulator.app running too. Attach a sim pane. | Exactly one alert, not two, and it is Device Hub's. |
+| 4.5 | Relaunch. Attach a physical device with Simulator.app running and Device Hub closed. | No alert. Simulator.app has nothing to do with a physical device. |
+| 4.6 | Click Learn More… on the Device Hub alert. | The Device Hub welcome opens. |
+| 4.7 | Tick "Don't show again", dismiss, relaunch, attach a sim with Device Hub running. | No alert, and `device-hub-advisory = suppress` is in `~/.config/deviceterm/config`. |
+
+4.4 is the priority rule, not a race. Device Hub's alert wins because its hazard
+reaches further: quitting it shuts down every booted Simulator, including ones
+it never opened, while Simulator.app's reach is bounded by the device windows it
+attached. Simulator.app's alert is unreachable while Device Hub's applies, and
+that is deliberate. Getting Simulator.app's here is a failure, not an acceptable
+variant.
+
+Confirm the other half of the rule too: suppress Device Hub's advisory, relaunch
+with both apps running, and attach a sim. Simulator.app's alert should appear.
+
+4.5 checks the physical-device gate. Simulator.app cannot expose a phone pane,
+so its advisory must never describe that phone as a sim open in both apps.

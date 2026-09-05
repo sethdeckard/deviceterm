@@ -19,27 +19,31 @@ import Foundation
 /// The alert's job is the hazard, not the explanation. It names what can
 /// still take this sim down from outside and offers Learn More…; the
 /// coexistence welcome carries the whole model. The skip conditions are:
-/// already shown this launch, suppressed by the user, Simulator.app not
-/// running, a welcome already ran this session (stacking a modal on an
-/// explanation the user is still reading gets both dismissed unread), or
-/// Simulator.app is already configured to detach on both routes, leaving
-/// no hazard to name.
+/// a physical-device pane, which Simulator.app cannot expose; a
+/// coexistence advisory already shown this launch; suppressed by the
+/// user; Simulator.app not running; a welcome already ran this session
+/// (stacking a modal on an explanation the user is still reading gets
+/// both dismissed unread); Simulator.app already configured to detach on
+/// both routes, leaving no hazard to name; or Device Hub's advisory
+/// applying too, in which case this one yields to it.
 ///
 /// Triggered from `SimulatorPaneViewController.viewDidLoad` after
 /// the pane finishes layout. The VM's per-launch + persistent
 /// latches make repeat invocations cheap no-ops.
 @MainActor
 enum HeadlessAdvisory {
-    /// Default entry point: use the shared VM so all sim attaches
-    /// share the per-launch latch.
-    static func presentIfNeeded() {
-        presentIfNeeded(viewModel: HeadlessAdvisoryViewModel.shared)
-    }
-
-    /// Show the modal if the VM says we should. Test target uses
-    /// this overload to inject a fake VM.
-    static func presentIfNeeded(viewModel: HeadlessAdvisoryViewModel) {
-        guard case let .warn(hazard) = viewModel.decision else { return }
+    /// Show the modal if the VM says we should.
+    /// - Parameters:
+    ///   - viewModel: injected so a test can supply a silent one.
+    ///   - isPhysicalDevice: a device pane is never exposed to
+    ///     Simulator.app, so the decision skips it.
+    static func presentIfNeeded(
+        viewModel: HeadlessAdvisoryViewModel,
+        isPhysicalDevice: Bool
+    ) {
+        guard case let .warn(hazard) = viewModel.decision(isPhysicalDevice: isPhysicalDevice) else {
+            return
+        }
         viewModel.markPresented()
 
         let alert = NSAlert()

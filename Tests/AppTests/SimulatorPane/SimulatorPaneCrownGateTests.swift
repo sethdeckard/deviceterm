@@ -34,7 +34,8 @@ struct SimulatorPaneCrownGateTests {
         let viewController = SimulatorPaneViewController(
             simPane: pane,
             daemonClient: fake,
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
         return (viewController, fake)
     }

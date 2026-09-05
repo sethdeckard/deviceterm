@@ -37,7 +37,8 @@ struct SimulatorPaneWrapperViewTests {
         return SimulatorPaneViewController(
             simPane: pane,
             daemonClient: FakeDaemonClient(),
-            advisory: .silent()
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
         )
     }
 
