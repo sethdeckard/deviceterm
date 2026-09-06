@@ -180,22 +180,37 @@ static NSString *const kAXPFrameworkPath =
 
 #pragma mark SimulatorKit loader
 
-/// Candidate paths for SimulatorKit.framework. Same shape as
-/// `candidateFrameworkPathsForDeveloperDir:`: try the active
-/// developer dir first, then the system-level install, then the
-/// historical hardcoded Xcode.app path as a last resort for hosts
-/// where `xcode-select -p` points at CommandLineTools but a working
-/// Xcode is installed at `/Applications/Xcode.app`.
-+ (NSArray<NSString *> *)_candidateSimulatorKitPathsForDeveloperDir:(NSString *)developerDir {
+/// Candidate paths for SimulatorKit.framework. For an Xcode
+/// `Contents/Developer` hint, try that Xcode's developer and shared-framework
+/// layouts before machine-wide and default-Xcode fallbacks. Xcode 26 and
+/// earlier put the framework under `Contents/Developer`; Xcode 27 moved it to
+/// `Contents/SharedFrameworks` beside the developer directory.
++ (NSArray<NSString *> *)candidateSimulatorKitPathsForDeveloperDir:(NSString *)developerDir {
     NSMutableArray<NSString *> *candidates = [NSMutableArray array];
     if (developerDir.length > 0) {
-        [candidates addObject:[developerDir
+        NSString *standardizedDeveloperDir = developerDir.stringByStandardizingPath;
+        [candidates addObject:[standardizedDeveloperDir
             stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"]];
+
+        NSString *contentsDir = standardizedDeveloperDir.stringByDeletingLastPathComponent;
+        if ([standardizedDeveloperDir.lastPathComponent isEqualToString:@"Developer"]
+            && [contentsDir.lastPathComponent isEqualToString:@"Contents"]) {
+            NSString *shared = [contentsDir
+                stringByAppendingPathComponent:@"SharedFrameworks/SimulatorKit.framework/SimulatorKit"];
+            if (![candidates containsObject:shared]) {
+                [candidates addObject:shared];
+            }
+        }
     }
     [candidates addObject:@"/Library/Developer/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
-    NSString *historical = @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
-    if (![candidates containsObject:historical]) {
-        [candidates addObject:historical];
+    NSArray<NSString *> *historical = @[
+        @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+        @"/Applications/Xcode.app/Contents/SharedFrameworks/SimulatorKit.framework/SimulatorKit",
+    ];
+    for (NSString *path in historical) {
+        if (![candidates containsObject:path]) {
+            [candidates addObject:path];
+        }
     }
     return candidates;
 }
@@ -203,7 +218,7 @@ static NSString *const kAXPFrameworkPath =
 + (BOOL)loadSimulatorKitWithError:(NSError **)error {
     dispatch_once(&gSimulatorKitLoadOnce, ^{
         NSString *developerDir = [self resolveDeveloperDir];
-        NSArray<NSString *> *candidates = [self _candidateSimulatorKitPathsForDeveloperDir:developerDir];
+        NSArray<NSString *> *candidates = [self candidateSimulatorKitPathsForDeveloperDir:developerDir];
         NSMutableArray<NSString *> *attempted = [NSMutableArray arrayWithCapacity:candidates.count];
 
         for (NSString *path in candidates) {

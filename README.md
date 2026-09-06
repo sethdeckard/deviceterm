@@ -37,7 +37,8 @@ drag `DeviceTerm.app` to `/Applications`.
 
 Simulator-service and physical-device compatibility are runtime concerns; see
 the [compatibility section in `USAGE.md`](docs/USAGE.md#runtime-compatibility).
-For source builds, DeviceTerm has been verified with Xcode 26.4 and 26.6;
+For source builds, DeviceTerm has been verified with Xcode 26.6 and Xcode 27
+beta 6. Xcode 27 builds starting with beta 4.
 [`BUILDING.md`](docs/BUILDING.md) has the toolchain and build details.
 
 ## Quick Start

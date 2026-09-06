@@ -4,9 +4,8 @@
 
 - **Apple Silicon Mac running macOS 14 or later** for building and running
   DeviceTerm.
-- **Xcode 26.4 or 26.6.** These are the toolchains currently verified to build
-  DeviceTerm. Other Xcode releases are unverified; Xcode 27 beta does not
-  currently build the project.
+- **Xcode 26.6 or Xcode 27 beta 4 or later.** Xcode 27 beta 6
+  (`27A5252f`) is the verified Xcode 27 version.
 - **Swift 6.2 or later**, included with supported Xcode releases. The
   manifest declares `swift-tools-version: 6.2`, so an older toolchain
   refuses to load the package.
@@ -39,15 +38,14 @@ xcodebuild -version
 Use the actual app name when it differs, for example:
 
 ```sh
-sudo xcode-select --switch /Applications/Xcode-26.4.app/Contents/Developer
-sudo xcode-select --switch /Applications/Xcode-26.6.app/Contents/Developer
+sudo xcode-select --switch /Applications/Xcode_27_beta_6.app/Contents/Developer
 ```
 
 For a one-command test without changing the system default, set
 `DEVELOPER_DIR` for that invocation:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode-26.4.app/Contents/Developer make build
+DEVELOPER_DIR=/Applications/Xcode_27_beta_6.app/Contents/Developer make build
 ```
 
 This compiler/toolchain support is separate from the Simulator services and

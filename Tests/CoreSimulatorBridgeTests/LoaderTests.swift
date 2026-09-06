@@ -9,6 +9,18 @@ private let xcodeAppDeveloperDir = "/Applications/Xcode.app/Contents/Developer"
 private let xcodeAppFrameworkPath =
     "/Applications/Xcode.app/Contents/Developer"
     + "/Library/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
+private let xcodeAppLegacySimulatorKitPath =
+    "/Applications/Xcode.app/Contents/Developer"
+    + "/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
+private let xcodeAppSharedSimulatorKitPath =
+    "/Applications/Xcode.app/Contents/SharedFrameworks/SimulatorKit.framework/SimulatorKit"
+private let xcode27DeveloperDir = "/Applications/Xcode_27_beta.app/Contents/Developer"
+private let xcode27LegacySimulatorKitPath =
+    "/Applications/Xcode_27_beta.app/Contents/Developer"
+    + "/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
+private let xcode27SharedSimulatorKitPath =
+    "/Applications/Xcode_27_beta.app/Contents"
+    + "/SharedFrameworks/SimulatorKit.framework/SimulatorKit"
 private let systemFrameworkPath =
     "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
 private let profilesFrameworkPath =
@@ -79,6 +91,40 @@ func candidatePathsWithEmptyDeveloperDirReturnsSystemFallbacks() {
     // are still present.
     #expect(!paths.isEmpty)
     #expect(paths.contains(systemFrameworkPath))
+}
+
+@Test
+func simulatorKitCandidatePathsLeadWithActiveXcodeLayouts() {
+    let paths = CoreSimulatorLoader.candidateSimulatorKitPaths(forDeveloperDir: xcode27DeveloperDir)
+    #expect(paths.count >= 2)
+    #expect(paths[0] == xcode27LegacySimulatorKitPath)
+    #expect(paths[1] == xcode27SharedSimulatorKitPath)
+}
+
+@Test
+func simulatorKitCandidatePathsDoNotInventSharedLayoutForCommandLineTools() {
+    let paths = CoreSimulatorLoader.candidateSimulatorKitPaths(
+        forDeveloperDir: "/Library/Developer/CommandLineTools"
+    )
+    #expect(!paths.contains("/Library/Developer/SharedFrameworks/SimulatorKit.framework/SimulatorKit"))
+    #expect(paths.contains(xcodeAppLegacySimulatorKitPath))
+    #expect(paths.contains(xcodeAppSharedSimulatorKitPath))
+}
+
+@Test
+func simulatorKitCandidatePathsWithEmptyDeveloperDirKeepDefaultBundleFallbacks() {
+    let paths = CoreSimulatorLoader.candidateSimulatorKitPaths(forDeveloperDir: "")
+    #expect(paths.contains(xcodeAppLegacySimulatorKitPath))
+    #expect(paths.contains(xcodeAppSharedSimulatorKitPath))
+}
+
+@Test
+func simulatorKitCandidatePathsKeepHistoricalFallbackWithoutDuplicates() {
+    let paths = CoreSimulatorLoader.candidateSimulatorKitPaths(forDeveloperDir: xcodeAppDeveloperDir)
+    let legacyCount = paths.filter { $0 == xcodeAppLegacySimulatorKitPath }.count
+    let sharedCount = paths.filter { $0 == xcodeAppSharedSimulatorKitPath }.count
+    #expect(legacyCount == 1, "legacy SimulatorKit fallback appeared \(legacyCount) times")
+    #expect(sharedCount == 1, "shared SimulatorKit fallback appeared \(sharedCount) times")
 }
 
 @Test

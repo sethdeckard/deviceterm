@@ -113,6 +113,14 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSString *> *)candidateFrameworkPathsForDeveloperDir:(NSString *)developerDir
     NS_SWIFT_NAME(candidateFrameworkPaths(forDeveloperDir:));
 
+/// Candidate SimulatorKit framework paths for a developer-dir hint. For an
+/// Xcode `Contents/Developer` hint, tries that Xcode's `Contents/Developer`
+/// and sibling `Contents/SharedFrameworks` layouts before
+/// developer-dir-independent fallbacks. Pure function with the same
+/// diagnostics/testing purpose as `candidateFrameworkPaths(forDeveloperDir:)`.
++ (NSArray<NSString *> *)candidateSimulatorKitPathsForDeveloperDir:(NSString *)developerDir
+    NS_SWIFT_NAME(candidateSimulatorKitPaths(forDeveloperDir:));
+
 @end
 
 NS_ASSUME_NONNULL_END

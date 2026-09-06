@@ -22,12 +22,18 @@ device, and rows explicitly marked optional.
 | 2026-08-17 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only |
 | 2026-08-18 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only |
 | 2026-08-26 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only |
+| 2026-09-06 | macOS 26.5.2 | Xcode 26.6 (17F113) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only |
+| 2026-09-06 | macOS 26.5.2 | Xcode 27 beta 6 (27A5252f) | Passed: 81 symbols present, 0 missing | `make probe`; symbol resolution only; SimulatorKit loaded from `Contents/SharedFrameworks` |
 
 Behavioral findings that require a booted device stay in their relevant
 sections below. A successful probe confirms that the active toolchain still
 provides the bridge's introspectable dependencies; it does not replace the
 live simulator test track, and it does not establish that the same Xcode can
 compile DeviceTerm. Source-build toolchains are tracked in `docs/BUILDING.md`.
+
+Xcode 26.6 stores SimulatorKit below `Contents/Developer`. Xcode 27 beta 6
+stores it below `Contents/SharedFrameworks`. The loader tries both locations
+in the active Xcode before its machine-wide fallbacks.
 
 ## Required symbols
 
@@ -75,7 +81,7 @@ compile DeviceTerm. Source-build toolchains are tracked in `docs/BUILDING.md`.
 | protocol method    | `-<SimScreen> registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:` | `SimDisplayHandle` | Push channel for orientation. **All three blocks must be non-nil**: CoreSimulator invokes them unconditionally, so a nil frame callback dereferences NULL and takes the simulator down. |
 | protocol method    | `-<SimScreen> unregisterScreenCallbacksWithUUID:`                    | `SimDisplayHandle`    | Teardown counterpart; called on `stopOrientation` and `stop`.  |
 | protocol method    | `-<SimScreenProperties> uiOrientation`                               | `SimDisplayHandle`    | The presented orientation, as a `UIInterfaceOrientation`. Mapped to device-orientation vocabulary in the bridge, **swapping the landscape pair** (see the orientation findings below). |
-| framework          | `SimulatorKit.framework`                                             | `SimHIDClient`        | Hosts `SimDeviceLegacyHIDClient` and the Indigo wire-format helpers; loaded by `CoreSimulatorLoader.loadSimulatorKit()`. |
+| framework          | `SimulatorKit.framework`                                             | `SimHIDClient`        | Hosts `SimDeviceLegacyHIDClient` and the Indigo wire-format helpers. `CoreSimulatorLoader.loadSimulatorKit()` tries the active Xcode's `Contents/Developer` and `Contents/SharedFrameworks` layouts first, then machine-wide and default-Xcode fallbacks. |
 | class              | `SimulatorKit.SimDeviceLegacyHIDClient`                              | `SimHIDClient`        | Swift-bridged subclass instantiated by the bridge; carries the `initWithDevice:error:` and `sendWithMessage:…` selectors inherited from `SimDeviceLegacyClient`. |
 | instance selector  | `-[SimulatorKit.SimDeviceLegacyHIDClient initWithDevice:error:]`     | `SimHIDClient`        | Construct a HID client bound to a specific `SimDevice`.        |
 | instance selector  | `-[SimulatorKit.SimDeviceLegacyHIDClient sendWithMessage:freeWhenDone:completionQueue:completion:]` | `SimHIDClient` | Submit an Indigo binary message; ownership of the buffer transfers when `freeWhenDone:YES`. |

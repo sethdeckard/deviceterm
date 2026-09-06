@@ -156,9 +156,8 @@ xattr <file>                                                        # expect emp
   make verify
   ```
 
-- [ ] Build the release tree with Xcode 26.4 and Xcode 26.6. These are the
-  currently covered build toolchains. Xcode 27 beta remains unsupported until
-  its build failure is resolved.
+- [ ] Build the release tree with Xcode 26.6 and the Xcode 27 version identified
+  as verified in `docs/BUILDING.md`.
 
 - [ ] Run `make probe` in every Simulator-services environment claimed by the
   release. Record each result in
