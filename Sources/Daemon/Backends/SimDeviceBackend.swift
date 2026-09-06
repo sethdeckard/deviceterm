@@ -11,9 +11,10 @@ import Foundation
 /// permanent acquisition failure so a broken client is not retried
 /// per call.
 ///
-/// `@unchecked Sendable`: the bridge handles are non-Sendable. The owning
-/// coordinator uses display and location state, `inputWorkQueue` serializes
-/// HID/Purple work, each pane's AX queue serializes accessibility work, and
+/// `@unchecked Sendable`: the bridge handles are non-Sendable. `SimDisplayLane`
+/// serializes the display handle and everything tied to its lifetime,
+/// `inputWorkQueue` serializes HID/Purple work, each pane's AX queue serializes
+/// accessibility work, the owning coordinator uses location state, and
 /// `inputGate` protects the small state shared across those domains.
 final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// A contact still held down (nil once lifted), tracked with its kind
@@ -34,7 +35,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     /// The CoreSimulator UDID: needed for the lazy AX-client lookup.
     private let udid: String
-    private var displayHandle: SimDisplayHandle?
+    /// The display handle and everything tied to its lifetime, behind one
+    /// serial domain of its own.
+    private let display: SimDisplayLane
     private var hidClient: SimHIDClient?
     private var purpleClient: SimPurpleHID?
     /// Lazily acquired on the first AX call; `axAcquisitionFailed`
@@ -67,9 +70,6 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     // the paced `SimInputSynthesis` gesture checks it before each later send.
     // `inputGate` protects short generation and held-state snapshots across
     // the queue, paced tasks, and the coordinator.
-    /// Delivery queue for display-orientation callbacks. Serial, so
-    /// deliveries reach the coordinator in queue order.
-    private let orientationQueue = DispatchQueue(label: "com.deviceterm.sim.display-orientation")
     /// SimulatorKit's HID completion API waits synchronously. This per-pane
     /// queue preserves bridge ordering without occupying a Swift
     /// cooperative-executor worker.
@@ -81,16 +81,6 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Slots the published frames are copied into, so a consumer holds a
     /// surface the daemon owns rather than the one CoreSimulator keeps writing.
     private let pool: LeasedSurfacePool
-    // Fences frame/fatal callback eligibility against teardown. `startFrames`
-    // captures the current `frameToken`; teardown bumps it (both under
-    // `frameGate`). A callback fires only while its captured token is still
-    // current, so no publish or fatal escapes after stop, with no
-    // check-then-act window a bare cancellation check would leave.
-    private let frameGate = DispatchQueue(label: "com.deviceterm.sim.frame-gate")
-    private var frameToken: UInt64 = 0
-    private var frameTask: Task<Void, Never>?
-    /// Hands surfaces from the bridge's callback queue to the copy pump.
-    private var surfaceContinuation: AsyncStream<RetainedSurface>.Continuation?
     /// Whether new lazy bridge work may begin. AX work reads this from its
     /// serial blocking queue while teardown writes it on the coordinator.
     private var backendActive = true
@@ -112,12 +102,17 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         purpleClient: SimPurpleHID
     ) {
         self.udid = udid
-        self.displayHandle = displayHandle
         self.hidClient = hidClient
         self.purpleClient = purpleClient
         let slotCount = ProcessInfo.processInfo.environment[DeviceTermEnv.surfacePoolSlots]
             .flatMap(Int.init) ?? Self.defaultPoolSlots
-        self.pool = LeasedSurfacePool(slotCount: slotCount)
+        let pool = LeasedSurfacePool(slotCount: slotCount)
+        self.pool = pool
+        self.display = SimDisplayLane(
+            handle: displayHandle,
+            pool: pool,
+            recoveryThreshold: Self.exhaustionRecoveryThreshold
+        )
     }
 
     /// Copy each surface from `surfaces` into a pooled slot and publish it.
@@ -328,60 +323,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         onFatal: @escaping @Sendable (String) -> Void,
         onDisconnect: @escaping @Sendable () -> Void
     ) throws {
-        guard let displayHandle else { throw DeviceBackendError.notActive }
-        let pool = self.pool
-        let recoveryThreshold = Self.exhaustionRecoveryThreshold
-        // Install a fresh run token; teardown bumps it to fence late callbacks.
-        // Checked and invoked together under `frameGate`, so teardown and a
-        // publish are mutually ordered with no window between them.
-        let gate = frameGate
-        let token = gate.sync {
-            frameToken += 1
-            return frameToken
-        }
-        let publish: @Sendable (PublishedSurface) -> Void = { [weak self] published in
-            guard let self else { return }
-            gate.sync { if token == self.frameToken { onFrame(published) } }
-        }
-        let fail: @Sendable (String) -> Void = { [weak self] reason in
-            guard let self else { return }
-            gate.sync { if token == self.frameToken { onFatal(reason) } }
-        }
-        // The callback fires on the bridge's own queue and must not block it,
-        // so it only hands the surface over. Latest-only: the pump copies at
-        // whatever rate the pool allows, and an older frame waiting behind a
-        // newer one has no value on a mirror.
-        let (surfaces, continuation) = AsyncStream.makeStream(
-            of: RetainedSurface.self,
-            bufferingPolicy: .bufferingNewest(1)
-        )
-        surfaceContinuation?.finish()
-        surfaceContinuation = continuation
-        frameTask = Task {
-            await Self.pumpFrames(
-                surfaces: surfaces,
-                pool: pool,
-                recoveryThreshold: recoveryThreshold,
-                publish: publish,
-                fail: fail
-            )
-        }
-        // Wrap on the bridge's queue so the retain/use-count pairing happens
-        // before the autoreleased source ref escapes.
-        try displayHandle.start { surfaceRef in
-            guard let surfaceRef else { return }
-            continuation.yield(RetainedSurface(surfaceRef))
-        }
+        try display.startFrames(onFrame: onFrame, onFatal: onFatal)
     }
 
-    func stopFrames() {
-        invalidateFrameRun()
-        displayHandle?.stop()
-        surfaceContinuation?.finish()
-        surfaceContinuation = nil
-        frameTask?.cancel()
-        frameTask = nil
-    }
+    func stopFrames() { display.stopFrames() }
 
     // MARK: Lease forwarders (to the pool)
 
@@ -414,50 +359,19 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         await pool.orphan(token)
     }
 
-    /// Retire the current frame run so any publish or fatal still in flight from
-    /// it is dropped. Serialised with the callbacks on `frameGate`.
-    private func invalidateFrameRun() {
-        frameGate.sync { frameToken += 1 }
-    }
-
-    func pixelDimensions() -> (Int?, Int?) {
-        guard let displayHandle else { return (nil, nil) }
-        let size = displayHandle.displaySize
-        guard size.width > 0, size.height > 0 else { return (nil, nil) }
-        return (Int(size.width), Int(size.height))
-    }
+    func pixelDimensions() -> (Int?, Int?) { display.pixelDimensions() }
 
     // MARK: Display orientation
 
     func startDisplayOrientation(
         onChange: @escaping @Sendable (Orientation) -> Void
     ) -> Bool {
-        guard let displayHandle else { return false }
-        do {
-            try displayHandle.startOrientation(
-                callback: { raw in
-                    guard let orientation = Orientation(displayValue: raw) else { return }
-                    onChange(orientation)
-                },
-                queue: orientationQueue
-            )
-            return true
-        } catch {
-            // A display that vends no orientation source leaves the pane
-            // on its last known orientation. Frames are unaffected, so
-            // this degrades rather than failing the pane.
-            return false
-        }
+        display.startOrientation(onChange: onChange)
     }
 
-    func stopDisplayOrientation() {
-        displayHandle?.stopOrientation()
-    }
+    func stopDisplayOrientation() { display.stopOrientation() }
 
-    func currentDisplayOrientation() -> Orientation? {
-        guard let displayHandle else { return nil }
-        return Orientation(displayValue: displayHandle.currentDisplayOrientation)
-    }
+    func currentDisplayOrientation() -> Orientation? { display.currentOrientation() }
 
     // MARK: Touch / keyboard / buttons / crown
 
@@ -759,7 +673,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// latched failure so a broken acquisition isn't re-probed per call.
     private func requireLocation() throws -> SimLocation {
         if let locationClient { return locationClient }
-        guard displayHandle != nil else { throw DeviceBackendError.notActive }
+        guard display.isActive else { throw DeviceBackendError.notActive }
         if let locationAcquisitionFailure {
             throw DeviceBackendError.locationUnavailable(message: locationAcquisitionFailure)
         }
@@ -783,13 +697,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // IOSurface use-count must release so the kernel can reclaim it. The
         // run token retires first, so a publish already in flight from the pump
         // is dropped rather than reaching a pane that is going away.
-        invalidateFrameRun()
-        displayHandle?.stop()
-        displayHandle = nil
-        surfaceContinuation?.finish()
-        surfaceContinuation = nil
-        frameTask?.cancel()
-        frameTask = nil
+        display.shutdown()
         // An AX call already queued before teardown owns this backend until it
         // returns. Keep its client stable; the pane's AX queue clears it after
         // all admitted reads finish.
