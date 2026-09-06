@@ -60,6 +60,10 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// The `IndigoHIDEdge` value each `openAppSwitcher` call carried, so a test
     /// can assert the device swipe rotates with the pane's orientation.
     private(set) var openAppSwitcherEdges: [Int] = []
+    /// Thrown by `startFrames` instead of starting them, modelling a display
+    /// stream that can't start. Thrown before `startFramesCalled` is set, so
+    /// that flag keeps meaning "frames actually started".
+    var startFramesError: (any Error)?
     private(set) var startFramesCalled = false
     private(set) var shutdownCalled = false
     /// What `currentDisplayOrientation()` reports, which is what the
@@ -197,6 +201,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         onFatal: @escaping @Sendable (String) -> Void,
         onDisconnect: @escaping @Sendable () -> Void
     ) throws {
+        if let startFramesError { throw startFramesError }
         startFramesCalled = true
         self.onSurface = onFrame
         self.onDisconnect = onDisconnect
@@ -438,6 +443,29 @@ func createPaneStartsFramesAndListsThePane() async throws {
     #expect(panes.first?.paneId == result.paneId)
     #expect(panes.first?.udid == "udid-a")
     #expect(panes.first?.capabilities == backend.capabilities.wire)
+}
+
+/// Frame-start failure after the record has taken the backend from
+/// `pendingBackend`, where the acquire path's `defer` no longer runs the
+/// cleanup. The coordinator has to run the backend shutdown itself.
+@Test
+func createPaneShutsDownTheBackendWhenStartFramesThrows() async {
+    let coordinator = PaneCoordinator()
+    let session = UUID()
+    let backend = MockDeviceBackend()
+    backend.startFramesError = NSError(domain: "StartFramesTest", code: 1, userInfo: nil)
+
+    await #expect(throws: PaneError.self) {
+        try await coordinator.createMockPane(
+            udid: "udid-start-frames-throws",
+            sessionId: session,
+            backend: backend
+        )
+    }
+
+    #expect(backend.shutdownCalled)
+    let panes = await coordinator.panesForSession(session)
+    #expect(panes.isEmpty)
 }
 
 @Test

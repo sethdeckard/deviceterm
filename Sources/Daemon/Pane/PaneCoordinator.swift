@@ -1103,6 +1103,11 @@ public actor PaneCoordinator {
             )
         } catch {
             let surfacePump = record.teardownSurfacePump()
+            // The record owns the backend once `pendingBackend` is cleared,
+            // so the acquire path's `defer` can't clean it up. Run the normal
+            // backend shutdown before dropping the failed record, rather than
+            // leaving teardown to deallocation.
+            shutDownBackend(for: record)
             panes.removeValue(forKey: paneId)
             await surfacePump?.value
             throw PaneError.startStreamFailed(
