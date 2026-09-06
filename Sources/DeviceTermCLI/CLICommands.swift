@@ -45,7 +45,7 @@ public enum CLICommands {
     /// The flag-shaped help triggers: `helpTriggers` minus bare `help`,
     /// which is excluded because a tab called that is ordinary. Derived
     /// rather than restated so a new spelling reaches both.
-    /// See `isHelpRequest(nameTail:escapedCount:)`.
+    /// See `isHelpRequest(freeTextTail:escapedCount:)`.
     static let helpFlags: Set<String> = helpTriggers.filter { $0.hasPrefix("-") }
 
     /// Refusal text for `deviceterm help --all`. `--all` is not a help
@@ -83,7 +83,7 @@ public enum CLICommands {
     }
 
     /// Whether a sub-verb's free-text tail is asking for the verb's shape
-    /// rather than supplying a name. `splitFlags` leaves anything it
+    /// rather than supplying a name or payload. `splitFlags` leaves anything it
     /// doesn't recognize as a flag in the positionals so `text` can type
     /// it literally, which is what puts a help trigger in a name
     /// position; without this check `tab rename --help` renames the tab
@@ -93,9 +93,9 @@ public enum CLICommands {
     /// unescaped. `escapedCount` keeps `--` meaning what it means
     /// everywhere else in the parser, and since the tail is the trailing
     /// run of positionals, a lone token is escaped exactly when that
-    /// count is non-zero. Name-taking sub-verbs call this; the payload
-    /// verbs (`text`, `tab send-input`) deliberately don't.
-    static func isHelpRequest(nameTail tail: [String], escapedCount: Int) -> Bool {
+    /// count is non-zero. Name-taking sub-verbs and `tab send-input` call this;
+    /// `text` deliberately keeps every help flag as literal payload.
+    static func isHelpRequest(freeTextTail tail: [String], escapedCount: Int) -> Bool {
         tail.count == 1 && escapedCount == 0 && helpFlags.contains(tail[0])
     }
 

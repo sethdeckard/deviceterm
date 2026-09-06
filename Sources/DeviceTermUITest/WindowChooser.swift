@@ -42,20 +42,24 @@ enum WindowChooser {
         }
     }
 
-    /// Pick the app's menu-bar status-item window: an owned, on-screen
-    /// window at the overlay layer. Returns nil when the app shows none,
-    /// which, for the daemon, is exactly how a hidden badge reads.
+    /// Pick the daemon's menu-bar status-item window from a window list
+    /// ScreenCaptureKit already restricted to on-screen windows. Returns
+    /// nil when the daemon shows none, which is how a hidden badge reads.
     ///
     /// Selects by *smallest area*, not front-most: the status button is a
     /// tiny window, so if its dropdown menu is also open (a larger overlay
     /// window, and frontmost), the small button still wins and the capture
     /// is the badge rather than the menu.
+    ///
+    /// Match the live process id directly. ScreenCaptureKit does not
+    /// consistently publish the daemon's bundle id or status-window layer
+    /// for this menu extra, while its owning process remains stable.
     static func chooseStatusItem(
         from candidates: [CandidateWindow],
-        bundleID: String,
+        ownerPIDs: Set<pid_t>,
         frontToBack: [UInt32]
     ) -> CandidateWindow? {
-        let owned = ownedStatusItem(candidates, bundleID: bundleID)
+        let owned = ownedStatusItem(candidates, ownerPIDs: ownerPIDs)
         guard !owned.isEmpty else { return nil }
         return owned.min { lhs, rhs in
             if lhs.area != rhs.area { return lhs.area < rhs.area }
@@ -77,11 +81,13 @@ enum WindowChooser {
         Set(ownedContent(candidates, bundleID: bundleID).compactMap(\.pid))
     }
 
-    /// Reported pids for processes owning overlay windows
-    /// `chooseStatusItem` would consider. Two live daemons each showing a
-    /// badge is the case this catches.
-    static func statusItemOwners(from candidates: [CandidateWindow], bundleID: String) -> Set<pid_t> {
-        Set(ownedStatusItem(candidates, bundleID: bundleID).compactMap(\.pid))
+    /// Reported pids for daemon windows `chooseStatusItem` would consider.
+    /// Two live daemons each showing a badge is the case this catches.
+    static func statusItemOwners(
+        from candidates: [CandidateWindow],
+        ownerPIDs: Set<pid_t>
+    ) -> Set<pid_t> {
+        Set(ownedStatusItem(candidates, ownerPIDs: ownerPIDs).compactMap(\.pid))
     }
 
     // The two selectors and their ambiguity checks share these filters, so
@@ -98,10 +104,11 @@ enum WindowChooser {
 
     private static func ownedStatusItem(
         _ candidates: [CandidateWindow],
-        bundleID: String
+        ownerPIDs: Set<pid_t>
     ) -> [CandidateWindow] {
         candidates.filter {
-            $0.bundleID == bundleID && $0.isOnScreen && $0.layer >= overlayLayer
+            guard let pid = $0.pid else { return false }
+            return ownerPIDs.contains(pid) && $0.area > 0
         }
     }
 

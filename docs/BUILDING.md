@@ -551,12 +551,13 @@ deviceterm-uitest capture window --out /tmp/win.png       # DeviceTerm's frontmo
 deviceterm-uitest capture status-item --out /tmp/badge.png # just the daemon's menu bar badge window
 ```
 
-The harness **only ever captures DeviceTerm's own windows, never a whole
-display**: it can't screenshot other apps or the desktop. The status
-item belongs to the *daemon*, not the app, and is a menu-bar-layer window of
-its own, so it is captured via `capture status-item` (not a window capture of
-the app, and not a display capture). When no owned sim is booted the badge is
-hidden and `capture status-item` reports `present:false` with no PNG.
+The harness captures only DeviceTerm’s own windows, never a whole display. It
+can’t screenshot other apps or the desktop.
+
+The status item belongs to the daemon, not the app. `capture status-item`
+selects that daemon-owned window directly. A visible badge returns
+`present:true` and writes the PNG. When no owned Simulator is booted, the badge
+is hidden and the command returns `present:false` without a PNG.
 
 ### Smoke track and the E2E skill
 

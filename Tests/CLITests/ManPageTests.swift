@@ -159,3 +159,11 @@ func manPageHasThHeader() throws {
     let contents = try String(contentsOf: url, encoding: .utf8)
     #expect(contents.contains(".TH DEVICETERM 1"))
 }
+
+@Test
+func manPageExplainsHowToSendHelpFlagsLiterally() throws {
+    let url = try #require(locateManPage())
+    let contents = try String(contentsOf: url, encoding: .utf8)
+    #expect(contents.contains("prints usage instead of sending text"))
+    #expect(contents.contains("before either value to send it literally"))
+}

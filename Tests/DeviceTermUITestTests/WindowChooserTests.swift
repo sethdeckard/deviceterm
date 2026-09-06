@@ -13,7 +13,7 @@ struct WindowChooserTests {
 
     private func window(
         _ id: UInt32,
-        bundleID: String,
+        bundleID: String?,
         layer: Int = 0,
         area: Double = 1_000,
         onScreen: Bool = true,
@@ -98,38 +98,44 @@ struct WindowChooserTests {
 
     // MARK: - Status item
 
-    /// The status item is the daemon's overlay-layer window; `chooseStatusItem`
-    /// finds it while `choose` (content windows) correctly ignores it.
+    /// The status item is selected by daemon pid. Its ScreenCaptureKit
+    /// bundle and layer metadata are not reliable identifiers.
     @Test
-    func statusItemPicksTheDaemonOverlayWindow() {
-        let badge = window(1, bundleID: daemon, layer: WindowChooser.overlayLayer, area: 900)
-        let chosen = WindowChooser.chooseStatusItem(from: [badge], bundleID: daemon, frontToBack: [1])
+    func statusItemPicksTheDaemonWindowByPID() {
+        let badge = window(1, bundleID: nil, layer: 0, area: 900, onScreen: false, pid: 200)
+        let chosen = WindowChooser.chooseStatusItem(from: [badge], ownerPIDs: [200], frontToBack: [1])
         #expect(chosen?.windowID == 1)
     }
 
-    /// No overlay window for the daemon == the status item is hidden (zero
+    /// No window for the live daemon means the status item is hidden (zero
     /// owned booted sims). The caller reads nil as "absent", not an error.
     @Test
-    func statusItemNilWhenDaemonHasNoOverlayWindow() {
-        let content = window(1, bundleID: daemon, layer: 0)
-        #expect(WindowChooser.chooseStatusItem(from: [content], bundleID: daemon, frontToBack: [1]) == nil)
+    func statusItemNilWhenDaemonHasNoWindow() {
+        let otherDaemon = window(1, bundleID: daemon, pid: 300)
+        #expect(WindowChooser.chooseStatusItem(from: [otherDaemon], ownerPIDs: [200], frontToBack: [1]) == nil)
     }
 
     /// If the status *menu* is open too, the smaller window (the badge
     /// button, not the dropdown) is captured.
     @Test
     func statusItemPrefersTheSmallerButtonOverAnOpenMenu() {
-        let menu = window(1, bundleID: daemon, layer: WindowChooser.overlayLayer, area: 40_000)
-        let button = window(2, bundleID: daemon, layer: WindowChooser.overlayLayer, area: 900)
+        let menu = window(1, bundleID: daemon, layer: 0, area: 40_000, pid: 200)
+        let button = window(2, bundleID: nil, layer: 8, area: 900, pid: 200)
         // Menu is frontmost, but the smaller button wins.
-        let chosen = WindowChooser.chooseStatusItem(from: [menu, button], bundleID: daemon, frontToBack: [1, 2])
+        let chosen = WindowChooser.chooseStatusItem(from: [menu, button], ownerPIDs: [200], frontToBack: [1, 2])
         #expect(chosen?.windowID == 2)
     }
 
     @Test
     func statusItemIgnoresOtherAppsMenuBarItems() {
-        let otherItem = window(1, bundleID: other, layer: WindowChooser.overlayLayer)
-        #expect(WindowChooser.chooseStatusItem(from: [otherItem], bundleID: daemon, frontToBack: [1]) == nil)
+        let otherItem = window(1, bundleID: other, layer: WindowChooser.overlayLayer, pid: 300)
+        #expect(WindowChooser.chooseStatusItem(from: [otherItem], ownerPIDs: [200], frontToBack: [1]) == nil)
+    }
+
+    @Test
+    func statusItemIgnoresZeroAreaDaemonWindows() {
+        let empty = window(1, bundleID: nil, layer: 0, area: 0, pid: 200)
+        #expect(WindowChooser.chooseStatusItem(from: [empty], ownerPIDs: [200], frontToBack: [1]) == nil)
     }
 
     // MARK: - Ambiguous targets
@@ -185,10 +191,10 @@ struct WindowChooserTests {
     @Test
     func statusItemOwnersReportsBothDaemonsShowingABadge() {
         let windows = [
-            window(1, bundleID: daemon, layer: WindowChooser.overlayLayer, pid: 100),
-            window(2, bundleID: daemon, layer: WindowChooser.overlayLayer, pid: 200)
+            window(1, bundleID: nil, layer: 0, pid: 100),
+            window(2, bundleID: other, layer: 8, pid: 200)
         ]
-        #expect(WindowChooser.statusItemOwners(from: windows, bundleID: daemon) == [100, 200])
+        #expect(WindowChooser.statusItemOwners(from: windows, ownerPIDs: [100, 200]) == [100, 200])
     }
 
     /// Two daemons showing *no* badge is still just "absent", so the caller
@@ -196,9 +202,9 @@ struct WindowChooserTests {
     @Test
     func statusItemOwnersIsEmptyWhenNeitherDaemonShowsABadge() {
         let windows = [
-            window(1, bundleID: daemon, layer: 0, pid: 100),
-            window(2, bundleID: daemon, layer: 0, pid: 200)
+            window(1, bundleID: daemon, layer: 0, area: 0, pid: 100),
+            window(2, bundleID: daemon, layer: 0, area: 0, pid: 200)
         ]
-        #expect(WindowChooser.statusItemOwners(from: windows, bundleID: daemon).isEmpty)
+        #expect(WindowChooser.statusItemOwners(from: windows, ownerPIDs: [100, 200]).isEmpty)
     }
 }

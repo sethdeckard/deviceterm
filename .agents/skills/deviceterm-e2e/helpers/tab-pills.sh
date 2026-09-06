@@ -46,12 +46,10 @@ if [ "$#" -eq 1 ]; then
 else
     dump="$(mktemp "${TMPDIR:-/tmp}/tab-pills.XXXXXX")"
     trap 'rm -f "$dump"' EXIT
-    # A failing client says why in `{"ok":false,"error":…}` on *stdout* and
-    # writes nothing to stderr, so its reason is now sitting in $dump. Don't
-    # let the non-zero exit stop us short of reading it: the ok:false arm below
-    # quotes that reason, and bailing here would report an exit code and no
-    # explanation at all.
-    "$here/uitest.sh" ax dump >"$dump" || true
+    # ax-dump.sh retries a transport miss or unusable tree once and emits only
+    # a complete, non-truncated ok:true dump. A failure here is not an empty
+    # pill set.
+    "$here/ax-dump.sh" >"$dump"
 fi
 
 python3 - "$dump" <<'PY'

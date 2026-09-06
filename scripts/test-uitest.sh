@@ -26,6 +26,7 @@ cd "$(dirname "$0")/.."
 BUILD=".build/debug"
 UITEST="$BUILD/deviceterm-uitest"
 CLI="$BUILD/deviceterm-cli"
+AX_DUMP=".agents/skills/deviceterm-e2e/helpers/ax-dump.sh"
 # The harness bundle installs to a stable, visible location (see
 # uitest-bundle.sh) so its TCC grant survives rebuilds and `make clean`.
 HARNESS_APP="${DEVICETERM_UITEST_APP:-$HOME/Applications/DeviceTermUITestHarness.app}"
@@ -49,6 +50,20 @@ trap 'exit 143' TERM
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 info() { printf "  · %s\n" "$1"; }
 fail() { printf "  \033[31m✗\033[0m %s\n" "$1" >&2; exit 1; }
+
+# Acquire one complete, trustworthy AX dump or stop the track immediately.
+# ax-dump.sh already owns the one safe retry. A failure after that is an
+# observation failure, not UI state that a caller may poll through.
+require_ax_dump() {
+    local out="$1"
+    local context="$2"
+    local diagnostic="$out.err"
+    if ! "$AX_DUMP" >"$out" 2>"$diagnostic"; then
+        [ ! -s "$diagnostic" ] || cat "$diagnostic" >&2
+        fail "$context"
+    fi
+    rm -f "$diagnostic"
+}
 
 echo "test-uitest: harness + GUI smoke (deliberate, sim-free)"
 
@@ -114,9 +129,9 @@ PY
 # checks scope to the window being driven. Otherwise another window's
 # focused pane would satisfy an app-wide check on its own.
 #
-# Both print nothing on a failed or truncated dump. The tree has depth and
-# node ceilings, and a pane dropped for budget would otherwise read as a
-# pane that does not exist.
+# Both print nothing when handed a failed or truncated dump. Every caller below
+# first uses `require_ax_dump`, so that defensive parser behavior can never turn
+# an acquisition failure into an absent pane.
 pane_ids() {
     python3 - "$1" <<'PY'
 import json, sys
@@ -238,33 +253,10 @@ PY
 ok "capture window wrote a non-empty PNG"
 
 # ── AX dump is well-formed and not the known degenerate tree ───────────
-# The degenerate tree (an AXApplication nested in itself, truncated:true)
-# is a known intermittent; retry once before failing so a flake doesn't
-# fail the track. A real tree contains chrome roles beyond AXApplication.
-ax_ok() {
-    "$UITEST" ax dump >"$SCRATCH/ax.json" 2>&1 || return 1
-    python3 - "$SCRATCH/ax.json" <<'PY'
-import json, sys
-r = json.load(open(sys.argv[1]))
-if r.get("ok") is not True: raise SystemExit(1)
-roles = set()
-def walk(n):
-    if isinstance(n, dict):
-        role = n.get("role")
-        if role: roles.add(role)
-        for c in n.get("children", []) or []: walk(c)
-walk(r.get("tree"))
-# Degenerate: nothing but AXApplication nodes.
-raise SystemExit(0 if roles - {"AXApplication"} else 1)
-PY
-}
-if ax_ok; then
-    ok "ax dump returned a well-formed tree"
-elif ax_ok; then
-    ok "ax dump returned a well-formed tree (after one retry)"
-else
-    fail "ax dump was empty or degenerate on two tries"
-fi
+# ax-dump.sh retries the known transient once and emits only a complete,
+# non-truncated tree. Its final diagnostic must remain visible on failure.
+require_ax_dump "$SCRATCH/ax.json" "ax dump remained unusable after its retry"
+ok "ax dump returned a well-formed tree"
 
 # ── The end-to-end proof: a harness GUI gesture moves CLI state ────────
 # Post ⌘T (New Tab) and confirm the workspace's total tab count — read
@@ -297,7 +289,7 @@ ok "harness-driven 'New Tab' added a tab (total tabs $baseline → $after)"
 # creates, never against an app-wide count or a unique focused pane. The
 # dump spans every window, and only the selected tab's panes are in the
 # view hierarchy, so absolute numbers are not the harness's to predict.
-"$UITEST" ax dump >"$SCRATCH/panes0.json" 2>&1 || fail "ax dump before split failed"
+require_ax_dump "$SCRATCH/panes0.json" "ax dump before split failed"
 pane_ids "$SCRATCH/panes0.json" >"$SCRATCH/ids0.txt"
 [ -s "$SCRATCH/ids0.txt" ] \
     || fail "no pane carried an accessibility identifier (truncated dump, or the pane wrappers stopped publishing one)"
@@ -306,7 +298,7 @@ pane_ids "$SCRATCH/panes0.json" >"$SCRATCH/ids0.txt"
     || { cat "$SCRATCH/split.json" >&2; fail "drive key cmd+d failed"; }
 new_pane=""
 for _ in $(seq 1 12); do
-    "$UITEST" ax dump >"$SCRATCH/panes1.json" 2>/dev/null || true
+    require_ax_dump "$SCRATCH/panes1.json" "ax dump while waiting for split failed"
     pane_ids "$SCRATCH/panes1.json" >"$SCRATCH/ids1.txt"
     new_pane="$(comm -13 "$SCRATCH/ids0.txt" "$SCRATCH/ids1.txt")"
     [ "$(printf '%s' "$new_pane" | grep -c .)" -eq 1 ] && break
@@ -336,7 +328,7 @@ source_pane="$(awk -F'\t' -v new="$new_pane" '$1 != new { print $1 }' "$SCRATCH/
     || { cat "$SCRATCH/focus.json" >&2; fail "drive key opt+cmd+left failed"; }
 moved=""
 for _ in $(seq 1 12); do
-    "$UITEST" ax dump >"$SCRATCH/panes2.json" 2>/dev/null || true
+    require_ax_dump "$SCRATCH/panes2.json" "ax dump while waiting for focus failed"
     window_panes "$SCRATCH/panes2.json" "$new_pane" >"$SCRATCH/wp2.txt"
     if grep -qxF "$(printf '%s\t1' "$source_pane")" "$SCRATCH/wp2.txt"; then
         moved="yes"
@@ -357,7 +349,7 @@ ok "harness-driven 'Select Pane Left' moved focus $new_pane → $source_pane"
     || { cat "$SCRATCH/move.json" >&2; fail "drive key cmd+shift+right failed"; }
 kept=""
 for _ in $(seq 1 12); do
-    "$UITEST" ax dump >"$SCRATCH/panes2b.json" 2>/dev/null || true
+    require_ax_dump "$SCRATCH/panes2b.json" "ax dump while waiting for rearrange failed"
     window_panes "$SCRATCH/panes2b.json" "$new_pane" >"$SCRATCH/wp2b.txt"
     if grep -qxF "$(printf '%s\t1' "$source_pane")" "$SCRATCH/wp2b.txt"; then
         kept="yes"
@@ -378,7 +370,7 @@ ok "harness-driven 'Move Pane Right' kept focus on $source_pane"
     || { cat "$SCRATCH/closepane.json" >&2; fail "drive key cmd+w failed"; }
 closed=""
 for _ in $(seq 1 12); do
-    "$UITEST" ax dump >"$SCRATCH/panes3.json" 2>/dev/null || true
+    require_ax_dump "$SCRATCH/panes3.json" "ax dump while waiting for pane close failed"
     pane_ids "$SCRATCH/panes3.json" >"$SCRATCH/ids3.txt"
     # An empty list means a failed or truncated dump, never an empty
     # window, so require panes to be present before reading one's

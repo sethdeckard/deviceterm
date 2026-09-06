@@ -19,11 +19,15 @@ enum UITestClient {
         let ok: Bool
     }
 
+    static let standardReplyTimeout: TimeInterval = 5
+    static let axDumpReplyTimeout: TimeInterval = 15
+
     static func send(
         _ request: UITestRequest,
         socketPath: String,
-        timeout: TimeInterval = 5
+        timeout requestedTimeout: TimeInterval? = nil
     ) throws -> Reply {
+        let timeout = requestedTimeout ?? replyTimeout(for: request)
         let fd: Int32
         do {
             fd = try UDSClientSocket.connect(to: socketPath)
@@ -39,7 +43,7 @@ enum UITestClient {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             guard let chunk = try UDSClientSocket.readAvailable(fd: fd) else {
-                break  // EOF before a full frame
+                throw UITestClientError.connectionClosed
             }
             if !chunk.isEmpty {
                 buffer.append(chunk)
@@ -49,7 +53,11 @@ enum UITestClient {
             }
             usleep(2_000)
         }
-        throw UITestClientError.noReply
+        throw UITestClientError.replyTimedOut(seconds: timeout)
+    }
+
+    static func replyTimeout(for request: UITestRequest) -> TimeInterval {
+        request.method == .axDump ? axDumpReplyTimeout : standardReplyTimeout
     }
 
     private static func replyIsOK(_ json: Data) -> Bool {

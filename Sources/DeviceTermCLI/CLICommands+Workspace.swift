@@ -93,8 +93,15 @@ extension CLICommands {
             // so the documented examples drive the shell. An empty
             // text is a usage error since the verb has no other
             // sensible interpretation.
-            let tail = Array(pos.dropFirst()).joined(separator: " ")
-            guard !tail.isEmpty else {
+            let tail = Array(pos.dropFirst())
+            if isHelpRequest(freeTextTail: tail, escapedCount: escapedCount) {
+                return .usage(
+                    message:
+                    "usage: deviceterm tab send-input [--tab <ref>] [--type-delay <ms>] <text>"
+                    )
+            }
+            let text = tail.joined(separator: " ")
+            guard !text.isEmpty else {
                 return .usage(
                     message:
                     "usage: deviceterm tab send-input [--tab <ref>] [--type-delay <ms>] <text>"
@@ -119,7 +126,7 @@ extension CLICommands {
             }
             return .tabSendInput(
                 tab: parseTabRef(flags["tab"]),
-                text: decodeEscapes(tail),
+                text: decodeEscapes(text),
                 typeDelay: typeDelay
             )
 
@@ -134,7 +141,7 @@ extension CLICommands {
             // Joined with spaces so quoted args carrying spaces stay
             // intact, matching `text`'s convention.
             let tail = Array(pos.dropFirst())
-            if isHelpRequest(nameTail: tail, escapedCount: escapedCount) {
+            if isHelpRequest(freeTextTail: tail, escapedCount: escapedCount) {
                 return .usage(
                     message:
                     "usage: deviceterm tab rename [--tab <ref>] [<name>]"
@@ -273,7 +280,7 @@ extension CLICommands {
         case "rename":
             let ref = parsePaneRef(flags["pane"])
             let tail = Array(pos.dropFirst())
-            if isHelpRequest(nameTail: tail, escapedCount: escapedCount) {
+            if isHelpRequest(freeTextTail: tail, escapedCount: escapedCount) {
                 return .usage(
                     message:
                     "usage: deviceterm pane rename [--pane <ref>] [<name>]"

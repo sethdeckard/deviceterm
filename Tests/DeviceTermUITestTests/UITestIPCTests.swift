@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import DaemonProtocol
+import Dispatch
 import Foundation
 import Testing
 
@@ -69,6 +70,67 @@ struct UITestIPCTests {
         )
         #expect(object["resident"] as? Bool == true)
         #expect(object["tool"] as? String == "deviceterm-uitest")
+    }
+
+    @Test
+    func axDumpUsesTheLongReplyDeadline() {
+        #expect(
+            UITestClient.replyTimeout(for: UITestRequest(method: .axDump))
+            == UITestClient.axDumpReplyTimeout
+        )
+        for method in UITestMethod.allCases where method != .axDump {
+            #expect(
+                UITestClient.replyTimeout(for: UITestRequest(method: method))
+                == UITestClient.standardReplyTimeout,
+                "\(method.rawValue) unexpectedly received the AX deadline"
+            )
+        }
+    }
+
+    @Test
+    func clientDistinguishesEOFBeforeAReply() throws {
+        let path = "/tmp/dt-uitest-\(UUID().uuidString.prefix(8)).sock"
+        unlink(path)
+        defer { unlink(path) }
+
+        let listener = try UDSListenerSocket.bindListener(at: path)
+        defer { UDSListenerSocket.close(listener) }
+        DispatchQueue.global().async {
+            guard let client = try? UDSListenerSocket.acceptOne(listenerFd: listener) else { return }
+            _ = try? UDSListenerSocket.readFrame(fd: client)
+            UDSListenerSocket.close(client)
+        }
+
+        #expect(throws: UITestClientError.connectionClosed) {
+            _ = try UITestClient.send(
+                UITestRequest(method: .ping),
+                socketPath: path,
+                timeout: 1
+            )
+        }
+    }
+
+    @Test
+    func clientDistinguishesAReplyTimeout() throws {
+        let path = "/tmp/dt-uitest-\(UUID().uuidString.prefix(8)).sock"
+        unlink(path)
+        defer { unlink(path) }
+
+        let listener = try UDSListenerSocket.bindListener(at: path)
+        defer { UDSListenerSocket.close(listener) }
+        DispatchQueue.global().async {
+            guard let client = try? UDSListenerSocket.acceptOne(listenerFd: listener) else { return }
+            defer { UDSListenerSocket.close(client) }
+            usleep(100_000)
+        }
+
+        #expect(throws: UITestClientError.replyTimedOut(seconds: 0.02)) {
+            _ = try UITestClient.send(
+                UITestRequest(method: .ping),
+                socketPath: path,
+                timeout: 0.02
+            )
+        }
     }
 
     /// Every stub must answer with a well-formed failure rather than

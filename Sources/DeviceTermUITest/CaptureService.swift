@@ -58,31 +58,36 @@ enum CaptureService {
     /// Screenshot just the daemon's menu-bar status-item window (the one
     /// showing the iPhone glyph and count), or report it absent.
     ///
-    /// The status item is the daemon's own on-screen window (menu-bar
-    /// extras are windows, at the overlay layer), so it is captured
-    /// per-window like any other. The harness never captures a whole
-    /// display, so this is the only way it can see the status item. "No
-    /// such window" is a first-class result: it *is* the hidden-at-zero
+    /// The status item is the daemon's own on-screen window, so it is
+    /// captured per-window like any other. The harness never captures a
+    /// whole display, so this is the only way it can see the status item.
+    /// "No such window" is a first-class result: it *is* the hidden-at-zero
     /// state, not an error.
     static func captureStatusItem(out path: String) async throws -> StatusItemCapture {
         try requireWritablePath(path)
         let content = try await shareableContent(onScreenWindowsOnly: true)
         let candidates = content.windows.map(candidate(from:))
+        let daemonProcesses = TargetOwners.live(bundleID: DeviceTermBundleID.daemon)
+        let daemonPIDs = Set(daemonProcesses)
         // Only once a badge is on screen does ambiguity change the answer.
         // Two daemons with no badge between them still means absent, and
         // that holds whichever one the caller meant; refusing there would
         // turn the ordinary hidden-at-zero-sims state into an error.
         let badgeOwners = WindowChooser.statusItemOwners(
             from: candidates,
-            bundleID: DeviceTermBundleID.daemon
+            ownerPIDs: daemonPIDs
         )
         if !badgeOwners.isEmpty {
-            try requireOneTarget(bundleID: DeviceTermBundleID.daemon, windowOwners: badgeOwners)
+            try requireOneTarget(
+                bundleID: DeviceTermBundleID.daemon,
+                processes: daemonProcesses,
+                windowOwners: badgeOwners
+            )
         }
         guard
             let chosen = WindowChooser.chooseStatusItem(
                 from: candidates,
-                bundleID: DeviceTermBundleID.daemon,
+                ownerPIDs: daemonPIDs,
                 frontToBack: frontToBackWindowIDs()
             ),
             let window = content.windows.first(where: { $0.windowID == chosen.windowID })
@@ -192,10 +197,19 @@ enum CaptureService {
     /// list is consulted too. Point-in-time by nature: this describes the
     /// moment the request ran, not the whole track.
     private static func requireOneTarget(bundleID: String, windowOwners: Set<pid_t>) throws {
-        let owners = TargetOwners.combined(
+        try requireOneTarget(
+            bundleID: bundleID,
             processes: TargetOwners.live(bundleID: bundleID),
             windowOwners: windowOwners
         )
+    }
+
+    private static func requireOneTarget(
+        bundleID: String,
+        processes: [pid_t],
+        windowOwners: Set<pid_t>
+    ) throws {
+        let owners = TargetOwners.combined(processes: processes, windowOwners: windowOwners)
         guard owners.count <= 1 else {
             throw CaptureError.ambiguousTarget(bundleID: bundleID, pids: owners.sorted())
         }

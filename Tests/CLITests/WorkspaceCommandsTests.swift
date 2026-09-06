@@ -625,16 +625,49 @@ struct WorkspaceCommandsTests {
     }
 
     @Test(arguments: ["--help", "-h"])
-    func tabSendInputKeepsHelpFlagAsText(trigger: String) {
-        // Typing an arbitrary string is what this verb is for, so its
-        // tail is a payload and a help trigger in it is literal, the
-        // same contract `text` keeps. The name-position guard that
-        // `tab rename` uses deliberately does not apply here.
+    func tabSendInputHelpFlagIsUsage(trigger: String) {
         let cmd = CLICommands.parse(
             ["deviceterm", "tab", "send-input", trigger]
             )
+        guard case .usage = cmd else {
+            Issue.record("expected .usage for '\(trigger)'; got \(cmd)")
+            return
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func tabSendInputHelpFlagIsUsageWithSelectors(trigger: String) {
+        let cmd = CLICommands.parse(
+            [
+            "deviceterm", "tab", "send-input", "--tab", "auth",
+            "--type-delay", "45", trigger
+            ]
+            )
+        guard case .usage = cmd else {
+            Issue.record("expected .usage for '\(trigger)'; got \(cmd)")
+            return
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func tabSendInputTerminatorForcesHelpFlagAsText(trigger: String) {
+        let cmd = CLICommands.parse(
+            ["deviceterm", "tab", "send-input", "--", trigger]
+            )
         if case let .tabSendInput(_, text, _) = cmd {
             #expect(text == trigger)
+        } else {
+            Issue.record("expected .tabSendInput for '\(trigger)'; got \(cmd)")
+        }
+    }
+
+    @Test(arguments: ["--help", "-h"])
+    func tabSendInputKeepsHelpFlagInsideLongerText(trigger: String) {
+        let cmd = CLICommands.parse(
+            ["deviceterm", "tab", "send-input", "echo", trigger]
+            )
+        if case let .tabSendInput(_, text, _) = cmd {
+            #expect(text == "echo \(trigger)")
         } else {
             Issue.record("expected .tabSendInput for '\(trigger)'; got \(cmd)")
         }

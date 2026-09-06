@@ -356,6 +356,13 @@ real keypresses. A caller whose session holds no grant is rejected at the
 dispatcher's scope check with
 .BR error.scope_violation .
 The receipt reports only the byte count, never the typed text.
+A lone
+.B --help
+or
+.B -h
+prints usage instead of sending text. Put
+.B --
+before either value to send it literally.
 .B --type-delay
 .I ms
 animates the injection one character at a time (for screencasts); omit

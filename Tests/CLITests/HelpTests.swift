@@ -218,6 +218,13 @@ func overviewCarriesTheCoordinateConvention() {
     #expect(HelpText.overview.contains("coords are normalized"))
 }
 
+@Test
+func tabHelpExplainsHowToSendHelpFlagsLiterally() {
+    let detail = HelpCatalog.topic(named: "tab")?.detail ?? ""
+    #expect(detail.contains("A lone `--help` or `-h` prints this usage instead of typing."))
+    #expect(detail.contains("Put `--` before either value to send it literally."))
+}
+
 // MARK: - Pages
 
 @Test

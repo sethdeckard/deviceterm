@@ -62,6 +62,11 @@ The two tools reach you very differently, because one ships and one doesn't:
   `.agents/skills/deviceterm-e2e/helpers/uitest.sh <verb>` instead** — same verbs
   and flags, just the full repo-relative wrapper path (like `preflight.sh`, these
   paths are written from the repo root, your working directory).
+- **AX assertions — `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh`.** Use
+  this instead of a raw `uitest.sh ax dump` in every assertion and poll. It
+  retries one missing, malformed, truncated, or degenerate read, then emits
+  only a complete `ok:true` tree. A serviced `ok:false` refusal is final. Call
+  `uitest.sh ax dump` directly only when diagnosing the harness itself.
 
 This split is intentional: the harness holds Screen Recording + Accessibility,
 capabilities kept out of the shipped product, so it lives only in the dev
@@ -99,6 +104,12 @@ build hint when the harness is not there, and `doctor` prints a multi-line
 grant-remediation block to stderr on top of its report. Decoding stdout without
 checking the status will hand you an empty string on exactly the failures you
 most need the reason for.
+
+The raw client distinguishes a resident that closed before a full frame from
+one that missed its reply deadline. `ax dump` gets a longer deadline than the
+other methods because one tree walk makes many cross-process reads. The
+`ax-dump.sh` wrapper retries either transient once; it never retries `drive`,
+whose first request may have landed even when its receipt did not.
 
 The `deviceterm` CLI emits a typed envelope on stdout instead:
 
@@ -230,9 +241,11 @@ one.
 - Capture the **status item** (menu bar) with `capture status-item`, never
   `capture window` — it is a daemon-owned `NSStatusItem` window, not part of any
   deviceterm app window.
-- If `ax dump` ever returns a degenerate tree (an `AXApplication` nested inside
-  itself, `truncated:true`), it is a known intermittent — re-dump; do not
-  root-cause it inline. The depth/node ceilings mean it can't hang.
+- Use `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh` for AX assertions. A
+  raw `ax dump` can intermittently
+  return no reply or a degenerate tree (`AXApplication` nested inside itself,
+  `truncated:true`). The helper retries once and fails rather than turning
+  either result into an empty UI. Do not root-cause the intermittent inline.
 - A node marked `"skipped": true` was deliberately not descended into, and it
   carries no `children` key. This is **not** `truncated`, which means a limit
   ran out: re-dumping or raising a ceiling will never reveal a skipped subtree,
@@ -453,7 +466,7 @@ assertions in the scenario library are *deltas*: "its length grew by 1",
 "re-assert the count dropped", "count deltas, not absolutes". None of those is
 checkable without the "before", and nothing else in this document will remind you
 to capture it. Plenty of other assertions are absolute and need no baseline: a
-receipt's shape, an alert's wording, the status-item badge, `doctor`'s `ok`.
+receipt's shape, an alert's wording, and `doctor`'s `ok`.
 
 Take the same three vantage points you intend to assert on, so a surprise in the
 baseline itself (tabs left over from an earlier run, a window you did not expect)
@@ -559,9 +572,9 @@ not from the receipt.
   >/tmp/e2e-pills.txt && wc -l </tmp/e2e-pills.txt` counts the pills, taking its
   own dump. **Redirect, don't pipe** — see the flagship cross-check: piping to
   `wc -l` prints `0` and exits 0 for a dump the helper refused. Run
-  `deviceterm-uitest ax dump` directly when you want the rest of the tree as
-  well. Then `deviceterm-uitest capture window --out /tmp/e2e-tabs.png` and read
-  the PNG.
+  `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh >/tmp/e2e-ax.json` when you
+  want the rest of the tree as well. Then `deviceterm-uitest capture window
+  --out /tmp/e2e-tabs.png` and read the PNG.
 - **Verify:** the flagship cross-check holds (count matches across JSON + AX +
   pixels).
 - **Rename:** `deviceterm tab rename "My Tab"` sets the GUI **manual title**
@@ -888,7 +901,9 @@ not from the receipt.
 ### 3. Pending-pane lifecycle *(needs a sim — GUI-only, invisible to the CLI)*
 
 The instant loading placeholder that swaps to a rendered pane is a pure-GUI
-behavior; the CLI only sees the final lifecycle state.
+behavior; the CLI only sees the final lifecycle state. Catching the placeholder
+is opportunistic. The required assertion is that the final sim node and pixels
+appear.
 
 - **Mutate:** attach a sim so a pane goes through pending (e.g. boot a sim of
   your own; the shim auto-attaches it).
@@ -896,7 +911,8 @@ behavior; the CLI only sees the final lifecycle state.
   large `ProgressView`, the pane label, and the text **`Connecting…`**; `ax dump`
   names that text. **This one is deliberately a race** and stays that way: the
   placeholder is what you are trying to catch, so there is nothing to wait for
-  first, and missing it is a result to report rather than a failure.
+  first. Report whether you saw it, but do not fail the scenario when the pane
+  reaches the rendered state before one observation round-trip.
 
   **Settle the coexistence advisory before you get here**, per *Mutations land
   after the CLI returns*. This scenario attaches a pane, which is the trigger,
@@ -905,7 +921,10 @@ behavior; the CLI only sees the final lifecycle state.
   the alert's text instead. Suppress it ahead of the run rather than dismissing
   it here, since dismissing costs the race you came for.
 - **Observe (after attach):** two steps, because they observe different things.
-  First the daemon side, naming the sim you booted by UDID:
+  First the daemon side, naming the sim you booted by UDID. Run this from a
+  terminal in the tab that contains the pane; `wait pane rendering` and
+  `panes list` are tab-scoped, so the same command from the automation driver
+  tab cannot see a sim mounted in another tab:
 
   ```sh
   SIM=            # the udid of the sim you booted; never the literal "booted"
@@ -927,7 +946,8 @@ behavior; the CLI only sees the final lifecycle state.
   after the CLI returns* warns about, in a scenario explicitly marked GUI-only.
 
   So poll the source you are actually asserting on. Bound it, and take a fresh
-  `ax dump` each time until the pane's own node stops being the pending one:
+  `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh` result each time until the
+  pane's own node stops being the pending one:
   pane roots are `deviceterm.pane.<kind>.<key>`, so `deviceterm.pane.pending.<n>`
   gives way to `deviceterm.pane.sim.<udid>`. Wait for **that identifier to
   appear** rather than for the pending one to vanish, since the positive form
@@ -948,20 +968,26 @@ behavior; the CLI only sees the final lifecycle state.
 
 ### 4. Status item badge *(needs a sim — menu bar, daemon-owned)*
 
-- **Mutate:** with a sim **you booted**, owned by deviceterm.
-- **Assert:** `deviceterm panes list --json` / `devices list --json` reflect the
-  owned booted sim(s); count = N.
-- **Observe:** `deviceterm-uitest capture status-item --out /tmp/e2e-badge.png`.
+- **Baseline:** before booting anything, run `capture status-item` with a fresh
+  output path. If the reply reports `present:true`, read the badge integer B
+  from the PNG. If it reports `present:false`, B is zero and there is no PNG.
+  Do not derive B by counting `ownerSessionId` fields: ownership attached to a
+  protected tab is deliberately hidden from other callers even though its sim
+  still contributes to the daemon's badge.
+- **Mutate:** boot exactly one sim **you booted** from an unprotected automation
+  tab. Use its `devices list --json` row to confirm that this new sim is
+  `Booted` and attributed to your session; that checks the test mutation, not
+  the workspace-wide badge total.
+- **Observe:** run `capture status-item` again with another fresh output path.
   This captures **just** the daemon's badge window (not a display), so it's
   monitor-independent. Read the PNG; it shows a **monochrome iPhone glyph
-  followed by N**. The glyph is a template image, so its color tracks the menu
-  bar's appearance — read the integer, not the ink.
-- **Verify:** the badge integer equals N. With zero owned-booted sims the item
-  is **hidden entirely** (not a glyph with `0`), and the daemon then owns no
-  badge window —
-  so `capture status-item` returns **`{ok:true, present:false}`** with no PNG.
-  That `present:false` *is* the hidden-at-zero confirmation; a present badge
-  returns `present:true` with the image.
+  followed by B + 1**. The glyph is a template image, so its color tracks the
+  menu bar's appearance — read the integer, not the ink.
+- **Verify:** the second reply reports `present:true` and its badge integer is
+  exactly B + 1. Shut down only the sim this scenario booted, then capture once
+  more: the badge returns to B. For B > 0 that means `present:true` with B in
+  the PNG; for B = 0 the item is hidden entirely and the reply is
+  **`{ok:true, present:false}`** with no PNG.
 
 ### 5. Close-tab prompt *(two arms; the multi-pane one needs no sim)*
 
@@ -997,6 +1023,12 @@ one. Press by title.
   session, or persistent sim-close disposition active. This arm ends in a
   disposition prompt over that sim, so it has to be one you own — see the
   device playbook's rule against shutting down a simulator you did not boot.
+  The sim must live in a throwaway tab separate from the automation driver,
+  because the trigger closes the selected tab if you choose a disposition.
+  Establish readiness from the workspace-wide device row plus the selected
+  tab's rendered `deviceterm.pane.sim.<udid>` AX node. Do not run tab-scoped
+  `panes list` or `wait pane rendering` from the driver and read its empty result
+  as the target tab's state.
 - **Trigger:** same ⌥⌘W. (With the sim pane focused, ⌘W would detach the
   mirror and never raise the prompt.)
 - **Reads:** message **`Close this tab?`**, informative *"Detach keeps any
@@ -1012,6 +1044,18 @@ sheets, so `ax dump` shows an untitled **`AXSheet` nested inside** the main
 window and the top-level window count stays put. Do not go looking for a
 separate empty-titled `AXWindow`; that is what the app-modal alerts elsewhere
 look like (scenario 6's quit prompt among them), and it is not this.
+
+Both sheets also carry an **`AXCheckBox` titled `Don't ask again`** and an
+**`AXPopUpButton`**. Assert both controls are present, but make the popup-value
+assertion from the target window's pre-trigger tab count:
+
+- When another tab shares that window, the initial value is **`For this
+  window`**.
+- When the target is the window's only tab, window scope is unavailable and the
+  initial value is **`Until DeviceTerm restarts`**.
+
+Leave the checkbox off during this scenario so the run does not change the
+operator's close defaults.
 
 **`capture window` frames a sheet differently.** Over a sheet it returns the
 *whole window scaled down* with the sheet composited on top, so the image's

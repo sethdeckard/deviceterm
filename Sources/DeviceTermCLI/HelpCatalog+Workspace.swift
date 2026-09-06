@@ -79,6 +79,8 @@ extension HelpCatalog {
                   sequences (\\n, \\r, \\x03, …) flow through libghostty's
                   input pipeline like real keypresses. The receipt reports
                   only the byte count, never the typed text.
+                  A lone `--help` or `-h` prints this usage instead of typing.
+                  Put `--` before either value to send it literally.
                   Authorization is a live automation grant, not a role.
                   Run it from a tab opened via Shell > "Open Automation Tab":
                   the GUI grants that tab's session, so the verb works from
