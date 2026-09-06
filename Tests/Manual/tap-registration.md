@@ -1,139 +1,156 @@
-# Tap registration manual checklist
+# Tap Registration Manual Checklist
 
-`PaneCoordinatorBackendTests` asserts a tap call takes at least the dwell, and
-`HIDClientLiveTests` asserts the sends themselves succeed against a booted sim.
-Neither can see the thing that matters: whether the guest *acted* on the tap.
+`make verify` checks the discrete-tap dwell, down/up ordering, coordinate
+validation, selector resolution, authorization, and receipt shapes.
+`make test-live` sends touch down and up through the real Simulator HID bridge,
+but it cannot observe whether the guest acted on them.
 
-That gap is what this file covers. A contact too short to act on still reaches
-the right view with gesture recognizers attached, so delivery succeeds and the
-control stays silent, which no automated check in this repo can tell apart from
-a working tap. A `UISwitch` is the case to watch: dragging its thumb works
-either way, so the pane keeps feeling half functional.
+The `deviceterm-device-e2e` playbook's scenario 1 closes that gap for the CLI
+path. It runs both selector and coordinate taps, waits for the guest to settle,
+and compares accessibility state before and after each tap.
 
-Run before any release that touches `Sources/Daemon/Input/`,
+This checklist retains the GUI mouse path, several UIKit control classes,
+tap-versus-hold behavior, comparison with Simulator.app, and physical-device
+behavior.
+
+Run it before a release that changes `Sources/Daemon/Input/`,
 `Sources/Daemon/Pane/PaneCoordinator.swift`,
 `Sources/App/SimulatorPane/SimulatorContentView.swift`, or
 `Sources/CoreSimulatorBridge/SimHIDClient.m`.
 
 ## Preconditions
 
-- A current debug build of this checkout, launched as a bundle: `make run`. Its
-  pre-flight (`instance-guard.sh ensure-clear`) stops this checkout's own app
-  and daemon. If it reports BUSY, a foreign instance holds the singleton: quit
-  the named one, from its checkout where it has one. Do not reach for `pkill`,
-  which cannot tell the two apart.
-- The daemon matters here specifically. The dwell lives in it, and it is
-  lazy-spawned, so a daemon left over from an older build has no dwell and
-  every row below fails for the wrong reason.
-- One tab, with a sim booted from inside it.
-- An iPhone or iPad simulator, on a Settings screen with a switch, such as
-  Airplane Mode.
+- Install Xcode with an available iPhone or iPad Simulator runtime.
+- Run `make verify`.
+- Confirm that every running Simulator is disposable, then run
+  `make test-live`. This track shuts down the entire Simulator fleet before
+  testing and shuts down its test Simulator afterward.
+- If testing the physical-device section, run `make test-device-live` with a
+  connected, unlocked, trusted iPhone or iPad and Device Hub closed.
+- Stop this checkout's app and daemon with `make kill-daemon`.
+- Launch with `make run`. Stop if any command prints a
+  `deviceterm-make: BUSY:` line.
+- From a DeviceTerm tab, boot a shutdown iPhone or iPad Simulator and wait for
+  its pane to render.
+- From an agent running in that tab, invoke the `deviceterm-device-e2e` skill
+  and run playbook scenario 1. Its selector and coordinate variants must both
+  pass before continuing.
+- Open a Settings screen containing a switch, such as Airplane Mode.
 
----
+`make test-live` and `make test-device-live` prove that their respective
+backends accept touch sends. They do not replace the visible guest assertions
+below.
 
 ## 1. A click toggles a switch
 
 | # | Action | Expected |
-|---|--------|----------|
-| 1.1 | One ordinary click on the switch. | It flips, on the first click. |
-| 1.2 | Ten clicks, counting flips. | Ten flips. An even count leaves the switch where it started, which is the second way to check. |
-| 1.3 | A click with the pointer held still. | It flips. Keep movement under the tap threshold: crossing it routes the gesture to the live-touch stream, which works regardless and would prove nothing. |
+|---|---|---|
+| 1.1 | Click the switch once. | It changes state on the first click. |
+| 1.2 | Click it ten times while counting state changes. | It changes state ten times. The even count leaves it where it started. |
+| 1.3 | Click while keeping the pointer still. | The switch changes state. Movement must stay below the tap threshold so the gesture does not become a live drag. |
 
-## 2. Every control kind, not only switches
-
-| # | Action | Expected |
-|---|--------|----------|
-| 2.1 | Single click a button, a list row, and a tab bar item. | Each responds on the first click. |
-
-The dwell has to register across switches, buttons, rows, and tab items. A
-failure in any control class fails this checklist.
-
-## 3. The CLI path
+## 2. Other control classes
 
 | # | Action | Expected |
-|---|--------|----------|
-| 3.1 | Locate the switch with `deviceterm ax tree` or `deviceterm ax sweep`, then `deviceterm tap <x> <y>` at the centre of its normalized frame. | It flips. Same synthesis as a GUI click, and the path agents use. |
+|---|---|---|
+| 2.1 | Click a button, a list row, and a tab-bar item once each. | Every control responds on its first click. |
 
-## 4. It stays a tap, not a hold
+A failure in any control class fails the checklist. A switch is especially
+important because dragging its thumb can still work when ordinary taps do not.
+
+The E2E prerequisite proves a named reactive control through the CLI. This
+section checks distinct control classes through DeviceTerm's GUI path.
+
+## 3. A tap does not become a hold
 
 | # | Action | Expected |
-|---|--------|----------|
-| 4.1 | Watch the switch during a single click. | It flips outright. The thumb must not track the pointer and commit on release, which is what a press long enough to read as a hold does. |
-| 4.2 | Press and hold about a second, then release. | The switch enters slide mode. That is the long-press promotion, a separate path from the tap. |
+|---|---|---|
+| 3.1 | Watch the switch during one ordinary click. | It changes state directly. Its thumb does not enter tracking mode before release. |
+| 3.2 | Press and hold the switch for about one second, then release. | The switch enters slide mode. The long-press path remains distinct from an ordinary tap. |
 
-## 5. Simulator.app agrees
+## 4. Simulator.app comparison
 
 | # | Action | Expected |
-|---|--------|----------|
-| 5.1 | Open the same booted device in Simulator.app and click the same switch. | Same result as 1.1. Simulator.app forwards the real click, so it is the reference for what a tap should do. |
+|---|---|---|
+| 4.1 | Open the same booted device in Simulator.app and click the same switch. | It behaves the same as row 1.1. |
 
-## 6. Physical device
+Simulator.app forwards the native mouse interaction and provides the reference
+behavior for the same guest control.
 
-Repeat 1.1 and 2.1 on a mirrored physical device pane
-(Shell ▸ Mirror Physical Device…). Device panes share the synthesis, so the
-dwell applies there too.
+## 5. Physical device
 
-## 7. Measuring contact duration
+This section needs a mirrored physical device pane and may be skipped when no
+device is available.
 
-`SimInputSynthesis.tapDwellMs` was chosen from the figures below. Re-run this
-when the constant is in question: DeviceTerm has no built-in instrumentation
-for contact duration, and the host-side request is not the duration the guest
-sees.
+| # | Action | Expected |
+|---|---|---|
+| 5.1 | Repeat row 1.1 on the physical device pane. | The switch changes state on the first click. |
+| 5.2 | Repeat row 2.1 on the physical device pane. | Each control responds on the first click. |
 
-Build a throwaway UIKit app that subclasses `UIWindow`, overrides
-`sendEvent(_:)`, and logs each touch's `.began` and `.ended` `UIEvent.timestamp`
-along with the interval between them. Intercept at the window rather than with
-a gesture recognizer or an overlay, because the case being measured is a touch
-that reaches a view and draws no reaction.
+The physical backend uses the same discrete-tap synthesis, including the dwell.
+`make test-device-live` proves that touch reaches the device's human-input
+channel without error. These rows prove the visible result.
 
-Give it four targets, each with its own counter: a `UISwitch`, a `UIButton`, a
-bare `UIControl` subclass counting `beginTracking` and `endTracking`, and a
-view carrying a bare `UITapGestureRecognizer`. Those exercise both gesture
-recognition and `UIControl` tracking, and the counters separate what was
-delivered from what reacted.
+## 6. Measuring contact duration
 
-Drive it three ways:
+`SimInputSynthesis.tapDwellMs` is two nominal display frames. Re-run this
+procedure when changing that value or the pacing implementation. The
+host-requested duration is not the duration the guest necessarily observes.
 
-- Ordinary clicks in a pane, for the tap path at the current dwell.
-- `deviceterm long-press <x> <y> --duration 0`, for the no-dwell baseline. A
-  zero duration skips the hold loop, leaving the down and up back to back with
-  no suspension between them: the same backend sequence as a zero-dwell tap.
-- `deviceterm long-press <x> <y> --duration <ms>` across a spread of holds, to
-  sample where registration becomes reliable. Observed contact is noisy and not
-  monotonic in the request, so sample several rather than looking for one
-  crossover.
+Build a throwaway UIKit app whose `UIWindow` subclass overrides
+`sendEvent(_:)`. Log each touch's `.began` and `.ended` timestamps and the
+interval between them. Intercept at the window instead of adding a gesture
+overlay, so the logger observes touches even when the target view does not
+react.
 
-Recorded on an iPhone 17 Pro, iOS 27, 2026-08-15. Timing mode: per-interval
-sleeps.
+Give the app four independently counted targets:
+
+- a `UISwitch`
+- a `UIButton`
+- a bare `UIControl` subclass that counts `beginTracking` and `endTracking`
+- a view with a bare `UITapGestureRecognizer`
+
+Drive them three ways:
+
+- Ordinary clicks in a DeviceTerm pane.
+- `deviceterm long-press <x> <y> --duration 0` for the no-dwell baseline.
+  A zero duration sends down and up without a hold interval.
+- `deviceterm long-press <x> <y> --duration <ms>` across several durations.
+  Observed contact is noisy, so collect several samples rather than assuming
+  one clean threshold.
+
+The following measurements were recorded on an iPhone 17 Pro running iOS 27
+on 2026-08-15:
 
 | Input | Observed contact | Result |
 |---|---|---|
-| Tap with the dwell removed | 0.1 to 6.6 ms | No reaction from any of the four targets |
+| Tap with the dwell removed | 0.1 to 6.6 ms | No reaction from any target |
 | Ten ordinary clicks | 33 to 86 ms | All ten registered |
-| `--duration` sweep, near the boundary | 12.3 ms / 14.2 ms | The 12.3 ms registered, the 14.2 ms did not |
+| `--duration` sweep near the boundary | 12.3 ms and 14.2 ms | The 12.3 ms contact registered; the 14.2 ms contact did not |
 | `--duration 50` | 154 to 194 ms | Registered, and the switch entered drag tracking |
 
-The first row was collected from the tap path with `tapDwellMs` set to zero.
+The first row used the tap path with `tapDwellMs` set to zero.
 
-Observed contact ran several times the requested hold in that sweep. At least
-two mechanisms can contribute. The daemon added each sleep's scheduler lateness
-to a running nominal total, so a longer hold compounded more of it; the paced
-loops sleep to absolute deadlines instead, which removes that one. The other is
-the synchronous HID send, one on the down and one on the up, whose latency has
-never been measured.
+These figures came from the earlier per-interval-sleep pacing implementation.
+Current gesture pacing uses fixed deadlines so scheduler lateness does not
+compound into the planned release time. Treat the table as design history, not
+a current timing benchmark. Re-run the procedure before making a claim about
+current observed contact duration.
 
-These figures characterize the per-interval-sleep implementation. Rerun the
-procedure to characterize absolute-deadline pacing.
+The remaining difference between requested and observed duration may include
+the synchronous HID sends on contact down and contact up. That latency has not
+been measured separately.
 
----
+## Passing the checklist
 
-## Pass criteria
+A release passes this layer when:
 
-- 1.1 flips on the first click.
-- 1.2 is ten for ten. A dropped click fails the checklist. Reproduce it and
-  measure the observed contact (§7) before adjusting `tapDwellMs`. The
-  duration is what separates a contact that was too short from a failure with
-  some other cause.
-- 2.1 responds on one click.
-- 4.1 shows no slide.
-- No row needs a second click to register.
+- `make verify` and `make test-live` pass.
+- Both variants of `deviceterm-device-e2e` scenario 1 pass.
+- Every applicable single-click row succeeds on the first click.
+- Ten switch clicks produce ten state changes.
+- An ordinary click does not enter slide mode.
+- The optional physical-device rows pass when that hardware is part of the
+  release test.
+
+Do not commit a separate run log. Fixes and the release commit are the record.

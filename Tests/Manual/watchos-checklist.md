@@ -1,17 +1,32 @@
 # watchOS Manual Checklist
 
 This checklist is the release gate for visible watch-pane and Digital Crown
-behavior. Automated tests verify that crown events send successfully, but they
-cannot observe the watch display or confirm scrolling.
+behavior.
+
+`make verify` covers Crown parsing, request formation, pacing, device-family
+classification, bezel geometry, minimum pane sizes, and GUI family gates. When
+`IndigoHIDMessageForDigitalCrownEvent` is available, the watch live track
+confirms that both Crown directions dispatch and that HID still accepts input
+afterward. Neither track can observe the watch display.
+
+The `deviceterm-device-e2e` scenario library has no Digital Crown scenario.
+Its standard `ax tree` readback is unsupported on watchOS, and its sweep
+fallback does not define Crown or side-button assertions. It does not replace
+the visual checks below.
 
 Run the checklist from beginning to end before creating a release tag. The
 bridge mechanism and tested-environment record live in
-`Sources/CoreSimulatorBridge/as-tested.md`; this checklist records measured
-response behavior. Do not commit a separate run log.
+`Sources/CoreSimulatorBridge/as-tested.md`. Do not commit a separate run log.
 
-## Setup
+## Prerequisites
 
 - [ ] Install Xcode with at least one bootable watchOS runtime.
+
+- [ ] Run the default automated gate:
+
+  ```sh
+  make verify
+  ```
 
 - [ ] Run the compatibility probe:
 
@@ -21,20 +36,30 @@ response behavior. Do not commit a separate run log.
 
   Find `C IndigoHIDMessageForDigitalCrownEvent (optional)` in the successful
   symbol list. If it instead says `optional: absent; feature disabled`, this
-  environment cannot pass the crown steps.
+  environment cannot pass the Crown steps.
 
 > **The watch live track shuts down every running Simulator.** Save any work
 > in them before continuing.
 
-- [ ] Run the automated watch track first:
+- [ ] Run the automated watch track:
 
   ```sh
   DEVICETERM_LIVE_DEVICE_FAMILY=watch make test-live
   ```
 
-  The track boots one watch, verifies that crown events send without wedging
-  HID, and shuts down the watch when it finishes. Visual movement remains a
-  manual check.
+  The track boots one watch and shuts it down afterward. When
+  `IndigoHIDMessageForDigitalCrownEvent` is available, it sends Crown events in
+  both directions and confirms that HID accepts a follow-up touch. Visual
+  movement remains a manual check.
+
+  Stop and report the result if the target prints a
+  `deviceterm-make: BUSY:` block.
+
+- [ ] Stop this checkout's app and daemon:
+
+  ```sh
+  make kill-daemon
+  ```
 
 - [ ] Find a stock watch Simulator:
 
@@ -51,16 +76,16 @@ response behavior. Do not commit a separate run log.
   make run
   ```
 
-  This rebuilds the app and stops any running DeviceTerm app and embedded
-  daemon before launching the new bundle.
+  Stop and report the result if the target prints a
+  `deviceterm-make: BUSY:` block.
 
-- [ ] Open a normal tab. Commands run in that shell pass through DeviceTerm's
-  `xcrun` shim, which associates successful boots with the tab.
+- [ ] Open a normal tab. Commands in that shell pass through DeviceTerm's
+  `xcrun` shim, which associates recognized successful Simulator transitions
+  with the terminal session.
 
-The menu-bar badge, a monochrome iPhone glyph followed by a count, reports
-the number of owned booted Simulators. The glyph is fixed: it does not change
-with the booted device's family, so a booted watch still shows the phone
-glyph.
+The menu-bar badge is a monochrome iPhone glyph followed by the number of owned
+booted Simulators. The glyph does not change with the device family, so a
+booted watch still shows the phone glyph.
 
 ## Manual Release Gate
 
@@ -68,11 +93,11 @@ glyph.
 
 | # | Action | Expected |
 |---|---|---|
-| 1.1 | Run `xcrun simctl boot <watch-udid>` in the tab. | A Simulator pane attaches within a few seconds. The badge reads `1`. |
+| 1.1 | Run `xcrun simctl boot <watch-udid>` in the tab. | A Simulator pane attaches within a few seconds. The menu-bar badge reads `1`. |
 | 1.2 | Inspect the pane. | The watch face renders with the model's correct round or rectangular shape. It is not stranded as a small image in a wide black pane. |
-| 1.3 | Drag the split divider inward. | The watch pane reaches a minimum width near 220 points. An iPhone pane stops near 380 points. |
+| 1.3 | Drag the split divider inward. | The watch pane reaches a minimum width near 220 points. |
 | 1.4 | Run `deviceterm panes list`. | One row contains `<paneId>  <udid>  rendering  watch  sim`. |
-| 1.5 | In another tab, attach an iPhone or iPad Simulator and run `deviceterm panes list`. | Its family column reads `phone` or `pad`, and its type column reads `sim`. |
+| 1.5 | Open another normal tab, boot an iPhone or iPad Simulator, run `deviceterm panes list`, and drag its divider inward. | The family column reads `phone` or `pad`, the type column reads `sim`, and the pane stops near 380 points wide. Shut down this Simulator when finished, then return to the watch tab. |
 
 ### 2. Rotate the Digital Crown
 
@@ -95,20 +120,19 @@ glyph.
 
 | # | Action | Expected |
 |---|---|---|
-| 4.1 | With the watch pane as your tab's only device pane, run `deviceterm crown 20` without `--pane`. | The command selects the sole device pane and scrolls it. |
+| 4.1 | With the watch as the tab's only device pane, run `deviceterm crown 20` without `--pane`. | The watch scrolls. |
 | 4.2 | Boot a second Simulator from the same terminal, then run `deviceterm crown 20`. | The command fails with `multiple panes in this tab; pass --pane <ref>`. |
-| 4.3 | Run `deviceterm crown 20 --pane <watch-udid>`. | The command selects the watch pane and scrolls it. |
-| 4.4 | From inside a DeviceTerm tab, run `env -u DEVICETERM_SESSION -u DEVICETERM_SESSION_CAP deviceterm crown 20`. | The command reports that it is not inside a DeviceTerm tab because the two session credential variables are unset. |
+| 4.3 | Run `deviceterm crown 20 --pane <watch-udid>`. | The named watch scrolls. |
+| 4.4 | Run `env -u DEVICETERM_SESSION -u DEVICETERM_SESSION_CAP deviceterm crown 20` inside the tab. | The command fails with `not inside a deviceterm tab (DEVICETERM_SESSION / DEVICETERM_SESSION_CAP unset)`. |
 
 ### Pass Criteria
 
-All steps in sections 1 through 4 must pass. If a step fails, fix the behavior,
-rerun the affected section, then complete the checklist again from the
-beginning.
+`make verify`, the automated watch track, and every row in sections 1 through 4
+must pass. If a manual row fails, fix the behavior, rerun the affected section,
+then complete the manual checklist again from the beginning.
 
-Do not commit a run log. The fixes and release commit are the execution record.
-Keep mechanism, constants, and tested environments in the Digital Crown section
-of `Sources/CoreSimulatorBridge/as-tested.md`.
+Do not commit a run log. Keep mechanism, constants, and tested environments in
+the Digital Crown section of `Sources/CoreSimulatorBridge/as-tested.md`.
 
 ## Measured Behavior Reference
 
@@ -127,7 +151,7 @@ The test binding was:
 .digitalCrownRotation(_:in: 0...1, by: 0.005, sensitivity: .medium)
 ```
 
-Use a single crown event for precise placement on a tight floating-point
+Use a single Crown event for precise placement on a tight floating-point
 binding. Streamed events sent with `--duration` can fall below the watchOS
 recognizer's per-event transition and produce no movement.
 
@@ -205,24 +229,23 @@ recorded `DRAG_CHANGED`, the final translation, and `DRAG_ENDED`.
 | E | `minimumDistance: 0`, List | 26 changes |
 | F | `minimumDistance: 0`, `simultaneousGesture` | 26 changes |
 | G | `minimumDistance: 0`, Circle target | 26 changes |
-| H | `minimumDistance: 0`, `.focusable()`, and `.digitalCrownRotation` | 26 changes; crown remained at `0.289` before and after `crown 3` |
+| H | `minimumDistance: 0`, `.focusable()`, and `.digitalCrownRotation` | 26 changes; Crown remained at `0.289` before and after `crown 3` |
 
 Variant C produced fewer change callbacks because the recognizer accumulated
 motion until it crossed the larger minimum distance. The final gesture still
 represented a path rather than an endpoint jump.
 
-Variant H combined a focused crown control with a drag gesture. In this run,
-the crown HID path and touch path did not interfere with each other.
+Variant H combined a focused Crown control with a drag gesture. In this run,
+the Crown HID path and touch path did not interfere with each other.
 
 #### Untested Gesture Configurations
 
 The matrix does not cover these configurations:
 
-- `.updating` with `@GestureState`, which uses different state-update
-  machinery from `.onChanged` and `.onEnded`;
+- `.updating` with `@GestureState`, which uses different state-update machinery
+  from `.onChanged` and `.onEnded`;
 - modal hosts such as `.sheet`, `.fullScreenCover`, and
   `.confirmationDialog`, which can introduce another hit-test or focus layer;
-  and
 - `.highPriorityGesture` competing with `.gesture`, which can change
   recognizer ordering.
 
