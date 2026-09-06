@@ -787,9 +787,11 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     contentHeight: contentDims.height,
                     pixelFormat: IOSurfaceGetPixelFormat(ioSurface)
                 )
-                // Exhaustion (no free slot) drops the frame: never blocks decode
-                // or backlogs. Sustained exhaustion drives one controlled
-                // recovery, then fails the pane.
+                // A pool that yields no slot drops the frame: never blocks
+                // decode or backlogs. Held slots are one cause; `acquire` also
+                // returns nil when a rotation exceeds the quarantine budget or
+                // a slot allocation fails. Sustained unavailability drives one
+                // controlled recovery, then fails the pane, whatever the cause.
                 guard var published = await pool.acquire(width: contentDims.width, height: contentDims.height)
                 else {
                     metrics?.noteDroppedExhaustion()
@@ -798,14 +800,14 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                         consecutiveDrops = 0
                         switch await pool.recoverFromExhaustion() {
                         case .recovered:
-                            log?("surface pool exhausted; retired the active "
+                            log?("surface pool unavailable; retired the active "
                                 + "epoch; the next frame allocates a fresh pool")
 
                         case .exhausted:
                             // Fenced: dropped if teardown already invalidated the
                             // run token, so no fatal escapes after stop.
-                            fail("surface pool exhausted and could not "
-                                + "recover; the mirror can't reclaim held slots")
+                            fail("surface pool stayed unavailable after "
+                                + "recovery; the mirror can't continue")
                             return
                         }
                     }
