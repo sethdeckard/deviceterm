@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import DaemonProtocol
 import Foundation
 
-/// Single fan-out point for pane surface
-/// delivery, keyed by `(paneId, connectionId)`.
+/// Single fan-out point for pane surface delivery, indexed by pane and by
+/// connection.
 ///
 /// JSON pane events fan out inside `PaneCoordinator` (each pane record
-/// carries its own subscriber continuations). This registry owns the
+/// carries its own subscriber channels). This registry owns the
 /// orthogonal surface lane that UDS can't carry: each XPC subscription
 /// registers a synchronous send closure (it marshals a `RetainedSurface`
 /// into an `xpc_object_t` and ships it), and the registry routes per-pane
@@ -62,26 +61,23 @@ public actor PaneSubscriptionRegistry {
         }
     }
 
-    /// One subscriber's record. JSON-event subscribers carry a
-    /// continuation; surface-delivery subscribers carry the send closure.
+    /// One subscriber's record: the side-band send closure, plus the keys the
+    /// per-pane and per-connection indexes route on.
     public struct Entry: Sendable {
         public let subscriptionId: UUID
         public let paneId: UUID
         public let connectionId: UInt64
-        public let continuation: AsyncStream<PaneEvent>.Continuation?
         public let surfaceDelivery: SurfaceDelivery?
 
         public init(
             subscriptionId: UUID,
             paneId: UUID,
             connectionId: UInt64,
-            continuation: AsyncStream<PaneEvent>.Continuation? = nil,
             surfaceDelivery: SurfaceDelivery? = nil
         ) {
             self.subscriptionId = subscriptionId
             self.paneId = paneId
             self.connectionId = connectionId
-            self.continuation = continuation
             self.surfaceDelivery = surfaceDelivery
         }
     }
@@ -108,8 +104,7 @@ public actor PaneSubscriptionRegistry {
     /// before any frame can ship; only once it has confirmed the
     /// subscription isn't already torn down does it `activate` the entry.
     /// A dormant entry is skipped by delivery, closing the window where a
-    /// frame could ship between registration and teardown. `register`
-    /// (the JSON+surface path) activates immediately.
+    /// frame could ship between registration and teardown.
     private var active: Set<UUID> = []
 
     /// Global per-frame leasing switch (`DEVICETERM_SURFACE_LEASES`). When
@@ -122,29 +117,6 @@ public actor PaneSubscriptionRegistry {
     }
 
     // MARK: - Registration
-
-    /// Register a new JSON+surface subscription. Returns the subscription
-    /// id (also the lease token) the caller passes to `unregister`.
-    @discardableResult
-    public func register(
-        paneId: UUID,
-        connectionId: UInt64,
-        continuation: AsyncStream<PaneEvent>.Continuation,
-        surfaceDelivery: SurfaceDelivery? = nil
-    ) -> UUID {
-        let subscriptionId = UUID()
-        insert(
-            Entry(
-                subscriptionId: subscriptionId,
-                paneId: paneId,
-                connectionId: connectionId,
-                continuation: continuation,
-                surfaceDelivery: surfaceDelivery
-            )
-        )
-        active.insert(subscriptionId)
-        return subscriptionId
-    }
 
     /// Register a delivery-only entry (XPC surface lane; JSON evts flow
     /// through `PaneCoordinator`'s per-record subscribers map) under a
@@ -195,8 +167,7 @@ public actor PaneSubscriptionRegistry {
     /// Remove one subscription. Closes admission for its delivery worker
     /// (the queued frame is discarded; any in-flight transaction observes
     /// the missing entry at its next revalidation and cancels/revokes its
-    /// hold). The continuation is not finished here: callers choose
-    /// finish-vs-leave semantics.
+    /// hold).
     public func unregister(subscriptionId: UUID) {
         active.remove(subscriptionId)
         guard let entry = entries.removeValue(forKey: subscriptionId) else {
@@ -217,8 +188,8 @@ public actor PaneSubscriptionRegistry {
         }
     }
 
-    /// Drop every entry whose `connectionId` matches, finishing each
-    /// continuation. Called on XPC connection invalidation.
+    /// Drop every entry whose `connectionId` matches. Called on XPC
+    /// connection invalidation.
     public func dropAllForConnection(connectionId: UInt64) {
         guard let ids = entriesByConnection.removeValue(forKey: connectionId) else {
             return
@@ -233,17 +204,6 @@ public actor PaneSubscriptionRegistry {
                 entriesByPane.removeValue(forKey: entry.paneId)
             }
             workers.removeValue(forKey: subscriptionId)
-            entry.continuation?.finish()
-        }
-    }
-
-    // MARK: - JSON event fan-out
-
-    /// Yield an event to every JSON subscriber on `paneId`.
-    public func yieldEvent(paneId: UUID, event: PaneEvent) {
-        guard let ids = entriesByPane[paneId] else { return }
-        for subscriptionId in ids {
-            entries[subscriptionId]?.continuation?.yield(event)
         }
     }
 
