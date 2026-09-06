@@ -18,6 +18,64 @@ skip()   { printf "  · %s (not present yet — skipping)\n" "$1"; }
 denied() { printf "  · %s — skipping\n" "$1"; }
 fail()   { printf "  ✗ %s\n" "$1" >&2; exit 1; }
 
+# `swift test` writes its results to stdout and its build and lock diagnostics
+# to stderr, so only stdout is captured. A passing run prints thousands of
+# progress lines and a failing one is worth a handful, and naming what failed
+# here saves a second full run to find out, which cannot overlap this one
+# because SwiftPM serializes on `.build`.
+#
+# stderr deliberately stays live. SwiftPM announces a `.build` lock wait there
+# and then blocks with no timeout, and the preflight that looks for a competing
+# process samples at one instant, so an instance arriving after it is only ever
+# visible through that line. Capturing stderr turns a lock wait into a silent
+# hang with no output and nothing to wait on.
+TEST_LOG="$(mktemp -t deviceterm-verify-test)"
+trap 'rm -f "${TEST_LOG}"' EXIT
+TEST_REPLAY_LINES=20
+
+# Swift Testing puts the test name, source location, and the expectation on one
+# `recorded an issue` line, and closes with a `Test run with` summary. A run
+# that never reached the tests has neither, and its reason has already gone to
+# the terminal on stderr; the tail covers a failure that left nothing on either.
+#
+# Nothing here may close a pipe early. `set -o pipefail` turns the writer's
+# SIGPIPE into a script-wide exit, which would drop the count, the summary, and
+# the ✗ line on exactly the broad breakage that produces the most output. `sed`
+# ranges and `tail` read their input to EOF; `head` does not.
+replay_test_failure() {
+    local summary count
+    count=$(grep -c -F 'recorded an issue' "${TEST_LOG}" || true)
+    summary=$(grep -F 'Test run with' "${TEST_LOG}" | tail -1 || true)
+    if [ "${count}" -gt 0 ]; then
+        grep -F 'recorded an issue' "${TEST_LOG}" \
+            | sed -n "1,${TEST_REPLAY_LINES}{s/^/      /;p;}" >&2
+        if [ "${count}" -gt "${TEST_REPLAY_LINES}" ]; then
+            printf "      … and %s more — run 'make test' for all of them\n" \
+                "$((count - TEST_REPLAY_LINES))" >&2
+        fi
+    fi
+    if [ -n "${summary}" ]; then
+        printf "      %s\n" "${summary}" >&2
+    fi
+    if [ "${count}" -eq 0 ] && [ -z "${summary}" ]; then
+        tail -n "${TEST_REPLAY_LINES}" "${TEST_LOG}" | sed 's/^/      /' >&2
+    fi
+}
+
+# Run a `swift test` invocation with its stdout captured, replaying only the
+# failure lines. `if`/`else` rather than the `&&`/`||` chains the other checks
+# use: both are exempt from `set -e`, and this one has a branch body.
+run_tests() {
+    local label="$1"
+    shift
+    if "$@" >"${TEST_LOG}"; then
+        ok "${label}"
+    else
+        replay_test_failure
+        fail "${label} — run 'make test' for the full output"
+    fi
+}
+
 echo "verify:"
 
 # ──────────────────────────────────────────────────────────────────────
@@ -88,7 +146,7 @@ fi
 if [ -x scripts/exclusive-lock.sh ]; then
     lk_track="verify-selftest.$$"
     lk_dir="/tmp/deviceterm.$(id -u).${lk_track}.lock"
-    trap 'rm -rf "$lk_dir" "$lk_dir.recover"' EXIT
+    trap 'rm -rf "$lk_dir" "$lk_dir.recover"; rm -f "${TEST_LOG}"' EXIT
     ./scripts/exclusive-lock.sh acquire "$lk_track" $$ \
         || fail "exclusive-lock: fresh acquire failed"
     set +e
@@ -179,6 +237,7 @@ if [ -x scripts/instance-guard.sh ]; then
     # `lk_dir` is unset when the block above skipped, and `set -u` would make
     # the trap itself fail; `${lk_dir:+…}` drops those words entirely then.
     trap 'rm -rf ${lk_dir:+"$lk_dir" "$lk_dir.recover"} "$ig_tmp"; \
+          rm -f "${TEST_LOG}"; \
           [ -n "$ig_pid" ] && kill "$ig_pid" 2>/dev/null; true' EXIT
     # Name the fixture per-run. A parallel checkout's verify spawns its own,
     # and a shared name would let each match the other's pid.
@@ -275,14 +334,13 @@ fi
 # not silently state-gated — run via `make test-live` / `make
 # test-device-live`. The `·` lines keep that visible so the exclusions are
 # never a surprise.
-swift test --no-parallel --skip CoreSimulatorLiveTests --skip DeviceLiveTests >/dev/null \
-    && ok "swift test (excludes live tracks)" \
-    || fail "swift test failed — run 'make test' for the full output"
+run_tests "swift test (excludes live tracks)" \
+    swift test --no-parallel --skip CoreSimulatorLiveTests --skip DeviceLiveTests
 printf "  · CoreSimulatorLiveTests — live-sim track, run 'make test-live' deliberately\n"
 printf "  · DeviceLiveTests — physical-device track, run 'make test-device-live' deliberately\n"
 
 if [ -d Tests/DaemonIntegrationTests ]; then
-    swift test --filter DaemonIntegrationTests      >/dev/null && ok "DaemonIntegrationTests" || fail "DaemonIntegrationTests"
+    run_tests "DaemonIntegrationTests" swift test --filter DaemonIntegrationTests
 else
     skip "DaemonIntegrationTests (no Tests/DaemonIntegrationTests/)"
 fi
@@ -302,19 +360,19 @@ if [ -x scripts/gui-smoke.sh ]; then
       && ./scripts/gui-smoke.sh debug                 >/dev/null \
       && ok "gui-smoke" || fail "gui-smoke"
 elif [ -d Tests/GUISmokeTests ]; then
-    swift test --filter GUISmokeTests               >/dev/null && ok "GUISmokeTests"        || fail "GUISmokeTests"
+    run_tests "GUISmokeTests" swift test --filter GUISmokeTests
 else
     skip "gui-smoke (no scripts/gui-smoke.sh)"
 fi
 
 if [ -d Tests/ShimTests ]; then
-    swift test --filter ShimTests                   >/dev/null && ok "ShimTests"            || fail "ShimTests"
+    run_tests "ShimTests" swift test --filter ShimTests
 else
     skip "ShimTests (no Tests/ShimTests/)"
 fi
 
 if [ -d Tests/CLITests ]; then
-    swift test --filter CLITests                    >/dev/null && ok "CLITests"             || fail "CLITests"
+    run_tests "CLITests" swift test --filter CLITests
 else
     skip "CLITests (no Tests/CLITests/)"
 fi
