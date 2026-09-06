@@ -299,7 +299,9 @@ hint covering the rc-file change that enables it (zsh `fpath`, bash
 
 The man page is hand-authored at `share/man/man1/deviceterm.1`. From a
 checkout, browse the canonical copy with
-`man -l share/man/man1/deviceterm.1`.
+`man ./share/man/man1/deviceterm.1`. The leading `./` is what makes
+macOS's `man` read the argument as a path; without it the argument is a
+page name, and `man -l` is a GNU spelling `/usr/bin/man` rejects.
 
 ## libghostty
 

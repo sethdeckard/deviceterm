@@ -1038,8 +1038,11 @@ The app bundle and Homebrew cask do not install the man page. To read the
 repository copy from a source checkout:
 
 ```sh
-man -l share/man/man1/deviceterm.1
+man ./share/man/man1/deviceterm.1
 ```
+
+Keep the leading `./`. Without it `man` reads the argument as a page name
+rather than a path.
 
 ## Configure DeviceTerm
 

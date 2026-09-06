@@ -152,8 +152,9 @@ func manPageCoversEverySubVerb() throws {
 
 @Test
 func manPageHasThHeader() throws {
-    // `.TH` is the man-page title macro, required for `man -l` to render
-    // the section line. Pin it explicitly.
+    // `.TH` is the man-page title macro. It supplies the section header
+    // when the checkout's page renders under
+    // `man ./share/man/man1/deviceterm.1`.
     let url = try #require(locateManPage())
     let contents = try String(contentsOf: url, encoding: .utf8)
     #expect(contents.contains(".TH DEVICETERM 1"))
