@@ -489,6 +489,12 @@ func makeMainMenu() -> NSMenu {
     // the app plist's CFBundleHelpBookName, so there is no action of ours
     // behind it. ⌘? is the system-wide binding for it.
     //
+    // The two links beneath it leave the app. All Guides on the Web is
+    // not the book by another name: the book carries docs/USAGE.md alone
+    // and sends its sibling-guide links to the site, which is what this
+    // item opens. Agent Skills is a separate repository, so it has no
+    // in-app form at all.
+    //
     // The welcome items are the permanent entry points to the coexistence
     // explanations, which appear automatically only until their ids are
     // recorded. An advisory's Learn More… button also reopens one, but
@@ -509,6 +515,20 @@ func makeMainMenu() -> NSMenu {
             title: "DeviceTerm Help",
             action: #selector(NSApplication.showHelp(_:)),
             keyEquivalent: "?"
+        )
+    )
+    helpMenu.addItem(
+        NSMenuItem(
+            title: "All Guides on the Web",
+            action: #selector(AppDelegate.openDocumentation(_:)),
+            keyEquivalent: ""
+        )
+    )
+    helpMenu.addItem(
+        NSMenuItem(
+            title: "Agent Skills on GitHub",
+            action: #selector(AppDelegate.openAgentSkills(_:)),
+            keyEquivalent: ""
         )
     )
     helpMenu.addItem(NSMenuItem.separator())

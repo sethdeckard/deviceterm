@@ -3,9 +3,9 @@
 import Foundation
 
 /// The canonical outbound URLs for the app (site, docs, repo,
-/// releases). Defined once so the About window, help text, and every
-/// other link surface reference the same values instead of scattering
-/// literals.
+/// releases, skills). Defined once so the About window, help text, and
+/// every other link surface reference the same values instead of
+/// scattering literals.
 enum AppLinks {
     // Compile-time-constant, known-valid literals. A malformed one is a
     // programmer error caught on first launch, so the force-unwrap is safe.
@@ -18,6 +18,9 @@ enum AppLinks {
     static let gitHub = URL(string: "https://github.com/sethdeckard/deviceterm")!
     /// Releases (signed DMGs).
     static let releases = URL(string: "https://github.com/sethdeckard/deviceterm/releases")!
+    /// The agent skills published for deviceterm, linked from the Help
+    /// menu. A separate repository, so it moves on its own schedule.
+    static let skills = URL(string: "https://github.com/sethdeckard/deviceterm-skills")!
     /// The full text of deviceterm's own license, linked from the About
     /// window so the program tells users how to view it.
     static let license = URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!

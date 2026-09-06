@@ -1448,6 +1448,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         alert.runModal()
     }
 
+    /// Help > All Guides on the Web: open the published documentation
+    /// index in the default browser. The bundled help book carries
+    /// `USAGE.md` alone, so this is the route to the rest of them.
+    @objc
+    func openDocumentation(_ sender: Any?) {
+        NSWorkspace.shared.open(AppLinks.docs)
+    }
+
+    /// Help > Agent Skills on GitHub: open the published agent skills in
+    /// the default browser.
+    @objc
+    func openAgentSkills(_ sender: Any?) {
+        NSWorkspace.shared.open(AppLinks.skills)
+    }
+
     /// Help > Third-Party Notices: show (or re-front) the notices window.
     @objc
     func openThirdPartyNotices(_ sender: Any?) {

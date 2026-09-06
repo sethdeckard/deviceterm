@@ -793,10 +793,14 @@ struct MainMenuTests {
 
     @Test
     func helpMenuGroupsItemsBetweenSeparators() throws {
-        // Three groups, in this order: the book, the coexistence
-        // welcomes, then Third-Party Notices. The separators are what
-        // keep a welcome from reading as one of the notices, or the book
-        // as one of the welcomes.
+        // Three groups, in this order: deviceterm's own reference, the
+        // coexistence welcomes, then Third-Party Notices. The separators
+        // are what keep a welcome from reading as one of the notices, or
+        // as one of the reference entries.
+        //
+        // The book leads its group and the two outbound links follow it,
+        // nearest-first: the bundled book, then the site, then a separate
+        // repository.
         //
         // Device Hub leads its group, deliberately the opposite of
         // `WelcomeCatalog.messages`. That order picks the welcome a first
@@ -806,7 +810,7 @@ struct MainMenuTests {
             .split(whereSeparator: { $0.isSeparatorItem })
             .map { $0.map(\.title) }
         #expect(groups == [
-            ["DeviceTerm Help"],
+            ["DeviceTerm Help", "All Guides on the Web", "Agent Skills on GitHub"],
             [
                 WelcomeCatalog.deviceHubCoexistenceTitle,
                 WelcomeCatalog.simulatorCoexistenceTitle
@@ -828,6 +832,29 @@ struct MainMenuTests {
         #expect(item.action == #selector(NSApplication.showHelp(_:)))
         #expect(item.keyEquivalent == "?")
         #expect(item.target == nil, "showHelp: should reach AppKit through the responder chain")
+    }
+
+    @Test
+    func helpMenuLinksOutToTheGuidesAndTheSkills() throws {
+        // ⌘? stays the bundled book's. The two items that leave the app
+        // take no key equivalent.
+        let help = try #require(helpMenu(), "Help submenu missing")
+
+        let guides = try #require(
+            help.items.first(where: { $0.title == "All Guides on the Web" }),
+            "All Guides on the Web missing"
+        )
+        #expect(guides.action == #selector(AppDelegate.openDocumentation(_:)))
+        #expect(guides.keyEquivalent.isEmpty)
+        #expect(guides.target == nil, "link items should target the responder chain")
+
+        let skills = try #require(
+            help.items.first(where: { $0.title == "Agent Skills on GitHub" }),
+            "Agent Skills on GitHub missing"
+        )
+        #expect(skills.action == #selector(AppDelegate.openAgentSkills(_:)))
+        #expect(skills.keyEquivalent.isEmpty)
+        #expect(skills.target == nil, "link items should target the responder chain")
     }
 
     @Test
