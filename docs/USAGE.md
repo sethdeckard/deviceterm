@@ -473,6 +473,10 @@ The `deviceterm` CLI drives the device pane from the same shell. This is how
 an agent running inside a tab interacts with the device: the tab supplies the
 target, and the agent speaks the same commands you would type.
 
+Ready-made skills for Claude Code and Codex live in
+[`deviceterm-skills`](https://github.com/sethdeckard/deviceterm-skills), a
+separate repository.
+
 ### Send Touch Input
 
 CLI coordinates are normalized. `(0,0)` is the top-left corner and `(1,1)` is

@@ -81,6 +81,14 @@ the compatibility policy and parseable shapes, and
 [`AUTOMATION.md`](docs/AUTOMATION.md) covers controlling DeviceTerm itself:
 workspace commands, automation, and events.
 
+## Agent Skills
+
+Skills that teach a coding agent to work inside a DeviceTerm tab live in
+[`deviceterm-skills`](https://github.com/sethdeckard/deviceterm-skills), a
+separate repository: orientation, app verification, App Store screenshots,
+accessibility audits, bug reproduction, and tab titles. They target Claude Code
+and Codex.
+
 ## Features
 
 - Live Simulator panes for iOS, iPadOS, watchOS, and tvOS.
@@ -126,6 +134,8 @@ test, signing, and release instructions.
 - [`AGENTS.md`](AGENTS.md): contributor conventions and verification policy.
 - [`RELEASING.md`](docs/RELEASING.md): signing, notarization, and publishing
   checklist.
+- [`deviceterm-skills`](https://github.com/sethdeckard/deviceterm-skills): agent
+  skills for Claude Code and Codex, in a separate repository.
 
 ## Distribution and License
 

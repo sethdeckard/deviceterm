@@ -14,6 +14,10 @@ covered in [`USAGE.md`](USAGE.md). The JSON shapes, exit codes, and stability
 promises behind every command here are defined in
 [`INTEGRATION.md`](INTEGRATION.md).
 
+Skills that teach a coding agent to use these commands live in
+[`deviceterm-skills`](https://github.com/sethdeckard/deviceterm-skills), a
+separate repository.
+
 ## Contents
 
 - [Understand Tabs, Sessions, and Authority](#understand-tabs-sessions-and-authority)

@@ -199,6 +199,9 @@ func agentsDocumentationCarriesCatEPhilosophyCalloutCMissingFromCLI() {
     let documentation = AgentsText.documentation
     #expect(documentation.contains("simctl"))
     #expect(documentation.contains("by design"))
+    // The recipe-library bullet says where recipes do live, so an agent
+    // that reads the non-goal isn't left thinking none exist anywhere.
+    #expect(documentation.contains("https://github.com/sethdeckard/deviceterm-skills"))
 }
 
 @Test

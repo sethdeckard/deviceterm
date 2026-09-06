@@ -517,7 +517,9 @@ public enum AgentsText {
         - No MCP / model-context layer. deviceterm is the
           terminal; the agent is the agent.
         - No recipe library. Workflow scripting is the shell's
-          job; `deviceterm` provides primitives.
+          job; `deviceterm` provides primitives. Task-shaped
+          recipes live outside the binary, in the agent skills:
+          https://github.com/sethdeckard/deviceterm-skills
 
     SEE ALSO
 
