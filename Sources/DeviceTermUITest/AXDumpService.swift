@@ -57,6 +57,34 @@ enum AXDumpService {
     /// Shared with the input driver: both need "resolve a bundle id to a
     /// live, bounded AX root, or say precisely why not."
     static func applicationElement(bundleID: String) throws -> (element: AXUIElement, pid: pid_t) {
+        let elements = try applicationElements(bundleID: bundleID)
+        guard let only = elements.first else {
+            throw AXDumpError.appNotRunning(bundleID: bundleID)
+        }
+        // Multiple matches are unordered. Refuse rather than return a
+        // plausible AX tree from the wrong process.
+        guard elements.count == 1 else {
+            throw AXDumpError.ambiguousTarget(bundleID: bundleID, pids: elements.map(\.pid))
+        }
+        // A trusted process can always create the element; failing to read
+        // even a role means the target isn't answering.
+        guard AXElementReader.copyAttribute(only.element, AXAttribute.role) != nil else {
+            throw AXDumpError.unreadableRoot(bundleID: bundleID)
+        }
+        return only
+    }
+
+    /// AX roots for *every* live process under `bundleID`, sorted by pid,
+    /// empty when none is running.
+    ///
+    /// `applicationElement` refuses more than one, which is right when the
+    /// answer is a tree that has to come from a particular process. A caller
+    /// asking a question every instance can answer at once ("is any of them
+    /// showing a menu-bar item?") needs them all, so that it can distinguish
+    /// a genuine ambiguity from a state they agree on.
+    static func applicationElements(
+        bundleID: String
+    ) throws -> [(element: AXUIElement, pid: pid_t)] {
         guard TCCStatus.hasAccessibility else { throw AXDumpError.notTrusted }
 
         // Bound every AX read in this process, including the child elements a
@@ -64,47 +92,32 @@ enum AXDumpService {
         // inherit the global default.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), messagingTimeout)
 
-        let pids = TargetOwners.live(bundleID: bundleID)
-        guard let pid = pids.first else {
-            throw AXDumpError.appNotRunning(bundleID: bundleID)
+        return TargetOwners.live(bundleID: bundleID).map {
+            (AXUIElementCreateApplication($0), $0)
         }
-        // Multiple matches are unordered. Refuse rather than return a
-        // plausible AX tree from the wrong process.
-        guard pids.count == 1 else {
-            throw AXDumpError.ambiguousTarget(bundleID: bundleID, pids: pids)
-        }
-
-        let root = AXUIElementCreateApplication(pid)
-        // A trusted process can always create the element; failing to read
-        // even a role means the target isn't answering.
-        guard AXElementReader.copyAttribute(root, AXAttribute.role) != nil else {
-            throw AXDumpError.unreadableRoot(bundleID: bundleID)
-        }
-        return (root, pid)
     }
 
     static func dump(
         bundleID: String,
         limits: AXTreeLimits = .default
-    ) throws -> (tree: [String: Any], truncated: Bool) {
+    ) throws -> AXTreeResult {
         let (root, pid) = try applicationElement(bundleID: bundleID)
 
-        let result = AXTreeBuilder.build(
+        var result = AXTreeBuilder.build(
             root: root,
             limits: limits,
             attributes: attributes(of:),
-            children: AXElementReader.children(of:),
-            shouldDescend: shouldDescend(into:siblingIndex:)
+            children: AXElementReader.childrenIfReadable(of:),
+            shouldDescend: shouldDescend(node:siblingIndex:)
         )
-        var tree = result.root
-        tree["pid"] = Int(pid)
-        return (tree, result.truncated)
+        result.tree["pid"] = Int(pid)
+        return result
     }
 
     // MARK: - Traversal policy
 
-    /// Whether the walk should descend into `element`, which sits at
-    /// `siblingIndex` among its parent's children.
+    /// Whether the walk should descend into the node just read, which sits
+    /// at `siblingIndex` among its parent's children.
     ///
     /// macOS owns and populates the leading Apple menu, so its
     /// descendants belong to the system rather than to whichever
@@ -112,26 +125,54 @@ enum AXDumpService {
     /// and is walked normally. Position is the ownership signal because
     /// titles are localized, so matching those would quietly stop working
     /// on a non-English system.
-    private static func shouldDescend(into element: AXUIElement, siblingIndex: Int) -> Bool {
+    ///
+    /// Decided from the attributes the walk already read, not a fresh read
+    /// of its own. A node whose role could not be read is marked unreadable
+    /// there, so a dump that descended on a failed read can never be
+    /// accepted, whichever way this call happened to go.
+    private static func shouldDescend(node: [String: Any], siblingIndex: Int) -> Bool {
         guard siblingIndex == 0 else { return true }
-        return AXElementReader.string(element, AXAttribute.role) != menuBarItemRole
+        return node["role"] as? String != menuBarItemRole
     }
 
     // MARK: - Element reading
 
+    /// Serialize one element, reading each attribute exactly once.
+    ///
+    /// An absent attribute is omitted; a failed read marks the node
+    /// unreadable. Most elements publish only a handful of these, so
+    /// conflating the two would either mark
+    /// every node or hide the failures: a tab whose `identifier` timed out
+    /// would serialize as a node carrying none, and a caller counting pills
+    /// would score it zero and call that an observation.
     private static func attributes(of element: AXUIElement) -> [String: Any] {
         var node: [String: Any] = [:]
         for pair in scalarAttributes {
-            guard let raw = AXElementReader.copyAttribute(element, pair.ax) else { continue }
-            if let value = AXElementReader.jsonSafe(raw) { node[pair.json] = value }
+            switch AXElementReader.read(element, pair.ax) {
+            case let .value(raw):
+                if let value = AXElementReader.jsonSafe(raw) { node[pair.json] = value }
+
+            case .absent:
+                continue
+
+            case .failed:
+                node[AXTreeBuilder.unreadableKey] = true
+            }
         }
-        if let frame = AXElementReader.frame(of: element) {
+        switch AXElementReader.frameRead(of: element) {
+        case let .value(frame):
             node["frame"] = [
                 "x": frame.origin.x,
                 "y": frame.origin.y,
                 "width": frame.size.width,
                 "height": frame.size.height
             ]
+
+        case .absent:
+            break
+
+        case .failed:
+            node[AXTreeBuilder.unreadableKey] = true
         }
         return node
     }

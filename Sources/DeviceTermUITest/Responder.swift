@@ -133,6 +133,7 @@ struct Responder: Sendable {
             return UITestReply.ok([
                 "bundleId": bundleID,
                 "truncated": result.truncated,
+                "unreadable": result.unreadable,
                 "tree": result.tree
             ])
         } catch {
@@ -221,8 +222,10 @@ struct Responder: Sendable {
                 return reply(for: outcome, extra: ["present": true])
 
             case .absent:
-                // Not an error: no status item == the daemon owns zero
-                // booted sims, which is the hidden-at-zero state to verify.
+                // Not an error: no status-item window is on screen, whether
+                // because no daemon is running, because a running one has no
+                // item to show at zero owned sims, or because no on-screen
+                // window contains the frame of the item it publishes.
                 return UITestReply.ok(["present": false])
             }
         } catch {
@@ -261,9 +264,33 @@ struct Responder: Sendable {
         case let CaptureError.cleanupFailed(path, underlying):
             return "couldn't remove a stale capture at \(path) (\(underlying))"
 
+        case let CaptureError.ambiguousStatusItem(bundleID, count):
+            return "\(bundleID) publishes \(count) menu-bar items; the harness "
+                + "can't tell which one is the status badge."
+
+        case let CaptureError.statusItemUnreadable(bundleID):
+            return "\(bundleID) is running but its accessibility tree could "
+                + "not be read, so whether a badge is showing is unknown. "
+                + "Retry; do not treat this as the hidden-at-zero-sims state."
+
+        case let CaptureError.statusItemTreeDegenerate(bundleID):
+            return "\(bundleID)'s accessibility tree nests an application "
+                + "inside itself, so the status item cannot be located. "
+                + "Restart the harness with make uitest-stop && make uitest-run."
+
+        case let CaptureError.statusItemUnstable(bundleID):
+            return "\(bundleID)'s badge position could not be confirmed across "
+                + "repeated reads, so no capture could be tied to a position it "
+                + "held. Retry once the menu bar settles."
+
         case let CaptureError.captureFailed(underlying):
             return "capture failed (\(underlying)). Is Screen Recording granted "
                 + "to the process running this harness?"
+
+        // The status-item capture locates the badge through accessibility,
+        // so its failures surface here as well as from `ax dump`.
+        case is AXDumpError:
+            return describeAX(error)
 
         default:
             return "capture failed: \(error)"

@@ -11,11 +11,17 @@ import AppKit
 /// flight.
 ///
 /// Ownership derived from on-screen windows alone would miss an instance
-/// showing nothing, and that is often the instance the caller meant: the
-/// daemon hides its status item at zero owned booted sims, and an app can
-/// sit windowless. Were the hidden one the target, a visible second
-/// instance would be captured in its place and read as a real answer. So
-/// the process list is consulted too, and the two sources are unioned.
+/// showing nothing, and that is often the instance the caller meant: an
+/// app can sit windowless. Were the hidden one the target, a visible
+/// second instance would be captured in its place and read as a real
+/// answer. So the process list is consulted too, and the two sources are
+/// unioned.
+///
+/// This serves the *content*-window path only. The status item is not an
+/// instance of the problem above: its window belongs to Control Center, so
+/// the daemon owns none whether the badge is drawn or not.
+/// `StatusItemLocator` obtains the item's frame through accessibility, and
+/// the capture path matches that frame to a window.
 enum TargetOwners {
     /// Live pids registered under `bundleID`, sorted so messages are stable.
     static func live(bundleID: String) -> [pid_t] {

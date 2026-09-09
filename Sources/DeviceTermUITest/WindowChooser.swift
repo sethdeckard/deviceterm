@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import CoreGraphics
 import Foundation
 
 /// Pure "which window do we screenshot?" logic.
@@ -11,6 +12,11 @@ enum WindowChooser {
     /// chrome (status items, tooltips), never document content. This is
     /// `NSStatusWindowLevel` (25), the layer menu-bar extras report.
     static let overlayLayer = 25
+
+    /// How much taller than the item it draws a status item's hosting
+    /// window may be. Generous, because the bound only has to separate a
+    /// menu-bar-height window from a document-height one.
+    static let hostHeightTolerance: Double = 2
 
     /// Pick the frontmost *content* window owned by `bundleID`: the main
     /// window, or an app-modal alert (close-tab / ⌘Q prompt) on top of it.
@@ -42,29 +48,48 @@ enum WindowChooser {
         }
     }
 
-    /// Pick the daemon's menu-bar status-item window from a window list
-    /// ScreenCaptureKit already restricted to on-screen windows. Returns
-    /// nil when the daemon shows none, which is how a hidden badge reads.
+    /// Pick the window hosting a status item, given that item's
+    /// accessibility frame.
     ///
-    /// Selects by *smallest area*, not front-most: the status button is a
-    /// tiny window, so if its dropdown menu is also open (a larger overlay
-    /// window, and frontmost), the small button still wins and the capture
-    /// is the badge rather than the menu.
+    /// Selection is by *geometry*, not ownership. macOS hosts every
+    /// menu-bar extra in Control Center's process, so the window server
+    /// attributes the badge to Control Center and the vending application
+    /// owns no on-screen window: neither its bundle id nor its pid can
+    /// reach the window, because both describe the same wrong process.
+    /// The accessibility frame (`StatusItemLocator`) is the one identifier
+    /// that still names the item as the daemon's.
     ///
-    /// Match the live process id directly. ScreenCaptureKit does not
-    /// consistently publish the daemon's bundle id or status-window layer
-    /// for this menu extra, while its owning process remains stable.
+    /// Matches on the AX frame's *centre* rather than rect equality: the
+    /// hosting window need not share the item's bounds. Roughly ten
+    /// menu-bar extras sit on screen at once at distinct offsets, so the
+    /// centre separates them.
+    ///
+    /// A content window under the menu bar contains the item's centre too,
+    /// so eligibility is bounded by *height*: a hosting window is about as
+    /// tall as the item it draws, while a document window is taller by
+    /// orders of magnitude. Height rather than window layer, because
+    /// ScreenCaptureKit does not report menu-extra layers consistently and
+    /// a layer test can reject the very window it should pick.
+    ///
+    /// Ties break on *smallest area*, so an open dropdown never wins over
+    /// the button that raised it.
+    ///
+    /// Deliberately does not filter on `isOnScreen`: ScreenCaptureKit is
+    /// already restricted to on-screen windows, and menu-bar extras do not
+    /// reliably report the flag either.
     static func chooseStatusItem(
         from candidates: [CandidateWindow],
-        ownerPIDs: Set<pid_t>,
-        frontToBack: [UInt32]
+        axFrame: CGRect
     ) -> CandidateWindow? {
-        let owned = ownedStatusItem(candidates, ownerPIDs: ownerPIDs)
-        guard !owned.isEmpty else { return nil }
-        return owned.min { lhs, rhs in
-            if lhs.area != rhs.area { return lhs.area < rhs.area }
-            return depth(of: lhs.windowID, in: frontToBack) < depth(of: rhs.windowID, in: frontToBack)
-        }
+        let centre = CGPoint(x: axFrame.midX, y: axFrame.midY)
+        let tallestHost = Double(axFrame.height) * hostHeightTolerance
+        return candidates
+            .filter {
+                $0.area > 0
+                    && $0.frame.contains(centre)
+                    && Double($0.frame.height) <= tallestHost
+            }
+            .min { $0.area < $1.area }
     }
 
     /// Reported pids for processes owning content windows `choose` would
@@ -81,34 +106,17 @@ enum WindowChooser {
         Set(ownedContent(candidates, bundleID: bundleID).compactMap(\.pid))
     }
 
-    /// Reported pids for daemon windows `chooseStatusItem` would consider.
-    /// Two live daemons each showing a badge is the case this catches.
-    static func statusItemOwners(
-        from candidates: [CandidateWindow],
-        ownerPIDs: Set<pid_t>
-    ) -> Set<pid_t> {
-        Set(ownedStatusItem(candidates, ownerPIDs: ownerPIDs).compactMap(\.pid))
-    }
-
-    // The two selectors and their ambiguity checks share these filters, so
-    // a check can never disagree with the selector it guards about which
-    // windows are in scope.
+    // `choose` and its ambiguity check share this filter, so the check can
+    // never disagree with the selector it guards about which windows are in
+    // scope. `chooseStatusItem` needs no such pairing: it selects on
+    // geometry, and its ambiguity is settled upstream by
+    // `StatusItemLocator`, before any window is considered.
     private static func ownedContent(
         _ candidates: [CandidateWindow],
         bundleID: String
     ) -> [CandidateWindow] {
         candidates.filter {
             $0.bundleID == bundleID && $0.isOnScreen && $0.layer < overlayLayer
-        }
-    }
-
-    private static func ownedStatusItem(
-        _ candidates: [CandidateWindow],
-        ownerPIDs: Set<pid_t>
-    ) -> [CandidateWindow] {
-        candidates.filter {
-            guard let pid = $0.pid else { return false }
-            return ownerPIDs.contains(pid) && $0.area > 0
         }
     }
 

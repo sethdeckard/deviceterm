@@ -129,15 +129,17 @@ PY
 # checks scope to the window being driven. Otherwise another window's
 # focused pane would satisfy an app-wide check on its own.
 #
-# Both print nothing when handed a failed or truncated dump. Every caller below
-# first uses `require_ax_dump`, so that defensive parser behavior can never turn
-# an acquisition failure into an absent pane.
+# Both print nothing when handed a failed, truncated, or unreadable dump, and
+# `unreadable` must be present and false: a reply without that field cannot
+# vouch for a childless tree. Every caller below first uses `require_ax_dump`,
+# so that defensive parser behavior can never turn an acquisition failure into
+# an absent pane.
 pane_ids() {
     python3 - "$1" <<'PY'
 import json, sys
 try:
     r = json.load(open(sys.argv[1]))
-    if r.get("ok") is not True or r.get("truncated"): raise SystemExit
+    if r.get("ok") is not True or r.get("truncated") or r.get("unreadable") is not False: raise SystemExit
     found = []
     def walk(node):
         if isinstance(node, dict):
@@ -158,7 +160,7 @@ window_panes() {
 import json, sys
 try:
     r = json.load(open(sys.argv[1]))
-    if r.get("ok") is not True or r.get("truncated"): raise SystemExit
+    if r.get("ok") is not True or r.get("truncated") or r.get("unreadable") is not False: raise SystemExit
     target, windows = sys.argv[2], []
     def walk(node, bucket):
         if not isinstance(node, dict): return

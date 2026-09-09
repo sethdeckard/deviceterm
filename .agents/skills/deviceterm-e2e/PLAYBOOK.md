@@ -87,7 +87,7 @@ produces a reply (see below). Reply shapes:
 | `doctor` | `{ok, resident, pid, bundleId, bundlePath, screenRecording, accessibility}` |
 | `capture window --out <p> [--bundle-id <id>]` | `{ok:true, path, width, height, scale, bundleId}` |
 | `capture status-item --out <p>` | present: `{ok:true, present:true, path, width, height, scale}`; hidden: `{ok:true, present:false}` |
-| `ax dump [--bundle-id <id>]` | `{ok:true, bundleId, truncated, tree}` |
+| `ax dump [--bundle-id <id>]` | `{ok:true, bundleId, truncated, unreadable, tree}` |
 | `drive key <shortcut>` | `{ok:true, shortcut, bundleId, pid}` |
 | `drive click <x> <y>` | `{ok:true, bundleId, x, y, screenX, screenY}` |
 | `drive click --ax <label>` | `{ok:true, ax, bundleId}` |
@@ -168,7 +168,7 @@ down with the sheet composited over it, so the image's dimensions track the
 sheet while its content is the window behind it. The close prompts are sheets
 (scenario 5); the quit prompt is an app-modal alert (scenario 6).
 `capture status-item`
-grabs just the daemon's menu-bar badge window (or reports it absent). There is
+grabs just the daemon's menu-bar badge (or reports it absent). There is
 no full-screen capture, so nothing on screen outside deviceterm is ever
 photographed, and multi-monitor setups are a non-issue.
 
@@ -239,8 +239,9 @@ one.
   restores focus), so run scenarios on an **idle machine** — like XCUITest. A
   stray keystroke landing in the user's editor mid-drive is the failure mode.
 - Capture the **status item** (menu bar) with `capture status-item`, never
-  `capture window` — it is a daemon-owned `NSStatusItem` window, not part of any
-  deviceterm app window.
+  `capture window` — it is the daemon's `NSStatusItem`, not part of any
+  deviceterm app window. (Its *window* belongs to Control Center, which hosts
+  every menu-bar extra; the harness finds it through accessibility.)
 - Use `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh` for AX assertions. A
   raw `ax dump` can intermittently
   return no reply or a degenerate tree (`AXApplication` nested inside itself,
@@ -249,7 +250,16 @@ one.
 - A node marked `"skipped": true` was deliberately not descended into, and it
   carries no `children` key. This is **not** `truncated`, which means a limit
   ran out: re-dumping or raising a ceiling will never reveal a skipped subtree,
-  so don't treat it as a flake. The dump walks from the application element, so
+  so don't treat it as a flake.
+- A third marker, `"unreadable": true`, means some read on that node failed:
+  its children, one of the attributes above, or its frame. The reply carries a
+  top-level `unreadable` flag when it happened anywhere. Unlike the other two
+  this one *is* worth retrying, because what failed is unknown rather than
+  absent. It exists because a failed read would otherwise serialize exactly
+  like an element that has nothing: a childless node, or one carrying no
+  `identifier`, which is how a timed-out walk comes to read as an empty UI or a
+  short pill list. `ax-dump.sh` and `tab-pills.sh` refuse such a dump for you,
+  so you only meet this using the raw client. The dump walks from the application element, so
   the menu bar comes along; the leading menu bar item is the Apple menu, which
   macOS owns and fills, and it is skipped because a dump of the target app's UI
   has no business carrying another program's. Every other menu, deviceterm's own
@@ -966,11 +976,32 @@ appear.
   Drive `Close` via `drive click --ax "Close"` to dismiss. Forcing a failure is
   hard to do safely; treat this variant as opportunistic.
 
-### 4. Status item badge *(needs a sim — menu bar, daemon-owned)*
+### 4. Status item badge *(needs a sim — the daemon's menu-bar item)*
+
+**Pair every `capture status-item` reply with the daemon's own AX tree**, which
+publishes the badge directly:
+
+```sh
+.agents/skills/deviceterm-e2e/helpers/ax-dump.sh --bundle-id com.deviceterm.daemon
+```
+
+Present, it carries one `AXMenuBarItem` whose `title` is the count and whose
+`description` is `Booted Simulators`; hidden, it has no menu bar item at all.
+That is a second, independent reading of the same number, and it is what makes
+`present:false` checkable. On its own that reply is indistinguishable from the
+legitimate hidden-at-zero state, so a capture regression looks exactly like a
+passing baseline — which is how one shipped. Disagreement between the two is the
+finding; report both.
+
+The window the capture matches belongs to **Control Center**, not to the daemon:
+macOS hosts every menu-bar extra in its process. Nothing in the reply exposes
+that, but don't go looking for a daemon-owned window when diagnosing, and don't
+expect a dump of `com.deviceterm` (the app) to carry the badge either.
 
 - **Baseline:** before booting anything, run `capture status-item` with a fresh
   output path. If the reply reports `present:true`, read the badge integer B
   from the PNG. If it reports `present:false`, B is zero and there is no PNG.
+  Confirm either reading against the AX dump above.
   Do not derive B by counting `ownerSessionId` fields: ownership attached to a
   protected tab is deliberately hidden from other callers even though its sim
   still contributes to the daemon's badge.
@@ -979,15 +1010,20 @@ appear.
   `Booted` and attributed to your session; that checks the test mutation, not
   the workspace-wide badge total.
 - **Observe:** run `capture status-item` again with another fresh output path.
-  This captures **just** the daemon's badge window (not a display), so it's
+  This captures **just** the badge (not a display), so it's
   monitor-independent. Read the PNG; it shows a **monochrome iPhone glyph
   followed by B + 1**. The glyph is a template image, so its color tracks the
   menu bar's appearance — read the integer, not the ink.
 - **Verify:** the second reply reports `present:true` and its badge integer is
-  exactly B + 1. Shut down only the sim this scenario booted, then capture once
-  more: the badge returns to B. For B > 0 that means `present:true` with B in
-  the PNG; for B = 0 the item is hidden entirely and the reply is
-  **`{ok:true, present:false}`** with no PNG.
+  exactly B + 1, and the AX dump's `AXMenuBarItem` `title` agrees. Shut down only
+  the sim this scenario booted, then capture once more: the badge returns to B.
+  For B > 0 that means `present:true` with B in the PNG; for B = 0 the item is
+  hidden entirely and the reply is **`{ok:true, present:false}`** with no PNG,
+  and the AX dump carries no menu bar item.
+
+  A `present:false` while the AX dump still reports a `title` means the capture
+  is failing to find a badge that is drawn. Report both readings rather than
+  re-running: it reproduces.
 
 ### 5. Close-tab prompt *(two arms; the multi-pane one needs no sim)*
 

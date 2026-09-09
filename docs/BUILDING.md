@@ -521,11 +521,12 @@ The two permissions:
   human sees them. An in-app self-render would miss those layers.
 - **Accessibility**: reading DeviceTerm's AppKit accessibility tree and
   posting the GUI-only gestures (menu clicks, drag, keyboard shortcuts)
-  that have no CLI equivalent. It is also the only way to dismiss an
-  app-modal `NSAlert`, which blocks DeviceTerm's own main run loop. The
-  tab, pane, and window close prompts are window-modal sheets and don't
-  block, but plenty of alerts still do, the quit-with-sims prompt and
-  cold-start orphan recovery among them.
+  that have no CLI equivalent. It also locates the menu-bar status item,
+  which `capture status-item` cannot find any other way. It is the only
+  way to dismiss an app-modal `NSAlert`, which blocks DeviceTerm's own
+  main run loop. The tab, pane, and window close prompts are window-modal
+  sheets and don't block, but plenty of alerts still do, the quit-with-sims
+  prompt and cold-start orphan recovery among them.
 
 With `CODESIGN_IDENTITY` set in `.env.release` the harness is signed with a
 stable Developer-ID identity, so TCC keys on the signature (not a
@@ -548,16 +549,27 @@ back to your shell.
 deviceterm-uitest ping
 deviceterm-uitest doctor
 deviceterm-uitest capture window --out /tmp/win.png       # DeviceTerm's frontmost window (incl. a modal alert)
-deviceterm-uitest capture status-item --out /tmp/badge.png # just the daemon's menu bar badge window
+deviceterm-uitest capture status-item --out /tmp/badge.png # just the daemon's menu bar badge
 ```
 
 The harness captures only DeviceTerm’s own windows, never a whole display. It
 can’t screenshot other apps or the desktop.
 
-The status item belongs to the daemon, not the app. `capture status-item`
-selects that daemon-owned window directly. A visible badge returns
-`present:true` and writes the PNG. When no owned Simulator is booted, the badge
-is hidden and the command returns `present:false` without a PNG.
+The status item belongs to the daemon, not the app, so a window capture of
+DeviceTerm never contains it. `capture status-item` grabs it on its own.
+
+Its window, though, belongs to Control Center, which hosts every menu-bar extra
+on macOS. Neither bundle id reaches that window, so the harness reads the
+badge's position from the daemon's accessibility tree and captures the window
+sitting at that position. That is why this one command needs Accessibility as
+well as Screen Recording.
+
+A drawn badge returns `present:true` and writes the PNG. You get
+`present:false` and no PNG when no badge is on screen: no daemon is running, no
+running daemon publishes a menu-bar item (which is what zero owned Simulators
+looks like), or the item it publishes has no on-screen window because the bar is
+full. An accessibility read that fails is an error instead, deliberately,
+because a badge nobody could read is not a badge that isn't there.
 
 ### Smoke track and the E2E skill
 

@@ -16,6 +16,10 @@ import Foundation
 /// keeps one `ax dump` from hanging the harness or returning a megabyte of
 /// JSON an agent cannot use.
 enum AXTreeBuilder {
+    /// Marks a node the walk could not read: either its own attributes or its
+    /// children. Set by `attributes` for the former, here for the latter.
+    static let unreadableKey = "unreadable"
+
     /// Walk `root` depth-first into a JSON-ready dictionary.
     ///
     /// Any node whose children were dropped, because the depth ceiling or
@@ -23,8 +27,14 @@ enum AXTreeBuilder {
     /// overall result reports whether that happened anywhere. A caller can
     /// then tell "this app has no more children" from "we stopped looking."
     ///
-    /// `shouldDescend` is consulted for each child before it is walked,
-    /// and never for the root, which is always walked. Declining emits the
+    /// `children` returning nil means the read failed, as distinct from an
+    /// element that has none. That node is marked `"unreadable": true` and
+    /// the overall result reports it, so a caller can tell "nothing there"
+    /// from "we could not look". Folding the two together is how a timed-out
+    /// read comes to serialize identically to an empty UI.
+    ///
+    /// `shouldDescend` is consulted for each child, given the attributes the
+    /// walk just read for it, and never for the root, which is always walked. Declining emits the
     /// node marked `"skipped": true` and never asks for its children, a
     /// third state kept distinct from `truncated`: the walk stopped by
     /// policy, so raising the limits reveals no more. The marker reports
@@ -34,22 +44,39 @@ enum AXTreeBuilder {
         root: Element,
         limits: AXTreeLimits = .default,
         attributes: (Element) -> [String: Any],
-        children: (Element) -> [Element],
-        shouldDescend: (_ element: Element, _ siblingIndex: Int) -> Bool = { _, _ in true }
-    ) -> (root: [String: Any], truncated: Bool) {
+        children: (Element) -> [Element]?,
+        shouldDescend: (
+            _ attributes: [String: Any],
+            _ siblingIndex: Int
+        ) -> Bool = { _, _ in true }
+    ) -> AXTreeResult {
         var budget = limits.maxNodes
         var truncated = false
+        var unreadable = false
 
-        func visit(_ element: Element, depth: Int, descend: Bool) -> [String: Any] {
+        func visit(_ element: Element, depth: Int, siblingIndex: Int) -> [String: Any] {
             var node = attributes(element)
             budget -= 1
+            // The policy reads what the walk already read, rather than going
+            // back to the element. A second read can disagree with the first,
+            // and a policy deciding on its own failed read would prune (or
+            // fail to prune) a subtree the emitted node cannot account for.
+            let descend = siblingIndex < 0 || shouldDescend(node, siblingIndex)
+            // `attributes` marks a node it could not read. Aggregate that into
+            // the walk-wide flag, so an unreadable node anywhere is reported
+            // even when every `children` read succeeded.
+            if node[unreadableKey] as? Bool == true { unreadable = true }
 
             guard descend else {
                 node["skipped"] = true
                 return node
             }
 
-            let kids = children(element)
+            guard let kids = children(element) else {
+                unreadable = true
+                node[unreadableKey] = true
+                return node
+            }
             guard !kids.isEmpty else { return node }
 
             if depth >= limits.maxDepth {
@@ -66,9 +93,7 @@ enum AXTreeBuilder {
                     node["truncated"] = true
                     break
                 }
-                emitted.append(
-                    visit(kid, depth: depth + 1, descend: shouldDescend(kid, index))
-                )
+                emitted.append(visit(kid, depth: depth + 1, siblingIndex: index))
             }
             if !emitted.isEmpty { node["children"] = emitted }
             return node
@@ -76,7 +101,9 @@ enum AXTreeBuilder {
 
         // The root always costs one node, even when `maxNodes` is 0: an
         // empty dictionary would be a less useful answer than a bare root.
-        let tree = visit(root, depth: 0, descend: true)
-        return (tree, truncated)
+        // A negative sibling index marks the root, which is never offered to
+        // the policy.
+        let tree = visit(root, depth: 0, siblingIndex: -1)
+        return AXTreeResult(tree: tree, truncated: truncated, unreadable: unreadable)
     }
 }

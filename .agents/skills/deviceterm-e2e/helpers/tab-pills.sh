@@ -65,6 +65,15 @@ if report.get("ok") is not True:
     sys.exit(f"tab-pills.sh: the dump reports ok:false ({report.get('error', 'no reason given')})")
 if report.get("truncated"):
     sys.exit("tab-pills.sh: the dump is truncated, so pills are missing from it — re-dump")
+# Matters most for a dump passed as an argument: a fresh one already passed
+# through ax-dump.sh, and a supplied file may not have.
+if "unreadable" not in report:
+    sys.exit(
+        "tab-pills.sh: the dump has no 'unreadable' field, so its completeness "
+        "cannot be verified — re-dump"
+    )
+if report["unreadable"]:
+    sys.exit("tab-pills.sh: the dump could not read some nodes, so pills may be missing — re-dump")
 
 found = []
 

@@ -17,8 +17,8 @@ struct AXTreeBuilderTests {
     private func build(
         _ root: FakeElement,
         limits: AXTreeLimits,
-        shouldDescend: (FakeElement, Int) -> Bool = { _, _ in true }
-    ) -> (root: [String: Any], truncated: Bool) {
+        shouldDescend: ([String: Any], Int) -> Bool = { _, _ in true }
+    ) -> AXTreeResult {
         AXTreeBuilder.build(
             root: root,
             limits: limits,
@@ -26,6 +26,96 @@ struct AXTreeBuilderTests {
             children: { $0.kids },
             shouldDescend: shouldDescend
         )
+    }
+
+    /// A failed `AXChildren` read must not serialize like a childless node:
+    /// that is how a timed-out walk comes to look like an empty UI.
+    @Test
+    func marksANodeWhoseChildrenCouldNotBeRead() {
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root"),
+            limits: .default,
+            attributes: { ["role": $0.name] },
+            children: { _ in nil }
+        )
+        #expect(result.unreadable)
+        #expect(result.tree["unreadable"] as? Bool == true)
+        #expect(result.tree["children"] == nil)
+    }
+
+    /// The marker is per-node and the flag is for the whole walk, so an
+    /// unreadable child is reported even when the root read fine.
+    @Test
+    func reportsAnUnreadableChildBeneathAReadableRoot() {
+        let leaf = FakeElement(name: "leaf")
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root", kids: [leaf]),
+            limits: .default,
+            attributes: { ["role": $0.name] },
+            children: { $0.name == "leaf" ? nil : $0.kids }
+        )
+        #expect(result.unreadable)
+        #expect(result.tree["unreadable"] == nil)
+        let kids = result.tree["children"] as? [[String: Any]]
+        #expect(kids?.first?["unreadable"] as? Bool == true)
+    }
+
+    /// `attributes` marks a node it could not read, and that must reach the
+    /// walk-wide flag even when every `children` read succeeded. Otherwise a
+    /// node whose role read timed out serializes as an ordinary one that
+    /// simply matches no predicate, and a caller counting roles scores it
+    /// zero and calls that an observation.
+    @Test
+    func aggregatesANodeTheAttributeReaderMarkedUnreadable() {
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root", kids: [FakeElement(name: "leaf")]),
+            limits: .default,
+            attributes: { element in
+                element.name == "leaf"
+                    ? [AXTreeBuilder.unreadableKey: true]
+                    : ["role": element.name]
+            },
+            children: { $0.kids }
+        )
+        #expect(result.unreadable)
+        let kids = result.tree["children"] as? [[String: Any]]
+        #expect(kids?.first?[AXTreeBuilder.unreadableKey] as? Bool == true)
+    }
+
+    /// The policy is handed the attributes the walk already read, so it can
+    /// never disagree with the emitted node about what the element is. A
+    /// second read could, and a policy pruning on its own failed read would
+    /// leave a subtree missing from a dump nothing marked.
+    @Test
+    func thePolicyDecidesFromTheAttributesTheWalkRead() {
+        var offered: [[String: Any]] = []
+        _ = AXTreeBuilder.build(
+            root: FakeElement(name: "root", kids: [FakeElement(name: "kid")]),
+            limits: .default,
+            attributes: { ["role": $0.name, "identifier": "id.\($0.name)"] },
+            children: { $0.kids },
+            shouldDescend: { node, _ in
+                offered.append(node)
+                return true
+            }
+        )
+        #expect(offered.count == 1)
+        #expect(offered.first?["role"] as? String == "kid")
+        #expect(offered.first?["identifier"] as? String == "id.kid")
+    }
+
+    /// A genuinely childless node stays unmarked, or the flag would fire on
+    /// every leaf and mean nothing.
+    @Test
+    func aChildlessNodeIsNotMarkedUnreadable() {
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root"),
+            limits: .default,
+            attributes: { ["role": $0.name] },
+            children: { $0.kids }
+        )
+        #expect(!result.unreadable)
+        #expect(result.tree["unreadable"] == nil)
     }
 
     /// A chain `a → b → c …` `depth` links long.
@@ -50,10 +140,10 @@ struct AXTreeBuilderTests {
         let result = build(tree, limits: AXTreeLimits(maxDepth: 10, maxNodes: 100))
 
         #expect(result.truncated == false)
-        #expect(result.root["role"] as? String == "AXApplication")
-        #expect(childRoles(result.root) == ["AXWindow"])
+        #expect(result.tree["role"] as? String == "AXApplication")
+        #expect(childRoles(result.tree) == ["AXWindow"])
 
-        let window = try #require((result.root["children"] as? [[String: Any]])?.first)
+        let window = try #require((result.tree["children"] as? [[String: Any]])?.first)
         #expect(childRoles(window) == ["AXButton"])
     }
 
@@ -63,8 +153,8 @@ struct AXTreeBuilderTests {
     func aLeafIsNotMarkedTruncated() {
         let result = build(FakeElement(name: "AXButton"), limits: AXTreeLimits(maxDepth: 0, maxNodes: 1))
         #expect(result.truncated == false)
-        #expect(result.root["truncated"] == nil)
-        #expect(result.root["children"] == nil)
+        #expect(result.tree["truncated"] == nil)
+        #expect(result.tree["children"] == nil)
     }
 
     @Test
@@ -73,7 +163,7 @@ struct AXTreeBuilderTests {
         #expect(result.truncated)
 
         // root(0) → child(1) → child(2, marked, children dropped)
-        let level1 = (result.root["children"] as? [[String: Any]])?.first
+        let level1 = (result.tree["children"] as? [[String: Any]])?.first
         let level2 = (level1?["children"] as? [[String: Any]])?.first
         #expect(level2?["role"] as? String == "n2")
         #expect(level2?["truncated"] as? Bool == true)
@@ -87,8 +177,8 @@ struct AXTreeBuilderTests {
         let result = build(wide, limits: AXTreeLimits(maxDepth: 10, maxNodes: 3))
 
         #expect(result.truncated)
-        #expect(result.root["truncated"] as? Bool == true)
-        #expect(childRoles(result.root) == ["kid0", "kid1"])
+        #expect(result.tree["truncated"] as? Bool == true)
+        #expect(childRoles(result.tree) == ["kid0", "kid1"])
     }
 
     /// The budget is global, not per-level: a deep-but-narrow tree exhausts
@@ -98,7 +188,7 @@ struct AXTreeBuilderTests {
         let result = build(chain(depth: 10), limits: AXTreeLimits(maxDepth: 100, maxNodes: 4))
         #expect(result.truncated)
 
-        var node: [String: Any]? = result.root
+        var node: [String: Any]? = result.tree
         var visited = 0
         while let current = node {
             visited += 1
@@ -116,14 +206,14 @@ struct AXTreeBuilderTests {
         let result = build(
             tree,
             limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
-            shouldDescend: { element, _ in element.name != "closed" }
+            shouldDescend: { node, _ in node["role"] as? String != "closed" }
         )
 
         // A declined subtree is not truncation: nothing ran out.
         #expect(result.truncated == false)
-        #expect(childRoles(result.root) == ["closed", "open"])
+        #expect(childRoles(result.tree) == ["closed", "open"])
 
-        let kids = try #require(result.root["children"] as? [[String: Any]])
+        let kids = try #require(result.tree["children"] as? [[String: Any]])
         #expect(kids[0]["skipped"] as? Bool == true)
         #expect(kids[0]["truncated"] == nil)
         #expect(kids[0]["children"] == nil)
@@ -149,7 +239,7 @@ struct AXTreeBuilderTests {
                 read.append($0.name)
                 return $0.kids
             },
-            shouldDescend: { element, _ in element.name != "closed" }
+            shouldDescend: { node, _ in node["role"] as? String != "closed" }
         )
         #expect(read == ["root"])
     }
@@ -164,8 +254,8 @@ struct AXTreeBuilderTests {
         _ = build(
             tree,
             limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
-            shouldDescend: { element, index in
-                seen[element.name] = index
+            shouldDescend: { node, index in
+                seen[node["role"] as? String ?? "?"] = index
                 return true
             }
         )
@@ -185,10 +275,10 @@ struct AXTreeBuilderTests {
             shouldDescend: { _, _ in false }
         )
 
-        #expect(result.root["skipped"] == nil)
-        #expect(childRoles(result.root) == ["kid"])
+        #expect(result.tree["skipped"] == nil)
+        #expect(childRoles(result.tree) == ["kid"])
 
-        let kid = (result.root["children"] as? [[String: Any]])?.first
+        let kid = (result.tree["children"] as? [[String: Any]])?.first
         #expect(kid?["skipped"] as? Bool == true)
         #expect(kid?["children"] == nil)
     }
@@ -204,7 +294,7 @@ struct AXTreeBuilderTests {
             shouldDescend: { _, _ in false }
         )
 
-        let leaf = (result.root["children"] as? [[String: Any]])?.first
+        let leaf = (result.tree["children"] as? [[String: Any]])?.first
         #expect(leaf?["skipped"] as? Bool == true)
     }
 

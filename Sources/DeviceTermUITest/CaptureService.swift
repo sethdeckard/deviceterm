@@ -17,6 +17,11 @@ import ScreenCaptureKit
 /// which is the whole reason it exists as a separate binary. When the grant
 /// is missing, ScreenCaptureKit throws and `captureFailed` carries a hint.
 enum CaptureService {
+    /// How many times to locate the status item before giving up. Two
+    /// attempts allow one transient: a badge frame that would not read, or
+    /// one that moved between the reads bracketing the snapshot.
+    private static let statusItemLocateAttempts = 2
+
     /// Screenshot the frontmost content window owned by `bundleID`: the
     /// main window, or an app-modal alert on top of it.
     static func captureWindow(bundleID: String, out path: String) async throws -> CaptureOutcome {
@@ -38,8 +43,16 @@ enum CaptureService {
         else {
             throw CaptureError.noMatchingWindow(bundleID: bundleID)
         }
+        return try await writeCapture(of: window, displays: content.displays, to: path)
+    }
 
-        let scale = backingScale(containing: window.frame, displays: content.displays)
+    /// Screenshot one window at its native pixel size and write the PNG.
+    private static func writeCapture(
+        of window: SCWindow,
+        displays: [SCDisplay],
+        to path: String
+    ) async throws -> CaptureOutcome {
+        let scale = backingScale(containing: window.frame, displays: displays)
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let image = try await capture(
             filter: filter,
@@ -55,58 +68,75 @@ enum CaptureService {
         )
     }
 
-    /// Screenshot just the daemon's menu-bar status-item window (the one
-    /// showing the iPhone glyph and count), or report it absent.
+    /// Screenshot just the window hosting the daemon's menu-bar status item
+    /// (the one showing the iPhone glyph and count), or report it absent.
     ///
-    /// The status item is the daemon's own on-screen window, so it is
-    /// captured per-window like any other. The harness never captures a
-    /// whole display, so this is the only way it can see the status item.
-    /// "No such window" is a first-class result: it *is* the hidden-at-zero
-    /// state, not an error.
+    /// The harness never captures a whole display, so a per-window capture
+    /// is the only way it can see the status item. The window is Control
+    /// Center's rather than the daemon's, so accessibility supplies the
+    /// frame and the window is matched against it.
+    ///
+    /// Absent is a first-class result, reached three ways: no daemon is
+    /// running, no running daemon publishes a menu-bar item (the
+    /// hidden-at-zero-sims state), or one does and no on-screen window
+    /// contains its frame. All three mean "not on screen to capture".
     static func captureStatusItem(out path: String) async throws -> StatusItemCapture {
         try requireWritablePath(path)
-        let content = try await shareableContent(onScreenWindowsOnly: true)
-        let candidates = content.windows.map(candidate(from:))
-        let daemonProcesses = TargetOwners.live(bundleID: DeviceTermBundleID.daemon)
-        let daemonPIDs = Set(daemonProcesses)
-        // Only once a badge is on screen does ambiguity change the answer.
-        // Two daemons with no badge between them still means absent, and
-        // that holds whichever one the caller meant; refusing there would
-        // turn the ordinary hidden-at-zero-sims state into an error.
-        let badgeOwners = WindowChooser.statusItemOwners(
-            from: candidates,
-            ownerPIDs: daemonPIDs
-        )
-        if !badgeOwners.isEmpty {
-            try requireOneTarget(
-                bundleID: DeviceTermBundleID.daemon,
-                processes: daemonProcesses,
-                windowOwners: badgeOwners
-            )
+        let daemon = DeviceTermBundleID.daemon
+        for attempt in 0 ..< statusItemLocateAttempts {
+            let isLast = attempt + 1 == statusItemLocateAttempts
+            do {
+                if let capture = try await locateAndCapture(daemon: daemon, out: path) {
+                    return capture
+                }
+            } catch CaptureError.statusItemUnreadable where !isLast {
+                // An unreadable element can be transient, a menu bar mid-reflow
+                // among the possibilities, so retry once before surfacing it.
+                continue
+            }
         }
-        guard
-            let chosen = WindowChooser.chooseStatusItem(
-                from: candidates,
-                ownerPIDs: daemonPIDs,
-                frontToBack: frontToBackWindowIDs()
-            ),
-            let window = content.windows.first(where: { $0.windowID == chosen.windowID })
-        else {
-            // Hidden: leave no PNG at `out`, so a caller reusing a path that
-            // held an earlier badge capture doesn't read the stale image as
-            // if the item were still present. `requireWritablePath` already
-            // rejected a directory, so this only unlinks a regular file.
+        throw CaptureError.statusItemUnstable(bundleID: daemon)
+    }
+
+    /// One attempt at the status-item capture. Nil means the badge frame
+    /// differed across the reads bracketing the snapshot, so the caller
+    /// should try again.
+    private static func locateAndCapture(
+        daemon: String,
+        out path: String
+    ) async throws -> StatusItemCapture? {
+        // Accessibility locates the badge; the window server cannot, since
+        // Control Center owns the window. `StatusItemLocator` also settles
+        // instance ambiguity up front, before any window is considered.
+        guard let axFrame = try StatusItemLocator.badgeFrame(bundleID: daemon) else {
             try removeStaleFile(at: path)
             return .absent
         }
-
-        let scale = backingScale(containing: window.frame, displays: content.displays)
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let image = try await capture(filter: filter, pointSize: window.frame.size, scale: scale)
-        try PNGWriter.write(image, to: path)
-        return .present(
-            CaptureOutcome(path: path, width: image.width, height: image.height, scale: Double(scale))
-        )
+        let content = try await shareableContent(onScreenWindowsOnly: true)
+        // The menu bar reflows whenever an extra comes or goes, and the
+        // snapshot above is awaited. Read the frame again on the far side: if
+        // it moved, these coordinates now name whichever extra slid into them,
+        // and capturing there would label another app's item as deviceterm's
+        // badge. Matching reads bracket the snapshot, so the position it was
+        // taken at is one the badge held.
+        guard try StatusItemLocator.badgeFrame(bundleID: daemon) == axFrame else { return nil }
+        guard
+            let chosen = WindowChooser.chooseStatusItem(
+                from: content.windows.map(candidate(from:)),
+                axFrame: axFrame
+            ),
+            let window = content.windows.first(where: { $0.windowID == chosen.windowID })
+        else {
+            // Published, but no on-screen window contains its frame. Leave no
+            // PNG at `out`, so a caller reusing a path that held an earlier
+            // badge capture doesn't read the stale image as if the item were
+            // still present. `requireWritablePath` already rejected a
+            // directory, so this only unlinks a regular file.
+            try removeStaleFile(at: path)
+            return .absent
+        }
+        let outcome = try await writeCapture(of: window, displays: content.displays, to: path)
+        return .present(outcome)
     }
 
     // MARK: - ScreenCaptureKit plumbing
@@ -223,7 +253,7 @@ enum CaptureService {
         CandidateWindow(
             windowID: window.windowID,
             layer: window.windowLayer,
-            area: Double(window.frame.width * window.frame.height),
+            frame: window.frame,
             bundleID: window.owningApplication?.bundleIdentifier,
             isOnScreen: window.isOnScreen,
             pid: window.owningApplication?.processID
