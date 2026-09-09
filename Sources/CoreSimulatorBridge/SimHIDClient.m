@@ -393,7 +393,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
     // touch struct out of. We pass `ratio` as if it were a point, since we'll
     // overwrite xRatio/yRatio anyway.
     CGPoint pt = ratio;
-    IndigoMessage *base = self.fnMouse(&pt, NULL, 0x32, direction, NO);
+    IndigoMessage *base = self.fnMouse(&pt, NULL, ButtonEventTargetDigitizer, direction, NO);
     if (!base) return NULL;
     base->payload.event.touch.xRatio = ratio.x;
     base->payload.event.touch.yRatio = ratio.y;
@@ -402,7 +402,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
     IndigoMessage *out = calloc(1, messageSize);
     out->innerSize = sizeof(IndigoPayload);
     out->eventType = IndigoEventTypeTouch;
-    out->payload.field1 = 0x0000000b;
+    out->payload.eventKind = 0x0000000b;
     out->payload.timestamp = mach_absolute_time();
     memcpy(&(out->payload.event.button), &(base->payload.event.button), sizeof(IndigoTouch));
     free(base);
@@ -437,8 +437,8 @@ static BOOL CSBIsNilMessage(NSError *error) {
 /// true 6-arg `fnMouseEdge` so the touch carries an originating screen
 /// `edge` (`IndigoHIDEdge`), which is what routes it to SpringBoard's
 /// system edge-gesture recognizer instead of app content. The edge lands
-/// in the high bytes of `IndigoTouch.field3` (0x38), alongside the
-/// constant low half-word the plain path also writes there.
+/// in the high bytes of `IndigoTouch.eventMask` (0x38), alongside the
+/// `IOHIDDigitizerEventMask` bits the plain path also writes there.
 ///
 /// `eventType` carries a down or an up, never a motion phase: the builder
 /// returns NULL for every motion `NSEventType` (see the `fnMouseEdge`
@@ -448,7 +448,8 @@ static BOOL CSBIsNilMessage(NSError *error) {
                                        eventType:(int)eventType
                                             edge:(int)edge {
     CGPoint pt = ratio;
-    IndigoMessage *base = self.fnMouseEdge(&pt, NULL, 0x32, (NSUInteger)eventType, CGSizeZero, (NSInteger)edge);
+    IndigoMessage *base = self.fnMouseEdge(&pt, NULL, ButtonEventTargetDigitizer, (NSUInteger)eventType, CGSizeZero,
+                                           (NSInteger)edge);
     if (!base) return NULL;
     base->payload.event.touch.xRatio = ratio.x;
     base->payload.event.touch.yRatio = ratio.y;
@@ -457,7 +458,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
     IndigoMessage *out = calloc(1, messageSize);
     out->innerSize = sizeof(IndigoPayload);
     out->eventType = IndigoEventTypeTouch;
-    out->payload.field1 = 0x0000000b;
+    out->payload.eventKind = 0x0000000b;
     out->payload.timestamp = mach_absolute_time();
     memcpy(&(out->payload.event.button), &(base->payload.event.button), sizeof(IndigoTouch));
     free(base);
@@ -520,15 +521,15 @@ static BOOL CSBIsNilMessage(NSError *error) {
         CGPoint untaggedPoint = CGPointMake(0.5, 0.99);
         // 3 is the bottom edge, the live-confirmed value the App Switcher
         // rides on; 0 is the untagged touch the plain path sends.
-        IndigoMessage *tagged = fn(&taggedPoint, NULL, 0x32, (NSUInteger)phases[i],
+        IndigoMessage *tagged = fn(&taggedPoint, NULL, ButtonEventTargetDigitizer, (NSUInteger)phases[i],
                                    CGSizeZero, (NSInteger)3);
-        IndigoMessage *untagged = fn(&untaggedPoint, NULL, 0x32, (NSUInteger)phases[i],
+        IndigoMessage *untagged = fn(&untaggedPoint, NULL, ButtonEventTargetDigitizer, (NSUInteger)phases[i],
                                      CGSizeZero, (NSInteger)0);
         BOOL built = (tagged != NULL && untagged != NULL);
-        // The edge lands in the high bytes of `field3`, so a tagged build
+        // The edge lands in the high bytes of `eventMask`, so a tagged build
         // that matches its untagged twin there never carried the tag.
-        BOOL tagLanded = built && tagged->payload.event.touch.field3
-                               != untagged->payload.event.touch.field3;
+        BOOL tagLanded = built && tagged->payload.event.touch.eventMask
+                               != untagged->payload.event.touch.eventMask;
         if (tagged) free(tagged);
         if (untagged) free(untagged);
         if (!built) {
@@ -575,7 +576,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
                                              direction:(int)direction {
     CGPoint r1 = ratio1;
     CGPoint r2 = ratio2;
-    IndigoMessage *message = self.fnMouse(&r1, &r2, 0x32, direction, NO);
+    IndigoMessage *message = self.fnMouse(&r1, &r2, ButtonEventTargetDigitizer, direction, NO);
     if (!message) return NULL;
 
     char *bytes = (char *)message;
@@ -657,6 +658,16 @@ static const int kCSBVoiceCommandUsage = 0xCF;
 /// "VoiceCommand page:0xC usage:0xCF" event. The old ButtonEventSourceSiri
 /// button source is rejected on iOS 26 and wedges the HID service, so it is
 /// never used.
+///
+/// The vendored `Indigo.h` says this cannot work: that the guest drops a HID
+/// usage addressed to `ButtonEventTargetHardware` with no log line and no
+/// error, and that only `ButtonEventTargetDigitizer` reaches the handler
+/// acting on usages. That is not what the guest does here. It logs the usage
+/// and drives the whole activation chain through SpringBoard and
+/// `SiriActivationService` to a presented Siri. The vendored header is a
+/// verbatim upstream snapshot and is not patched to match; trust this call
+/// site over its claim, and re-check both if Siri stops responding on a
+/// newer runtime.
 - (BOOL)_pressVoiceCommandWithError:(NSError **)error {
     BOOL ok = [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnHIDArbitrary(ButtonEventTargetHardware, kCSBConsumerUsagePage,

@@ -8,8 +8,8 @@
 #import <CoreSimulator/SimDevice.h>
 #import <CoreSimulator/SimDeviceIO.h>
 #import <CoreSimulator/SimDeviceIOProtocol-Protocol.h>
-#import <SimulatorKit/SimDisplayIOSurfaceRenderable-Protocol.h>
-#import <SimulatorKit/SimDisplayRenderable-Protocol.h>
+#import <CoreSimDeviceIO/SimDisplayIOSurfaceRenderable-Protocol.h>
+#import <CoreSimDeviceIO/SimDisplayRenderable-Protocol.h>
 
 #import <objc/runtime.h>
 
@@ -26,11 +26,21 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
     CSBDisplayHandleErrorNotStarted       = 27,
 };
 
-// The display proxy's orientation surface. Declared here rather than in
-// `PrivateHeaders/SimulatorKit/` because those are a wholesale snapshot of
-// idb's vendored headers (see `PrivateHeaders/UPSTREAM.md`, which says not
-// to hand-patch them); `SimScreen` is not in that snapshot, so a file added
-// there would be silently dropped by the next refresh.
+// The display proxy's orientation surface, declared locally even though the
+// vendored `CoreSimDeviceIO/SimScreen-Protocol.h` also declares `SimScreen`.
+// Two things that header does not provide:
+//
+//   - `screenProperties`. Upstream declares no such property, because idb's
+//     own consumer ignores the properties callback. `CSBOrientationFromScreen`
+//     reads it, so the accessor has to be declared somewhere.
+//   - Narrower callback blocks. Upstream types `surfacesChangedCallback` as
+//     `(id, id)` and `propertiesChangedCallback` as `(id)`; the zero-argument
+//     forms below are a deliberate narrowing, neither callback reading its
+//     arguments.
+//
+// Patching the vendored header instead is not an option: it is a wholesale
+// snapshot (see `PrivateHeaders/UPSTREAM.md`) and an edit there would be
+// dropped by the next refresh.
 //
 // Found by runtime introspection on macOS 26.5.2 / Xcode 26.6 against a
 // booted iOS 26.5 device. The live `com.apple.framebuffer.display`
@@ -39,7 +49,7 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
 // the same object, not a second lookup.
 //
 // `SimDisplayRotationAngleDelegate` / `didChangeDisplayAngle:` looks like
-// the natural source and is **not** usable: it is declared in SimulatorKit
+// the natural source and is **not** usable: it is declared in CoreSimDeviceIO
 // but no port or descriptor vends it, and no proxy answers `displayAngle`.
 @protocol CSBSimScreenProperties <NSObject>
 @property (nonatomic, readonly) unsigned int uiOrientation;
