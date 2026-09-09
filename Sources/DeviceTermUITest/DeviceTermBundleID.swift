@@ -20,4 +20,14 @@ enum DeviceTermBundleID {
 
     /// The faceless daemon helper that owns the menu-bar status item.
     static let daemon = "com.deviceterm.daemon"
+
+    /// The complete set of targets a request may name.
+    ///
+    /// A request may name a bundle id, so this is checked rather than
+    /// trusted. The Screen Recording and Accessibility grants were justified
+    /// by observing deviceterm and nothing else; without the check the
+    /// resident lends them to any app on the machine, since its socket is
+    /// reachable by every process running as the same user and none of those
+    /// hold the grants themselves.
+    static let targets: Set<String> = [app, daemon]
 }

@@ -92,6 +92,11 @@ produces a reply (see below). Reply shapes:
 | `drive click <x> <y>` | `{ok:true, bundleId, x, y, screenX, screenY}` |
 | `drive click --ax <label>` | `{ok:true, ax, bundleId}` |
 
+**`--bundle-id` reaches deviceterm and its daemon, and nothing else.** Any other
+target is refused before the harness uses either grant, so it is not a way to
+read, screenshot, or drive another app. The daemon is the one you will name in
+practice, for the status-item badge in scenario 4.
+
 **The two tools report failure differently, and neither is stdout-only, so
 read both streams and lead with the exit status.**
 

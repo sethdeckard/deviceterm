@@ -47,13 +47,30 @@ struct Responder: Sendable {
         }
     }
 
+    /// The target a request names, or nil when it is not one this harness
+    /// acts on. Defaults to the app, so an unadorned request is unaffected.
+    private func target(of request: UITestRequest) -> String? {
+        let bundleID = request.params["bundleId"] ?? DeviceTermBundleID.app
+        return DeviceTermBundleID.targets.contains(bundleID) ? bundleID : nil
+    }
+
+    private func refuseForeignTarget(_ request: UITestRequest) -> Data {
+        let named = request.params["bundleId"] ?? DeviceTermBundleID.app
+        return UITestReply.failure(
+            "\(named) is not a target this harness acts on: it reads, captures, "
+            + "and drives \(DeviceTermBundleID.app) and "
+            + "\(DeviceTermBundleID.daemon) only. Its accessibility and screen "
+            + "recording grants exist for deviceterm alone."
+        )
+    }
+
     // MARK: - Input drive
 
     private func driveKey(_ request: UITestRequest) -> Data {
         guard let text = request.params["shortcut"] else {
             return UITestReply.failure("drive.key requires a 'shortcut'")
         }
-        let bundleID = request.params["bundleId"] ?? DeviceTermBundleID.app
+        guard let bundleID = target(of: request) else { return refuseForeignTarget(request) }
         do {
             let shortcut = try KeyShortcutParser.parse(text)
             let (_, pid) = try AXDumpService.applicationElement(bundleID: bundleID)
@@ -65,7 +82,7 @@ struct Responder: Sendable {
     }
 
     private func driveClick(_ request: UITestRequest) -> Data {
-        let bundleID = request.params["bundleId"] ?? DeviceTermBundleID.app
+        guard let bundleID = target(of: request) else { return refuseForeignTarget(request) }
         do {
             if let needle = request.params["ax"] {
                 try InputDriver.pressElement(matching: needle, bundleID: bundleID)
@@ -127,7 +144,7 @@ struct Responder: Sendable {
     // MARK: - Accessibility
 
     private func axDump(_ request: UITestRequest) -> Data {
-        let bundleID = request.params["bundleId"] ?? DeviceTermBundleID.app
+        guard let bundleID = target(of: request) else { return refuseForeignTarget(request) }
         do {
             let result = try AXDumpService.dump(bundleID: bundleID)
             return UITestReply.ok([
@@ -203,7 +220,7 @@ struct Responder: Sendable {
         guard let path = request.params["out"] else {
             return UITestReply.failure("capture.window requires an 'out' path")
         }
-        let bundleID = request.params["bundleId"] ?? DeviceTermBundleID.app
+        guard let bundleID = target(of: request) else { return refuseForeignTarget(request) }
         do {
             let outcome = try await CaptureService.captureWindow(bundleID: bundleID, out: path)
             return reply(for: outcome, extra: ["bundleId": bundleID])

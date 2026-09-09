@@ -219,7 +219,14 @@ enum InputDriver {
             if matches(element, needle: needle) { return element }
             guard depth < limits.maxDepth else { return nil }
 
-            for child in AXElementReader.children(of: element) {
+            for (index, child) in AXElementReader.children(of: element).enumerated() {
+                // Skipped rather than merely not descended into: pressing the
+                // Apple menu's own bar item opens system UI just as pressing
+                // an item inside it does.
+                guard AXTraversalPolicy.shouldEnter(
+                    role: AXElementReader.string(child, AXAttribute.role),
+                    siblingIndex: index
+                ) else { continue }
                 if let hit = visit(child, depth: depth + 1) { return hit }
             }
             return nil

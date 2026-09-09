@@ -48,9 +48,6 @@ enum AXDumpService {
         (AXAttribute.document, "document")
     ]
 
-    /// Role of a top-level item in an application's menu bar.
-    private static let menuBarItemRole = "AXMenuBarItem"
-
     /// The application-level AX element for `bundleID`, with the process-wide
     /// messaging timeout already applied.
     ///
@@ -117,22 +114,18 @@ enum AXDumpService {
     // MARK: - Traversal policy
 
     /// Whether the walk should descend into the node just read, which sits
-    /// at `siblingIndex` among its parent's children.
+    /// at `siblingIndex` among its parent's children. `AXTraversalPolicy`
+    /// holds the rule and the reasoning, shared with the input driver.
     ///
-    /// macOS owns and populates the leading Apple menu, so its
-    /// descendants belong to the system rather than to whichever
-    /// application was asked for. The rest of the bar is the target's own
-    /// and is walked normally. Position is the ownership signal because
-    /// titles are localized, so matching those would quietly stop working
-    /// on a non-English system.
-    ///
-    /// Decided from the attributes the walk already read, not a fresh read
-    /// of its own. A node whose role could not be read is marked unreadable
-    /// there, so a dump that descended on a failed read can never be
-    /// accepted, whichever way this call happened to go.
+    /// Decided from the attributes the walk already read rather than a fresh
+    /// read of its own: a second read can disagree with the first, and a
+    /// policy deciding on its own would prune, or fail to prune, a subtree
+    /// the emitted node cannot account for.
     private static func shouldDescend(node: [String: Any], siblingIndex: Int) -> Bool {
-        guard siblingIndex == 0 else { return true }
-        return node["role"] as? String != menuBarItemRole
+        AXTraversalPolicy.shouldEnter(
+            role: node["role"] as? String,
+            siblingIndex: siblingIndex
+        )
     }
 
     // MARK: - Element reading
