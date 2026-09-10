@@ -11,8 +11,8 @@ import Foundation
 /// CoreSimulator boundary, which doesn't expose its own version
 /// surface).
 ///
-/// Pure data type; `VersionReportFormat` renders it and the runner in
-/// main.swift fills in the fields (env reads, daemon ping).
+/// Pure data type; `VersionReportFormat` renders it and
+/// `versionOutcome` fills in the fields (env reads, daemon ping).
 public struct VersionReport: Encodable, Sendable, Equatable {
     /// `deviceterm-cli`'s own semver. Pinned at the CLI module's
     /// build-time constant.

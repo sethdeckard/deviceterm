@@ -8,9 +8,9 @@ import Testing
 // `deviceterm help` parsing + content invariants.
 //
 // Parser side: the three top-level triggers (`--help`, `-h`, `help`)
-// resolve to `.help`; the first non-flag token after one names a topic;
-// sub-command literals (e.g. `deviceterm text --help`) stay literals
-// because the trigger fires only in the verb position.
+// resolve to `.help`. The topic is the longest declared command path the
+// tail names, falling back to the first non-flag token for a verb the
+// command tree does not declare.
 //
 // Content side: the help text is where the practical gotchas have to
 // live. These tests pin the content invariants so a refactor can't
@@ -44,9 +44,10 @@ func parseHelpVerbResolvesToHelp() {
 
 @Test
 func parseHelpTriggersTakeFirstTrailingArgAsTopic() {
-    // The first non-flag token after a trigger names a topic page. All
-    // three spellings agree. Making `--help crown` behave differently
-    // from `help crown` would be a trap, not a feature.
+    // A topic the command tree does not declare resolves to the first
+    // non-flag token after the trigger. All three spellings agree.
+    // Making `--help crown` behave differently from `help crown` would
+    // be a trap, not a feature.
     #expect(CLICommands.parse(["deviceterm", "--help", "crown"]) == .help(topic: "crown"))
     #expect(CLICommands.parse(["deviceterm", "-h", "crown"]) == .help(topic: "crown"))
     #expect(CLICommands.parse(["deviceterm", "help", "crown"]) == .help(topic: "crown"))
@@ -91,9 +92,12 @@ func parseHelpTopicOutranksATrailingAllFlag() {
     // the signature into a help request must still reach the page. The
     // rejection above applies only when no topic was named; otherwise
     // the documented "operands after the topic are ignored" rule wins.
+    //
+    // The topic is the longest command path the tail names, so this
+    // lands on `windows list` rather than its parent.
     #expect(
         CLICommands.parse(["deviceterm", "help", "windows", "list", "--all"])
-        == .help(topic: "windows")
+        == .help(topic: "windows list")
         )
     #expect(
         CLICommands.parse(["deviceterm", "help", "windows", "--all"])
@@ -102,23 +106,25 @@ func parseHelpTopicOutranksATrailingAllFlag() {
 }
 
 @Test
-func parseTextTreatsDashDashHelpAsLiteral() {
-    // Regression guard: top-level help recognition must NOT eat
-    // `--help` when it lives downstream of a command that types
-    // arbitrary text. `deviceterm text --help` types the string
-    // "--help", the existing wider invariant for `text` literals.
+func parseTextDashDashHelpAsksForHelp() {
+    // `--help` means help on every verb, including the one that types
+    // arbitrary text: a verb whose help you cannot ask for the usual way
+    // is a trap of its own. `deviceterm text -- --help` types the
+    // literal string.
     #expect(
         CLICommands.parse(["deviceterm", "text", "--help"])
+        == .help(topic: "text")
+        )
+    #expect(
+        CLICommands.parse(["deviceterm", "text", "--", "--help"])
         == .text(pane: nil, text: "--help")
         )
 }
 
 @Test
 func parseVerbTrailingDashDashHelpIsNotHelp() {
-    // Help is recognized in the verb position only. A trailing `--help`
-    // on a real verb stays that verb's problem, which is what keeps
-    // `deviceterm text --help` typing a literal string. Anything that
-    // makes `deviceterm crown --help` print a page has broken that.
+    // On a verb the command tree does not declare, a trailing `--help`
+    // stays that verb's own problem and its parser answers it.
     let parsed = CLICommands.parse(["deviceterm", "crown", "--help"])
     #expect(parsed != .help(topic: "crown"))
     #expect(parsed != .help(topic: nil))

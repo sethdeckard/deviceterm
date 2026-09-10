@@ -15,7 +15,7 @@ import Foundation
 ///
 /// The check functions stay pure (return a `Check` given inputs) so
 /// the formatter + status semantics are unit-testable without spawning
-/// processes. The runner in main.swift gathers the I/O (env reads,
+/// processes. `doctorOutcome` gathers the I/O (env reads,
 /// socket connect, daemon ping, tabs.list, panes.list, and
 /// daemon.capabilities) and passes those inputs to these primitives.
 /// The Report's `ok` boolean is derived from

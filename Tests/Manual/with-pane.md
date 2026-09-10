@@ -7,8 +7,10 @@ covers the *end-to-end runner path* the unit tests can't see: the
 actual subprocess spawn, env injection, stdin/stdout/stderr passthrough,
 and signal propagation through the spawned child.
 
-Run before any release that touches `Sources/DeviceTermCLI/main.swift`'s
-`.withPane` dispatch case or `CLICommands.mapChildExitCode`.
+Run before any release that touches the `.withPane` dispatch case in
+`Sources/DeviceTermCLI/CommandDispatch.swift`, `withPaneExec` in
+`Sources/DeviceTermCLI/CommandRunners.swift`, or
+`CLICommands.mapChildExitCode`.
 
 ## Preconditions
 

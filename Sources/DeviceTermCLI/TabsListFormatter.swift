@@ -6,7 +6,7 @@ import Foundation
 /// Pure-logic formatting for `deviceterm tabs list`
 /// and `deviceterm tabs current`.
 ///
-/// Lives separate from main.swift so the row shape is unit-testable
+/// Lives separate from command dispatch so the row shape is unit-testable
 /// without spawning a process or threading env values through.
 ///
 /// Format (per row, no header):

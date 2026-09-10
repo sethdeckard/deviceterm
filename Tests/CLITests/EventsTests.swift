@@ -7,7 +7,7 @@ import Testing
 
 // `deviceterm events` parser surface.
 //
-// The runner in main.swift opens a long-running UDS connection and
+// `eventsStream` opens a long-running UDS connection and
 // loops printing event frames; that path needs a live daemon and is
 // exercised by the manual checklist (`Tests/Manual/events.md`). The
 // parser tests below pin the verb-position dispatch + the standing
@@ -19,10 +19,12 @@ func parseEventsResolvesToEvents() {
 }
 
 @Test
-func parseEventsTolerateTrailingArgs() {
-    // Forgiving: trailing args don't change the command (the stream
-    // is the stream; nothing to parameterize).
-    #expect(CLICommands.parse(["deviceterm", "events", "extra"]) == .events)
+func parseEventsRejectsTrailingArgs() {
+    // The stream takes no parameters, so a trailing token is a typo.
+    guard case .usage = CLICommands.parse(["deviceterm", "events", "extra"]) else {
+        Issue.record("expected .usage for a trailing token")
+        return
+    }
 }
 
 @Test

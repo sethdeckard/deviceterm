@@ -5,7 +5,7 @@ import Foundation
 
 /// Renders a `VersionReport` for `deviceterm version`.
 ///
-/// The runner in main.swift fills in the fields (env reads, daemon ping) and
+/// `versionOutcome` fills in the fields (env reads, daemon ping) and
 /// prints either the human form here or the JSON form via the global `--json`
 /// toggle.
 public enum VersionReportFormat {

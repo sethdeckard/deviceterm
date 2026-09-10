@@ -7,10 +7,11 @@
 /// overview footer, with no overview line of its own). `HelpCatalog` holds
 /// the table; `HelpText` renders it.
 ///
-/// The split from `VerbCatalog` is deliberate: that table is parser grammar
-/// (which flags take a value, which sub-verbs a verb accepts) and is read on
-/// every flag split. Prose belongs beside prose. `HelpCatalogTests` joins the
-/// two so a verb can't gain a parser entry without gaining a page.
+/// The split from `VerbCatalog` is deliberate: that table is the legacy
+/// parser's flag metadata and the sub-verbs the completion scripts
+/// offer, read on every flag split it still runs. Prose belongs beside
+/// prose. `HelpCatalogTests` joins the two so a verb can't gain a parser
+/// entry without gaining a page.
 struct HelpTopic: Sendable, Equatable {
     /// Where the topic surfaces. `.command` topics occupy an overview line
     /// under their group; `.concept` topics are reachable only by name.

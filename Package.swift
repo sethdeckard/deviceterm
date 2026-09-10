@@ -63,6 +63,16 @@ let package = Package(
             url: "https://github.com/apple/swift-markdown.git",
             from: "0.8.0"
         ),
+        // swift-argument-parser: Apple's declarative CLI parser. It backs
+        // the declared `deviceterm` grammar and the usage and help pages
+        // generated from it, so a declared verb cannot describe a shape
+        // its parser does not accept. `VerbCatalog` and `HelpCatalog`
+        // still drive the installed completions and the written guidance.
+        // Links into the CLI only.
+        .package(
+            url: "https://github.com/apple/swift-argument-parser",
+            from: "1.8.2"
+        ),
     ],
     targets: [
         // Quarantine for private CoreSimulator types. Swift code outside this
@@ -554,7 +564,10 @@ let package = Package(
         // wire over the daemon's single Unix-domain socket.
         .executableTarget(
             name: "DeviceTermCLI",
-            dependencies: ["DaemonProtocol"],
+            dependencies: [
+                "DaemonProtocol",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
             path: "Sources/DeviceTermCLI",
             swiftSettings: strictWarnings
         ),

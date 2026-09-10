@@ -5,13 +5,18 @@ import Foundation
 
 /// Pure argv parsing and request encoding.
 ///
-/// Kept separate from main.swift so Tests/CLITests can drive these
-/// functions directly. main.swift owns side effects (env reads, stderr,
-/// socket I/O, `exit`); this file owns the deterministic pieces.
+/// Free of side effects, so Tests/CLITests can drive these functions
+/// directly; `CLIMain` owns env reads, stderr, socket I/O and `exit`.
 ///
-/// The verb families split across `CLICommands+Workspace.swift` and
-/// `CLICommands+Input.swift`; the grammar they share is documented on
-/// `CLICommand`.
+/// `parse` is the one entry point, and it is total: every argv yields a
+/// `CLICommand`, with failure carried in-band as `.usage`. It routes a
+/// verb the `DeviceTerm` command tree declares to `parseDeclared`, and
+/// the rest to the verb families in `CLICommands+Workspace.swift` and
+/// `CLICommands+Input.swift`. Three verbs branch directly ahead of
+/// both: `help`, which resolves its optional topic here and answers a
+/// bare trigger with an overview the command tree cannot produce;
+/// `with-pane`, which must hand its tail to a child process byte for
+/// byte; and `completions`, whose one sub-verb is matched literally.
 public enum CLICommands {
     // MARK: - Nested types
 
@@ -37,9 +42,11 @@ public enum CLICommands {
     // MARK: - Parsing
 
     /// Top-level help triggers: `--help`, `-h`, and bare `help`.
-    /// Detected in the verb position only so sub-command literals
-    /// (`deviceterm text --help` typing the string "--help") stay
-    /// untouched.
+    ///
+    /// Matched in the verb position, which is what reaches the overview
+    /// and the concept pages. After a verb, a help trigger belongs to
+    /// that verb's own parser: a declared verb answers it from the
+    /// command tree, and the rest answer it themselves.
     static let helpTriggers: Set<String> = ["--help", "-h", "help"]
 
     /// The flag-shaped help triggers: `helpTriggers` minus bare `help`,
@@ -67,6 +74,17 @@ public enum CLICommands {
     /// not deviceterm's: `with-pane`.
     static let execWrapperVerbs: Set<String> = ["with-pane"]
 
+    /// Verbs whose grammar the `DeviceTerm` command tree owns.
+    ///
+    /// Dispatch is on the verb rather than on "the declarative parser
+    /// refused it", so a declared verb carrying a bad flag reports that
+    /// bad flag instead of falling back and being re-parsed by a grammar
+    /// that does not own that verb.
+    static let portedVerbs: Set<String> = [
+        "text", "tabs", "panes", "devices", "windows",
+        "doctor", "version", "dump-config", "events", "agents"
+    ]
+
     /// Map a child `Process`'s termination status to an exec-like
     /// exit code. When the child was killed by a signal,
     /// follow the shell convention of `128 + signum` (SIGTERM=15 →
@@ -83,31 +101,30 @@ public enum CLICommands {
     }
 
     /// Whether a sub-verb's free-text tail is asking for the verb's shape
-    /// rather than supplying a name or payload. `splitFlags` leaves anything it
-    /// doesn't recognize as a flag in the positionals so `text` can type
-    /// it literally, which is what puts a help trigger in a name
-    /// position; without this check `tab rename --help` renames the tab
-    /// to "--help".
+    /// rather than supplying a name or payload. `splitFlags` leaves
+    /// anything it doesn't recognize as a flag in the positional tail of
+    /// the legacy free-text sub-verbs, which is what puts a help trigger
+    /// in a name position; without this check `tab rename --help`
+    /// renames the tab to "--help".
     ///
     /// True only for a lone `helpFlags` member that reached the tail
     /// unescaped. `escapedCount` keeps `--` meaning what it means
     /// everywhere else in the parser, and since the tail is the trailing
     /// run of positionals, a lone token is escaped exactly when that
-    /// count is non-zero. Name-taking sub-verbs and `tab send-input` call this;
-    /// `text` deliberately keeps every help flag as literal payload.
+    /// count is non-zero. Called by the name-taking sub-verbs and
+    /// `tab send-input`.
     static func isHelpRequest(freeTextTail tail: [String], escapedCount: Int) -> Bool {
         tail.count == 1 && escapedCount == 0 && helpFlags.contains(tail[0])
     }
 
-    /// Flag names that consume a value, **scoped to the command**. Only
-    /// these are parsed as flags; any other `--token` becomes a positional
-    /// (so `text` can type literal `--`-prefixed words), and a bare `--`
-    /// forces everything after it literal. Scoping per command means
-    /// `--duration` / `--velocity` are literal text for commands that
-    /// don't accept them, rather than being eaten as flags.
+    /// Flag names the legacy parser consumes a value for, **scoped to
+    /// the command**. Only these are parsed as flags; any other
+    /// `--token` stays a positional, and a bare `--` forces everything
+    /// after it literal. Scoping per command is what lets a free-text
+    /// sub-verb carry a word another verb would have claimed as a flag.
     ///
-    /// Sourced from the shared `VerbCatalog` so the parser's flag grammar
-    /// and the shell completions can't drift apart.
+    /// Sourced from the shared `VerbCatalog` so this flag grammar and the
+    /// shell completions can't drift apart.
     static func valuedFlags(for verb: String) -> Set<String> {
         VerbCatalog.valuedFlags(for: verb)
     }
@@ -333,8 +350,9 @@ public enum CLICommands {
                     index += 2
                     continue
                 }
-                // Unknown / not-for-this-command `--token` falls through to
-                // a positional, so `text` can type it literally.
+                // Unknown / not-for-this-command `--token` falls through
+                // to a positional, which is what lets the legacy
+                // free-text sub-verbs carry it literally.
             }
             positionals.append(arg)
             index += 1
@@ -507,14 +525,14 @@ public enum CLICommands {
         // recognized flag of any command.
         if helpTriggers.contains(verb) {
             // The tail is read here rather than through the global flag
-            // machinery, which never runs for a help trigger. The first
-            // non-flag token names a topic; everything after it is
-            // ignored, so `deviceterm help tap 0.5 0.5` lands on the tap
-            // page and `deviceterm help windows list --all` on the
-            // windows page. All three spellings behave alike; having
-            // `--help crown` differ from `help crown` would be a trap.
-            let tail = argv.dropFirst(2)
-            guard let topic = tail.first(where: { !$0.hasPrefix("-") }) else {
+            // machinery, which never runs for a help trigger. It resolves
+            // through `helpTopic`, the same way a trailing `--help` does,
+            // so `help tabs current` and `tabs current --help` reach one
+            // page. Having the two spellings differ would be a trap.
+            // Tokens past the resolved path are ignored, so
+            // `deviceterm help tap 0.5 0.5` still lands on the tap page.
+            let tail = Array(argv.dropFirst(2))
+            guard let topic = helpTopic(in: tail) else {
                 // No topic named, so nothing outranks a stray flag. A
                 // bare `--all` here is the muscle-memory request for a
                 // full dump; naming it beats ignoring it, which would
@@ -527,14 +545,6 @@ public enum CLICommands {
             }
             return .help(topic: topic)
         }
-        // `deviceterm agents` is the long-form workflow guide. Dispatched
-        // before flag-splitting since trailing args are tolerated
-        // (the guide is one document; extra args don't change it).
-        if verb == "agents" { return .agents }
-        if verb == "doctor" { return .doctor }
-        if verb == "events" { return .events }
-        if verb == "version" { return .version }
-        if verb == "dump-config" { return .dumpConfig }
         if verb == "completions" {
             // argv: ["deviceterm", "completions", "install", "<shell>"]
             // `install` is the only sub-verb; a print-only
@@ -565,6 +575,9 @@ public enum CLICommands {
             let ref = argv[2]
             let cmd = Array(argv.dropFirst(3))
             return .withPane(ref: ref, cmd: cmd)
+        }
+        if portedVerbs.contains(verb) {
+            return parseDeclared(Array(argv.dropFirst()))
         }
         guard let parsed = splitFlags(Array(argv.dropFirst(2)), valued: valuedFlags(for: verb)) else {
             return .usage(message: "deviceterm: a flag is missing its value")
@@ -671,6 +684,63 @@ public enum CLICommands {
                 settleMs: settleMs
             ) ?? .usage(message: nil)
         }
+    }
+
+    /// Parse a verb the `DeviceTerm` command tree owns.
+    ///
+    /// `arguments` excludes the program name, which `parseAsRoot`
+    /// expects. Three outcomes: a command this CLI owns, which carries
+    /// its own `CLICommand`; a help request, which arrives as a parsed
+    /// value that is not one of ours because ArgumentParser answers
+    /// `--help` with a type it does not export; or a thrown parse
+    /// failure, which becomes the usage error the dispatcher already
+    /// knows how to render in both human and JSON form.
+    static func parseDeclared(_ arguments: [String]) -> CLICommand {
+        do {
+            let parsed = try DeviceTerm.parseAsRoot(arguments)
+            guard let owned = parsed as? CLICommandConvertible else {
+                return .help(topic: helpTopic(in: arguments))
+            }
+            return owned.cliCommand
+        } catch {
+            // The full form, not the bare diagnostic: it carries the
+            // failing command's usage line, which is where a caller who
+            // mistyped a sub-verb reads the ones that exist.
+            let rendered = DeviceTerm.fullMessage(for: error)
+            guard let hint = terminatorHint(
+                forArguments: arguments,
+                diagnostic: DeviceTerm.message(for: error)
+            ) else { return .usage(message: rendered) }
+            return .usage(message: rendered + "\n" + hint)
+        }
+    }
+
+    /// The `--` cue for a free-text verb that refused a dashed word.
+    ///
+    /// Naming the token the parser rejected is not enough on a verb
+    /// whose payload is arbitrary text, because the caller usually meant
+    /// to send that token. Without the cue the refusal is a dead end;
+    /// with it, it is a fix.
+    static func terminatorHint(forArguments arguments: [String], diagnostic: String) -> String? {
+        guard diagnostic.contains("Unknown option") else { return nil }
+        let leading = Array(arguments.prefix { !$0.hasPrefix("-") })
+        guard let command = CommandTree.command(for: CommandTree.longestCommandPath(in: leading)),
+            command is any FreeTextCommand.Type else { return nil }
+        return "Put -- before the text to type a word beginning with -."
+    }
+
+    /// The topic a help request is asking about.
+    ///
+    /// A declared verb resolves to the longest leading run of non-flag
+    /// tokens that names a command path, so `tabs current --help` and
+    /// `help tabs current` reach one page. A verb the command tree does
+    /// not declare resolves to nothing, and the first non-flag token
+    /// names the legacy topic instead.
+    static func helpTopic(in arguments: [String]) -> String? {
+        let leading = Array(arguments.prefix { !$0.hasPrefix("-") })
+        let path = CommandTree.longestCommandPath(in: leading)
+        if !path.isEmpty { return path.joined(separator: " ") }
+        return arguments.first { !$0.hasPrefix("-") }
     }
 
     // MARK: - Request encoding

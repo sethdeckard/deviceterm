@@ -6,7 +6,7 @@ import Foundation
 /// surface.
 ///
 /// Each `script(for:)` returns the full text of a `_deviceterm` /
-/// `deviceterm.fish` / bash-completion script. main.swift writes the
+/// `deviceterm.fish` / bash-completion script. `completionsInstallOutcome` writes the
 /// script to `defaultInstallPath(for:homeDir:)` and prints the path +
 /// `activationHint(for:installPath:)` so the user knows how to enable
 /// it (typical case: append a one-liner to `~/.zshrc` and re-source).

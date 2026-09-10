@@ -7,7 +7,7 @@ import Testing
 
 // `deviceterm version` parser + formatter.
 //
-// The runner in main.swift gathers I/O (daemon ping for the live wire
+// `versionOutcome` gathers I/O (daemon ping for the live wire
 // version, ProcessInfo for macOS); the formatter is pure and is
 // tested here. Parser test per the standing rule.
 
@@ -36,8 +36,11 @@ func parseVersionAcceptsJSONFlag() {
 }
 
 @Test
-func parseVersionTolerateTrailingArgs() {
-    #expect(CLICommands.parse(["deviceterm", "version", "extra"]) == .version)
+func parseVersionRejectsTrailingArgs() {
+    guard case .usage = CLICommands.parse(["deviceterm", "version", "extra"]) else {
+        Issue.record("expected .usage for a trailing token")
+        return
+    }
 }
 
 @Test

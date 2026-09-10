@@ -6,10 +6,12 @@ import DaemonProtocol
 ///
 /// Two shapes come out of here. `overview` is what a bare `deviceterm help`
 /// prints: one line per top-level verb, grouped by the job it does, with the
-/// concepts named at the foot. `page(forTopic:)` is what `deviceterm help
-/// <command>` prints: that topic's reference block plus whatever context its
-/// group carries. Subcommands (`tab open`, `ax sweep`) never reach the
-/// overview; they live on their parent verb's page.
+/// concepts named at the foot. `page(forTopic:)` is a topic's reference
+/// block plus whatever context its group carries: the whole page for a
+/// concept or a verb the command tree does not declare, and the written
+/// discussion inside the generated page for one it does. Subcommands
+/// (`tab open`, `ax sweep`) never reach the overview; they live on their
+/// parent verb's page.
 ///
 /// Text is wrapped to 78 columns so it reads in any 80-col terminal.
 /// `render(role:)` prepends a role-aware header, so a caller can see which
@@ -93,7 +95,7 @@ public enum HelpText {
     }
 
     /// Final rendered overview: header, a blank line, then the command
-    /// list. The entry point `main.swift` uses; the bare `overview`
+    /// list. What `helpOutcome` serves for a bare topic; the `overview`
     /// constant stays for tests that pin body invariants without caring
     /// about the role header.
     public static func render(role: SessionRole?) -> String {

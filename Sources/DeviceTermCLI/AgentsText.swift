@@ -14,8 +14,8 @@
 /// invariants without spawning a process. Wrapped to 78 cols for any
 /// 80-col terminal.
 public enum AgentsText {
-    /// The shape printed for `deviceterm agents`. main.swift writes
-    /// this to stdout and exits 0: same pattern as --help.
+    /// The shape printed for `deviceterm agents`. Dispatch returns it as
+    /// stdout and `CLIMain` writes it, exiting 0: same pattern as --help.
     public static let documentation = """
     deviceterm agents: workflow + triage guide for CLI users
 

@@ -6,12 +6,13 @@ import Foundation
 /// What an argv dispatches to. Pure: no I/O, no env. Tests assert on
 /// this enum to pin dispatch behavior without spawning a process. The
 /// `pane` on each pane-targeted case is the optional targeting ref
-/// (from `--pane`); main.swift resolves it to a concrete paneId via
-/// `panes.list` + `PaneRefResolver`.
+/// (from `--pane`); `resolvePane` in `CommandDispatch.swift` resolves
+/// it to a concrete paneId via `panes.list` + `PaneRefResolver`.
 ///
-/// Kept separate from main.swift so Tests/CLITests can drive the parse
-/// directly. main.swift owns side effects (env reads, stderr, socket I/O,
-/// `exit`); this enum is the deterministic result of reading argv.
+/// Kept free of side effects so Tests/CLITests can drive the parse
+/// directly. `CLIMain` and the command runners own env reads, stderr,
+/// socket I/O and `exit`; this enum is the deterministic result of
+/// reading argv.
 ///
 /// Grammar (locked): required operands are positional, optional modifiers
 /// are flags, and `--pane <ref>` is the shared targeting selector that
@@ -150,11 +151,15 @@ public enum CLICommand: Equatable, Sendable {
     /// `deviceterm help`. The command list and any known page write to
     /// stdout and exit 0; an unknown topic fails with suggestions.
     ///
-    /// `topic` is the first non-flag token after the trigger
-    /// (`deviceterm help crown`), nil for a bare trigger. It is not
-    /// validated here. The dispatcher resolves it against `HelpCatalog`,
-    /// which is what lets the unknown-topic error carry suggestions
-    /// instead of collapsing into the terse usage block.
+    /// `topic` is nil for a bare trigger. Otherwise it is the longest
+    /// leading run of non-flag tokens naming a declared command path
+    /// (`tabs current`, space-separated), falling back to the first
+    /// non-flag token for a verb the command tree does not declare
+    /// (`deviceterm help crown`). It is not validated here: the
+    /// dispatcher resolves a declared path through `CommandTree` and
+    /// anything else against `HelpCatalog`, which is what lets the
+    /// unknown-topic error carry suggestions instead of collapsing into
+    /// the terse usage block.
     case help(
         topic:
         String?

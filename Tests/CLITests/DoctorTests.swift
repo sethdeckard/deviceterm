@@ -7,7 +7,7 @@ import Testing
 
 // Doctor check primitives + report formatting.
 //
-// The runner in main.swift gathers I/O (env reads, socket connect,
+// `doctorOutcome` gathers I/O (env reads, socket connect,
 // daemon ping, tabs.list, panes.list); the primitives below are pure
 // functions of their inputs. Tests pin status semantics + the
 // load-bearing fields of the human report.
@@ -458,10 +458,12 @@ func parseDoctorAcceptsJSONFlag() {
 }
 
 @Test
-func parseDoctorTolerateTrailingArgs() {
-    // No subcommands; extra args are harmless and don't change
-    // dispatch.
-    #expect(CLICommands.parse(["deviceterm", "doctor", "extra"]) == .doctor)
+func parseDoctorRejectsTrailingArgs() {
+    // No subcommands and no arguments, so a trailing token is a typo.
+    guard case .usage = CLICommands.parse(["deviceterm", "doctor", "extra"]) else {
+        Issue.record("expected .usage for a trailing token")
+        return
+    }
 }
 
 @Test

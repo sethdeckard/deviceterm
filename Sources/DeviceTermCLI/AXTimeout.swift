@@ -6,12 +6,8 @@ import DaemonProtocol
 /// serial accessibility queue per pane and so can wait on each other
 /// there.
 ///
-/// A namespace rather than a top-level constant in `main.swift`: a
-/// top-level `let` holds its zero-initialized value until top-level code
-/// reaches it, which makes the budget correct only by statement order and
-/// leaves it reading zero, an instant timeout, anywhere that order does
-/// not hold. Under the test harness top-level code never runs at all, so
-/// no test can assert a budget declared that way.
+/// A namespace so the budget is a named constant with one definition,
+/// readable from the test target that asserts on it.
 enum AXTimeout {
     /// Slack beyond the daemon-side work: dispatch, one in-flight bridge
     /// call no deadline can interrupt, and delivery of the response.

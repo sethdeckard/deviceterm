@@ -6,7 +6,7 @@ import Foundation
 /// optional stderr message, and a process exit code. Handlers build and
 /// return this instead of writing to stdout/stderr and calling `exit`
 /// themselves, so the dispatch logic is pure and testable; a single thin
-/// driver in `main.swift` renders the outcome and terminates.
+/// driver, `CLIMain`, renders the outcome and terminates.
 ///
 /// `stdout` is raw bytes (already newline-terminated where the human /
 /// JSON format calls for it). `stderr` is normally a message body that the

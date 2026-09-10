@@ -135,7 +135,12 @@ extension HelpCatalog {
                   keypress. Unsupported characters surface as an error
                   carrying the offending character so the caller can split
                   or filter rather than silently lose input.
+
+                  Put `--` ahead of the text to type a word that starts with
+                  a dash. The `--` is not typed. Without it,
+                  `deviceterm text --foo` is a usage error.
                   Example: deviceterm text "hello world"
+                  Example: deviceterm text -- --foo
             """
         ),
         HelpTopic(

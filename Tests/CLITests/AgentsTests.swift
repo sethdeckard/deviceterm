@@ -23,11 +23,17 @@ func parseAgentsVerbResolvesToAgents() {
 }
 
 @Test
-func parseAgentsTolerateTrailingArgs() {
-    // The guide is one document; trailing tokens don't change it.
-    // Same forgiveness as `--help <anything>`.
-    #expect(CLICommands.parse(["deviceterm", "agents", "crown"]) == .agents)
-    #expect(CLICommands.parse(["deviceterm", "agents", "tap", "0.5", "0.5"]) == .agents)
+func parseAgentsRejectsTrailingArgs() {
+    // `agents` takes no arguments, so a trailing token is a typo worth
+    // reporting rather than a word to swallow. The verbs that take no
+    // arguments all answer the same way, which is what makes the rule
+    // learnable.
+    for argv in [["agents", "crown"], ["agents", "tap", "0.5", "0.5"]] {
+        guard case .usage = CLICommands.parse(["deviceterm"] + argv) else {
+            Issue.record("expected .usage for \(argv)")
+            return
+        }
+    }
 }
 
 @Test

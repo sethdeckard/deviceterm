@@ -14,7 +14,7 @@ import Foundation
 /// unrecognized keys so a typo in `~/.config/deviceterm/config`
 /// surfaces explicitly.
 ///
-/// Pure parser + report; the runner in main.swift reads the file
+/// Pure parser + report; `dumpConfigOutcome` reads the file
 /// from disk and hands the raw text in. Each piece is testable
 /// without I/O. This covers the deviceterm overrides path that the
 /// architecture-checks gate documents; the Ghostty presentation layer

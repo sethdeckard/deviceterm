@@ -5,7 +5,7 @@ import Foundation
 import Testing
 
 // `deviceterm completions install <shell>` parser + the pure
-// `Completions` emitters and path resolver. main.swift handles the
+// `Completions` emitters and path resolver. `completionsInstallOutcome` handles the
 // disk write; these tests pin the script invariants and the install-
 // path conventions so a release can't ship completion scripts that
 // silently drop a verb or land in a directory that isn't on the
@@ -40,7 +40,7 @@ func parseCompletionsInstallFish() {
 @Test
 func parseCompletionsInstallRespectsJSONStrip() {
     // Global --json strip applies; the parser still resolves the
-    // verb. main.swift dispatches the install (which doesn't honor
+    // verb. `CommandDispatch.run` dispatches the install (which doesn't honor
     // --json, since it's a documentation surface, like --help / agents).
     #expect(
         CLICommands.parse(

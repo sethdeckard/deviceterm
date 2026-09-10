@@ -5,8 +5,8 @@ import Foundation
 import Testing
 
 // Drift guards joining `HelpCatalog` to the two tables it has to agree
-// with: `VerbCatalog` (parser grammar + completion sub-verbs) and the
-// `CLICommand` parse switch itself.
+// with: `VerbCatalog` (legacy flag metadata + completion sub-verbs) and
+// the `CLICommand` parse switch itself.
 //
 // These join catalog structure to those tables and check the prose
 // invariants that structure depends on: that a verb can't gain a parser

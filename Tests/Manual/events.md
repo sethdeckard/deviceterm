@@ -9,7 +9,8 @@ publish wiring on each coordinator path.
 Run before any release that touches `Sources/Daemon/EventBroker.swift`,
 `Sources/Daemon/DaemonEventsMethods.swift`, the publish sites in
 `PaneCoordinator` / `DeviceCoordinator` / `SessionManager`, or the
-`.events` dispatch in `DeviceTermCLI/main.swift`.
+`.events` dispatch in `DeviceTermCLI/CommandDispatch.swift`, or
+`eventsStream` in `DeviceTermCLI/CommandRunners.swift`.
 
 ## Preconditions
 

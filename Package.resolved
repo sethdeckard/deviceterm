@@ -1,5 +1,5 @@
 {
-  "originHash" : "b1c6740d34225ed92f4ec676bd922ea8785d33207c028c68bf454e1221ef30e8",
+  "originHash" : "2b081baf2f648f6cb00fc25be81103c0090795c033fb12d48dcd914b73fd86df",
   "pins" : [
     {
       "identity" : "libghostty-spm",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "b6496a74a087257ef5e6da1c5b29a447a60f5bd7",
         "version" : "2.9.4"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
       }
     },
     {

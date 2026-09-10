@@ -171,16 +171,24 @@ func parseTextResolvesToText() {
 }
 
 @Test
-func parseTextPreservesUnknownDashDashTokens() {
-    // `text` types arbitrary input, so unrecognized `--` tokens are literal,
-    // not flags: the splitter must not consume them.
-    #expect(
-        CLICommands.parse(["deviceterm", "text", "hello", "--world"])
-        == .text(pane: nil, text: "hello --world")
-        )
+func parseTextRejectsUnknownDashDashTokens() {
+    // A dashed word in the payload is read as a flag and refused, so
+    // typing one takes the `--` terminator. The refusal is the point: it
+    // keeps a mistyped flag from being sent to the device.
+    guard case .usage = CLICommands.parse(["deviceterm", "text", "hello", "--world"]) else {
+        Issue.record("expected .usage for an unknown dashed payload word")
+        return
+    }
+}
+
+@Test
+func parseTextHelpFlagAsksForHelp() {
+    // `--help` reaches the help page rather than being typed, on `text`
+    // as on every other verb. `--` is how the literal string is typed;
+    // `parseTextDashDashTerminatorIsLiteral` covers that.
     #expect(
         CLICommands.parse(["deviceterm", "text", "--help"])
-        == .text(pane: nil, text: "--help")
+        == .help(topic: "text")
         )
 }
 
@@ -203,18 +211,19 @@ func parseTextStillHonorsPaneFlag() {
 }
 
 @Test
-func parseTextTreatsNonTextValuedFlagsAsLiteral() {
-    // `--duration` / `--velocity` aren't `text` modifiers, so they (and
-    // their would-be values) must be typed literally: flag parsing is
-    // scoped to the active command.
-    #expect(
-        CLICommands.parse(["deviceterm", "text", "--duration", "100"])
-        == .text(pane: nil, text: "--duration 100")
-        )
-    #expect(
-        CLICommands.parse(["deviceterm", "text", "hello", "--velocity", "fast"])
-        == .text(pane: nil, text: "hello --velocity fast")
-        )
+func parseTextRejectsFlagsItDoesNotDefine() {
+    // `--duration` / `--velocity` aren't `text` modifiers. They are
+    // refused rather than typed, so a caller who reached for the wrong
+    // verb's flag hears about it instead of sending it to the device.
+    for argv in [
+        ["text", "--duration", "100"],
+        ["text", "hello", "--velocity", "fast"]
+    ] {
+        guard case .usage = CLICommands.parse(["deviceterm"] + argv) else {
+            Issue.record("expected .usage for \(argv)")
+            return
+        }
+    }
 }
 
 @Test

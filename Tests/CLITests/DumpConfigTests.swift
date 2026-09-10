@@ -6,7 +6,7 @@ import Foundation
 import Testing
 
 // `deviceterm dump-config` parser + formatter + report builder. All
-// three are pure-logic; the runner in main.swift reads the file
+// three are pure-logic; `dumpConfigOutcome` reads the file
 // from disk and hands the text in.
 
 // MARK: - Parser

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// The single per-verb table for the two otherwise
-/// hand-duplicated mechanical lists: a verb's value-taking flags (the
-/// parser's `CLICommands.valuedFlags` grammar) and its shell-completion
-/// sub-verbs (`Completions`). Adding a verb updates it in one place
-/// instead of a flag switch plus four completion arrays.
+/// The single per-verb table for the two otherwise hand-duplicated
+/// mechanical lists: a verb's value-taking flags for the legacy parser
+/// (`CLICommands.valuedFlags`) and its shell-completion sub-verbs
+/// (`Completions`). Adding a verb the legacy parser owns updates those
+/// two in one place instead of a flag switch plus four completion
+/// arrays. A verb the `DeviceTerm` command tree declares carries its own
+/// flag grammar and does not read this table.
 ///
 /// This is deliberately NOT the source of truth for *which* verbs exist
 /// or what they parse to; the `CLICommand` enum and the exhaustive
