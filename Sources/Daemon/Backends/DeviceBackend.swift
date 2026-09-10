@@ -63,6 +63,32 @@ protocol DeviceBackend: AnyObject, Sendable {
         onFatal: @escaping @Sendable (String) -> Void,
         onDisconnect: @escaping @Sendable () -> Void
     ) throws
+    /// Start frames, install orientation observation, and read the seed
+    /// orientation and pixel dimensions as one operation.
+    ///
+    /// `SimDeviceBackend` batches its CoreSimulator calls off the caller's
+    /// executor. One operation also gives callers a single suspension to fence
+    /// and `DisplayBootstrapSupervisor` a single operation to bound.
+    ///
+    /// Declared here rather than only in the extension below: an
+    /// extension-only method dispatches statically through `any DeviceBackend`,
+    /// so a conformer's override would never be reached.
+    ///
+    /// Throws only when frames cannot start. A display with no orientation
+    /// source reports `observingOrientation: false` and leaves the pane usable.
+    func bootstrapDisplay(
+        onFrame: @escaping @Sendable (PublishedSurface) -> Void,
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void,
+        onOrientation: @escaping @Sendable (Orientation) -> Void
+    ) async throws -> DisplayBootstrap
+    /// Tear the backend down without holding the caller's executor.
+    ///
+    /// Callers that must not block on teardown use this: simulator shutdown
+    /// waits on the display lane and on CoreSimulator, so running it inline
+    /// stalls whatever is waiting. Declared here for the same static-dispatch
+    /// reason as `bootstrapDisplay`.
+    func shutdownBackendAsync() async
     /// Stop streaming and release the display subscription. Idempotent.
     func stopFrames()
     /// Native pixel dimensions, or `(nil, nil)` if not yet known
@@ -333,6 +359,31 @@ extension DeviceBackend {
     // Default: only the CoreSimulator backend overrides these. Other
     // backends (physical device, stub) reject edge gestures.
     // swiftlint:disable async_without_await
+    /// Sequential default: starts frames before orientation observation, so a
+    /// synchronous first-frame callback arrives before observation is
+    /// installed. Overrides can batch display work off the caller's executor;
+    /// only those overrides suspend, which is why this one has no `await`.
+    func bootstrapDisplay(
+        onFrame: @escaping @Sendable (PublishedSurface) -> Void,
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void,
+        onOrientation: @escaping @Sendable (Orientation) -> Void
+    ) async throws -> DisplayBootstrap {
+        try startFrames(onFrame: onFrame, onFatal: onFatal, onDisconnect: onDisconnect)
+        let observing = startDisplayOrientation(onChange: onOrientation)
+        let dimensions = pixelDimensions()
+        return DisplayBootstrap(
+            pixelWidth: dimensions.0,
+            pixelHeight: dimensions.1,
+            seedOrientation: currentDisplayOrientation(),
+            observingOrientation: observing
+        )
+    }
+
+    /// Default: a backend whose teardown is not a device round trip has nothing
+    /// to hop off, so it runs inline.
+    func shutdownBackendAsync() async { shutdownBackend() }
+
     func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedEdgeGesture
     }

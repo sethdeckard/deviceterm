@@ -369,6 +369,15 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
                 if await paneCoordinator.hasDeferredCleanup {
                     return true
                 }
+                // A create partway through may be acquiring a backend,
+                // starting one, or disposing one, and has published no pane
+                // record through any of it, so it appears in none of the checks
+                // below. An abandoned attempt still parked in the bridge
+                // counts too: exiting under one can strand display work that is
+                // already partly started, along with its eventual teardown.
+                if await paneCoordinator.hasCreateInFlight {
+                    return true
+                }
                 let liveOwners = await paneCoordinator.liveOwnerSessionIds
                 for owner in liveOwners where await sessionManager.isAlive(owner) {
                     return true
@@ -387,12 +396,14 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
                 lifecycleLog.notice(
                     """
                     exit: idle timeout, last busy sample found no connected \
-                    peers, no pane with a live owner, and no owned booted sims
+                    peers, no deferred cleanup or create in flight, no pane \
+                    with a live owner, and no owned booted sims
                     """
                 )
                 let line = "deviceterm-daemon: idle timeout reached; no connected"
-                    + " peers, no live-owned panes, no confirmed owned booted"
-                    + " sims; terminating\n"
+                    + " peers, no deferred cleanup or create in flight, no"
+                    + " live-owned panes, no confirmed owned booted sims;"
+                    + " terminating\n"
                 FileHandle.standardError.write(Data(line.utf8))
                 await MainActor.run {
                     NSApp.terminate(nil)

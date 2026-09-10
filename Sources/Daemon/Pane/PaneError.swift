@@ -193,6 +193,22 @@ public enum PaneError: Error, Equatable, Sendable {
         udid:
         String
         )
+    /// Starting the display (frames, orientation observation, and the geometry
+    /// reads that go with them) did not finish inside its deadline. Abandoned
+    /// by the caller only, on the same terms as `backendAcquireTimedOut`: the
+    /// bridge call keeps running and keeps its slot until it returns and the
+    /// teardown that follows finishes, and whatever it eventually produces is
+    /// torn down rather than delivered.
+    case displayStartTimedOut(
+        udid:
+        String
+        )
+    /// All display-start slots are in use, so this attach is refused before
+    /// touching the display. Distinct from a timeout: this caller never waited.
+    case displayStartBusy(
+        udid:
+        String
+        )
 
     /// Translate a backend-level error into the wire-facing `PaneError`,
     /// adding the paneId context the backend doesn't carry. `operation` is

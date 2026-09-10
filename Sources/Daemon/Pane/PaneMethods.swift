@@ -1133,6 +1133,25 @@ public enum PaneMethods {
                 message: "pane.create: too many simulator acquisitions in flight; retry"
             )
 
+        case .displayStartTimedOut:
+            // The display did not start inside its deadline. Same code and the
+            // same reasoning as the acquisition timeout above: well-formed,
+            // worth retrying, and not on the client's tight `notReadyCode`
+            // loop while the bridge is stalled.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.create: the display did not start in time; retry"
+            )
+
+        case .displayStartBusy:
+            // Admission is taken before the backend is acquired, so this can
+            // come back before any display work has begun. The message names
+            // the create rather than the display start for that reason.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.create: too many pane creation attempts in flight; retry"
+            )
+
         case let .paneAlreadyAttached(udid, _):
             // The udid already has a live pane under a different
             // session. No CLI verb moves it; only the human (GUI

@@ -326,6 +326,22 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         try display.startFrames(onFrame: onFrame, onFatal: onFatal)
     }
 
+    /// Batched onto the display lane, so none of it runs on the caller's actor.
+    /// `onDisconnect` is unused: a sim doesn't disconnect, and one that shuts
+    /// down is reported through CoreSimulator's own notification.
+    func bootstrapDisplay(
+        onFrame: @escaping @Sendable (PublishedSurface) -> Void,
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void,
+        onOrientation: @escaping @Sendable (Orientation) -> Void
+    ) async throws -> DisplayBootstrap {
+        try await display.bootstrap(
+            onFrame: onFrame,
+            onFatal: onFatal,
+            onOrientation: onOrientation
+        )
+    }
+
     func stopFrames() { display.stopFrames() }
 
     // MARK: Lease forwarders (to the pool)
@@ -690,6 +706,28 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     // MARK: Lifecycle
 
+    /// Teardown that suspends rather than blocking, so a caller waiting on it
+    /// (the bootstrap supervisor disposing an abandoned attempt) keeps serving
+    /// other work while CoreSimulator takes its time.
+    func shutdownBackendAsync() async {
+        // Stop admitting lazy bridge work before releasing the display.
+        inputGate.sync { backendActive = false }
+        await display.shutdownAsync()
+        clearLazyClientsAfterShutdown()
+    }
+
+    /// An AX call already queued before teardown owns this backend until it
+    /// returns. Keep its client stable; the pane's AX queue clears it after all
+    /// admitted reads finish.
+    ///
+    /// Location holds only a `SimDevice` reference and has no in-flight
+    /// sequence to finish (each call is a single unpaced send), so unlike
+    /// HID/Purple it drops with the display handle.
+    private func clearLazyClientsAfterShutdown() {
+        locationClient = nil
+        cachedLocationScenarios = nil
+    }
+
     func shutdownBackend() {
         // Stop admitting lazy bridge work before releasing the display.
         inputGate.sync { backendActive = false }
@@ -698,14 +736,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // run token retires first, so a publish already in flight from the pump
         // is dropped rather than reaching a pane that is going away.
         display.shutdown()
-        // An AX call already queued before teardown owns this backend until it
-        // returns. Keep its client stable; the pane's AX queue clears it after
-        // all admitted reads finish.
-        // Location holds only a `SimDevice` reference and has no
-        // in-flight sequence to finish (each call is a single unpaced
-        // send), so unlike HID/Purple it drops with the display handle.
-        locationClient = nil
-        cachedLocationScenarios = nil
+        clearLazyClientsAfterShutdown()
         // HID + Purple are deliberately NOT cleared here. A long-running
         // input call (swipe / pinch / longPress / crown) captures this
         // backend before its first `await`; if a concurrent

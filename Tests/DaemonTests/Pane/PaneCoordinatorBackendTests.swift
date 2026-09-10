@@ -64,8 +64,32 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// stream that can't start. Thrown before `startFramesCalled` is set, so
     /// that flag keeps meaning "frames actually started".
     var startFramesError: (any Error)?
+    /// When true, `bootstrapDisplay` suspends until `releaseBootstrap()`,
+    /// modelling a display start parked inside the bridge.
+    var parkBootstrap = false
+    /// Thrown by `bootstrapDisplay` instead of completing.
+    var bootstrapError: (any Error)?
+    private var bootstrapGate: CheckedContinuation<Void, Never>?
+    private var bootstrapReleased = false
+    private var bootstrapIsParked = false
+    private(set) var bootstrapCalls = 0
+    /// Callbacks captured at the *start* of the bootstrap, so a test can
+    /// deliver a frame or a fatal while it is still parked.
+    private(set) var onFatalHandler: (@Sendable (String) -> Void)?
+    private(set) var onOrientationHandler: (@Sendable (Orientation) -> Void)?
     private(set) var startFramesCalled = false
     private(set) var shutdownCalled = false
+    private(set) var shutdownCalls = 0
+    /// What `pixelDimensions()` answers, and how often it was asked. The
+    /// coordinator must not reach for it once a pane exists.
+    var pixelDimensionsResult: (Int?, Int?) = (nil, nil)
+    private var pixelDimensionsCallCount = 0
+    /// When true, `shutdownBackendAsync` suspends until `releaseShutdown()`,
+    /// modelling teardown queued behind the same wedged lane.
+    var parkShutdown = false
+    private var shutdownGate: CheckedContinuation<Void, Never>?
+    private var shutdownReleased = false
+    private var shutdownIsParked = false
     /// What `currentDisplayOrientation()` reports, which is what the
     /// coordinator seeds a pane from. Nil models a backend with a source
     /// that has nothing to say yet.
@@ -113,6 +137,15 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     var accessibilityReadParked: Bool {
         parkedLock.lock(); defer { parkedLock.unlock() }; return accessibilityParked
     }
+    /// True while a bootstrap is suspended, so a test can act inside the
+    /// window where the pane record is built but not yet published.
+    var bootstrapParked: Bool { parkedLock.withLock { bootstrapIsParked } }
+
+    var pixelDimensionsCalls: Int { parkedLock.withLock { pixelDimensionsCallCount } }
+
+    /// True while an async teardown is suspended.
+    var shutdownParked: Bool { parkedLock.withLock { shutdownIsParked } }
+
     var accessibilityResourcesReleased: Bool {
         parkedLock.lock(); defer { parkedLock.unlock() }; return accessibilityReleased
     }
@@ -212,7 +245,10 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     // swiftlint:disable:next async_without_await
     func poolCounters() async -> SurfacePoolCounters? { poolCountersResult }
 
-    func pixelDimensions() -> (Int?, Int?) { (nil, nil) }
+    func pixelDimensions() -> (Int?, Int?) {
+        parkedLock.withLock { pixelDimensionsCallCount += 1 }
+        return pixelDimensionsResult
+    }
 
     // MARK: Display orientation
 
@@ -237,6 +273,45 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     func emitDisplayOrientation(_ orientation: Orientation) {
         displayOrientation = orientation
         onDisplayOrientation?(orientation)
+    }
+
+    /// Release a parked `bootstrapDisplay` (or record the release so one that
+    /// parks later resumes immediately).
+    func releaseBootstrap() {
+        let continuation: CheckedContinuation<Void, Never>? = parkedLock.withLock {
+            bootstrapReleased = true
+            let parked = bootstrapGate
+            bootstrapGate = nil
+            return parked
+        }
+        continuation?.resume()
+    }
+
+    /// Release a parked `shutdownBackendAsync`.
+    func releaseShutdown() {
+        let continuation: CheckedContinuation<Void, Never>? = parkedLock.withLock {
+            shutdownReleased = true
+            let parked = shutdownGate
+            shutdownGate = nil
+            return parked
+        }
+        continuation?.resume()
+    }
+
+    func shutdownBackendAsync() async {
+        if parkShutdown {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resumeNow: Bool = parkedLock.withLock {
+                    if shutdownReleased { return true }
+                    shutdownGate = continuation
+                    shutdownIsParked = true
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+            parkedLock.withLock { shutdownIsParked = false }
+        }
+        shutdownBackend()
     }
 
     /// Release a parked `tapDown`.
@@ -395,7 +470,53 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         return accessibilityElement
     }
 
-    func shutdownBackend() { shutdownCalled = true }
+    func shutdownBackend() {
+        shutdownCalled = true
+        parkedLock.withLock { shutdownCalls += 1 }
+        // Mirrors the real backend, which unregisters display observation
+        // during shutdown rather than on the coordinator.
+        stopDisplayOrientation()
+    }
+
+    /// Records the call and captures the callbacks, then parks if asked, so a
+    /// test can hold the create inside the window where the record exists but
+    /// is not published. Capturing first is deliberate: delivering a frame or a
+    /// fatal *during* that window is exactly what the buffering has to
+    /// survive.
+    func bootstrapDisplay(
+        onFrame: @escaping @Sendable (PublishedSurface) -> Void,
+        onFatal: @escaping @Sendable (String) -> Void,
+        onDisconnect: @escaping @Sendable () -> Void,
+        onOrientation: @escaping @Sendable (Orientation) -> Void
+    ) async throws -> DisplayBootstrap {
+        parkedLock.withLock { bootstrapCalls += 1 }
+        onSurface = onFrame
+        onFatalHandler = onFatal
+        onOrientationHandler = onOrientation
+        self.onDisconnect = onDisconnect
+        if parkBootstrap {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resumeNow: Bool = parkedLock.withLock {
+                    if bootstrapReleased { return true }
+                    bootstrapGate = continuation
+                    bootstrapIsParked = true
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+            parkedLock.withLock { bootstrapIsParked = false }
+        }
+        if let bootstrapError { throw bootstrapError }
+        try startFrames(onFrame: onFrame, onFatal: onFatal, onDisconnect: onDisconnect)
+        let observing = startDisplayOrientation(onChange: onOrientation)
+        let dimensions = pixelDimensions()
+        return DisplayBootstrap(
+            pixelWidth: dimensions.0,
+            pixelHeight: dimensions.1,
+            seedOrientation: currentDisplayOrientation(),
+            observingOrientation: observing
+        )
+    }
 
     func releaseAccessibilityResources() {
         parkedLock.withLock { accessibilityReleased = true }
@@ -638,12 +759,13 @@ func accessibilityReadOnOnePaneDoesNotBlockAnotherPane() async throws {
 
 @Test
 func deviceReAttachInSameSessionSkipsAcquire() async throws {
-    // The attach handler's "release the keepalive when the backend wasn't
-    // consumed" path hinges on this: an idempotent re-attach of an
-    // already-mirrored device returns the existing pane WITHOUT invoking
-    // `acquire`. If this regressed (acquire ran on every attach), the
-    // handler would over-release; if dedup stopped skipping acquire, the
-    // freshly-built backend + its tunnel keepalive retain would leak.
+    // The attach handler resolves its backend inside `acquire`, and that
+    // hinges on this: an idempotent re-attach of an already-mirrored device
+    // returns the existing pane WITHOUT invoking it. That is what keeps a
+    // re-attach from bringing up a tunnel it has no use for, and from failing
+    // on a hiccup in machinery it never touched. Were acquire to run on every
+    // attach, the GUI's reconnect sweep would resolve a backend per pane just
+    // to have the coordinator dispose it again.
     let coordinator = PaneCoordinator()
     let session = UUID()
     var acquireCount = 0
@@ -687,33 +809,21 @@ private actor CreateLatch {
     }
 }
 
-/// Which backends a create built and which came back unused. `onUnused` is
-/// synchronous, so this is lock-guarded rather than an actor.
-///
-/// `@unchecked Sendable`: every access goes through `lock`.
-private final class BackendLog: @unchecked Sendable {
-    private let lock = NSLock()
-    private var unusedBackends: [MockDeviceBackend] = []
-
-    var unused: [MockDeviceBackend] { lock.withLock { unusedBackends } }
-
-    func noteUnused(_ backend: MockDeviceBackend) {
-        lock.withLock { unusedBackends.append(backend) }
-    }
-}
-
 @Test
-func aBackendLostToAConcurrentCreateGoesBackToItsCaller() async throws {
+func aBackendLostToAConcurrentCreateIsDisposedByTheCoordinator() async throws {
     // Acquiring suspends, so two creates can both build a backend while only
-    // one claims the target. Return the unused backend so its caller can
-    // release the matching tunnel keepalive; closing it here would strand that
-    // retain and hold the tunnel up after the pane closes.
+    // one claims the target. The loser's backend is the coordinator's to
+    // dispose: it tears it down once and then runs the acquisition's own
+    // `releaseSideResources`, which is what balances the tunnel keepalive a
+    // device attach retained. The caller is only told, so it cannot double-free
+    // either half.
     let coordinator = PaneCoordinator()
     let session = UUID()
     let latch = CreateLatch()
     let acquiring = CreateLatch()
-    let log = BackendLog()
+    let unusedNotices = CallbackCounter()
     let loserBackend = MockDeviceBackend()
+    let sideResourceReleases = CallbackCounter()
 
     let loser = Task {
         try await coordinator.createPane(
@@ -725,13 +835,11 @@ func aBackendLostToAConcurrentCreateGoesBackToItsCaller() async throws {
                 return PaneCoordinator.AcquiredBackend(
                     backend: loserBackend,
                     family: "phone",
-                    deviceType: "iPhone"
+                    deviceType: "iPhone",
+                    releaseSideResources: { sideResourceReleases.bump() }
                 )
             },
-            onUnused: { unused in
-                guard let backend = unused.backend as? MockDeviceBackend else { return }
-                log.noteUnused(backend)
-            }
+            onUnused: { unusedNotices.bump() }
         )
     }
 
@@ -753,13 +861,42 @@ func aBackendLostToAConcurrentCreateGoesBackToItsCaller() async throws {
 
     let lost = try await loser.value
     #expect(lost.paneId == winner.paneId, "one target, one pane")
-    // The caller was told, and the coordinator did not close it behind their
-    // back: releasing it, and the keepalive, is the caller's job.
-    #expect(log.unused.count == 1)
-    #expect(log.unused.first === loserBackend)
-    #expect(!loserBackend.shutdownCalled)
+    // Ownership is staged: past `acquire`, the coordinator owns the backend and
+    // the ordering of its disposal, and an abandoned acquisition is torn down
+    // exactly once with its side resources released exactly once, after that
+    // teardown. The caller is still told, so it can log or account for it.
+    #expect(unusedNotices.calls == 1)
+    var settled = false
+    for _ in 0..<20_000 where !settled {
+        settled = loserBackend.shutdownCalls == 1 && sideResourceReleases.calls == 1
+        if !settled { await Task.yield() }
+    }
+    // Only the loser's acquisition supplied a side-resource release, so one
+    // call pins which backend was disposed without holding a reference to it.
+    #expect(loserBackend.shutdownCalls == 1)
+    #expect(sideResourceReleases.calls == 1)
     let panes = await coordinator.panesForSession(session)
     #expect(panes.count == 1)
+}
+
+/// Counts a synchronous callback that fires across the actor hop.
+///
+/// `@unchecked Sendable`: every access goes through `lock`.
+private final class CallbackCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func bump() {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+    }
 }
 
 @Test

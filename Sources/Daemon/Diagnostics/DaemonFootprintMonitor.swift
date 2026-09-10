@@ -55,6 +55,8 @@ public actor DaemonFootprintMonitor {
                 pendingPaneEvents: queue.pending,
                 conflatedSurfaceNotices: queue.conflated,
                 acquiresInFlight: await paneCoordinator.acquiresInFlight(),
+                displayStartsInFlight: await paneCoordinator.displayStartsInFlight(),
+                reservedTargets: await paneCoordinator.creatingCount,
                 abandonedDeviceReads: await deviceCoordinator.abandonedDeviceReadCount,
                 xpcRequestsInFlight: await xpcServer.inFlightRequestCount,
                 xpcConnections: await xpcServer.connectionCount,

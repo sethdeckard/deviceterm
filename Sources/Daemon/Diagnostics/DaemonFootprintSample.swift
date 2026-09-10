@@ -28,6 +28,14 @@ struct DaemonFootprintSample: Sendable, Equatable {
     var conflatedSurfaceNotices = 0
     /// Simulator lookups currently inside CoreSimulator.
     var acquiresInFlight = 0
+    /// Display-start admission slots currently held, abandoned attempts
+    /// included. Persisting across samples means an admitted create is stuck
+    /// acquiring, bootstrapping, or disposing a backend.
+    var displayStartsInFlight = 0
+    /// Targets claimed after backend acquisition returned, held until the pane
+    /// publishes or disposal finishes. Persisting across samples means a
+    /// post-acquisition create has not settled.
+    var reservedTargets = 0
     /// Device reads that passed their deadline and are still unaccounted for.
     var abandonedDeviceReads = 0
     /// Inbound XPC event handlers registered on live connections and not yet
@@ -57,6 +65,8 @@ struct DaemonFootprintSample: Sendable, Equatable {
             + "paneEventsQueued=\(pendingPaneEvents) "
             + "surfaceNoticesConflated=\(conflatedSurfaceNotices) "
             + "acquiresInFlight=\(acquiresInFlight) "
+            + "displayStartsInFlight=\(displayStartsInFlight) "
+            + "reservedTargets=\(reservedTargets) "
             + "abandonedReads=\(abandonedDeviceReads) "
             + "xpcInFlight=\(xpcRequestsInFlight) xpcConns=\(xpcConnections) "
             + "surfaceDrops=\(surfaceExhaustionDrops) "

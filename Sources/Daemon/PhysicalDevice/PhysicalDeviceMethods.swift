@@ -92,50 +92,28 @@ public enum PhysicalDeviceMethods {
             // attempt, not the hardware.
             let attachId = UUID().uuidString
             // Resolving a backend brings up the tunnel and bootstraps services:
-            // the slowest and least reliable work in an attach, and it has to
-            // happen out here, because doing it inside `createPane` would block
-            // the coordinator's actor for its whole duration.
+            // the slowest and least reliable work in an attach. It runs inside
+            // the `acquire` closure below, which `createPane` calls off its own
+            // actor and only on a genuine fresh create, after its dedup and
+            // adopt branches.
             //
-            // That ordering means resolution runs before anything can tell
-            // whether a backend is needed at all. A re-attach that `createPane`
-            // would answer from the existing record needs none, and failing it
-            // on a hiccup in machinery it never used would turn a healthy
-            // mirror into a failed pane. The GUI re-attaches every device pane
-            // on reconnect, so that combination is not hypothetical.
-            //
-            // So a failure here is carried rather than thrown. `createPane`
-            // invokes `acquire` only on a genuine fresh create, after its
-            // dedup and adopt branches, which makes it the one place that
-            // knows whether the backend was required; the failure surfaces
-            // there or not at all. Deciding it here instead would mean a
+            // Both halves of that matter. Off-actor is why the slowest work in
+            // an attach cannot park the coordinator. Fresh-create-only is why a
+            // re-attach that `createPane` answers from the existing record
+            // never resolves at all: failing one on a hiccup in machinery it
+            // never used would turn a healthy mirror into a failed pane, and
+            // the GUI re-attaches every device pane on reconnect, so that
+            // combination is not hypothetical. Resolving out here and deciding
+            // whether it was needed afterwards would also mean a
             // check-then-create race this doesn't have.
-            let backend: RealDeviceBackend?
-            let resolutionFailure: PhysicalDeviceError?
-            do {
-                DiagnosticLog.attach.info(
-                    "attach \(attachId, privacy: .public): resolveBackend entering"
-                )
-                backend = try await physicalDeviceCoordinator.resolveBackend(deviceId: params.deviceId)
-                resolutionFailure = nil
-                DiagnosticLog.attach.info(
-                    "attach \(attachId, privacy: .public): resolveBackend ok"
-                )
-            } catch let error as PhysicalDeviceError {
-                DiagnosticLog.attach.error(
-                    """
-                    attach \(attachId, privacy: .public): resolveBackend failed, \
-                    deferred to acquire: \(error.diagnosticKind, privacy: .public)
-                    """
-                )
-                backend = nil
-                resolutionFailure = error
-            }
-            // `createPane` invokes `acquire` only on a genuine fresh create;
-            // its idempotent-re-attach and orphan-adopt branches return an
-            // existing pane *without* it. Track whether our freshly-built
-            // backend was actually consumed, so when it wasn't we release both
-            // it and the keepalive retain `resolveBackend` took. Otherwise a
-            // repeat attach of an already-mirrored device leaks the tunnel.
+            //
+            // Nothing holds the resolved backend out here. Whatever `acquire`
+            // hands over, `createPane` owns, including disposing it and running
+            // the acquisition's `releaseSideResources` when it goes unused.
+
+            // Diagnostic only: whether this attach turned out to be a fresh
+            // create (it resolved a backend and the pane took it) or was
+            // answered from an existing record. It gates no cleanup.
             var backendConsumed = false
             let result: PaneCreateResult
             let ownerIncarnation = await PaneAccessPrincipal.ownerIncarnation(for: sessionId) {
@@ -161,28 +139,44 @@ public enum PhysicalDeviceMethods {
                         await sessionManager.isAlive(priorOwner)
                     },
                     acquire: {
-                        // Reached only on a fresh create, so this is where a
-                        // deferred resolution failure becomes the answer: the
-                        // record that would have made it irrelevant isn't
-                        // there.
-                        guard let backend else {
-                            throw resolutionFailure ?? .notConnected(deviceId: params.deviceId)
-                        }
+                        // Reached only on a fresh create, and only after the
+                        // display-start admission was taken, so a refusal never
+                        // retains a tunnel. A resolution failure becomes the
+                        // answer here: the record that would have made it
+                        // irrelevant isn't there.
+                        DiagnosticLog.attach.info(
+                            "attach \(attachId, privacy: .public): resolveBackend entering"
+                        )
+                        let resolved = try await physicalDeviceCoordinator.resolveBackend(
+                            deviceId: params.deviceId
+                        )
+                        DiagnosticLog.attach.info(
+                            "attach \(attachId, privacy: .public): resolveBackend ok"
+                        )
                         backendConsumed = true
                         return PaneCoordinator.AcquiredBackend(
-                            backend: backend,
+                            backend: resolved,
                             family: DeviceFamily.unknown.rawValue,
-                            deviceType: nil
+                            deviceType: nil,
+                            releaseSideResources: { [physicalDeviceCoordinator] in
+                                // Balances the retain `resolveBackend` took.
+                                // Run after the backend is down, so it cannot
+                                // pull the tunnel out from under a teardown or
+                                // a start still in flight.
+                                await physicalDeviceCoordinator.releaseKeepalive(
+                                    deviceId: params.deviceId
+                                )
+                            }
                         )
                     },
-                    onUnused: { _ in
+                    onUnused: {
                         // Acquiring suspends, so a concurrent attach can claim
                         // the target after this one built its backend. The
-                        // create hands it back rather than consuming it, which
-                        // puts the release below back in charge of both the
-                        // backend and the keepalive retain.
+                        // create still disposes it; this only corrects the
+                        // diagnostic below, which would otherwise report a
+                        // fresh attach for one that ended up deduped.
                         backendConsumed = false
-                    }
+                    },
                 )
             } catch let error as PhysicalDeviceError {
                 DiagnosticLog.attach.error(
@@ -200,20 +194,17 @@ public enum PhysicalDeviceMethods {
                     \(error.diagnosticKind, privacy: .public)
                     """
                 )
-                // No pane will own the backend; release it + the keepalive
-                // retain or we'd hold the tunnel up for a mirror that never
-                // mounted. Both are conditional on having resolved one:
-                // `resolveBackend` balances its own retain on failure, so a
-                // deferred failure leaves this attach holding none, and
-                // releasing anyway would decrement a retain belonging to
-                // whichever live pane is already mirroring the device. That is
-                // reachable: the create can refuse because another live
-                // session holds it, which is exactly when someone else's
-                // tunnel is at stake.
-                if let backend {
-                    backend.shutdownBackend()
-                    await physicalDeviceCoordinator.releaseKeepalive(deviceId: params.deviceId)
-                }
+                // Nothing to release here, whichever error came back. Either
+                // `acquire` never ran, so this attach holds no retain
+                // (`resolveBackend` balances its own on failure), or it did and
+                // the create owns what it built: disposal tears the backend
+                // down and `releaseSideResources` balances the keepalive after
+                // that teardown finishes. Releasing here as well would
+                // double-free the retain, and the retain it decremented could
+                // belong to whichever live pane is already mirroring the
+                // device. That is reachable: the create can refuse *because*
+                // another live session holds it, which is exactly when someone
+                // else's tunnel is at stake.
                 throw PaneMethods.mapPaneError(error)
             }
             DiagnosticLog.attach.info(
@@ -222,16 +213,12 @@ public enum PhysicalDeviceMethods {
                 fresh=\(backendConsumed, privacy: .public)
                 """
             )
-            if !backendConsumed, let backend {
-                // Dedup / orphan-adopt returned an existing pane; our backend
-                // and its keepalive retain are unused. Release both so a
-                // repeated attach doesn't accumulate retains and leave the
-                // device tunnel held after the only pane closes. Nil means
-                // resolution failed and the dedup made that not matter, so
-                // there is no retain to release.
-                backend.shutdownBackend()
-                await physicalDeviceCoordinator.releaseKeepalive(deviceId: params.deviceId)
-            }
+            // Nothing to release here. When a dedup or orphan-adopt returns an
+            // existing pane, the create disposes the backend it acquired under
+            // its own display-start admission and runs the keepalive release
+            // through `releaseSideResources`. Releasing again would decrement a
+            // retain that now belongs to whichever pane is mirroring the
+            // device, and could race that teardown.
             return try JSONEncoder().encode(
                 PaneMethods.CreateResponse(
                     paneId: result.paneId.uuidString,

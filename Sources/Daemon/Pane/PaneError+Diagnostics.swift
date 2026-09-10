@@ -106,6 +106,12 @@ extension PaneError {
 
         case .backendAcquireBusy:
             return "backend-acquire-busy"
+
+        case .displayStartTimedOut:
+            return "display-start-timed-out"
+
+        case .displayStartBusy:
+            return "display-start-busy"
         }
     }
 }

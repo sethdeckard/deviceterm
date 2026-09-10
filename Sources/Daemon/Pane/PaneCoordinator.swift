@@ -297,6 +297,15 @@ public actor PaneCoordinator {
         /// Whether display-orientation observation is running for this
         /// pane, so teardown only unregisters what was registered.
         var observingDisplayOrientation = false
+        /// Native pixel dimensions, seeded by the display bootstrap and
+        /// corrected by each committed frame. Nil until one of the two supplies
+        /// them; see `displayPixelDimensions()`.
+        var cachedPixelWidth: Int?
+        var cachedPixelHeight: Int?
+        /// Terminal reports from the backend, held so teardown can end the
+        /// drain rather than leaving it parked forever.
+        var lifecycleContinuation: AsyncStream<LifecycleSignal>.Continuation?
+        var lifecyclePump: Task<Void, Never>?
         /// Bumped when display observation is torn down, and by nothing
         /// else. The observer's callback captures the value it started
         /// with, so a delivery already in flight past teardown is dropped.
@@ -449,19 +458,31 @@ public actor PaneCoordinator {
             )
         }
 
-        /// Best-effort read of the device's native pixel dimensions.
-        /// Returns `(nil, nil)` when the backend is gone (post-shutdown)
-        /// or the renderable hasn't bound a surface yet (`displaySize`
-        /// is `CGSizeZero` per the bridge contract). The GUI treats nil
-        /// as "use family-default sizing" so a startup race doesn't
-        /// blank the pane.
+        /// The device's native pixel dimensions as last cached. Returns
+        /// `(nil, nil)` until either the bootstrap or a committed frame
+        /// supplies them, which the bridge leaves open when the renderable
+        /// hasn't bound a surface yet (`displaySize` is `CGSizeZero` per its
+        /// contract). Survives backend teardown, since it is a cache rather
+        /// than a read. The GUI treats nil as "use family-default sizing" so a
+        /// startup race doesn't blank the pane.
         func displayPixelDimensions() -> (Int?, Int?) {
-            backend?.pixelDimensions() ?? (nil, nil)
+            // Memory only, on every path including re-attach. The bootstrap
+            // seeds this, and the first committed frame corrects it: reading
+            // the backend here would put a CoreSimulator round trip on the
+            // coordinator, which is what this whole seam removes. Nil before
+            // the first frame is the documented answer, and the GUI falls back
+            // to family-default sizing for it.
+            (cachedPixelWidth, cachedPixelHeight)
         }
 
-        /// Stop display-orientation observation and finish its pump.
-        /// Idempotent.
-        func teardownOrientationPump(backend: DeviceBackend?) {
+        /// Fence display-orientation callbacks locally and finish their pump:
+        /// bumps the epoch so a delivery already dispatched is dropped,
+        /// finishes the stream, and cancels the drain. Idempotent.
+        ///
+        /// The CoreSimulator unregister is *not* done here, because it is a
+        /// bridge call and this runs on the coordinator; async backend shutdown
+        /// performs it.
+        func teardownOrientationPump() {
             if let waiter = rotationConfirmationWaiter {
                 rotationConfirmationWaiter = nil
                 waiter.continuation.resume(
@@ -473,15 +494,22 @@ public actor PaneCoordinator {
                     )
                 )
             }
-            if observingDisplayOrientation {
-                backend?.stopDisplayOrientation()
-                observingDisplayOrientation = false
-            }
+            observingDisplayOrientation = false
             displayObserverEpoch &+= 1
             orientationContinuation?.finish()
             orientationContinuation = nil
             orientationPump?.cancel()
             orientationPump = nil
+        }
+
+        /// Finish the lifecycle stream and cancel its drain. Without this the
+        /// drain stays suspended on a stream nothing will ever finish, leaking
+        /// a task and a continuation per closed pane.
+        func teardownLifecyclePump() {
+            lifecycleContinuation?.finish()
+            lifecyclePump?.cancel()
+            lifecycleContinuation = nil
+            lifecyclePump = nil
         }
 
         /// Finish the ordered surface pump and stop its drain task.
@@ -507,13 +535,41 @@ public actor PaneCoordinator {
     }
 
     /// What a successful `acquire` hands back to `createPane`: the live
-    /// backend plus the device-family / human-readable type the create
-    /// response carries. The backend kind (`SimDeviceBackend` vs a
-    /// physical one) is the only thing that varies between targets.
+    /// backend, the device-family / human-readable type the create response
+    /// carries, and the cleanup for anything the caller retained alongside the
+    /// backend.
+    ///
+    /// Ownership is staged, and `releaseSideResources` is what makes the last
+    /// stage possible:
+    ///
+    ///   - before `acquire` returns, the caller owns everything;
+    ///   - after it returns, the coordinator owns the backend and the ordering
+    ///     of its disposal;
+    ///   - once the pane publishes, pane lifecycle owns it;
+    ///   - if it is abandoned instead, disposal tears the backend down and runs
+    ///     `releaseSideResources` exactly once, after that teardown finishes.
+    ///
+    /// A device attach holds a tunnel keepalive that only it can balance, and
+    /// this is how it balances one without also owning the backend's teardown.
     struct AcquiredBackend {
         let backend: any DeviceBackend
         let family: String
         let deviceType: String?
+        /// Run once, after the backend is down, when this acquisition is
+        /// abandoned rather than published.
+        let releaseSideResources: @Sendable () async -> Void
+
+        init(
+            backend: any DeviceBackend,
+            family: String,
+            deviceType: String?,
+            releaseSideResources: @escaping @Sendable () async -> Void = {}
+        ) {
+            self.backend = backend
+            self.family = family
+            self.deviceType = deviceType
+            self.releaseSideResources = releaseSideResources
+        }
     }
 
     /// What `inputBackend` resolves for one input operation: the authorized
@@ -550,6 +606,42 @@ public actor PaneCoordinator {
         case beforeCommit
         case beforeStatePublication
         case beforeTerminalPublicationWait
+    }
+
+    /// A terminal report from a backend, held until the pane it describes is
+    /// published.
+    ///
+    /// `markPaneFailed` and `markPaneShutdown` are keyed by `paneId` and no-op
+    /// when the record is not in `panes`. During a bootstrap it deliberately
+    /// is not, so a fatal delivered then would be swallowed and a dead stream
+    /// published as a live pane.
+    enum LifecycleSignal: Sendable {
+        case failed(String)
+        case disconnected
+    }
+
+    /// One target claimed by a create that has not finished building its pane.
+    ///
+    /// The claim outlives the create when the attempt is abandoned, which is
+    /// any create that cannot publish: a timeout, a session teardown, a
+    /// bootstrap that failed, a handoff the ownership fence rejected. All of
+    /// them mark it `.abandoned` rather than removing it, because the backend
+    /// underneath is still starting or still coming down, and the target has to
+    /// stay spoken for until disposal says otherwise.
+    struct Creating {
+        enum Phase {
+            case active
+            case abandoned
+        }
+
+        let token: UUID
+        let target: PaneTarget
+        let sessionId: UUID
+        /// The owner incarnation the claim was made under. A session close
+        /// invalidates the reservation through this, since there is no pane
+        /// record to sweep yet.
+        let incarnation: UInt64?
+        var phase: Phase = .active
     }
 
     /// Upper bound on gesture durations (ms) accepted by `swipe`,
@@ -644,9 +736,59 @@ public actor PaneCoordinator {
     /// Builds sim backends off this actor, under a deadline and an admission
     /// cap. Held rather than constructed per create so the cap spans attaches.
     private let simBackendAcquirer: SimBackendAcquirer
+    /// Bounds display bootstraps the same way, and for the same reason: the
+    /// bridge calls under it cannot be cancelled, so a wedged one has to be
+    /// abandoned by the caller and accounted for until it returns.
+    private let displayBootstrapSupervisor: DisplayBootstrapSupervisor
+    /// Targets whose pane is being built but is not yet in `panes`.
+    ///
+    /// A create holds its target here across the display bootstrap, which is
+    /// the only suspension in `createPane` that happens with a half-built
+    /// record in hand. Keeping the record *out* of `panes` until it is finished
+    /// is what stops a competing create returning one whose frames have not
+    /// started, and the token is what lets a late resumption tell its own
+    /// reservation from a newer one.
+    private var creating: [PaneTarget: Creating] = [:]
+    private var creatingTargetWaiters: [
+        (target: PaneTarget, continuation: CheckedContinuation<Void, Never>)
+    ] = []
+    /// Targets whose backend is still being torn down after the pane went
+    /// terminal. Committing the terminal state early takes the record out of
+    /// `isLiveTarget`, so without this a retry would build a second backend for
+    /// a device the first one is still stopping.
+    private var tearingDown: [PaneTarget: Int] = [:]
+    private var tearingDownWaiters: [
+        (target: PaneTarget, continuation: CheckedContinuation<Void, Never>)
+    ] = []
     /// Test-only seam captured when a pane creates its pump. Always nil in
     /// production.
     private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
+
+    /// Whether any create attempt is unsettled: an admitted slot, which is
+    /// taken before backend acquisition and given back only at publication or
+    /// once disposal finishes, or a target claim that has not yet reached
+    /// either.
+    ///
+    /// The idle monitor samples this alongside `hasDeferredCleanup`. An
+    /// unsettled create may be acquiring a backend, starting one, or disposing
+    /// one, and holds no pane record through any of it, so without this the
+    /// daemon could exit out from under it.
+    public var hasCreateInFlight: Bool {
+        get async {
+            if !creating.isEmpty { return true }
+            return await displayBootstrapSupervisor.inFlight > 0
+        }
+    }
+
+    /// Reservations outstanding right now. Read by the footprint sample;
+    /// `hasCreateInFlight` checks the same reservation map for daemon
+    /// lifetime.
+    public var creatingCount: Int { creating.count }
+
+    /// Diagnostic accessor: creates parked waiting for a claimed target to
+    /// settle. A pile-up here means one create is holding a target that
+    /// several others want.
+    public var creatingWaiterCount: Int { creatingTargetWaiters.count }
 
     /// Diagnostic accessor: live, listable pane records. Excludes retiring ones.
     public var paneCount: Int { panes.count }
@@ -687,7 +829,8 @@ public actor PaneCoordinator {
             eventBroker: eventBroker,
             subscriptionRegistry: subscriptionRegistry,
             rotationConfirmationTimeoutNanoseconds: rotationConfirmationTimeoutNanoseconds,
-            simBackendAcquirer: SimBackendAcquirer()
+            simBackendAcquirer: SimBackendAcquirer(),
+            displayBootstrapSupervisor: DisplayBootstrapSupervisor()
         )
     }
 
@@ -699,13 +842,15 @@ public actor PaneCoordinator {
         eventBroker: EventBroker?,
         subscriptionRegistry: PaneSubscriptionRegistry?,
         rotationConfirmationTimeoutNanoseconds: UInt64,
-        simBackendAcquirer: SimBackendAcquirer
+        simBackendAcquirer: SimBackendAcquirer,
+        displayBootstrapSupervisor: DisplayBootstrapSupervisor = DisplayBootstrapSupervisor()
     ) {
         self.mintShortID = mintShortID
         self.eventBroker = eventBroker
         self.subscriptionRegistry = subscriptionRegistry
         self.rotationConfirmationTimeoutNanoseconds = rotationConfirmationTimeoutNanoseconds
         self.simBackendAcquirer = simBackendAcquirer
+        self.displayBootstrapSupervisor = displayBootstrapSupervisor
     }
 
     /// Test-only: install the ordered-pump race hook above.
@@ -816,12 +961,13 @@ public actor PaneCoordinator {
     ///
     /// That suspension makes "acquire ran" and "the pane took what it built"
     /// two different facts: two creates racing one target can both acquire,
-    /// and only one commits. `onUnused` reports the second case, handing the
-    /// backend back to the caller, and it is the caller's cue to release
-    /// anything it retained alongside it. The device path's tunnel keepalive is
-    /// balanced that way, against a create that cannot assume its backend was
-    /// consumed. The default closes the backend, which is all a sim create
-    /// holds. It runs at most once per create, and never after a commit.
+    /// and only one commits. `onUnused` **reports** the second case and hands
+    /// back nothing: disposal is the coordinator's, which is why it takes no
+    /// backend to act on. It exists so a caller can log or account for an
+    /// acquisition that went nowhere, and it runs at most once per create,
+    /// never after a commit. Anything the caller retained alongside the
+    /// backend is balanced by the acquisition's own `releaseSideResources`,
+    /// after the teardown that disposal performs.
     ///
     /// `.shutdown` / `.failed` panes are skipped so an already-shut-
     /// down record doesn't block a reboot; a fresh `booted` event
@@ -834,7 +980,7 @@ public actor PaneCoordinator {
         requireConcreteIncarnation: Bool = false,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil,
         acquire: () async throws -> AcquiredBackend,
-        onUnused: (AcquiredBackend) -> Void = { $0.backend.shutdownBackend() }
+        onUnused: () -> Void = {}
     ) async throws -> PaneCreateResult {
         // Production pane ownership requires a CONCRETE target incarnation: the
         // handler resolves it from the target session's live phase (nil when the
@@ -880,13 +1026,49 @@ public actor PaneCoordinator {
         }
         // A backend built for a create that then loses its target, whether to a
         // racing create, an adoption, or a refused incarnation, has no pane
-        // record to close it, so ownership goes back to the caller on every
-        // exit except the commit. Handing it back rather than just closing it
-        // here is what lets a caller release whatever it retained *alongside*
-        // the backend: a device attach holds a tunnel keepalive that only it
-        // can balance.
+        // record to close it. Held here so the `defer` below disposes it on
+        // every exit except the commit, together with whatever the caller
+        // retained *alongside* it: a device attach holds a tunnel keepalive
+        // that only the acquisition's own `releaseSideResources` can balance.
         var pendingBackend: AcquiredBackend?
-        defer { if let pendingBackend { onUnused(pendingBackend) } }
+        // Held from admission until this create settles the slot: publication
+        // releases it, and a bootstrap failure or a rejected handoff clears it
+        // by handing responsibility to the supervisor. A successful bootstrap
+        // leaves it set, because the slot stays charged until the pane
+        // publishes. Held here so every early exit settles it.
+        var admissionToken: UUID?
+        defer {
+            let supervisor = displayBootstrapSupervisor
+            if let unused = pendingBackend {
+                // Tell the caller its acquisition went unused, then dispose it
+                // under this attempt's own admission. Detached because a
+                // `defer` cannot await, but the token is removed only once
+                // that teardown finishes, so the slot still covers the work.
+                // Disposing here rather than handing the backend to the caller
+                // keeps a simulator's synchronous shutdown off this actor and
+                // leaves one owner for the teardown ordering.
+                onUnused()
+                let backend = unused.backend
+                let cleanup = unused.releaseSideResources
+                if let token = admissionToken {
+                    admissionToken = nil
+                    Task {
+                        await supervisor.disposeAdmitted(
+                            token: token,
+                            backend: backend,
+                            onDisposed: cleanup
+                        )
+                    }
+                } else {
+                    Task {
+                        await backend.shutdownBackendAsync()
+                        await cleanup()
+                    }
+                }
+            } else if let token = admissionToken {
+                Task { await supervisor.release(token: token) }
+            }
+        }
         let acquired: AcquiredBackend
         // Resolve the target's current owner, re-checking after every
         // suspension. A pane whose close deferred still owns its device while
@@ -898,6 +1080,27 @@ public actor PaneCoordinator {
                 await awaitRetiringTarget(target)
                 continue
             }
+            // A create already building this target's pane holds it out of
+            // `panes` until its display has started. Park rather than racing it
+            // to a second backend on the same device.
+            if let claim = creating[target] {
+                guard claim.phase == .active else {
+                    // An abandoned attempt still owns this device. Waiting is
+                    // wrong (nothing bounds when the bridge answers) and so is
+                    // starting a second backend, so refuse and let the caller
+                    // retry once disposal has released it.
+                    throw PaneError.displayStartBusy(udid: key)
+                }
+                await awaitCreatingTarget(target)
+                continue
+            }
+            // Same for a terminal pane whose backend is still stopping: the
+            // record is no longer a live target, so only this keeps a retry
+            // from attaching beside a device that is still being released.
+            if tearingDown[target] != nil {
+                await awaitTeardown(of: target)
+                continue
+            }
             guard let existing = panes.values.first(where: { isLiveTarget($0, target: target) }) else {
                 // Nothing holds this target, so this is a fresh create. Build
                 // the backend off this actor first, then re-run every check
@@ -905,7 +1108,19 @@ public actor PaneCoordinator {
                 // create, adoption, or close lands in that window exactly as it
                 // can in the liveness await below.
                 guard let pending = pendingBackend else {
-                    pendingBackend = try await acquire()
+                    // Admission first, then acquisition. Refusing after the
+                    // backend exists means every refusal leaves one to tear
+                    // down, so refusals themselves would accumulate stalled
+                    // teardowns.
+                    let token = try await displayBootstrapSupervisor.admit(udid: key)
+                    admissionToken = token
+                    do {
+                        pendingBackend = try await acquire()
+                    } catch {
+                        admissionToken = nil
+                        await displayBootstrapSupervisor.release(token: token)
+                        throw error
+                    }
                     continue
                 }
                 acquired = pending
@@ -1043,27 +1258,180 @@ public actor PaneCoordinator {
         record.cohortId = ownerIncarnation.flatMap {
             cohortState.cohortId(forMember: CohortMember(sessionId: sessionId, incarnation: $0))
         }
-        panes[paneId] = record
+        // The record deliberately stays OUT of `panes` until its display has
+        // started. Claim the target instead: a competing create parks on the
+        // claim rather than finding a record whose frames have not started, and
+        // a session close can invalidate the claim through its incarnation even
+        // though there is no pane record to sweep yet.
+        let creatingToken = UUID()
+        creating[target] = Creating(
+            token: creatingToken,
+            target: target,
+            sessionId: sessionId,
+            incarnation: ownerIncarnation
+        )
+        defer { releaseCreating(target: target, token: creatingToken) }
         // The record owns the backend from here, so the disposal above must
         // not also claim it.
         pendingBackend = nil
 
-        // Stand up the per-pane ordered surface pump before starting
-        // frames: the backend can fire its callback synchronously
-        // inside `startFrames` when a surface is already bound, so the
-        // continuation must exist first. The callback only yields. The
-        // detached serial drain asks this actor to commit each retained frame
-        // in receive order, then performs steady-state side-band fan-out
-        // without re-entering PaneCoordinator. The first frame re-enters once
-        // to fence its lifecycle publication against teardown and session
-        // revocation.
+        // Stand up the ordered surface stream before starting frames: the
+        // backend can fire its callback synchronously inside the bootstrap when
+        // a surface is already bound, so the continuation must exist first. The
+        // callback only yields.
+        //
+        // The *drain* starts after publication, not here. It commits each frame
+        // against this actor keyed by `paneId`, and until the record is in
+        // `panes` that lookup finds nothing and the frame is dropped. The
+        // stream's latest-only buffer retains the newest frame produced during
+        // the bootstrap until the drain starts.
         let (surfaceStream, surfaceContinuation) = AsyncStream.makeStream(
             of: PublishedSurface.self,
             bufferingPolicy: .bufferingNewest(1)
         )
         record.surfaceContinuation = surfaceContinuation
+        let (orientationStream, orientationContinuation) = AsyncStream.makeStream(
+            of: Orientation.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        // Oldest-wins, not newest: each of these fires at most once, and if a
+        // fatal is followed by a disconnect the fatal is the one the user has
+        // to act on.
+        let (lifecycleStream, lifecycleContinuation) = AsyncStream.makeStream(
+            of: LifecycleSignal.self,
+            bufferingPolicy: .bufferingOldest(1)
+        )
         let subscriptionRegistry = subscriptionRegistry
         let surfacePumpTestHook = surfacePumpTestHook
+
+        let bootstrap: DisplayBootstrap
+        do {
+            // From here the slot's fate splits. A successful handover leaves it
+            // charged for this create to release after publication; anything
+            // else leaves the supervisor holding it through disposal.
+            guard let token = admissionToken else {
+                // Unreachable: admission is taken before the acquire that
+                // produced this backend. Refuse rather than bootstrapping
+                // uncharged.
+                throw PaneError.displayStartBusy(udid: key)
+            }
+            bootstrap = try await displayBootstrapSupervisor.bootstrap(
+                token: token,
+                backend: acquired.backend,
+                udid: key,
+                onFrame: { published in
+                    surfaceContinuation.yield(published)
+                },
+                onFatal: { reason in
+                    lifecycleContinuation.yield(.failed(reason))
+                },
+                onDisconnect: {
+                    lifecycleContinuation.yield(.disconnected)
+                },
+                onOrientation: { orientation in
+                    orientationContinuation.yield(orientation)
+                },
+                // Composed: the caller's cleanup (a device attach releases its
+                // tunnel keepalive) runs first, then the claim is released.
+                // Both happen only once disposal has finished, which is what
+                // keeps the target exclusive and the daemon non-idle for the
+                // whole abandoned-attempt lifetime.
+                onDisposed: { [weak self] in
+                    await acquired.releaseSideResources()
+                    await self?.releaseAbandonedCreating(
+                        target: target,
+                        token: creatingToken
+                    )
+                }
+            )
+        } catch let error as PaneError {
+            // The supervisor keeps this token and disposes the backend itself,
+            // so nothing here settles either.
+            admissionToken = nil
+            surfaceContinuation.finish()
+            orientationContinuation.finish()
+            lifecycleContinuation.finish()
+            // Rethrown as-is: these already carry their own RPC message and
+            // diagnostic code, and wrapping them as `startStreamFailed` would
+            // make both unreachable.
+            if case .displayStartTimedOut = error {
+                // Deliberately no teardown here. The attempt is still running
+                // inside the bridge and still holds its slot; the supervisor
+                // disposes it when it returns. Tearing down from this actor
+                // would queue behind that same wedged lane and block the
+                // coordinator for exactly as long as the deadline was meant to
+                // avoid.
+                //
+                // The claim is abandoned rather than released, so the target
+                // stays spoken for while that backend is still starting. The
+                // `defer` below leaves an abandoned claim alone; disposal
+                // releases it.
+                abandonCreating(target: target, token: creatingToken)
+                throw error
+            }
+            // No teardown here either: the supervisor disposes every attempt
+            // it took, and releases the claim through `onDisposed`.
+            abandonCreating(target: target, token: creatingToken)
+            record.backend = nil
+            throw error
+        } catch {
+            admissionToken = nil
+            surfaceContinuation.finish()
+            orientationContinuation.finish()
+            lifecycleContinuation.finish()
+            // No teardown here. The supervisor keeps this attempt's slot and
+            // disposes the backend itself, so a stalled teardown stays charged
+            // against the cap instead of freeing room for another one. The
+            // claim is abandoned meanwhile, and its `onDisposed` releases it.
+            abandonCreating(target: target, token: creatingToken)
+            record.backend = nil
+            throw PaneError.startStreamFailed(
+                udid: key,
+                message: BridgeMessage.unwrap(error)
+            )
+        }
+
+        // The bootstrap suspended, so re-check what it was started for. The
+        // claim must still be ours (a session close or a newer attempt can have
+        // taken it) and the owner incarnation still current. Losing either
+        // means the display we just started belongs to nobody, so release it
+        // rather than publishing a pane the caller no longer wants.
+        guard creating[target]?.token == creatingToken, ownerIncarnationStillActive() else {
+            surfaceContinuation.finish()
+            orientationContinuation.finish()
+            lifecycleContinuation.finish()
+            // The handover completed, so this backend is the coordinator's to
+            // release. Charged, because that teardown can stall as easily as
+            // any other.
+            abandonCreating(target: target, token: creatingToken)
+            let handedOver = record.backend
+            record.backend = nil
+            let rejectedToken = admissionToken
+            admissionToken = nil
+            if let handedOver, let rejectedToken {
+                // Reuses the slot this attempt was admitted on, so repeated
+                // rejected handoffs cannot pile up past the cap.
+                await displayBootstrapSupervisor.disposeAdmitted(
+                    token: rejectedToken,
+                    backend: handedOver,
+                    onDisposed: acquired.releaseSideResources
+                )
+            }
+            releaseAbandonedCreating(target: target, token: creatingToken)
+            throw PaneError.ownerNotReady(sessionId: sessionId)
+        }
+
+        // No `await` from here to the end of this actor step: the record is
+        // published, its pumps start, and the claim is released as one
+        // indivisible turn. Waiters resumed by that release cannot run on this
+        // actor until the turn finishes, so none of them sees a partial pane.
+        record.cachedPixelWidth = bootstrap.pixelWidth
+        record.cachedPixelHeight = bootstrap.pixelHeight
+        if let seed = bootstrap.seedOrientation {
+            record.presentationOrientation = seed
+            record.confirmedOrientation = seed
+        }
+        panes[paneId] = record
         record.surfacePump = Task.detached { [weak self, paneId] in
             for await published in surfaceStream {
                 guard !Task.isCancelled else { break }
@@ -1084,52 +1452,56 @@ public actor PaneCoordinator {
                 )
             }
         }
+        // Drained only now, for the same reason the surface pump is: these
+        // land on `panes[paneId]`, and a terminal report delivered during the
+        // bootstrap would have found nothing there. The buffer held it.
+        record.lifecycleContinuation = lifecycleContinuation
+        record.lifecyclePump = Task { [weak self, paneId] in
+            for await signal in lifecycleStream {
+                switch signal {
+                case let .failed(reason):
+                    await self?.markPaneFailed(paneId: paneId, reason: reason)
 
-        do {
-            try acquired.backend.startFrames(
-                onFrame: { published in
-                    surfaceContinuation.yield(published)
-                },
-                onFatal: { [weak self, paneId] reason in
-                    Task { [weak self, paneId] in
-                        await self?.markPaneFailed(paneId: paneId, reason: reason)
-                    }
-                },
-                onDisconnect: { [weak self, paneId] in
-                    Task { [weak self, paneId] in
-                        await self?.markPaneShutdown(paneId: paneId)
-                    }
+                case .disconnected:
+                    await self?.markPaneShutdown(paneId: paneId)
                 }
-            )
-        } catch {
-            let surfacePump = record.teardownSurfacePump()
-            // The record owns the backend once `pendingBackend` is cleared,
-            // so the acquire path's `defer` can't clean it up. Run the normal
-            // backend shutdown before dropping the failed record, rather than
-            // leaving teardown to deallocation.
-            shutDownBackend(for: record)
-            panes.removeValue(forKey: paneId)
-            await surfacePump?.value
-            throw PaneError.startStreamFailed(
-                udid: key,
-                message: BridgeMessage.unwrap(error)
-            )
+            }
         }
-
-        startDisplayOrientationObserver(record: record, paneId: paneId, backend: acquired.backend)
-
-        // The backend may fire the callback synchronously inside
-        // `startFrames` when a surface is already bound. By the time we
-        // get here, `record.currentSurface` may already reflect that.
-        // If not, fall through to the first asynchronous callback.
-        if record.currentSurface != nil {
-            record.state = .rendering
+        if bootstrap.observingOrientation {
+            record.observingDisplayOrientation = true
+            record.orientationContinuation = orientationContinuation
+            // Fenced on the observer's own epoch so a delivery still in flight
+            // past teardown can't resurrect orientation state on a pane it no
+            // longer describes.
+            let observerEpoch = record.displayObserverEpoch
+            record.orientationPump = Task { [weak self, paneId] in
+                for await orientation in orientationStream {
+                    await self?.emitObservedOrientation(
+                        paneId: paneId,
+                        observerEpoch: observerEpoch,
+                        orientation: orientation
+                    )
+                }
+            }
+        } else {
+            orientationContinuation.finish()
         }
+        releaseCreating(target: target, token: creatingToken)
         // Publish the pane's initial state (booting or already-
         // rendering on attach-to-booted-device) to the event stream,
         // scoped to the sessions permitted to drive the pane. Subsequent
         // transitions get their own publishes in handleSurfaceCallback /
         // shutdown.
+        //
+        // This is the FIRST suspension after the no-await region, and the pumps
+        // started just above are why. They are already draining buffers that
+        // can hold a frame or a terminal report delivered during bootstrap, so
+        // the instant this actor yields, one of them can publish a later state
+        // for this pane. Reaching the broker before yielding is what keeps a
+        // subscriber from seeing `rendering` (or a terminal state) and then
+        // this one, which would leave the stream describing the pane as
+        // booting after it had moved on. Suspending for anything else first,
+        // the admission release below included, puts the inversion back.
         await eventBroker?.publish(
             .paneStateChanged(
             paneId: paneId.uuidString,
@@ -1138,6 +1510,14 @@ public actor PaneCoordinator {
         ),
             to: .sessions(controllers(of: record))
         )
+        // Published, so the work this slot covered is done. The slot is held
+        // across the publish rather than given back before it: publication is
+        // bounded, non-blocking fan-out, and the create does not return until
+        // the release lands either way.
+        if let committed = admissionToken {
+            admissionToken = nil
+            await displayBootstrapSupervisor.release(token: committed)
+        }
         return resultFor(record)
     }
 
@@ -1412,6 +1792,12 @@ public actor PaneCoordinator {
     /// nonzero across samples suggests an acquisition is wedged.
     func acquiresInFlight() async -> Int {
         await simBackendAcquirer.inFlight
+    }
+
+    /// Display-start admission slots held: taken before backend acquisition
+    /// and given back at publication or once disposal finishes.
+    func displayStartsInFlight() async -> Int {
+        await displayBootstrapSupervisor.inFlight
     }
 
     /// The three pool counters the footprint sample carries, summed across
@@ -1909,23 +2295,39 @@ public actor PaneCoordinator {
         let terminalPublicationRevision = record.terminalPublicationRevision
         record.terminalStatePublicationInFlight = true
         let surfacePump = record.teardownSurfacePump()
-        record.teardownOrientationPump(backend: record.backend)
-        shutDownBackend(for: record)
+        record.teardownOrientationPump()
+        record.teardownLifecyclePump()
+        // Commit the terminal state and bump the epoch *before* suspending on
+        // teardown. Both awaits below leave this record reachable, and the
+        // already-terminal guards in `markPaneShutdown`/`markPaneFailed` read
+        // `state`: leaving it `.booting` across the wait lets a second terminal
+        // report enter `retire` concurrently, and lets a queued frame pass an
+        // epoch fence that has not moved. A teardown that never returns would
+        // also leave subscribers with no terminal transition at all.
         record.currentSurface = nil
         record.simulatedLocation = nil
         record.locationEpoch &+= 1
         record.state = state
         record.epoch &+= 1
+        // Hold the target for as long as the backend takes to come down. The
+        // record is terminal now, so it no longer answers `isLiveTarget`, and a
+        // retry would otherwise build a second backend for a device this one is
+        // still stopping.
+        let target = record.target
+        beginTeardown(of: target)
+        defer { endTeardown(of: target) }
 
         // A detached pump may already have committed work or queued its actor
         // call when cancellation lands. Wait for that one task to finish before
         // emitting terminal events. The handler's state/epoch fence
         // rejects work that had not committed yet; admitted work finishes
-        // before subscribers can observe the terminal state.
+        // before subscribers can observe the terminal state. Bounded: the pump
+        // is already cancelled.
         await surfacePump?.value
         guard panes[record.id] === record,
             record.state == state else {
             finishTerminalStatePublication(record, revision: terminalPublicationRevision)
+            await shutDownBackendAsync(for: record)
             return
         }
 
@@ -1944,6 +2346,12 @@ public actor PaneCoordinator {
             to: .sessions(controllers(of: record))
         )
         finishTerminalStatePublication(record, revision: terminalPublicationRevision)
+        // Last, and deliberately so: backend shutdown has no bound. Subscribers
+        // and the event stream have already been told the pane is terminal, so
+        // a stalled teardown can no longer leave the GUI showing a live pane or
+        // hold `terminalStatePublicationInFlight` against subscription
+        // revocation.
+        await shutDownBackendAsync(for: record)
     }
 
     /// Shut down one pane whose backend classified its stream termination as
@@ -2146,8 +2554,9 @@ public actor PaneCoordinator {
             }
         }
         let surfacePump = record.teardownSurfacePump()
-        record.teardownOrientationPump(backend: record.backend)
-        shutDownBackend(for: record)
+        record.teardownOrientationPump()
+        record.teardownLifecyclePump()
+        await shutDownBackendAsync(for: record)
         record.currentSurface = nil
         await surfacePump?.value
     }
@@ -2157,13 +2566,22 @@ public actor PaneCoordinator {
     /// A contact lane may retain the backend for held-contact recovery after a
     /// terminal transition, so relying on backend deinit would retain the AX
     /// delegate registration indefinitely.
-    private func shutDownBackend(for record: Record) {
+
+    /// Teardown that suspends instead of holding this actor.
+    ///
+    /// Simulator shutdown waits on the display lane, so running it inline stops
+    /// the coordinator answering anything (a `panes.list` included) for as long
+    /// as CoreSimulator takes. Clearing `record.backend` first is what fences
+    /// new requests immediately rather than only once the wait ends; retirement
+    /// still awaits the result, because it must not release the target while a
+    /// backend is still coming down.
+    private func shutDownBackendAsync(for record: Record) async {
         guard let backend = record.backend else { return }
-        backend.shutdownBackend()
+        record.backend = nil
+        await backend.shutdownBackendAsync()
         record.accessibilityWorkQueue.submit {
             backend.releaseAccessibilityResources()
         }
-        record.backend = nil
     }
 
     /// Drop the retirement and let anything waiting on this target proceed.
@@ -2208,57 +2626,129 @@ public actor PaneCoordinator {
         }
     }
 
-    // MARK: - Display orientation
-
-    /// Begin observing what this pane's display is presenting, and seed the
-    /// record from it.
-    ///
-    /// Registers before seeding, so a rotation landing between the two
-    /// arrives as a callback rather than disappearing into the gap between
-    /// a snapshot and a subscription.
-    ///
-    /// A backend with no display source leaves presentation at its existing
-    /// value. Rotation confirmation then depends on a command reply; a backend
-    /// with neither path reports it as unsupported.
-    private func startDisplayOrientationObserver(
-        record: Record,
-        paneId: UUID,
-        backend: DeviceBackend
-    ) {
-        // Stand the ordered pump up before starting observation: the
-        // backend can deliver its first callback synchronously, so the
-        // continuation has to exist first.
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: Orientation.self,
-            bufferingPolicy: .bufferingNewest(1)
-        )
-        // Fenced on the observer's own epoch so a delivery still in flight
-        // past teardown can't resurrect orientation state on a pane it no
-        // longer describes.
-        let observerEpoch = record.displayObserverEpoch
-        let started = backend.startDisplayOrientation { orientation in
-            continuation.yield(orientation)
-        }
-        guard started else {
-            continuation.finish()
-            return
-        }
-        record.observingDisplayOrientation = true
-        record.orientationContinuation = continuation
-        record.orientationPump = Task { [weak self, paneId] in
-            for await orientation in stream {
-                await self?.emitObservedOrientation(
-                    paneId: paneId,
-                    observerEpoch: observerEpoch,
-                    orientation: orientation
-                )
-            }
-        }
-        if let seed = backend.currentDisplayOrientation() {
-            record.presentationOrientation = seed
-            record.confirmedOrientation = seed
+    /// Suspend while `target` is claimed by a create still building its pane,
+    /// so a competing create waits rather than seeing a half-built record.
+    private func awaitCreatingTarget(_ target: PaneTarget) async {
+        guard creating[target] != nil else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            creatingTargetWaiters.append((target: target, continuation: continuation))
         }
     }
+
+    /// Drop this attempt's claim and wake whoever parked on it.
+    ///
+    /// Only if the claim is still ours: after this attempt releases or loses
+    /// its claim, its deferred cleanup must not remove a newer attempt's
+    /// reservation.
+    private func releaseCreating(target: PaneTarget, token: UUID) {
+        guard let claim = creating[target], claim.token == token else { return }
+        // An abandoned claim is the supervisor's to release, through
+        // `releaseAbandonedCreating` once disposal finishes.
+        guard claim.phase == .active else { return }
+        creating.removeValue(forKey: target)
+        let targeted = creatingTargetWaiters.filter { $0.target == target }
+        creatingTargetWaiters.removeAll { $0.target == target }
+        for waiter in targeted {
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Whether a pane's terminal publication has finished. Subscription
+    /// revocation waits on this, so it must not depend on backend cleanup.
+    func terminalPublicationSettled(paneId: UUID) -> Bool {
+        guard let record = panes[paneId] else { return true }
+        return !record.terminalStatePublicationInFlight
+    }
+
+    /// Mark a claim abandoned: its create cannot publish, but the backend work
+    /// or cleanup under it has not settled, so the target stays spoken for
+    /// until disposal says so. Reached from a timeout, a session teardown, a
+    /// failed bootstrap, and a handoff the ownership fence rejected.
+    ///
+    /// Token-checked, because a timed-out task can resume long after disposal
+    /// released its claim and a newer create installed one; without the check
+    /// it would abandon somebody else's reservation.
+    ///
+    /// Waiters are woken rather than left parked. Waiting is only correct while
+    /// the claim is `.active` and a publication is coming; once it is abandoned
+    /// there may be no bound on disposal at all, so parked callers have to
+    /// re-evaluate and take `displayStartBusy`.
+    private func abandonCreating(target: PaneTarget, token: UUID) {
+        guard creating[target]?.token == token else { return }
+        creating[target]?.phase = .abandoned
+        let targeted = creatingTargetWaiters.filter { $0.target == target }
+        creatingTargetWaiters.removeAll { $0.target == target }
+        for waiter in targeted {
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Release a claim whose attempt has finished disposing. Called from the
+    /// supervisor's disposal hook, which is the only thing that knows the
+    /// backend is really down.
+    func releaseAbandonedCreating(target: PaneTarget, token: UUID) {
+        guard let claim = creating[target], claim.token == token else { return }
+        creating.removeValue(forKey: target)
+        let targeted = creatingTargetWaiters.filter { $0.target == target }
+        creatingTargetWaiters.removeAll { $0.target == target }
+        for waiter in targeted {
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Hold `target` while its backend comes down, and count it as deferred
+    /// cleanup so the daemon cannot idle-exit mid-teardown.
+    private func beginTeardown(of target: PaneTarget) {
+        tearingDown[target, default: 0] += 1
+        deferredCleanups += 1
+    }
+
+    /// Release the hold and wake anything parked on the target.
+    private func endTeardown(of target: PaneTarget) {
+        deferredCleanups -= 1
+        if let outstanding = tearingDown[target], outstanding > 1 {
+            tearingDown[target] = outstanding - 1
+            return
+        }
+        tearingDown.removeValue(forKey: target)
+        let targeted = tearingDownWaiters.filter { $0.target == target }
+        tearingDownWaiters.removeAll { $0.target == target }
+        for waiter in targeted {
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Suspend while `target`'s previous backend is still stopping.
+    private func awaitTeardown(of target: PaneTarget) async {
+        guard tearingDown[target] != nil else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            tearingDownWaiters.append((target: target, continuation: continuation))
+        }
+    }
+
+    /// Drop reservations held by a session incarnation that has gone away.
+    ///
+    /// The fence already refuses to publish their panes, because the same
+    /// teardown cleared `activeIncarnation`. This is about the *claim*: without
+    /// it the target stays reserved until the bootstrap returns, which for a
+    /// wedged display may be never, and every competing create parks behind it.
+    ///
+    /// Matched on incarnation as well as session so a restored session's newer
+    /// claim is left alone.
+    private func invalidateCreatingReservations(sessionId: UUID, incarnation: UInt64) {
+        let stale = creating.values.filter {
+            $0.sessionId == sessionId && $0.incarnation == incarnation
+        }
+        for claim in stale {
+            // Abandoned, not released. The backend under it may still be
+            // starting, or may already need disposing (this can land after a
+            // bootstrap completed but before its create resumed), so the target
+            // stays spoken for until that cleanup finishes.
+            abandonCreating(target: claim.target, token: claim.token)
+        }
+    }
+
+    // MARK: - Display orientation
 
     /// Drop a callback delivered after observer teardown, and forward a
     /// live one for dedupe and publication. Unregistering can't recall a
@@ -3679,6 +4169,16 @@ public actor PaneCoordinator {
         } else {
             sequence = record.lastSequence &+ 1
         }
+        // Geometry is taken only from a frame the fence admitted. A stale
+        // leased frame is rejected above, and letting it write here would back-
+        // date the pane's dimensions to a generation nothing else accepted.
+        let frameSize = published.surface.withRef {
+            (IOSurfaceGetWidth($0), IOSurfaceGetHeight($0))
+        }
+        if frameSize.0 > 0, frameSize.1 > 0 {
+            record.cachedPixelWidth = frameSize.0
+            record.cachedPixelHeight = frameSize.1
+        }
         record.lastSequence = sequence
         record.currentSurface = published
         // Off-by-default producer trace row (paneId is known here, not at
@@ -4086,6 +4586,7 @@ public actor PaneCoordinator {
         if activeIncarnation[sessionId] == incarnation {
             activeIncarnation[sessionId] = nil
         }
+        invalidateCreatingReservations(sessionId: sessionId, incarnation: incarnation)
         let member = CohortMember(sessionId: sessionId, incarnation: incarnation)
         let cohortId = cohortState.cohortId(forMember: member)
         switch cohortState.tearDown(member: member, now: DispatchTime.now().uptimeNanoseconds) {
