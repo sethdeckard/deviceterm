@@ -64,8 +64,9 @@ The two tools reach you very differently, because one ships and one doesn't:
   paths are written from the repo root, your working directory).
 - **AX assertions — `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh`.** Use
   this instead of a raw `uitest.sh ax dump` in every assertion and poll. It
-  retries one missing, malformed, truncated, or degenerate read, then emits
-  only a complete `ok:true` tree. A serviced `ok:false` refusal is final. Call
+  retries once after a transport failure or a retryable tree-validation
+  failure, then emits only a complete `ok:true` tree. A serviced `ok:false`
+  refusal is final. Call
   `uitest.sh ax dump` directly only when diagnosing the harness itself.
 
 This split is intentional: the harness holds Screen Recording + Accessibility,
@@ -248,15 +249,27 @@ one.
   deviceterm app window. (Its *window* belongs to Control Center, which hosts
   every menu-bar extra; the harness finds it through accessibility.)
 - Use `.agents/skills/deviceterm-e2e/helpers/ax-dump.sh` for AX assertions. A
-  raw `ax dump` can intermittently
-  return no reply or a degenerate tree (`AXApplication` nested inside itself,
-  `truncated:true`). The helper retries once and fails rather than turning
-  either result into an empty UI. Do not root-cause the intermittent inline.
+  raw `ax dump` can miss its reply deadline. The helper retries once and fails
+  rather than turning that into an empty UI.
+- **A nested `AXApplication` terminates the walk rather than being followed.**
+  Some targets vend their own application element as a child of itself. An
+  ancestor the walk recognizes by element identity is marked `cycle`; any other
+  nested application is marked `skipped`. Neither is descended into, which
+  keeps the depth ceiling and node budget available for the sibling windows you
+  came for. `ax-dump.sh` accepts a marked nested application and rejects an
+  unmarked one, because an unmarked one means neither guard stopped it.
 - A node marked `"skipped": true` was deliberately not descended into, and it
   carries no `children` key. This is **not** `truncated`, which means a limit
   ran out: re-dumping or raising a ceiling will never reveal a skipped subtree,
-  so don't treat it as a flake.
-- A third marker, `"unreadable": ["AXChildren", "AXTitle"]`, lists the reads
+  so don't treat it as a flake. Two rules produce it: the Apple menu (below),
+  and an `AXApplication` below the root.
+- A node marked `"cycle": true` *is* one of its own ancestors, established by
+  comparing element identity rather than role. The walk stops there because
+  everything below it is already in the tree above it. Like `skipped` and
+  unlike `truncated`, re-dumping reveals nothing new. The two markers are kept
+  apart on purpose: `cycle` asserts the element was met before, which only an
+  identity comparison shows, while `skipped` only says a rule declined.
+- A further marker, `"unreadable": ["AXChildren", "AXTitle"]`, lists the reads
   that failed on that node: `AXChildren`, any of the attributes above, or the
   `AXPosition`/`AXSize` pair behind its frame. It is a **list of AX attribute
   names**, not a boolean, and it names the accessibility attribute rather than

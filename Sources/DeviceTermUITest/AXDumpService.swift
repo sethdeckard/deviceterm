@@ -105,6 +105,7 @@ enum AXDumpService {
             limits: limits,
             attributes: attributes(of:),
             children: AXElementReader.childrenIfReadable(of:),
+            identity: { AXElementKey($0) },
             shouldDescend: shouldDescend(node:siblingIndex:)
         )
         result.tree["pid"] = Int(pid)

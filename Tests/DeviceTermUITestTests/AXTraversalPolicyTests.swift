@@ -5,9 +5,10 @@ import Testing
 @testable import DeviceTermUITest
 
 /// The dump must not traverse the Apple menu's contents, and the input driver
-/// must not match the menu or its descendants. Both walks apply this one rule,
-/// so allowing a target does not put Apple-menu actions within reach of a
-/// press.
+/// must not match the menu or its descendants. Neither walk may descend into a
+/// nested application element either. Both walks apply these rules, so allowing
+/// a target neither puts Apple-menu actions within reach of a press nor lets a
+/// self-nesting target consume the walk.
 @Suite("traversal policy")
 struct AXTraversalPolicyTests {
     /// The leading menu-bar item is the Apple menu, whatever it is called on a
@@ -47,5 +48,24 @@ struct AXTraversalPolicyTests {
     @Test
     func admitsALaterChildWhoseRoleIsUnknown() {
         #expect(AXTraversalPolicy.shouldEnter(role: nil, siblingIndex: 1))
+    }
+
+    /// An application element never legitimately contains another. The caller
+    /// never offers the root here, so seeing this role at all means one sits
+    /// above it, and position is irrelevant: the observed shape puts the
+    /// nested element first, but nothing guarantees that.
+    @Test("refuses a nested application wherever it sits", arguments: 0...3)
+    func refusesANestedApplication(index: Int) {
+        #expect(!AXTraversalPolicy.shouldEnter(role: "AXApplication", siblingIndex: index))
+    }
+
+    /// A later position isolates the role rule. The leading-child guard cannot
+    /// stand in for it even at index 0: that guard asks only whether the
+    /// leading child is a menu-bar item, so it admits every other known role,
+    /// a nested application included.
+    @Test
+    func refusesANestedApplicationForItsRoleRatherThanItsPosition() {
+        #expect(!AXTraversalPolicy.shouldEnter(role: "AXApplication", siblingIndex: 9))
+        #expect(AXTraversalPolicy.shouldEnter(role: "AXWindow", siblingIndex: 9))
     }
 }

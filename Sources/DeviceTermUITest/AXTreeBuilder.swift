@@ -11,10 +11,16 @@ import Foundation
 /// which subtrees are worth descending into.
 ///
 /// The limits are not cosmetic. An accessibility tree is a foreign process's
-/// data structure: it can be enormous (a scrolled terminal), and a
-/// misbehaving app can even present a cycle. Bounding depth and node count
-/// keeps one `ax dump` from hanging the harness or returning a megabyte of
-/// JSON an agent cannot use.
+/// data structure and it can be enormous (a scrolled terminal). Bounding
+/// depth and node count keeps one `ax dump` from hanging the harness or
+/// returning a megabyte of JSON an agent cannot use.
+///
+/// A repeat is handled by `identity` rather than left to those ceilings. They
+/// do bound a loop, but only by spending themselves on it: the walk emits
+/// `maxDepth` copies of the repeating element and marks the result truncated,
+/// and where that element has siblings, the subtree beneath them is re-walked
+/// at every level and can exhaust the node budget before later branches are
+/// reached. Stopping at the repeat leaves both for the rest of the tree.
 enum AXTreeBuilder {
     /// Lists the attribute names whose reads failed on a node, `AXChildren`
     /// among them. Written by `attributes` for a node's own attributes, and
@@ -25,6 +31,16 @@ enum AXTreeBuilder {
     /// different responses, and the caller is the one who knows which
     /// attribute its assertion rests on.
     static let unreadableKey = "unreadable"
+
+    /// Marks a node that *is* one of its own ancestors, established by
+    /// comparing element identity. The walk stops there; everything below it
+    /// is already in the tree.
+    ///
+    /// Kept distinct from `"skipped"` on purpose. This marker asserts the
+    /// element was met before, which only an identity comparison can show.
+    /// A node cut by `AXTraversalPolicy` for its role is marked skipped
+    /// instead, because that rule says nothing about which element it is.
+    static let cycleKey = "cycle"
 
     /// Reads whose failure leaves the tree's shape or a node's identity in
     /// doubt, and so set `AXTreeResult.unreadable` for the whole walk.
@@ -72,11 +88,22 @@ enum AXTreeBuilder {
     /// policy, so raising the limits reveals no more. The marker reports
     /// what the walk did rather than what exists, so a declined node that
     /// turns out to be childless is marked all the same.
+    ///
+    /// `identity` names an element so the walk can tell it has met one
+    /// before. A child already on the path from the root is emitted marked
+    /// `"cycle": true` and not descended into: the tree still records that
+    /// accessibility reported it, without walking the same subtree twice.
+    /// Membership is of the *current path*, not of everything seen, because
+    /// the same element legitimately appearing under two different parents is
+    /// a shared node rather than a loop. It has no default: a default would
+    /// have to invent an identity, and one that differed per call would
+    /// disable the guard silently.
     static func build<Element>(
         root: Element,
         limits: AXTreeLimits = .default,
         attributes: (Element) -> [String: Any],
         children: (Element) -> [Element]?,
+        identity: (Element) -> AnyHashable,
         shouldDescend: (
             _ attributes: [String: Any],
             _ siblingIndex: Int
@@ -85,6 +112,7 @@ enum AXTreeBuilder {
         var budget = limits.maxNodes
         var truncated = false
         var unreadable = false
+        var onPath: Set<AnyHashable> = []
 
         func visit(_ element: Element, depth: Int, siblingIndex: Int) -> [String: Any] {
             var node = attributes(element)
@@ -99,6 +127,20 @@ enum AXTreeBuilder {
             // identifier is unknown is reported even when every `children`
             // read succeeded.
             if failedStructurally(node) { unreadable = true }
+
+            // Identity is checked before the policy so a genuine repeat is
+            // reported as one. Both arms stop the walk here, but only this one
+            // has evidence that the element *is* an ancestor; the policy's
+            // cutoff is a rule about roles and establishes nothing about which
+            // element this is. Checked after `attributes` so the repeat is
+            // still described, and before `children` so the loop is never
+            // entered.
+            let key = identity(element)
+            guard onPath.insert(key).inserted else {
+                node[cycleKey] = true
+                return node
+            }
+            defer { onPath.remove(key) }
 
             guard descend else {
                 node["skipped"] = true

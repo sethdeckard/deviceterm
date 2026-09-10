@@ -8,10 +8,17 @@ import Testing
 @Suite("accessibility tree shaping + limits")
 struct AXTreeBuilderTests {
     /// Stand-in for an `AXUIElement`: the builder only ever asks for a
-    /// node's attributes and its children.
+    /// node's attributes, its children, and its identity.
     private struct FakeElement {
         let name: String
         var kids: [FakeElement] = []
+        /// Identity, when it has to differ from the name. Two elements
+        /// reporting the same role while *being* different elements is the
+        /// case the role rule exists for, and `name` doubles as the role
+        /// here, so that case needs the two pulled apart.
+        var id: String?
+
+        var key: String { id ?? name }
     }
 
     private func build(
@@ -19,11 +26,31 @@ struct AXTreeBuilderTests {
         limits: AXTreeLimits,
         shouldDescend: ([String: Any], Int) -> Bool = { _, _ in true }
     ) -> AXTreeResult {
-        AXTreeBuilder.build(
+        build(
             root: root,
             limits: limits,
             attributes: { ["role": $0.name] },
             children: { $0.kids },
+            shouldDescend: shouldDescend
+        )
+    }
+
+    /// `AXTreeBuilder.build` with `identity` defaulted to the fake element's
+    /// key; callers may override it.
+    private func build(
+        root: FakeElement,
+        limits: AXTreeLimits = .default,
+        attributes: (FakeElement) -> [String: Any],
+        children: (FakeElement) -> [FakeElement]?,
+        identity: ((FakeElement) -> AnyHashable)? = nil,
+        shouldDescend: ([String: Any], Int) -> Bool = { _, _ in true }
+    ) -> AXTreeResult {
+        AXTreeBuilder.build(
+            root: root,
+            limits: limits,
+            attributes: attributes,
+            children: children,
+            identity: identity ?? { $0.key },
             shouldDescend: shouldDescend
         )
     }
@@ -33,13 +60,123 @@ struct AXTreeBuilderTests {
         node?[AXTreeBuilder.unreadableKey] as? [String]
     }
 
+    /// A self-child is emitted once, marked, and not descended into. Without
+    /// the guard the walk would emit `maxDepth` copies of it and mark the
+    /// result truncated.
+    @Test
+    func stopsAtAnElementThatIsItsOwnChild() {
+        let result = build(
+            root: FakeElement(name: "root"),
+            attributes: { ["role": $0.name] },
+            children: { _ in [FakeElement(name: "root")] }
+        )
+        let kids = result.tree["children"] as? [[String: Any]]
+        #expect(kids?.count == 1)
+        #expect(kids?.first?[AXTreeBuilder.cycleKey] as? Bool == true)
+        #expect(kids?.first?["role"] as? String == "root")
+        #expect(kids?.first?["children"] == nil)
+        #expect(!result.truncated)
+    }
+
+    /// The loop need not close on a direct child. Keying only the parent
+    /// would catch the shape that happened to be found and miss this one.
+    @Test
+    func stopsAtALoopThatClosesFurtherDown() {
+        let result = build(
+            root: FakeElement(name: "a"),
+            attributes: { ["role": $0.name] },
+            children: { element in
+                switch element.name {
+                case "a":
+                    return [FakeElement(name: "b")]
+
+                case "b":
+                    return [FakeElement(name: "a")]
+
+                default:
+                    return []
+                }
+            }
+        )
+        let middle = (result.tree["children"] as? [[String: Any]])?.first
+        let repeated = (middle?["children"] as? [[String: Any]])?.first
+        #expect(middle?["role"] as? String == "b")
+        #expect(repeated?["role"] as? String == "a")
+        #expect(repeated?[AXTreeBuilder.cycleKey] as? Bool == true)
+        #expect(!result.truncated)
+    }
+
+    /// Membership is of the path from the root, not of everything seen. One
+    /// element under two different parents is a shared node, and walking it
+    /// twice is correct; marking the second as a loop would drop real UI.
+    @Test
+    func aSharedElementUnderTwoParentsIsNotALoop() {
+        let shared = FakeElement(name: "shared")
+        let result = build(
+            root: FakeElement(name: "root", kids: [
+                FakeElement(name: "left", kids: [shared]),
+                FakeElement(name: "right", kids: [shared])
+            ]),
+            attributes: { ["role": $0.name] },
+            children: { $0.kids }
+        )
+        let branches = result.tree["children"] as? [[String: Any]]
+        let under = branches?.compactMap { ($0["children"] as? [[String: Any]])?.first }
+        #expect(under?.count == 2)
+        #expect(under?.allSatisfy { $0["role"] as? String == "shared" } == true)
+        #expect(under?.allSatisfy { $0[AXTreeBuilder.cycleKey] == nil } == true)
+    }
+
+    /// Identity catches a nested application only when accessibility hands
+    /// back an element that compares equal to its ancestor, and nothing in the
+    /// API promises that, so `AXTraversalPolicy` refuses the role whether or
+    /// not it does.
+    ///
+    /// The markers differ deliberately. `skipped` says the walk declined by
+    /// rule; `cycle` would claim the element was met before, which a role
+    /// comparison cannot establish.
+    @Test
+    func stopsAtANestedApplicationThatIsADistinctElement() throws {
+        let result = build(
+            root: FakeElement(
+                name: "AXApplication",
+                kids: [
+                    FakeElement(name: "AXApplication", id: "nested"),
+                    FakeElement(name: "AXWindow", kids: [FakeElement(name: "AXButton")])
+                ],
+                id: "root"
+            ),
+            attributes: { ["role": $0.name] },
+            children: { $0.kids },
+            shouldDescend: { node, index in
+                AXTraversalPolicy.shouldEnter(
+                    role: node["role"] as? String,
+                    siblingIndex: index
+                )
+            }
+        )
+
+        let kids = try #require(result.tree["children"] as? [[String: Any]])
+        #expect(kids.count == 2)
+        #expect(kids[0]["role"] as? String == "AXApplication")
+        #expect(kids[0]["skipped"] as? Bool == true)
+        #expect(kids[0][AXTreeBuilder.cycleKey] == nil)
+        #expect(kids[0]["children"] == nil)
+
+        // Skipping the nested application preserves the sibling window.
+        #expect(kids[1]["role"] as? String == "AXWindow")
+        #expect(kids[1]["skipped"] == nil)
+        #expect(childRoles(kids[1]) == ["AXButton"])
+        #expect(!result.truncated)
+    }
+
     /// A failed `AXChildren` read must not serialize like a childless node:
     /// that is how a timed-out walk comes to look like an empty UI. It names
     /// the attribute rather than setting a bare flag, so a caller can see
     /// that what failed was the structure and not a label.
     @Test
     func marksANodeWhoseChildrenCouldNotBeRead() {
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root"),
             limits: .default,
             attributes: { ["role": $0.name] },
@@ -55,7 +192,7 @@ struct AXTreeBuilderTests {
     /// and the tree would understate what it does not know.
     @Test
     func aFailedChildrenReadJoinsTheNamesAlreadyRecorded() {
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root"),
             limits: .default,
             attributes: { _ in [AXTreeBuilder.unreadableKey: [AXAttribute.title]] },
@@ -69,7 +206,7 @@ struct AXTreeBuilderTests {
     @Test
     func reportsAnUnreadableChildBeneathAReadableRoot() {
         let leaf = FakeElement(name: "leaf")
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root", kids: [leaf]),
             limits: .default,
             attributes: { ["role": $0.name] },
@@ -88,7 +225,7 @@ struct AXTreeBuilderTests {
     /// roles scores it zero and calls that an observation.
     @Test(arguments: [AXAttribute.role, AXAttribute.identifier, AXAttribute.children])
     func aFailedStructuralReadRaisesTheWalkWideFlag(attribute: String) {
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root", kids: [FakeElement(name: "leaf")]),
             limits: .default,
             attributes: { element in
@@ -110,7 +247,7 @@ struct AXTreeBuilderTests {
     /// treating those as fatal refuses every tree they appear in.
     @Test(arguments: [AXAttribute.title, AXAttribute.value, AXAttribute.position])
     func aFailedNonStructuralReadIsRecordedButNotFatal(attribute: String) {
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root", kids: [FakeElement(name: "leaf")]),
             limits: .default,
             attributes: { element in
@@ -129,7 +266,7 @@ struct AXTreeBuilderTests {
     /// whether any read that matters failed, not whether every one did.
     @Test
     func aMixedListRaisesTheFlagOnItsStructuralName() {
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root"),
             limits: .default,
             attributes: { _ in
@@ -147,7 +284,7 @@ struct AXTreeBuilderTests {
     @Test
     func thePolicyDecidesFromTheAttributesTheWalkRead() {
         var offered: [[String: Any]] = []
-        _ = AXTreeBuilder.build(
+        _ = build(
             root: FakeElement(name: "root", kids: [FakeElement(name: "kid")]),
             limits: .default,
             attributes: { ["role": $0.name, "identifier": "id.\($0.name)"] },
@@ -166,7 +303,7 @@ struct AXTreeBuilderTests {
     /// every leaf and mean nothing.
     @Test
     func aChildlessNodeIsNotMarkedUnreadable() {
-        let result = AXTreeBuilder.build(
+        let result = build(
             root: FakeElement(name: "root"),
             limits: .default,
             attributes: { ["role": $0.name] },
@@ -289,7 +426,7 @@ struct AXTreeBuilderTests {
         let tree = FakeElement(name: "root", kids: [
             FakeElement(name: "closed", kids: [FakeElement(name: "beneath")])
         ])
-        _ = AXTreeBuilder.build(
+        _ = build(
             root: tree,
             limits: AXTreeLimits(maxDepth: 10, maxNodes: 100),
             attributes: { ["role": $0.name] },

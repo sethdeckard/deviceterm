@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # ax-dump.sh: return one trustworthy DeviceTerm accessibility dump.
 #
-# The resident can occasionally miss its reply deadline or return the known
-# degenerate/truncated tree. Retry that read once, then fail without emitting
-# an empty result that a caller could mistake for an empty UI. A serviced
-# ok:false refusal is final and is never retried.
+# The resident can occasionally miss its reply deadline or return a truncated
+# tree. Retry that read once, then fail without emitting an empty result that a
+# caller could mistake for an empty UI. A serviced ok:false refusal is final and
+# is never retried.
 #
 # "Empty" is judged against the target. Only the GUI app is expected to have
 # UI; a faceless agent such as the daemon publishes a childless root whenever
@@ -127,7 +127,9 @@ def walk(node):
     role = node.get("role")
     if role:
         roles.add(role)
-        if role == "AXApplication":
+        # A marked application node was recorded but not entered, so only
+        # unmarked ones count toward the nested-application check below.
+        if role == "AXApplication" and not node.get("cycle") and not node.get("skipped"):
             application_nodes += 1
     for child in node.get("children") or []:
         walk(child)
@@ -143,10 +145,11 @@ if not isinstance(tree, dict) or tree.get("role") != "AXApplication":
     print("ax-dump.sh: dump root is not an AXApplication node", file=sys.stderr)
     raise SystemExit(11)
 
-# An application element never legitimately contains another, so anything
-# beyond the root is the self-nesting degenerate read, whatever was dumped.
+# An application element never legitimately contains another. This compares
+# roles, not identities, so an unmarked nested one establishes only that the
+# walk entered it: neither traversal guard stopped the node.
 if application_nodes > 1:
-    print("ax-dump.sh: dump nests AXApplication inside itself", file=sys.stderr)
+    print("ax-dump.sh: dump contains an unmarked nested AXApplication", file=sys.stderr)
     raise SystemExit(11)
 
 # A root with nothing under it means a bad read only for a target expected to
