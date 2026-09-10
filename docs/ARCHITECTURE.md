@@ -255,19 +255,22 @@ mounted it the first time mounts it again, error rendering and Retry included.
 Re-attaching a record that did survive is harmless, because the daemon hands
 the owning session its existing pane back rather than minting a second, and
 the GUI adopts the admission that comes with it. That holds for a physical
-device only because its attach carries a resolution failure forward instead of
-throwing it: bringing up a tunnel has to happen before `createPane` can say
-whether a backend is needed, so an attach that fails there would otherwise
-fail a re-attach that never needed one. The failure is raised from `acquire`,
-which runs only on a genuine fresh create.
+device because it resolves its backend inside `acquire`, which `createPane`
+calls only on a genuine fresh create, after its dedup and adopt branches. A
+re-attach the daemon answers from the existing record never brings up a tunnel
+at all, so a resolution failure cannot fail an attach that needed no backend.
 
-Running it is not the same as the pane keeping what it built, though.
-Acquiring a sim backend suspends, so two creates
-racing one target can both acquire before either sees the other's pane, and
-only one commits. The default closes an unused simulator backend.
-Physical-device attach overrides `onUnused` so it can release both the backend
-and the tunnel keepalive it took alongside it, which only the caller can
-balance.
+Running it is not the same as the pane keeping what it built, though. Acquiring
+a backend suspends, so two creates racing one target can both acquire before
+either sees the other's pane, and only one commits.
+
+Ownership is staged rather than handed back. Past `acquire` the coordinator owns
+the backend and the order of its disposal, so a loser's backend is disposed
+there instead of being returned. What the caller supplies alongside the backend
+is a cleanup for whatever it retained with it, run once after that teardown
+finishes, which is how a physical-device attach balances its tunnel keepalive.
+The caller is told its acquisition went unused; it is handed nothing, so there
+is one owner for the teardown and nothing to double-free.
 
 The resurrect path (detach + re-attach in place) covers a different case: a
 pane that lost its device under a live daemon and can get it back. A sim
@@ -612,9 +615,10 @@ refused daemon-side, which is what makes a late one harmless.
 **No process observes sleep or wake.** Neither the GUI nor the daemon registers
 for sleep/wake notifications, deliberately. Waking is one trigger among several
 for the two conditions that actually matter: CoreSimulator stopped answering,
-or a consumer stopped draining. Each is bounded where it happens. The
-acquisition deadline bounds CoreSimulator calls, and with per-frame leasing
-enabled the surface pool bounds a consumer that stops draining. Recovery
+or a consumer stopped draining. Each is bounded where it happens. Backend
+acquisition and display startup each have a deadline of their own, device-set
+enumeration has a separate one, and with per-frame leasing enabled the surface
+pool bounds a consumer that stops draining. Recovery
 therefore doesn't depend on having noticed the wake, and the same bounds cover
 the causes that have nothing to do with sleep.
 
@@ -1668,6 +1672,24 @@ a peer that omits the block leaves the client on `missingBlockFallback`.
 The added `location` flag reads `false` when absent from a present block;
 the original fields remain required.
 
+Starting the display suspends, so the record stays out of `panes.list` until it
+is fully started. The create claims the target instead, and a competing create
+parks on that claim rather than being handed a record whose frames have not
+started. A session close invalidates the claim through its owner incarnation,
+which is what stops a create that resumes late from publishing a pane into a
+session that is gone.
+
+Once a create has claimed the target, a timeout, a failed start, or a rejected
+ownership handoff marks that claim abandoned rather than releasing it, and it
+comes back only once the backend disposal behind it has finished, so a retry
+against the same target is refused rather than building a second backend for a
+device the first one is still stopping. Whether that outlasts the
+caller depends on the path: a timeout or a failed start leaves the disposal
+running behind a create that has already returned, while a handoff the
+ownership fence rejects awaits that disposal itself and releases the claim
+before it throws. Both the claim and the display-start admission keep the
+daemon from idle-exiting while they are outstanding.
+
 Orphan re-attach and most pane creation use `device.attach` instead: this
 method only creates the pane and leaves daemon ownership pointed at any
 prior owner.
@@ -1686,7 +1708,7 @@ default when `mode` is omitted, drops the pane and leaves the sim
 running; `"shutdown"` also shuts down the sim.
 
 Closing a pane whose gesture still holds contact does not tear it down.
-The pane is retired instead: gone from `pane.list` and from every further
+The pane is retired instead: gone from `panes.list` and from every further
 request, but its backend stays alive until the gesture releases, because
 pulling it out mid-gesture strands the contact.
 
@@ -3834,7 +3856,8 @@ split adds a pane and an arrow moves focus through exactly this.
 - A synchronous API with no asynchronous wait runs on a documented Dispatch
   queue. `BlockingWorkQueue` bridges daemon work back through a `Sendable`
   continuation. Queues are serial where ordering matters, including connection
-  writes, simulator input, pane accessibility, and each `devicectl` use.
+  writes, simulator input, simulator display, pane accessibility, and each
+  `devicectl` use.
   Signature walks use a concurrent queue because different peers are
   independent; lookups for the same peer still coalesce before the walk begins.
   GUI `simctl` commands and recording shutdown use separate Dispatch queues.

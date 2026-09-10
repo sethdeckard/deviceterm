@@ -5,10 +5,11 @@ answering: CoreSimulator wedges, the GUI stops consuming frames, or the machine
 sleeps with a mirror running. Each needs a live sim and a real GUI, and one
 needs a sleep cycle, so none of them is automatable.
 
-The unit tests cover the pieces in isolation. `SimBackendAcquirerTests`
-exercises deadline behavior with an injected sleep and slot accounting with a
-parked bridge; `DaemonFootprintMonitorTests` exercises sample formatting and
-cadence with injected samples and reporters. Neither can see a real
+The unit tests cover the pieces in isolation. `SimBackendAcquirerTests` and
+`PaneDisplayBootstrapTests` exercise deadline behavior with an injected sleep
+and slot accounting with a parked bridge, for acquisition and display startup
+respectively; `DaemonFootprintMonitorTests` exercises sample formatting and
+cadence with injected samples and reporters. None of them can see a real
 CoreSimulator refuse to answer or a real GUI stop acknowledging frames. That is
 what this procedure is for.
 
@@ -144,18 +145,19 @@ calls and never returns.
 | # | Action | Expected |
 |---|--------|----------|
 | 1.1 | `SIM_STOPPED=1; simsig STOP` | Exits 0. The already-rendering pane keeps showing its last frame. The flag is what tells `cleanup` there is something to resume; without it cleanup resumes nothing. |
-| 1.2 | `deviceterm panes list` | Answers promptly with the live pane. This is the headline assertion: the listing is an in-memory read. A slow answer means the in-memory pane path is blocked; capture a daemon sample before attributing it. |
+| 1.2 | `deviceterm panes list` | Answers promptly with the live pane. The listing is an in-memory read, and nothing on the path calls CoreSimulator to serve it. A slow answer means that path is blocked somewhere across dispatch, session validation, and the coordinator; capture a daemon sample before attributing it. |
 | 1.3 | `deviceterm devices list`, repeating for at least 3s | Eventually blocks or fails. The daemon caches its device snapshot for 2s, so a call right after 1.1 can still answer from cache. Repeat until it stops answering; that is what confirms the service is really wedged. |
 | 1.4 | Repeat 1.2 several times over the next minute | Answers promptly every time. A `panes list` that starts hanging is the wedge reproducing. |
 | 1.5 | `simsig CONT && SIM_STOPPED=` | Exits 0. Service resumes, and clearing the flag stops cleanup from sending a second, pointless `CONT`. |
 | 1.6 | `deviceterm devices list` | Answers again. |
 
-**You cannot reach the acquire deadline this way, so don't try.** `xcrun simctl
-boot` runs through the shim, which snapshots every device's state with `simctl
-list devices -j` before spawning the real `simctl`. With the service stopped
-that snapshot blocks, so no boot is ever reported and no attach is requested.
-The production defaults are a 10s deadline and three slots;
-`SimBackendAcquirerTests` covers their timeout and saturation behavior with
+**You cannot reach the acquire or display-start deadline this way, so don't
+try.** `xcrun simctl boot` runs through the shim, which snapshots every
+device's state with `simctl list devices -j` before spawning the real `simctl`.
+With the service stopped that snapshot blocks, so no boot is ever reported, no
+attach is requested, and neither bound is ever approached. Both default to a
+10s deadline and three slots; `SimBackendAcquirerTests` and
+`PaneDisplayBootstrapTests` cover their timeout and saturation behavior with
 injected values.
 
 ## 2. Stalled consumer
@@ -285,12 +287,17 @@ produce.
 only. A simulator-only run reports zero sightings, and that is not evidence of
 anything.
 
-Check 1 cannot exercise backend acquisition at all, for the shim reason given in
-its own section. What it does test is that the coordinator stays answerable
-while CoreSimulator does not.
+Check 1 cannot exercise backend acquisition or display startup at all, for the
+shim reason given in its own section. What it does test is that the coordinator
+stays answerable while CoreSimulator does not.
 
-Pane creation calls `startFrames`, `startDisplayOrientation`, and
-`currentDisplayOrientation` while holding `PaneCoordinator`. This check triggers
-none of them, because the pane was created before the service stop. So a hang at
-1.2 or 1.4 is something else, and it is worth capturing rather than guessing at.
-Run `sample deviceterm-daemon 5` while it is stuck and keep the output.
+Pane creation does not hold `PaneCoordinator` across the display's
+CoreSimulator calls. Starting frames, registering the orientation observer, and
+reading the display's seed orientation and pixel dimensions all run together on
+the pane's display lane, off the actor, under their own deadline and slot cap.
+Teardown runs off the actor on that lane too, but it has no deadline, and only
+the teardown of an abandoned start keeps holding a startup slot.
+
+So this check has no known way to hang 1.2 or 1.4. A hang there is something
+else, and it is worth capturing rather than guessing at. Run `sample
+deviceterm-daemon 5` while it is stuck and keep the output.
