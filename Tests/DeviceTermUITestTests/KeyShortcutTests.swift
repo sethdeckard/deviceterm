@@ -8,6 +8,15 @@ import Testing
 
 @Suite("keyboard shortcut parsing")
 struct KeyShortcutTests {
+    /// One chord and exactly what it must produce. Not `private`: it is a
+    /// parameter type of a `@Test` function, which cannot be more visible
+    /// than the types in its own signature.
+    struct Chord: Sendable {
+        let text: String
+        let code: CGKeyCode
+        let flags: CGEventFlags
+    }
+
     @Test
     func parsesABareKey() throws {
         let shortcut = try KeyShortcutParser.parse("t")
@@ -28,6 +37,39 @@ struct KeyShortcutTests {
         #expect(shortcut.keyCode == 123)
         #expect(shortcut.flags.contains(.maskCommand))
         #expect(shortcut.flags.contains(.maskShift))
+    }
+
+    /// Exact keycode and exact flag set for the shift combinations, which
+    /// nothing else pins: `combinesMultipleModifiers` asserts that cmd and
+    /// shift are present, not that nothing else is, and the playbook sweep
+    /// below only asserts that a chord parses at all.
+    ///
+    /// Worth pinning because a wrong keycode here is invisible at the call
+    /// site: the harness reports a successful post without observing whether
+    /// the intended menu action ran. A wrong code can instead reach the
+    /// focused pane as text, which reads as a bug in the app rather than in
+    /// this table.
+    @Test("shift combinations parse exactly", arguments: [
+        Chord(text: "cmd+shift+left", code: 123, flags: [.maskCommand, .maskShift]),
+        Chord(text: "cmd+shift+right", code: 124, flags: [.maskCommand, .maskShift]),
+        Chord(text: "ctrl+shift+d", code: 2, flags: [.maskControl, .maskShift])
+    ])
+    func shiftCombinationsParseExactly(chord: Chord) throws {
+        let shortcut = try KeyShortcutParser.parse(chord.text)
+        #expect(shortcut.keyCode == chord.code)
+        #expect(shortcut.flags == chord.flags)
+    }
+
+    /// Shift is a modifier, never a key in its own right, so it must not
+    /// leave a keycode behind when it is the only thing named.
+    @Test
+    func rejectsShiftWithNoKey() {
+        #expect(throws: KeyShortcutError.missingKey) {
+            _ = try KeyShortcutParser.parse("shift")
+        }
+        #expect(throws: KeyShortcutError.missingKey) {
+            _ = try KeyShortcutParser.parse("ctrl+shift")
+        }
     }
 
     @Test("modifier aliases agree", arguments: [
