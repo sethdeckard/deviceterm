@@ -10,6 +10,7 @@
 #import <CoreSimulator/SimDeviceIOProtocol-Protocol.h>
 #import <CoreSimDeviceIO/SimDisplayIOSurfaceRenderable-Protocol.h>
 #import <CoreSimDeviceIO/SimDisplayRenderable-Protocol.h>
+#import <CoreSimDeviceIO/SimScreen-Protocol.h>
 
 #import <objc/runtime.h>
 
@@ -26,21 +27,16 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
     CSBDisplayHandleErrorNotStarted       = 27,
 };
 
-// The display proxy's orientation surface, declared locally even though the
-// vendored `CoreSimDeviceIO/SimScreen-Protocol.h` also declares `SimScreen`.
-// Two things that header does not provide:
+// The display proxy's orientation surface. `SimScreen` and its registration
+// methods come from the vendored `CoreSimDeviceIO/SimScreen-Protocol.h`, so
+// the compiler checks those calls against the vendored protocol declaration
+// rather than locally redeclared signatures. The two declarations below are
+// what that header leaves out.
 //
-//   - `screenProperties`. Upstream declares no such property, because idb's
-//     own consumer ignores the properties callback. `CSBOrientationFromScreen`
-//     reads it, so the accessor has to be declared somewhere.
-//   - Narrower callback blocks. Upstream types `surfacesChangedCallback` as
-//     `(id, id)` and `propertiesChangedCallback` as `(id)`; the zero-argument
-//     forms below are a deliberate narrowing, neither callback reading its
-//     arguments.
-//
-// Patching the vendored header instead is not an option: it is a wholesale
-// snapshot (see `PrivateHeaders/UPSTREAM.md`) and an edit there would be
-// dropped by the next refresh.
+// `screenProperties` and the shape of what it returns: upstream names
+// `SimScreenProperties` in prose but declares neither, because idb's own
+// consumer ignores the properties callback. `CSBOrientationFromScreen` reads
+// both, so both have to be declared here.
 //
 // Found by runtime introspection on macOS 26.5.2 / Xcode 26.6 against a
 // booted iOS 26.5 device. The live `com.apple.framebuffer.display`
@@ -55,14 +51,8 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
 @property (nonatomic, readonly) unsigned int uiOrientation;
 @end
 
-@protocol CSBSimScreen <NSObject>
+@protocol CSBSimScreen <SimScreen>
 @property (nonatomic, readonly) id screenProperties;
-- (void)registerScreenCallbacksWithUUID:(NSUUID *)uuid
-                          callbackQueue:(dispatch_queue_t)queue
-                          frameCallback:(void (^)(void))frameCallback
-                surfacesChangedCallback:(void (^)(void))surfacesCallback
-              propertiesChangedCallback:(void (^)(void))propertiesCallback;
-- (void)unregisterScreenCallbacksWithUUID:(NSUUID *)uuid;
 @end
 
 /// Map the display proxy's `uiOrientation` into the bridge's vocabulary.
@@ -474,10 +464,10 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
     NSUUID *uuid = [NSUUID UUID];
 
     __weak SimDisplayHandle *weakSelf = self;
-    // Re-read the properties rather than trusting a block argument: the
-    // callback's parameter list isn't declared anywhere we can verify, and
-    // re-reading makes the observation level-triggered, so a coalesced pair
-    // of changes still settles on the right value.
+    // Re-read `screenProperties` instead of using the callback argument.
+    // `SimScreen` declares the argument as `id`, and ROCKRemoteProxy provides
+    // no stronger runtime type. Re-reading also makes observation
+    // level-triggered, so coalesced changes settle on the current value.
     //
     // Read them through the captured `screen`, never `self.renderable`.
     // Deliveries after `stopOrientation` are expected, and `stop` clears
@@ -493,7 +483,7 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
     // late and the first real rotation reads as "no change" and is swallowed
     // for good. The consumer already holds the authoritative previous value,
     // so it dedupes without a race.
-    void (^propertiesChanged)(void) = ^{
+    void (^propertiesChanged)(id) = ^(id properties) {
         CSBDisplayOrientation now = CSBOrientationFromScreen(screen);
         // Unknown means the source went away or reported something with no
         // pane meaning; the consumer's last good value stands rather than
@@ -514,7 +504,8 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
         [screen registerScreenCallbacksWithUUID:uuid
                                   callbackQueue:queue
                                   frameCallback:^{}
-                        surfacesChangedCallback:^{}
+                        surfacesChangedCallback:^(id _Nullable surface,
+                                                  id _Nullable maskedSurface) {}
                       propertiesChangedCallback:propertiesChanged];
     } @catch (NSException *e) {
         self.orientationCallback = nil;
