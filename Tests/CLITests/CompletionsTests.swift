@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import DaemonProtocol
 @testable import DeviceTermCLI
 import Foundation
 import Testing
@@ -94,268 +95,138 @@ func parseCompletionsRejectsUnknownSubVerb() {
     }
 }
 
-// MARK: - Script invariants (per shell)
+// MARK: - Completion callbacks
+
+/// A transport that must never be used. A clean exit is answered from
+/// the parsed value alone, so reaching the wire means the dispatch took
+/// a path it should not have.
+private struct UnreachableTransport: CLITransport {
+    func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) -> Data {
+        Issue.record("a clean exit reached the transport: \(envelope.method ?? "?")")
+        return Data()
+    }
+}
 
 @Test
-func zshScriptCoversEveryTopLevelVerb() {
-    let script = Completions.script(for: .zsh)
-    for verb in Completions.topLevelVerbs {
+func aCleanExitPrintsToStdoutAndSucceeds() {
+    // The shell reads a completion callback's candidates off stdout.
+    // Rendering the answer as a usage error would put them on stderr
+    // behind a usage block, where the shell cannot read them and the
+    // user sees them as noise in the command line.
+    //
+    // Driven from the command rather than from a `---completion` argv:
+    // resolving a live ref would contact the daemon, and a unit test
+    // that reaches a socket depends on whichever tabs happen to be
+    // open.
+    let outcome = run(
+        .cleanExit(text: "current\nphn001"),
+        transport: UnreachableTransport(),
+        output: .human
+        )
+    #expect(String(data: outcome.stdout, encoding: .utf8) == "current\nphn001\n")
+    #expect(outcome.stderr == nil)
+    #expect(outcome.exitCode == 0)
+}
+
+@Test
+func generatedScriptRequestIsACleanExit() {
+    let parsed = CLICommands.parse(["deviceterm", "--generate-completion-script", "zsh"])
+    guard case let .cleanExit(text) = parsed else {
+        Issue.record("expected .cleanExit; got \(parsed)")
+        return
+    }
+    #expect(text.contains("#compdef deviceterm"))
+}
+
+@Test
+func aParseFailureIsStillAUsageError() {
+    // The two arrive the same way and are told apart by exit code, so
+    // pin that a real failure did not become a clean exit.
+    guard case .usage = CLICommands.parse(["deviceterm", "tap", "--nope"]) else {
+        Issue.record("expected .usage for an unknown option")
+        return
+    }
+}
+
+// MARK: - Generated script invariants
+//
+// The scripts come from the command declarations, so these check that
+// the generator was handed the whole tree rather than re-pinning shell
+// syntax the generator owns.
+
+/// Each shell's script, for the checks that hold across all three.
+private var everyScript: [(shell: Completions.Shell, text: String)] {
+    Completions.Shell.allCases.map { ($0, Completions.script(for: $0)) }
+}
+
+@Test
+func everyScriptRegistersTheSymlinkName() {
+    // The target builds `deviceterm-cli` and is symlinked as
+    // `deviceterm`. A script registered under either other spelling
+    // completes a command nobody types.
+    for (shell, text) in everyScript {
+        #expect(text.contains("deviceterm"), "\(shell) script does not name deviceterm")
+        #expect(!text.contains("device-term"), "\(shell) script uses the derived name")
+    }
+}
+
+@Test
+func everyScriptCoversEveryDeclaredVerb() {
+    for (shell, text) in everyScript {
+        for verb in CommandTree.all.map(\.name) {
+            #expect(text.contains(verb), "\(shell) script omits verb: \(verb)")
+        }
+    }
+}
+
+@Test
+func everyScriptCoversEverySubVerb() {
+    for (shell, text) in everyScript {
+        for verb in CommandTree.all where !verb.subVerbs.isEmpty {
+            for subVerb in verb.subVerbs {
+                #expect(
+                    text.contains(subVerb),
+                    "\(shell) script omits \(verb.name) \(subVerb)"
+                    )
+            }
+        }
+    }
+}
+
+@Test
+func everyScriptCompletesHelpTopics() {
+    // Concepts and sub-verb command paths alike.
+    for (shell, text) in everyScript {
+        for topic in ["targeting", "tab open", "wait ax"] {
+            #expect(text.contains(topic), "\(shell) script omits help topic: \(topic)")
+        }
+    }
+}
+
+@Test
+func everyScriptCarriesTheValueVocabularies() {
+    // An operand read as a string carries no type for the generator to
+    // enumerate, so its candidates are attached to the declaration. A
+    // verb that loses them completes nothing after the verb name.
+    let vocabulary = Completions.buttonValues
+        + Completions.rotateValues
+        + Completions.waitPaneValues
+    for (shell, text) in everyScript {
+        for value in vocabulary {
+            #expect(text.contains(value), "\(shell) script omits value: \(value)")
+        }
+    }
+}
+
+@Test
+func everyScriptHooksTheRefOptions() {
+    // The ref candidates are whatever is open right now, so the script
+    // has to call back into the binary rather than carry a list.
+    for (shell, text) in everyScript {
         #expect(
-            script.contains(verb),
-            "zsh script missing verb '\(verb)'"
+            text.contains("---completion") || text.contains("customCompletion"),
+            "\(shell) script has no callback for the live refs"
             )
-    }
-}
-
-@Test
-func bashScriptCoversEveryTopLevelVerb() {
-    let script = Completions.script(for: .bash)
-    for verb in Completions.topLevelVerbs {
-        #expect(
-            script.contains(verb),
-            "bash script missing verb '\(verb)'"
-            )
-    }
-}
-
-@Test
-func fishScriptCoversEveryTopLevelVerb() {
-    let script = Completions.script(for: .fish)
-    for verb in Completions.topLevelVerbs {
-        #expect(
-            script.contains(verb),
-            "fish script missing verb '\(verb)'"
-            )
-    }
-}
-
-@Test
-func everyShellCompletesHelpTopics() {
-    // `deviceterm help <TAB>` has to offer the topics, or the
-    // per-command pages are only discoverable by reading the list.
-    for shell in [Completions.Shell.zsh, .bash, .fish] {
-        let script = Completions.script(for: shell)
-        for topic in Completions.helpTopics {
-            #expect(
-                script.contains(topic),
-                "\(shell) script missing help topic '\(topic)'"
-                )
-        }
-    }
-}
-
-@Test
-func zshAndFishCarryVerbSummaries() {
-    // The gloss beside each candidate is the same one-liner the command
-    // list prints, so a reader meets one wording in both places. bash
-    // has no description slot, so it is deliberately excluded.
-    let zsh = Completions.script(for: .zsh)
-    let fish = Completions.script(for: .fish)
-    for (verb, description) in Completions.verbDescriptions {
-        #expect(!description.isEmpty, "no summary for verb '\(verb)'")
-        #expect(zsh.contains("'\(verb):\(description)'"), "zsh missing gloss for '\(verb)'")
-        #expect(fish.contains("-a \(verb) -d '\(description)'"), "fish missing gloss for '\(verb)'")
-    }
-}
-
-@Test
-func generatedScriptsKeepSingleQuotesBalanced() {
-    // A stray apostrophe in a summary produces a script that fails to
-    // load at shell startup, far from the edit that caused it. Checked
-    // per line because that is the scope a quote has to close in.
-    for shell in [Completions.Shell.zsh, .bash, .fish] {
-        let script = Completions.script(for: shell)
-        for (index, line) in script.split(separator: "\n").enumerated() {
-            let quotes = line.filter { $0 == "'" }.count
-            #expect(
-                quotes.isMultiple(of: 2),
-                "\(shell) line \(index + 1) has an unbalanced quote: \(line)"
-                )
-        }
-    }
-}
-
-@Test
-func zshScriptCoversButtonAndRotateEnums() {
-    let script = Completions.script(for: .zsh)
-    for value in Completions.buttonValues {
-        #expect(script.contains(value), "zsh missing button '\(value)'")
-    }
-    for value in Completions.rotateValues {
-        #expect(script.contains(value), "zsh missing rotate '\(value)'")
-    }
-}
-
-@Test
-func bashScriptCoversButtonAndRotateEnums() {
-    let script = Completions.script(for: .bash)
-    for value in Completions.buttonValues {
-        #expect(script.contains(value), "bash missing button '\(value)'")
-    }
-    for value in Completions.rotateValues {
-        #expect(script.contains(value), "bash missing rotate '\(value)'")
-    }
-}
-
-@Test
-func fishScriptCoversButtonAndRotateEnums() {
-    let script = Completions.script(for: .fish)
-    for value in Completions.buttonValues {
-        #expect(script.contains(value), "fish missing button '\(value)'")
-    }
-    for value in Completions.rotateValues {
-        #expect(script.contains(value), "fish missing rotate '\(value)'")
-    }
-}
-
-@Test
-func everyShellCompletesWaitConditionsAndValues() {
-    for shell in Completions.Shell.allCases {
-        let script = Completions.script(for: shell)
-        for subVerb in ["pane", "ax", "orientation"] {
-            #expect(script.contains(subVerb), "\(shell) missing wait condition '\(subVerb)'")
-        }
-        for value in Completions.waitPaneValues {
-            #expect(script.contains(value), "\(shell) missing wait pane state '\(value)'")
-        }
-        for value in Completions.waitOrientationValues {
-            #expect(script.contains(value), "\(shell) missing wait orientation '\(value)'")
-        }
-        #expect(script.contains("tree"))
-        #expect(script.contains("sweep"))
-    }
-}
-
-@Test
-func fishNestedCompletionsUseExactPositionalPaths() {
-    let script = Completions.script(for: .fish)
-
-    #expect(script.contains("-n '__deviceterm_on_path wait' -a 'pane ax orientation surface'"))
-    #expect(script.contains("-n '__deviceterm_on_path wait pane'"))
-    #expect(script.contains("-n '__deviceterm_on_path wait orientation'"))
-    #expect(script.contains("-n '__deviceterm_on_path wait surface'"))
-    #expect(script.contains("-n '__deviceterm_on_path pane'"))
-    #expect(script.contains("-n '__deviceterm_on_path ax'"))
-    #expect(!script.contains("__fish_seen_subcommand_from wait"))
-}
-
-@Test
-func zshAndBashScriptsCoverFlagsWithDashDashSyntax() {
-    // zsh's `_arguments` and bash's `compgen -W` both spell flags
-    // as literal `--name`. fish's `complete -l name` uses the
-    // bare-name form (no `--`); pinned separately below.
-    let flags = [
-        "--duration", "--velocity", "--step", "--timeout", "--identifier",
-        "--label", "--role", "--match", "--source", "--json"
-    ]
-    for shell in [Completions.Shell.zsh, .bash] {
-        let script = Completions.script(for: shell)
-        for flag in flags {
-            #expect(
-                script.contains(flag),
-                "\(shell.rawValue) script missing flag '\(flag)'"
-                )
-        }
-    }
-}
-
-@Test
-func fishScriptCoversFlagsWithCompleteLNSyntax() {
-    // fish spells long flags via `complete -l <name>` (no leading
-    // dashes in the script form). The user still types `--name`,
-    // but the script declares it bare.
-    let script = Completions.script(for: .fish)
-    for flag in [
-        "duration", "velocity", "step", "timeout", "identifier", "label",
-        "role", "match", "source", "json"
-    ] {
-        #expect(
-            script.contains("-l \(flag)"),
-            "fish script missing `-l \(flag)`"
-            )
-    }
-}
-
-@Test
-func axReachesTheFlagListInEveryShell() {
-    // Past the `ax` sub-verb position both shells have to reach the shared
-    // flag list, since that is where `--step` and `--budget` live.
-    let zsh = Completions.script(for: .zsh)
-    #expect(zsh.contains("_deviceterm_flags"))
-    // Both the `ax` branch and the catch-all reach the shared flag function.
-    #expect(zsh.components(separatedBy: "_deviceterm_flags").count - 1 >= 3)
-
-    let bash = Completions.script(for: .bash)
-    // The `ax` branch returns early only at the sub-verb position, so a later
-    // word falls out of the case to the shared `${flags}` completion.
-    #expect(bash.contains("""
-                ax)
-                    if [ "${COMP_CWORD}" -eq 2 ]; then
-        """))
-}
-
-@Test
-func zshScriptCarriesCompdefHeader() {
-    // _deviceterm scripts live in zsh's site-functions; the
-    // `#compdef deviceterm` header is the load-on-tab trigger.
-    let script = Completions.script(for: .zsh)
-    #expect(script.hasPrefix("#compdef deviceterm"))
-}
-
-@Test
-func bashScriptRegistersWithComplete() {
-    let script = Completions.script(for: .bash)
-    #expect(script.contains("complete -F _deviceterm deviceterm"))
-}
-
-@Test
-func fishScriptDisablesFileCompletion() {
-    // Without `-f`, fish offers file paths after `deviceterm <TAB>`, a
-    // bad default for a verb-driven CLI.
-    let script = Completions.script(for: .fish)
-    #expect(script.contains("complete -c deviceterm -f"))
-}
-
-@Test
-func fishScriptDocumentsTabIdReference() {
-    let script = Completions.script(for: .fish)
-    #expect(script.contains("tab ref (tabId / sessionId / shortId / name / current)"))
-}
-
-@Test
-func zshScriptCompletesCompletionsInstallShellArg() {
-    let script = Completions.script(for: .zsh)
-    #expect(script.contains("'completions subcommand'"))
-}
-
-@Test
-func zshScriptCompletesAxSubVerbs() {
-    let script = Completions.script(for: .zsh)
-    #expect(script.contains("tree"))
-    #expect(script.contains("point"))
-    #expect(script.contains("sweep"))
-}
-
-@Test
-func zshScriptCompletesTabsSubVerbs() {
-    let script = Completions.script(for: .zsh)
-    #expect(script.contains("tabs subcommand"))
-    #expect(script.contains("current"))
-}
-
-@Test
-func scriptsCompleteDeviceNounSubVerbs() {
-    // The `device` / `devices` nouns and the `device attach` sub-verb
-    // must surface in every shell's completion script.
-    for shell in Completions.Shell.allCases {
-        let script = Completions.script(for: shell)
-        #expect(script.contains("devices"), "\(shell.rawValue) missing 'devices'")
-        for sub in Completions.deviceSubVerbs {
-            #expect(
-                script.contains(sub),
-                "\(shell.rawValue) missing device sub-verb '\(sub)'"
-            )
-        }
     }
 }
 

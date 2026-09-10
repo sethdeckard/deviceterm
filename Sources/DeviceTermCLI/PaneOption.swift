@@ -9,7 +9,8 @@ import ArgumentParser
 struct PaneOption: ParsableArguments {
     @Option(
         name: .long,
-        help: "Pane to target. Defaults to DEVICETERM_TARGET_PANE, then the tab's only device pane."
+        help: "Pane to target. Defaults to DEVICETERM_TARGET_PANE, then the tab's only device pane.",
+        completion: .custom { _, _, _ in RefCompletion.panes() }
     )
     var pane: String?
 }

@@ -13,7 +13,10 @@ struct WaitCommand: CLICommandConvertible {
                 + "[--pane <ref>] [--timeout <ms>]"
         )
 
-        @Argument(help: "Lifecycle state to wait for.")
+        @Argument(
+            help: "Lifecycle state to wait for.",
+            completion: .list(Completions.waitPaneValues)
+        )
         var state: String?
 
         @OptionGroup var options: WaitOptions
@@ -54,7 +57,10 @@ struct WaitCommand: CLICommandConvertible {
             usage: "deviceterm wait orientation <orientation> [--pane <ref>] [--timeout <ms>]"
         )
 
-        @Argument(help: "Orientation to wait for.")
+        @Argument(
+            help: "Orientation to wait for.",
+            completion: .list(Completions.waitOrientationValues)
+        )
         var orientation: String
 
         @OptionGroup var options: WaitOptions
@@ -84,7 +90,10 @@ struct WaitCommand: CLICommandConvertible {
                 + "[--settle <ms>] [--pane <ref>] [--timeout <ms>]"
         )
 
-        @Argument(help: "The only mode: quiescent.")
+        @Argument(
+            help: "The only mode: quiescent.",
+            completion: .list(Completions.surfaceConditionValues)
+        )
         var mode: String?
 
         @OptionGroup var options: WaitOptions

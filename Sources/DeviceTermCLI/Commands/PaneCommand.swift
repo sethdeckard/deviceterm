@@ -18,7 +18,11 @@ struct PaneCommand: CLICommandConvertible {
         @Flag(name: .long, help: "Open a terminal pane. Required.")
         var terminal = false
 
-        @Option(name: .long, help: "Tab to open the pane in.")
+        @Option(
+            name: .long,
+            help: "Tab to open the pane in.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @Option(name: .long, help: "Working directory for the pane's shell.")
@@ -46,10 +50,18 @@ struct PaneCommand: CLICommandConvertible {
             usage: "deviceterm pane close [--pane <ref>] [--mode <detach|shutdown>]"
         )
 
-        @Option(name: .long, help: "Pane to close.")
+        @Option(
+            name: .long,
+            help: "Pane to close.",
+            completion: .custom { _, _, _ in RefCompletion.panes() }
+        )
         var pane: String?
 
-        @Option(name: .long, help: "What to do with the device: detach or shutdown.")
+        @Option(
+            name: .long,
+            help: "What to do with the device: detach or shutdown.",
+            completion: .list(Completions.closeModeValues)
+        )
         var mode: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -69,7 +81,11 @@ struct PaneCommand: CLICommandConvertible {
             usage: "deviceterm pane rename [--pane <ref>] [<name>]"
         )
 
-        @Option(name: .long, help: "Pane to rename.")
+        @Option(
+            name: .long,
+            help: "Pane to rename.",
+            completion: .custom { _, _, _ in RefCompletion.panes() }
+        )
         var pane: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -93,7 +109,11 @@ struct PaneCommand: CLICommandConvertible {
             abstract: "Print one pane's identity and device"
         )
 
-        @Option(name: .long, help: "Pane to describe.")
+        @Option(
+            name: .long,
+            help: "Pane to describe.",
+            completion: .custom { _, _, _ in RefCompletion.panes() }
+        )
         var pane: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -108,10 +128,18 @@ struct PaneCommand: CLICommandConvertible {
             usage: "deviceterm pane move [--pane <ref>] --to-tab <ref>"
         )
 
-        @Option(name: .long, help: "Pane to move.")
+        @Option(
+            name: .long,
+            help: "Pane to move.",
+            completion: .custom { _, _, _ in RefCompletion.panes() }
+        )
         var pane: String?
 
-        @Option(name: .customLong("to-tab"), help: "Destination tab.")
+        @Option(
+            name: .customLong("to-tab"),
+            help: "Destination tab.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var toTab: String?
 
         @OptionGroup var jsonFlag: JSONFlag

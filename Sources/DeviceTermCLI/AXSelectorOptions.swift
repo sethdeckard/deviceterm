@@ -21,10 +21,18 @@ struct AXSelectorOptions: ParsableArguments {
     @Option(name: .long, help: "Narrow to elements carrying this value.")
     var value: String?
 
-    @Option(name: .long, help: "How the needle matches: exact or contains.")
+    @Option(
+        name: .long,
+        help: "How the needle matches: exact or contains.",
+        completion: .list(Completions.matchValues)
+    )
     var match: String?
 
-    @Option(name: .long, help: "Where to observe from: tree or sweep.")
+    @Option(
+        name: .long,
+        help: "Where to observe from: tree or sweep.",
+        completion: .list(Completions.sourceValues)
+    )
     var source: String?
 
     @Option(name: .long, help: "Sweep spacing, 0...1. Requires --source sweep.")

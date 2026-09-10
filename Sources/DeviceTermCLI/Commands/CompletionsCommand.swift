@@ -11,7 +11,10 @@ struct CompletionsCommand: CLICommandConvertible {
             usage: "deviceterm completions install <zsh|bash|fish>"
         )
 
-        @Argument(help: "Shell to install for: zsh, bash, or fish.")
+        @Argument(
+            help: "Shell to install for: zsh, bash, or fish.",
+            completion: .list(Completions.Shell.allCases.map(\.rawValue))
+        )
         var shell: String
 
         @OptionGroup var jsonFlag: JSONFlag

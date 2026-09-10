@@ -18,10 +18,18 @@ struct WaitOptions: ParsableArguments {
     @Option(name: .long, help: "Window of stillness in milliseconds. `wait surface` only.")
     var settle: Int?
 
-    @Option(name: .long, help: "What to print on success. `wait ax` only.")
+    @Option(
+        name: .long,
+        help: "What to print on success. `wait ax` only.",
+        completion: .list(Completions.waitPrintValues)
+    )
     var print: String?
 
-    @Option(name: .long, help: "Wait for the element to be present or absent. `wait ax` only.")
+    @Option(
+        name: .long,
+        help: "Wait for the element to be present or absent. `wait ax` only.",
+        completion: .list(Completions.waitStateValues)
+    )
     var state: String?
 
     @OptionGroup var selector: AXSelectorOptions

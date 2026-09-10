@@ -16,7 +16,7 @@ struct ButtonCommand: CLICommandConvertible {
         discussion: HelpText.page(forTopic: "button") ?? ""
     )
 
-    @Argument(help: "Button name.")
+    @Argument(help: "Button name.", completion: .list(Completions.buttonValues))
     var name: String
 
     @OptionGroup var paneOption: PaneOption

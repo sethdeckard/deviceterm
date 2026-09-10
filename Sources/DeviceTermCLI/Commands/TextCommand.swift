@@ -16,9 +16,7 @@ struct TextCommand: FreeTextCommand {
         discussion: HelpText.page(forTopic: "text") ?? ""
     )
 
-    @Option(name: .long, help: "Pane to target.")
-    var pane: String?
-
+    @OptionGroup var paneOption: PaneOption
     @OptionGroup var jsonFlag: JSONFlag
 
     @Argument(
@@ -34,6 +32,6 @@ struct TextCommand: FreeTextCommand {
         guard !words.isEmpty else {
             return .usage(message: "usage: deviceterm text <string> [--pane <ref>]")
         }
-        return .text(pane: pane, text: words.joined(separator: " "))
+        return .text(pane: paneOption.pane, text: words.joined(separator: " "))
     }
 }

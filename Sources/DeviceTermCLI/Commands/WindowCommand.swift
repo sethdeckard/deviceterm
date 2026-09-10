@@ -22,10 +22,18 @@ struct WindowCommand: CLICommandConvertible {
             usage: "deviceterm window close [--window <ref>] [--mode <detach|shutdown>]"
         )
 
-        @Option(name: .long, help: "Window to close.")
+        @Option(
+            name: .long,
+            help: "Window to close.",
+            completion: .custom { _, _, _ in RefCompletion.windows() }
+        )
         var window: String?
 
-        @Option(name: .long, help: "What to do with the devices: detach or shutdown.")
+        @Option(
+            name: .long,
+            help: "What to do with the devices: detach or shutdown.",
+            completion: .list(Completions.closeModeValues)
+        )
         var mode: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -44,7 +52,11 @@ struct WindowCommand: CLICommandConvertible {
             abstract: "Bring a window to the front"
         )
 
-        @Option(name: .long, help: "Window to focus.")
+        @Option(
+            name: .long,
+            help: "Window to focus.",
+            completion: .custom { _, _, _ in RefCompletion.windows() }
+        )
         var window: String?
 
         @OptionGroup var jsonFlag: JSONFlag

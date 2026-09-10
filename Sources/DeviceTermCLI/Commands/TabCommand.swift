@@ -12,7 +12,11 @@ struct TabCommand: CLICommandConvertible {
             usage: "deviceterm tab open [--window <ref>] [--cwd <path>] [--cmd '<cmd>']"
         )
 
-        @Option(name: .long, help: "Window to open the tab in.")
+        @Option(
+            name: .long,
+            help: "Window to open the tab in.",
+            completion: .custom { _, _, _ in RefCompletion.windows() }
+        )
         var window: String?
 
         @Option(name: .long, help: "Working directory for the tab's shell.")
@@ -39,10 +43,18 @@ struct TabCommand: CLICommandConvertible {
             usage: "deviceterm tab close [--tab <ref>] [--mode <detach|shutdown>]"
         )
 
-        @Option(name: .long, help: "Tab to close.")
+        @Option(
+            name: .long,
+            help: "Tab to close.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
-        @Option(name: .long, help: "What to do with the tab's device: detach or shutdown.")
+        @Option(
+            name: .long,
+            help: "What to do with the tab's device: detach or shutdown.",
+            completion: .list(Completions.closeModeValues)
+        )
         var mode: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -62,7 +74,11 @@ struct TabCommand: CLICommandConvertible {
             usage: "deviceterm tab rename [--tab <ref>] [<name>]"
         )
 
-        @Option(name: .long, help: "Tab to rename.")
+        @Option(
+            name: .long,
+            help: "Tab to rename.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -86,7 +102,11 @@ struct TabCommand: CLICommandConvertible {
             abstract: "Bring a tab to the front"
         )
 
-        @Option(name: .long, help: "Tab to select.")
+        @Option(
+            name: .long,
+            help: "Tab to select.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -100,7 +120,11 @@ struct TabCommand: CLICommandConvertible {
             abstract: "Print one tab's identity and panes"
         )
 
-        @Option(name: .long, help: "Tab to describe.")
+        @Option(
+            name: .long,
+            help: "Tab to describe.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -115,13 +139,21 @@ struct TabCommand: CLICommandConvertible {
             usage: "deviceterm tab move [--tab <ref>] [--to <index>] [--to-window <ref>]"
         )
 
-        @Option(name: .long, help: "Tab to move.")
+        @Option(
+            name: .long,
+            help: "Tab to move.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @Option(name: .customLong("to"), help: "Destination index within the window.")
         var toIndex: Int?
 
-        @Option(name: .customLong("to-window"), help: "Destination window.")
+        @Option(
+            name: .customLong("to-window"),
+            help: "Destination window.",
+            completion: .custom { _, _, _ in RefCompletion.windows() }
+        )
         var toWindow: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -146,7 +178,11 @@ struct TabCommand: CLICommandConvertible {
             usage: "deviceterm tab send-input [--tab <ref>] [--type-delay <ms>] <text>"
         )
 
-        @Option(name: .long, help: "Tab to type into.")
+        @Option(
+            name: .long,
+            help: "Tab to type into.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @Option(name: .customLong("type-delay"), help: "Per-character delay in milliseconds.")
@@ -182,7 +218,11 @@ struct TabCommand: CLICommandConvertible {
             usage: "deviceterm tab capture [--tab <ref>]"
         )
 
-        @Option(name: .long, help: "Tab to capture.")
+        @Option(
+            name: .long,
+            help: "Tab to capture.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
@@ -200,7 +240,11 @@ struct TabCommand: CLICommandConvertible {
         @Argument(help: "true or false.")
         var value: String
 
-        @Option(name: .long, help: "Tab to mark.")
+        @Option(
+            name: .long,
+            help: "Tab to mark.",
+            completion: .custom { _, _, _ in RefCompletion.tabs() }
+        )
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag

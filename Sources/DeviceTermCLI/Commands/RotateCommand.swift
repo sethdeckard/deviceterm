@@ -16,7 +16,10 @@ struct RotateCommand: CLICommandConvertible {
         discussion: HelpText.page(forTopic: "rotate") ?? ""
     )
 
-    @Argument(help: "Absolute orientation, or the direction to turn.")
+    @Argument(
+        help: "Absolute orientation, or the direction to turn.",
+        completion: .list(Completions.rotateValues)
+    )
     var target: String
 
     @OptionGroup var paneOption: PaneOption

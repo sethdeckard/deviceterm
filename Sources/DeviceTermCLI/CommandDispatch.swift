@@ -715,6 +715,9 @@ func run(
         case .doctor:
             return doctorOutcome(output: output)
 
+        case let .cleanExit(text):
+            return .stdout(text + "\n")
+
         case let .usage(message):
             return CLIUsage.outcome(message: message)
 

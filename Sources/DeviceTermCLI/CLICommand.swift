@@ -383,6 +383,17 @@ public enum CLICommand: Equatable, Sendable {
         isProtected: Bool
         )
 
+    /// Text the parser answered with itself: a completion callback's
+    /// candidates, or a generated completion script. It prints to
+    /// stdout and exits 0.
+    ///
+    /// These arrive as thrown values because ArgumentParser signals
+    /// them the way it signals a failure, so they have to be told apart
+    /// by their exit code. Rendering one as a usage error puts the
+    /// candidates on stderr behind a usage block, which is both useless
+    /// to the shell asking and noise in the user's command line.
+    case cleanExit(text: String)
+
     /// Anything else: caller prints usage to stderr and exits 1.
     case usage(
         message:

@@ -20,7 +20,11 @@ struct HelpCommand: CLICommandConvertible {
         discussion: HelpText.page(forTopic: "help") ?? ""
     )
 
-    @Argument(parsing: .remaining, help: "Command or concept to read.")
+    @Argument(
+        parsing: .remaining,
+        help: "Command or concept to read.",
+        completion: .list(Completions.helpTopics)
+    )
     var topic: [String] = []
 
     var cliCommand: CLICommand {

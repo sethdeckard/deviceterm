@@ -489,6 +489,12 @@ public enum CLICommands {
             }
             return owned.cliCommand
         } catch {
+            // A completion callback's candidates and a generated script
+            // are thrown the same way a failure is, and only the exit
+            // code tells them apart.
+            guard DeviceTerm.exitCode(for: error) != .success else {
+                return .cleanExit(text: DeviceTerm.message(for: error))
+            }
             // The full form, not the bare diagnostic: it carries the
             // failing command's usage line, which is where a caller who
             // mistyped a sub-verb reads the ones that exist.
