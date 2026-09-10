@@ -687,9 +687,20 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Resolve (or lazily acquire) the location client, mirroring
     /// `requireAX()`: `.notActive` once the backend is torn down, and a
     /// latched failure so a broken acquisition isn't re-probed per call.
+    ///
+    /// The gate is `backendActive` rather than whether the display handle is
+    /// still held. Asking the display lane means a `queue.sync` onto the
+    /// serial queue its bridge calls run on, so a wedged display would block
+    /// a location call, and with it the coordinator. `inputGate` answers
+    /// without touching CoreSimulator. It also closes earlier: teardown
+    /// disables new bridge work before it starts releasing the display, so a
+    /// location acquisition can no longer be admitted alongside a shutdown
+    /// already under way.
     private func requireLocation() throws -> SimLocation {
         if let locationClient { return locationClient }
-        guard display.isActive else { throw DeviceBackendError.notActive }
+        guard inputGate.sync(execute: { backendActive }) else {
+            throw DeviceBackendError.notActive
+        }
         if let locationAcquisitionFailure {
             throw DeviceBackendError.locationUnavailable(message: locationAcquisitionFailure)
         }

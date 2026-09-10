@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import CoreSimulatorBridge
+@testable import Daemon
 import Foundation
 import Testing
 
@@ -210,5 +211,47 @@ func startRouteRejectsTooFewWaypointsAgainstARealDevice() throws {
             (error as NSError).localizedDescription.contains("at least two waypoints"),
             "rejected, but not by the wrapper's arity check: \(error)"
         )
+    }
+}
+
+/// A backend over the booted sim, so the location gate can be exercised
+/// through `SimDeviceBackend` rather than the bridge wrapper directly.
+private func bootedBackend() throws -> SimDeviceBackend {
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    return SimDeviceBackend(
+        udid: booted.udid,
+        displayHandle: try SimDisplayHandle.handle(forUDID: booted.udid),
+        hidClient: try SimHIDClient.client(forUDID: booted.udid),
+        purpleClient: try SimPurpleHID.client(forUDID: booted.udid)
+    )
+}
+
+/// After teardown, the first location call returns `.notActive` without
+/// acquiring a client. This backend has never made a location call, so no
+/// cached client is in play: what refuses is the lazy-acquisition gate, and
+/// without it `requireLocation()` would acquire a fresh client against a sim
+/// this backend no longer drives.
+@Test
+func locationAfterBackendTeardownIsNotActive() throws {
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let backend = try bootedBackend()
+    backend.shutdownBackend()
+
+    do {
+        try backend.setSimulatedLocation(
+            latitude: 37.3349,
+            longitude: -122.009,
+            generation: 1
+        )
+        Issue.record("a location set was accepted after teardown")
+    } catch DeviceBackendError.notActive {
+    } catch {
+        Issue.record("refused, but not by the liveness gate: \(error)")
     }
 }

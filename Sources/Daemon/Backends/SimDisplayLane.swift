@@ -43,11 +43,6 @@ final class SimDisplayLane: @unchecked Sendable {
     private let pool: LeasedSurfacePool
     private let recoveryThreshold: Int
 
-    /// Whether the handle is still held. False once teardown has released it,
-    /// which is what makes a post-teardown call answer rather than reach a dead
-    /// bridge object.
-    var isActive: Bool { queue.sync { handle != nil } }
-
     init(handle: SimDisplayHandle, pool: LeasedSurfacePool, recoveryThreshold: Int) {
         self.handle = handle
         self.pool = pool
