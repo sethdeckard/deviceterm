@@ -66,10 +66,17 @@ if report.get("ok") is not True:
 if report.get("truncated"):
     print("ax-dump.sh: dump is truncated", file=sys.stderr)
     raise SystemExit(11)
-# Some node could not be read. Distinct from truncated, where a ceiling ran out.
-# `unreadable` separates a failed attribute, frame, or child read from a genuine
-# absence: without it a failed field looks missing and a failed child read looks
-# childless.
+# Some node failed a structural or identifying read, so this tree's shape or a
+# node's identity is in doubt. Distinct from truncated, where a ceiling ran
+# out. `unreadable` separates a failed child, role, or identifier read from a
+# genuine absence: without it a failed child read looks childless and a failed
+# identifier looks like a node that carries none.
+#
+# Narrower than "any read failed". A title or a value that would not read is
+# recorded on its own node and left there, because it cannot hide a node or
+# misclassify one. Real trees carry such nodes routinely (a sim pane mounts
+# system-vended controls that fail a read on every dump), and refusing over one
+# takes away the AX vantage point entirely.
 #
 # The field must be *present*. A reply without it cannot vouch for its own
 # completeness, and treating that silence as "readable" restores exactly the
@@ -86,7 +93,27 @@ if "unreadable" not in report:
     )
     raise SystemExit(10)
 if report["unreadable"]:
-    print("ax-dump.sh: dump could not read some nodes", file=sys.stderr)
+    # Name the attributes so the failure is diagnosable from the message. A
+    # bare `true` marker offers no name to collect, hence the type guard; the
+    # refusal itself stands either way.
+    failed = set()
+
+    def collect(node):
+        if not isinstance(node, dict):
+            return
+        marks = node.get("unreadable")
+        if isinstance(marks, list):
+            failed.update(marks)
+        for child in node.get("children") or []:
+            collect(child)
+
+    collect(report.get("tree"))
+    print(
+        "ax-dump.sh: dump failed a structural or identifying read "
+        f"({', '.join(sorted(failed)) or 'attribute not named'}), so the "
+        "tree's shape or a node's identity is in doubt",
+        file=sys.stderr,
+    )
     raise SystemExit(11)
 
 roles = set()

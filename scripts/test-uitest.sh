@@ -131,9 +131,14 @@ PY
 #
 # Both print nothing when handed a failed, truncated, or unreadable dump, and
 # `unreadable` must be present and false: a reply without that field cannot
-# vouch for a childless tree. Every caller below first uses `require_ax_dump`,
-# so that defensive parser behavior can never turn an acquisition failure into
-# an absent pane.
+# vouch for a childless tree. The flag answers for structural and identifying
+# reads only (children, role, identifier), which are the ones that could drop a
+# pane from these lists. Anything else is recorded on its own node and left for
+# the reader, so `window_panes` checks each pane's own marker for AXFocused:
+# the flag will not tell it that a focus read failed, and an unobserved focus
+# would otherwise print as a definite 0. Every caller below first uses
+# `require_ax_dump`, so that defensive parser behavior can never turn an
+# acquisition failure into an absent pane.
 pane_ids() {
     python3 - "$1" <<'PY'
 import json, sys
@@ -158,6 +163,12 @@ PY
 window_panes() {
     python3 - "$1" "$2" <<'PY'
 import json, sys
+
+
+class UnreadableFocus(Exception):
+    """A pane's AXFocused read failed, so the focus column is not an answer."""
+
+
 try:
     r = json.load(open(sys.argv[1]))
     if r.get("ok") is not True or r.get("truncated") or r.get("unreadable") is not False: raise SystemExit
@@ -171,18 +182,54 @@ try:
             windows.append(bucket)
         ident = str(node.get("identifier", ""))
         if bucket is not None and ident.startswith("deviceterm.pane."):
-            bucket.append((ident, 1 if node.get("focused") else 0))
+            # A failed AXFocused read is not an unfocused pane. It does not
+            # raise the dump-wide flag, because it cannot hide a pane, so the
+            # refusal has to happen here: the expression below maps a failed
+            # read and an observed false to the same 0.
+            marks = node.get("unreadable")
+            unread = isinstance(marks, list) and "AXFocused" in marks
+            bucket.append((ident, 1 if node.get("focused") else 0, unread))
         for kid in node.get("children") or []: walk(kid, bucket)
     walk(r.get("tree"), None)
     for bucket in windows:
-        if any(ident == target for ident, _ in bucket):
-            for ident, focused in sorted(bucket): print("%s\t%d" % (ident, focused))
+        if any(ident == target for ident, _, _ in bucket):
+            # One unreadable pane spoils the whole window's focus column: a
+            # sibling reported 0 could equally be the pane that holds focus,
+            # so a "focus moved to X" check would pass on a guess.
+            if any(unread for _, _, unread in bucket): raise UnreadableFocus
+            for ident, focused, _ in sorted(bucket): print("%s\t%d" % (ident, focused))
             break
+# Exit 3, distinct from an empty-but-trustworthy answer, so a caller can tell
+# "nothing to report" from "ask again". Every other bail stays silent-and-zero,
+# preserving the `[ -s ]` contract above.
+except UnreadableFocus:
+    sys.exit(3)
 except SystemExit:
     pass
 except Exception:
     pass
 PY
+}
+
+# `window_panes`, retrying while a pane's AXFocused read is unreadable.
+#
+# That refusal lands *downstream* of `require_ax_dump`'s own retry: the dump is
+# structurally sound, so nothing upstream re-takes it, and a caller reading the
+# empty output would report "focus is nowhere" for an observation never made.
+# The first attempt uses the dump already in hand, so a readable tree costs
+# nothing extra; only a refusal re-dumps (into the same path, which no caller
+# reads again afterwards).
+window_panes_settled() {
+    local dump="$1" target="$2" out="$3" context="$4"
+    local attempt
+    for attempt in 1 2 3; do
+        if [ "$attempt" -gt 1 ]; then
+            sleep 0.25
+            require_ax_dump "$dump" "$context"
+        fi
+        if window_panes "$dump" "$target" >"$out"; then return 0; fi
+    done
+    fail "$context: a pane's AXFocused read stayed unreadable across 3 dumps"
 }
 
 # ── Resident harness up + both TCC grants ──────────────────────────────
@@ -319,7 +366,8 @@ ok "harness-driven 'Split Right' added a pane ($new_pane)"
 # Named panes on both sides. "focus is no longer on the new pane" would
 # also be true if the action merely dropped focus on the floor, which is
 # exactly how a broken forward from the pane's root view behaves.
-window_panes "$SCRATCH/panes1.json" "$new_pane" >"$SCRATCH/wp1.txt"
+window_panes_settled "$SCRATCH/panes1.json" "$new_pane" "$SCRATCH/wp1.txt" \
+    "ax dump after the split"
 grep -qxF "$(printf '%s\t1' "$new_pane")" "$SCRATCH/wp1.txt" \
     || fail "the new pane did not report AXFocused after the split"
 source_pane="$(awk -F'\t' -v new="$new_pane" '$1 != new { print $1 }' "$SCRATCH/wp1.txt")"
@@ -331,7 +379,11 @@ source_pane="$(awk -F'\t' -v new="$new_pane" '$1 != new { print $1 }' "$SCRATCH/
 moved=""
 for _ in $(seq 1 12); do
     require_ax_dump "$SCRATCH/panes2.json" "ax dump while waiting for focus failed"
-    window_panes "$SCRATCH/panes2.json" "$new_pane" >"$SCRATCH/wp2.txt"
+    # An unreadable focus read empties the file, which this loop already reads
+    # as "not yet" and answers by re-dumping. Tolerated here, unlike at the
+    # one-shot sites, precisely because the retry exists. Without the `|| true`
+    # the distinct status would abort the run under `set -e`.
+    window_panes "$SCRATCH/panes2.json" "$new_pane" >"$SCRATCH/wp2.txt" || true
     if grep -qxF "$(printf '%s\t1' "$source_pane")" "$SCRATCH/wp2.txt"; then
         moved="yes"
         break
@@ -352,7 +404,9 @@ ok "harness-driven 'Select Pane Left' moved focus $new_pane → $source_pane"
 kept=""
 for _ in $(seq 1 12); do
     require_ax_dump "$SCRATCH/panes2b.json" "ax dump while waiting for rearrange failed"
-    window_panes "$SCRATCH/panes2b.json" "$new_pane" >"$SCRATCH/wp2b.txt"
+    # Same as the focus loop above: an unreadable read is "not yet", and the
+    # `|| true` keeps the distinct status from aborting under `set -e`.
+    window_panes "$SCRATCH/panes2b.json" "$new_pane" >"$SCRATCH/wp2b.txt" || true
     if grep -qxF "$(printf '%s\t1' "$source_pane")" "$SCRATCH/wp2b.txt"; then
         kept="yes"
         break
@@ -395,7 +449,8 @@ ok "harness-driven 'Close Pane' dropped $source_pane and kept the tab"
 # row the tab-strip fallback would still close the tab with focus lost
 # entirely, and the count assertion below would pass for the wrong
 # reason.
-window_panes "$SCRATCH/panes3.json" "$new_pane" >"$SCRATCH/wp3.txt"
+window_panes_settled "$SCRATCH/panes3.json" "$new_pane" "$SCRATCH/wp3.txt" \
+    "ax dump after the pane close"
 grep -qxF "$(printf '%s\t1' "$new_pane")" "$SCRATCH/wp3.txt" \
     || fail "the surviving pane did not report AXFocused after the close (window now: $(tr '\n' ' ' <"$SCRATCH/wp3.txt"))"
 ok "focus landed on the surviving pane ($new_pane)"

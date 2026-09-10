@@ -35,7 +35,9 @@ enum AXElementReader {
     enum FrameRead {
         case value(CGRect)
         case absent
-        case failed
+        /// The attributes that failed. A frame is two reads, so naming them
+        /// keeps a dump from claiming both went wrong when one did.
+        case failed(attributes: [String])
     }
 
     static let pressAction = "AXPress"
@@ -128,23 +130,22 @@ enum AXElementReader {
     static func frameRead(of element: AXUIElement) -> FrameRead {
         let position = read(element, AXAttribute.position)
         let size = read(element, AXAttribute.size)
-        if case .failed = position { return .failed }
-        if case .failed = size { return .failed }
+        var failed: [String] = []
+        if case .failed = position { failed.append(AXAttribute.position) }
+        if case .failed = size { failed.append(AXAttribute.size) }
+        guard failed.isEmpty else { return .failed(attributes: failed) }
         guard
             case let .value(rawPosition) = position,
             case let .value(rawSize) = size
         else { return .absent }
-        guard
-            let positionValue = axValue(rawPosition),
-            let sizeValue = axValue(rawSize)
-        else { return .failed }
 
-        var origin = CGPoint.zero
-        var frameSize = CGSize.zero
-        guard
-            AXValueGetValue(positionValue, .cgPoint, &origin),
-            AXValueGetValue(sizeValue, .cgSize, &frameSize)
-        else { return .failed }
+        let origin = decodePoint(rawPosition)
+        let frameSize = decodeSize(rawSize)
+        if origin == nil { failed.append(AXAttribute.position) }
+        if frameSize == nil { failed.append(AXAttribute.size) }
+        guard let origin, let frameSize else {
+            return .failed(attributes: failed)
+        }
         return .value(CGRect(origin: origin, size: frameSize))
     }
 
@@ -177,5 +178,26 @@ enum AXElementReader {
     private static func axValue(_ raw: CFTypeRef) -> AXValue? {
         guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
         return unsafeDowncast(raw as AnyObject, to: AXValue.self)
+    }
+
+    /// Unpack an `AXPosition` value, or nil when it will not decode.
+    ///
+    /// A value that arrived and will not decode counts as a failed read: it
+    /// is not the same as an element that publishes none. Written per type
+    /// rather than generically because taking a pointer to an unconstrained
+    /// generic is a warning, and warnings are errors here.
+    private static func decodePoint(_ raw: CFTypeRef) -> CGPoint? {
+        guard let unpacked = axValue(raw) else { return nil }
+        var value = CGPoint.zero
+        guard AXValueGetValue(unpacked, .cgPoint, &value) else { return nil }
+        return value
+    }
+
+    /// Unpack an `AXSize` value, or nil when it will not decode.
+    private static func decodeSize(_ raw: CFTypeRef) -> CGSize? {
+        guard let unpacked = axValue(raw) else { return nil }
+        var value = CGSize.zero
+        guard AXValueGetValue(unpacked, .cgSize, &value) else { return nil }
+        return value
     }
 }

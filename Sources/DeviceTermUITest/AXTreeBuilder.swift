@@ -16,9 +16,37 @@ import Foundation
 /// keeps one `ax dump` from hanging the harness or returning a megabyte of
 /// JSON an agent cannot use.
 enum AXTreeBuilder {
-    /// Marks a node the walk could not read: either its own attributes or its
-    /// children. Set by `attributes` for the former, here for the latter.
+    /// Lists the attribute names whose reads failed on a node, `AXChildren`
+    /// among them. Written by `attributes` for a node's own attributes, and
+    /// here for its children. A name under this key means that value is
+    /// unknown rather than absent.
+    ///
+    /// Names rather than a bare flag because the two failures call for
+    /// different responses, and the caller is the one who knows which
+    /// attribute its assertion rests on.
     static let unreadableKey = "unreadable"
+
+    /// Reads whose failure leaves the tree's shape or a node's identity in
+    /// doubt, and so set `AXTreeResult.unreadable` for the whole walk.
+    ///
+    /// A failed `AXChildren` hides a subtree. A failed `AXRole` or
+    /// `AXIdentifier` makes a node fail to match the predicate that describes
+    /// it, which reads as a shorter list rather than as an error. What sets
+    /// these three apart is that they decide whether a caller finds the node
+    /// at all; every other attribute is a value read off a node already in
+    /// hand, so a caller wanting it can see for itself that it did not
+    /// arrive.
+    ///
+    /// Every other attribute is recorded on its node and goes no further. A
+    /// title or a value that would not read leaves one assertion incomplete,
+    /// but it cannot hide a node or misclassify one, and treating it as fatal
+    /// refuses a whole tree over a single control publishing an unreadable
+    /// icon.
+    static let structuralAttributes: Set<String> = [
+        AXAttribute.children,
+        AXAttribute.role,
+        AXAttribute.identifier
+    ]
 
     /// Walk `root` depth-first into a JSON-ready dictionary.
     ///
@@ -28,10 +56,14 @@ enum AXTreeBuilder {
     /// then tell "this app has no more children" from "we stopped looking."
     ///
     /// `children` returning nil means the read failed, as distinct from an
-    /// element that has none. That node is marked `"unreadable": true` and
-    /// the overall result reports it, so a caller can tell "nothing there"
-    /// from "we could not look". Folding the two together is how a timed-out
-    /// read comes to serialize identically to an empty UI.
+    /// element that has none. That node records `AXChildren` under
+    /// `"unreadable"`, so a caller can tell "nothing there" from "we could not
+    /// look". Folding the two together is how a timed-out read comes to
+    /// serialize identically to an empty UI.
+    ///
+    /// The overall result reports whether any node failed a *structural or
+    /// identifying* read; see `structuralAttributes` for which those are and
+    /// why the rest stop at the node.
     ///
     /// `shouldDescend` is consulted for each child, given the attributes the
     /// walk just read for it, and never for the root, which is always walked. Declining emits the
@@ -62,10 +94,11 @@ enum AXTreeBuilder {
             // and a policy deciding on its own failed read would prune (or
             // fail to prune) a subtree the emitted node cannot account for.
             let descend = siblingIndex < 0 || shouldDescend(node, siblingIndex)
-            // `attributes` marks a node it could not read. Aggregate that into
-            // the walk-wide flag, so an unreadable node anywhere is reported
-            // even when every `children` read succeeded.
-            if node[unreadableKey] as? Bool == true { unreadable = true }
+            // `attributes` records the names it could not read. Aggregate the
+            // structural ones into the walk-wide flag, so a node whose role or
+            // identifier is unknown is reported even when every `children`
+            // read succeeded.
+            if failedStructurally(node) { unreadable = true }
 
             guard descend else {
                 node["skipped"] = true
@@ -74,7 +107,7 @@ enum AXTreeBuilder {
 
             guard let kids = children(element) else {
                 unreadable = true
-                node[unreadableKey] = true
+                mark(&node, unreadable: AXAttribute.children)
                 return node
             }
             guard !kids.isEmpty else { return node }
@@ -105,5 +138,24 @@ enum AXTreeBuilder {
         // the policy.
         let tree = visit(root, depth: 0, siblingIndex: -1)
         return AXTreeResult(tree: tree, truncated: truncated, unreadable: unreadable)
+    }
+
+    /// Record `attribute` on `node` as a read that failed.
+    ///
+    /// Additive, because a node can fail several reads and each one is a
+    /// separate thing the caller may or may not care about. Repeats are
+    /// dropped so the list stays a set of names.
+    static func mark(_ node: inout [String: Any], unreadable attribute: String) {
+        var names = node[unreadableKey] as? [String] ?? []
+        guard !names.contains(attribute) else { return }
+        names.append(attribute)
+        node[unreadableKey] = names
+    }
+
+    /// Whether any read this node records as failed was a structural or
+    /// identifying one.
+    private static func failedStructurally(_ node: [String: Any]) -> Bool {
+        guard let names = node[unreadableKey] as? [String] else { return false }
+        return names.contains(where: structuralAttributes.contains)
     }
 }

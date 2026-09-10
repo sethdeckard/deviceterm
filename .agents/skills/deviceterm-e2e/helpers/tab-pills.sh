@@ -73,7 +73,14 @@ if "unreadable" not in report:
         "cannot be verified — re-dump"
     )
 if report["unreadable"]:
-    sys.exit("tab-pills.sh: the dump could not read some nodes, so pills may be missing — re-dump")
+    # Narrower than "any read failed": a failed identifier read is exactly how a
+    # pill goes missing from this list, and a failed children read hides a whole
+    # strip. A title or a value that would not read is recorded on its node and
+    # does not raise the flag, so a tree carrying one still yields a count.
+    sys.exit(
+        "tab-pills.sh: the dump failed a structural or identifying read, so "
+        "pills may be missing from it. Re-dump."
+    )
 
 found = []
 

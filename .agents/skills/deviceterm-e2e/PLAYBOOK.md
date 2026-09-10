@@ -256,15 +256,28 @@ one.
   carries no `children` key. This is **not** `truncated`, which means a limit
   ran out: re-dumping or raising a ceiling will never reveal a skipped subtree,
   so don't treat it as a flake.
-- A third marker, `"unreadable": true`, means some read on that node failed:
-  its children, one of the attributes above, or its frame. The reply carries a
-  top-level `unreadable` flag when it happened anywhere. Unlike the other two
-  this one *is* worth retrying, because what failed is unknown rather than
-  absent. It exists because a failed read would otherwise serialize exactly
-  like an element that has nothing: a childless node, or one carrying no
-  `identifier`, which is how a timed-out walk comes to read as an empty UI or a
-  short pill list. `ax-dump.sh` and `tab-pills.sh` refuse such a dump for you,
-  so you only meet this using the raw client. The dump walks from the application element, so
+- A third marker, `"unreadable": ["AXChildren", "AXTitle"]`, lists the reads
+  that failed on that node: `AXChildren`, any of the attributes above, or the
+  `AXPosition`/`AXSize` pair behind its frame. It is a **list of AX attribute
+  names**, not a boolean, and it names the accessibility attribute rather than
+  the JSON key the dump uses for it. Unlike the other two markers this one *is*
+  worth retrying, because what failed is unknown rather than absent. It exists
+  because a failed read would otherwise serialize exactly like an element that
+  has nothing: a childless node, or one carrying no `identifier`, which is how
+  a timed-out walk comes to read as an empty UI or a short pill list.
+- **The top-level `unreadable` flag is narrower than the per-node marker.** It
+  is true only when some node failed a *structural or identifying* read:
+  `AXChildren`, `AXRole`, or `AXIdentifier`. Those are the reads that can hide
+  a node or make it fail a predicate that describes it, so they decide whether
+  you can find a node at all. A node whose `AXTitle`, `AXValue`, or frame would
+  not read carries the name and nothing more, and the tree stays usable.
+  Real trees carry such nodes routinely: a mounted sim pane brings
+  system-vended controls that fail a read on every dump, and a flag that fires
+  on those refuses every tree they appear in. So check the marker on the
+  nodes your assertion touches; the flag alone will not tell you a title went
+  missing. `ax-dump.sh` and `tab-pills.sh` refuse a flagged dump for you and
+  name the attributes that failed, so you only meet the flag using the raw
+  client. The dump walks from the application element, so
   the menu bar comes along; the leading menu bar item is the Apple menu, which
   macOS owns and fills, and it is skipped because a dump of the target app's UI
   has no business carrying another program's. Every other menu, deviceterm's own
@@ -339,6 +352,12 @@ The pill roles are worth knowing for assertions other than counting:
 **Read selection from `value`, not `focused`.** `focused` is `false` on every
 pill including the selected one, so a `focused` predicate silently matches
 nothing.
+
+**A missing `value` is not an unselected pill.** `AXValue` is not one of the
+reads behind the top-level `unreadable` flag, so a pill whose `value` failed
+arrives in an accepted tree carrying no `value` key, exactly like one reading
+0. Check that pill's own `"unreadable"` list before concluding it is
+unselected, and re-dump if `AXValue` is in it.
 
 **Pills carry markers, and your own has one.** An automation-role tab's pill
 shows a `wand.and.rays` marker that agent-role tabs don't have, and you run from
@@ -786,7 +805,11 @@ not from the receipt.
   is per window, not per app:** every open window keeps its own first responder,
   so a second deviceterm window contributes a second focused pane. Assert on the
   identifier you are driving (was it focused, did focus leave it), never on
-  "exactly one focused pane".
+  "exactly one focused pane". **A pane carrying no `focused` key is not a pane
+  without focus:** `AXFocused` does not raise the top-level `unreadable` flag,
+  so a failed read reaches you inside an accepted tree looking identical to a
+  false. Check the pane's own `"unreadable"` list for `AXFocused` and re-dump if
+  it is there.
 - **GUI-only split** (the CLI verb above appends; these split the *focused*
   pane, and with a device pane focused the new terminal lands beside it):
   - `deviceterm-uitest drive key cmd+d` → **Split Right**

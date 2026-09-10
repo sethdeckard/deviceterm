@@ -132,12 +132,17 @@ enum AXDumpService {
 
     /// Serialize one element, reading each attribute exactly once.
     ///
-    /// An absent attribute is omitted; a failed read marks the node
-    /// unreadable. Most elements publish only a handful of these, so
+    /// An absent attribute is omitted; a failed read records that attribute's
+    /// name on the node. Most elements publish only a handful of these, so
     /// conflating the two would either mark
     /// every node or hide the failures: a tab whose `identifier` timed out
     /// would serialize as a node carrying none, and a caller counting pills
     /// would score it zero and call that an observation.
+    ///
+    /// The recorded name is the accessibility attribute (`AXTitle`), not the
+    /// JSON key this dump chose for it (`title`), because a reader deciding
+    /// whether the failure touches its assertion is reasoning about the AX
+    /// attribute.
     private static func attributes(of element: AXUIElement) -> [String: Any] {
         var node: [String: Any] = [:]
         for pair in scalarAttributes {
@@ -149,7 +154,7 @@ enum AXDumpService {
                 continue
 
             case .failed:
-                node[AXTreeBuilder.unreadableKey] = true
+                AXTreeBuilder.mark(&node, unreadable: pair.ax)
             }
         }
         switch AXElementReader.frameRead(of: element) {
@@ -164,8 +169,10 @@ enum AXDumpService {
         case .absent:
             break
 
-        case .failed:
-            node[AXTreeBuilder.unreadableKey] = true
+        case let .failed(attributes):
+            for attribute in attributes {
+                AXTreeBuilder.mark(&node, unreadable: attribute)
+            }
         }
         return node
     }

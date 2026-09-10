@@ -28,8 +28,15 @@ struct AXTreeBuilderTests {
         )
     }
 
+    /// The names a node records as unread, or nil when it records none.
+    private func unread(_ node: [String: Any]?) -> [String]? {
+        node?[AXTreeBuilder.unreadableKey] as? [String]
+    }
+
     /// A failed `AXChildren` read must not serialize like a childless node:
-    /// that is how a timed-out walk comes to look like an empty UI.
+    /// that is how a timed-out walk comes to look like an empty UI. It names
+    /// the attribute rather than setting a bare flag, so a caller can see
+    /// that what failed was the structure and not a label.
     @Test
     func marksANodeWhoseChildrenCouldNotBeRead() {
         let result = AXTreeBuilder.build(
@@ -39,8 +46,22 @@ struct AXTreeBuilderTests {
             children: { _ in nil }
         )
         #expect(result.unreadable)
-        #expect(result.tree["unreadable"] as? Bool == true)
+        #expect(unread(result.tree) == [AXAttribute.children])
         #expect(result.tree["children"] == nil)
+    }
+
+    /// The names accumulate. A node whose title failed and whose children
+    /// then failed carries both, or the second write would erase the first
+    /// and the tree would understate what it does not know.
+    @Test
+    func aFailedChildrenReadJoinsTheNamesAlreadyRecorded() {
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root"),
+            limits: .default,
+            attributes: { _ in [AXTreeBuilder.unreadableKey: [AXAttribute.title]] },
+            children: { _ in nil }
+        )
+        #expect(unread(result.tree) == [AXAttribute.title, AXAttribute.children])
     }
 
     /// The marker is per-node and the flag is for the whole walk, so an
@@ -57,29 +78,66 @@ struct AXTreeBuilderTests {
         #expect(result.unreadable)
         #expect(result.tree["unreadable"] == nil)
         let kids = result.tree["children"] as? [[String: Any]]
-        #expect(kids?.first?["unreadable"] as? Bool == true)
+        #expect(unread(kids?.first) == [AXAttribute.children])
     }
 
-    /// `attributes` marks a node it could not read, and that must reach the
-    /// walk-wide flag even when every `children` read succeeded. Otherwise a
-    /// node whose role read timed out serializes as an ordinary one that
-    /// simply matches no predicate, and a caller counting roles scores it
-    /// zero and calls that an observation.
-    @Test
-    func aggregatesANodeTheAttributeReaderMarkedUnreadable() {
+    /// `attributes` records a read it could not make, and a structural one
+    /// must reach the walk-wide flag even when every `children` read
+    /// succeeded. Otherwise a node whose role timed out serializes as an
+    /// ordinary one that simply matches no predicate, and a caller counting
+    /// roles scores it zero and calls that an observation.
+    @Test(arguments: [AXAttribute.role, AXAttribute.identifier, AXAttribute.children])
+    func aFailedStructuralReadRaisesTheWalkWideFlag(attribute: String) {
         let result = AXTreeBuilder.build(
             root: FakeElement(name: "root", kids: [FakeElement(name: "leaf")]),
             limits: .default,
             attributes: { element in
                 element.name == "leaf"
-                    ? [AXTreeBuilder.unreadableKey: true]
+                    ? [AXTreeBuilder.unreadableKey: [attribute]]
                     : ["role": element.name]
             },
             children: { $0.kids }
         )
         #expect(result.unreadable)
         let kids = result.tree["children"] as? [[String: Any]]
-        #expect(kids?.first?[AXTreeBuilder.unreadableKey] as? Bool == true)
+        #expect(unread(kids?.first) == [attribute])
+    }
+
+    /// The flag is what makes a consumer refuse the whole tree, so it answers
+    /// only for reads that could hide a node or misclassify one. A title or a
+    /// value that would not read is recorded and nothing more: a sim pane
+    /// mounts system-vended controls that fail such a read on every dump, so
+    /// treating those as fatal refuses every tree they appear in.
+    @Test(arguments: [AXAttribute.title, AXAttribute.value, AXAttribute.position])
+    func aFailedNonStructuralReadIsRecordedButNotFatal(attribute: String) {
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root", kids: [FakeElement(name: "leaf")]),
+            limits: .default,
+            attributes: { element in
+                element.name == "leaf"
+                    ? [AXTreeBuilder.unreadableKey: [attribute]]
+                    : ["role": element.name]
+            },
+            children: { $0.kids }
+        )
+        #expect(!result.unreadable)
+        let kids = result.tree["children"] as? [[String: Any]]
+        #expect(unread(kids?.first) == [attribute])
+    }
+
+    /// One structural name among non-structural ones is enough. The flag asks
+    /// whether any read that matters failed, not whether every one did.
+    @Test
+    func aMixedListRaisesTheFlagOnItsStructuralName() {
+        let result = AXTreeBuilder.build(
+            root: FakeElement(name: "root"),
+            limits: .default,
+            attributes: { _ in
+                [AXTreeBuilder.unreadableKey: [AXAttribute.title, AXAttribute.role]]
+            },
+            children: { $0.kids }
+        )
+        #expect(result.unreadable)
     }
 
     /// The policy is handed the attributes the walk already read, so it can
