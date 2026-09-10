@@ -17,3 +17,17 @@ protocol CLICommandConvertible: ParsableCommand {
     /// The dispatcher command these parsed arguments denote.
     var cliCommand: CLICommand { get }
 }
+
+extension CLICommandConvertible {
+    /// This command's usage line as a refusal message.
+    ///
+    /// A `.usage` outcome prints unprefixed, so the `usage:` opener has
+    /// to be part of the message. Taking it from `configuration.usage`
+    /// rather than restating it keeps the refusal and the help page
+    /// showing one spelling of the command's shape.
+    static var usageRefusal: String {
+        let shape = configuration.usage
+            ?? "deviceterm \(configuration.commandName ?? "")"
+        return "usage: \(shape)"
+    }
+}

@@ -4,11 +4,10 @@
 import Foundation
 import Testing
 
-// Drift guards joining `HelpCatalog` to the two tables it has to agree
-// with: `VerbCatalog` (legacy flag metadata + completion sub-verbs) and
-// the `CLICommand` parse switch itself.
+// Drift guards joining `HelpCatalog` to `CommandTree`, read off the
+// declared commands.
 //
-// These join catalog structure to those tables and check the prose
+// These join catalog structure to the tree and check the prose
 // invariants that structure depends on: that a verb can't gain a parser
 // entry without gaining a page, that a page can't outlive the verb it
 // documents, that a sub-verb the completion scripts offer is one the
@@ -17,7 +16,7 @@ import Testing
 
 @Test
 func everyVerbHasATopicAndEveryTopicHasAVerb() {
-    let verbs = Set(VerbCatalog.all.map(\.name))
+    let verbs = Set(CommandTree.all.map(\.name))
     let documented = Set(HelpCatalog.commandNames)
     let undocumented = verbs.subtracting(documented).sorted()
     let orphaned = documented.subtracting(verbs).sorted()
@@ -27,14 +26,12 @@ func everyVerbHasATopicAndEveryTopicHasAVerb() {
 
 @Test
 func everyCommandTopicNamesARealParsedVerb() {
-    // The catalog-to-parser guard. A recognized verb parses to something
-    // other than the unknown-verb sentinel: either a real command, or a
-    // usage error carrying a message. Only an unrecognized verb reaches
-    // `.usage(message: nil)`, which makes this exact without reflection.
+    // The catalog-to-parser guard. A documented verb has to resolve in
+    // the command tree, which is the parser: a name that resolves to
+    // nothing is documented but unreachable.
     for name in HelpCatalog.commandNames {
-        let parsed = CLICommands.parse(["deviceterm", name])
         #expect(
-            parsed != .usage(message: nil),
+            CommandTree.command(for: [name]) != nil,
             "help documents '\(name)', which the parser does not recognize"
             )
     }
@@ -45,7 +42,7 @@ func everySubVerbAppearsInItsParentTopic() {
     // A sub-verb the completion scripts offer but the help never
     // explains is a verb users can tab-complete into and then have to
     // guess at.
-    for verb in VerbCatalog.all where !verb.subVerbs.isEmpty {
+    for verb in CommandTree.all where !verb.subVerbs.isEmpty {
         let detail = HelpCatalog.topic(named: verb.name)?.detail ?? ""
         for sub in verb.subVerbs {
             #expect(

@@ -12,7 +12,7 @@ import Foundation
 /// it (typical case: append a one-liner to `~/.zshrc` and re-source).
 ///
 /// Coverage:
-///   - every `VerbCatalog` verb and its `subVerbs`
+///   - every declared verb and its sub-verbs
 ///   - `help` topic names, from `HelpCatalog`
 ///   - the common flags, not the full per-verb grammar
 ///   - enum-valued: `button` (HardwareButton), `rotate` and `wait
@@ -35,21 +35,18 @@ public enum Completions {
     // MARK: - Surface
 
     /// Top-level verbs that should appear at `deviceterm <TAB>`, in
-    /// `VerbCatalog.all` order. That is the catalog's own stable
-    /// ordering, not the order `deviceterm help` groups verbs into;
-    /// completion candidates are filtered as the user types, so the
-    /// sequence matters far less here than having every verb present
-    /// from the same table that feeds the parser's flag grammar.
-    public static var topLevelVerbs: [String] { VerbCatalog.all.map(\.name) }
+    /// command-declaration order rather than the grouping `deviceterm
+    /// help` prints. Candidates are filtered as the user types, so
+    /// complete coverage matters more here than the exact order.
+    public static var topLevelVerbs: [String] { CommandTree.all.map(\.name) }
 
     /// Sub-verbs surfaced under each hierarchical verb, taken from its
-    /// `VerbCatalog.subVerbs` entry, which mirrors the sub-command
-    /// parsers' (`parseTabSubcommand` / `parsePaneSubcommand` / …)
-    /// accepted sets.
-    public static var tabSubVerbs: [String] { VerbCatalog.subVerbs(of: "tab") }
-    public static var paneSubVerbs: [String] { VerbCatalog.subVerbs(of: "pane") }
-    public static var deviceSubVerbs: [String] { VerbCatalog.subVerbs(of: "device") }
-    public static var windowSubVerbs: [String] { VerbCatalog.subVerbs(of: "window") }
+    /// `CommandTree.subVerbs` entry, read off the sub-commands each
+    /// verb declares.
+    public static var tabSubVerbs: [String] { CommandTree.subVerbs(of: "tab") }
+    public static var paneSubVerbs: [String] { CommandTree.subVerbs(of: "pane") }
+    public static var deviceSubVerbs: [String] { CommandTree.subVerbs(of: "device") }
+    public static var windowSubVerbs: [String] { CommandTree.subVerbs(of: "window") }
 
     /// What `deviceterm help <TAB>` offers: every addressable help topic,
     /// commands and concepts alike.
@@ -64,7 +61,7 @@ public enum Completions {
     /// a fish `-d` argument. A stray quote would produce a script that
     /// fails to load at shell startup, far from the edit that caused it.
     public static var verbDescriptions: [(verb: String, description: String)] {
-        VerbCatalog.all.map { verb in
+        CommandTree.all.map { verb in
             (verb.name, HelpCatalog.topic(named: verb.name)?.summary ?? "")
         }
     }
@@ -167,7 +164,7 @@ public enum Completions {
     /// The sub-verb list for `verb`, space-joined for interpolation into a
     /// shell word list. Empty for a flat verb.
     private static func subVerbList(_ verb: String) -> String {
-        VerbCatalog.subVerbs(of: verb).joined(separator: " ")
+        CommandTree.subVerbs(of: verb).joined(separator: " ")
     }
 
     public static func script(for shell: Shell) -> String {

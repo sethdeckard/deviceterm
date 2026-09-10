@@ -26,9 +26,38 @@ func everyDeclaredCommandCarriesItsCLICommand() {
 }
 
 @Test
-func commandTreeReportsTheDeclaredVerbs() {
-    let names = Set(CommandTree.subcommands(of: DeviceTerm.self).map { CommandTree.name(of: $0) })
-    #expect(names == CLICommands.portedVerbs)
+func commandTreeReportsEveryVerb() {
+    // The declared tree is the reference set checked against the man
+    // page, the surface matrix, the command list and the completion
+    // scripts. It also keeps the intercepted `help` and `with-pane`
+    // verbs represented, those two being the only ones that would still
+    // run while absent from it.
+    let expected: Set<String> = [
+        "tabs", "panes", "devices", "version", "dump-config", "events",
+        "doctor", "agents", "help", "tap", "swipe", "app-switcher",
+        "long-press", "pinch", "button", "key", "text", "rotate", "crown",
+        "ax", "wait", "with-pane", "tab", "pane", "device", "window",
+        "windows", "completions"
+    ]
+    #expect(Set(CommandTree.all.map(\.name)) == expected)
+}
+
+@Test
+func everyVerbAbstractMatchesItsWrittenSummary() {
+    // Keep the one-line description identical across the help
+    // surfaces: the catalog summary is what the command list prints,
+    // and the abstract is what the command page's OVERVIEW line prints.
+    // The abstract is a verbatim move of the summary, not a second
+    // wording of it.
+    //
+    // Only top-level verbs have a catalog summary, so a sub-verb has
+    // nothing here to agree with and is skipped.
+    for verb in CommandTree.all {
+        guard let summary = HelpCatalog.topic(named: verb.name)?.summary else { continue }
+        let detail = "\(verb.name): abstract \(verb.abstract.debugDescription) "
+            + "diverges from summary \(summary.debugDescription)"
+        #expect(verb.abstract == summary, "\(detail)")
+    }
 }
 
 @Test
@@ -151,7 +180,13 @@ func helpSpellingsAgree(path: [String]) {
 
 // MARK: - Unknown-flag rejection
 
-/// Every declared verb and sub-verb, as argv prefixes.
+/// A valid argv prefix for every non-intercepted leaf command,
+/// carrying whatever operands it requires, so the only thing left to
+/// refuse is the flag the test appends.
+///
+/// `help` and `with-pane` are absent because neither reaches this
+/// parser: both are intercepted ahead of it, and their tails are theirs
+/// to read.
 let declaredInvocations: [[String]] = [
     ["text", "hello"],
     ["tabs", "list"],
@@ -163,7 +198,42 @@ let declaredInvocations: [[String]] = [
     ["version"],
     ["dump-config"],
     ["events"],
-    ["agents"]
+    ["agents"],
+    ["tap", "0.5", "0.5"],
+    ["swipe", "0.1", "0.2", "0.3", "0.4"],
+    ["long-press", "0.5", "0.5"],
+    ["pinch", "0.1", "0.1", "0.2", "0.2", "0.3", "0.3", "0.4", "0.4"],
+    ["app-switcher"],
+    ["button", "home"],
+    ["key", "0x30", "down"],
+    ["rotate", "portrait"],
+    ["crown", "30"],
+    ["ax", "tree"],
+    ["ax", "point", "0.5", "0.5"],
+    ["ax", "sweep"],
+    ["wait", "pane", "rendering"],
+    ["wait", "ax", "--label", "Save"],
+    ["wait", "orientation", "portrait"],
+    ["wait", "surface", "quiescent"],
+    ["tab", "open"],
+    ["tab", "close"],
+    ["tab", "rename", "name"],
+    ["tab", "select"],
+    ["tab", "info"],
+    ["tab", "move", "--to", "1"],
+    ["tab", "send-input", "echo"],
+    ["tab", "capture"],
+    ["tab", "set-protected", "true"],
+    ["pane", "open", "--terminal"],
+    ["pane", "close"],
+    ["pane", "rename", "name"],
+    ["pane", "info"],
+    ["pane", "move", "--to-tab", "auth"],
+    ["window", "open"],
+    ["window", "close"],
+    ["window", "focus"],
+    ["device", "attach", "ABC"],
+    ["completions", "install", "zsh"]
 ]
 
 @Test("unknown flags are refused", arguments: declaredInvocations)

@@ -126,7 +126,7 @@ func manPageCoversEveryTopLevelVerb() throws {
     // has no long-form home at all.
     let url = try #require(locateManPage())
     let contents = try String(contentsOf: url, encoding: .utf8)
-    for verb in VerbCatalog.all.map(\.name) {
+    for verb in CommandTree.all.map(\.name) {
         #expect(
             contents.contains(".B \(verb)"),
             "man page missing verb '\(verb)'"
@@ -140,7 +140,7 @@ func manPageCoversEverySubVerb() throws {
     // scripts offer has to be explained somewhere a reader can find it.
     let url = try #require(locateManPage())
     let contents = try String(contentsOf: url, encoding: .utf8)
-    for verb in VerbCatalog.all where !verb.subVerbs.isEmpty {
+    for verb in CommandTree.all where !verb.subVerbs.isEmpty {
         for sub in verb.subVerbs {
             #expect(
                 contents.contains("\(verb.name) \(sub)"),

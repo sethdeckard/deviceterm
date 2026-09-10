@@ -8,9 +8,10 @@ import Foundation
 /// rotate, crown, ax) plus their request builders, split out of
 /// CLICommands.swift to keep that file focused on the shared parse core.
 ///
-/// `parse(_:)` (in CLICommands.swift) delegates the input verbs here through
-/// `parseInputVerb`, which returns nil for any verb it doesn't own so the
-/// caller falls through to a usage error. The read-only listing builders
+/// The input verbs parse from their own declarations under `Commands/`;
+/// what remains here is the request encoding they share, plus the
+/// coordinate and selector checks a declaration cannot state. The
+/// read-only listing builders
 /// (`tabsListRequest` / `panesListRequest`) ride along here too, next to
 /// the input builders they resemble.
 ///
@@ -31,8 +32,13 @@ extension CLICommands {
     }
 
     /// Both forms of `tap`, which take either operand but never both.
+    ///
+    /// The bare shape, with no `usage:` opener: the help page prepends
+    /// its own label and `usageRefusal` prepends the refusal's, so
+    /// carrying one here would double it in both. The continuation is
+    /// indented to clear either label, both being seven columns.
     static let tapUsage = """
-    usage: deviceterm tap <x> <y> [--pane <ref>]
+    deviceterm tap <x> <y> [--pane <ref>]
            deviceterm tap (--identifier <value>|--label <value>) [--role <value>] \
     [--value <value>] [--match <exact|contains>] [--source <tree|sweep>] \
     [--step <0..1>] [--budget <ms>] [--timeout <ms>] [--pane <ref>]
@@ -45,13 +51,12 @@ extension CLICommands {
     /// belonging to another. `--pane` and `--timeout` are absent because
     /// every wait reads both.
     ///
-    /// Separate from `selectorOnlyTapFlags`, which lists a different set for
-    /// a different reason. `tap` picks its form from `--identifier` and
-    /// `--label`, so that list omits those two and carries `--timeout`. A
-    /// wait picks its form from the sub-verb positional, so nothing here
-    /// selects a form and everything is an orphan somewhere else.
+    /// A wait picks its form from the sub-verb, so nothing here selects
+    /// a form and everything is an orphan somewhere else. `TapCommand`
+    /// carries its own list for the opposite case, where `--identifier`
+    /// and `--label` are what pick the form.
     ///
-    /// `--step` and `--budget` reach the parser already converted, so
+    /// `--step` and `--budget` reach the check already converted, so
     /// `foreignWaitFlagRefusal` checks them as values rather than by name.
     static let waitExclusiveFlags: [String: [String]] = [
         "ax": [
@@ -61,288 +66,7 @@ extension CLICommands {
         "surface": ["settle"]
     ]
 
-    /// Flags that say nothing until `tap` has a selector to narrow.
-    ///
-    /// A coordinate tap carrying one was written for the selector form, so
-    /// tapping the coordinates and ignoring the rest would run a command
-    /// nobody asked for. Ordered, not a set, so the message names the same
-    /// flag every time.
-    static let selectorOnlyTapFlags = [
-        "role", "value", "match", "source", "step", "budget", "timeout"
-    ]
-
-    // MARK: - Input verb parsing
-
-    /// Parse an input-family verb (`tap` … `ax`) into its `CLICommand`,
-    /// or return nil when `verb` is not an input verb (the caller then
-    /// falls through to its own dispatch / usage error). The shared
-    /// numeric flags are pre-validated and passed in already parsed:
-    /// `durationMs` / `holdMs` / `velocity` / `step` / `budgetMs`. A
-    /// malformed operand for an owned verb returns `.usage(...)` (not nil),
-    /// so an input verb typed wrong never leaks to the fallthrough.
-    static func parseInputVerb(
-        _ verb: String,
-        positionals pos: [String],
-        pane: String?,
-        durationMs: Int?,
-        holdMs: Int?,
-        velocity: Double?,
-        step: Double?,
-        budgetMs: Int?,
-        flags: [String: String],
-        timeoutMs: Int,
-        settleMs: Int
-    ) -> CLICommand? {
-        switch verb {
-        case "tap":
-            return parseTap(
-                positionals: pos,
-                pane: pane,
-                flags: flags,
-                step: step,
-                budgetMs: budgetMs,
-                timeoutMs: timeoutMs
-            )
-
-        case "swipe":
-            let n = pos.compactMap { Double($0) }
-            guard pos.count == 4, n.count == 4 else {
-                return .usage(
-                    message:
-                    "usage: deviceterm swipe <fromX> <fromY> <toX> <toY> "
-                    + "[--duration <ms>] [--hold <ms>] [--pane <ref>]"
-                    )
-            }
-            if let outside = firstCoordinateOutsideUnitRange(n) {
-                return .usage(message: coordinateRangeUsage(outside))
-            }
-            return .swipe(
-                pane: pane,
-                fromX: n[0],
-                fromY: n[1],
-                toX: n[2],
-                toY: n[3],
-                durationMs: durationMs,
-                holdMs: holdMs
-                )
-
-        case "app-switcher":
-            guard pos.isEmpty else {
-                return .usage(message: "usage: deviceterm app-switcher [--pane <ref>]")
-            }
-            return .appSwitcher(pane: pane)
-
-        case "long-press":
-            guard pos.count == 2, let x = Double(pos[0]), let y = Double(pos[1]) else {
-                return .usage(
-                    message:
-                    "usage: deviceterm long-press <x> <y> [--duration <ms>] [--pane <ref>]"
-                    )
-            }
-            if let outside = firstCoordinateOutsideUnitRange([x, y]) {
-                return .usage(message: coordinateRangeUsage(outside))
-            }
-            return .longPress(pane: pane, x: x, y: y, durationMs: durationMs)
-
-        case "pinch":
-            let n = pos.compactMap { Double($0) }
-            guard pos.count == 8, n.count == 8 else {
-                return .usage(
-                    message:
-                    "usage: deviceterm pinch <f1x> <f1y> <f2x> <f2y> "
-                    + "<tf1x> <tf1y> <tf2x> <tf2y> [--duration <ms>] [--pane <ref>]"
-                    )
-            }
-            if let outside = firstCoordinateOutsideUnitRange(n) {
-                return .usage(message: coordinateRangeUsage(outside))
-            }
-            return .pinch(
-                pane: pane,
-                fromF1X: n[0],
-                fromF1Y: n[1],
-                fromF2X: n[2],
-                fromF2Y: n[3],
-                toF1X: n[4],
-                toF1Y: n[5],
-                toF2X: n[6],
-                toF2Y: n[7],
-                durationMs: durationMs
-                )
-
-        case "button":
-            guard pos.count == 1,
-                let button = parseEnumArg(pos[0], as: HardwareButton.self) else {
-                return .usage(
-                    message:
-                    "usage: deviceterm button "
-                    + "<home|lock|side|apple-pay|siri|digital-crown> [--pane <ref>]"
-                    )
-            }
-            return .button(pane: pane, button: button)
-
-        case "key":
-            // Accept both decimal and `0x`-prefixed hex (Apple's
-            // HIToolbox `kVK_*` constants are presented in hex in
-            // the canonical headers, so an agent that looked up
-            // "kVK_Tab = 0x30" should be able to type `0x30`).
-            guard pos.count == 2, let keyCode = parseKVKToken(pos[0]),
-                pos[1] == "down" || pos[1] == "up" else {
-                return .usage(
-                    message:
-                    "usage: deviceterm key <keyCode> <down|up> [--pane <ref>] "
-                    + "(decimal or 0x-prefixed hex)"
-                    )
-            }
-            return .key(pane: pane, keyCode: keyCode, down: pos[1] == "down")
-
-        case "text":
-            guard !pos.isEmpty else {
-                return .usage(message: "usage: deviceterm text <string> [--pane <ref>]")
-            }
-            return .text(pane: pane, text: pos.joined(separator: " "))
-
-        case "rotate":
-            // A direction and an orientation share one positional. Matching
-            // is on the whole argument rather than a prefix, so no
-            // orientation spelling resolves to `left` or `right` and the two
-            // vocabularies can't shadow each other.
-            guard pos.count == 1, let target = parseRotationTarget(pos[0]) else {
-                return .usage(
-                    message:
-                    "usage: deviceterm rotate "
-                    + "<portrait|portrait-upside-down|landscape-left|landscape-right"
-                    + "|left|right> "
-                    + "[--pane <ref>]"
-                    )
-            }
-            return .rotate(pane: pane, target: target)
-
-        case "crown":
-            guard pos.count == 1, let delta = Double(pos[0]) else {
-                return .usage(
-                    message:
-                    "usage: deviceterm crown <delta> [--velocity <v>] "
-                    + "[--duration <ms>] [--pane <ref>]"
-                    )
-            }
-            return .crown(pane: pane, delta: delta, velocity: velocity, durationMs: durationMs)
-
-        case "ax":
-            if pos == ["tree"] { return .axTree(pane: pane) }
-            if pos.count == 3, pos[0] == "point",
-                let x = Double(pos[1]), let y = Double(pos[2]) {
-                if let outside = firstCoordinateOutsideUnitRange([x, y]) {
-                    return .usage(message: coordinateRangeUsage(outside))
-                }
-                return .axPoint(pane: pane, x: x, y: y)
-            }
-            if pos == ["sweep"] {
-                return .axSweep(pane: pane, step: step, budgetMs: budgetMs)
-            }
-            return .usage(
-                message:
-                "usage: deviceterm ax tree | ax point <x> <y> "
-                + "| ax sweep [--step <0..1>] [--budget <ms>] [--pane <ref>]"
-                )
-
-        case "wait":
-            // `wait` registers every sub-verb's flags for the whole verb, so
-            // the parser accepts any of them here and each arm refuses the
-            // ones another wait owns.
-            func foreignFlag(_ subVerb: String) -> CLICommand? {
-                foreignWaitFlagRefusal(
-                    subVerb: subVerb,
-                    flags: flags,
-                    step: step,
-                    budgetMs: budgetMs
-                )
-            }
-            if pos.count == 2, pos[0] == "pane",
-                let state = PaneLifecycle(rawValue: pos[1]) {
-                if let refusal = foreignFlag("pane") { return refusal }
-                return .waitPane(pane: pane, state: state, timeoutMs: timeoutMs)
-            }
-            if pos.count == 2, pos[0] == "orientation",
-                let orientation = parseEnumArg(pos[1], as: Orientation.self) {
-                if let refusal = foreignFlag("orientation") { return refusal }
-                return .waitOrientation(
-                    pane: pane,
-                    orientation: orientation,
-                    timeoutMs: timeoutMs
-                )
-            }
-            if pos == ["surface", "quiescent"] {
-                if let refusal = foreignFlag("surface") { return refusal }
-                return .waitSurfaceQuiescent(
-                    pane: pane,
-                    settleMs: settleMs,
-                    timeoutMs: timeoutMs
-                )
-            }
-            if pos.first == "surface" {
-                return .usage(
-                    message: "usage: deviceterm wait surface quiescent "
-                        + "[--settle <ms>] [--pane <ref>] [--timeout <ms>]"
-                )
-            }
-            if pos == ["ax"] {
-                if let refusal = foreignFlag("ax") { return refusal }
-                let query: CLICommand.WaitAXQuery
-                switch parseAXSelector(
-                    verb: "wait ax",
-                    flags: flags,
-                    step: step,
-                    budgetMs: budgetMs
-                ) {
-                case let .usage(message):
-                    return .usage(message: message)
-
-                case let .query(parsed):
-                    query = parsed
-                }
-                let printMode: CLICommand.WaitAXPrint?
-                if let raw = flags["print"] {
-                    guard let mode = CLICommand.WaitAXPrint(rawValue: raw) else {
-                        return .usage(message: "deviceterm: --print must be center")
-                    }
-                    printMode = mode
-                } else {
-                    printMode = nil
-                }
-                guard let state = CLICommand.WaitAXState(rawValue: flags["state"] ?? "present") else {
-                    return .usage(message: "deviceterm: --state must be present or absent")
-                }
-                // Nothing to print once the element is gone, and refusing is
-                // clearer than succeeding with empty stdout, which is what a
-                // refusal looks like.
-                if state == .absent, printMode != nil {
-                    return .usage(
-                        message: "deviceterm: --print cannot be combined with --state absent"
-                    )
-                }
-                return .waitAX(
-                    pane: pane,
-                    query: query,
-                    timeoutMs: timeoutMs,
-                    printMode: printMode,
-                    state: state
-                )
-            }
-            if waitPaneStateMisplaced(positionals: pos, flags: flags) {
-                return .usage(
-                    message: "usage: deviceterm wait pane "
-                        + "<booting|rendering|shutdown|failed> [--timeout <ms>]"
-                )
-            }
-            return .usage(
-                message: "usage: deviceterm wait <pane|ax|orientation|surface> ... "
-                    + "[--timeout <ms>]"
-            )
-
-        default:
-            return nil
-        }
-    }
+    // MARK: - Shared grammar checks
 
     /// The usage error for a wait carrying a flag another wait owns, or nil
     /// when every flag it was given belongs to it.
@@ -375,118 +99,6 @@ extension CLICommands {
         if step != nil { return refusal("step", owner: "ax") }
         if budgetMs != nil { return refusal("budget", owner: "ax") }
         return nil
-    }
-
-    /// Parse `tap`, which takes two positional coordinates or an
-    /// accessibility selector, never both.
-    ///
-    /// A selector flag is what picks the form. Two positionals and a selector
-    /// together is a usage error rather than a precedence rule, because a
-    /// caller who wrote both cannot be read as meaning either.
-    static func parseTap(
-        positionals pos: [String],
-        pane: String?,
-        flags: [String: String],
-        step: Double?,
-        budgetMs: Int?,
-        timeoutMs: Int
-    ) -> CLICommand {
-        if flags["identifier"] != nil || flags["label"] != nil {
-            guard pos.isEmpty else { return .usage(message: tapUsage) }
-            switch parseAXSelector(
-                verb: "tap",
-                flags: flags,
-                step: step,
-                budgetMs: budgetMs
-            ) {
-            case let .usage(message):
-                return .usage(message: message)
-
-            case let .query(query):
-                return .tapElement(pane: pane, query: query, timeoutMs: timeoutMs)
-            }
-        }
-        guard pos.count == 2, let x = Double(pos[0]), let y = Double(pos[1]) else {
-            return .usage(message: tapUsage)
-        }
-        if let orphan = selectorOnlyTapFlags.first(where: { flags[$0] != nil }) {
-            return .usage(
-                message: "deviceterm: --\(orphan) applies to `tap --identifier` or `tap --label`"
-            )
-        }
-        if let outside = firstCoordinateOutsideUnitRange([x, y]) {
-            return .usage(message: coordinateRangeUsage(outside))
-        }
-        return .tap(pane: pane, x: x, y: y)
-    }
-
-    /// Read the accessibility selector `wait ax` and `tap` share:
-    /// `--identifier` or `--label`, narrowed by `--role`, `--value`, and
-    /// `--match`, observed through `--source` with its `--step` and
-    /// `--budget`.
-    ///
-    /// One parser for both verbs, so a selector cannot come to mean one thing
-    /// to the wait and another to the tap that acts on it. `verb` names the
-    /// caller in the exactly-one-selector message, which is the only rejection
-    /// whose wording depends on who asked.
-    static func parseAXSelector(
-        verb: String,
-        flags: [String: String],
-        step: Double?,
-        budgetMs: Int?
-    ) -> AXSelectorParse {
-        let identifier = flags["identifier"]
-        let label = flags["label"]
-        guard (identifier == nil) != (label == nil) else {
-            return .usage("deviceterm: \(verb) requires exactly one of --identifier or --label")
-        }
-        guard let matchMode = CLICommand.WaitAXMatchMode(rawValue: flags["match"] ?? "exact") else {
-            return .usage("deviceterm: --match must be exact or contains")
-        }
-        // An empty needle is a legitimate exact query for an empty attribute,
-        // but under `contains` it matches every string-valued instance of that
-        // attribute.
-        if matchMode == .contains, (identifier ?? label)?.isEmpty == true {
-            return .usage(
-                "deviceterm: --match contains requires a non-empty --identifier or --label"
-            )
-        }
-        // `--value` narrows an element the caller already named. It needs no
-        // requires-a-selector check of its own: the exactly-one guard above
-        // already refuses a call with neither `--identifier` nor `--label`.
-        let value = flags["value"]
-        if matchMode == .contains, value?.isEmpty == true {
-            return .usage("deviceterm: --match contains requires a non-empty --value")
-        }
-        guard let source = CLICommand.WaitAXSource(rawValue: flags["source"] ?? "tree") else {
-            return .usage("deviceterm: --source must be tree or sweep")
-        }
-        if source == .tree, step != nil || budgetMs != nil {
-            return .usage("deviceterm: --step and --budget require --source sweep")
-        }
-        return .query(
-            CLICommand.WaitAXQuery(
-                identifier: identifier,
-                label: label,
-                role: flags["role"],
-                value: value,
-                matchMode: matchMode,
-                source: source,
-                step: step,
-                budgetMs: budgetMs
-            )
-        )
-    }
-
-    /// Whether a wait was written with its state in `--state` rather than
-    /// as the positional it belongs in.
-    ///
-    /// `wait pane --state rendering` is the natural mis-spelling once
-    /// `--state` exists, and it parses as a lone `pane` positional with the
-    /// lifecycle eaten by the flag, which the generic wait usage explains
-    /// badly.
-    static func waitPaneStateMisplaced(positionals pos: [String], flags: [String: String]) -> Bool {
-        pos == ["pane"] && flags["state"].map { PaneLifecycle(rawValue: $0) != nil } == true
     }
 
     /// The first coordinate outside the inclusive unit range, or nil when

@@ -18,16 +18,34 @@ struct DeviceTerm: ParsableCommand {
         commandName: "deviceterm",
         abstract: "Drive DeviceTerm tabs, panes, and the devices they show.",
         subcommands: [
-            TextCommand.self,
             TabsCommand.self,
             PanesCommand.self,
             DevicesCommand.self,
-            WindowsCommand.self,
-            DoctorCommand.self,
             VersionCommand.self,
             DumpConfigCommand.self,
             EventsCommand.self,
-            AgentsCommand.self
+            DoctorCommand.self,
+            AgentsCommand.self,
+            HelpCommand.self,
+            TapCommand.self,
+            SwipeCommand.self,
+            AppSwitcherCommand.self,
+            LongPressCommand.self,
+            PinchCommand.self,
+            ButtonCommand.self,
+            KeyCommand.self,
+            TextCommand.self,
+            RotateCommand.self,
+            CrownCommand.self,
+            AxCommand.self,
+            WaitCommand.self,
+            WithPaneCommand.self,
+            TabCommand.self,
+            PaneCommand.self,
+            DeviceCommand.self,
+            WindowCommand.self,
+            WindowsCommand.self,
+            CompletionsCommand.self
         ]
     )
 }

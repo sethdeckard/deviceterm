@@ -16,7 +16,12 @@ func parseEmptyArgvIsUsage() {
 
 @Test
 func parseUnknownTopLevelIsUsage() {
-    #expect(CLICommands.parse(["deviceterm", "wat"]) == .usage(message: nil))
+    // The refusal names the verb it did not recognize.
+    guard case let .usage(message) = CLICommands.parse(["deviceterm", "wat"]) else {
+        Issue.record("expected .usage for an unknown verb")
+        return
+    }
+    #expect(message?.contains("wat") ?? false)
 }
 
 @Test
@@ -137,6 +142,86 @@ func parseCrownNegativeDeltaAndFlags() {
 }
 
 @Test
+func parseCrownAcceptsASignedVelocity() {
+    // A signed value has to reach the velocity option as well as the
+    // delta operand.
+    #expect(
+        CLICommands.parse(["deviceterm", "crown", "30", "--velocity", "-2"])
+        == .crown(pane: nil, delta: 30, velocity: -2, durationMs: nil)
+        )
+    #expect(
+        CLICommands.parse(["deviceterm", "crown", "-30", "--velocity", "-2"])
+        == .crown(pane: nil, delta: -30, velocity: -2, durationMs: nil)
+        )
+}
+
+@Test
+func parseCrownAcceptsAnExplicitTerminator() {
+    // A caller who escaped the operand themselves is left alone.
+    #expect(
+        CLICommands.parse(["deviceterm", "crown", "--", "-30"])
+        == .crown(pane: nil, delta: -30, velocity: nil, durationMs: nil)
+        )
+}
+
+@Test
+func parseCrownTakesASignedDeltaInAnyFlagOrder() {
+    // The normalizer moves the operand and leaves the flags where they
+    // are, so a signed delta reads the same before, between, and after
+    // them.
+    let expected = CLICommand.crown(pane: "W", delta: -15, velocity: 2, durationMs: 200)
+    let orderings = [
+        ["crown", "-15", "--velocity", "2", "--duration", "200", "--pane", "W"],
+        ["crown", "--velocity", "2", "-15", "--duration", "200", "--pane", "W"],
+        ["crown", "--velocity", "2", "--duration", "200", "--pane", "W", "-15"]
+    ]
+    for argv in orderings {
+        #expect(CLICommands.parse(["deviceterm"] + argv) == expected, "\(argv)")
+    }
+    // A signed value ahead of the signed operand: the delta has to
+    // survive a negative velocity sitting directly before it.
+    #expect(
+        CLICommands.parse(["deviceterm", "crown", "--velocity", "-2", "-30"])
+        == .crown(pane: nil, delta: -30, velocity: -2, durationMs: nil)
+        )
+}
+
+@Test
+func parseCrownReportsAnUnknownOptionRatherThanTheOperand() {
+    // An unrecognized flag doesn't take a value, so the signed token
+    // after it is still the operand and the refusal names the flag.
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "crown", "--nope", "-30"]
+    ) else {
+        Issue.record("expected .usage for an unknown option")
+        return
+    }
+    #expect(message?.contains("--nope") ?? false, "refusal should name --nope: \(message ?? "")")
+}
+
+@Test
+func parseCrownLeavesOtherVerbsAlone() {
+    // The rewrite is crown's own. A dashed token on any other verb is
+    // still refused rather than quietly re-homed.
+    guard case .usage = CLICommands.parse(["deviceterm", "tap", "-15", "0.5"]) else {
+        Issue.record("expected .usage; the rewrite must not reach `tap`")
+        return
+    }
+}
+
+@Test
+func parseCrownKeepsFractionalAndPositiveDeltas() {
+    #expect(
+        CLICommands.parse(["deviceterm", "crown", "-0.5"])
+        == .crown(pane: nil, delta: -0.5, velocity: nil, durationMs: nil)
+        )
+    #expect(
+        CLICommands.parse(["deviceterm", "crown", "0.5"])
+        == .crown(pane: nil, delta: 0.5, velocity: nil, durationMs: nil)
+        )
+}
+
+@Test
 func parseCrownWithPaneSelector() {
     // The crown branch carries velocity/duration; confirm `--pane`
     // lands in the targeting slot.
@@ -160,6 +245,37 @@ func parseCrownMissingDeltaIsUsage() {
         Issue.record("expected .usage for missing delta")
         return
     }
+}
+
+@Test("a deadline that cannot elapse is refused", arguments: [
+    ["tap", "--label", "Save", "--timeout", "0"],
+    ["tap", "--label", "Save", "--timeout", "-5"],
+    ["wait", "ax", "--label", "Save", "--timeout", "0"],
+    ["wait", "pane", "rendering", "--timeout", "0"],
+    ["wait", "orientation", "portrait", "--timeout", "0"],
+    ["wait", "surface", "quiescent", "--timeout", "0"]
+])
+func parseRejectsANonPositiveTimeout(argv: [String]) {
+    // Every verb that takes `--timeout` refuses a deadline that has
+    // already passed. A selector tap with a zero deadline would report
+    // a timeout without having looked.
+    guard case let .usage(message) = CLICommands.parse(["deviceterm"] + argv) else {
+        Issue.record("expected .usage for \(argv)")
+        return
+    }
+    #expect(message?.contains("--timeout") ?? false)
+}
+
+@Test
+func parseTapKeepsAPositiveTimeout() {
+    let parsed = CLICommands.parse(
+        ["deviceterm", "tap", "--label", "Save", "--timeout", "1500"]
+        )
+    guard case let .tapElement(_, _, timeoutMs) = parsed else {
+        Issue.record("expected .tapElement; got \(parsed)")
+        return
+    }
+    #expect(timeoutMs == 1_500)
 }
 
 @Test

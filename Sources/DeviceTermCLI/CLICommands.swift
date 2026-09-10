@@ -9,29 +9,15 @@ import Foundation
 /// directly; `CLIMain` owns env reads, stderr, socket I/O and `exit`.
 ///
 /// `parse` is the one entry point, and it is total: every argv yields a
-/// `CLICommand`, with failure carried in-band as `.usage`. It routes a
-/// verb the `DeviceTerm` command tree declares to `parseDeclared`, and
-/// the rest to the verb families in `CLICommands+Workspace.swift` and
-/// `CLICommands+Input.swift`. Three verbs branch directly ahead of
-/// both: `help`, which resolves its optional topic here and answers a
-/// bare trigger with an overview the command tree cannot produce;
-/// `with-pane`, which must hand its tail to a child process byte for
-/// byte; and `completions`, whose one sub-verb is matched literally.
+/// `CLICommand`, with failure carried in-band as `.usage`. The
+/// `DeviceTerm` command tree owns the grammar, so `parse` hands argv to
+/// `parseDeclared` after two carve-outs it cannot express: `help`, which
+/// resolves its optional topic here and answers a bare trigger with an
+/// overview the tree cannot produce, and `with-pane`, which must hand
+/// its tail to a child process byte for byte. What remains in
+/// `CLICommands+Workspace.swift` and `CLICommands+Input.swift` is the
+/// request encoding and the checks a declaration cannot state.
 public enum CLICommands {
-    // MARK: - Nested types
-
-    /// Positionals and `--key value` / `--key=value` flags split out of
-    /// an argument slice. Returns nil if a `--key` is missing its value.
-    struct ParsedArgs: Equatable {
-        var positionals: [String]
-        var flags: [String: String]
-        /// How many trailing positionals arrived after a `--` terminator
-        /// and are therefore literal. Zero when no terminator appeared.
-        /// The terminator itself is dropped, so this is the only record
-        /// that a positional was escaped rather than typed bare.
-        var escapedCount = 0
-    }
-
     // Request bodies are the shared `DaemonProtocol` param types
     // (`TapParams`, `SwipeParams`, `AXPointParams`, `PanesListParams`, …),
     // the exact shapes the daemon handlers decode, defined once. The
@@ -48,12 +34,6 @@ public enum CLICommands {
     /// that verb's own parser: a declared verb answers it from the
     /// command tree, and the rest answer it themselves.
     static let helpTriggers: Set<String> = ["--help", "-h", "help"]
-
-    /// The flag-shaped help triggers: `helpTriggers` minus bare `help`,
-    /// which is excluded because a tab called that is ordinary. Derived
-    /// rather than restated so a new spelling reaches both.
-    /// See `isHelpRequest(freeTextTail:escapedCount:)`.
-    static let helpFlags: Set<String> = helpTriggers.filter { $0.hasPrefix("-") }
 
     /// Refusal text for `deviceterm help --all`. `--all` is not a help
     /// flag: the command list already names every verb, so there is
@@ -74,16 +54,24 @@ public enum CLICommands {
     /// not deviceterm's: `with-pane`.
     static let execWrapperVerbs: Set<String> = ["with-pane"]
 
-    /// Verbs whose grammar the `DeviceTerm` command tree owns.
+    /// Deadline the waiting verbs use when `--timeout` is omitted.
+    static let defaultTimeoutMillis = 30_000
+
+    /// Window of stillness `wait surface quiescent` uses when
+    /// `--settle` is omitted.
+    static let defaultSettleMillis = 500
+
+    /// The refusal for a deadline that cannot elapse, or nil when the
+    /// deadline is usable.
     ///
-    /// Dispatch is on the verb rather than on "the declarative parser
-    /// refused it", so a declared verb carrying a bad flag reports that
-    /// bad flag instead of falling back and being re-parsed by a grammar
-    /// that does not own that verb.
-    static let portedVerbs: Set<String> = [
-        "text", "tabs", "panes", "devices", "windows",
-        "doctor", "version", "dump-config", "events", "agents"
-    ]
+    /// Shared by every verb that takes `--timeout`, so a zero or
+    /// negative one is refused wherever it appears rather than reaching
+    /// dispatch as a deadline that has already passed. An omitted
+    /// `--timeout` takes `defaultTimeoutMillis` and is always usable.
+    static func timeoutRefusal(_ timeoutMs: Int?) -> CLICommand? {
+        guard let timeoutMs, timeoutMs <= 0 else { return nil }
+        return .usage(message: "deviceterm: --timeout must be greater than zero")
+    }
 
     /// Map a child `Process`'s termination status to an exec-like
     /// exit code. When the child was killed by a signal,
@@ -98,35 +86,6 @@ public enum CLICommands {
             return 128 &+ status
         }
         return status
-    }
-
-    /// Whether a sub-verb's free-text tail is asking for the verb's shape
-    /// rather than supplying a name or payload. `splitFlags` leaves
-    /// anything it doesn't recognize as a flag in the positional tail of
-    /// the legacy free-text sub-verbs, which is what puts a help trigger
-    /// in a name position; without this check `tab rename --help`
-    /// renames the tab to "--help".
-    ///
-    /// True only for a lone `helpFlags` member that reached the tail
-    /// unescaped. `escapedCount` keeps `--` meaning what it means
-    /// everywhere else in the parser, and since the tail is the trailing
-    /// run of positionals, a lone token is escaped exactly when that
-    /// count is non-zero. Called by the name-taking sub-verbs and
-    /// `tab send-input`.
-    static func isHelpRequest(freeTextTail tail: [String], escapedCount: Int) -> Bool {
-        tail.count == 1 && escapedCount == 0 && helpFlags.contains(tail[0])
-    }
-
-    /// Flag names the legacy parser consumes a value for, **scoped to
-    /// the command**. Only these are parsed as flags; any other
-    /// `--token` stays a positional, and a bare `--` forces everything
-    /// after it literal. Scoping per command is what lets a free-text
-    /// sub-verb carry a word another verb would have claimed as a flag.
-    ///
-    /// Sourced from the shared `VerbCatalog` so this flag grammar and the
-    /// shell completions can't drift apart.
-    static func valuedFlags(for verb: String) -> Set<String> {
-        VerbCatalog.valuedFlags(for: verb)
     }
 
     // MARK: - Workspace ref parsing
@@ -314,56 +273,6 @@ public enum CLICommands {
         return ref.value ?? ref.type
     }
 
-    static func splitFlags(_ args: [String], valued: Set<String>) -> ParsedArgs? {
-        var positionals: [String] = []
-        var flags: [String: String] = [:]
-        var index = 0
-        var literalOnly = false
-        // Where literal territory began, so a caller can still tell an
-        // escaped positional from a bare one once the terminator is gone.
-        var escapedFrom: Int?
-        while index < args.count {
-            let arg = args[index]
-            if literalOnly {
-                positionals.append(arg)
-                index += 1
-                continue
-            }
-            if arg == "--" {  // terminator: everything after is literal
-                literalOnly = true
-                escapedFrom = positionals.count
-                index += 1
-                continue
-            }
-            if arg.hasPrefix("--") {
-                let body = String(arg.dropFirst(2))
-                if let equals = body.firstIndex(of: "=") {
-                    let name = String(body[..<equals])
-                    if valued.contains(name) {
-                        flags[name] = String(body[body.index(after: equals)...])
-                        index += 1
-                        continue
-                    }
-                } else if valued.contains(body) {
-                    guard index + 1 < args.count else { return nil }
-                    flags[body] = args[index + 1]
-                    index += 2
-                    continue
-                }
-                // Unknown / not-for-this-command `--token` falls through
-                // to a positional, which is what lets the legacy
-                // free-text sub-verbs carry it literally.
-            }
-            positionals.append(arg)
-            index += 1
-        }
-        return ParsedArgs(
-            positionals: positionals,
-            flags: flags,
-            escapedCount: escapedFrom.map { positionals.count - $0 } ?? 0
-        )
-    }
-
     /// Detect the requested output mode. `--json` anywhere in argv
     /// before a bare `--` terminator switches to JSON; tokens after
     /// `--` are literal (so `deviceterm text -- --json` types the
@@ -545,22 +454,6 @@ public enum CLICommands {
             }
             return .help(topic: topic)
         }
-        if verb == "completions" {
-            // argv: ["deviceterm", "completions", "install", "<shell>"]
-            // `install` is the only sub-verb; a print-only
-            // `deviceterm completions <shell>` variant would land here
-            // too. Reject other sub-verbs with a
-            // pointing usage error rather than silently passing.
-            guard argv.count == 4, argv[2] == "install",
-                let shell = Completions.Shell(rawValue: argv[3])
-            else {
-                return .usage(
-                    message:
-                    "usage: deviceterm completions install <zsh|bash|fish>"
-                    )
-            }
-            return .completionsInstall(shell: shell)
-        }
         if execWrapperVerbs.contains(verb) {
             // argv: ["deviceterm", "with-pane", "<ref>", "<cmd>", "<args>"...]
             // First positional is the pane ref; everything after is the
@@ -576,114 +469,7 @@ public enum CLICommands {
             let cmd = Array(argv.dropFirst(3))
             return .withPane(ref: ref, cmd: cmd)
         }
-        if portedVerbs.contains(verb) {
-            return parseDeclared(Array(argv.dropFirst()))
-        }
-        guard let parsed = splitFlags(Array(argv.dropFirst(2)), valued: valuedFlags(for: verb)) else {
-            return .usage(message: "deviceterm: a flag is missing its value")
-        }
-        let pos = parsed.positionals
-        // `--pane <ref>` is the universal targeting selector.
-        let pane = parsed.flags["pane"]
-
-        // Shared numeric flags, validated once. A present-but-malformed
-        // flag is a usage error rather than a silently-dropped value.
-        if let raw = parsed.flags["duration"], Int(raw) == nil {
-            return .usage(message: "deviceterm: --duration must be an integer (ms)")
-        }
-        if let raw = parsed.flags["velocity"], Double(raw) == nil {
-            return .usage(message: "deviceterm: --velocity must be a number")
-        }
-        if let raw = parsed.flags["hold"], Int(raw) == nil {
-            return .usage(message: "deviceterm: --hold must be an integer (ms)")
-        }
-        if let raw = parsed.flags["step"], Double(raw) == nil {
-            return .usage(message: "deviceterm: --step must be a number (normalized 0..1 fraction)")
-        }
-        if let raw = parsed.flags["budget"], Int(raw) == nil {
-            return .usage(message: "deviceterm: --budget must be an integer (ms)")
-        }
-        if let raw = parsed.flags["timeout"], Int(raw) == nil {
-            return .usage(message: "deviceterm: --timeout must be an integer (ms)")
-        }
-        if let raw = parsed.flags["settle"], Int(raw) == nil {
-            return .usage(message: "deviceterm: --settle must be an integer (ms)")
-        }
-        let durationMs = parsed.flags["duration"].flatMap { Int($0) }
-        let holdMs = parsed.flags["hold"].flatMap { Int($0) }
-        let velocity = parsed.flags["velocity"].flatMap { Double($0) }
-        let step = parsed.flags["step"].flatMap { Double($0) }
-        let budgetMs = parsed.flags["budget"].flatMap { Int($0) }
-        let timeoutMs = parsed.flags["timeout"].flatMap { Int($0) } ?? 30_000
-        if timeoutMs <= 0 {
-            return .usage(message: "deviceterm: --timeout must be greater than zero")
-        }
-        // Zero is a legitimate ask: one unchanged observation rather than a
-        // window of stillness. Negative is not.
-        let settleMs = parsed.flags["settle"].flatMap { Int($0) } ?? 500
-        if settleMs < 0 {
-            return .usage(message: "deviceterm: --settle cannot be negative")
-        }
-
-        switch verb {
-        case "tabs":
-            if pos == ["list"] { return .tabsList }
-            if pos == ["current"] { return .tabsCurrent }
-            return .usage(message: "deviceterm: 'tabs' supports: list, current")
-
-        case "panes":
-            guard pos == ["list"] else {
-                return .usage(message: "deviceterm: 'panes' supports: list")
-            }
-            return .panesList
-
-        case "devices":
-            guard pos == ["list"] else {
-                return .usage(message: "deviceterm: 'devices' supports: list")
-            }
-            return .devicesList
-
-        case "device":
-            return parseDeviceSubcommand(positionals: pos)
-
-        case "tab":
-            return parseTabSubcommand(
-                positionals: pos,
-                flags: parsed.flags,
-                escapedCount: parsed.escapedCount
-            )
-
-        case "pane":
-            return parsePaneSubcommand(
-                positionals: pos,
-                flags: parsed.flags,
-                escapedCount: parsed.escapedCount
-            )
-
-        case "window":
-            return parseWindowSubcommand(positionals: pos, flags: parsed.flags)
-
-        case "windows":
-            return parseWindowsSubcommand(positionals: pos)
-
-        default:
-            // Input-family verbs (tap … ax) live in `CLICommands+Input.swift`;
-            // `parseInputVerb` returns nil for anything it doesn't own, so
-            // an unrecognized verb falls through to the usage error.
-            return parseInputVerb(
-                verb,
-                positionals: pos,
-                pane: pane,
-                durationMs: durationMs,
-                holdMs: holdMs,
-                velocity: velocity,
-                step: step,
-                budgetMs: budgetMs,
-                flags: parsed.flags,
-                timeoutMs: timeoutMs,
-                settleMs: settleMs
-            ) ?? .usage(message: nil)
-        }
+        return parseDeclared(Array(argv.dropFirst()))
     }
 
     /// Parse a verb the `DeviceTerm` command tree owns.
@@ -697,7 +483,7 @@ public enum CLICommands {
     /// knows how to render in both human and JSON form.
     static func parseDeclared(_ arguments: [String]) -> CLICommand {
         do {
-            let parsed = try DeviceTerm.parseAsRoot(arguments)
+            let parsed = try DeviceTerm.parseAsRoot(CrownCommand.normalizing(arguments))
             guard let owned = parsed as? CLICommandConvertible else {
                 return .help(topic: helpTopic(in: arguments))
             }

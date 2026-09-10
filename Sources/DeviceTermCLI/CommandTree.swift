@@ -8,6 +8,28 @@ import ArgumentParser
 /// description of the grammar from falling behind the parser that
 /// implements it.
 enum CommandTree {
+    /// One top-level verb, as the documentation guards and the
+    /// completion scripts read it.
+    struct Verb: Equatable {
+        let name: String
+        /// Sub-verbs under a hierarchical verb; empty for a flat one.
+        let subVerbs: [String]
+        /// The one-line summary, which is also the command list's
+        /// right-hand column.
+        let abstract: String
+    }
+
+    /// Every top-level verb, in declaration order.
+    static var all: [Verb] {
+        subcommands(of: DeviceTerm.self).map { command in
+            Verb(
+                name: name(of: command),
+                subVerbs: subcommands(of: command).map { name(of: $0) },
+                abstract: command.configuration.abstract
+            )
+        }
+    }
+
     /// Every declared sub-command below the root, at any depth.
     ///
     /// Parents are included because a verb invoked without its sub-verb
@@ -30,6 +52,12 @@ enum CommandTree {
         let configuration = command.configuration
         return configuration.ungroupedSubcommands
             + configuration.groupedSubcommands.flatMap(\.subcommands)
+    }
+
+    /// The sub-verbs of a top-level verb, empty when it has none or is
+    /// not declared.
+    static func subVerbs(of verb: String) -> [String] {
+        all.first { $0.name == verb }?.subVerbs ?? []
     }
 
     /// The name `command` answers to on the command line.

@@ -65,10 +65,12 @@ func parseHelpIgnoresOperandsAfterTheTopic() {
 }
 
 @Test
-func parseHelpTopicResolvesSubcommandToItsParent() {
-    // Topics are top-level names; a subcommand's prose lives on its
-    // parent's page, so the parent is what gets addressed.
-    #expect(CLICommands.parse(["deviceterm", "help", "tab", "open"]) == .help(topic: "tab"))
+func parseHelpTopicResolvesTheLongestCommandPath() {
+    // A sub-verb has its own page, so the topic is the whole path it
+    // names rather than the parent it sits under.
+    #expect(CLICommands.parse(["deviceterm", "help", "tab", "open"]) == .help(topic: "tab open"))
+    // A trailing token that names nothing stops the walk.
+    #expect(CLICommands.parse(["deviceterm", "help", "tab", "burn"]) == .help(topic: "tab"))
 }
 
 @Test
@@ -122,12 +124,11 @@ func parseTextDashDashHelpAsksForHelp() {
 }
 
 @Test
-func parseVerbTrailingDashDashHelpIsNotHelp() {
-    // On a verb the command tree does not declare, a trailing `--help`
-    // stays that verb's own problem and its parser answers it.
-    let parsed = CLICommands.parse(["deviceterm", "crown", "--help"])
-    #expect(parsed != .help(topic: "crown"))
-    #expect(parsed != .help(topic: nil))
+func parseVerbTrailingDashDashHelpAsksForThatVerb() {
+    // A trailing `--help` reaches the verb's own page, and the `help`
+    // spelling reaches the same one.
+    #expect(CLICommands.parse(["deviceterm", "crown", "--help"]) == .help(topic: "crown"))
+    #expect(CLICommands.parse(["deviceterm", "help", "crown"]) == .help(topic: "crown"))
 }
 
 @Test
@@ -140,7 +141,14 @@ func parseBareDeviceTermIsStillUsageNotHelp() {
 
 @Test
 func parseUnknownVerbIsStillUsageNotHelp() {
-    #expect(CLICommands.parse(["deviceterm", "wat"]) == .usage(message: nil))
+    // An unknown verb is refused rather than answered with the command
+    // list, which would read as though it had worked.
+    let parsed = CLICommands.parse(["deviceterm", "wat"])
+    guard case let .usage(message) = parsed else {
+        Issue.record("expected .usage for an unknown verb; got \(parsed)")
+        return
+    }
+    #expect(message?.contains("wat") ?? false)
 }
 
 // MARK: - Overview
@@ -178,7 +186,7 @@ func overviewGroupsCommandsByCategory() {
 func overviewListsEveryTopLevelVerb() {
     // The command list is the discovery surface: a verb the parser
     // accepts but the list omits is unreachable in practice.
-    for verb in VerbCatalog.all.map(\.name) {
+    for verb in CommandTree.all.map(\.name) {
         #expect(
             HelpText.overview.contains("\n  \(verb) "),
             "verb missing from the command list: \(verb)"

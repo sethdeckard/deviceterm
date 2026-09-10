@@ -47,7 +47,7 @@ func integrationGuideSurfaceMatrixCoversEveryCataloguedCommand() throws {
     let contents = try integrationGuide()
     let matrix = try section(named: "Surface Matrix", in: contents)
 
-    for verb in VerbCatalog.all {
+    for verb in CommandTree.all {
         if verb.subVerbs.isEmpty {
             #expect(
                 matrix.contains(verb.name),

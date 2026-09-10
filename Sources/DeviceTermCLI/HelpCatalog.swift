@@ -8,7 +8,7 @@
 ///
 /// Topics are ordered group-major so a single array drives the overview
 /// without a sort. `HelpCatalogTests` pins the invariants that keep the
-/// table honest: every `VerbCatalog` verb has a topic and vice versa, every
+/// table honest: every declared verb has a topic and vice versa, every
 /// command topic names a verb the parser actually recognizes, and every
 /// sub-verb appears in its parent's page.
 enum HelpCatalog {
