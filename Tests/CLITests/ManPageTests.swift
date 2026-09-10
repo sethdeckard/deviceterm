@@ -161,9 +161,9 @@ func manPageHasThHeader() throws {
 }
 
 @Test
-func manPageExplainsHowToSendHelpFlagsLiterally() throws {
+func manPageExplainsHowToSendDashedWordsLiterally() throws {
     let url = try #require(locateManPage())
     let contents = try String(contentsOf: url, encoding: .utf8)
-    #expect(contents.contains("prints usage instead of sending text"))
-    #expect(contents.contains("before either value to send it literally"))
+    #expect(contents.contains("is read as a flag"))
+    #expect(contents.contains("before the text to send such a word literally"))
 }

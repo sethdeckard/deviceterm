@@ -2911,7 +2911,7 @@ principle by naming `location` explicitly.
 
 Location therefore ships as a GUI menu (Device ▸ Location, and the pane's
 right-click menu) with **no CLI verb**: no `CLICommand`, no
-`VerbCatalog` entry, nothing in the man page or completions.
+command declaration, nothing in the man page or completions.
 
 Both `pane.location.*` methods are tagged `.validatedGUI`, which turns
 that from a convention anyone could quietly break into a dispatch fact.

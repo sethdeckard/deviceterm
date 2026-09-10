@@ -83,7 +83,13 @@ struct TabCommand: CLICommandConvertible {
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        @Argument(parsing: .remaining, help: "New name. Omit to clear it.")
+        @Argument(
+            parsing: .remaining,
+            help: """
+            New name. Omit to clear it. A word beginning with - is read \
+            as a flag. Put -- before the name to use one literally.
+            """
+        )
         var words: [String] = []
 
         var cliCommand: CLICommand {
@@ -190,7 +196,14 @@ struct TabCommand: CLICommandConvertible {
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        @Argument(parsing: .remaining, help: "Text to send. C-style escapes are decoded.")
+        @Argument(
+            parsing: .remaining,
+            help: """
+            Text to send. C-style escapes are decoded. A word beginning \
+            with - is read as a flag. Put -- before the text to send one \
+            literally.
+            """
+        )
         var words: [String] = []
 
         var cliCommand: CLICommand {

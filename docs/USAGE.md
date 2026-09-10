@@ -1034,6 +1034,14 @@ Follow the printed activation hint. Zsh may require adding the directory to
 `fpath`, Bash may require sourcing the file from its completion setup, and
 Fish loads the installed file in a new shell.
 
+Completion covers every verb and sub-verb, the help topics, and the fixed
+value sets, on options like `--mode` and on operands like the one `button`
+takes. An option taking a path, a number, or free-form text completes nothing.
+
+The `--pane`, `--tab`, and `--window` refs complete against what's open, which
+means the shell runs `deviceterm` to ask. If the daemon isn't reachable those
+three offer only `current`.
+
 The app bundle and Homebrew cask do not install the man page. To read the
 repository copy from a source checkout:
 

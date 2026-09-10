@@ -90,7 +90,13 @@ struct PaneCommand: CLICommandConvertible {
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        @Argument(parsing: .remaining, help: "New name. Omit to clear it.")
+        @Argument(
+            parsing: .remaining,
+            help: """
+            New name. Omit to clear it. A word beginning with - is read \
+            as a flag. Put -- before the name to use one literally.
+            """
+        )
         var words: [String] = []
 
         var cliCommand: CLICommand {

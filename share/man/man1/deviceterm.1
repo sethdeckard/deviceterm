@@ -356,13 +356,16 @@ real keypresses. A caller whose session holds no grant is rejected at the
 dispatcher's scope check with
 .BR error.scope_violation .
 The receipt reports only the byte count, never the typed text.
-A lone
+A word beginning with
+.B -
+is read as a flag, and
 .B --help
 or
 .B -h
-prints usage instead of sending text. Put
+anywhere ahead of the text prints the command's help instead of sending
+it. Put
 .B --
-before either value to send it literally.
+before the text to send such a word literally.
 .B --type-delay
 .I ms
 animates the injection one character at a time (for screencasts); omit

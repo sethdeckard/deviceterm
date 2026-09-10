@@ -233,10 +233,12 @@ func overviewCarriesTheCoordinateConvention() {
 }
 
 @Test
-func tabHelpExplainsHowToSendHelpFlagsLiterally() {
+func tabHelpExplainsHowToSendDashedWordsLiterally() {
+    // `tab send-input` types arbitrary text, so the page has to say how
+    // to send a word the parser would otherwise claim as a flag.
     let detail = HelpCatalog.topic(named: "tab")?.detail ?? ""
-    #expect(detail.contains("A lone `--help` or `-h` prints this usage instead of typing."))
-    #expect(detail.contains("Put `--` before either value to send it literally."))
+    #expect(detail.contains("A word beginning with - is read as a flag"))
+    #expect(detail.contains("Put `--` before the text to send"))
 }
 
 // MARK: - Pages

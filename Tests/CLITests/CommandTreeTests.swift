@@ -142,16 +142,27 @@ func freeTextRefusalOmitsTheHintWhenNoFlagWasUnknown() {
 }
 
 @Test
-func freeTextPageStatesTheTerminatorRule() {
+func everyFreeTextPageStatesTheTerminatorRule() {
     // The parser refuses a dash-prefixed payload word, so the page has
-    // to say how to type one. Without it, a caller discovers the
-    // required terminator only by hitting the error.
-    let page = String(data: helpOutcome(topic: "text").stdout, encoding: .utf8) ?? ""
-    #expect(page.contains("--"), "text page does not mention the terminator")
-    #expect(
-        page.lowercased().contains("beginning with -"),
-        "text page does not say a dashed word is read as a flag: \(page)"
-        )
+    // to say how to send one. Without it, a caller discovers the
+    // terminator only by hitting the error.
+    //
+    // Checked on the leaf's own page rather than its parent's prose,
+    // because the leaf is what `<verb> --help` renders, and that is the
+    // spelling the prose sends the reader to.
+    for command in CommandTree.allCommands {
+        guard command is any FreeTextCommand.Type else { continue }
+        let name = CommandTree.name(of: command)
+        let page = DeviceTerm.helpMessage(for: command)
+        #expect(
+            page.contains("Put -- before"),
+            "\(name) page does not say how to send a dashed word"
+            )
+        #expect(
+            page.contains("beginning with -"),
+            "\(name) page does not say a dashed word is read as a flag"
+            )
+    }
 }
 
 @Test
