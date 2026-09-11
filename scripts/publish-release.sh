@@ -10,10 +10,12 @@
 # Steps:
 #   1. Read VERSION from DeviceTermVersion.swift; compute the DMG's
 #      sha256.
-#   2. Generate the EdDSA-signed Sparkle appcast over the release DMG.
-#   3. Create the GitHub release, uploading the DMG + appcast.xml so the
+#   2. Require a clean Homebrew tap checkout and fast-forward its current
+#      branch from its configured upstream.
+#   3. Generate the EdDSA-signed Sparkle appcast over the release DMG.
+#   4. Create the GitHub release, uploading the DMG + appcast.xml so the
 #      `releases/latest/download/appcast.xml` feed permalink serves it.
-#   4. Render the Homebrew cask into the local tap checkout and commit +
+#   5. Render the Homebrew cask into the local tap checkout and commit +
 #      push it. This step runs last so a failed release upload never
 #      leaves the public cask pointing at a DMG that doesn't exist yet.
 #
@@ -62,6 +64,8 @@ die()  { printf 'publish-release: %s\n' "$1" >&2; exit 1; }
 
 # shellcheck source=lib/version.sh
 . "$ROOT/scripts/lib/version.sh"
+# shellcheck source=lib/tap-sync.sh
+. "$ROOT/scripts/lib/tap-sync.sh"
 VERSION="$(dt_release_version "$ROOT")"
 DMG="$OUT/deviceterm-$VERSION.dmg"
 CASK_DEST="$TAP_DIR/Casks/deviceterm.rb"
@@ -97,6 +101,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     note "would render cask → $CASK_DEST (version $VERSION, sha $SHA)"
     render_cask | sed 's/^/      /'
     note "would generate appcast → $APPCAST (enclosure prefix $DL_PREFIX)"
+    note "would require a clean tap checkout and fast-forward its tracking branch"
     note "would: gh release create v$VERSION '$DMG' '$APPCAST'"
     note "would: git -C '$TAP_DIR' commit+push Casks/deviceterm.rb (after the release)"
     exit 0
@@ -106,6 +111,7 @@ fi
 command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 gh auth status >/dev/null 2>&1 || die "not logged in to gh (run: gh auth login)"
 [ -d "$TAP_DIR/Casks" ] || die "tap checkout not found at $TAP_DIR (set DEVICETERM_TAP_DIR)"
+dt_sync_tap_checkout "$TAP_DIR" || die "Homebrew tap preflight failed"
 
 GEN_APPCAST="$(generate_appcast_bin)"
 [ -n "$GEN_APPCAST" ] || die "generate_appcast not found (set SPARKLE_BIN_DIR)"
@@ -165,6 +171,6 @@ note "rendering cask → $CASK_DEST"
 render_cask > "$CASK_DEST"
 git -C "$TAP_DIR" add "Casks/deviceterm.rb"
 git -C "$TAP_DIR" commit -m "deviceterm $VERSION"
-git -C "$TAP_DIR" push
+dt_push_tap_checkout "$TAP_DIR"
 
 echo "publish-release: v$VERSION published"

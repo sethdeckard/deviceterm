@@ -377,6 +377,13 @@ else
     skip "CLITests (no Tests/CLITests/)"
 fi
 
+if [ -x scripts/test-publish-tap-sync.sh ]; then
+    ./scripts/test-publish-tap-sync.sh >/dev/null \
+      && ok "publish tap synchronization" || fail "publish tap synchronization"
+else
+    skip "publish tap synchronization (no scripts/test-publish-tap-sync.sh)"
+fi
+
 if [ -x scripts/build-release.sh ]; then
     ./scripts/build-release.sh --dry-run             && ok "release dry-run"                || fail "release dry-run"
 else

@@ -225,21 +225,35 @@ version, checksum, appcast URL, and cask:
 scripts/publish-release.sh --dry-run
 ```
 
-When the dry run is correct:
+The dry run does not inspect or update the tap checkout. When its output is
+correct, publish the release:
 
 ```sh
 make publish
 ```
 
+Before changing GitHub, the publisher checks the tap checkout. It must be
+clean, on a branch with a remote upstream, and contain no local-only commits.
+The publisher runs `git pull --ff-only` against that upstream. A checkout that
+is behind advances without a merge commit; dirty, detached, ahead, or diverged
+states stop the release.
+
+The final push uses the same remote and branch resolved during the pull.
+Settings such as `pushRemote`, `remote.pushDefault`, and `push.default` cannot
+redirect it or include other branches.
+
 The publisher performs these operations in order:
 
 1. Calculate the DMG checksum.
-2. Generate the EdDSA-signed Sparkle appcast.
-3. Create the GitHub release and upload the DMG and `appcast.xml`.
-4. Render, commit, and push the Homebrew cask.
+2. Check and fast-forward the Homebrew tap checkout.
+3. Generate the EdDSA-signed Sparkle appcast.
+4. Create the GitHub release and upload the DMG and `appcast.xml`.
+5. Render, commit, and push the Homebrew cask.
 
 The cask is pushed last so it cannot point at a release artifact that failed to
-upload.
+upload. If the tap changes again after the preflight, the final push fails
+without merging. The GitHub release exists at that point, so reconcile the tap
+and push its cask commit manually.
 
 ## Verify the Published Release
 
