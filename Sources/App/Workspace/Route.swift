@@ -49,7 +49,7 @@ enum Route: Sendable {
     /// the GUI's CWD when nil). `cmd` is the command line typed into
     /// the shell after attach (libghostty's `initial_input`). It runs
     /// once and leaves the user at an interactive prompt. Both ride
-    /// from `deviceterm tab open --cwd <path> --cmd '<cmd>'`.
+    /// from `deviceterm tab open --cwd <path> --command '<cmd>'`.
     case newTab(
         WindowID,
         reattach: [OrphanRecord] = [],
@@ -116,7 +116,7 @@ enum Route: Sendable {
     /// Add an additional terminal pane to an existing tab. Mints a
     /// fresh daemon session whose role inherits the tab's role; the
     /// reconcile pass adds the new TerminalPaneViewController to the
-    /// split. The CLI verb `deviceterm pane open --terminal` flows
+    /// split. The CLI verb `deviceterm pane split` flows
     /// through here via the Intent layer.
     ///
     /// `cwd` / `cmd` semantics match `newTab`.
@@ -151,7 +151,7 @@ enum Route: Sendable {
     )
     /// Mount a sim pane on a tab (device.attach), for a sim the tab does not
     /// already hold: the discovery poll (which is also how a shim-intercepted
-    /// boot arrives) and the `deviceterm pane attach` verb. The new leaf
+    /// boot arrives) and the `deviceterm device attach` verb. The new leaf
     /// lands next to the spawning terminal. Orphan re-attach and the two
     /// in-place re-attach paths reach the same attach without a route,
     /// because each has its own placeholder to insert or reuse.

@@ -97,45 +97,15 @@ func doctorOutcome(output: OutputMode) -> CommandOutcome {
         }
     }
 
-    // Session + linked-pane info (only meaningful inside a tab).
+    // Session + linked-pane details (only meaningful inside a tab).
     var sessionInfo: Doctor.SessionInfo?
     var targets: [PanesListEntry]?
     if let sessionEnv, !sessionEnv.isEmpty, let capEnv, !capEnv.isEmpty, socketReachable {
-        // tabs.list resolves the session's shortId + name AND
-        // serves as the "session live in daemon" check: a stale
-        // shell env after a daemon restart won't have its
-        // sessionId in the list, and every session-scoped call
-        // will fail.
-        var foundInTabs = false
-        if let tabsResult = try? roundTrip(
-            method: RPCMethod.tabsList.rawValue,
-            params: nil
-        ),
-            let entries = try? JSONDecoder().decode([TabsListEntry].self, from: tabsResult) {
-            let entry = entries.first { $0.sessionId == sessionEnv }
-            foundInTabs = (entry != nil)
-            if let entry {
-                sessionInfo = Doctor.SessionInfo(
-                    sessionId: sessionEnv,
-                    shortId: entry.shortId,
-                    name: entry.name
-                )
-            }
-        }
-        doctorChecks.append(
-            Doctor.sessionLivenessCheck(
-            envSessionId: sessionEnv,
-            foundInTabs: foundInTabs
-        )
-            )
-
-        // panes.list: the linked sim panes are the "target
-        // availability" axis AND the first call here that proves
-        // session authorization (the cap is honored). Surface
-        // failures explicitly rather than swallowing them, so a
-        // stale/wrong cap doesn't slip past as a missing field.
+        // The daemon-direct device-pane roster authenticates the session and
+        // supplies the target availability axis without using the GUI's public
+        // workspace projection.
         do {
-            let panesRequest = try CLICommands.panesListRequest(
+            let panesRequest = try CLICommands.paneDeviceListRequest(
                 sessionId: sessionEnv,
                 cap: capEnv
             )
@@ -144,17 +114,40 @@ func doctorOutcome(output: OutputMode) -> CommandOutcome {
                 [PanesListEntry].self,
                 from: panesResult
             )
-            doctorChecks.append(Doctor.panesAuthorizationCheck(error: nil))
-            targets = panes
-        } catch CLIError.daemon(let code, let message) {
+            doctorChecks.append(Doctor.paneAuthorizationCheck(error: nil))
             doctorChecks.append(
-                Doctor.panesAuthorizationCheck(
+                Doctor.sessionLivenessCheck(
+                    envSessionId: sessionEnv,
+                    authenticated: true
+                )
+            )
+            sessionInfo = Doctor.SessionInfo(
+                sessionId: sessionEnv,
+                shortId: nil,
+                name: nil
+            )
+            targets = panes
+        } catch CLIError.daemon(let code, let message, _) {
+            doctorChecks.append(
+                Doctor.sessionLivenessCheck(
+                    envSessionId: sessionEnv,
+                    authenticated: false
+                )
+            )
+            doctorChecks.append(
+                Doctor.paneAuthorizationCheck(
                 error: "daemon \(code): \(message)"
             )
                 )
         } catch {
             doctorChecks.append(
-                Doctor.panesAuthorizationCheck(
+                Doctor.sessionLivenessCheck(
+                    envSessionId: sessionEnv,
+                    authenticated: false
+                )
+            )
+            doctorChecks.append(
+                Doctor.paneAuthorizationCheck(
                 error: "\(error)"
             )
                 )
@@ -203,7 +196,7 @@ func withPaneExec(ref: String, cmd: [String]) -> Never {
     let creds = sessionCredentials()
     let withPaneKey: String
     do {
-        let request = try CLICommands.panesListRequest(
+        let request = try CLICommands.paneDeviceListRequest(
             sessionId: creds.sessionId,
             cap: creds.cap
         )
@@ -215,7 +208,7 @@ func withPaneExec(ref: String, cmd: [String]) -> Never {
 
         case .sentinel, .notFound:
             writeStderr("deviceterm: no device pane matching '\(ref)' in this tab\n")
-            writeStderr("  run `deviceterm panes list` to see available panes\n")
+            writeStderr("  run `deviceterm pane list` to see available panes\n")
             exit(1)
 
         case let .ambiguous(hits):
@@ -223,7 +216,7 @@ func withPaneExec(ref: String, cmd: [String]) -> Never {
             writeStderr(paneRosterLines(hits) + "\n")
             exit(1)
         }
-    } catch CLIError.daemon(let code, let message) {
+    } catch CLIError.daemon(let code, let message, _) {
         writeStderr("deviceterm: daemon error \(code): \(message)\n")
         exit(1)
     } catch {
@@ -357,7 +350,8 @@ func eventsStream() -> Never {
                     cap: creds.cap,
                     deadline: Date().addingTimeInterval(AppCommandDeadline.cliRequestTimeoutSeconds)
                 )
-            } catch let CLIError.daemon(code, _) where code == notReadyCode && attempt < maxNotReadyRetries {
+            } catch let CLIError.daemon(code, _, _)
+                where code == notReadyCode && attempt < maxNotReadyRetries {
                 UDSClientSocket.close(eventsFd)
                 attempt += 1
                 usleep(100_000)

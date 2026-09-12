@@ -93,15 +93,18 @@ func manPageCoversTouchAndHardwareInputCommands() throws {
         "tab open",
         "tab close",
         "tab rename",
-        "tab send-input",
-        "tab capture",
-        "pane open --terminal",
+        "tab focus",
+        "tab protect",
+        "pane list",
+        "pane split",
         "pane close",
+        "pane send-input",
+        "pane capture-text",
         "device attach",
         "window open",
         "window close",
         "window focus",
-        "windows list",
+        "window list",
         "completions install"
     ] {
         #expect(
@@ -166,4 +169,42 @@ func manPageExplainsHowToSendDashedWordsLiterally() throws {
     let contents = try String(contentsOf: url, encoding: .utf8)
     #expect(contents.contains("is read as a flag"))
     #expect(contents.contains("before the text to send such a word literally"))
+}
+
+@Test
+func manPagePinsWorkspaceReferenceRules() throws {
+    let url = try #require(locateManPage())
+    let contents = try String(contentsOf: url, encoding: .utf8)
+    #expect(contents.contains("Names match\nexactly, never by prefix"))
+    #expect(contents.contains("is display-order metadata, not a reference"))
+    #expect(contents.contains("first six lowercase hexadecimal characters"))
+    #expect(contents.contains("six lowercase Crockford base32 characters"))
+    #expect(!contents.contains("one-based\nindex from"))
+}
+
+@Test
+func manPagePinsPaneMutationAuthorityAndMode() throws {
+    let url = try #require(locateManPage())
+    let contents = try String(contentsOf: url, encoding: .utf8)
+    #expect(contents.contains("an ungranted caller may target only its own terminal\nsession"))
+    #expect(contents.contains("Simulator and physical-device panes retain target-tab ownership"))
+    #expect(contents.contains("An explicit mode is valid only for a Simulator pane"))
+    #expect(contents.contains("intent.unsupportedPane"))
+    #expect(contents.contains("intent.wouldCloseTab"))
+}
+
+@Test
+func manPagePinsBoundedRenameGrammar() throws {
+    let url = try #require(locateManPage())
+    let contents = try String(contentsOf: url, encoding: .utf8)
+    #expect(contents.components(separatedBy: "than two positionals is a usage error").count == 3)
+    #expect(contents.components(separatedBy: "before the name to use it literally").count == 3)
+}
+
+@Test
+func manPagePinsPartialMutationFailure() throws {
+    let url = try #require(locateManPage())
+    let contents = try String(contentsOf: url, encoding: .utf8)
+    #expect(contents.contains("intent.mutationFailed"))
+    #expect(contents.contains("error.details.committed"))
 }

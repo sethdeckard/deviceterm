@@ -8,12 +8,12 @@ import Foundation
 /// (`AppCommandSubscriber`) can JSON-encode them directly into
 /// `AppCommandResult.data` without an intermediate translation.
 enum IntentResponse: Sendable, Equatable {
-    case tabInfo(TabInfoPayload)
-    case paneInfo(PaneInfoPayload)
-    case windowsList([WindowInfoPayload])
-    case tabCapture(TabCapturePayload)
-    /// Awaited outcome of `tab set-protected`: committed vs still
-    /// converging (`committed == false`). A definite rejection is an
-    /// `.error`, not this.
-    case tabSetProtected(TabSetProtectedResult)
+    case workspaceWindows([WorkspaceWindow])
+    case workspaceWindow(WorkspaceWindowDetail)
+    case workspaceTabs([WorkspaceTab])
+    case workspaceTab(WorkspaceTabDetail)
+    case workspacePanes([WorkspacePane])
+    case workspacePane(WorkspacePane)
+    case workspaceMutation(WorkspaceMutationReceipt)
+    case workspaceCapture(WorkspaceCaptureResult)
 }

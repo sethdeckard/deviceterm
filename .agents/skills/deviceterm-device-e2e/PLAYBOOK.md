@@ -22,7 +22,8 @@ everything here perfectly.
 ## What you need
 
 - A **booted simulator or connected device attached as a pane, in the
-  `rendering` state**. A row in `panes list` is not enough: `state` is one of
+  `rendering` state**. A row in `pane list` is not enough: device lifecycle
+  state is one of
   `booting`, `rendering`, `shutdown`, or `failed`, and only `rendering` can
   answer input or accessibility reads. Block on the pane you actually mean:
 
@@ -157,10 +158,8 @@ DT_DIR=$(mktemp -d)
 Every scratch path below is written against it.
 
 **Never hardcode a short ref.** They are minted per mount, so a sim reboot
-reissues them and a `--pane rpvgzr` baked into a script breaks silently against
-whatever pane inherits the ref later. Hold the **UDID** as your durable handle,
-since that survives reboots, and derive a short ref from it when a verb needs
-one (see the two resolvers below).
+reissues them. Hold the Simulator **UDID** or physical **deviceId** as the
+durable handle; both resolver families accept that exact device key.
 
 For device-control verbs the UDID works directly, matched as a device key,
 exactly and case-insensitively:
@@ -185,62 +184,36 @@ where type is `sim` or `device` and the key is a sim UDID or a physical
 listing, so the order is arbitrary as far as you are concerned. Treat it as a
 lookup aid, never as an ordering.
 
-**A UDID does not work on every verb.** Two different resolvers are in play:
+Two different resolvers remain in play, but both accept a device key:
 
 - **Device-control verbs** (`tap`, `swipe`, `long-press`, `pinch`,
   `app-switcher`, `button`, `key`, `text`, `rotate`, `crown`, `ax *`) resolve
-  `--pane` **locally against `panes.list`** through `PaneRefResolver`, which has
-  a device-key tier. A UDID works.
-- **Workspace verbs** (`pane close`, `pane rename`, `pane info`, `pane move`)
-  send the ref to the GUI instead, classified by `CLICommands.parsePaneRef`,
-  which has only two branches: UUID-shaped becomes a **`paneId`**, anything else
-  becomes a `shortId`. A sim UDID *is* UUID-shaped, so it is sent as a paneId
-  and matched against a pane's `paneId`, which it never equals.
+  `--pane` locally against the daemon's device-pane roster through
+  `PaneRefResolver`. It is tab-scoped and covers only Simulator and physical
+  device panes. A UDID/deviceId works directly.
+- **Workspace verbs** (`pane list`, `show`, `split`, `focus`, `close`, `rename`,
+  `send-input`, `capture-text`) send the raw ref to the GUI. Its projection
+  includes every terminal, Simulator, and physical-device leaf in layout order.
+  Resolution tiers are exact short ID, exact full ID, exact name, exact device
+  key, then a unique full-ID prefix. Names do not prefix-match.
 
-**Of those four, only `pane close` and `pane info` are implemented, and both are
-simulator-only.** No ref type changes that. The GUI resolves them through
-`resolveSimPane`, which walks a tab's `simPanes`; physical-device panes live in
-a separate `devicePanes` collection that this resolver never looks at. So both
-fail with `intent.notFound` against a device pane given a perfectly correct
-shortId or paneId, and there is no CLI route to closing one: that is the pane's
-own close control in the GUI.
-
-Device panes still appear in `panes list`, typed `device`, so a ref you resolve
-there is not necessarily a ref a workspace verb can use.
-
-`pane rename` and `pane move` fail for a different reason and on every pane
-alike: they throw before reaching any resolver. See *Known broken*.
-
-So `deviceterm pane close --pane <udid>` does not close that pane. **It fails
-loudly**, with `intent.notFound` and a nonzero exit, because the GUI looks for a
-pane whose `paneId` equals your UDID and finds none. That is a clean failure,
-not a silent mistarget.
-
-Resolve a workspace-verb ref at run time instead:
+Use singular workspace commands and positional pane refs:
 
 ```sh
-DT_REF=$(deviceterm panes list --json | jq -r --arg u "$DT_PANE" '
-  [ .[]
-    | select((.udid | ascii_downcase) == ($u | ascii_downcase))
-    | (.shortId // .paneId) ]
-  | if length == 1 then .[0] else empty end')
-[ -n "$DT_REF" ] || { echo "no unique pane for $DT_PANE" >&2; exit 1; }
+deviceterm pane show "$DT_PANE" --json
+deviceterm pane rename "$DT_PANE" "Map Device" --json
 ```
 
-**Every part of that guard earns its place.**
+`pane close "$DT_PANE" --mode detach` is valid for a Simulator. A physical
+device closes with `pane close "$DT_PANE"` and no mode. Explicit `--mode` on a
+physical-device or terminal pane is `intent.unsupportedPane`; a terminal pane
+also refuses as `intent.wouldCloseTab` when it is the tab's last terminal.
+There is no public `pane move`: a split is layout, not a pane kind, and layout
+rearrangement remains a GUI operation.
 
-- The comparison is **case-insensitive** because `panes list` emits canonical
-  lowercase UDIDs while `xcrun simctl list devices` prints uppercase, so a
-  `DT_PANE` copied from simctl misses on an exact compare.
-- It falls back to **`paneId`** because `shortId` is absent against a daemon
-  predating the identifier model, and a workspace verb takes a paneId perfectly
-  well: it is UUID-shaped, so `parsePaneRef` classifies it as one and the GUI
-  matches it directly. Insisting on `shortId` would abort on exactly the skew
-  this playbook tells you to tolerate elsewhere.
-- The **emptiness check** is the one that prevents damage. `--pane ""` is not an
-  error: `parsePaneRef` treats empty as `current`, so a failed lookup silently
-  retargets the verb at whichever pane is current. This is the only quiet
-  mistarget in the section, and on `pane close` it closes the wrong pane.
+Do not pass an unverified empty variable to an optional workspace pane
+positional: empty means current. Device-control `--pane` follows its own
+automatic-target rules, which can also select the sole device pane when omitted.
 
 **Use `--json` for every assertion**, and know which fields are guaranteed. The
 receipt shape is per verb, and each verb has a required core plus fields that
@@ -583,11 +556,12 @@ it is the one node that never carries a `normalizedCenter`. Its children do:
 `ax point` and `ax sweep` both scale against the real frontmost tree the daemon
 reads during preflight, so no caller ever computes a scale.
 
-**The real screen comes back as `rootFrame`**, in displayed points, on `ax point`
-and on the `ax sweep` root — once per response, never on a child. `ax tree` does
-not carry it, its own root `frame` being the scale already. Multiply a
-`normalizedCenter` by `rootFrame.w` and `.h` to get displayed points back
-without a second `ax tree`.
+**The real screen comes back as `rootFrame`**, in displayed points. Read it at
+`.element.rootFrame` for `ax point` and `.tree.rootFrame` for `ax sweep`. It
+belongs to the command's root payload, not to the top-level response and not to
+nested descendants. `ax tree` does not carry it because its own root `frame` is
+already the scale. Multiply a `normalizedCenter` by `rootFrame.w` and `.h` to
+get displayed points back without a second `ax tree`.
 
 It is omitted rather than defaulted when the preflight root had no usable frame,
 because a synthesized `1 x 1` reads exactly like a genuine one-point screen.
@@ -607,6 +581,12 @@ deviceterm tap --label Continue --match contains --pane "$DT_PANE"
 No coordinate crosses the shell. `tap` and `wait ax --print center` make the
 same selection through one shared code path, so the two cannot come to disagree
 about which element a query means.
+
+A retryably incomplete tree does not disqualify a unique eligible target. If
+the tree contains that target and its `normalizedCenter`, both commands use it.
+If no unique target emerges, they retry and report `wait.inconclusive` at the
+deadline. Unsupported enumeration and a truncated sweep refuse before
+selection, even when a surviving node matches.
 
 **A refusal sends no tap.** `wait.unreachable`, `wait.ambiguous`, and
 `wait.inconclusive` each end the command with nothing dispatched, so a query
@@ -641,8 +621,8 @@ deviceterm long-press "$x" "$y" --pane "$DT_PANE"
 ```
 
 It writes a bare `x y` at six decimal places and nothing else, refuses with the
-same two codes rather than guessing, and writes nothing when it does. It cannot
-be combined with `--json`, nor with `--state absent`.
+same refusal codes rather than guessing, and writes nothing when it does. It
+cannot be combined with `--json`, nor with `--state absent`.
 
 **To inspect the ranked matches** rather than act on one, read the observation.
 `matches` is capped at **20** entries with `matchCount` carrying the true total,
@@ -669,13 +649,12 @@ jq -r '
 ' $DT_DIR/tree.json
 ```
 
-**Selecting on `normalizedCenter` is also the bounds check.** Maps'
-dismiss-popup group carries a frame of `x -402, y -874, w 1206, h 2622`:
-negative origin, roughly three times the root in both axes. Its centre falls
-outside `0...1`, so the daemon omits the key and the node drops out here with no
-filter of your own. A selector written against `frame` still picks it up, and
-picks it up first. Filter on `role` as well when a screen has several such
-wrappers.
+**`normalizedCenter` bounds the centre, not the whole frame.** Maps'
+dismiss-popup group carries a frame of `x -402, y -874, w 1206, h 2622`, yet
+its centre is exactly `0.5, 0.5`, so the key is present. Selecting on
+`normalizedCenter` removes wrappers whose centres are off-screen, but not
+oversized wrappers whose centres remain on-screen. Filter on `role` and choose
+a control whose reaction you can observe.
 
 **Pick a control you can watch react**, not a static label. A tap on a `Text`
 node produces a clean receipt and no observable change, which is
@@ -921,10 +900,20 @@ it does shows the app you started from — indistinguishable here from a gesture
 the recognizer never armed.
 
 This is an edge-tagged system gesture, not a content swipe, and the daemon
-derives the edge from the pane's current orientation. Confirmed in portrait and
-both landscape orientations; upside-down has no edge value that arms the
-recognizer. A physical device that does not support the edge gesture falls back
-to a consumer-HID Home double-press.
+derives the edge from the pane's current orientation. On a Simulator, the
+contact starts at the home-indicator edge, travels about one fifth of the screen
+inward, and dwells before lifting. Pulling to the middle before the dwell can
+commit Home instead. The orientation-specific edge values and current shallow
+dwell are live-confirmed in portrait, landscape-left, and landscape-right.
+Upside-down has no edge value that arms the recognizer. A physical device that
+does not support the edge gesture falls back to a consumer-HID Home double-press.
+
+Return to the foreground app before rotating for another App Switcher check. A
+rotation issued while the App Switcher is open can fail with
+`rotate.unconfirmed` and leave the pane in its prior orientation. Check the
+rotation receipt and re-read `pane show` immediately before each gesture.
+Otherwise a loop can label two attempts as different orientations even though
+both ran in the same one.
 
 Assert on the tree, not on the receipt.
 
@@ -968,7 +957,7 @@ identifier:
 
 ```sh
 FIELD=SomeField.Identifier   # from an ax tree read, not guessed
-MARK=zzq7                    # a marker, not a word the field might already hold
+MARK=9073                    # digits are not changed by autocapitalization
 
 read_field() {
   deviceterm ax tree --pane "$DT_PANE" \
@@ -979,6 +968,15 @@ read_field() {
           end'
 }
 
+wait_after_focus() {
+  local rc=0
+  deviceterm wait surface quiescent --pane "$DT_PANE" || rc=$?
+  case "$rc" in
+    0|124) return 0 ;;
+    *) return "$rc" ;;
+  esac
+}
+
 BEFORE=$(read_field) || { echo "baseline read failed" >&2; exit 1; }
 case "$BEFORE" in *"$MARK"*)
   echo "field already holds $MARK; pick another marker" >&2; exit 1 ;;
@@ -986,12 +984,9 @@ esac
 
 deviceterm tap --identifier "$FIELD" --pane "$DT_PANE"   # focus it
 
-# Barrier, not politeness. The tap's receipt says the gesture was accepted for
-# delivery, not that the guest processed it, and on a physical device touch and
-# keyboard travel separate asynchronous pumps -- so `text` can overtake the tap
-# and land wherever focus was before. Settling here is the only place that can
-# be prevented; the value check below cannot recover keystrokes sent elsewhere.
-deviceterm wait surface quiescent --pane "$DT_PANE"
+# Insert an observation round trip before sending keyboard input. This does not
+# prove that the field has focus.
+wait_after_focus || { echo "post-focus wait failed" >&2; exit 1; }
 
 deviceterm text "$MARK" --pane "$DT_PANE"
 
@@ -1011,11 +1006,26 @@ case "$AFTER" in
 esac
 ```
 
+No current CLI condition proves that an iOS field has focus. Device
+accessibility nodes expose no focus property, and physical-device touch and
+keyboard input travel through separate pumps.
+
+`wait_after_focus` inserts an observation round trip before keyboard dispatch.
+A Maps field can keep the surface moving until `wait surface quiescent` returns
+124, so the helper accepts either success or that completed deadline. Any other
+failure aborts the recipe. The exact value wait remains the assertion that input
+landed in the intended field.
+
 **Type a marker you first proved absent, and assert the whole marker arrived.**
 "Contains `hello` and differs from the baseline" is not enough: a field that
 already held `hello` passes that test when only `he` lands, so a partial
 delivery reads as success. Proving the marker absent beforehand is what makes
 its presence afterwards mean something.
+
+Prefer digits for this marker unless the field explicitly disables
+autocapitalization. A lowercase marker can arrive with its first character
+capitalized, making the shell read-back report a false failure even though
+every keystroke landed.
 
 **Do not assert `AFTER` equals `BEFORE` with the marker appended.** A tap places
 the caret where you tapped, so text lands mid-string on a field that was not
@@ -1035,42 +1045,43 @@ narrow it by re-tapping and retrying before you conclude anything.
 
 **`key`** takes a kVK virtual key code and sends a discrete event, so pair every
 `down` with an `up`. **Verify it with a key that changes text**, not one that
-moves focus:
+moves focus. Focus the field, clear it with Command-A and Delete, then use a
+digit so autocapitalization cannot change the expected value:
 
 ```sh
-# Start from an empty field, so the value you expect afterwards is exact.
-# `0x33` is kVK_Delete, one character per press.
-BEFORE=$(read_field) || { echo "baseline read failed" >&2; exit 1; }
-[ -z "$BEFORE" ] || { echo "clear $FIELD first (0x33 is kVK_Delete)" >&2; exit 1; }
+deviceterm tap --identifier "$FIELD" --pane "$DT_PANE"
+# Insert an observation round trip before sending keyboard input. This does not
+# prove that the field has focus.
+wait_after_focus || { echo "post-focus wait failed" >&2; exit 1; }
 
-deviceterm key 0x00 down --pane "$DT_PANE"; deviceterm key 0x00 up --pane "$DT_PANE"
+deviceterm key 0x37 down --pane "$DT_PANE"
+deviceterm key 0x00 down --pane "$DT_PANE"
+deviceterm key 0x00 up --pane "$DT_PANE"
+deviceterm key 0x37 up --pane "$DT_PANE"
+deviceterm key 0x33 down --pane "$DT_PANE"
+deviceterm key 0x33 up --pane "$DT_PANE"
 
-deviceterm wait ax --identifier "$FIELD" --value a --match exact \
-  --pane "$DT_PANE" || { echo "'a' never landed in $FIELD" >&2; exit 1; }
+deviceterm key 0x1a down --pane "$DT_PANE"
+deviceterm key 0x1a up --pane "$DT_PANE"
+
+deviceterm wait ax --identifier "$FIELD" --value 7 --match exact \
+  --pane "$DT_PANE" || { echo "'7' never landed in $FIELD" >&2; exit 1; }
+
+AFTER=$(read_field) || { echo "read-back failed" >&2; exit 1; }
+[ "$AFTER" = 7 ] || {
+  echo "expected [7], found [$AFTER]" >&2
+  exit 1
+}
 ```
 
-`0x00` is `kVK_ANSI_A`, so a focused field's `value` gains an `a`.
+`0x37` is Command, `0x00` is A, `0x33` is Delete, and `0x1a` is
+`kVK_ANSI_7`. Some fields expose their placeholder as `AXValue` when empty, so
+`[ -z "$BEFORE" ]` is not a valid clearing assertion. The exact final value
+`7` proves both that the old value was cleared and that the key landed.
 
-**Use `--match exact` here, and empty the field to make that possible.** The
-`text` scenario needs `contains` because a tap puts the caret mid-string, and it
-pays for that twice over: `contains` folds case, so an `A` satisfies `--value a`,
-and it widens the *identifier* too, so a neighbouring node whose identifier
-merely contains `$FIELD` can satisfy the wait — returning before your field has
-the key, which then makes an exact read-back afterwards report a failure that
-has not happened yet. Emptying the field first removes the reason for `contains`
-and both problems with it: an exact identifier cannot widen, and an exact value
-cannot fold.
-
-**If this times out while the field visibly gained a character**, read it with
-`read_field` before concluding anything. A field that autocapitalises holds `A`,
-which `--match exact --value a` will never match — that is the field's own
-behaviour rather than a lost keystroke, and it is why the case question is
-settled here by emptiness rather than by a looser comparison.
-
-Block on the value rather than reading straight back, for the reason the `text`
-block above gives: the key receipts report dispatch, not that the guest consumed
-them. The same focus barrier applies too — these keys go wherever focus already
-is, so establish it and settle before sending them.
+Block on the exact value rather than reading straight back. The key receipts
+report dispatch, not that the guest consumed them. `wait_after_focus` reduces
+immediate back-to-back dispatch but does not prove focus; the final value does.
 
 **Do not use `0x30` here**: it is Tab, which moves focus and leaves `value`
 untouched, so a read-back can neither confirm nor refute delivery. It appears in
@@ -1091,10 +1102,9 @@ and then ran. So a close racing only the *holder* refuses nothing, because a
 holding composite is deliberately left to finish. You need a third command
 already queued when the close lands, which `ContactLane.close()` cancels:
 
-**`pane close` needs the shortId, not the UDID**, for the reason in *Invocation
-conventions*. Resolve it with the guarded lookup there, or the close targets
-whatever pane is current and the queued tap runs normally, which looks exactly
-like the refusal path not working.
+Use the same exact Simulator UDID or physical deviceId held in `$DT_PANE` for
+the workspace close. Resolve it first with `pane show` and retain its `kind`,
+because only a Simulator accepts `--mode`.
 
 **Capture each background pid.** The `wait` below is the **shell builtin**, on
 job pids; it is not `deviceterm wait`, and the sleeps around it are the timing
@@ -1108,7 +1118,19 @@ deviceterm long-press 0.5 0.5 --duration 5000 --pane "$DT_PANE" & hold=$!
 sleep 0.3
 deviceterm tap 0.4 0.4 --pane "$DT_PANE" > $DT_DIR/queued.txt 2>&1 & queued=$!
 sleep 0.3
-deviceterm pane close --mode detach --pane "$DT_REF"; close_rc=$?
+kind=$(deviceterm pane show "$DT_PANE" --json | jq -er '.kind') || exit 1
+case "$kind" in
+    simulator)
+        deviceterm pane close "$DT_PANE" --mode detach; close_rc=$?
+        ;;
+    device)
+        deviceterm pane close "$DT_PANE"; close_rc=$?
+        ;;
+    *)
+        echo "unexpected pane kind: $kind" >&2
+        exit 1
+        ;;
+esac
 
 wait "$queued"; queued_rc=$?
 wait "$hold";   hold_rc=$?
@@ -1124,10 +1146,9 @@ Read it in this order:
 3. `hold_rc` is informational. The holder is deliberately left to finish, so it
    is not the one being refused.
 
-**This scenario requires a simulator pane**, because it is built on `pane
-close`, which cannot resolve a physical-device pane at all. On a device pane the
-close fails with `intent.notFound` and the queued tap runs normally, which reads
-as the refusal path not working.
+This scenario works with either mirrored kind. The Simulator arm explicitly
+chooses detach; the physical-device arm omits `--mode`, since a handset has no
+shutdown disposition.
 
 **It closes the pane**, so run it last, or on a pane you are finished with.
 
@@ -1197,13 +1218,9 @@ Do not spend a run rediscovering these.
   true, because the real-device backend throws
   `unsupported(verb: "two-finger input")` unconditionally. The capability flag
   gates the family, not that verb.
-- **`pane rename` and `pane move` return `intent.internalError`.** Both verbs
-  parse, dispatch, and reach a handler that throws "not implemented"; neither
-  mutates anything.
-- **No CLI verb closes a physical-device pane.** `pane close` resolves against
-  `simPanes` only, so a device pane is `intent.notFound` however you name it.
-  Close it from the GUI, and budget for that when a device scenario needs a
-  clean pane.
+- **Workspace `pane rename` and `pane close` cover both mirrored kinds.** The
+  pane's exact device key is a valid ref. Only Simulator close accepts
+  `--mode`; passing it for a physical device is `intent.unsupportedPane`.
 - **`crown --velocity` is accepted and silently ignored**, because the
   SimulatorKit crown builder takes only a delta. The streaming `--duration` path
   also no-ops below the watchOS recognizer's coalescing floor; use the

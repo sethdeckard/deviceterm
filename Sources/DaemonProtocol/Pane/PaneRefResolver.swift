@@ -4,10 +4,10 @@ import Foundation
 
 /// Pure-logic `--pane <ref>` resolution.
 ///
-/// Same shape as `TabRefResolver` but matches against `PanesListEntry`
-/// instead of `TabsListEntry`. Lives in DaemonProtocol so CLI and daemon
-/// code share the same matcher. No I/O; the caller fetches `panes.list`
-/// and hands the entries in.
+/// Matches device-backed pane refs against the daemon's internal
+/// `PanesListEntry` roster. Lives in DaemonProtocol so CLI and daemon code
+/// share the same matcher. No I/O; the caller fetches `pane.deviceList` and
+/// hands the entries in.
 public enum PaneRefResolver {
     public enum Resolution: Equatable, Sendable {
         case entry(PanesListEntry)
@@ -16,8 +16,8 @@ public enum PaneRefResolver {
         case ambiguous([PanesListEntry])
     }
 
-    /// Minimum length of a UUID-prefix match, same rationale as
-    /// `TabRefResolver.minUUIDPrefixLength`.
+    /// Minimum length of a UUID-prefix match, avoiding accidental matches on
+    /// tiny fragments while keeping generated pane ids convenient to type.
     public static let minUUIDPrefixLength = 4
 
     /// Resolve `ref` against `entries`. Priority: short_id → name →

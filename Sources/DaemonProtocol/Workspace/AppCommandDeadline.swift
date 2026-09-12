@@ -39,6 +39,15 @@ public enum AppCommandDeadline {
     /// GUI.
     public static let cliRequestTimeoutSeconds: Double = 5
 
+    /// GUI reply budget for workspace mutations that may await session minting
+    /// and AppKit reconciliation before returning committed objects.
+    public static let workspaceGUIReplyTimeoutMs: Int = 17_000
+
+    /// CLI transport budget for committed workspace mutations. The one-second
+    /// margin lets the daemon return a GUI-timeout error before the socket
+    /// deadline wins.
+    public static let workspaceCLIRequestTimeoutSeconds: Double = 18
+
     /// Wire code the GUI acks with when it declines an expired command.
     ///
     /// Usually diagnostic: the daemon has generally dropped its pending

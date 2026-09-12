@@ -48,19 +48,28 @@ enum IntentError: Error, Sendable, Equatable {
     /// unlike the protection gate: resolution runs first, so a foreign
     /// protected tab is already `notFound` before this can fire.
     /// Anything that gets here is a tab the caller can already see in
-    /// `tabs list`, so naming the reason leaks nothing and a `notFound`
+    /// `tab list`, so naming the reason leaks nothing and a `notFound`
     /// would be a confusing lie. Carries the verb for the hint.
     case automationRequired(verb: String)
 
-    /// The caller owns no terminal in the resolved tab, for a verb that
-    /// admits only an owner. Distinguishable from `notFound` on the same
-    /// reasoning as `automationRequired`: the gate sits behind resolution,
-    /// which already refused a foreign protected tab, so anything reaching
-    /// it is a tab the caller can see in `tabs list`. Distinct from
-    /// `automationRequired` too, because an automation grant does not widen
-    /// an owner gate: pointing the caller at an Automation Tab would send it
-    /// down a path that still refuses. Carries the verb for the hint.
-    case ownerRequired(verb: String)
+    /// Closing the final terminal pane would implicitly destroy the tab.
+    /// The public CLI keeps that boundary explicit: callers must choose
+    /// `tab close` when they intend to close the workspace.
+    case wouldCloseTab
+
+    /// The selected pane exists, but does not support the requested verb.
+    case unsupportedPane(verb: String, kind: WorkspacePaneKind)
+
+    /// A compound mutation committed a resource before a later operation
+    /// failed. The committed receipt lets the caller address and clean up
+    /// what now exists instead of rediscovering it by polling.
+    case mutationFailed(message: String, committed: WorkspaceMutationReceipt)
+
+    /// A pane attach failed before it committed a pane. When the failure came
+    /// from the daemon, `forwardedRPCCode` lets the back-channel return that
+    /// numeric RPC error unchanged instead of wrapping it as an intent-layer
+    /// internal error. Caller-local failures use `rpc.serverError`.
+    case attachFailed(message: String, forwardedRPCCode: Int)
 
     /// Internal invariant broken. Surfaces as a bug message
     /// pointing at the source-layer caller. Wraps an underlying
@@ -88,8 +97,17 @@ enum IntentError: Error, Sendable, Equatable {
             // its own numeric scope refusal; the rest it only relays.
             return IntentErrorCode.automationRequired
 
-        case .ownerRequired:
-            return "intent.ownerRequired"
+        case .wouldCloseTab:
+            return "intent.wouldCloseTab"
+
+        case .unsupportedPane:
+            return "intent.unsupportedPane"
+
+        case .mutationFailed:
+            return "intent.mutationFailed"
+
+        case .attachFailed:
+            return "intent.attachFailed"
 
         case .internalError:
             return "intent.internalError"
@@ -105,7 +123,7 @@ enum IntentError: Error, Sendable, Equatable {
 
         case let .ambiguous(kind, ref, matchCount):
             return "\(kind) ref '\(ref)' matched \(matchCount) entries; "
-                + "use --short-id or the full UUID"
+                + "use a unique short ID or the full ID"
 
         case let .guiUnavailable(timeoutMs):
             return "no GUI response within \(timeoutMs)ms; the "
@@ -118,12 +136,39 @@ enum IntentError: Error, Sendable, Equatable {
             return "\(verb) needs a live automation grant for this "
                 + "target; run it from an Automation Tab"
 
-        case let .ownerRequired(verb):
-            return "\(verb) needs a terminal inside the target tab; "
-                + "the caller owns none there"
+        case .wouldCloseTab:
+            return "closing the last terminal pane would close its tab; "
+                + "use `deviceterm tab close` instead"
+
+        case let .unsupportedPane(verb, kind):
+            return "pane \(verb) is not supported by a \(kind.rawValue) pane"
+
+        case let .mutationFailed(message, _):
+            return message
+
+        case let .attachFailed(message, _):
+            return message
 
         case let .internalError(description):
             return "internal: \(description)"
         }
+    }
+
+    /// JSON context copied through the back-channel and outer RPC error.
+    var details: Data? {
+        guard case let .mutationFailed(_, committed) = self,
+            let encoded = try? JSONEncoder().encode(committed),
+            let object = try? JSONSerialization.jsonObject(with: encoded),
+            let data = try? JSONSerialization.data(
+                withJSONObject: ["committed": object],
+                options: [.sortedKeys]
+            ) else { return nil }
+        return data
+    }
+
+    /// Numeric daemon error to relay through the GUI back-channel unchanged.
+    var forwardedRPCCode: Int? {
+        guard case let .attachFailed(_, code) = self else { return nil }
+        return code
     }
 }

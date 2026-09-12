@@ -18,8 +18,6 @@ struct DeviceTerm: ParsableCommand {
         commandName: "deviceterm",
         abstract: "Drive DeviceTerm tabs, panes, and the devices they show.",
         subcommands: [
-            TabsCommand.self,
-            PanesCommand.self,
             DevicesCommand.self,
             VersionCommand.self,
             DumpConfigCommand.self,
@@ -44,7 +42,6 @@ struct DeviceTerm: ParsableCommand {
             PaneCommand.self,
             DeviceCommand.self,
             WindowCommand.self,
-            WindowsCommand.self,
             CompletionsCommand.self
         ]
     )

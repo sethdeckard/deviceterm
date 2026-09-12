@@ -3,8 +3,8 @@
 import Foundation
 
 /// Daemon-wide store of automation grants. Actor-isolated: mutated only
-/// by validated-GUI handlers (`automation.grant` / `automation.revoke`),
-/// by connection teardown, and by session removal; read by the automation
+/// by the validated-GUI `automation.grant` handler, by connection teardown,
+/// and by session removal; read by the automation
 /// scope check and capability advertising on every request.
 ///
 /// Nothing here is written to disk. A daemon restart starts empty; grants live

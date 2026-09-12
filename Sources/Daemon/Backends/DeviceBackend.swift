@@ -482,7 +482,7 @@ extension DeviceBackend {
 }
 
 extension DeviceBackendCapabilities {
-    /// Wire projection for `pane.create` / `panes.list`. The daemon-only
+    /// Wire projection for `pane.create` / `pane.deviceList`. The daemon-only
     /// `DeviceBackendCapabilities` (which drives the coordinator's
     /// per-verb gate) maps 1:1 to the Foundation-only `PaneCapabilities`
     /// wire shape. This is not a protocol conformance (it's a

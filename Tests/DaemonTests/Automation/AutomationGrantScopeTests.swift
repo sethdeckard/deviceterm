@@ -8,8 +8,8 @@ import Testing
 @preconcurrency import XPC
 
 // Automation authority is a LIVE grant, not a cached role, enforced over
-// the real XPC dispatch path. And the grant/revoke verbs are
-// validated-GUI-only. Payloads are atomic. Session close and GUI disconnect
+// the real XPC dispatch path. The grant verb is validated-GUI-only. Payloads
+// are atomic. Session close and GUI disconnect
 // revoke on the same already-authenticated socket.
 
 private let validatedGUIPeer: PeerValidator = { _ in
@@ -25,11 +25,9 @@ private func automationServer(
         handlers: [
             RPCMethod.automationGrant.rawValue:
                 .validatedGUI(AutomationMethods.grant(store: grants)),
-            RPCMethod.automationRevoke.rawValue:
-                .validatedGUI(AutomationMethods.revoke(store: grants)),
-            RPCMethod.tabCapture.rawValue:
+            RPCMethod.paneCaptureText.rawValue:
                 .automationTab(AppCommandMethods.publishVerb(
-                    kind: .tabCapture,
+                    kind: .paneCaptureText,
                     coordinator: coordinator,
                     automationGrant: grants
                 ))
@@ -103,19 +101,22 @@ func automationScopeIsGatedByLiveGrantNotRole() async throws {
     try await authenticate(created, client: clientPair, replyBox: replyBox)
 
     // No grant → refused at the scope gate.
-    sendRequest(envelopeId: 2, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
+    sendRequest(envelopeId: 2, method: RPCMethod.paneCaptureText.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 
     // Grant → the call reaches the handler (guiUnavailable, -32099).
     send(3, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     _ = try await replyBox.awaitReply()
-    sendRequest(envelopeId: 4, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
+    sendRequest(envelopeId: 4, method: RPCMethod.paneCaptureText.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == -32_099)
 
-    // Revoke → the SAME authenticated socket is refused again (live recheck).
-    send(5, .automationRevoke, try grantBody([sid], revision: 2), to: clientPair)
-    _ = try await replyBox.awaitReply()
-    sendRequest(envelopeId: 6, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
+    // Lifecycle revoke → the SAME authenticated socket is refused again
+    // (live recheck). Revocation is intentionally not a public RPC verb.
+    _ = await grants.revoke(
+        sessionIds: [sid],
+        key: GrantOrderingKey(epoch: XPCServer.xpcIdBase, revision: 2)
+    )
+    sendRequest(envelopeId: 6, method: RPCMethod.paneCaptureText.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 }
 
@@ -134,7 +135,7 @@ func automationRoleWithoutGrantIsRefused() async throws {
     setupClient(clientPair, replyBox: replyBox)
     try await authenticate(created, client: clientPair, replyBox: replyBox)
 
-    sendRequest(envelopeId: 2, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
+    sendRequest(envelopeId: 2, method: RPCMethod.paneCaptureText.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
 }
 
@@ -143,7 +144,7 @@ func automationRoleWithoutGrantIsRefused() async throws {
 /// deliberately: each file names the set it drives, and
 /// `registryTagsExactlyTheAutomationSurface` is what pins the real one.
 private let workspaceWideMethods: [RPCMethod] = [
-    .tabOpen, .tabSelect, .tabMove, .windowOpen, .windowFocus
+    .tabOpen, .tabFocus, .tabMove, .windowOpen, .windowFocus, .paneFocus
 ]
 
 @Test(arguments: workspaceWideMethods)
@@ -218,10 +219,10 @@ func malformedIdBatchIsRejectedWithNoMutation() async throws {
     setupClient(clientPair, replyBox: replyBox)
     try await authenticate(created, client: clientPair, replyBox: replyBox)
 
-    // A revoke batch with a malformed id → invalidParams at decode, no
+    // A grant batch with a malformed id → invalidParams at decode, no
     // mutation: the pre-existing grant survives.
     let malformed = Data(#"{"sessionIds":["\#(created.state.id.uuidString)","not-a-uuid"],"revision":9}"#.utf8)
-    sendRequest(envelopeId: 2, method: RPCMethod.automationRevoke.rawValue, params: malformed, client: clientPair)
+    sendRequest(envelopeId: 2, method: RPCMethod.automationGrant.rawValue, params: malformed, client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.invalidParamsCode)
     #expect(await grants.hasGrant(created.state.id))
 }
@@ -244,7 +245,7 @@ func sessionCloseRevokesGrantAndRefusesSameSocket() async throws {
     // Grant, confirm reach.
     send(2, .automationGrant, try grantBody([sid], revision: 1), to: clientPair)
     _ = try await replyBox.awaitReply()
-    sendRequest(envelopeId: 3, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
+    sendRequest(envelopeId: 3, method: RPCMethod.paneCaptureText.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == -32_099)
 
     // Close the session out from under the socket → grant revoked → refused.
@@ -255,14 +256,14 @@ func sessionCloseRevokesGrantAndRefusesSameSocket() async throws {
     // the socket isn't just ungranted, it's no longer authenticated at all.
     try await manager.closeSession(sessionId: sid, capability: created.capability)
     #expect(await grants.hasGrant(sid) == false)
-    sendRequest(envelopeId: 4, method: RPCMethod.tabCapture.rawValue, params: Data("{}".utf8), client: clientPair)
+    sendRequest(envelopeId: 4, method: RPCMethod.paneCaptureText.rawValue, params: Data("{}".utf8), client: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.unauthorizedCode)
 }
 
-@Test(arguments: [RPCMethod.automationGrant, RPCMethod.automationRevoke])
-func grantAndRevokeRefusedOverUDS(method: RPCMethod) async throws {
-    // Both are .validatedGUI: an authenticated UDS caller (any role) can't
-    // reach them, so no same-uid CLI process can issue itself a grant.
+@Test
+func grantRefusedOverUDS() async throws {
+    // It is .validatedGUI: an authenticated UDS caller (any role) can't reach
+    // it, so no same-uid CLI process can issue itself a grant.
     let manager = SessionManager()
     let created = try await manager.createSession(label: nil, role: .automation)
     let path = tempSocketPath(prefix: "deviceterm-orch-grant")
@@ -274,10 +275,12 @@ func grantAndRevokeRefusedOverUDS(method: RPCMethod) async throws {
     let body = try JSONEncoder().encode(
         AutomationGrantParams(sessionIds: [created.state.id], revision: 1)
     )
-    try client.send(RPCEnvelope(id: 1, type: .request, method: method.rawValue, body: .params(body)))
+    try client.send(
+        RPCEnvelope(id: 1, type: .request, method: RPCMethod.automationGrant.rawValue, body: .params(body))
+    )
     let response = try client.receive()
     guard case let .error(error) = response.body else {
-        Issue.record("expected \(method.rawValue) refused over UDS; got \(response.body)")
+        Issue.record("expected automation.grant refused over UDS; got \(response.body)")
         return
     }
     #expect(error.code == RPCMethodError.scopeViolationCode)
@@ -315,9 +318,9 @@ func guiDisconnectRevokesItsGrants() async throws {
     #expect(revoked)
 }
 
-@Test(arguments: [RPCMethod.automationGrant, RPCMethod.automationRevoke])
-func grantAndRevokeRefusedOverUnvalidatedXPC(method: RPCMethod) async throws {
-    // An XPC peer whose signature doesn't validate can't grant/revoke: the
+@Test
+func grantRefusedOverUnvalidatedXPC() async throws {
+    // An XPC peer whose signature doesn't validate can't grant: the
     // `.validatedGUI` scope refuses it, so a rogue local XPC client can't
     // mint itself authority.
     let grants = AutomationGrantStore()
@@ -326,9 +329,7 @@ func grantAndRevokeRefusedOverUnvalidatedXPC(method: RPCMethod) async throws {
     let registry = MethodRegistry(
         handlers: [
             RPCMethod.automationGrant.rawValue:
-                .validatedGUI(AutomationMethods.grant(store: grants)),
-            RPCMethod.automationRevoke.rawValue:
-                .validatedGUI(AutomationMethods.revoke(store: grants))
+                .validatedGUI(AutomationMethods.grant(store: grants))
         ],
         provenance: TestPeerIdentity.xpcProvenance(manager),
         automationGrant: grants
@@ -345,7 +346,7 @@ func grantAndRevokeRefusedOverUnvalidatedXPC(method: RPCMethod) async throws {
     defer { Task { await server.stop() } }
     setupClient(clientPair, replyBox: replyBox)
 
-    send(1, method, try grantBody([created.state.id], revision: 1), to: clientPair)
+    send(1, .automationGrant, try grantBody([created.state.id], revision: 1), to: clientPair)
     #expect(try errorCode(try await replyBox.awaitReply()) == RPCMethodError.scopeViolationCode)
     #expect(await grants.hasGrant(created.state.id) == false)
 }
@@ -511,8 +512,8 @@ func capabilitiesAdvertisesAutomationForGrantedAgentOverXPC() async throws {
     let server = defaultRegistryServer(manager: manager)
     defer { Task { await server.stop() } }
     let methods = try await advertisedMethods(for: created, server: server)
-    #expect(methods.contains(RPCMethod.tabCapture.rawValue))
-    #expect(methods.contains(RPCMethod.tabSendInput.rawValue))
+    #expect(methods.contains(RPCMethod.paneCaptureText.rawValue))
+    #expect(methods.contains(RPCMethod.paneSendInput.rawValue))
     for method in workspaceWideMethods {
         #expect(methods.contains(method.rawValue))
     }
@@ -528,8 +529,8 @@ func capabilitiesOmitsAutomationForUngrantedAutomationOverXPC() async throws {
     let server = defaultRegistryServer(manager: manager)
     defer { Task { await server.stop() } }
     let methods = try await advertisedMethods(for: created, server: server)
-    #expect(!methods.contains(RPCMethod.tabCapture.rawValue))
-    #expect(!methods.contains(RPCMethod.tabSendInput.rawValue))
+    #expect(!methods.contains(RPCMethod.paneCaptureText.rawValue))
+    #expect(!methods.contains(RPCMethod.paneSendInput.rawValue))
     for method in workspaceWideMethods {
         #expect(!methods.contains(method.rawValue))
     }

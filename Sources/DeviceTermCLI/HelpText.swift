@@ -17,7 +17,7 @@ import DaemonProtocol
 /// `render(role:)` prepends a role-aware header, so a caller can see which
 /// role the daemon gave it. That header is the only role-varying part of the
 /// output. The verb list is never filtered: an automation-only verb like
-/// `tab send-input` appears in every caller's view, and a listed command may
+/// `pane send-input` appears in every caller's view, and a listed command may
 /// still be refused because the connection lacks the required grant.
 ///
 /// A topic page carries no role header. It answers "how does this work?"

@@ -74,7 +74,7 @@ struct AppCommandSubscriberTests {
         }
     }
 
-    /// A `windows.list` command, optionally stamped with a deadline.
+    /// A `window.list` command, optionally stamped with a deadline.
     /// `windowsList` is the cheapest kind to dispatch for real: it reads
     /// the (empty) workspace and answers `.data`, so a dispatched command
     /// is distinguishable from a declined one by status alone.
@@ -83,9 +83,9 @@ struct AppCommandSubscriberTests {
     ) -> AppCommand {
         AppCommand(
             commandId: "cmd-\(expiresAtMonotonicNanos.map(String.init) ?? "none")",
-            kind: .windowsList,
+            kind: .windowList,
             originatingSessionId: nil,
-            params: Data(#"{"all":false}"#.utf8),
+            params: Data(#"{"all":true}"#.utf8),
             expiresAtMonotonicNanos: expiresAtMonotonicNanos
         )
     }
@@ -181,7 +181,7 @@ struct AppCommandSubscriberTests {
         try fake.emit(windowsListCommand(expiresAtMonotonicNanos: future))
         let acked = await waitUntil(3) { !fake.results.isEmpty }
         #expect(acked)
-        // "data" is what a real `windows.list` dispatch answers with, so
+        // "data" is what a real `window.list` dispatch answers with, so
         // this asserts the command ran rather than merely that it wasn't
         // declined for expiry.
         #expect(fake.results.first?.status == "data")
@@ -202,7 +202,7 @@ struct AppCommandSubscriberTests {
         try fake.emit(windowsListCommand(expiresAtMonotonicNanos: nil))
         let acked = await waitUntil(3) { !fake.results.isEmpty }
         #expect(acked)
-        // "data" is what a real `windows.list` dispatch answers with, so
+        // "data" is what a real `window.list` dispatch answers with, so
         // this asserts the command ran rather than merely that it wasn't
         // declined for expiry.
         #expect(fake.results.first?.status == "data")

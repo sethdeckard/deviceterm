@@ -88,80 +88,9 @@ public enum CLICommands {
         return status
     }
 
-    // MARK: - Workspace ref parsing
-    //
-    // `parseTabRef` / `parsePaneRef` / `parseWindowRef` map a raw
-    // `--tab` / `--pane` / `--window` value to the wire enum the
-    // daemon's `IntentResolver` consumes. Discrimination rules:
-    //   - Empty/nil/`current` → `.current`.
-    //   - UUID → `.sessionId` (a tab ID or terminal session ID); the GUI
-    //     resolves either to the containing tab. Panes use `.paneId`.
-    //   - Short alphanumeric (≤ 12 chars) → `.shortId`.
-    //   - Anything else → `.name` (tab only) or `.shortId` (pane).
-    //   - Pure integer (window) → `.index`.
-    //   - Anything else (window) → `.keyed` (rejected by the
-    //     resolver, but the encoding is forward-compatible).
-
-    /// Convert a `--tab <ref>` value to the wire enum. Nil/empty
-    /// means "current". Tests pin the discrimination rules so a
-    /// future change has to update the assertion list.
-    public static func parseTabRef(_ raw: String?) -> Wire.TabRef {
-        guard let raw, !raw.isEmpty, raw != "current" else {
-            return Wire.TabRef(type: "current", value: nil)
-        }
-        if UUID(uuidString: raw) != nil {
-            return Wire.TabRef(type: "sessionId", value: raw)
-        }
-        if raw.count <= 12, raw.allSatisfy({ $0.isLetter || $0.isNumber }) {
-            return Wire.TabRef(type: "shortId", value: raw)
-        }
-        return Wire.TabRef(type: "name", value: raw)
-    }
-
-    /// Convert a `--pane <ref>` value to the wire enum. `--pane`
-    /// accepts a paneId (UUID-shaped) or shortId here; name/UDID
-    /// resolution happens against `panes.list`.
-    public static func parsePaneRef(_ raw: String?) -> Wire.PaneRef {
-        guard let raw, !raw.isEmpty, raw != "current" else {
-            return Wire.PaneRef(type: "current", value: nil)
-        }
-        if UUID(uuidString: raw) != nil {
-            return Wire.PaneRef(type: "paneId", value: raw)
-        }
-        return Wire.PaneRef(type: "shortId", value: raw)
-    }
-
-    /// Convert a `--window <ref>` value to the wire enum. Pure
-    /// integers become a 1-based index; non-empty non-integer
-    /// strings encode as `keyed` (forward-compat, the resolver
-    /// rejects them, but the encoding shape is stable).
-    public static func parseWindowRef(_ raw: String?) -> Wire.WindowRef {
-        guard let raw, !raw.isEmpty, raw != "current" else {
-            return Wire.WindowRef(type: "current", value: nil)
-        }
-        if Int(raw) != nil {
-            return Wire.WindowRef(type: "index", value: raw)
-        }
-        return Wire.WindowRef(type: "keyed", value: raw)
-    }
-
-    /// Normalize a `--mode` flag to the wire-form `"detach"` /
-    /// `"shutdown"` string. Anything else (including nil) is
-    /// silently `detach`, matching the daemon's default and the
-    /// per-tab close prompt's safest answer.
-    public static func parseCloseMode(_ raw: String?) -> String {
-        switch raw {
-        case "shutdown":
-            return "shutdown"
-
-        default:
-            return "detach"
-        }
-    }
-
     /// Decode C-style escape sequences in `raw` to the actual control
     /// bytes: `\n` → LF, `\r` → CR, `\t` → TAB, `\xNN` →
-    /// arbitrary byte, etc. Used by `tab send-input` so the help-
+    /// arbitrary byte, etc. Used by `pane send-input` so the help-
     /// text examples (`'echo hi\\n'`) drive the shell as
     /// documented; without this the shell would receive a literal
     /// backslash + `n` because POSIX shells pass single-quoted
@@ -251,26 +180,6 @@ public enum CLICommands {
             index = raw.index(after: afterBackslash)
         }
         return out
-    }
-
-    /// Human-readable echo for a TabRef (used in `ok` lines /
-    /// receipts). The wire keeps `(type, value)`; the echo flattens
-    /// to either the literal value or the placeholder `current`.
-    public static func echoLabel(_ ref: Wire.TabRef) -> String {
-        if ref.type == "current" { return "current" }
-        return ref.value ?? ref.type
-    }
-
-    /// Human-readable echo for a PaneRef.
-    public static func echoLabel(_ ref: Wire.PaneRef) -> String {
-        if ref.type == "current" { return "current" }
-        return ref.value ?? ref.type
-    }
-
-    /// Human-readable echo for a WindowRef.
-    public static func echoLabel(_ ref: Wire.WindowRef) -> String {
-        if ref.type == "current" { return "current" }
-        return ref.value ?? ref.type
     }
 
     /// Detect the requested output mode. `--json` anywhere in argv
@@ -436,7 +345,7 @@ public enum CLICommands {
             // The tail is read here rather than through the global flag
             // machinery, which never runs for a help trigger. It resolves
             // through `helpTopic`, the same way a trailing `--help` does,
-            // so `help tabs current` and `tabs current --help` reach one
+            // so `help tab show` and `tab show --help` reach one
             // page. Having the two spellings differ would be a trap.
             // Tokens past the resolved path are ignored, so
             // `deviceterm help tap 0.5 0.5` still lands on the tap page.
@@ -524,8 +433,8 @@ public enum CLICommands {
     /// The topic a help request is asking about.
     ///
     /// A declared verb resolves to the longest leading run of non-flag
-    /// tokens that names a command path, so `tabs current --help` and
-    /// `help tabs current` reach one page. A verb the command tree does
+    /// tokens that names a command path, so `tab show --help` and
+    /// `help tab show` reach one page. A verb the command tree does
     /// not declare resolves to nothing, and the first non-flag token
     /// names the legacy topic instead.
     static func helpTopic(in arguments: [String]) -> String? {

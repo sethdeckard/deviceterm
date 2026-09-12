@@ -5,7 +5,7 @@ import Foundation
 import Testing
 
 // PaneCapabilities is the per-pane capability block carried on
-// `pane.create` / `device.attach` and `panes.list`. These pin its
+// `pane.create` / `device.attach` and `pane.deviceList`. These pin its
 // round-trip and, critically, the skew tolerance of the carrying
 // wire shapes: the fields are optional so an older daemon that omits
 // them still decodes, and an older client decoding a newer daemon's

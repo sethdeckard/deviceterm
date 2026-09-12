@@ -77,7 +77,11 @@ func authenticateConnection(
         deadline: deadline
     )
     if case let .error(err) = response.body {
-        throw CLIError.daemon(code: err.code, message: err.message)
+        throw CLIError.daemon(
+            code: err.code,
+            message: err.message,
+            details: err.details
+        )
     }
 }
 
@@ -120,9 +124,13 @@ func roundTrip(
         }
         do {
             return try roundTripOnce(deadline: deadline, buildingRequest: buildingRequest)
-        } catch let CLIError.daemon(code, message) {
+        } catch let CLIError.daemon(code, message, details) {
             guard code == notReadyCode, attempt < maxNotReadyRetries else {
-                throw CLIError.daemon(code: code, message: message)
+                throw CLIError.daemon(
+                    code: code,
+                    message: message,
+                    details: details
+                )
             }
             attempt += 1
             let remaining = deadline.timeIntervalSinceNow
@@ -193,7 +201,11 @@ private func roundTripOnce(
         return Data()
 
     case let .error(err):
-        throw CLIError.daemon(code: err.code, message: err.message)
+        throw CLIError.daemon(
+            code: err.code,
+            message: err.message,
+            details: err.details
+        )
 
     case .params:
         throw CLIError.invalidResponse("unexpected params body on a response")

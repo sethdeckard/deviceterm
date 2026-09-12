@@ -216,7 +216,7 @@ func deviceFlagValue(in args: [String]) -> String? {
 /// shim would post a fabricated boot claim. The daemon would then bind
 /// ownership of an externally-booted sim to the calling
 /// session, breaking the linkage model's "external sims stay
-/// unattached until `deviceterm pane attach`" property. `simctl boot
+/// unattached until `deviceterm device attach`" property. `simctl boot
 /// <udid>` against an already-Booted device fails non-zero so the
 /// caller's `exitCode == 0` gate already screens it; bootstatus -b
 /// is the first verb where success-without-transition is the

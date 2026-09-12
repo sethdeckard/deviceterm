@@ -613,6 +613,23 @@ func panesListObservationCarriesConfirmedOrientationAndSurface() async throws {
 }
 
 @Test
+func paneNameUpdateAppearsInDaemonDirectRoster() async throws {
+    let coordinator = PaneCoordinator()
+    let sessionId = UUID()
+    let pane = try await coordinator.createMockPane(
+        udid: "pane-name",
+        sessionId: sessionId,
+        backend: MockDeviceBackend()
+    )
+
+    try await coordinator.setName(paneId: pane.paneId, name: "phone")
+    #expect(await coordinator.panesForSession(sessionId).first?.name == "phone")
+
+    try await coordinator.setName(paneId: pane.paneId, name: nil)
+    #expect(await coordinator.panesForSession(sessionId).first?.name == nil)
+}
+
+@Test
 func textRoutesAsOneValidatedKeystrokeBatch() async throws {
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()

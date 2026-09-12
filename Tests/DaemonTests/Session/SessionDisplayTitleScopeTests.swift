@@ -25,9 +25,7 @@ private func displayTitleServer(
     let registry = MethodRegistry(
         handlers: [
             RPCMethod.sessionSetDisplayTitle.rawValue:
-                .validatedGUI(SessionMethods.setDisplayTitle(using: manager)),
-            RPCMethod.tabsList.rawValue:
-                .daemonWide(SessionMethods.tabsList(using: manager))
+                .validatedGUI(SessionMethods.setDisplayTitle(using: manager))
         ],
         subscriptions: [:],
         provenance: TestPeerIdentity.xpcProvenance(manager)
@@ -56,14 +54,8 @@ private func sendTitle(
     )
 }
 
-private func tabs(_ reply: xpc_object_t) throws -> [TabsListEntry] {
-    let envelope = try decodeEnvelope(reply: reply)
-    guard case let .result(bytes) = envelope.body else { return [] }
-    return try JSONDecoder().decode([TabsListEntry].self, from: bytes)
-}
-
 @Test
-func setDisplayTitleThenClearThroughTabsList() async throws {
+func setDisplayTitleThenClearUpdatesManagerProjection() async throws {
     let manager = SessionManager()
     let session = try await manager.makeSessionState(name: "branch")
     let server = displayTitleServer(manager: manager, validator: validatedTitlePeer)
@@ -82,19 +74,12 @@ func setDisplayTitleThenClearThroughTabsList() async throws {
         return
     }
 
-    sendRequest(envelopeId: 2, method: RPCMethod.tabsList.rawValue, client: clientPair)
-    let listed = try tabs(try await replyBox.awaitReply())
-    #expect(listed.first?.displayTitle == "vim foo")
-    #expect(listed.first?.name == "branch")
+    #expect(await manager.displayTitle(session.id) == "vim foo")
 
-    // The clear is a real operation: `tabs.list` drops back to the session
-    // name rather than reporting the stale title.
+    // The clear is a real operation: the daemon must not retain a stale title.
     try sendTitle(envelopeId: 3, sessionId: session.id.uuidString, title: nil, client: clientPair)
     _ = try await replyBox.awaitReply()
-    sendRequest(envelopeId: 4, method: RPCMethod.tabsList.rawValue, client: clientPair)
-    let cleared = try tabs(try await replyBox.awaitReply())
-    #expect(cleared.first?.displayTitle == nil)
-    #expect(cleared.first?.name == "branch")
+    #expect(await manager.displayTitle(session.id) == nil)
 }
 
 @Test

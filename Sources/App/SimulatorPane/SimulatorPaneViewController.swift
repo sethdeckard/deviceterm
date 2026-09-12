@@ -54,6 +54,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// `.shutdown` before issuing the boot RPC) without exposing the
     /// VM itself.
     var currentState: SimulatorPaneState { viewModel.state }
+    var currentOrientation: Orientation { viewModel.currentOrientation }
 
     private let viewModel: SimulatorPaneViewModel
     /// SwiftUI chrome overlay state (title strip, status badge, focus

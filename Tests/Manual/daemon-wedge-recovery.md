@@ -24,7 +24,7 @@ surface pool, or the GUI's retry policies.
 - A terminal **outside** DeviceTerm, so you can still drive the machine when the
   app's own tabs are blocked. It needs bash or zsh for the `<<<` below.
 
-The `panes list` and `devices list` commands below run **inside a DeviceTerm
+The `pane list` and `devices list` commands below run **inside a DeviceTerm
 terminal pane**. They authenticate against that pane's session and are refused
 out of tab. Signals, `instance-guard.sh`, and the lock run in the **external**
 terminal, which is what keeps them working when the app is stopped. In check 1
@@ -145,9 +145,9 @@ calls and never returns.
 | # | Action | Expected |
 |---|--------|----------|
 | 1.1 | `SIM_STOPPED=1; simsig STOP` | Exits 0. The already-rendering pane keeps showing its last frame. The flag is what tells `cleanup` there is something to resume; without it cleanup resumes nothing. |
-| 1.2 | `deviceterm panes list` | Answers promptly with the live pane. The listing is an in-memory read, and nothing on the path calls CoreSimulator to serve it. A slow answer means that path is blocked somewhere across dispatch, session validation, and the coordinator; capture a daemon sample before attributing it. |
+| 1.2 | `deviceterm pane list` | Answers promptly with the live GUI projection. Nothing on the read path calls CoreSimulator to serve it. A slow answer means the GUI back-channel or workspace projection is blocked; capture app and daemon samples before attributing it. |
 | 1.3 | `deviceterm devices list`, repeating for at least 3s | Eventually blocks or fails. The daemon caches its device snapshot for 2s, so a call right after 1.1 can still answer from cache. Repeat until it stops answering; that is what confirms the service is really wedged. |
-| 1.4 | Repeat 1.2 several times over the next minute | Answers promptly every time. A `panes list` that starts hanging is the wedge reproducing. |
+| 1.4 | Repeat 1.2 several times over the next minute | Answers promptly every time. A `pane list` that starts hanging means the CoreSimulator wedge has leaked into the GUI projection path. |
 | 1.5 | `simsig CONT && SIM_STOPPED=` | Exits 0. Service resumes, and clearing the flag stops cleanup from sending a second, pointless `CONT`. |
 | 1.6 | `deviceterm devices list` | Answers again. |
 

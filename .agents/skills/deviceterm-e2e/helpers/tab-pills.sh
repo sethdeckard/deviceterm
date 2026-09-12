@@ -83,11 +83,15 @@ if report["unreadable"]:
     )
 
 found = []
+window_nodes = 0
 
 
 def walk(node):
+    global window_nodes
     if not isinstance(node, dict):
         return
+    if node.get("role") == "AXWindow" and not node.get("cycle") and not node.get("skipped"):
+        window_nodes += 1
     ident = str(node.get("identifier", ""))
     if (ident.startswith("deviceterm.tab.")
             and not ident.endswith(".close")
@@ -98,6 +102,8 @@ def walk(node):
 
 
 walk(report.get("tree"))
+if window_nodes == 0:
+    sys.exit("tab-pills.sh: the DeviceTerm dump contains no AXWindow — re-dump")
 for ident in sorted(found):
     print(ident)
 PY

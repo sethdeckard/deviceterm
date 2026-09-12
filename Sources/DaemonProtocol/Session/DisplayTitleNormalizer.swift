@@ -5,9 +5,9 @@ import Foundation
 /// The one routine that turns a raw OSC 0/2
 /// terminal title into a value safe to store and republish.
 ///
-/// A tab's display title is written by whatever program runs in that tab,
-/// so it is fully caller-controlled text that ends up in a daemon-wide
-/// read (`tabs.list`). Two properties matter:
+/// A tab's display title is written by whatever program runs in that tab, so it
+/// is fully caller-controlled text that crosses process boundaries and appears
+/// in the public workspace projection. Two properties matter:
 ///
 ///   - **Bounded.** Untreated, an OSC title is unbounded, so it would be
 ///     both an unbounded XPC payload and unbounded daemon state. The GUI
@@ -33,8 +33,7 @@ import Foundation
 ///     values that render the same. Stripping them to close that gap would
 ///     corrupt legitimate titles, which is the worse trade for a label
 ///     whose whole job is to describe a tab to a human. Nothing resolves a
-///     tab by its display title: `shortId` is the identifier, and
-///     `tabs.list` documents `displayTitle` as explicitly not one.
+///     tab by its display title: the tab id or short id is the identifier.
 ///
 /// Pipeline order matters: strip prohibited scalars, THEN
 /// NFC-normalize (stripping first is what makes the surviving neighbours

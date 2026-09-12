@@ -22,11 +22,21 @@ func registryKeysMatchRPCMethodCases() {
 }
 
 @Test
+func paneNameMirrorIsValidatedGUIOnly() {
+    let registry = DaemonMethods.defaultRegistry(
+        sessionManager: SessionManager(),
+        deviceCoordinator: DeviceCoordinator(),
+        paneCoordinator: PaneCoordinator()
+    )
+    #expect(registry.scope(of: RPCMethod.paneSetName.rawValue) == .validatedGUI)
+}
+
+@Test
 func registryTagsExactlyTheAutomationSurface() {
     // Which verbs need a live automation grant is a closed set, pinned
     // here so one can't be added or dropped as a side effect. Two groups:
     // verbs that create or rearrange workspace surfaces or change focus,
-    // plus two terminal-content verbs. All seven are gated before target
+    // plus two terminal-content verbs. All eight are gated before target
     // resolution.
     let registry = DaemonMethods.defaultRegistry(
         sessionManager: SessionManager(),
@@ -35,8 +45,8 @@ func registryTagsExactlyTheAutomationSurface() {
     )
     let tagged = registry.methodNames.filter { registry.scope(of: $0) == .automationTab }
     let expected: [RPCMethod] = [
-        .tabOpen, .tabSelect, .tabMove, .windowOpen, .windowFocus,
-        .tabSendInput, .tabCapture
+        .tabOpen, .tabFocus, .tabMove, .windowOpen, .windowFocus, .paneFocus,
+        .paneSendInput, .paneCaptureText
     ]
     #expect(Set(tagged) == Set(expected.map(\.rawValue)))
 }

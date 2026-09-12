@@ -85,14 +85,14 @@ swift build >/dev/null
 [ -d "$DEVICETERM_APP" ] || fail "$DEVICETERM_APP missing"
 
 # ── Small JSON reader (python3 ships with the Command Line Tools) ───────
-# Total tab count summed across ALL windows in `windows list --all --json`
-# (a bare array of {index,isKey,tabCount,selectedTabShortId?}). Prints -1
+# Total tab count summed across all windows in `window list --all --json`
+# (an array of WorkspaceWindow objects). Prints -1
 # if there are no windows.
 #
 # Deliberately the workspace total, not one window's count. ⌘T adds a tab
 # to the frontmost window and ⌘W removes it, so the total moves by ±1
 # whichever window is frontmost — and we never have to identify that
-# window. That matters because `isKey` here is derived from
+# window. That matters because `focused` here is derived from
 # `workspace.selectedWindowID`, not a live window-server read: a focus
 # change reaches it a notification later, and structural mutations set it
 # outright, so a sampled row can disagree with the window the harness
@@ -111,10 +111,9 @@ PY
 
 # ── Pane readers, from the AX tree ─────────────────────────────────────
 # Pane wrapper views publish a `deviceterm.pane.<kind>.<key>` accessibility
-# identifier and answer AXFocused. That is the only way in: pane identity
-# lives in GUI nav state the CLI never exposes, and `panes list` is a
-# daemon RPC that enumerates device panes only, so it can neither see nor
-# count terminal panes.
+# identifier and answer AXFocused. `pane list` exposes the same leaf identity,
+# but the AX tree is required here because this track verifies the AppKit
+# accessibility surface and per-window responder focus.
 #
 # `pane_ids` lists every pane in the dump. `window_panes` lists the panes
 # sharing a window with a named one, each tagged `1` or `0` for AXFocused.
@@ -271,12 +270,12 @@ if [ -x "$dt_bin" ]; then
     done
 fi
 
-if ! "$CLI" windows list --all --json >"$SCRATCH/windows.json" 2>/dev/null \
+if ! "$CLI" window list --all --json >"$SCRATCH/windows.json" 2>/dev/null \
    || [ "$(total_tabs "$SCRATCH/windows.json")" -lt 0 ]; then
     info "deviceterm has no window — launching it"
     open "$DEVICETERM_APP"
     for _ in $(seq 1 40); do
-        "$CLI" windows list --all --json >"$SCRATCH/windows.json" 2>/dev/null || true
+        "$CLI" window list --all --json >"$SCRATCH/windows.json" 2>/dev/null || true
         [ "$(total_tabs "$SCRATCH/windows.json")" -ge 0 ] && break
         sleep 0.5
     done
@@ -320,7 +319,7 @@ ok "ax dump returned a well-formed tree"
     || { cat "$SCRATCH/drive.json" >&2; fail "drive key cmd+t failed"; }
 after=-1
 for _ in $(seq 1 12); do
-    "$CLI" windows list --all --json >"$SCRATCH/windows2.json" 2>/dev/null || true
+    "$CLI" window list --all --json >"$SCRATCH/windows2.json" 2>/dev/null || true
     after="$(total_tabs "$SCRATCH/windows2.json")"
     [ "$after" -eq "$((baseline + 1))" ] && break
     sleep 0.25
@@ -331,7 +330,7 @@ ok "harness-driven 'New Tab' added a tab (total tabs $baseline → $after)"
 
 # ── Pane-level proof: a split adds a pane, an arrow moves focus ────────
 # Runs inside the tab ⌘T just opened, so the panes created here leave with
-# it. `windows list` counts tabs, not panes, which is why these read the
+# it. `window list` counts tabs, not panes, which is why these read the
 # AX tree instead.
 #
 # Everything below is phrased against the ONE identifier the split
@@ -439,7 +438,7 @@ for _ in $(seq 1 12); do
 done
 [ -n "$closed" ] \
     || fail "Close Pane did not drop $source_pane (panes now: $(tr '\n' ' ' <"$SCRATCH/ids3.txt"))"
-"$CLI" windows list --all --json >"$SCRATCH/windows3.json" 2>/dev/null || true
+"$CLI" window list --all --json >"$SCRATCH/windows3.json" 2>/dev/null || true
 held="$(total_tabs "$SCRATCH/windows3.json")"
 [ "$held" -eq "$((baseline + 1))" ] \
     || fail "Close Pane took the tab with it (total tabs $((baseline + 1)) → $held)"
@@ -462,7 +461,7 @@ ok "focus landed on the surviving pane ($new_pane)"
 "$UITEST" drive key cmd+w >/dev/null 2>&1 || true
 final=-1
 for _ in $(seq 1 12); do
-    "$CLI" windows list --all --json >"$SCRATCH/windows4.json" 2>/dev/null || true
+    "$CLI" window list --all --json >"$SCRATCH/windows4.json" 2>/dev/null || true
     final="$(total_tabs "$SCRATCH/windows4.json")"
     [ "$final" -eq "$baseline" ] && break
     sleep 0.25

@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Parameters for `automation.grant` and `automation.revoke`.
+/// Parameters for `automation.grant`.
 ///
 /// `sessionIds` is a typed `[UUID]`, so a malformed identifier fails
 /// decoding and the request is rejected `invalidParams` before any mutation.

@@ -7,7 +7,7 @@ import Testing
 
 // `deviceterm with-pane <ref> <cmd…>` parser surface.
 //
-// `withPaneExec` gathers panes.list + spawns the child
+// `withPaneExec` gathers pane.deviceList + spawns the child
 // process; those code paths need a live daemon and are exercised by
 // the manual checklist. The parser logic is pure and covers:
 // - Happy path (ref + cmd + args)

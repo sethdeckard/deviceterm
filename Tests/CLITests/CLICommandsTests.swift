@@ -25,74 +25,77 @@ func parseUnknownTopLevelIsUsage() {
 }
 
 @Test
-func parseTabsListResolvesToTabsList() {
-    #expect(CLICommands.parse(["deviceterm", "tabs", "list"]) == .tabsList)
+func parseTabListResolvesToTabList() {
+    #expect(CLICommands.parse(["deviceterm", "tab", "list"]) == .tabList(window: nil, all: false))
 }
 
 @Test
-func parseTabsBareIsUsageWithSpecificMessage() throws {
-    // `tabs` without a subcommand is a user typo; the more specific
+func parseTabBareIsUsageWithSpecificMessage() throws {
+    // `tab` without a subcommand is a user typo; the more specific
     // stderr message helps them fix it without scanning the full
     // usage block.
-    let result = CLICommands.parse(["deviceterm", "tabs"])
+    let result = CLICommands.parse(["deviceterm", "tab"])
     guard case let .usage(message) = result else {
         Issue.record("expected .usage, got \(result)")
         return
     }
     let text = try #require(message)
-    #expect(text.contains("tabs"))
+    #expect(text.contains("tab"))
     #expect(text.contains("list"))
 }
 
 @Test
-func parseTabsUnknownSubcommandIsUsageWithSpecificMessage() throws {
-    let result = CLICommands.parse(["deviceterm", "tabs", "burn"])
+func parseTabUnknownSubcommandIsUsageWithSpecificMessage() throws {
+    let result = CLICommands.parse(["deviceterm", "tab", "burn"])
     guard case let .usage(message) = result else {
         Issue.record("expected .usage, got \(result)")
         return
     }
     let text = try #require(message)
-    #expect(text.contains("tabs"))
+    #expect(text.contains("tab"))
 }
 
 // MARK: - Wire shape
 
 @Test
-func tabsListRequestShape() {
+func tabListRequestShape() throws {
     // Pin the wire shape: method name and body. The id is `1`
     // because the CLI is one-shot: the daemon doesn't care about
     // uniqueness across CLI invocations (each invocation gets its
     // own connection).
-    let envelope = CLICommands.tabsListRequest()
+    let envelope = try CLICommands.tabListRequest(window: nil, all: false)
     #expect(envelope.id == 1)
     #expect(envelope.type == .request)
-    #expect(envelope.method == "tabs.list")
-    if case .empty = envelope.body {
-        // OK
-    } else {
-        Issue.record("expected .empty body, got \(envelope.body)")
+    #expect(envelope.method == "tab.list")
+    guard case let .params(data) = envelope.body else {
+        Issue.record("expected params body, got \(envelope.body)")
+        return
     }
+    #expect(
+        try JSONDecoder().decode(AppCommandParams.ListTabs.self, from: data)
+            == .init(window: nil, all: false)
+    )
 }
 
 @Test
-func tabsListRequestEncodesToValidFrame() throws {
+func tabListRequestEncodesToValidFrame() throws {
     // End-to-end wire check: the envelope must round-trip through
     // RPCFraming + RPCEnvelope back into something the daemon's
     // dispatcher would recognize.
-    let envelope = CLICommands.tabsListRequest()
+    let envelope = try CLICommands.tabListRequest(window: nil, all: false)
     let frame = RPCFraming.encode(try envelope.encode())
     let (payload, consumed) = try #require(try RPCFraming.decodeNext(from: frame))
     #expect(consumed == frame.count)
     let decoded = try RPCEnvelope.decode(payload)
-    #expect(decoded.method == "tabs.list")
+    #expect(decoded.method == "tab.list")
     #expect(decoded.type == .request)
 }
 
 // MARK: - Input grammar (positional operands, flag modifiers, --pane)
 
 @Test
-func parsePanesListResolvesToPanesList() {
-    #expect(CLICommands.parse(["deviceterm", "panes", "list"]) == .panesList)
+func parsePaneListResolvesToPaneList() {
+    #expect(CLICommands.parse(["deviceterm", "pane", "list"]) == .paneList(tab: nil))
 }
 
 @Test
@@ -1423,9 +1426,9 @@ func buttonRequestShape() throws {
 }
 
 @Test
-func panesListRequestShape() throws {
-    let envelope = try CLICommands.panesListRequest(sessionId: "SID", cap: "CAP")
-    #expect(envelope.method == "panes.list")
+func paneDeviceListRequestShape() throws {
+    let envelope = try CLICommands.paneDeviceListRequest(sessionId: "SID", cap: "CAP")
+    #expect(envelope.method == "pane.deviceList")
     guard case let .params(data) = envelope.body else {
         Issue.record("expected .params body, got \(envelope.body)")
         return

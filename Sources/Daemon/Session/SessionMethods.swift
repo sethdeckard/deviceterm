@@ -3,8 +3,7 @@
 import DaemonProtocol
 import Foundation
 
-/// RPC handlers for the `session.*` and `tabs.*`
-/// methods.
+/// RPC handlers for the `session.*` methods.
 ///
 /// Each handler is a `MethodRegistry.Handler` factory: pass in the
 /// shared `SessionManager` and get back the closure to register
@@ -15,7 +14,6 @@ import Foundation
 ///                        → {sessionId, capability, shortId, name?, role}
 ///     session.close({sessionId, cap, mode?})
 ///                        → {ok: true}
-///     tabs.list          → [{sessionId, tabId, shortId, name?, displayTitle?, label?}]
 ///
 /// `session.close` applies `mode` to an in-flight boot claim before removing
 /// the session. Existing pane shutdown still uses the GUI's per-pane fan-out.
@@ -48,10 +46,10 @@ public enum SessionMethods {
         /// When true, the session is born with the protection flag set,
         /// atomically at create time. The GUI passes this for a terminal
         /// joining a tab that is already protected (or mid-transition to
-        /// protected) so the new session is never observable as unprotected on
-        /// `tabs.list`: a follow-up protection toggle would race the
-        /// create's own persist/publish suspension points. Optional on
-        /// the wire; absent/false is the ordinary unprotected session.
+        /// protected) so daemon session and device projections never expose it
+        /// as unprotected. A follow-up protection toggle would race the
+        /// create's own persist/publish suspension points. Optional on the wire;
+        /// absent/false is the ordinary unprotected session.
         public let initialProtected: Bool?
 
         /// Defaults preserve backward compatibility with call sites
@@ -72,13 +70,10 @@ public enum SessionMethods {
         }
     }
 
-    /// Response shape. `shortId` + `name` are the identifier model
-    /// for the `--tab <ref>` resolver; `role` carries the role the
-    /// daemon assigned (descriptive metadata). All ride alongside the foundational
-    /// `sessionId` + `capability` so an older client that hasn't
-    /// learned a field yet decodes the response cleanly and just
-    /// doesn't use it. `role` is always emitted; the daemon never
-    /// leaves it nil so newer callers can rely on it.
+    /// Response shape. `shortId` is the terminal session's public pane short
+    /// id, `name` is creation-time session metadata, and `role` is descriptive
+    /// metadata. They ride alongside `sessionId` and `capability`; every field
+    /// is emitted by the current daemon.
     public struct CreateResponse: Codable, Sendable, Equatable {
         public let sessionId: String
         public let capability: String
@@ -94,23 +89,6 @@ public enum SessionMethods {
         /// semantic. Recorded for forward-compat; current handler
         /// closes the session record regardless.
         public let mode: String?
-    }
-
-    /// Mirrors the wire-side `DaemonProtocol.TabsListEntry`. `tabId` is the
-    /// required grouping UUID. Sessions in one GUI tab share it; a session
-    /// without a GUI tab uses its `sessionId`. GUI-backed groups support direct
-    /// `--tab` resolution. `shortId` and `name` remain per-session convenience
-    /// references.
-    /// `displayTitle` is the normalized live label the GUI last pushed; it
-    /// is never a ref, since it changes as often as the shell redraws its
-    /// prompt.
-    public struct TabsListEntry: Codable, Sendable, Equatable {
-        public let sessionId: String
-        public let tabId: String
-        public let shortId: String
-        public let name: String?
-        public let displayTitle: String?
-        public let label: String?
     }
 
     // MARK: - Handlers
@@ -315,38 +293,10 @@ public enum SessionMethods {
         }
     }
 
-    public static func tabsList(using manager: SessionManager) -> MethodRegistry.Handler {
-        { _ in
-            // Per `docs/ARCHITECTURE.md`, the result is a bare array,
-            // not an object wrapper. Encode the entries directly so
-            // the wire shape matches the canonical schema and any
-            // client following the docs decodes cleanly.
-            //
-            // Protection filter: a protected session is visible only to
-            // its owner. The originating session id comes from the
-            // task-local `SessionDispatchContext.originatingSessionId`
-            // bound by the dispatcher before this handler runs;
-            // unauthenticated callers (no creds in env) have a nil
-            // value and therefore never see protected sessions.
-            let callerId = SessionDispatchContext.originatingSessionId
-                .flatMap(UUID.init(uuidString:))
-            let entries = await manager.sessionsWithDisplayTitles(visibleTo: callerId).map {
-                TabsListEntry(
-                    sessionId: $0.state.id.uuidString,
-                    tabId: $0.state.tabId.uuidString,
-                    shortId: $0.state.shortId,
-                    name: $0.state.name,
-                    displayTitle: $0.displayTitle,
-                    label: $0.state.label
-                )
-            }
-            return try JSONEncoder().encode(entries)
-        }
-    }
-
-    /// `session.setDisplayTitle({sessionId, title}) → {ok: true}`. Cache
-    /// the tab's normalized live label so `tabs.list` can serve it in place
-    /// of the static `name`, falling back to `name` when it is absent.
+    /// `session.setDisplayTitle({sessionId, title}) → {ok: true}`. Cache one
+    /// normalized live label under the representative terminal session. This
+    /// daemon-local cache is separate from the GUI's public workspace
+    /// projection.
     /// `.validatedGUI`-scoped, so the scope check has already refused any
     /// non-validated-GUI caller and no capability rides on the wire.
     ///

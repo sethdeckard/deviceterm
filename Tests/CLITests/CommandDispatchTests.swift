@@ -1,35 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import DaemonProtocol
+@testable import DeviceTermCLI
 import Foundation
 import Testing
 
-@testable import DeviceTermCLI
-
-/// Records the envelopes it's handed and replays a canned response (or
-/// throws), so the typed command handlers can be exercised without a
-/// daemon, a socket, or a process exit.
+/// Records requests and replays canned responses without a daemon.
 private final class FakeTransport: CLITransport {
     private var queue: [Data]
     private let fallback: Data
     var error: CLIError?
     private(set) var sent: [RPCEnvelope] = []
-    /// The response timeout each send was given, positionally aligned with
-    /// `sent`, so a test can assert the budget a verb chose.
     private(set) var timeouts: [Double] = []
 
-    /// Replay `response` for every send (for single-round-trip handlers).
     init(response: Data = Data(), error: CLIError? = nil) {
-        self.queue = []
-        self.fallback = response
+        queue = []
+        fallback = response
         self.error = error
     }
 
-    /// Replay `responses` in order, one per send (for handlers that make
-    /// more than one round-trip, e.g. resolve-then-act).
     init(responses: [Data], error: CLIError? = nil) {
-        self.queue = responses
-        self.fallback = Data()
+        queue = responses
+        fallback = Data()
         self.error = error
     }
 
@@ -42,485 +34,290 @@ private final class FakeTransport: CLITransport {
     }
 }
 
-/// A session owning a single sim pane: the sole-pane resolution target.
-private func onePaneResponse() throws -> Data {
-    try JSONEncoder().encode([
-        PanesListEntry(paneId: "p1", udid: "U1", state: .rendering, family: "iphone", shortId: "sh1")
-    ])
-}
-
-private let testCreds = (sessionId: "S1", cap: "C1")
-private let testTabId = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+private let testCredentials = (sessionId: "S1", cap: "C1")
 
 private func encoded(_ value: some Encodable) throws -> Data {
     try JSONEncoder().encode(value)
 }
 
-private func stdoutString(_ outcome: CommandOutcome) -> String {
-    String(bytes: outcome.stdout, encoding: .utf8) ?? ""
-}
-
-// MARK: - tabs list
-
-@Test
-func tabsListHumanMatchesFormatter() throws {
-    let entries = [
-        TabsListEntry(sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"),
-        TabsListEntry(sessionId: "S2", label: "L2", tabId: testTabId, shortId: "s2", name: nil)
-    ]
-    let fake = FakeTransport(response: try encoded(entries))
-    let outcome = try handleTabsList(transport: fake, output: .human, currentSession: "S1")
-
-    #expect(outcome.exitCode == 0)
-    #expect(outcome.stderr == nil)
-    // Deterministic against the shared formatter + line helper.
-    #expect(outcome == .lines(
-        TabsListFormatter.formatList(entries: entries, currentSessionId: "S1")
-    ))
-    #expect(fake.sent.count == 1)
-    #expect(fake.sent.first?.method == RPCMethod.tabsList.rawValue)
-}
-
-@Test
-func tabsListJSONEncodesRowsWithCurrentFlag() throws {
-    let entries = [
-        TabsListEntry(
-            sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"
-        ),
-        TabsListEntry(
-            sessionId: "S2", label: "L2", tabId: testTabId, shortId: "s2", name: nil
-        )
-    ]
-    let fake = FakeTransport(response: try encoded(entries))
-    let outcome = try handleTabsList(transport: fake, output: .json, currentSession: "S2")
-
-    let expected = [
-        Receipt.TabsListRow(
-            current: false,
-            shortId: "s1",
-            name: "n1",
-            displayTitle: nil,
-            sessionId: "S1",
-            label: "L1",
-            tabId: testTabId
-        ),
-        Receipt.TabsListRow(
-            current: true,
-            shortId: "s2",
-            name: nil,
-            displayTitle: nil,
-            sessionId: "S2",
-            label: "L2",
-            tabId: testTabId
-        )
-    ]
-    #expect(outcome.exitCode == 0)
-    #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
-}
-
-@Test
-func tabsListJSONCarriesTheLiveDisplayTitle() throws {
-    // The daemon-side title cache reaches an external consumer: `--json`
-    // carries the GUI's normalized label alongside the static name stamped
-    // at session create. The human columns stay a pinned five-column shape,
-    // so this rides JSON only.
-    let entries = [
-        TabsListEntry(
-            sessionId: "S1",
-            label: "L1",
-            tabId: testTabId,
-            shortId: "s1",
-            name: "branch",
-            displayTitle: "vim foo.swift"
-        )
-    ]
-    let fake = FakeTransport(response: try encoded(entries))
-    let outcome = try handleTabsList(transport: fake, output: .json, currentSession: "S1")
-
-    let expected = [
-        Receipt.TabsListRow(
-            current: true,
-            shortId: "s1",
-            name: "branch",
-            displayTitle: "vim foo.swift",
-            sessionId: "S1",
-            label: "L1",
-            tabId: testTabId
-        )
-    ]
-    #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
-    // The human row is unchanged: a sixth column would break `awk -F'\t'`.
-    #expect(TabsListFormatter.formatRow(entry: entries[0], isCurrent: true)
-        == "*\ts1\tbranch\tS1\tL1")
-}
-
-@Test
-func tabsListEmptyProducesNoOutput() throws {
-    let fake = FakeTransport(response: try encoded([TabsListEntry]()))
-    let outcome = try handleTabsList(transport: fake, output: .human, currentSession: nil)
-    #expect(outcome == .ok)
-}
-
-@Test
-func tabsListJSONEmptyIsSuccessfulArray() throws {
-    let fake = FakeTransport(response: try encoded([TabsListEntry]()))
-    let outcome = try handleTabsList(transport: fake, output: .json, currentSession: nil)
-    #expect(outcome.exitCode == 0)
-    #expect(outcome.stdout == Data("[]\n".utf8))
-}
-
-@Test
-func tabsListJSONMissingTabIdIsInvalidResponse() throws {
-    let response = Data(#"[{"sessionId":"S1"}]"#.utf8)
-    let command = CLICommand.tabsList
-    let outcome = run(command, transport: FakeTransport(response: response), output: .json)
-        .renderingFailure(for: command, output: .json)
-    let document = try #require(
-        JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any]
-    )
-    let error = try #require(document["error"] as? [String: Any])
-    #expect(error["code"] as? String == "protocol.invalidResponse")
-    #expect(outcome.exitCode == 1)
-    #expect(outcome.stderr != nil)
-    #expect(outcome.stdout.last == 0x0A)
-}
-
-@Test
-func tabsListJSONMalformedTabIdIsInvalidResponse() throws {
-    let response = Data(#"[{"sessionId":"S1","tabId":"not-a-uuid"}]"#.utf8)
-    let command = CLICommand.tabsList
-    let outcome = run(command, transport: FakeTransport(response: response), output: .json)
-        .renderingFailure(for: command, output: .json)
-    let document = try #require(
-        JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any]
-    )
-    let error = try #require(document["error"] as? [String: Any])
-    #expect(error["code"] as? String == "protocol.invalidResponse")
-    #expect(outcome.exitCode == 1)
-    #expect(outcome.stderr != nil)
-    #expect(outcome.stdout.last == 0x0A)
-}
-
-// MARK: - tabs current
-
-@Test
-func tabsCurrentOutOfTabIsFailureWithHint() throws {
-    let outcome = try handleTabsCurrent(
-        transport: FakeTransport(),
-        output: .human,
-        currentSession: nil
-    )
-    #expect(outcome.exitCode == 1)
-    #expect(outcome.stdout.isEmpty)
-    #expect(outcome.stderr == "not inside a deviceterm tab (\(DeviceTermEnv.session) unset); "
-        + "run `deviceterm tabs list` to see open tabs")
-}
-
-@Test
-func tabsCurrentStaleSessionIsFailure() throws {
-    let fake = FakeTransport(response: try encoded([
-        TabsListEntry(sessionId: "OTHER", label: nil, tabId: testTabId)
-    ]))
-    let outcome = try handleTabsCurrent(transport: fake, output: .human, currentSession: "S1")
-    #expect(outcome.exitCode == 1)
-    #expect(outcome.failure?.code == .sessionUnauthorized)
-    #expect(outcome.stderr == "\(DeviceTermEnv.session)=S1 has no live tab; "
-        + "the daemon may have restarted; try opening a fresh tab")
-}
-
-@Test
-func tabsCurrentJSONStaleSessionHasFailureEnvelope() throws {
-    let fake = FakeTransport(response: try encoded([
-        TabsListEntry(sessionId: "OTHER", label: nil, tabId: testTabId)
-    ]))
-    let command = CLICommand.tabsCurrent
-    let outcome = try handleTabsCurrent(transport: fake, output: .json, currentSession: "S1")
-        .renderingFailure(for: command, output: .json)
-    let document = try #require(
-        JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any]
-    )
-    let error = try #require(document["error"] as? [String: Any])
-    #expect(error["code"] as? String == "session.unauthorized")
-    #expect(outcome.exitCode == 1)
-    #expect(outcome.stderr != nil)
-    #expect(outcome.stdout.last == 0x0A)
-}
-
-@Test
-func tabsCurrentSuccessRendersRow() throws {
-    let entry = TabsListEntry(
-        sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"
-    )
-    let fake = FakeTransport(response: try encoded([entry]))
-    let outcome = try handleTabsCurrent(transport: fake, output: .human, currentSession: "S1")
-    #expect(outcome.exitCode == 0)
-    #expect(outcome == .stdout(TabsListFormatter.formatRow(entry: entry, isCurrent: true) + "\n"))
-}
-
-@Test
-func tabsCurrentJSONIncludesTabId() throws {
-    let entry = TabsListEntry(
-        sessionId: "S1", label: "L1", tabId: testTabId, shortId: "s1", name: "n1"
-    )
-    let fake = FakeTransport(response: try encoded([entry]))
-    let outcome = try handleTabsCurrent(transport: fake, output: .json, currentSession: "S1")
-    let expected = Receipt.TabsListRow(
+private func testWindow() -> WorkspaceWindow {
+    WorkspaceWindow(
+        id: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+        shortId: "aaaaaa",
+        name: "main",
+        index: 0,
         current: true,
-        shortId: "s1",
-        name: "n1",
-        displayTitle: nil,
-        sessionId: "S1",
-        label: "L1",
-        tabId: testTabId
+        focused: true,
+        selectedTabId: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+        tabCount: 1
     )
-    #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
 }
 
-// MARK: - panes list
-
-@Test
-func panesListJSONEmitsWireEntries() throws {
-    let panes = [
-        PanesListEntry(paneId: "p1", udid: "U1", state: .rendering, family: "iphone", shortId: "sh1")
-    ]
-    let fake = FakeTransport(response: try encoded(panes))
-    let outcome = try handlePanesList(
-        transport: fake,
-        output: .json,
-        creds: (sessionId: "S1", cap: "C1")
+private func testTab() -> WorkspaceTab {
+    WorkspaceTab(
+        id: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+        shortId: "bbbbbb",
+        name: "build",
+        title: "swift test",
+        windowId: testWindow().id,
+        current: true,
+        selected: true,
+        protected: false,
+        state: .ready,
+        paneCount: 1
     )
-    #expect(outcome.stdout == (try encodeJSONReceipt(panes)))
-    #expect(fake.sent.first?.method == RPCMethod.panesList.rawValue)
 }
 
-@Test
-func panesListHumanColumnsPerRow() throws {
-    let panes = [
-        PanesListEntry(paneId: "p1", udid: "U1", state: .rendering, family: "iphone", shortId: "sh1")
-    ]
-    let fake = FakeTransport(response: try encoded(panes))
-    let outcome = try handlePanesList(
-        transport: fake,
-        output: .human,
-        creds: (sessionId: "S1", cap: "C1")
+private func testTerminalPane() -> WorkspacePane {
+    WorkspacePane(
+        id: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+        shortId: "cccccc",
+        name: "shell",
+        kind: .terminal,
+        tabId: testTab().id,
+        current: true,
+        focused: true,
+        capabilities: [.sendInput, .captureText],
+        terminal: .init(
+            sessionId: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+            cwd: "/project"
+        )
     )
-    let text = stdoutString(outcome)
-    #expect(text.hasPrefix("p1\tU1\trendering\t"))
-    #expect(text.hasSuffix("\n"))
 }
 
-// MARK: - devices list
-
-@Test
-func devicesListHumanTrailsNewlineEvenWhenEmpty() throws {
-    let fake = FakeTransport(response: try encoded([DeviceRosterEntry]()))
-    let outcome = try handleDevicesList(transport: fake, output: .human)
-    // Legacy `print(formatDeviceRoster(roster))` emitted a lone newline
-    // for an empty roster; preserve that.
-    #expect(outcome == .stdout("\n"))
-    #expect(fake.sent.first?.method == RPCMethod.devicesList.rawValue)
+private func testSimulatorPane() -> WorkspacePane {
+    WorkspacePane(
+        id: "AAAAAAAA-1111-2222-3333-444444444444",
+        shortId: "aaaaaa",
+        name: "phone",
+        kind: .simulator,
+        tabId: testTab().id,
+        current: false,
+        focused: false,
+        capabilities: [.touch, .text],
+        simulator: .init(
+            udid: "U1",
+            displayName: "iPhone",
+            family: "phone",
+            state: .rendering,
+            orientation: .portrait,
+            pixelWidth: 1_206,
+            pixelHeight: 2_622,
+            capabilities: .simulator
+        )
+    )
 }
 
-@Test
-func devicesListJSONEmitsRoster() throws {
-    let roster = [
-        DeviceRosterEntry(id: "U1", kind: .sim, name: "iPhone", state: "Booted")
-    ]
-    let fake = FakeTransport(response: try encoded(roster))
-    let outcome = try handleDevicesList(transport: fake, output: .json)
-    #expect(outcome.stdout == (try encodeJSONReceipt(roster)))
+private func oneDevicePaneResponse() throws -> Data {
+    try encoded([
+        PanesListEntry(
+            paneId: "p1",
+            udid: "U1",
+            state: .rendering,
+            family: "iphone",
+            shortId: "sh1"
+        )
+    ])
 }
 
-// MARK: - windows list
+// MARK: - Workspace reads
 
 @Test
-func windowsListJSONPassesDaemonBytesVerbatim() throws {
-    let payload = [WindowInfoPayload(index: 1, isKey: true, tabCount: 2, selectedTabShortId: "s1")]
-    let data = try encoded(payload)
-    let fake = FakeTransport(response: data)
-    let outcome = try handleWindowsList(all: false, transport: fake, output: .json)
-    // JSON mode echoes the daemon's payload bytes verbatim + a newline.
-    var expected = data
+func workspaceListJSONPreservesGUIProjection() throws {
+    let payload = try encoded([testWindow()])
+    let fake = FakeTransport(response: payload)
+    let outcome = run(.windowList(all: true), transport: fake, output: .json)
+
+    var expected = payload
     expected.append(0x0A)
     #expect(outcome.stdout == expected)
-    #expect(fake.sent.first?.method == RPCMethod.windowsList.rawValue)
+    #expect(fake.sent.map(\.method) == [RPCMethod.windowList.rawValue])
 }
 
-// MARK: - workspace verbs
+@Test
+func workspaceListsUseLiveHumanFormatters() throws {
+    let tabs = [testTab()]
+    let fake = FakeTransport(response: try encoded(tabs))
+    let outcome = run(.tabList(window: "main", all: false), transport: fake, output: .human)
+
+    #expect(outcome == .stdout(formatWorkspaceTabs(tabs) + "\n"))
+    #expect(fake.sent.map(\.method) == [RPCMethod.tabList.rawValue])
+}
 
 @Test
-func workspaceMutationHumanEcho() throws {
-    let fake = FakeTransport(response: Data("{}".utf8))
+func workspaceShowRendersPaneDetails() throws {
+    let pane = testTerminalPane()
+    let fake = FakeTransport(response: try encoded(pane))
+    let outcome = run(.paneShow(pane: "shell"), transport: fake, output: .human)
+
+    #expect(outcome == .stdout(formatWorkspacePane(pane) + "\n"))
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneShow.rawValue])
+}
+
+@Test
+func malformedWorkspaceProjectionIsProtocolFailure() {
+    let command = CLICommand.windowList(all: false)
+    let outcome = run(
+        command,
+        transport: FakeTransport(response: Data(#"[{"id":1}]"#.utf8)),
+        output: .human
+    ).renderingFailure(for: command, output: .json)
+
+    #expect(outcome.exitCode == 1)
+    #expect(outcome.failure?.code == .protocolInvalidResponse)
+    #expect(outcome.stdout.last == 0x0A)
+}
+
+// MARK: - Committed mutations
+
+@Test
+func workspaceMutationHumanUsesCommittedObjects() throws {
+    let receipt = WorkspaceMutationReceipt(window: testWindow(), tab: testTab(), pane: testTerminalPane())
+    let fake = FakeTransport(response: try encoded(receipt))
     let outcome = try sendWorkspaceMutation(
         transport: fake,
         output: .human,
-        build: { try CLICommands.tabSelectRequest(tab: Wire.TabRef(type: "current", value: nil)) },
-        humanEcho: { "ok tab=current" },
-        jsonReceipt: { Receipt.TabSelect(tab: "current") }
+        build: { try CLICommands.tabOpenRequest(window: nil) }
     )
-    #expect(outcome == .stdout("ok tab=current\n"))
-    #expect(fake.sent.first?.method == RPCMethod.tabSelect.rawValue)
+
+    #expect(outcome == .stdout("ok window=aaaaaa tab=bbbbbb pane=cccccc\n"))
+    #expect(fake.sent.map(\.method) == [RPCMethod.tabOpen.rawValue])
+    #expect(fake.timeouts == [AppCommandDeadline.workspaceCLIRequestTimeoutSeconds])
 }
 
 @Test
-func workspaceMutationJSONReceipt() throws {
-    let fake = FakeTransport(response: Data("{}".utf8))
-    let outcome = try sendWorkspaceMutation(
-        transport: fake,
-        output: .json,
-        build: { try CLICommands.tabSelectRequest(tab: Wire.TabRef(type: "current", value: nil)) },
-        humanEcho: { "ok tab=current" },
-        jsonReceipt: { Receipt.TabSelect(tab: "current") }
-    )
-    #expect(outcome.stdout == (try encodeJSONReceipt(Receipt.TabSelect(tab: "current"))))
-}
-
-@Test
-func tabMoveMutationSendsMoveMethodAndEcho() throws {
-    let fake = FakeTransport(response: Data("{}".utf8))
-    let outcome = try sendWorkspaceMutation(
-        transport: fake,
-        output: .human,
-        build: {
-            try CLICommands.tabMoveRequest(
-                tab: Wire.TabRef(type: "current", value: nil),
-                toIndex: 1,
-                toWindow: Wire.WindowRef(type: "index", value: "2")
-            )
-        },
-        humanEcho: { "ok tab=current window=2 to=1" },
-        jsonReceipt: { Receipt.TabMove(tab: "current", toIndex: 1, toWindow: "2") }
-    )
-    #expect(outcome == .stdout("ok tab=current window=2 to=1\n"))
-    #expect(fake.sent.first?.method == RPCMethod.tabMove.rawValue)
-}
-
-@Test
-func workspaceInfoJSONPassesPayloadVerbatim() throws {
-    let payload = Data(#"{"sessionId":"S1"}"#.utf8)
+func workspaceMutationJSONPreservesCommittedReceipt() throws {
+    let receipt = WorkspaceMutationReceipt(pane: testTerminalPane())
+    let payload = try encoded(receipt)
     let fake = FakeTransport(response: payload)
-    let outcome = try sendWorkspaceInfo(
+    let outcome = try sendWorkspaceMutation(
         transport: fake,
         output: .json,
-        build: { try CLICommands.tabInfoRequest(tab: Wire.TabRef(type: "current", value: nil)) },
-        humanRender: { (payload: TabInfoPayload) in formatTabInfo(payload) }
+        build: { try CLICommands.paneSplitRequest(pane: "shell", direction: .right) }
     )
+
+    var expected = payload
+    expected.append(0x0A)
+    #expect(outcome.stdout == expected)
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneSplit.rawValue])
+}
+
+@Test
+func runRoutesPaneFocusThroughAutomationMethod() throws {
+    let receipt = WorkspaceMutationReceipt(pane: testTerminalPane())
+    let fake = FakeTransport(response: try encoded(receipt))
+    let outcome = run(.paneFocus(pane: "shell"), transport: fake, output: .human)
+
+    #expect(outcome.exitCode == 0)
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneFocus.rawValue])
+    #expect(fake.timeouts == [AppCommandDeadline.workspaceCLIRequestTimeoutSeconds])
+}
+
+// MARK: - Explicit terminal operations
+
+@Test
+func paneCaptureHumanAppendsOnlyMissingNewline() throws {
+    let pane = testTerminalPane()
+    let first = FakeTransport(response: try encoded(WorkspaceCaptureResult(pane: pane, text: "one\ntwo")))
+    let second = FakeTransport(response: try encoded(WorkspaceCaptureResult(pane: pane, text: "already\n")))
+
+    #expect(
+        try handlePaneCaptureText(pane: "shell", transport: first, output: .human)
+            == .stdout("one\ntwo\n")
+    )
+    #expect(
+        try handlePaneCaptureText(pane: "shell", transport: second, output: .human)
+            == .stdout("already\n")
+    )
+    #expect(first.sent.map(\.method) == [RPCMethod.paneCaptureText.rawValue])
+}
+
+@Test
+func paneCaptureJSONIncludesResolvedPane() throws {
+    let result = WorkspaceCaptureResult(pane: testTerminalPane(), text: "contents")
+    let payload = try encoded(result)
+    let fake = FakeTransport(response: payload)
+    let outcome = try handlePaneCaptureText(pane: "shell", transport: fake, output: .json)
+
     var expected = payload
     expected.append(0x0A)
     #expect(outcome.stdout == expected)
 }
 
 @Test
-func deviceAttachSuccessEcho() throws {
+func paneSendInputReturnsGUIReceipt() throws {
+    let receipt = WorkspaceMutationReceipt(pane: testTerminalPane(), bytes: 5, typeDelayMs: 8)
+    let fake = FakeTransport(response: try encoded(receipt))
+    let outcome = run(
+        .paneSendInput(pane: "shell", text: "hello", typeDelay: 8),
+        transport: fake,
+        output: .human
+    )
+
+    #expect(outcome == .stdout("ok pane=cccccc bytes=5 typeDelayMs=8\n"))
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneSendInput.rawValue])
+}
+
+// MARK: - Device verbs and legacy device-pane resolution
+
+@Test
+func devicesListFormatsBothOutputModes() throws {
     let roster = [DeviceRosterEntry(id: "U1", kind: .sim, name: "iPhone", state: "Booted")]
-    let fake = FakeTransport(responses: [try encoded(roster), Data("{}".utf8)])
+    let human = try handleDevicesList(transport: FakeTransport(response: encoded(roster)), output: .human)
+    let json = try handleDevicesList(transport: FakeTransport(response: encoded(roster)), output: .json)
+
+    #expect(human == .stdout(formatDeviceRoster(roster) + "\n"))
+    #expect(json.stdout == (try encodeJSONReceipt(roster)))
+}
+
+@Test
+func deviceAttachResolvesThenPublishes() throws {
+    let roster = [DeviceRosterEntry(id: "U1", kind: .sim, name: "iPhone", state: "Booted")]
+    let receipt = WorkspaceMutationReceipt(pane: testSimulatorPane())
+    let fake = FakeTransport(responses: [try encoded(roster), try encoded(receipt)])
     let outcome = try handleDeviceAttach(
         ref: "U1",
         transport: fake,
         output: .human,
-        creds: testCreds
+        creds: testCredentials
     )
-    #expect(outcome == .stdout("ok target=U1 kind=sim\n"))
+
+    #expect(outcome == .stdout("ok pane=aaaaaa\n"))
     #expect(fake.sent.map(\.method) == [RPCMethod.devicesList.rawValue, RPCMethod.paneAttach.rawValue])
 }
 
 @Test
-func deviceAttachUnknownRefIsFailure() throws {
+func deviceAttachUnknownRefDoesNotPublish() throws {
     let fake = FakeTransport(response: try encoded([DeviceRosterEntry]()))
     let outcome = try handleDeviceAttach(
         ref: "nope",
         transport: fake,
         output: .human,
-        creds: testCreds
+        creds: testCredentials
     )
+
     #expect(outcome.exitCode == 1)
-    #expect(outcome.stderr == "no device matching 'nope'\n"
-        + "  run `deviceterm devices list` to see available devices")
-    // Only the roster fetch happened, with no attach publish.
     #expect(fake.sent.map(\.method) == [RPCMethod.devicesList.rawValue])
 }
 
 @Test
-func tabCaptureHumanAppendsNewlineWhenMissing() throws {
-    let payload = TabCapturePayload(text: "line one\nline two")
-    let fake = FakeTransport(response: try encoded(payload))
-    let outcome = try handleTabCapture(
-        tabRef: Wire.TabRef(type: "current", value: nil),
-        transport: fake,
-        output: .human
-    )
-    #expect(outcome == .stdout("line one\nline two\n"))
-}
+func deviceInputResolutionUsesInternalDevicePaneList() throws {
+    let fake = FakeTransport(response: try oneDevicePaneResponse())
+    let resolved = try resolvePane(ref: nil, transport: fake, creds: testCredentials)
 
-@Test
-func tabCaptureHumanKeepsExistingTrailingNewline() throws {
-    let payload = TabCapturePayload(text: "already\n")
-    let fake = FakeTransport(response: try encoded(payload))
-    let outcome = try handleTabCapture(
-        tabRef: Wire.TabRef(type: "current", value: nil),
-        transport: fake,
-        output: .human
-    )
-    #expect(outcome == .stdout("already\n"))
-}
-
-// MARK: - driver intercept + error mapping
-
-@Test
-func runRoutesAgentsToStdout() {
-    // A pure doc-dump verb: no I/O, no creds, and `run` returns the guide.
-    let outcome = run(.agents, transport: FakeTransport(), output: .human)
-    #expect(outcome == .stdout(AgentsText.documentation))
-}
-
-@Test
-func runMapsDaemonError() {
-    let fake = FakeTransport(error: .daemon(code: -32_000, message: "boom"))
-    let outcome = run(.tabsList, transport: fake, output: .human)
-    #expect(outcome.exitCode == 1)
-    // The underscore is only in the Swift literal; the interpolated Int
-    // renders without it.
-    #expect(outcome.stderr == "daemon error -32000: boom")
-    #expect(outcome.stdout.isEmpty)
-}
-
-@Test
-func runMapsTransportError() {
-    let fake = FakeTransport(error: .transport("cannot connect"))
-    let outcome = run(.tabsList, transport: fake, output: .human)
-    #expect(outcome.exitCode == 1)
-    // `.transport` surfaces its message verbatim, matching the wording
-    // the docs, help topics, and man page quote for resolution errors.
-    #expect(outcome.stderr == "cannot connect")
-}
-
-// MARK: - pane-targeted input (tap / swipe / ax)
-
-@Test
-func resolvePaneReturnsSolePaneWhenNoRef() throws {
-    let fake = FakeTransport(response: try onePaneResponse())
-    let resolved = try resolvePane(ref: nil, transport: fake, creds: testCreds)
     #expect(resolved == ResolvedPane(paneId: "p1", udid: "U1", shortId: "sh1"))
-    #expect(fake.sent.first?.method == RPCMethod.panesList.rawValue)
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneDeviceList.rawValue])
 }
 
 @Test
-func resolvePaneUnknownRefThrows() throws {
-    let fake = FakeTransport(response: try onePaneResponse())
-    #expect(throws: CLIError.self) {
-        _ = try resolvePane(ref: "nope", transport: fake, creds: testCreds)
-    }
-}
-
-@Test
-func tapJSONReceiptAndEnvelope() throws {
-    let fake = FakeTransport(response: try onePaneResponse())
+func tapStillResolvesThenDispatches() throws {
+    let fake = FakeTransport(response: try oneDevicePaneResponse())
     let outcome = try sendResolved(
         ref: nil,
         output: .json,
         transport: fake,
-        creds: testCreds,
-        humanFields: { _ in [("x", "1.0"), ("y", "2.0")] },
+        creds: testCredentials,
+        humanFields: { _ in [("x", "1"), ("y", "2")] },
         jsonReceipt: { resolved in
             Receipt.Tap(
                 udid: resolved.udid,
@@ -532,518 +329,56 @@ func tapJSONReceiptAndEnvelope() throws {
         },
         build: { try CLICommands.tapRequest(paneId: $0, x: 1, y: 2) }
     )
-    let expected = Receipt.Tap(udid: "U1", paneId: "p1", shortId: "sh1", x: 1, y: 2)
-    #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
-    // Two round-trips: resolve (panes.list) then the tap itself.
-    #expect(fake.sent.map(\.method) == [RPCMethod.panesList.rawValue, RPCMethod.paneInputTap.rawValue])
+
+    #expect(outcome.exitCode == 0)
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneDeviceList.rawValue, RPCMethod.paneInputTap.rawValue])
+}
+
+// MARK: - Error mapping
+
+@Test
+func runMapsDaemonAndTransportErrors() {
+    let daemon = run(
+        .tabList(window: nil, all: false),
+        transport: FakeTransport(error: .daemon(code: -32_000, message: "boom")),
+        output: .human
+    )
+    let transport = run(
+        .tabList(window: nil, all: false),
+        transport: FakeTransport(error: .transport("cannot connect")),
+        output: .human
+    )
+
+    #expect(daemon.failure?.code == .rpcServerError)
+    #expect(daemon.stderr == "daemon error -32000: boom")
+    #expect(transport.stderr == "cannot connect")
 }
 
 @Test
-func tapHumanEchoLine() throws {
-    let fake = FakeTransport(response: try onePaneResponse())
-    let outcome = try sendResolved(
-        ref: nil,
-        output: .human,
-        transport: fake,
-        creds: testCreds,
-        humanFields: { _ in [("x", "1.0"), ("y", "2.0")] },
-        jsonReceipt: { _ in Receipt.Tap(udid: "U1", paneId: "p1", shortId: "sh1", x: 1, y: 2) },
-        build: { try CLICommands.tapRequest(paneId: $0, x: 1, y: 2) }
-    )
-    let resolved = ResolvedPane(paneId: "p1", udid: "U1", shortId: "sh1")
-    #expect(outcome == .stdout(
-        Echo.ok(udid: "U1", pane: resolved.displayLabel, fields: [("x", "1.0"), ("y", "2.0")]) + "\n"
-    ))
-}
-
-@Test
-func swipeDecodesAckAndTargetsPane() throws {
-    let ack = SwipeAck(steps: 3, durationMs: 200)
-    let fake = FakeTransport(responses: [try onePaneResponse(), try JSONEncoder().encode(ack)])
-    let outcome = try handleSwipe(
-        pane: nil,
-        fromX: 0,
-        fromY: 0,
-        toX: 1,
-        toY: 1,
-        durationMs: 200,
-        holdMs: nil,
-        transport: fake,
-        output: .json,
-        creds: testCreds
-    )
-    let expected = Receipt.Swipe(
-        udid: "U1",
-        paneId: "p1",
-        shortId: "sh1",
-        dispatched: ack.dispatched?.rawValue,
-        steps: ack.steps,
-        durationMs: ack.durationMs
-    )
-    #expect(outcome.stdout == (try encodeJSONReceipt(expected)))
-    #expect(fake.sent.map(\.method) == [RPCMethod.panesList.rawValue, RPCMethod.paneInputSwipe.rawValue])
-}
-
-@Test
-func rotateJSONReportsTheConfirmedTargetAndObservation() throws {
-    let result = RotateResult(
-        success: true,
-        status: .confirmed,
-        targetOrientation: .landscapeLeft,
-        observedOrientation: .landscapeLeft
-    )
-    let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
-    let outcome = try handleRotate(
-        pane: nil,
-        target: .absolute(.landscapeLeft),
-        transport: fake,
-        output: .json,
-        creds: testCreds
-    )
-    let expected = Receipt.Rotate(
-        udid: "U1",
-        paneId: "p1",
-        shortId: "sh1",
-        orientation: "landscapeLeft",
-        direction: nil,
-        targetOrientation: "landscapeLeft",
-        observedOrientation: "landscapeLeft"
-    )
-
-    #expect(outcome == .stdout(try encodeJSONReceipt(expected)))
-    #expect(fake.sent.map(\.method) == [RPCMethod.panesList.rawValue, RPCMethod.paneInputRotate.rawValue])
-}
-
-@Test
-func relativeRotateHumanReceiptReportsWhereTheDeviceLanded() throws {
-    let result = RotateResult(
-        success: true,
-        status: .confirmed,
-        targetOrientation: .portraitUpsideDown,
-        observedOrientation: .portraitUpsideDown
-    )
-    let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
-    let outcome = try handleRotate(
-        pane: nil,
-        target: .relative(.left),
-        transport: fake,
-        output: .human,
-        creds: testCreds
-    )
-    let resolved = ResolvedPane(paneId: "p1", udid: "U1", shortId: "sh1")
-
-    #expect(outcome == .stdout(Echo.ok(
-        udid: "U1",
-        pane: resolved.displayLabel,
-        fields: [
-            ("direction", "left"),
-            ("targetOrientation", "portraitUpsideDown"),
-            ("observedOrientation", "portraitUpsideDown")
-        ]
-    ) + "\n"))
-}
-
-@Test(
-    "rotate failures carry their command-specific code",
-    arguments: [
-        (
-            RotateResult(
-                success: false,
-                status: .unconfirmed,
-                targetOrientation: .landscapeLeft,
-                observedOrientation: .portrait,
-                deadlineMs: 4_000
-            ),
-            "rotate.unconfirmed"
-        ),
-        (
-            RotateResult(
-                success: false,
-                status: .unconfirmed,
-                targetOrientation: .landscapeLeft,
-                observedOrientation: .portrait,
-                reason: .queueFull
-            ),
-            "rotate.unconfirmed"
-        ),
-        (
-            RotateResult(
-                success: false,
-                status: .confirmationUnsupported,
-                targetOrientation: .landscapeLeft,
-                observedOrientation: nil
-            ),
-            "rotate.confirmationUnsupported"
-        ),
-        (
-            RotateResult(
-                success: false,
-                status: .refused,
-                targetOrientation: .landscapeLeft,
-                observedOrientation: .portrait
-            ),
-            "input.refused"
-        ),
-        (
-            RotateResult(
-                success: false,
-                status: .unavailable,
-                targetOrientation: .landscapeLeft,
-                observedOrientation: nil
-            ),
-            "pane.unavailable"
-        )
-    ]
-)
-func rotateFailuresUseStableJSONCodes(result: RotateResult, expectedCode: String) throws {
-    let command = CLICommand.rotate(pane: nil, target: .absolute(.landscapeLeft))
-    let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
-    let failure = try handleRotate(
-        pane: nil,
-        target: .absolute(.landscapeLeft),
-        transport: fake,
-        output: .json,
-        creds: testCreds
-    )
-    let rendered = failure.renderingFailure(for: command, output: .json)
-
-    #expect(failure.exitCode == 1)
-    #expect(failure.failure?.code.rawValue == expectedCode)
-    #expect(stdoutString(rendered).hasSuffix("\n"))
-    #expect(stdoutString(rendered).contains(#"{"error":{"code":"\#(expectedCode)""#))
-    let detailsData = try #require(failure.failure?.details)
-    let details = try #require(
-        JSONSerialization.jsonObject(with: detailsData) as? [String: Any]
-    )
-    #expect(details["requestedOrientation"] as? String == "landscapeLeft")
-    #expect(details["targetOrientation"] as? String == "landscapeLeft")
-    #expect(details["observedOrientation"] as? String == result.observedOrientation?.rawValue)
-    #expect(details["deadlineMs"] as? Int == result.deadlineMs)
-    #expect(details["reason"] as? String == result.reason?.rawValue)
-}
-
-@Test
-func rotateInfrastructureFailuresKeepTheirSharedClassification() throws {
-    let failures: [(CLIError, CLIErrorCode)] = [
-        (
-            .daemon(code: -32_020, message: "pane.rotate: relay failed"),
-            .paneBridgeFailed
-        ),
-        (
-            .daemon(code: -32_011, message: "session authority revoked"),
-            .sessionUnauthorized
-        ),
-        (
-            .transportTimeout("timed out waiting for the daemon"),
-            .transportTimeout
-        )
-    ]
-
-    for (error, expectedCode) in failures {
-        let fake = FakeTransport(responses: [try onePaneResponse()], error: error)
-        do {
-            _ = try handleRotate(
-                pane: nil,
-                target: .absolute(.landscapeLeft),
-                transport: fake,
-                output: .json,
-                creds: testCreds
+func daemonIntentDetailsSurviveJSONFailureRendering() throws {
+    let details = Data(#"{"committed":{"tab":{"id":"T"}}}"#.utf8)
+    let command = CLICommand.tabOpen(window: nil, cwd: nil, command: nil)
+    let outcome = run(
+        command,
+        transport: FakeTransport(
+            error: .daemon(
+                code: -32_000,
+                message: "intent.mutationFailed: session mint failed",
+                details: details
             )
-            Issue.record("rotate unexpectedly converted an infrastructure failure to a result")
-        } catch {
-            let outcome = errorOutcome(error)
-            #expect(outcome.failure?.code == expectedCode)
-            #expect(outcome.failure?.code != .rotateUnconfirmed)
-            #expect(outcome.failure?.code != .rotateConfirmationUnsupported)
-        }
-    }
-}
-
-@Test
-func malformedRotateResultIsAProtocolFailure() throws {
-    let malformedResponses = [
-        Data(#"{"unexpected":true}"#.utf8),
-        Data(#"{"ok":true,"unexpected":true}"#.utf8)
-    ]
-
-    for response in malformedResponses {
-        let fake = FakeTransport(responses: [try onePaneResponse(), response])
-        do {
-            _ = try handleRotate(
-                pane: nil,
-                target: .absolute(.landscapeLeft),
-                transport: fake,
-                output: .json,
-                creds: testCreds
-            )
-            Issue.record("malformed rotate result unexpectedly succeeded")
-        } catch {
-            #expect(errorOutcome(error).failure?.code == .protocolInvalidResponse)
-        }
-    }
-}
-
-@Test
-func axTreeReturnsDaemonPayloadVerbatim() throws {
-    let axPayload = Data(#"{"role":"window","children":[]}"#.utf8)
-    let fake = FakeTransport(responses: [try onePaneResponse(), axPayload])
-    let outcome = try sendResolvedPrintingResult(ref: nil, transport: fake, creds: testCreds) {
-        try CLICommands.axTreeRequest(paneId: $0)
-    }
-    var expected = axPayload
-    expected.append(0x0A)
-    #expect(outcome.stdout == expected)
-    #expect(fake.sent.map(\.method) == [RPCMethod.panesList.rawValue, RPCMethod.paneAXTree.rawValue])
-}
-
-@Test
-func axCallGetsItsOwnBudgetWhilePaneResolutionKeepsTheDefault() throws {
-    let fake = FakeTransport(responses: [try onePaneResponse(), Data(#"{}"#.utf8)])
-    _ = try sendResolvedPrintingResult(
-        ref: nil,
-        transport: fake,
-        creds: testCreds,
-        timeoutSeconds: AXTimeout.response
-    ) {
-        try CLICommands.axTreeRequest(paneId: $0)
-    }
-    // Resolution is a cheap `panes.list`, so it keeps the short wait and a
-    // wedged resolve still fails fast; only the AX envelope waits longer.
-    #expect(fake.timeouts == [AppCommandDeadline.cliRequestTimeoutSeconds, AXTimeout.response])
-}
-
-@Test
-func theAXWaitCoversTheLongestSweepAnyoneCanBuy() {
-    // Every `ax` verb queues on the pane's one accessibility queue, so any of
-    // them can wait out another caller's sweep before its own work starts.
-    // Each wait therefore has to exceed `AXSweepBudget.maxMs`: anything sized
-    // to the default budget fails on a request the daemon goes on to answer
-    // whenever someone else holds the queue with a ceiling-budget sweep.
-    let ceilingSeconds = Double(AXSweepBudget.maxMs) / 1_000.0
-    #expect(AXTimeout.response > ceilingSeconds)
-    #expect(AXTimeout.response > AppCommandDeadline.cliRequestTimeoutSeconds)
-    // Headroom, not a second budget: covering the ceiling twice would mean a
-    // wedged bridge call hangs the caller for two minutes.
-    #expect(AXTimeout.response < ceilingSeconds * 2)
-}
-
-@Test
-func aSweepsOwnBudgetDoesNotAddToTheWaitItNeeds() {
-    // The daemon takes a sweep's deadline when the request arrives, not when
-    // it reaches the queue, so time spent queued is spent out of the budget
-    // rather than deferring it. Worst case is max(queue wait, own budget) and
-    // the same ceiling caps both, which is why one constant serves all three
-    // verbs and `--budget` needs no client-side arithmetic.
-    let ceilingSeconds = Double(AXSweepBudget.maxMs) / 1_000.0
-    #expect(AXTimeout.response > ceilingSeconds)
-    #expect(AXTimeout.response > Double(AXSweepBudget.defaultMs) / 1_000.0)
-}
-
-@Test
-func errorOutcomeMappings() {
-    let daemon = errorOutcome(CLIError.daemon(code: 7, message: "x"))
-    #expect(daemon.stderr == "daemon error 7: x")
-    #expect(daemon.failure?.code == .rpcError)
-
-    let notInTab = errorOutcome(CLIError.notInTab("no tab"))
-    #expect(notInTab.stderr == "no tab")
-    #expect(notInTab.failure?.code == .sessionRequired)
-
-    let transport = errorOutcome(CLIError.transport("t"))
-    #expect(transport.exitCode == 1)
-    #expect(transport.failure?.code == .transportInterrupted)
-}
-
-// MARK: - response budgets for caller-paced verbs
-
-/// Verbs the daemon answers only once work the caller sized has finished: the
-/// paced gestures, and the sweep whose walk runs under a budget the caller can
-/// buy. Each can exceed the default five-second client wait, which is why each
-/// one overrides it.
-///
-/// These drive `run` rather than reconstructing the `sendResolved` call the way
-/// the tap tests above do, because what needs pinning is the dispatch site's own
-/// choice of budget. A reconstructed call would pass even if the verb omitted
-/// `timeoutSeconds:` entirely.
-///
-/// Serialized because `run` reads the session credentials from the process
-/// environment and there is no seam for injecting them, so concurrent cases
-/// would race over a process-wide value. Each call restores what it found.
-@Suite(.serialized)
-struct ResponseBudgetTests {
-    private func withTabEnv<T>(_ body: () throws -> T) rethrows -> T {
-        let priorSession = ProcessInfo.processInfo.environment[DeviceTermEnv.session]
-        let priorCap = ProcessInfo.processInfo.environment[DeviceTermEnv.sessionCap]
-        defer {
-            if let priorSession {
-                setenv(DeviceTermEnv.session, priorSession, 1)
-            } else {
-                unsetenv(DeviceTermEnv.session)
-            }
-            if let priorCap {
-                setenv(DeviceTermEnv.sessionCap, priorCap, 1)
-            } else {
-                unsetenv(DeviceTermEnv.sessionCap)
-            }
-        }
-        setenv(DeviceTermEnv.session, testCreds.sessionId, 1)
-        setenv(DeviceTermEnv.sessionCap, testCreds.cap, 1)
-        return try body()
-    }
-
-    /// The budget the action envelope was sent with. Index 1 because index 0 is
-    /// the `panes.list` resolution, which deliberately keeps the short wait.
-    private func actionBudget(for command: CLICommand) throws -> Double {
-        let fake = FakeTransport(responses: [try onePaneResponse(), Data(#"{}"#.utf8)])
-        let outcome = withTabEnv { run(command, transport: fake, output: .json) }
-        #expect(outcome.exitCode == 0)
-        #expect(fake.timeouts.count == 2)
-        #expect(fake.timeouts.first == AppCommandDeadline.cliRequestTimeoutSeconds)
-        return fake.timeouts[1]
-    }
-
-    private func pinch(durationMs: Int?) -> CLICommand {
-        .pinch(
-            pane: nil,
-            fromF1X: 0.4,
-            fromF1Y: 0.4,
-            fromF2X: 0.6,
-            fromF2Y: 0.6,
-            toF1X: 0.3,
-            toF1Y: 0.3,
-            toF2X: 0.7,
-            toF2Y: 0.7,
-            durationMs: durationMs
-        )
-    }
-
-    @Test
-    func longPressWaitsOutTheHoldItAskedFor() throws {
-        let budget = try actionBudget(
-            for: .longPress(pane: nil, x: 0.5, y: 0.5, durationMs: 5_000)
-        )
-        #expect(budget == gestureTimeout(5_000))
-        // A five-second hold has to keep headroom beyond the ordinary
-        // five-second request timeout, or it expires on a press it dispatched.
-        #expect(budget > AppCommandDeadline.cliRequestTimeoutSeconds + 5)
-    }
-
-    @Test
-    func pinchWaitsOutTheDurationItAskedFor() throws {
-        #expect(try actionBudget(for: pinch(durationMs: 8_000)) == gestureTimeout(8_000))
-    }
-
-    @Test
-    func crownWaitsOutASubSteppedRotation() throws {
-        let budget = try actionBudget(
-            for: .crown(pane: nil, delta: 100, velocity: nil, durationMs: 6_000)
-        )
-        #expect(budget == gestureTimeout(6_000))
-    }
-
-    @Test
-    func rotateWaitsOutItsBoundedQueueAndConfirmationWindow() throws {
-        let result = RotateResult(
-            success: true,
-            status: .confirmed,
-            targetOrientation: .landscapeLeft,
-            observedOrientation: .landscapeLeft
-        )
-        let fake = FakeTransport(responses: [try onePaneResponse(), try encoded(result)])
-        let outcome = withTabEnv {
-            run(
-                .rotate(pane: nil, target: .absolute(.landscapeLeft)),
-                transport: fake,
-                output: .json
-            )
-        }
-        let confirmationSeconds = Double(RotationConfirmationDeadline.observationMilliseconds) / 1_000
-
-        #expect(outcome.exitCode == 0)
-        #expect(fake.timeouts == [
-            AppCommandDeadline.cliRequestTimeoutSeconds,
-            RotationConfirmationDeadline.clientResponseTimeoutSeconds
-        ])
-        #expect(RotationConfirmationDeadline.maximumOutstandingPerPane == 2)
-        #expect(
-            RotationConfirmationDeadline.clientResponseTimeoutSeconds
-                > 2 * confirmationSeconds + AppCommandDeadline.cliRequestTimeoutSeconds
-        )
-    }
-
-    /// An omitted `--duration` must resolve the daemon's own default, not the
-    /// bare floor: the daemon still holds a long-press for half a second, and a
-    /// client that assumed zero would be cutting its own margin.
-    @Test(arguments: [
-        (
-            CLICommand.longPress(pane: nil, x: 0.5, y: 0.5, durationMs: nil),
-            GestureDuration.longPressDefaultMs
         ),
-        (
-            CLICommand.crown(pane: nil, delta: 10, velocity: nil, durationMs: nil),
-            GestureDuration.crownDefaultMs
-        )
-    ])
-    func anOmittedDurationTakesTheSharedDefault(command: CLICommand, expected: Int) throws {
-        #expect(try actionBudget(for: command) == gestureTimeout(expected))
-    }
+        output: .json
+    ).renderingFailure(for: command, output: .json)
+    let root = try #require(JSONSerialization.jsonObject(with: outcome.stdout) as? [String: Any])
+    let error = try #require(root["error"] as? [String: Any])
+    let renderedDetails = try #require(error["details"] as? [String: Any])
 
-    /// argv takes any `Int` and the daemon refuses anything past
-    /// `GestureDuration.maxMs`, so a duration that will be rejected must not
-    /// buy the client an unbounded wait on a peer that never answers.
-    @Test
-    func anOutOfRangeDurationCannotStretchTheDeadline() throws {
-        let absurd = GestureDuration.maxMs * 10_000
-        let ceiling = gestureTimeout(GestureDuration.maxMs)
-        #expect(gestureTimeout(absurd) == ceiling)
-        #expect(try actionBudget(
-            for: .longPress(pane: nil, x: 0.5, y: 0.5, durationMs: absurd)
-        ) == ceiling)
-        // A minute of gesture plus its headroom is the most a single-phase
-        // verb can claim.
-        #expect(ceiling < 75)
-    }
+    #expect(error["code"] as? String == "intent.mutationFailed")
+    #expect(renderedDetails["rpcCode"] as? Int == -32_000)
+    #expect(renderedDetails["committed"] != nil)
+}
 
-    /// `swipe` runs a motion and then a dwell, and the daemon validates the two
-    /// independently, so both are legal at the ceiling and the gesture can
-    /// legitimately outlast it. Bounding their sum instead would expire the
-    /// deadline halfway through a swipe the daemon accepted.
-    @Test
-    func aSwipeDeadlineCoversItsDwellAsWellAsItsMotion() {
-        let ceiling = GestureDuration.maxMs
-        #expect(gestureTimeout(ceiling, ceiling) > gestureTimeout(ceiling))
-        #expect(gestureTimeout(ceiling, ceiling) == gestureTimeout(ceiling) + 60)
-        // Each phase is still bounded on its own, so an out-of-range pair
-        // cannot reach past two legal ones.
-        #expect(gestureTimeout(ceiling * 99, ceiling * 99) == gestureTimeout(ceiling, ceiling))
-    }
-
-    /// Pins every single-phase duration-bearing verb to a budget longer than
-    /// the duration it asked for, so none can fall back to the floor on its
-    /// own. `swipe`'s two-phase budget is covered above.
-    @Test
-    func everyDurationBearingVerbOutlastsItsOwnGesture() throws {
-        let durationMs = 9_000
-        let commands: [CLICommand] = [
-            .longPress(pane: nil, x: 0.5, y: 0.5, durationMs: durationMs),
-            pinch(durationMs: durationMs),
-            .crown(pane: nil, delta: 100, velocity: nil, durationMs: durationMs)
-        ]
-        for command in commands {
-            #expect(try actionBudget(for: command) > Double(durationMs) / 1_000)
-        }
-    }
-
-    /// `ax sweep` takes `AXTimeout.response` whatever budget it asked for,
-    /// including none: the daemon answers only once the walk has stopped, and
-    /// the sweep can itself queue behind a ceiling-budget one. The budget does
-    /// not size the wait, but the wait must not fall back to the floor.
-    @Test(arguments: [30_000, nil])
-    func aSweepWaitsOutTheLongestWalkTheDaemonAllows(budgetMs: Int?) throws {
-        let budget = try actionBudget(
-            for: .axSweep(pane: nil, step: 0.02, budgetMs: budgetMs)
-        )
-        #expect(budget == AXTimeout.response)
-        #expect(budget > Double(AXSweepBudget.maxMs) / 1_000)
-    }
+@Test
+func runRoutesAgentsToStdout() {
+    #expect(run(.agents, transport: FakeTransport(), output: .human) == .stdout(AgentsText.documentation))
 }

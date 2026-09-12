@@ -385,8 +385,8 @@ UDID.
 
 ## Work With Tabs and Panes
 
-A tab is a workspace. It contains one or more terminal sessions, their working
-directories, and any device panes attached to the tab.
+A tab is a workspace. Its split layout contains terminal, Simulator, and
+physical-device panes. Each pane is independently addressable.
 
 A terminal split creates another terminal session inside the same tab. Each
 session has its own CLI identity, but the GUI treats them as one workspace for
@@ -429,11 +429,14 @@ tab.
 Press ⌘W to close the focused pane. Closing a Simulator pane raises the Close
 a Device Pane prompt. If the focused pane is the tab's final terminal,
 DeviceTerm closes the tab and applies its Simulator close decision instead.
+The CLI makes that boundary explicit: `pane close` refuses the final terminal
+with `intent.wouldCloseTab`, and `tab close` removes the workspace.
 
 Press ⌥⌘W to close the tab directly. Press ⇧⌘W to close the window.
 
-A script or agent can create and arrange the same surfaces with the workspace
-commands in [`AUTOMATION.md`](AUTOMATION.md#control-the-workspace).
+A script or agent can inspect and arrange the same hierarchy with singular
+`window`, `tab`, and `pane` command roots. See
+[`AUTOMATION.md`](AUTOMATION.md#control-the-workspace).
 
 ## Drive a Device Directly
 
@@ -527,9 +530,11 @@ Use `--hold` to keep the finger at the final coordinate before lifting:
 deviceterm swipe 0.5 0.8 0.5 0.2 --duration 250 --hold 300
 ```
 
-On a Simulator, `app-switcher` sends an edge swipe with a dwell. On a physical
-device, DeviceTerm uses the app-switcher gesture when available and otherwise
-uses a Home double-press.
+On a Simulator, `app-switcher` sends an edge swipe from the home-indicator edge
+to a shallow dwell point about one fifth of the screen inward. It stops before
+the middle because dwelling after a longer drag can commit the gesture to Home
+instead of opening the App Switcher. On a physical device, DeviceTerm uses the
+app-switcher gesture when available and otherwise uses a Home double-press.
 
 ### Send Keys, Text, Buttons, and Rotation
 
@@ -660,11 +665,18 @@ deviceterm wait ax --label Continue --match contains --print center
 deviceterm tap --label Continue --match contains
 ```
 
-Both make the same selection and both refuse rather than guess:
-`wait.unreachable` when nothing eligible matched, `wait.ambiguous` when
-several unrelated elements did. A refusal sends no tap either way. What it
-writes differs: `--print center` writes nothing at all, while `tap --json`
-writes the usual error envelope to stdout.
+Both make the same selection. Neither selects from a tree marked
+`ax.treeIncomplete`, because an omitted element could make the target ambiguous
+or change the containment result. An incomplete tree is retried and returns
+`wait.inconclusive` if no complete observation arrives before the deadline.
+Unsupported enumeration and a truncated sweep refuse immediately and dispatch
+no tap.
+
+Both commands also refuse rather than guess: `wait.unreachable` when nothing
+eligible matched and `wait.ambiguous` when several unrelated elements did. A
+refusal sends no tap either way. What it writes differs: `--print center`
+writes nothing at all, while `tap --json` writes the usual error envelope to
+stdout.
 
 A sweep-based AX wait reduces the requested or default sweep budget to the time
 remaining before the overall wait deadline. A short wait therefore cannot leave
@@ -734,12 +746,12 @@ deviceterm help refs
 Resolve one pane for a group of nested commands with `with-pane`:
 
 ```sh
-deviceterm panes list
+deviceterm pane list
 PANE_REF="abc123"
 deviceterm with-pane "$PANE_REF" sh -c 'deviceterm tap 0.5 0.5'
 ```
 
-Replace `abc123` with the short ID printed by `panes list`. Nested
+Replace `abc123` with the short ID printed by `pane list`. Nested
 `deviceterm` commands inherit the resolved target; the environment contract
 and exit forwarding are defined in
 [`INTEGRATION.md`](INTEGRATION.md#run-a-child-with-a-pane-target).
@@ -775,9 +787,10 @@ response.
 for the sweep's preflight. The synthetic sweep root remains a normalized
 0,0,1,1 placeholder and has no `normalizedCenter`.
 
-`ax point` and `ax sweep` also report the screen they measured, as `rootFrame`.
-Multiply a `normalizedCenter` by its `w` and `h` for displayed points, instead
-of running a second `ax tree` for the size.
+`ax point` reports the measured screen at `.element.rootFrame`; `ax sweep`
+reports it at `.tree.rootFrame`. It is not a top-level sibling of `element` or
+`tree`. Multiply a `normalizedCenter` by its `w` and `h` for displayed points,
+instead of running a second `ax tree` for the size.
 
 It's omitted when the daemon couldn't measure the screen. `ax tree` never
 carries it, since its own root frame is the scale.
@@ -1304,7 +1317,7 @@ DeviceTerm reports a restart it could not perform rather than claiming one.
 | `xcrun simctl boot` succeeds but no pane appears | The command bypassed DeviceTerm's per-session `xcrun` shim, or it did not produce a new boot transition. | Run `deviceterm doctor` and check the shim result; see [Understand the xcrun Shim](#understand-the-xcrun-shim). Attach an already booted Simulator by UDID. |
 | A Simulator was booted from Xcode, Simulator.app, or Device Hub | External boots are not claimed automatically. | Find the Simulator with `xcrun simctl list devices booted` and pass its UDID to `deviceterm device attach`. |
 | Attaching an external Simulator by name fails | `devices list` contains only owned booted Simulators, so it cannot resolve an unclaimed external name. | Use the Simulator UDID rather than its name. |
-| `multiple panes in this tab; pass --pane <ref>` | Your tab shows more than one device pane. | Run `deviceterm panes list`, pass a pane reference with `--pane`, or use `with-pane`. |
+| `multiple panes in this tab; pass --pane <ref>` | Your tab shows more than one device pane. | Run `deviceterm pane list`, pass a pane reference with `--pane`, or use `with-pane`. |
 | No physical devices appear in the picker | The device is disconnected, locked, untrusted, or was connected after the picker opened. | Connect and unlock it, trust the Mac, then choose **Refresh**. |
 | A physical device appears but attachment fails | Enumeration succeeded, but a required tunnel, display, or input service did not. | Read the attachment error, unlock and trust the device, then retry. A device with unsupported services cannot be mirrored by this build. |
 | The GUI and CLI disagree after an upgrade | The live daemon wire version differs from the bundled RPC wire version, or the version probe failed. | Run `deviceterm version --json` and compare `daemon` with `rpcWire`; see [the version report](INTEGRATION.md#version-report). Quit and reopen DeviceTerm. |

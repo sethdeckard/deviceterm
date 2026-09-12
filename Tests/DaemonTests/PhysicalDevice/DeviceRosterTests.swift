@@ -49,7 +49,7 @@ func rosterHidesOwnerInProtectedSessionViaOpacity() {
     let hiddenOwner = UUID()
     // The caller can't see `hiddenOwner` (a protected session it doesn't
     // own), so the device must read as unattached, exactly the
-    // tabs.list opacity rule.
+    // tab.list opacity rule.
     let roster = DeviceRoster.build(
         sims: [],
         physical: [PhysicalDeviceInfo(deviceId: "fd00::1")],
@@ -67,7 +67,7 @@ func rosterMatchesSimOwnershipCaseInsensitively() {
     // CoreSimulator hands sim UDIDs back uppercase; the pane's
     // ownership target key is the daemon's lowercase canonical form. An
     // attached sim must still annotate (and report its id in the
-    // canonical lowercase that matches panes.list).
+    // canonical lowercase that matches pane.deviceList).
     let owner = UUID()
     let upper = "ABCD1234-5678-90AB-CDEF-1234567890AB"
     let roster = DeviceRoster.build(

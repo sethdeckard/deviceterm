@@ -10,7 +10,7 @@ import Foundation
 /// pane's controlling members is visible to the caller, so a device
 /// attached to a protected tab the caller doesn't own reads as
 /// unattached. That reuses
-/// the exact `tabs.list` opacity rule (the caller passes the set of
+/// the exact `tab.list` opacity rule (the caller passes the set of
 /// session ids visible to them; an owner-hidden protected session simply
 /// isn't in it). Pure, so the opacity logic is unit-tested without a
 /// device or CoreSimulator.
@@ -53,7 +53,7 @@ enum DeviceRoster {
             let target: PaneTarget = kind == .sim ? .sim(udid: id) : .device(deviceId: id)
             // Opacity: annotate the owner only when the caller can see one of
             // the sessions controlling the pane; otherwise the device reads as
-            // unattached, exactly as `tabs.list` hides a protected tab from
+            // unattached, exactly as `tab.list` hides a protected tab from
             // non-owners.
             //
             // The test is over every controlling member, not the record's own
@@ -94,9 +94,9 @@ enum DeviceRoster {
         // Sim UDIDs are case-insensitive UUIDs. CoreSimulator hands them
         // back uppercase, but the daemon's canonical form (and so
         // `PaneOwnership.targetKey` (from `canonicalizeUDID`) and the
-        // `panes.list` udid) is lowercase. Normalize the sim id to that
+        // `pane.deviceList` udid) is lowercase. Normalize the sim id to that
         // canonical form so the ownership match lines up and the id a
-        // client correlates with `panes.list` is identical. Physical
+        // client correlates with `pane.deviceList` is identical. Physical
         // deviceIds are the stable CoreDevice UDID (the `devicectl
         // --device` argument, not an ephemeral tunnel address) and pass
         // through unchanged.

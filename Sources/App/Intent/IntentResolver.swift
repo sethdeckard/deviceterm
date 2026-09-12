@@ -2,8 +2,7 @@
 
 import Foundation
 
-/// Resolve user-facing refs (`TabRef`, `PaneRef`,
-/// `WindowRef`) into GUI-internal IDs the Router consumes.
+/// Resolve raw public window, tab, and pane refs into GUI-internal IDs.
 ///
 /// Lives at `@MainActor` because it reads the workspace's live tab /
 /// window lists. Pure projection (no mutation, no side effects); every
@@ -67,51 +66,103 @@ struct IntentResolver {
         }
     }
 
-    // MARK: - Tab
+    /// Caller-visible windows in stable workspace order.
+    func visibleWindowStates() -> [WindowState] { visibleWindows() }
 
-    /// Resolve a `TabRef` to a `ResolvedTab`. Throws `IntentError.notFound`
-    /// or `.ambiguous` per the matrix in `IntentError`. A foreign protected
-    /// tab always resolves `notFound`.
-    func resolveTab(_ ref: TabRef) throws -> ResolvedTab {
-        switch ref {
-        case .current:
-            return try resolveCurrentTab()
+    /// Resolve one raw public window reference. Full UUID, short id, and name
+    /// are accepted; omitted and `current` are origin-aware.
+    func resolveWindow(_ raw: String?) throws -> WindowID {
+        guard let raw, !raw.isEmpty, raw != "current" else {
+            switch origin {
+            case .inProcess:
+                guard let windowID = workspace.selectedWindowID else {
+                    throw IntentError.notFound(kind: "window", ref: "current")
+                }
+                return windowID
 
-        case let .sessionId(sid):
-            if let uuid = UUID(uuidString: sid) {
-                return try findUnique(
-                    kind: "tab",
-                    ref: sid,
-                    predicate: { tab in
-                        tab.cohortId == uuid || tab.terminals.contains { terminal in
-                            UUID(uuidString: terminal.sessionId) == uuid
-                        }
-                    }
-                )
+            case let .external(sessionID, _):
+                guard let sessionID, let tab = findBySession(sessionID) else {
+                    throw IntentError.notFound(kind: "window", ref: "current")
+                }
+                return tab.windowID
             }
-            guard let hit = findBySession(sid), accessible(hit.tab) else {
-                throw IntentError.notFound(kind: "tab", ref: sid)
-            }
-            return hit
-
-        case let .shortId(sid):
-            // The tab's display identity tracks the primary terminal
-            // (the one created at tab-open). Non-primary terminals have
-            // their own short_ids but `--tab` refers to the tab, not an
-            // internal terminal: match the primary's id.
-            return try findUnique(
-                kind: "tab",
-                ref: sid,
-                predicate: { $0.primaryTerminal.shortId == sid }
-            )
-
-        case let .name(n):
-            return try findUnique(
-                kind: "tab",
-                ref: n,
-                predicate: { $0.primaryTerminal.name == n }
-            )
         }
+        let windows = visibleWindows()
+        let folded = raw.lowercased()
+        let exactShort = windows.filter { WorkspaceShortID.make(from: $0.publicID) == folded }
+        if let resolved = try uniqueWindow(exactShort, ref: raw) { return resolved }
+        let exactID = windows.filter { $0.publicID.uuidString.lowercased() == folded }
+        if let resolved = try uniqueWindow(exactID, ref: raw) { return resolved }
+        let exactName = windows.filter { $0.name?.lowercased() == folded }
+        if let resolved = try uniqueWindow(exactName, ref: raw) { return resolved }
+        let prefix = windows.filter {
+            $0.publicID.uuidString.lowercased().hasPrefix(folded)
+        }
+        guard let resolved = try uniqueWindow(prefix, ref: raw) else {
+            throw IntentError.notFound(kind: "window", ref: raw)
+        }
+        return resolved
+    }
+
+    /// Resolve one raw public tab reference using the shared public identity
+    /// tiers. Protected foreign tabs never enter the candidate set.
+    func resolveTab(_ raw: String?) throws -> ResolvedTab {
+        guard let raw, !raw.isEmpty, raw != "current" else {
+            return try resolveCurrentTab()
+        }
+        let folded = raw.lowercased()
+        let candidates = visibleTabStates()
+        let exactShort = candidates.filter {
+            WorkspaceShortID.make(from: $0.tab.cohortId) == folded
+        }
+        if let resolved = try uniqueTab(exactShort, ref: raw) { return resolved }
+        let exactID = candidates.filter { $0.tab.cohortId.uuidString.lowercased() == folded }
+        if let resolved = try uniqueTab(exactID, ref: raw) { return resolved }
+        let exactName = candidates.filter { $0.tab.name?.lowercased() == folded }
+        if let resolved = try uniqueTab(exactName, ref: raw) { return resolved }
+        let prefix = candidates.filter {
+            $0.tab.cohortId.uuidString.lowercased().hasPrefix(folded)
+        }
+        guard let resolved = try uniqueTab(prefix, ref: raw) else {
+            throw IntentError.notFound(kind: "tab", ref: raw)
+        }
+        return resolved
+    }
+
+    /// Resolve one terminal, Simulator, or physical-device pane reference.
+    func resolveWorkspacePane(_ raw: String?) throws -> ResolvedWorkspacePane {
+        if raw == nil || raw?.isEmpty == true || raw == "current" {
+            return try resolveCurrentWorkspacePane()
+        }
+        let raw = raw ?? ""
+        let folded = raw.lowercased()
+        let candidates = visibleWorkspacePanes()
+        let exactShort = candidates.filter { $0.shortID?.lowercased() == folded }
+        if let resolved = try uniqueWorkspacePane(exactShort, ref: raw) { return resolved }
+        let exactID = candidates.filter { $0.id.lowercased() == folded }
+        if let resolved = try uniqueWorkspacePane(exactID, ref: raw) { return resolved }
+        let exactName = candidates.filter { $0.name?.lowercased() == folded }
+        if let resolved = try uniqueWorkspacePane(exactName, ref: raw) { return resolved }
+        let exactDevice = candidates.filter { pane in
+            switch pane.state {
+            case let .simulator(simulator):
+                simulator.udid.lowercased() == folded
+
+            case let .device(device):
+                device.deviceId.lowercased() == folded
+
+            case .terminal:
+                false
+            }
+        }
+        if let resolved = try uniqueWorkspacePane(exactDevice, ref: raw) { return resolved }
+        let prefix = candidates.filter { pane in
+            pane.id.lowercased().hasPrefix(folded)
+        }
+        guard let resolved = try uniqueWorkspacePane(prefix, ref: raw) else {
+            throw IntentError.notFound(kind: "pane", ref: raw)
+        }
+        return resolved
     }
 
     /// `.current` resolution, by origin. In-process borrows the key
@@ -138,117 +189,6 @@ struct IntentResolver {
         }
     }
 
-    // MARK: - Pane (sim)
-
-    /// Resolve a `PaneRef` to a `ResolvedPane`. `current` requires the
-    /// caller's tab to host exactly one sim pane. A pane inside a foreign
-    /// protected tab resolves `notFound`.
-    func resolveSimPane(_ ref: PaneRef) throws -> ResolvedPane {
-        switch ref {
-        case .current:
-            let tab = try resolveTab(.current)
-            guard tab.tab.simPanes.count == 1,
-                let pane = tab.tab.simPanes.first else {
-                if tab.tab.simPanes.isEmpty {
-                    throw IntentError.notFound(
-                        kind: "pane",
-                        ref: "current (no sim panes in tab)"
-                    )
-                }
-                throw IntentError.ambiguous(
-                    kind: "pane",
-                    ref: "current",
-                    matchCount: tab.tab.simPanes.count
-                )
-            }
-            return ResolvedPane(
-                windowID: tab.windowID,
-                tabID: tab.tabID,
-                pane: pane
-            )
-
-        case let .paneId(pid):
-            guard let hit = findPane(where: { $0.paneId == pid }) else {
-                throw IntentError.notFound(kind: "pane", ref: pid)
-            }
-            return hit
-
-        case let .udid(udid):
-            guard let hit = findPane(where: { $0.udid == udid }) else {
-                throw IntentError.notFound(kind: "pane", ref: udid)
-            }
-            return hit
-
-        case let .shortId(sid):
-            return try findUniquePane(
-                kind: "pane",
-                ref: sid,
-                predicate: { $0.shortId == sid }
-            )
-        }
-    }
-
-    // MARK: - Window
-
-    /// Resolve a `WindowRef` to a `WindowID`, origin-aware. An external
-    /// caller's `.current` is *its own* window (the one containing its
-    /// session's tab), not the key window; `.index` counts only the
-    /// visible-window projection, so a window holding only foreign-protected
-    /// tabs never occupies a position an external caller can target.
-    func resolveWindow(_ ref: WindowRef) throws -> WindowID {
-        switch ref {
-        case .current:
-            switch origin {
-            case .inProcess:
-                guard let id = workspace.selectedWindowID else {
-                    throw IntentError.notFound(
-                        kind: "window",
-                        ref: "current (no key window)"
-                    )
-                }
-                return id
-
-            case let .external(sessionID, _):
-                guard let sessionID, let hit = findBySession(sessionID) else {
-                    throw IntentError.notFound(
-                        kind: "window",
-                        ref: "current"
-                    )
-                }
-                return hit.windowID
-            }
-
-        case let .index(pos):
-            let windows = visibleWindows()
-            let idx = pos - 1
-            guard let window = windows[safe: idx] else {
-                throw IntentError.notFound(
-                    kind: "window",
-                    ref: "index \(pos)"
-                )
-            }
-            return window.id
-
-        case let .keyed(key):
-            // `WindowID` is not a user-facing string. Reject opaque keyed
-            // references rather than matching them accidentally.
-            throw IntentError.notFound(kind: "window", ref: key)
-
-        case let .windowID(id):
-            // Direct concrete-ID targeting from an in-process caller
-            // (TabStripVC menu actions). Validate the window is still
-            // live so a stale ID held across a close surfaces as notFound
-            // rather than silently routing to nowhere.
-            guard workspace.window(id: id) != nil else {
-                throw IntentError.notFound(
-                    kind: "window",
-                    ref: "windowID \(id.value)"
-                )
-            }
-            return id
-        }
-    }
-
     // MARK: - Private helpers
 
     private func findBySession(_ sessionID: String) -> ResolvedTab? {
@@ -272,84 +212,99 @@ struct IntentResolver {
         return nil
     }
 
-    private func findUnique(
-        kind: String,
-        ref: String,
-        predicate: (TabState) -> Bool
-    ) throws -> ResolvedTab {
-        var matches: [ResolvedTab] = []
-        for window in workspace.windows {
-            // Accessibility is ANDed into the predicate: a foreign-protected
-            // tab is invisible to the match, so it can neither be resolved
-            // nor inflate an `.ambiguous` count.
-            for tab in window.tabs.tabs where accessible(tab) && predicate(tab) {
-                matches.append(
-                    ResolvedTab(
-                    windowID: window.id,
-                    tabID: tab.id,
-                    tab: tab
-                )
-                    )
+    private func visibleTabStates() -> [ResolvedTab] {
+        visibleWindows().flatMap { window in
+            window.tabs.tabs.compactMap { tab in
+                guard accessible(tab) else { return nil }
+                return ResolvedTab(windowID: window.id, tabID: tab.id, tab: tab)
             }
         }
-        if matches.isEmpty {
-            throw IntentError.notFound(kind: kind, ref: ref)
-        }
-        if matches.count > 1 {
-            throw IntentError.ambiguous(
-                kind: kind,
-                ref: ref,
-                matchCount: matches.count
-            )
-        }
-        return matches[0]
     }
 
-    private func findPane(where predicate: (SimPaneState) -> Bool) -> ResolvedPane? {
-        for window in workspace.windows {
-            for tab in window.tabs.tabs where accessible(tab) {
-                if let pane = tab.simPanes.first(where: predicate) {
-                    return ResolvedPane(
-                        windowID: window.id,
-                        tabID: tab.id,
-                        pane: pane
+    private func visibleWorkspacePanes() -> [ResolvedWorkspacePane] {
+        visibleTabStates().flatMap { resolved -> [ResolvedWorkspacePane] in
+            guard resolved.tab.lifecycle == .ready else { return [] }
+            return PaneTreeOps.leavesInOrder(resolved.tab.paneTree).compactMap { slot in
+                switch slot {
+                case let .terminal(id):
+                    guard let terminal = resolved.tab.terminals.first(where: { $0.id == id }) else {
+                        return nil
+                    }
+                    return ResolvedWorkspacePane(
+                        windowID: resolved.windowID,
+                        tabID: resolved.tabID,
+                        slot: slot,
+                        state: .terminal(terminal)
                     )
+
+                case let .sim(udid):
+                    guard let pane = resolved.tab.simPanes.first(where: { $0.udid == udid }) else {
+                        return nil
+                    }
+                    return ResolvedWorkspacePane(
+                        windowID: resolved.windowID,
+                        tabID: resolved.tabID,
+                        slot: slot,
+                        state: .simulator(pane)
+                    )
+
+                case let .device(deviceId):
+                    guard let pane = resolved.tab.devicePanes.first(where: { $0.deviceId == deviceId }) else {
+                        return nil
+                    }
+                    return ResolvedWorkspacePane(
+                        windowID: resolved.windowID,
+                        tabID: resolved.tabID,
+                        slot: slot,
+                        state: .device(pane)
+                    )
+
+                case .pending:
+                    return nil
                 }
             }
         }
-        return nil
     }
 
-    private func findUniquePane(
-        kind: String,
-        ref: String,
-        predicate: (SimPaneState) -> Bool
-    ) throws -> ResolvedPane {
-        var matches: [ResolvedPane] = []
-        for window in workspace.windows {
-            for tab in window.tabs.tabs where accessible(tab) {
-                for pane in tab.simPanes where predicate(pane) {
-                    matches.append(
-                        ResolvedPane(
-                        windowID: window.id,
-                        tabID: tab.id,
-                        pane: pane
-                    )
-                        )
-                }
-            }
+    private func resolveCurrentWorkspacePane() throws -> ResolvedWorkspacePane {
+        let tab = try resolveCurrentTab()
+        let panes = visibleWorkspacePanes().filter { $0.tabID == tab.tabID }
+        if let sessionID = origin.sessionID,
+            let terminal = panes.first(where: { $0.id == sessionID }) {
+            return terminal
         }
-        if matches.isEmpty {
-            throw IntentError.notFound(kind: kind, ref: ref)
+        if let remembered = tab.tab.lastFocusedPane,
+            let pane = panes.first(where: { $0.slot == remembered }) {
+            return pane
         }
+        guard let pane = panes.first else {
+            throw IntentError.notFound(kind: "pane", ref: "current")
+        }
+        return pane
+    }
+
+    private func uniqueWindow(_ matches: [WindowState], ref: String) throws -> WindowID? {
         if matches.count > 1 {
-            throw IntentError.ambiguous(
-                kind: kind,
-                ref: ref,
-                matchCount: matches.count
-            )
+            throw IntentError.ambiguous(kind: "window", ref: ref, matchCount: matches.count)
         }
-        return matches[0]
+        return matches.first?.id
+    }
+
+    private func uniqueTab(_ matches: [ResolvedTab], ref: String) throws -> ResolvedTab? {
+        if matches.count > 1 {
+            throw IntentError.ambiguous(kind: "tab", ref: ref, matchCount: matches.count)
+        }
+        return matches.first
+    }
+
+    private func uniqueWorkspacePane(
+        _ matches: [ResolvedWorkspacePane],
+        ref: String
+    ) throws -> ResolvedWorkspacePane? {
+        if matches.count > 1 {
+            throw IntentError.ambiguous(kind: "pane", ref: ref, matchCount: matches.count)
+        }
+        return matches.first
     }
 }
 

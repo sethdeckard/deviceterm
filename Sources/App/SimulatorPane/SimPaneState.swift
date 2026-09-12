@@ -25,7 +25,7 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
     /// `device.attach`. The daemon emits nil at create and populates it
     /// on `deviceterm pane rename`, so this is nil until the pane state
     /// is rebuilt from a later response.
-    let name: String?
+    var name: String?
     /// Native pixel width of the device's display, from the daemon's
     /// attach response. Drives the size-preset math (Physical / Point
     /// Accurate / Pixel Accurate / Fit Screen). Nil when the renderable

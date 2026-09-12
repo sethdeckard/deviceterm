@@ -10,33 +10,28 @@ import Foundation
 /// TabContentViewController / per-pane controllers off these ids and
 /// reconciles to match.
 ///
-/// `shortId` (Crockford base32, 6 chars, daemon-minted, immutable) +
-/// `name` (mutable, optional) are the identifier model and ride
-/// alongside `paneId` on `SimPaneState`. Both fields are Optional in
-/// the GUI model since they decode from Optional wire fields (skew
-/// tolerance against an older daemon during a Sparkle update window);
-/// current daemons always emit them.
-///
 /// `terminals` is non-empty: every tab is born with one terminal
 /// pane (the primary, index 0) and additional terminals are added via
 /// `Route.openTerminalPane`. `closeTerminalPane` refuses to remove
 /// the last entry (use `closeTab` instead). `primaryTerminal` is the
-/// safe accessor for callers that need a representative session
-/// (tab-info, status item grouping, sim-pane attribution for the
-/// discovery snapshot).
+/// safe accessor for callers that need the tab's representative session
+/// (cohort reconciliation, device attribution, and primary-pane fallback).
 struct TabState: Identifiable, Equatable, Sendable {
     let id: TabID
-    /// The stable UUID for this tab. It is both the daemon-side cohort id under
-    /// which the Router reconciles sibling terminal authority and the public
-    /// `tabId` stored on each session for listing/reference. Stable for the
-    /// tab's whole life, including daemon-only restarts; restore inventory and
-    /// cohort reconciliation both re-supply it.
+    /// The tab's stable UUID and daemon-side cohort id. The public tab short id
+    /// is derived from this value; terminal session short ids belong to their
+    /// individual pane records. Stable across renames and daemon-only restarts.
     let cohortId: UUID
+    /// User-facing name. Nil restores the live automatic title.
+    var name: String?
+    /// Initial-session lifecycle exposed by the public workspace API.
+    var lifecycle: WorkspaceTabLifecycle
+    /// Failure reason when `lifecycle == .failed`.
+    var failureMessage: String?
     /// Non-empty list of terminal panes. Index 0 is the primary
     /// terminal, the one created when the tab opened and the
-    /// fallback target for tab-scoped operations (tab-info `sessionId`,
-    /// sim-pane attribution, the automation's `tab send-input`
-    /// destination).
+    /// fallback target for sim-pane attribution. Public terminal operations
+    /// name a pane explicitly.
     var terminals: [TerminalPaneState]
     /// Role the daemon assigned at session creation (descriptive
     /// metadata, not an authorization gate). Defaults
@@ -134,8 +129,8 @@ struct TabState: Identifiable, Equatable, Sendable {
     var lastFocusedPane: PaneSlot?
 
     /// The primary terminal pane at index 0, always present. Tab-scoped
-    /// operations (sim-pane attribution, `tab info`'s reported
-    /// session, automation `send-input` default target) use this.
+    /// operations such as sim-pane attribution use this. Public workspace
+    /// reads project every terminal pane rather than only the primary.
     var primaryTerminal: TerminalPaneState { terminals[0] }
 
     init(
@@ -145,11 +140,17 @@ struct TabState: Identifiable, Equatable, Sendable {
         devicePanes: [DevicePaneState] = [],
         role: SessionRole = .agent,
         isProtected: Bool = false,
-        cohortId: UUID = UUID()
+        cohortId: UUID = UUID(),
+        name: String? = nil,
+        lifecycle: WorkspaceTabLifecycle = .ready,
+        failureMessage: String? = nil
     ) {
         precondition(!terminals.isEmpty, "TabState must have at least one terminal pane")
         self.id = id
         self.cohortId = cohortId
+        self.name = name ?? terminals[0].name
+        self.lifecycle = lifecycle
+        self.failureMessage = failureMessage
         self.terminals = terminals
         self.role = role
         self.simPanes = simPanes

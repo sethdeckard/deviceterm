@@ -104,7 +104,7 @@ func detailsCarryNoTrailingNewline() {
 @Test
 func suggestionsFindNearMissesAndStayQuietOtherwise() {
     #expect(HelpCatalog.suggestions(for: "cro") == ["crown"])
-    #expect(HelpCatalog.suggestions(for: "window").contains("windows"))
+    #expect(HelpCatalog.suggestions(for: "windw").contains("window"))
     #expect(HelpCatalog.suggestions(for: "zzzz").isEmpty)
     #expect(HelpCatalog.suggestions(for: "").isEmpty)
     // Capped, so a broad prefix can't print the whole catalog.

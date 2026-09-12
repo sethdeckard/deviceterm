@@ -29,9 +29,9 @@
 /// validated XPC peer server-side (identical to `session.create`), never
 /// sent on the wire.
 public struct SessionRestoreBatchParams: Codable, Sendable, Equatable {
-    /// The complete live session inventory. Entry order is significant.
-    /// It defines `tabs.list` ordering for the restored set. An empty
-    /// array is valid and still completes the restoration barrier.
+    /// The complete live session inventory. Entry order is significant because
+    /// it defines the restored sessions' `createdAt` ordering in daemon
+    /// snapshots. An empty array still completes the restoration barrier.
     public let sessions: [RestoredSession]
     /// A monotonically increasing revision the GUI allocates per restore SEND
     /// (including each durable retry). Paired server-side with the connection

@@ -32,7 +32,7 @@ public enum AgentsText {
       attach the resulting sim to the calling session. Bypassing
       the shim (custom `idb`-style helpers, `simctl` against the
       Apple-shipped binary outside a tab) creates a sim that
-      deviceterm has no knowledge of; `deviceterm panes list` will stay
+      deviceterm has no knowledge of; `deviceterm pane list` will stay
       empty even after the sim is fully booted.
 
       If `deviceterm tap` / `swipe` / `crown` returns
@@ -40,7 +40,7 @@ public enum AgentsText {
 
         env | grep DEVICETERM     # confirms the tab's env is wired
         which xcrun            # confirms the shim is on PATH
-        deviceterm panes list     # confirms the pane attached
+        deviceterm pane list     # confirms the pane attached
 
       Expected env values inside a healthy deviceterm tab:
 
@@ -166,7 +166,7 @@ public enum AgentsText {
       Boot a fresh sim and verify the pane attached:
         xcrun simctl list devices iPhone   # find UDID
         xcrun simctl boot <UDID>           # shim intercepts
-        deviceterm panes list                 # pane row appears
+        deviceterm pane list                 # pane row appears
 
       Tap a UI element you've located:
         deviceterm ax tree | jq \\
@@ -186,7 +186,7 @@ public enum AgentsText {
         deviceterm text "hello world"
 
       Drive multiple panes with --pane disambiguation:
-        deviceterm panes list                 # see all panes
+        deviceterm pane list                 # see all panes
         deviceterm tap 0.5 0.5 --pane <WATCH-UDID>
 
       Lock subsequent commands onto one pane with `with-pane`:
@@ -201,25 +201,27 @@ public enum AgentsText {
 
       Spawn a fresh agent tab in the current window (needs a grant):
         deviceterm tab open
-        deviceterm tab open --cwd ~/projects/app --cmd 'claude'
+        deviceterm tab open --cwd ~/projects/app --command 'claude'
         # Requires a live automation grant; an ordinary tab is
-        # refused with error.scope_violation. Run it from a tab
+        # refused with intent.automationRequired. Run it from a tab
         # opened via Shell > "Open Automation Tab". New tab appears
-        # in the same window. The verb returns once the GUI accepts
-        # the route; the new tab's session id isn't reflected back
-        # (fire-and-forget). --cwd sets the shell's startup directory
+        # in the same window. The verb waits for the GUI to commit the
+        # tab and mint its first terminal session, then returns the
+        # window, tab, and terminal pane in one receipt. It does not
+        # wait for shell readiness. --cwd sets the startup directory
         # (the CLI resolves relative / ~-prefixed paths against its
-        # own CWD); --cmd is typed into the new shell after attach so
+        # own CWD); --command is typed into the new shell after attach so
         # it runs once and the user lands at an interactive prompt.
-        # Same flags on `pane open --terminal`, which needs no grant.
+        # `pane split --direction right` adds a terminal to this tab,
+        # needs no grant, and returns the new terminal pane.
 
-      Rename / select / inspect existing tabs by shortId:
-        deviceterm tabs list                    # see open tabs
-        deviceterm tab select --tab abc123      # focus it (grant)
-        deviceterm tab move --tab abc123 --to 0 # reorder it (grant)
+      Rename / focus / inspect existing tabs by shortId:
+        deviceterm tab list                    # see open tabs
+        deviceterm tab focus abc123             # focus it (grant)
+        deviceterm tab move abc123 --window 22aa44 --index 0
         deviceterm tab rename "billing"         # rename current
-        deviceterm tab info                     # role + linked panes
-        deviceterm tab close --tab abc123       # close that tab
+        deviceterm tab show                     # panes + split layout
+        deviceterm tab close abc123             # close that tab
         # "(grant)" marks a verb needing a live automation grant.
         # Both need it even when the target is your own tab:
         # selecting one can replace the visible tab and move terminal
@@ -227,36 +229,36 @@ public enum AgentsText {
 
       Manage windows:
         deviceterm window open                  # new window (grant)
-        deviceterm windows list                 # see all windows
-        deviceterm window focus --window 2      # bring forward (grant)
-        deviceterm window close --window 2      # close window 2
+        deviceterm window list --all             # see all visible windows
+        deviceterm window focus 22aa44           # stable ref (grant)
+        deviceterm window close 22aa44           # index is metadata only
 
-      Cross-tab shell control (run from an automation tab):
-        deviceterm tab send-input --tab abc123 'echo hi\\n'
-        # Writes the text into the resolved tab's terminal as
+      Drive a terminal pane (run from an automation tab):
+        deviceterm pane send-input term123 'echo hi\\n'
+        # Writes the text into the resolved terminal pane as
         # though the user had typed it. control sequences flow
         # through libghostty's input pipeline. Authorization is a
         # live automation grant, not a role. Works from a tab
         # opened via Shell > "Open Automation Tab" (the GUI grants
         # that tab's session); from an ordinary agent tab it is
-        # refused (error.scope_violation).
-        deviceterm tab send-input --tab abc123 --type-delay 45 -- 'ls\\n'
+        # refused (intent.automationRequired).
+        deviceterm pane send-input term123 --type-delay 45 -- 'ls\\n'
         # --type-delay <ms> animates the injection one character at a
         # time (for recording screencasts). Omit it for the instant
         # one-shot. The verb returns as soon as the typing is enqueued
-        # (non-blocking); concurrent paced calls to one tab type out in
+        # (non-blocking); concurrent paced calls to one pane type out in
         # order. Delay is capped at 1000ms. See docs/DEMO.md for the
         # presenter-style recording workflow.
 
-      Cross-tab screen read (run from an automation tab):
-        deviceterm tab capture --tab abc123 | grep error
-        deviceterm tab capture --tab abc123 --json | jq -r .text
-        # Returns the resolved tab's currently-visible viewport as
+      Read a terminal pane (run from an automation tab):
+        deviceterm pane capture-text term123 | grep error
+        deviceterm pane capture-text term123 --json | jq -r .text
+        # Returns the resolved terminal's currently-visible viewport as
         # plain text. Viewport only; no scrollback or line-count
         # flags. Same grant-gated authority as send-input: works from
         # an automation tab, refused from an agent tab. The intended
-        # pairing is: tab send-input '<cmd>\\n' then wait for the prompt and
-        # tab capture to read the output.
+        # pairing is: pane send-input '<cmd>\\n' then wait for the prompt and
+        # pane capture-text to read the output.
 
       Detach mode vs shutdown mode on close:
         deviceterm tab close --mode detach      # default; sim stays
@@ -264,10 +266,11 @@ public enum AgentsText {
         deviceterm tab close --mode shutdown    # shuts sim down
 
       Pipe JSON through jq for scripted decisions:
-        deviceterm panes list --json | jq '.[] | select(.family=="watch")'
-        deviceterm tabs current --json | jq '.shortId'
-        deviceterm tab info --json | jq '.role'
-        deviceterm windows list --json | jq 'length'
+        deviceterm pane list --json |
+          jq '.[] | select(.kind=="simulator")'
+        deviceterm tab list --json | jq '.[] | select(.current).shortId'
+        deviceterm tab show --json | jq '.layout'
+        deviceterm window list --json | jq 'length'
 
       Boot and wait for the pane to render:
         xcrun simctl boot "$UDID"
@@ -344,40 +347,30 @@ public enum AgentsText {
         stream errors.
 
       Identifiers
-        A `tabs list` row describes one live daemon session. Its
-        JSON form carries these grouping and session identifiers:
-        - `tabId`: required grouping UUID. Terminal sessions in one
-          GUI tab share its tab UUID. A session without a GUI tab
-          uses its `sessionId`.
-        - `shortId`: 6-char Crockford base32 (lowercase, no
-          i/l/o/u). Immutable, daemon-minted, and unique per
-          session or pane container. It remains the most-typeable
-          handle for a specific list row.
-        - `name`: optional, and it means a different thing on each
-          container. A session's name is fixed at `session.create`
-          and never rewritten. The GUI derives one from the git
-          worktree branch, when it finds one, for a new tab's first
-          terminal session; terminals added to an existing tab get
-          their own sessions and start unnamed. `deviceterm tab
-          rename [<name>]` retitles the tab in the GUI without
-          touching the field, so `tabs list` keeps reporting the
-          original. A pane's name is nil because `pane rename` is not
-          implemented.
-        - `sessionId` / `paneId`: canonical UUIDs for one daemon
-          session or pane. A split tab has multiple `sessionId`
-          values, so do not use them to group tab-wide work.
+        Workspace lists come from the GUI's live projection, so a
+        `tab list` row is one real tab and a `pane list` row is one
+        real layout leaf, including terminal panes.
 
-        Group rows by `tabId`. GUI-backed groups correspond to tabs,
-        and their full `tabId` works directly with `--tab`. Distinct
-        groups can also include non-GUI sessions; the response does
-        not mark which groups are GUI-backed.
+        Every workspace object carries:
+        - `id`: the canonical UUID. A terminal pane's id is its
+          daemon `sessionId`.
+        - `shortId`: six lowercase hex characters derived from a
+          window or tab UUID, or a six-character lowercase Crockford
+          base32 handle minted for a pane.
+        - `name`: an optional user-assigned stable name.
 
-        `tabs list --json` also carries `displayTitle`: the GUI's
-        live tab label (the shell's OSC title, a manual rename), in
-        the normalized, bounded form the daemon holds. It is not an
-        identifier and resolves no `--tab <ref>`, since it changes
-        as often as the shell redraws its prompt, and it is null
-        whenever it would say nothing `name` doesn't already.
+        Refs are raw, case-insensitive strings. Window and tab refs
+        accept an exact short ID, exact full UUID, exact unique name,
+        or unique full-UUID prefix. Pane refs also accept an exact
+        device key or unique full-ID prefix. Names never match by
+        prefix. The one-based window index is display metadata, not
+        a reference.
+
+        `tab show --json` returns `{tab, panes, layout}`. The layout
+        recursively identifies pane leaves and split axis/extents.
+        A pane row reports `kind`, `capabilities`, and one of
+        `terminal`, `simulator`, or `device`. Branch on those fields
+        instead of grouping daemon session rows yourself.
 
       Daemon discovery
         The CLI talks to one socket, named by
@@ -417,7 +410,7 @@ public enum AgentsText {
         process elsewhere that scraped the cap is refused: it has no
         ancestor in the tab. Processes started normally in the tab
         inherit its controlling terminal and may drive the session's
-        pane(s), which is why the cap is intentionally not a secret
+        panes, which is why the cap is intentionally not a secret
         from those children. A detached process (`setsid`, a
         daemonized helper) stays authorized only while its parent
         chain reaches the tab, which is what lets an agent harness
@@ -430,10 +423,11 @@ public enum AgentsText {
         Two roles exist: `agent` (default) and `automation`. The
         role is fixed for the session's lifetime and readable from
         `$DEVICETERM_SESSION_ROLE`. The role is descriptive metadata,
-        not an authorization gate. Seven verbs are authorized by a
-        live automation grant, independently of role: tab open,
-        tab select, tab move, window open, window focus,
-        tab send-input, and tab capture. `deviceterm help` names
+        not an authorization gate. A live automation grant independently
+        authorizes workspace creation and focus, tab movement, and
+        terminal-pane input and capture: tab open, tab focus, tab move,
+        window open, window focus, pane focus, pane send-input, and
+        pane capture-text. `deviceterm help` names
         your role in its header but lists every verb regardless. A
         listed command may be refused because the connection lacks
         the required authorization.
@@ -461,16 +455,16 @@ public enum AgentsText {
         - Role escalation (agent → automation) — Shell → Open
           Automation Tab. The daemon refuses an automation mint
           over the CLI socket outright.
-        - Workspace-wide mutation (tab open / select / move,
-          window open / focus) — a live automation grant, checked
+        - Workspace-wide mutation (tab open / focus / move,
+          pane focus, window open / focus) — a live automation grant, checked
           by the daemon on every request. The role string alone
           does not carry it.
-        - Protection-mutation for someone else — a
-          `tab set-protected` only touches a tab the caller owns a
-          terminal in. The GUI enforces that owner gate, and the
-          atomic batch RPC behind it is accepted only from the
+        - Protection mutation for someone else — target-tab ownership
+          or a live automation grant. A grant can protect a visible,
+          unprotected foreign tab, but it never reveals a foreign
+          protected tab and therefore cannot unprotect one. The atomic
+          batch RPC behind the GUI gate is accepted only from the
           signature-validated GUI peer, never a raw CLI socket.
-          Automation is not special-cased.
 
       Pane reach
         Device panes are scoped to the tab through a session
@@ -482,6 +476,10 @@ public enum AgentsText {
         terminal of a split hands its panes to the survivors,
         and a freshly split terminal can see a brief refusal
         before the GUI registers it with the daemon; retry.
+        Workspace close and rename are narrower for terminal panes:
+        without a grant, the target terminal session must equal the
+        caller. Simulator and physical-device mutations retain tab
+        ownership plus this daemon cohort check.
         That gets you per-tab pane authority between agents in
         separate tabs, and nothing more: they still share a
         uid, a filesystem, and every other process on the
@@ -502,7 +500,7 @@ public enum AgentsText {
       Sims booted outside deviceterm are invisible
         Booting via Simulator.app's GUI or via a stock terminal
         running `xcrun simctl boot` creates a sim that has no
-        deviceterm pane. `deviceterm panes list` won't show it.
+        deviceterm pane. `deviceterm pane list` won't show it.
         `deviceterm device attach <udid>` lets an agent (or
         automation) claim such an externally-booted sim into
         the current tab; the in-tab self-attach via shim is the

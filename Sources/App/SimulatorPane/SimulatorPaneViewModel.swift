@@ -655,17 +655,18 @@ final class SimulatorPaneViewModel {
 
     /// Open the iOS App Switcher. Rides `pane.input.edgeSwipe`, which the
     /// daemon realizes per backend: on a simulator, an edge-tagged swipe up
-    /// from the bottom edge to mid-screen with a dwell (`AppSwitcherGesture`),
+    /// from the bottom edge to a shallow dwell point (`AppSwitcherGesture`),
     /// where the edge tag routes it to the system gesture rather than the
-    /// foreground app. On a physical device, whose synthetic coordinate
+    /// foreground app without crossing the Home commit threshold. On a
+    /// physical device, whose synthetic coordinate
     /// touches can't reach the system recognizer, it is the enriched
     /// system-gesture swipe (`openAppSwitcher`), falling back to a
     /// consumer-HID Home double-press. The client passes the swipe
     /// coordinates either way; the daemon ignores them on the device path.
     ///
     /// The `AppSwitcherGesture` constants describe the swipe in displayed
-    /// space, bottom-edge center up to mid-screen, which is what the wire
-    /// takes. The daemon rotates them into the surface's portrait-native
+    /// space, bottom-edge center to the shallow switcher dwell, which is what
+    /// the wire takes. The daemon rotates them into the surface's portrait-native
     /// frame and picks the matching home-indicator edge tag from its
     /// authoritative presentation orientation
     /// (`AppSwitcherGesture.plan(for:)`), which this view model's own

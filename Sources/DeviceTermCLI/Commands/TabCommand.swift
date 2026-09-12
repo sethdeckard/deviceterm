@@ -1,38 +1,67 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import ArgumentParser
+import DaemonProtocol
 import Foundation
 
-/// `deviceterm tab <open|close|rename|select|info|move|send-input|capture|set-protected>`.
+/// Commands over tab workspaces.
 struct TabCommand: CLICommandConvertible {
+    struct List: CLICommandConvertible {
+        static let configuration = CommandConfiguration(
+            commandName: "list",
+            abstract: "List tab workspaces"
+        )
+
+        @Option(name: .long, help: "Window whose tabs to list.")
+        var window: String?
+
+        @Flag(name: .long, help: "List tabs in every visible window.")
+        var all = false
+
+        @OptionGroup var jsonFlag: JSONFlag
+
+        var cliCommand: CLICommand {
+            guard !(all && window != nil) else {
+                return .usage(message: "deviceterm: tab list accepts --window or --all, not both")
+            }
+            return .tabList(window: window, all: all)
+        }
+    }
+
+    struct Show: CLICommandConvertible {
+        static let configuration = CommandConfiguration(
+            commandName: "show",
+            abstract: "Show one tab and its pane layout"
+        )
+
+        @Argument(help: "Tab reference. Defaults to current.")
+        var tab: String?
+
+        @OptionGroup var jsonFlag: JSONFlag
+
+        var cliCommand: CLICommand { .tabShow(tab: tab) }
+    }
+
     struct Open: CLICommandConvertible {
         static let configuration = CommandConfiguration(
             commandName: "open",
             abstract: "Open a tab",
-            usage: "deviceterm tab open [--window <ref>] [--cwd <path>] [--cmd '<cmd>']"
+            usage: "deviceterm tab open [--window <ref>] [--cwd <path>] [--command '<cmd>']"
         )
 
-        @Option(
-            name: .long,
-            help: "Window to open the tab in.",
-            completion: .custom { _, _, _ in RefCompletion.windows() }
-        )
+        @Option(name: .long, help: "Window to open the tab in.")
         var window: String?
 
         @Option(name: .long, help: "Working directory for the tab's shell.")
         var cwd: String?
 
         @Option(name: .long, help: "Command to type after the login shell starts.")
-        var cmd: String?
+        var command: String?
 
         @OptionGroup var jsonFlag: JSONFlag
 
         var cliCommand: CLICommand {
-            .tabOpen(
-                window: window.map(CLICommands.parseWindowRef),
-                cwd: cwd,
-                cmd: cmd
-                )
+            .tabOpen(window: window, cwd: cwd, command: command)
         }
     }
 
@@ -40,261 +69,142 @@ struct TabCommand: CLICommandConvertible {
         static let configuration = CommandConfiguration(
             commandName: "close",
             abstract: "Close a tab",
-            usage: "deviceterm tab close [--tab <ref>] [--mode <detach|shutdown>]"
+            usage: "deviceterm tab close [<tab>] [--mode <detach|shutdown>]"
         )
 
-        @Option(
-            name: .long,
-            help: "Tab to close.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
+        @Argument(help: "Tab reference. Defaults to current.")
         var tab: String?
 
-        @Option(
-            name: .long,
-            help: "What to do with the tab's device: detach or shutdown.",
-            completion: .list(Completions.closeModeValues)
-        )
+        @Option(name: .long, help: "Simulator disposition: detach or shutdown.")
         var mode: String?
 
         @OptionGroup var jsonFlag: JSONFlag
 
         var cliCommand: CLICommand {
-            .tabClose(
-                tab: CLICommands.parseTabRef(tab),
-                mode: CLICommands.parseCloseMode(mode)
-                )
+            guard let parsed = WorkspaceCloseMode(rawValue: mode ?? WorkspaceCloseMode.detach.rawValue) else {
+                return .usage(message: "deviceterm: --mode expects detach or shutdown")
+            }
+            return .tabClose(tab: tab, mode: parsed)
         }
     }
 
     struct Rename: FreeTextCommand {
         static let configuration = CommandConfiguration(
             commandName: "rename",
-            abstract: "Rename a tab, or clear its name",
-            usage: "deviceterm tab rename [--tab <ref>] [<name>]"
+            abstract: "Assign or clear a tab name",
+            usage: "deviceterm tab rename [<tab>] <name>",
+            discussion: """
+            Names occupy one positional argument. Quote a name containing spaces.
+            A word beginning with - is read as a flag. Put -- before the name to use it literally.
+            """
         )
-
-        @Option(
-            name: .long,
-            help: "Tab to rename.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
-        var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        @Argument(
-            parsing: .remaining,
-            help: """
-            New name. Omit to clear it. A word beginning with - is read \
-            as a flag. Put -- before the name to use one literally.
-            """
-        )
-        var words: [String] = []
+        @Argument(help: "Name for the current tab, or a tab reference when <name> follows.")
+        var targetOrName: String?
+
+        @Argument(help: "Name for an explicitly referenced tab.")
+        var explicitName: String?
 
         var cliCommand: CLICommand {
-            let trimmed = words.joined(separator: " ")
-                .trimmingCharacters(in: .whitespaces)
-            return .tabRename(
-                tab: CLICommands.parseTabRef(tab),
-                name: trimmed.isEmpty ? nil : trimmed
-                )
+            guard let targetOrName else { return .usage(message: Self.usageRefusal) }
+            let tab = explicitName == nil ? nil : targetOrName
+            let name = (explicitName ?? targetOrName)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .tabRename(tab: tab, name: name.isEmpty ? nil : name)
         }
     }
 
-    struct Select: CLICommandConvertible {
+    struct Focus: CLICommandConvertible {
         static let configuration = CommandConfiguration(
-            commandName: "select",
-            abstract: "Bring a tab to the front"
+            commandName: "focus",
+            abstract: "Select a tab in its window"
         )
 
-        @Option(
-            name: .long,
-            help: "Tab to select.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
+        @Argument(help: "Tab reference. Defaults to current.")
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        var cliCommand: CLICommand { .tabSelect(tab: CLICommands.parseTabRef(tab)) }
-    }
-
-    struct Info: CLICommandConvertible {
-        static let configuration = CommandConfiguration(
-            commandName: "info",
-            abstract: "Print one tab's identity and panes"
-        )
-
-        @Option(
-            name: .long,
-            help: "Tab to describe.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
-        var tab: String?
-
-        @OptionGroup var jsonFlag: JSONFlag
-
-        var cliCommand: CLICommand { .tabInfo(tab: CLICommands.parseTabRef(tab)) }
+        var cliCommand: CLICommand { .tabFocus(tab: tab) }
     }
 
     struct Move: CLICommandConvertible {
         static let configuration = CommandConfiguration(
             commandName: "move",
-            abstract: "Move a tab to an index or another window",
-            usage: "deviceterm tab move [--tab <ref>] [--to <index>] [--to-window <ref>]"
+            abstract: "Move a tab to a window",
+            usage: "deviceterm tab move [<tab>] --window <window> [--index <n>]"
         )
 
-        @Option(
-            name: .long,
-            help: "Tab to move.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
+        @Argument(help: "Tab reference. Defaults to current.")
         var tab: String?
 
-        @Option(name: .customLong("to"), help: "Destination index within the window.")
-        var toIndex: Int?
+        @Option(name: .long, help: "Destination window.")
+        var window: String?
 
-        @Option(
-            name: .customLong("to-window"),
-            help: "Destination window.",
-            completion: .custom { _, _, _ in RefCompletion.windows() }
-        )
-        var toWindow: String?
+        @Option(name: .long, help: "Zero-based destination index. Omit to append.")
+        var index: Int?
 
         @OptionGroup var jsonFlag: JSONFlag
 
         var cliCommand: CLICommand {
-            let destination = toWindow.map(CLICommands.parseWindowRef)
-            guard toIndex != nil || destination != nil else {
+            guard let window, !window.isEmpty else {
                 return .usage(message: Self.usageRefusal)
             }
-            return .tabMove(
-                tab: CLICommands.parseTabRef(tab),
-                toIndex: toIndex,
-                toWindow: destination
-                )
+            guard index.map({ $0 >= 0 }) ?? true else {
+                return .usage(message: "deviceterm: --index expects a non-negative integer")
+            }
+            return .tabMove(tab: tab, window: window, index: index)
         }
     }
 
-    struct SendInput: FreeTextCommand {
+    struct Protect: CLICommandConvertible {
         static let configuration = CommandConfiguration(
-            commandName: "send-input",
-            abstract: "Type text into another tab's shell",
-            usage: "deviceterm tab send-input [--tab <ref>] [--type-delay <ms>] <text>"
+            commandName: "protect",
+            abstract: "Hide a tab from other sessions"
         )
 
-        @Option(
-            name: .long,
-            help: "Tab to type into.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
-        var tab: String?
-
-        @Option(name: .customLong("type-delay"), help: "Per-character delay in milliseconds.")
-        var typeDelay: Int?
-
-        @OptionGroup var jsonFlag: JSONFlag
-
-        @Argument(
-            parsing: .remaining,
-            help: """
-            Text to send. C-style escapes are decoded. A word beginning \
-            with - is read as a flag. Put -- before the text to send one \
-            literally.
-            """
-        )
-        var words: [String] = []
-
-        var cliCommand: CLICommand {
-            let text = words.joined(separator: " ")
-            guard !text.isEmpty else {
-                return .usage(message: Self.usageRefusal)
-            }
-            if let typeDelay, typeDelay < 0 {
-                return .usage(
-                    message: "deviceterm: --type-delay expects a non-negative integer (milliseconds)"
-                    )
-            }
-            return .tabSendInput(
-                tab: CLICommands.parseTabRef(tab),
-                text: CLICommands.decodeEscapes(text),
-                typeDelay: typeDelay.map { min($0, CLICommands.maxTypeDelayMillis) }
-                )
-        }
-    }
-
-    struct Capture: CLICommandConvertible {
-        static let configuration = CommandConfiguration(
-            commandName: "capture",
-            abstract: "Read another tab's visible terminal viewport",
-            usage: "deviceterm tab capture [--tab <ref>]"
-        )
-
-        @Option(
-            name: .long,
-            help: "Tab to capture.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
+        @Argument(help: "Tab reference. Defaults to current.")
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        var cliCommand: CLICommand { .tabCapture(tab: CLICommands.parseTabRef(tab)) }
+        var cliCommand: CLICommand { .tabProtect(tab: tab) }
     }
 
-    struct SetProtected: CLICommandConvertible {
+    struct Unprotect: CLICommandConvertible {
         static let configuration = CommandConfiguration(
-            commandName: "set-protected",
-            abstract: "Mark a tab protected, or clear the mark",
-            usage: "deviceterm tab set-protected <true|false> [--tab <ref>]"
+            commandName: "unprotect",
+            abstract: "Make a tab visible to other sessions"
         )
 
-        @Argument(help: "true or false.")
-        var value: String
-
-        @Option(
-            name: .long,
-            help: "Tab to mark.",
-            completion: .custom { _, _, _ in RefCompletion.tabs() }
-        )
+        @Argument(help: "Tab reference. Defaults to current.")
         var tab: String?
 
         @OptionGroup var jsonFlag: JSONFlag
 
-        var cliCommand: CLICommand {
-            let isProtected: Bool
-            switch value.lowercased() {
-            case "true", "yes", "on", "1":
-                isProtected = true
-
-            case "false", "no", "off", "0":
-                isProtected = false
-
-            default:
-                return .usage(
-                    message:
-                    "deviceterm: 'tab set-protected' expects true or false; got '\(value)'"
-                    )
-            }
-            return .tabSetProtected(tab: CLICommands.parseTabRef(tab), isProtected: isProtected)
-        }
+        var cliCommand: CLICommand { .tabUnprotect(tab: tab) }
     }
 
-    /// The sub-verbs, named in the refusal so a mistyped one is answered
-    /// with the ones that exist.
-    static let subVerbList = "deviceterm: 'tab' supports: open, close, rename, select, info, "
-        + "move, send-input, capture, set-protected"
+    static let subVerbList = "deviceterm: 'tab' supports: list, show, open, close, rename, focus, "
+        + "move, protect, unprotect"
 
     static let configuration = CommandConfiguration(
         commandName: "tab",
-        abstract: "Open, close, rename, move, or drive a tab",
-        usage: "deviceterm tab <open|close|rename|select|info|move|send-input|capture"
-            + "|set-protected>",
+        abstract: "List, inspect, or change tab workspaces",
+        usage: "deviceterm tab <list|show|open|close|rename|focus|move|protect|unprotect>",
         discussion: HelpText.page(forTopic: "tab") ?? "",
         subcommands: [
-            Open.self, Close.self, Rename.self, Select.self, Info.self,
-            Move.self, SendInput.self, Capture.self, SetProtected.self
+            List.self,
+            Show.self,
+            Open.self,
+            Close.self,
+            Rename.self,
+            Focus.self,
+            Move.self,
+            Protect.self,
+            Unprotect.self
         ]
     )
 

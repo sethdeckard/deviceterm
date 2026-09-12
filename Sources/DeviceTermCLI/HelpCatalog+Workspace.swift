@@ -1,224 +1,172 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// Help topics for the back-channel verbs: tabs, panes, windows, and the
-/// pane-targeting wrapper.
+/// Help topics for the public workspace nouns: windows, tabs, and panes, plus
+/// the pane-targeting wrapper.
 ///
 /// This is a behavior-grouping extension, not a conformance split.
 extension HelpCatalog {
     static let workspaceTopics: [HelpTopic] = [
         HelpTopic(
-            "tab",
+            "window",
             .command(.workspace),
-            summary: "Open, close, rename, move, or drive a tab",
+            summary: "List, inspect, or change windows",
             detail: """
-              tab open [--window <ref>] [--cwd <path>] [--cmd '<cmd>']
-                  Requires a live automation grant. Mint a fresh agent-role
-                  tab. --window picks the host window. The default is your
-                  own window, the one holding the calling tab. --cwd sets
-                  the shell's startup directory (the CLI resolves relative
-                  and ~-prefixed paths against its own CWD before sending).
-                  --cmd is typed into the new shell after attach, so the
-                  command runs once and the user stays at an interactive
-                  prompt, matching the shape it would have if typed by hand.
-                  Example: deviceterm tab open --window 2
-                  Example: deviceterm tab open --cwd ~/projects/app --cmd 'claude'
+              A window contains tab workspaces. Window refs accept a full UUID,
+              exact short ID, exact unique name, or unique full-UUID prefix.
+              Names match exactly, never by prefix. The one-based index printed
+              by `window list` is display metadata, not a reference. Omitted
+              refs mean the caller's own window.
 
-              tab close [--tab <ref>] [--mode <detach|shutdown>]
-                  Close the named tab. Default --tab is the caller's current
-                  tab. Without a live automation grant this reaches only your
-                  own tab, and only while it holds that tab's single terminal:
-                  closing a split tab ends the other panes' sessions.
-                  --mode controls what happens to any linked sims
-                  (detach leaves them booted as orphans; shutdown shuts them
-                  down).
-                  Example: deviceterm tab close --mode shutdown
+              window list [--all]
+                  List the caller's window. --all lists every caller-visible
+                  window. Human rows are:
+                    <marker>  <shortId>  <name>  <tabCount>  <selectedTabId>
+                  `*` marks the caller's current window. --json emits complete
+                  WorkspaceWindow objects from the GUI's live projection.
 
-              tab rename [--tab <ref>] [<name>]
-                  Apply a manual title. Omit <name> to restore the automatic
-                  title (CWD / OSC / session name). Without a live automation
-                  grant this reaches only a tab you own a terminal in.
-                  Example: deviceterm tab rename "auth-feature"
+              window show [<window>]
+                  Show one window and its caller-visible tabs. --json emits
+                  `{window, tabs}`.
 
-              tab select [--tab <ref>]
-                  Requires a live automation grant, including for your own
-                  tab. Focus the named tab in its window.
-                  Example: deviceterm tab select --tab abc123
+              window open
+                  Requires a live automation grant. Open a window, its first
+                  tab, and that tab's initial terminal pane. The command waits
+                  for the terminal session ID and returns all three committed
+                  objects in one receipt; it does not wait for shell readiness.
 
-              tab info [--tab <ref>]
-                  Print a structured description of the named tab (role,
-                  session, linked sim panes). --json emits the raw payload.
-                  Example: deviceterm tab info
+              window focus [<window>]
+                  Requires a live automation grant. Raise the window and return
+                  its committed window, selected tab, and focused pane state.
 
-              tab move [--tab <ref>] [--to <index>] [--to-window <ref>]
-                  Requires a live automation grant, including for your own
-                  tab: a reorder can shift other tabs' positions, and
-                  --to-window moves the tab into what may be another
-                  agent's window.
-                  Reorder the named tab within its window (--to <index>) or
-                  move it to another window (--to-window <ref>, optionally at
-                  --to <index>; default appends at the end). At least one of
-                  --to / --to-window is required. Mirrors dragging a tab in
-                  the strip.
-                  Example: deviceterm tab move --to 0
-                  Example: deviceterm tab move --tab abc123 --to-window 2
-
-              tab set-protected <true|false> [--tab <ref>]
-                  Hide the named tab from other sessions, or unhide it. A
-                  protected tab and its panes drop out of every other
-                  session's `tabs list` and `windows list`, can't be reached
-                  by their refs, and are refused to `tab send-input` /
-                  `tab capture` even from an automation tab. Your own
-                  views are unchanged. Only a tab you own a terminal in can
-                  be flipped. Default --tab is the caller's current tab; the
-                  value takes true/false, yes/no, on/off, or 1/0.
-                  Example: deviceterm tab set-protected true
-
-              tab send-input [--tab <ref>] [--type-delay <ms>] <text>
-                  Requires a live automation grant. Write <text> into the
-                  resolved tab's terminal as though the user had typed it. Control
-                  sequences (\\n, \\r, \\x03, …) flow through libghostty's
-                  input pipeline like real keypresses. The receipt reports
-                  only the byte count, never the typed text.
-                  A word beginning with - is read as a flag, and `--help`
-                  or `-h` anywhere ahead of the text prints this page
-                  instead of typing. Put `--` before the text to send
-                  such a word literally.
-                  Authorization is a live automation grant, not a role.
-                  Run it from a tab opened via Shell > "Open Automation Tab":
-                  the GUI grants that tab's session, so the verb works from
-                  inside it. From an ordinary agent tab it is refused
-                  (error.scope_violation).
-                  --type-delay <ms> animates the injection one character at a
-                  time (for screencasts); omit it for the instant one-shot.
-                  The verb returns as soon as the typing is enqueued (it does
-                  not block for the animation), and concurrent paced calls to
-                  one tab type out in order. Pacing is per-character, so keep
-                  paced text to plain commands + a trailing newline (a
-                  multi-byte escape sequence would be split across the delay).
-                  The delay is capped at 1000 ms.
-                  Example: deviceterm tab send-input --tab abc123 'echo hi\\n'
-                  Example: deviceterm tab send-input --type-delay 45 -- 'ls -la\\n'
-
-              tab capture [--tab <ref>]
-                  Requires a live automation grant. Print the resolved tab's
-                  currently-visible viewport (the rendered terminal screen) to
-                  stdout. Captures the visible viewport only; there are no
-                  scrollback or line-count flags. Human mode emits the
-                  raw text (so `deviceterm tab capture > screen.txt` saves the
-                  screen); `--json` emits a `{text}` object. Same grant-gated
-                  authority as send-input: works from a tab opened via Shell >
-                  "Open Automation Tab", refused from an agent tab.
-                  Example: deviceterm tab capture --tab abc123 | grep error
+              window close [<window>] [--mode <detach|shutdown>]
+                  Close the window and all its tabs. detach leaves linked
+                  Simulators booted; shutdown also shuts them down. The receipt
+                  carries the closed window object and selected mode.
             """
         ),
         HelpTopic(
-            "tabs",
+            "tab",
             .command(.workspace),
-            summary: "List every session you can see, or print your own",
+            summary: "List, inspect, or change tab workspaces",
             detail: """
-              tabs list
-                  List every daemon session you can see. Human output uses
-                  only these five tab-separated columns:
-                    <marker>  <short_id>  <name>  <sessionId>  <label>
-                  The marker is `*` on the caller's current session (matches
-                  $DEVICETERM_SESSION), a space otherwise.
+              A tab is the workspace: it owns a pane layout containing terminal,
+              Simulator, and physical-device panes. Tab refs accept an exact
+              short ID, full UUID, exact unique name, or unique full-UUID prefix.
+              Names match exactly, never by prefix. Omitted refs mean the
+              caller's tab.
 
-                  With --json, every session row also has a required tabId.
-                  Terminal sessions in the same GUI tab share that full UUID;
-                  a session without a GUI tab uses its sessionId. Group rows
-                  by tabId. GUI-backed groups correspond to tabs and accept
-                  their tabId directly through --tab. A distinct tabId count
-                  can also include non-GUI session groups.
-                  An empty array is a successful visibility result; JSON
-                  failures use the shared error envelope and exit nonzero.
+              tab list [--window <ref> | --all]
+                  List tabs in the caller's window. --window selects one window;
+                  --all spans every caller-visible window. Human rows are:
+                    <marker>  <shortId>  <name>  <title>  <paneCount>  <state>
+                  `*` marks the caller's tab. --json emits WorkspaceTab objects.
 
-                  A protected session is listed only when visible to the caller.
+              tab show [<tab>]
+                  Show one tab, every pane in layout order, and its recursive
+                  split tree. --json emits `{tab, panes, layout}`.
 
-              tabs current
-                  Print the caller's own session row. Same human columns and
-                  JSON row shape as `tabs list`; marker is always `*`. Errors
-                  when run outside a tab or when the session is no longer live.
+              tab open [--window <ref>] [--cwd <path>] [--command '<cmd>']
+                  Requires a live automation grant. Open a tab in the named or
+                  caller's window. Relative and ~-prefixed working directories
+                  are resolved by the CLI. --command is typed after the login
+                  shell attaches. The command waits for the terminal session ID
+                  and returns the committed window, tab, and terminal pane; it
+                  does not wait for the shell to become ready.
+
+                  If the tab commits but terminal session creation fails, the
+                  tab remains visible with state `failed`. The command fails with
+                  `intent.mutationFailed`, and JSON `error.details.committed.tab`
+                  identifies the addressable tab that was retained.
+
+              tab close [<tab>] [--mode <detach|shutdown>]
+                  Close the tab. detach leaves linked Simulators booted; shutdown
+                  also shuts them down. Closing a split tab requires automation
+                  authority because it ends the other terminal sessions.
+
+              tab rename [<tab>] <name>
+                  Assign a unique manual name. One positional names the current
+                  tab; two supply the tab ref and name. Quote a name containing
+                  spaces. More than two positionals is a usage error. Pass a
+                  quoted empty name to clear it, or `--` before a dashed name.
+
+              tab focus [<tab>]
+                  Requires a live automation grant. Select the tab, raise its
+                  window, and return the committed focus state.
+
+              tab move [<tab>] --window <window> [--index <n>]
+                  Requires a live automation grant. Move the tab to a destination
+                  window, appending unless a zero-based index is supplied. Moving
+                  within the same window requires --index.
+
+              tab protect [<tab>]
+              tab unprotect [<tab>]
+                  Hide a tab and all of its panes from other sessions, or make it
+                  visible again. The caller's own projection is unchanged.
             """
         ),
         HelpTopic(
             "pane",
             .command(.workspace),
-            summary: "Open, close, or inspect a pane",
+            summary: "List, inspect, split, or drive panes",
             detail: """
-              pane open --terminal [--tab <ref>] [--cwd <path>] [--cmd '<cmd>']
-                  Open a fresh terminal pane alongside the tab's existing
-                  panes, splitting the tab rather than opening a new one.
-                  --cwd / --cmd carry the same semantics as `tab open`: a
-                  startup directory plus a single command typed into the
-                  shell after attach. Omitting --tab splits your own tab;
-                  naming another one needs a live automation grant.
-                  Example: deviceterm pane open --terminal
-                  Example: deviceterm pane open --terminal --cwd ~/work --cmd 'make test'
+              Panes are the addressable leaves inside a tab. Pane refs accept a
+              full ID, exact short ID, exact unique name, exact Simulator UDID or
+              physical device ID, or unique full-ID prefix. Names match exactly,
+              never by prefix. A terminal pane's ID is its session ID. Omitted
+              refs mean the calling terminal pane when a command permits omission.
 
-              pane close [--pane <ref>] [--mode <detach|shutdown>]
-                  Detach or shut down the named sim pane. --pane accepts a
-                  shortId or paneId (UUID). --pane resolves sim panes only;
-                  closing a physical-device pane is a GUI action. Without a
-                  live automation grant this reaches only panes in a tab you
-                  own a terminal in.
-                  Example: deviceterm pane close --pane abc123
+              pane list [--tab <ref>]
+                  List every terminal, Simulator, and physical-device pane in
+                  layout order. Human rows are:
+                    <marker>  <shortId>  <kind>  <name>  <id>
+                  `*` marks the caller's pane. --json emits WorkspacePane objects
+                  with kind-specific details and supported capabilities.
 
-              pane info [--pane <ref>]
-                  Print a structured description of the named sim pane.
-                  Example: deviceterm pane info
+              pane show [<pane>]
+                  Show one pane, including kind, host tab, focus, capabilities,
+                  and its terminal, Simulator, or physical-device details.
 
-              pane rename [--pane <ref>] [<name>]
-              pane move [--pane <ref>] --to-tab <ref>
-                  Not implemented; both return `intent.internalError`.
-            """
-        ),
-        HelpTopic(
-            "window",
-            .command(.workspace),
-            summary: "Open, close, or focus a window",
-            detail: """
-              window open
-                  Requires a live automation grant. Mint a new window with
-                  one fresh agent-role tab.
-                  Example: deviceterm window open
+              pane split [<pane>] --direction <left|right|up|down>
+                  Create a terminal beside the anchor pane. The command waits for
+                  the new terminal session ID and returns the committed tab and
+                  terminal pane. It does not wait for shell readiness.
 
-              window close [--window <ref>] [--mode <detach|shutdown>]
-                  Close the named window. Default --window is your own
-                  window (the one holding the calling tab), not the human's
-                  key window, so a stray `window close` can't reach across
-                  to another window. A window that also holds a tab you
-                  can't see is refused, as is one holding a tab you don't
-                  solely own, unless you hold a live automation grant.
-                  --mode mirrors `tab close`'s semantics for every tab the
-                  window holds.
-                  Example: deviceterm window close
+              pane focus [<pane>]
+                  Requires a live automation grant. Select and raise the pane's
+                  window and tab, give the pane keyboard focus, and return the
+                  committed window, tab, and pane.
 
-              window focus [--window <ref>]
-                  Requires a live automation grant, including for your own
-                  window. Bring the named window forward, activating
-                  DeviceTerm if another app is in front. --window current
-                  is your own window (the caller's), not the human's key
-                  window.
-                  Example: deviceterm window focus --window 2
-            """
-        ),
-        HelpTopic(
-            "windows",
-            .command(.workspace),
-            summary: "List the windows you can see",
-            detail: """
-              windows list [--all]
-                  List the windows you can see. Columns:
-                    <marker>  <index>  <tabCount>  <selectedTabShortId>
-                  The marker is `*` on your key window when it's visible,
-                  a space otherwise. --json emits a `WindowInfoPayload`
-                  array. Default: only your own window (the one containing
-                  the calling tab). --all returns every window you can see,
-                  the caller-visible projection: windows and tabs that
-                  another session protects are omitted, and indices count
-                  only the visible ones. Out-of-tab callers without --all
-                  see an empty list. Boot a tab first or pass --all.
-                  Example: deviceterm windows list --all
+              pane close [<pane>] [--mode <detach|shutdown>]
+                  Close any pane kind. For a Simulator, detach leaves it booted
+                  and shutdown also shuts it down. An explicit --mode is valid
+                  only for a Simulator; terminal and physical-device panes fail
+                  with `intent.unsupportedPane`. Closing the last terminal is
+                  refused with `intent.wouldCloseTab`; use `tab close` instead.
+
+              pane rename [<pane>] <name>
+                  Assign a unique pane name. One positional names the current
+                  pane; two supply the pane ref and name. Quote a name containing
+                  spaces. More than two positionals is a usage error. Pass a
+                  quoted empty name to clear it, or `--` before a dashed name.
+                  Device-pane names stay in sync with device targeting.
+
+              Terminal pane close and rename require the target's own session or
+              a live automation grant. Simulator and physical-device panes use
+              target-tab ownership or a grant.
+
+              pane send-input <pane> [--type-delay <ms>] <text>
+                  Requires a live automation grant and a terminal pane. C-style
+                  escapes (\\n, \\r, \\x03, ...) are decoded. The receipt reports
+                  the pane and byte count, never the text. Put `--` before text
+                  beginning with `-`. A paced call is capped at 1000 ms per
+                  character and returns after the input is enqueued. A word
+                  beginning with - is read as a flag. Put `--` before the text
+                  to send such a word literally.
+
+              pane capture-text <pane>
+                  Requires a live automation grant and a terminal pane. Human
+                  mode prints the visible viewport as raw text; --json emits
+                  `{pane, text}`. Scrollback is not included.
             """
         ),
         HelpTopic(
@@ -226,11 +174,10 @@ extension HelpCatalog {
             .command(.workspace),
             summary: "Run a command with one pane pre-resolved",
             detail: """
-              with-pane <ref> <cmd…>
-                  `deviceterm with-pane <ref> <cmd…>` runs <cmd…>
-                  with `DEVICETERM_TARGET_PANE` set to the resolved pane's key, so
-                  downstream `deviceterm tap` / `swipe` / etc. inside <cmd…>
-                  auto-target without needing --pane on every call.
+              with-pane <ref> <cmd...>
+                  Resolve a device pane from the calling tab, then run <cmd...>
+                  with DEVICETERM_TARGET_PANE set to its canonical pane ID.
+                  Device-control verbs in the child can omit --pane.
                   Example: deviceterm with-pane phn001 bash -c 'deviceterm tap 0.5 0.5'
             """
         )

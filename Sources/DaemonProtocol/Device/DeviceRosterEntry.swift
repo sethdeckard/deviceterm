@@ -10,10 +10,10 @@
 /// Apple's tools is the pane/ownership layer.
 ///
 /// Protection: the `ownerSessionId` annotation obeys the same protected-tab
-/// opacity rule as `tabs.list`. A caller that doesn't own a *protected*
+/// opacity rule as `tab.list`. A caller that doesn't own a *protected*
 /// session never learns a device is attached to it. The device is
 /// reported `attached == false` / `ownerSessionId == nil`, exactly as
-/// `tabs.list` hides protected tabs from non-owners.
+/// `tab.list` hides protected tabs from non-owners.
 public struct DeviceRosterEntry: Codable, Sendable, Equatable {
     /// Identity: a CoreSimulator UDID for a sim, or the physical
     /// device's `deviceId`.

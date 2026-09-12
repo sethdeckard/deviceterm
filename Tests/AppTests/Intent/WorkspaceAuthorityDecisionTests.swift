@@ -35,7 +35,7 @@ struct WorkspaceAuthorityDecisionTests {
         .external(sessionID: session, hasAutomationGrant: true)
     }
 
-    // MARK: - Ownership requirement (rename, pane open, pane close)
+    // MARK: - Ownership requirement (tab rename, pane split, mirrored panes)
 
     @Test
     func ownershipPassesOnYourOwnTabWithoutAGrant() {

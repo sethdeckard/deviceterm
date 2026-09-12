@@ -16,24 +16,26 @@
 /// is joined by matching kernel terminal provenance (its POSIX session /
 /// controlling tty against the session's bound terminal); the daemon re-checks
 /// that on every scoped request. See `ProvenanceMatcher`.
-/// Pane-targeted calls are **not** trusted by paneId alone: each is
-/// authorized against the caller's identity by `PaneCoordinator.authorize`:
-/// a session reaches its cohort's panes (its own, for a pane with no
-/// cohort), the validated GUI peer spans sessions, and a foreign paneId is
-/// indistinguishable from an unknown one (both `notFound`). See
-/// `PaneAccessPrincipal`.
+/// Pane-targeted calls are **not** trusted by paneId alone. Daemon-direct
+/// methods such as `pane.closeById`, `pane.input.*`, `pane.ax.*`, and
+/// `pane.subscribe` authorize through `PaneCoordinator`. Public GUI-backed
+/// workspace mutations such as `pane.close` and `pane.rename` resolve and
+/// authorize in `IntentDispatcher`.
 ///
 /// Four values:
 ///   - `.daemonWide`: useful regardless of context. Includes
 ///     out-of-tab callers without env creds. Used by `daemon.ping`,
-///     `daemon.capabilities`, `tabs.list`, `device.list`, etc.
+///     `daemon.capabilities`, and `device.list`.
 ///   - `.session`: useful only to in-tab callers. Some handlers
-///     validate `(sessionId, cap)` directly (`panes.list`,
+///     validate `(sessionId, cap)` directly (`pane.deviceList`,
 ///     `device.attach`, `session.close`, `shim.event`); the pane-
-///     targeted ones (`pane.input.*`, `pane.ax.*`, `pane.close`,
-///     `pane.subscribe`) are authorized by the caller's cohort
+///     targeted daemon methods (`pane.input.*`, `pane.ax.*`,
+///     `pane.closeById`, `pane.subscribe`) are authorized by the caller's cohort
 ///     membership on the pane (`PaneCoordinator.authorize`), not by the
-///     paneId alone. The tag exists so `daemon.capabilities` correctly
+///     paneId alone. GUI-backed workspace methods such as `tab.list`,
+///     `pane.close`, and `pane.rename` apply their target visibility and
+///     authority rules in `IntentDispatcher`. The tag exists so
+///     `daemon.capabilities` correctly
 ///     filters the no-session subset: calling these without env creds
 ///     is pointless (no reachable pane), so they don't appear in
 ///     an out-of-tab caller's `allowedMethods`.
@@ -43,10 +45,10 @@
 ///     not the role: a granted `.agent` reaches it, an ungranted
 ///     `.automation` does not. Grants are issued in memory only by the
 ///     validated GUI and never persisted, so a forged/rehydrated role
-///     grants nothing. `tab.send-input` and `tab.capture` carry this tag,
-///     as do the five workspace-wide verbs (`tab.open`, `tab.select`,
-///     `tab.move`, `window.open`, `window.focus`), which create or
-///     rearrange workspace surfaces or change workspace focus.
+///     grants nothing. `pane.sendInput` and `pane.captureText` carry this tag,
+///     as do the workspace-wide verbs (`tab.open`, `tab.focus`, `tab.move`,
+///     `pane.focus`, `window.open`, `window.focus`), which create or rearrange
+///     workspace surfaces or change workspace focus.
 ///     Reachable over BOTH transports for a granted session: over the GUI's
 ///     validated XPC connection, and over UDS from the CLI inside a granted
 ///     tab (a UDS session authenticates via cap + kernel terminal-process
@@ -64,11 +66,10 @@
 ///     `app.commandResult`) carries this scope; the dispatcher admits a
 ///     validated XPC peer and rejects everyone else.
 ///
-/// Per-pane authorization (a session drives its cohort's panes, or its
-/// own unbound ones; the validated GUI peer spans sessions) is enforced by
-/// `PaneCoordinator.authorize`, orthogonally to scope. Scope decides
-/// "is this method meaningful from your context"; authorization decides
-/// "may you touch *this* pane".
+/// Scope decides "is this method meaningful from your context". The handler's
+/// authorization layer then decides "may you touch this target", either in
+/// `PaneCoordinator` for daemon-direct methods or `IntentDispatcher` for the
+/// public workspace API.
 public enum MethodScope: String, Codable, Sendable, Equatable, CaseIterable {
     case daemonWide
     case session

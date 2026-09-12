@@ -23,6 +23,9 @@ protocol PaneControlling: AnyObject {
     /// `expecting` fences the close to one admission of the pane; see
     /// `DaemonClient.closePane`. Nil closes unconditionally.
     func closePane(paneId: String, mode: PaneCloseMode, expecting attachment: UInt64?) async throws
+    /// Mirror the GUI-owned public pane name into the daemon's device-pane
+    /// roster so direct input commands resolve the same name.
+    func setPaneName(paneId: String, name: String?) async throws
     func paneInputTap(paneId: String, x: Double, y: Double) async throws
     func paneInputTouch(
         paneId: String,

@@ -16,11 +16,9 @@ public struct SessionState: Sendable, Equatable {
     /// and never held here. On a daemon restart the validated GUI re-supplies
     /// the bearer cap via `restoreBatch` and the daemon re-derives this.
     public let capabilityVerifier: CapabilityVerifier
-    /// Crockford base32 short_id (lowercased, 6 chars). Daemon-minted
-    /// at create time via `ShortID.generate(...)` with collision retry
-    /// against the live session set. Immutable for the session's
-    /// lifetime so an agent printing `deviceterm tabs current` after a
-    /// rename doesn't see the handle move.
+    /// Crockford base32 terminal-pane short id (lowercased, 6 chars).
+    /// Daemon-minted at create time with collision retry against the live
+    /// session set and immutable for the session's lifetime.
     public let shortId: String
     public let label: String?
     /// Optional name, taken from the `session.create` request and
@@ -28,7 +26,6 @@ public struct SessionState: Sendable, Equatable {
     /// the GUI without touching this). `nil` when the request carried
     /// none. Distinct from `label`, which is the internal
     /// classification (default `nil`; debugging surfaces use it).
-    /// Visible on `tabs.list` rows.
     public let name: String?
     /// Role the daemon assigned at create time (descriptive metadata, not
     /// an authorization gate). Defaults to

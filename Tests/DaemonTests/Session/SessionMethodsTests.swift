@@ -17,8 +17,8 @@ import Darwin
 // `authenticatedAs:` opt-in: when provided, the helper sends a
 // `session.authenticate` frame before the test's envelope so
 // `.session`-scoped methods (e.g. `session.close`) pass the
-// dispatcher's auth gate. Tests calling daemon-wide methods (e.g.
-// `session.create`, `tabs.list`) omit it.
+// dispatcher's auth gate. Tests calling daemon-wide methods such as
+// `session.create` omit it.
 private func roundTrip(
     _ envelope: RPCEnvelope,
     manager: SessionManager,
@@ -493,169 +493,6 @@ func sessionCloseRejectsMalformedCapability() async throws {
     #expect(rpcError.message.contains("base64"))
 }
 
-// MARK: - tabs.list
-
-@Test
-func tabsListExposesLabelsButNotCapabilities() async throws {
-    let manager = SessionManager()
-    _ = try await manager.makeSessionState(label: "alpha")
-    _ = try await manager.makeSessionState(label: nil)  // unlabeled tab
-    _ = try await manager.makeSessionState(label: "beta")
-
-    let envelope = RPCEnvelope(
-        id: 7,
-        type: .request,
-        method: "tabs.list",
-        body: .empty
-    )
-    let response = try await roundTrip(envelope, manager: manager)
-    let tabs = try #require(try decodeResult(response, as: [SessionMethods.TabsListEntry].self))
-    #expect(tabs.count == 3)
-    let labels = tabs.map(\.label)
-    #expect(labels == ["alpha", nil, "beta"])
-    // Tabs entries don't carry the capability. It is returned by the one-time
-    // `session.create` response and injected into that terminal's environment,
-    // not exposed through daemon-wide inventory. (No structural assertion is
-    // needed; TabsListEntry simply has no capability field.)
-    for entry in tabs {
-        #expect(UUID(uuidString: entry.sessionId) != nil)
-    }
-}
-
-@Test
-func tabsListGroupsSessionsByTabId() async throws {
-    let manager = SessionManager()
-    let sharedTabId = UUID()
-    let first = try await manager.createSession(label: nil, tabId: sharedTabId)
-    let second = try await manager.createSession(label: nil, tabId: sharedTabId)
-    let third = try await manager.createSession(label: nil)
-
-    let envelope = RPCEnvelope(
-        id: 7,
-        type: .request,
-        method: RPCMethod.tabsList.rawValue,
-        body: .empty
-    )
-    let response = try await roundTrip(envelope, manager: manager)
-    let tabs = try #require(
-        try decodeResult(response, as: [SessionMethods.TabsListEntry].self)
-    )
-
-    #expect(tabs.map(\.sessionId) == [
-        first.state.id.uuidString,
-        second.state.id.uuidString,
-        third.state.id.uuidString
-    ])
-    #expect(tabs.map(\.tabId) == [
-        sharedTabId.uuidString,
-        sharedTabId.uuidString,
-        third.state.id.uuidString
-    ])
-}
-
-@Test
-func tabsListIsBareArrayOnWire() async throws {
-    // Direct schema check: the result body is JSON `[…]`, not
-    // `{"tabs":[…]}`. docs/ARCHITECTURE.md's canonical shape is the
-    // bare array; we verify by parsing the raw result bytes as
-    // an Any and checking the root type.
-    let manager = SessionManager()
-    _ = try await manager.makeSessionState(label: "only-tab")
-    let envelope = RPCEnvelope(
-        id: 8,
-        type: .request,
-        method: "tabs.list",
-        body: .empty
-    )
-    let response = try await roundTrip(envelope, manager: manager)
-    guard case let .result(bytes) = response.body else {
-        Issue.record("expected .result body, got \(response.body)")
-        return
-    }
-    let parsed = try JSONSerialization.jsonObject(with: bytes, options: [])
-    #expect(parsed is [Any], "tabs.list result should be a bare array, got \(type(of: parsed))")
-}
-
-@Test
-func tabsListIsEmptyOnFreshManager() async throws {
-    let manager = SessionManager()
-    let envelope = RPCEnvelope(
-        id: 9,
-        type: .request,
-        method: "tabs.list",
-        body: .empty
-    )
-    let response = try await roundTrip(envelope, manager: manager)
-    let tabs = try #require(try decodeResult(response, as: [SessionMethods.TabsListEntry].self))
-    #expect(tabs.isEmpty)
-}
-
-@Test
-func tabsListHidesProtectedFromUnauthenticatedCaller() async throws {
-    // Protected session: no auth on the connection → the daemon
-    // filters it out. This is the locked design's "protected tab is
-    // opaque to other principals" rule applied to the
-    // out-of-tab / stock-terminal case.
-    let manager = SessionManager()
-    let priv = try await manager.makeSessionState(
-        label: nil,
-        name: "protected"
-    )
-    try await manager.setProtectedBatch(sessionIds: [priv.id], isProtected: true, revision: 1, epoch: 1)
-    _ = try await manager.makeSessionState(label: nil, name: "unprotected")
-    let envelope = RPCEnvelope(
-        id: 1,
-        type: .request,
-        method: "tabs.list",
-        body: .empty
-    )
-    let response = try await roundTrip(envelope, manager: manager)
-    let tabs = try #require(
-        try decodeResult(
-        response,
-        as: [SessionMethods.TabsListEntry].self
-    )
-        )
-    #expect(tabs.map(\.name) == ["unprotected"])
-}
-
-@Test
-func tabsListShowsOwnProtectedToAuthenticatedOwner() async throws {
-    // The owning session DOES see its own protected tab when
-    // authenticated on the connection. Sibling-protected sessions
-    // stay hidden.
-    let manager = SessionManager()
-    let created = try await manager.createSession(
-        label: nil,
-        name: "owner"
-    )
-    let owner = created.state
-    try await manager.setProtectedBatch(sessionIds: [owner.id], isProtected: true, revision: 1, epoch: 1)
-    let other = try await manager.makeSessionState(
-        label: nil,
-        name: "other"
-    )
-    try await manager.setProtectedBatch(sessionIds: [other.id], isProtected: true, revision: 1, epoch: 1)
-    let envelope = RPCEnvelope(
-        id: 1,
-        type: .request,
-        method: "tabs.list",
-        body: .empty
-    )
-    let response = try await roundTrip(
-        envelope,
-        manager: manager,
-        authenticatedAs: created
-    )
-    let tabs = try #require(
-        try decodeResult(
-        response,
-        as: [SessionMethods.TabsListEntry].self
-    )
-        )
-    #expect(tabs.map(\.name) == ["owner"])
-}
-
 @Test
 func setDisplayTitleRefusedOverUDS() async throws {
     // `session.setDisplayTitle` is `.validatedGUI`-scoped: the peer's audit
@@ -688,20 +525,6 @@ func setDisplayTitleRefusedOverUDS() async throws {
     }
     #expect(error.code == RPCMethodError.scopeViolationCode)
     #expect(await manager.displayTitle(created.state.id) == nil)
-}
-
-@Test
-func tabsListCarriesTheLiveDisplayTitle() async throws {
-    let manager = SessionManager()
-    let created = try await manager.createSession(label: nil, name: "branch")
-    try await manager.setDisplayTitle(sessionId: created.state.id, title: "vim foo", fromConnection: 1)
-    let envelope = RPCEnvelope(id: 1, type: .request, method: "tabs.list", body: .empty)
-    let response = try await roundTrip(envelope, manager: manager)
-    let tabs = try #require(
-        try decodeResult(response, as: [TabsListEntry].self)
-    )
-    #expect(tabs.map(\.displayTitle) == ["vim foo"])
-    #expect(tabs.map(\.name) == ["branch"])
 }
 
 @Test

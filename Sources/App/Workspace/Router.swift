@@ -15,6 +15,10 @@ import Foundation
 /// here: one path for everything.
 @MainActor
 final class Router {
+    private struct QueuedRoute: Sendable {
+        let route: Route
+        let completion: CheckedContinuation<Void, Never>?
+    }
     /// Wire codes for a *definite* pre-commit protection rejection: the
     /// daemon validated and refused **before** the atomic mutation, so this
     /// batch never committed. These are **terminal**: the transition reports
@@ -46,7 +50,7 @@ final class Router {
     /// `createSessionCalls` stay deterministic regardless of where the
     /// test runner happens to be.
     private let detectWorktreeName: @MainActor () -> String?
-    private var continuation: AsyncStream<Route>.Continuation?
+    private var continuation: AsyncStream<QueuedRoute>.Continuation?
     private var drainTask: Task<Void, Never>?
     private var nextWindowValue = 1
     private var nextTabValue = 1
@@ -71,6 +75,11 @@ final class Router {
     /// still its own; otherwise the older one's completion would unregister
     /// the live attach and put it out of quit's reach.
     private var attachTasks: [PendingPaneID: AttachRegistration] = [:]
+    /// Terminal outcome for a failed placeholder after its task registration
+    /// has been cleared. Kept for as long as the placeholder is visible so an
+    /// awaited CLI attach can report the real daemon failure, and so a later
+    /// explicit attach can deliberately retry that placeholder.
+    private var attachFailures: [PendingPaneID: PaneAttachFailure] = [:]
     /// Automatic attach retries already spent per (normalized) target. Cleared
     /// when a pane for the target mounts and when the user retries by hand,
     /// the two events that say the situation is not the one being backed off.
@@ -252,11 +261,12 @@ final class Router {
             daemon: daemon,
             ownedSims: ownedSims
         )
-        let (stream, continuation) = AsyncStream.makeStream(of: Route.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: QueuedRoute.self)
         self.continuation = continuation
         self.drainTask = Task { @MainActor [weak self] in
-            for await route in stream {
-                await self?.handle(route)
+            for await queued in stream {
+                await self?.handle(queued.route)
+                queued.completion?.resume()
             }
         }
     }
@@ -274,7 +284,59 @@ final class Router {
         if case let .closeWindow(windowID, _, _) = route {
             closingWindows.insert(windowID)
         }
-        continuation?.yield(route)
+        continuation?.yield(QueuedRoute(route: route, completion: nil))
+    }
+
+    /// Enqueue a route and suspend until its serial handler has completed.
+    func dispatchAndWait(_ route: Route) async {
+        reserveClosingWindow(for: route)
+        guard let continuation else { return }
+        await withCheckedContinuation { completion in
+            continuation.yield(QueuedRoute(route: route, completion: completion))
+        }
+    }
+
+    /// Enqueue an optimistic pane attach, then wait for its placeholder to
+    /// resolve. The regular route drain remains free while the daemon RPC is
+    /// in flight; callers that need a committed mutation receipt use this
+    /// boundary instead of observing the placeholder as the final result.
+    func dispatchAndWaitForPaneAttach(
+        _ route: Route,
+        tab tabID: TabID,
+        target: PaneTarget
+    ) async throws {
+        let existing = workspace
+            .windowContaining(tab: tabID)?
+            .tabs
+            .tab(id: tabID)?
+            .pendingPanes
+            .first(where: {
+                TabListViewModel.targetsMatch($0.target, target)
+            })
+        if let existing, case .failed = existing.phase {
+            // An explicit attach is itself a retry request. Reuse the failed
+            // placeholder so its layout slot remains stable, exactly as the
+            // visible Retry button does.
+            await dispatchAndWait(.retryPendingPane(tab: tabID, pendingId: existing.id))
+        } else {
+            await dispatchAndWait(route)
+        }
+        guard let tab = workspace.windowContaining(tab: tabID)?.tabs.tab(id: tabID),
+            let pending = tab.pendingPanes.first(where: {
+                TabListViewModel.targetsMatch($0.target, target)
+            }) else { return }
+        if let task = attachTasks[pending.id]?.task {
+            _ = await task.value
+        }
+        if let failure = attachFailures[pending.id] {
+            throw failure
+        }
+    }
+
+    private func reserveClosingWindow(for route: Route) {
+        if case let .closeWindow(windowID, _, _) = route {
+            closingWindows.insert(windowID)
+        }
     }
 
     /// End the drain and await in-flight handling. The quit path
@@ -294,6 +356,7 @@ final class Router {
         // pane to, and the daemon idle-exits and reaps orphans anyway.
         for registration in attachTasks.values { registration.task.cancel() }
         attachTasks.removeAll()
+        attachFailures.removeAll()
         for batch in orphanBatchTasks.values {
             for task in batch.values { task.cancel() }
         }
@@ -877,10 +940,13 @@ final class Router {
         cwd: String? = nil,
         command: [String]? = nil
     ) async {
+        let name = detectWorktreeName()
+        let cohortID = UUID()
+        let modelID = allocateTabID()
         do {
             // Pre-populate `name` from the worktree branch when the
             // GUI's CWD is in a git worktree. Detector returns nil
-            // outside a worktree, leaving the tab unnamed; a future
+            // outside a worktree, leaving the tab unnamed;
             // `deviceterm tab rename` can fill it.
             //
             // Role: the standard tab-open path passes `.agent`; the
@@ -890,8 +956,6 @@ final class Router {
             // returns `.agent`); trust the response's `role` rather
             // than the requested one so the tab's recorded role
             // matches what's actually on the wire.
-            let name = detectWorktreeName()
-            let tabId = UUID()
             // A freshly-opened tab is always unprotected; a protected tab is only
             // ever reached by toggling protection after it exists.
             let session = try await daemon.createSession(
@@ -899,7 +963,7 @@ final class Router {
                 name: name,
                 role: role,
                 initialProtected: false,
-                tabId: tabId
+                tabId: cohortID
             )
             let primary = TerminalPaneState(
                 id: allocateTerminalPaneID(),
@@ -911,11 +975,12 @@ final class Router {
                 command: command
             )
             let tab = TabState(
-                id: allocateTabID(),
+                id: modelID,
                 terminals: [primary],
                 simPanes: [],
                 role: session.role ?? role,
-                cohortId: tabId
+                cohortId: cohortID,
+                name: name
             )
             window.tabs.append(tab)
             // Install the tab's cohort eagerly, so a device pane attached
@@ -927,6 +992,30 @@ final class Router {
             }
         } catch {
             logError("session.create failed: \(error)")
+            // The tab itself is already the committed GUI mutation. Keep a
+            // failed, addressable workspace on screen so the originating CLI
+            // can identify and close/retry it from the structured error rather
+            // than polling for a terminal session that will never appear.
+            let placeholder = TerminalPaneState(
+                id: allocateTerminalPaneID(),
+                sessionId: "failed-\(cohortID.uuidString.lowercased())",
+                capability: "",
+                name: name,
+                cwd: cwd,
+                command: command
+            )
+            window.tabs.append(
+                TabState(
+                    id: modelID,
+                    terminals: [placeholder],
+                    simPanes: [],
+                    role: role,
+                    cohortId: cohortID,
+                    name: name,
+                    lifecycle: .failed,
+                    failureMessage: "terminal session creation failed: \(error)"
+                )
+            )
         }
     }
 
@@ -1039,6 +1128,7 @@ final class Router {
         spec: PendingAttachSpec,
         delayNanoseconds: UInt64 = 0
     ) -> Task<Bool, Never> {
+        attachFailures[pendingId] = nil
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             if delayNanoseconds > 0 {
@@ -1320,7 +1410,7 @@ final class Router {
     /// refused, or abandoned by an opposite-state supersede), or `.pending`
     /// (unconfirmed because of a deadline, indeterminate transport loss,
     /// same-state supersession, or tab disappearance). Lets
-    /// `tab set-protected` report the daemon's real state instead of an
+    /// tab-protection callers report the daemon's real state instead of an
     /// optimistic echo.
     func applyTabProtection(tab tabID: TabID, isProtected: Bool) async -> TabProtectionOutcome {
         await withCheckedContinuation { continuation in
@@ -1885,7 +1975,7 @@ final class Router {
             },
             mount: { window, pendingId, response, resolvedName in
                 // Mount the identity the daemon reports, not the one this
-                // call asked with, so `pane info` and the `panes.list` the
+                // call asked with, so `pane show` and the `pane.deviceList` the
                 // daemon answers name the pane with one string. `createSim`
                 // canonicalizes to lowercase; the attach paths reach here
                 // with whatever case they were handed.
@@ -2098,6 +2188,7 @@ final class Router {
                 return false
             }
             spec.mount(window, pendingId, response, resolvedName)
+            attachFailures[pendingId] = nil
             attachRetries[targetKey(spec.target)] = nil
             // A pane can mount into the window where the cohort install
             // raced it: the reconcile snapshotted no panes, and auto-bind at
@@ -2125,11 +2216,17 @@ final class Router {
                 daemon.noteCallerBoundedCallExpired(sentOn: sentOn)
             }
             logError("\(spec.failureLog): \(error)")
-            workspace.windowContaining(tab: tabID)?.tabs.failPendingPane(
-                id: pendingId,
-                message: ErrorText.describing(error),
-                inTab: tabID
-            )
+            if isPlaceholderPresent(pendingId, inTab: tabID),
+                !closingTabs.contains(tabID) {
+                attachFailures[pendingId] = PaneAttachFailure(error)
+                workspace.windowContaining(tab: tabID)?.tabs.failPendingPane(
+                    id: pendingId,
+                    message: ErrorText.describing(error),
+                    inTab: tabID
+                )
+            } else {
+                attachFailures[pendingId] = nil
+            }
             // This attempt has stopped waiting, so a detach deferred behind
             // it (including one deferred behind THIS placeholder while it was
             // attaching) has to be retaken now: a placeholder that isn't
@@ -2497,6 +2594,7 @@ final class Router {
         mode: PaneCloseMode
     ) {
         _ = mode
+        attachFailures[pendingId] = nil
         workspace.windowContaining(tab: tabID)?.tabs.removePendingPane(
             id: pendingId,
             fromTab: tabID
@@ -2527,6 +2625,10 @@ final class Router {
     /// terminal session for ownership because sims may be linked to
     /// non-primary terminals.
     private func closeTabRecords(_ tab: TabState, mode: PaneCloseMode) async {
+        // A failed initial session is represented by a GUI-only sentinel
+        // terminal so the tab remains visible and addressable. It owns no
+        // daemon records and must never send that sentinel over RPC.
+        guard tab.lifecycle == .ready else { return }
         // Closing tombstone: this method cancels protection and cohort work
         // but then `await`s several daemon RPCs while the tab is STILL in the
         // workspace (removal happens synchronously at the call site after we
@@ -2540,6 +2642,9 @@ final class Router {
         // suspension the tombstone must already cover.
         closingTabs.insert(tab.id)
         defer { closingTabs.remove(tab.id) }
+        for pending in tab.pendingPanes {
+            attachFailures[pending.id] = nil
+        }
         // Cancel the tab's cohort reconcile before deciding the close: a
         // send computed from pre-close membership would only be refused by
         // the daemon's closed-member interlock, so stop issuing them.
@@ -2654,21 +2759,41 @@ final class Router {
     func isWindowClosing(_ windowID: WindowID) -> Bool { closingWindows.contains(windowID) }
 
     private func allocateWindowID() -> WindowID {
+        while workspace.window(id: WindowID(value: nextWindowValue)) != nil {
+            nextWindowValue += 1
+        }
         defer { nextWindowValue += 1 }
         return WindowID(value: nextWindowValue)
     }
 
     private func allocateTabID() -> TabID {
+        while workspace.windowContaining(tab: TabID(value: nextTabValue)) != nil {
+            nextTabValue += 1
+        }
         defer { nextTabValue += 1 }
         return TabID(value: nextTabValue)
     }
 
     private func allocateTerminalPaneID() -> TerminalPaneID {
+        while workspace.windows.contains(where: { window in
+            window.tabs.tabs.contains(where: { tab in
+                tab.terminals.contains(where: { $0.id == TerminalPaneID(value: nextTerminalValue) })
+            })
+        }) {
+            nextTerminalValue += 1
+        }
         defer { nextTerminalValue += 1 }
         return TerminalPaneID(value: nextTerminalValue)
     }
 
     private func allocatePendingPaneID() -> PendingPaneID {
+        while workspace.windows.contains(where: { window in
+            window.tabs.tabs.contains(where: { tab in
+                tab.pendingPanes.contains(where: { $0.id == PendingPaneID(value: nextPendingValue) })
+            })
+        }) {
+            nextPendingValue += 1
+        }
         defer { nextPendingValue += 1 }
         return PendingPaneID(value: nextPendingValue)
     }

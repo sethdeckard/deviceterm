@@ -96,8 +96,8 @@ booted watch still shows the phone glyph.
 | 1.1 | Run `xcrun simctl boot <watch-udid>` in the tab. | A Simulator pane attaches within a few seconds. The menu-bar badge reads `1`. |
 | 1.2 | Inspect the pane. | The watch face renders with the model's correct round or rectangular shape. It is not stranded as a small image in a wide black pane. |
 | 1.3 | Drag the split divider inward. | The watch pane reaches a minimum width near 220 points. |
-| 1.4 | Run `deviceterm panes list`. | One row contains `<paneId>  <udid>  rendering  watch  sim`. |
-| 1.5 | Open another normal tab, boot an iPhone or iPad Simulator, run `deviceterm panes list`, and drag its divider inward. | The family column reads `phone` or `pad`, the type column reads `sim`, and the pane stops near 380 points wide. Shut down this Simulator when finished, then return to the watch tab. |
+| 1.4 | Run `deviceterm pane list`, then `deviceterm pane show <watch-pane> --json`. | The list includes a `simulator` pane; its detail reports the watch UDID, `family: "watch"`, and `state: "rendering"`. |
+| 1.5 | Open another normal tab, boot an iPhone or iPad Simulator, inspect it with `deviceterm pane show <pane> --json`, and drag its divider inward. | The detail reports `family: "phone"` or `"pad"`, and the pane stops near 380 points wide. Shut down this Simulator when finished, then return to the watch tab. |
 
 ### 2. Rotate the Digital Crown
 

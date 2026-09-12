@@ -3,9 +3,9 @@
 /// `session.create` → `{sessionId, capability, shortId?, name?, role?}`.
 /// Mirrors `SessionMethods.CreateResponse`.
 ///
-/// `shortId` is the daemon-minted Crockford base32 short identifier
-/// for `--tab <ref>` resolution. `name` is the optional session name
-/// the caller supplied at `session.create`, echoed back (the GUI
+/// `shortId` is the daemon-minted Crockford base32 short identifier for the
+/// terminal pane backed by this session. `name` is optional creation-time
+/// session metadata supplied at `session.create` and echoed back (the GUI
 /// derives it from a git worktree branch when it detects one, but the
 /// wire imposes no such rule); `deviceterm tab rename` changes only
 /// GUI presentation and does not write back here.
@@ -23,7 +23,7 @@
 public struct SessionCreateResponse: Codable, Sendable, Equatable {
     public let sessionId: String
     public let capability: String
-    /// Daemon-minted short identifier (Crockford base32, 6 chars).
+    /// Daemon-minted terminal-pane short identifier (Crockford base32, 6 chars).
     /// Optional for skew tolerance against pre-identifier-model
     /// daemons; the current daemon always emits a non-nil value.
     public let shortId: String?

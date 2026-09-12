@@ -16,8 +16,9 @@ Run before any release that touches the `.withPane` dispatch case in
 
 - A clean build: `make build`.
 - Launch with `make run`. Open one tab.
-- Boot at least one sim from inside the tab so `deviceterm panes list`
-  shows a row. Note its UDID + shortId.
+- Boot at least one sim from inside the tab so `deviceterm pane list`
+  shows a row. Note its short ID, then read its UDID with
+  `deviceterm pane show <shortId> --json | jq -r .simulator.udid`.
 
 ---
 
@@ -25,10 +26,10 @@ Run before any release that touches the `.withPane` dispatch case in
 
 | # | Action | Expected |
 |---|--------|----------|
-| 1.1 | `deviceterm panes list` — copy the UDID. Run `deviceterm with-pane <UDID> deviceterm tap 0.5 0.5`. | Tap fires on the sim. Receipt printed: `ok udid=<UDID> pane=<shortId> x=0.5 y=0.5`. |
+| 1.1 | Read the UDID with `deviceterm pane show <shortId> --json`, then run `deviceterm with-pane <UDID> deviceterm tap 0.5 0.5`. | Tap fires on the sim. Receipt printed: `ok udid=<UDID> pane=<shortId> x=0.5 y=0.5`. |
 | 1.2 | Copy the shortId (e.g. `phn001`). Run `deviceterm with-pane phn001 deviceterm tap 0.5 0.5`. | Same as 1.1. |
 | 1.3 | Copy the first 4-8 chars of the paneId UUID. Run `deviceterm with-pane <prefix> deviceterm tap 0.5 0.5`. | Same as 1.1. |
-| 1.4 | `deviceterm with-pane no-such-thing bash`. | Stderr: `deviceterm: no device pane matching 'no-such-thing' in this tab`, then a hint to run `deviceterm panes list`; exit 1. |
+| 1.4 | `deviceterm with-pane no-such-thing bash`. | Stderr: `deviceterm: no device pane matching 'no-such-thing' in this tab`, then a hint to run `deviceterm pane list`; exit 1. |
 
 ## 2. Env injection
 

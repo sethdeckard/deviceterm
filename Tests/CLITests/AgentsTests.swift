@@ -73,7 +73,7 @@ func agentsDocumentationCarriesGettingASimSection() {
     #expect(AgentsText.documentation.contains("xcrun simctl boot"))
     #expect(AgentsText.documentation.contains("env | grep DEVICETERM"))
     #expect(AgentsText.documentation.contains("which xcrun"))
-    #expect(AgentsText.documentation.contains("panes list"))
+    #expect(AgentsText.documentation.contains("pane list"))
 }
 
 @Test
@@ -132,7 +132,7 @@ func agentsDocumentationCarriesPermissionsAndLinkageSection() {
     // stay documented, not that they share a mechanism.
     #expect(documentation.contains("Linkage-mutation"))
     #expect(documentation.contains("Role escalation"))
-    #expect(documentation.contains("Protection-mutation"))
+    #expect(documentation.contains("Protection mutation"))
     // No roadmap framing: the guide states what holds now.
     #expect(!documentation.contains("Coming soon"))
 }
@@ -163,16 +163,16 @@ func agentsDocumentationCarriesIntegrationTips() {
 }
 
 @Test
-func agentsDocumentationExplainsTabGroupingIdentifier() {
+func agentsDocumentationExplainsWorkspaceIdentifiers() {
     let documentation = AgentsText.documentation
-    #expect(documentation.contains("`tabId`: required grouping UUID"))
-    #expect(documentation.contains("A session without a GUI tab"))
-    #expect(documentation.contains("GUI-backed groups correspond to tabs"))
-    #expect(documentation.contains("not mark which groups are GUI-backed"))
-    #expect(documentation.contains("do not use them to group tab-wide work"))
-    #expect(documentation.contains("A pane's name is nil because `pane rename` is not"))
-    #expect(documentation.contains("implemented."))
-    #expect(!documentation.contains("linkage refinement"))
+    #expect(documentation.contains("Workspace lists come from the GUI's live projection"))
+    #expect(documentation.contains("A terminal pane's id is its"))
+    #expect(documentation.contains("daemon `sessionId`"))
+    #expect(documentation.contains("six-character lowercase Crockford"))
+    #expect(documentation.contains("Refs are raw, case-insensitive strings"))
+    #expect(documentation.contains("window index is display metadata"))
+    #expect(documentation.contains("`tab show --json` returns `{tab, panes, layout}`"))
+    #expect(documentation.contains("instead of grouping daemon session rows yourself"))
 }
 
 @Test

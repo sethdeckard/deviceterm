@@ -4,50 +4,30 @@
 import DaemonProtocol
 import Testing
 
-/// The bridge from RouteIntent to either a
-/// Router dispatch, an actionDelegate call, or a workspace-read
-/// payload.
-///
-/// Mutating intents fire the matching Route on the Router (asserted
-/// via FakeDaemonClient's recorded calls). Read-only intents
-/// (`tabInfo`, `paneInfo`, `windowsList`) return `.data` carrying the
-/// wire payload. Resolver errors land as `.error`.
 @MainActor
 struct IntentDispatcherTests {
-    // MARK: - Helpers
-
-    /// Bundle of test-time references the harness builds so each
-    /// test can poke at the recording fake, the workspace, etc.
     private struct Harness {
         let dispatcher: IntentDispatcher
         let workspace: WorkspaceViewModel
-        let router: Router
         let fake: FakeDaemonClient
-        let actionDelegate: RecordingActionDelegate
+        let delegate: RecordingActionDelegate
     }
 
     private func makeHarness() -> Harness {
         let workspace = WorkspaceViewModel()
         let fake = FakeDaemonClient()
-        let router = Router(workspace: workspace, daemon: fake)
-        let actionDelegate = RecordingActionDelegate()
+        let delegate = RecordingActionDelegate()
         let dispatcher = IntentDispatcher(
             workspace: workspace,
-            router: router,
-            actionDelegate: actionDelegate
+            router: Router(workspace: workspace, daemon: fake),
+            actionDelegate: delegate
         )
         return Harness(
             dispatcher: dispatcher,
             workspace: workspace,
-            router: router,
             fake: fake,
-            actionDelegate: actionDelegate
+            delegate: delegate
         )
-    }
-
-    /// Let the Router's serial drain process queued routes.
-    private func settle() async {
-        try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
     private func appendTab(
@@ -55,14 +35,22 @@ struct IntentDispatcherTests {
         windowID: WindowID,
         tabID: TabID,
         sessionId: String,
-        panes: [SimPaneState] = []
+        terminals: [TerminalPaneState]? = nil,
+        panes: [SimPaneState] = [],
+        devicePanes: [DevicePaneState] = []
     ) {
         let list: TabListViewModel
-        if let existing = workspace.window(id: windowID) {
-            list = existing.tabs
+        if let window = workspace.window(id: windowID) {
+            list = window.tabs
         } else {
             list = TabListViewModel()
-            workspace.addWindow(WindowState(id: windowID, tabs: list))
+            workspace.addWindow(
+                WindowState(
+                    id: windowID,
+                    tabs: list,
+                    name: "window-\(windowID.value)"
+                )
+            )
         }
         let primary = TerminalPaneState(
             id: TerminalPaneID(value: tabID.value),
@@ -71,393 +59,23 @@ struct IntentDispatcherTests {
         )
         list.append(
             TabState(
-            id: tabID,
-            terminals: [primary],
-            simPanes: panes
-        )
+                id: tabID,
+                terminals: terminals ?? [primary],
+                simPanes: panes,
+                devicePanes: devicePanes,
+                name: "tab-\(tabID.value)"
             )
-    }
-
-    // MARK: - Mutating intents
-
-    @Test
-    func moveTabSameWindowDispatchesReorderRoute() async {
-        let harness = makeHarness()
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 1), sessionId: "S-A")
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 2), sessionId: "S-B")
-        let result = await harness.dispatcher.dispatch(
-            .moveTab(.sessionId("S-A"), toIndex: 1, toWindow: nil), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(
-            harness.workspace.window(id: WindowID(value: 1))?.tabs.tabs.map(\.id)
-                == [TabID(value: 2), TabID(value: 1)]
-        )
-        // Same-window reorder goes through the Router, not the delegate.
-        #expect(harness.actionDelegate.moves.isEmpty)
-    }
-
-    @Test
-    func moveTabToAnotherWindowHitsActionDelegate() async {
-        let harness = makeHarness()
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 1), sessionId: "S-A")
-        appendTab(harness.workspace, windowID: WindowID(value: 2), tabID: TabID(value: 2), sessionId: "S-B")
-        let result = await harness.dispatcher.dispatch(
-            .moveTab(.sessionId("S-A"), toIndex: nil, toWindow: .index(2)), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        // toIndex nil → append at the destination's end (1 existing tab).
-        #expect(
-            harness.actionDelegate.moves == [
-                .init(
-                    tab: TabID(value: 1),
-                    from: WindowID(value: 1),
-                    destination: WindowID(value: 2),
-                    atIndex: 1
-                )
-            ]
         )
     }
 
     @Test
-    func moveTabToSameWindowWithoutIndexIsRejected() async {
-        // `--to-window` that resolves to the tab's own window is a
-        // same-window reorder, which requires an explicit `--to`. Without
-        // it the intent must error, not slide the tab to the last slot.
-        let harness = makeHarness()
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 1), sessionId: "S-A")
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 2), sessionId: "S-B")
-        let result = await harness.dispatcher.dispatch(
-            .moveTab(.sessionId("S-A"), toIndex: nil, toWindow: .index(1)), origin: .inProcess
-        )
-        await settle()
-        if case .error = result {
-            // expected
-        } else {
-            Issue.record("expected .error; got \(result)")
-        }
-        #expect(harness.actionDelegate.moves.isEmpty)
-        #expect(
-            harness.workspace.window(id: WindowID(value: 1))?.tabs.tabs.map(\.id)
-                == [TabID(value: 1), TabID(value: 2)]
-        )
-    }
-
-    @Test
-    func openWindowDispatchesOpenWindowRoute() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(.openWindow, origin: .inProcess)
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.workspace.windows.count == 1)
-    }
-
-    @Test
-    func closeTabDispatchesCloseTabRoute() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-A"), mode: .shutdown), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.fake.closeSessionCalls.first?.mode == .shutdown)
-    }
-
-    @Test
-    func renameTabRoutesThroughActionDelegate() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .renameTab(.sessionId("S-A"), name: "feature"), origin: .inProcess
-        )
-        #expect(result == .ok)
-        #expect(
-            harness.actionDelegate.renames == [
-            RecordingActionDelegate.Rename(
-                window: WindowID(value: 1),
-                tab: TabID(value: 1),
-                name: "feature"
-            )
-            ]
-            )
-    }
-
-    @Test
-    func selectTabFiresSelectTabRoute() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .selectTab(.sessionId("S-A")), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-    }
-
-    @Test
-    func selectTabDoesNotRaiseItsWindow() async {
-        // The deliberate split between the two selection verbs: `tab
-        // select` moves the selection inside its window and leaves
-        // window order alone, so a granted caller can stage a
-        // background window's tab without taking the human's
-        // attention. `window focus` is the verb that raises.
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 2),
-            tabID: TabID(value: 2),
-            sessionId: "S-B"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .selectTab(.sessionId("S-A")), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.actionDelegate.raises.isEmpty)
-        #expect(harness.workspace.selectedWindowID == WindowID(value: 2))
-    }
-
-    @Test
-    func focusWindowRaisesTheResolvedWindow() async {
-        // The raise is the whole verb: the dispatcher writes no
-        // selection of its own. The recording delegate raises nothing,
-        // so no `windowDidBecomeKey` follows it and the workspace stays
-        // on window 2 where `appendTab` left it. What that pins is the
-        // absence of a second write here, not what the real AppKit
-        // mirror does with the raise.
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 2),
-            tabID: TabID(value: 2),
-            sessionId: "S-B"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .focusWindow(.index(1)), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.actionDelegate.raises == [WindowID(value: 1)])
-        #expect(harness.workspace.selectedWindowID == WindowID(value: 2))
-    }
-
-    @Test
-    func focusWindowRaisesNothingWhenTheRefDoesNotResolve() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .focusWindow(.index(9)), origin: .inProcess
-        )
-        await settle()
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
-        #expect(harness.actionDelegate.raises.isEmpty)
-    }
-
-    @Test
-    func focusWindowRaisesTheExternalCallersOwnWindow() async {
-        // `.current` for an external caller is its own window, never
-        // the human's key one, so the raise follows the session rather
-        // than whatever is frontmost.
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 2),
-            tabID: TabID(value: 2),
-            sessionId: "S-B"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .focusWindow(.current), origin: .external(sessionID: "S-A", hasAutomationGrant: false)
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.actionDelegate.raises == [WindowID(value: 1)])
-    }
-
-    @Test
-    func openPaneTerminalAddsTerminalToNamedTab() async {
-        // The Intent layer's openPaneTerminal verb now dispatches the
-        // real Route.openTerminalPane (replacing the prior newTab
-        // fallback). The Router mints a fresh session and appends a
-        // TerminalPaneState, so the tab gains a second terminal.
-        let harness = makeHarness()
-        harness.fake.sessionSequence = [
-            SessionCreateResponse(sessionId: "S-A", capability: "C-A"),
-            SessionCreateResponse(sessionId: "S-A2", capability: "C-A2")
-        ]
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .openPaneTerminal(
-                inTab: .sessionId("S-A"),
-                cwd: nil,
-                cmd: nil
-            ), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        let tab = harness.workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))
-        #expect(tab?.terminals.count == 2)
-        // session.create fired once for the new terminal; the appended
-        // primary's session was pre-seeded by the test fixture.
-        #expect(harness.fake.createSessionCalls.count == 1)
-    }
-
-    @Test
-    func openPaneTerminalCurrentTargetsCallerTab() async {
-        // With no `--tab` ref and a current session, the Intent
-        // resolves to the caller's tab and adds a terminal there.
-        let harness = makeHarness()
-        harness.fake.sessionSequence = [
-            SessionCreateResponse(sessionId: "S-new", capability: "C-new")
-        ]
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-caller"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .openPaneTerminal(inTab: nil, cwd: nil, cmd: nil),
-            origin: .external(sessionID: "S-caller", hasAutomationGrant: false)
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(
-            harness.workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?.terminals.count == 2
-            )
-    }
-
-    @Test
-    func openTabThreadsCwdAndCmdToPrimaryTerminal() async {
-        // --cwd / --cmd flow Route.newTab → Router.addTab →
-        // TerminalPaneState so the GUI's libghostty attach can
-        // honor them. Pin both ends: the dispatched .openTab
-        // carries them and the resulting primary terminal records
-        // them on its state.
-        //
-        // Seed the workspace with an existing window first, since `.openTab(
-        // inWindow: nil)` resolves to "current key window"; the
-        // headless test fixture has none until appendTab fills one.
-        let harness = makeHarness()
-        harness.fake.sessionSequence = [
-            SessionCreateResponse(sessionId: "S-new", capability: "C-new")
-        ]
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-seed"
-        )
-        let result = await harness.dispatcher.dispatch(
-            .openTab(
-                inWindow: nil,
-                role: .agent,
-                cwd: "/proj",
-                cmd: ["claude --print"]
-            ), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        let tabs = harness.workspace.window(id: WindowID(value: 1))?
-            .tabs.tabs ?? []
-        #expect(tabs.count == 2)
-        // The newly-minted tab is the second one; its primary
-        // terminal carries the threaded cwd/cmd.
-        let primary = tabs.last?.terminals.first
-        #expect(primary?.sessionId == "S-new")
-        #expect(primary?.cwd == "/proj")
-        #expect(primary?.command == ["claude --print"])
-    }
-
-    @Test
-    func openPaneTerminalThreadsCwdAndCmdToNewTerminal() async {
-        // Same plumbing as openTab but on the
-        // `openPaneTerminal(inTab:cwd:cmd:)` path. The added
-        // terminal must carry the requested cwd/cmd.
-        let harness = makeHarness()
-        harness.fake.sessionSequence = [
-            SessionCreateResponse(sessionId: "S-new", capability: "C-new")
-        ]
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-seed"
-        )
-        let result = await harness.dispatcher.dispatch(
-            .openPaneTerminal(
-                inTab: .sessionId("S-seed"),
-                cwd: "/work",
-                cmd: ["python3", "manage.py", "runserver"]
-            ), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        let added = harness.workspace.window(id: WindowID(value: 1))?
-            .tabs.tab(id: TabID(value: 1))?
-            .terminals.last
-        #expect(added?.sessionId == "S-new")
-        #expect(added?.cwd == "/work")
-        #expect(added?.command == ["python3", "manage.py", "runserver"])
-    }
-
-    @Test
-    func closePaneDispatchesDetachSimPane() async {
+    func workspacePaneRenameCommitsGUIAndDaemonNamesTogether() async {
         let harness = makeHarness()
         let pane = SimPaneState(
             paneId: "P1",
             udid: "U-iphone17",
             displayName: "iPhone",
-            family: "iPhone"
+            family: "phone"
         )
         appendTab(
             harness.workspace,
@@ -465,608 +83,624 @@ struct IntentDispatcherTests {
             tabID: TabID(value: 1),
             sessionId: "S-A",
             panes: [pane]
-            )
-        let result = await harness.dispatcher.dispatch(
-            .closePane(.udid("U-iphone17"), mode: .detach), origin: .inProcess
         )
-        await settle()
-        #expect(result == .ok)
-    }
 
-    // MARK: - Read-only intents
-
-    @Test
-    func tabInfoReturnsPayloadForResolvedTab() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
         let result = await harness.dispatcher.dispatch(
-            .tabInfo(.sessionId("S-A")), origin: .inProcess
+            .workspacePaneRename("P1", name: "phone"),
+            origin: .inProcess
         )
-        guard case .data(.tabInfo(let payload)) = result else {
-            Issue.record("expected .data(.tabInfo); got \(result)"); return
+
+        guard case let .data(.workspaceMutation(receipt)) = result else {
+            Issue.record("expected workspace mutation; got \(result)")
+            return
         }
-        #expect(payload.sessionId == "S-A")
-        #expect(payload.role == "agent")
+        #expect(receipt.pane?.name == "phone")
+        #expect(
+            harness.delegate.paneRenames == [
+                .init(
+                    window: WindowID(value: 1),
+                    tab: TabID(value: 1),
+                    slot: .sim(udid: "U-iphone17"),
+                    daemonPaneId: "P1",
+                    name: "phone"
+                )
+            ]
+        )
     }
 
     @Test
-    func tabInfoMarksCallerOwnTabAsCurrent() async {
+    func workspaceTabOpenReturnsCommittedTabAndTerminal() async {
+        let harness = makeHarness()
+        harness.fake.sessionSequence = [
+            SessionCreateResponse(sessionId: "S-new", capability: "C-new")
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabOpen(window: nil, cwd: "/project", command: ["pwd"]),
+            origin: .external(sessionID: "S-seed", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceMutation(receipt)) = result else {
+            Issue.record("expected workspace mutation; got \(result)")
+            return
+        }
+        #expect(receipt.tab?.state == .ready)
+        #expect(receipt.pane?.id == "S-new")
+        #expect(receipt.pane?.terminal?.sessionId == "S-new")
+    }
+
+    @Test
+    func workspaceTabOpenFailureReturnsTheCommittedFailedTab() async {
+        let harness = makeHarness()
+        harness.fake.createSessionError = FakeDaemonClient.InjectedFailure.sessionCreate
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabOpen(window: nil, cwd: nil, command: nil),
+            origin: .external(sessionID: "S-seed", hasAutomationGrant: true)
+        )
+
+        guard case let .error(.mutationFailed(_, committed)) = result else {
+            Issue.record("expected partial mutation failure; got \(result)")
+            return
+        }
+        #expect(committed.tab?.state == .failed)
+        #expect(committed.tab?.paneCount == 0)
+        #expect(committed.pane == nil)
+        #expect(harness.workspace.window(id: WindowID(value: 1))?.tabs.tabs.count == 2)
+    }
+
+    @Test
+    func workspacePaneSplitReturnsTheMintedTerminalSession() async {
+        let harness = makeHarness()
+        harness.fake.sessionSequence = [
+            SessionCreateResponse(sessionId: "S-split", capability: "C-split")
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneSplit(nil, direction: .right),
+            origin: .external(sessionID: "S-seed", hasAutomationGrant: false)
+        )
+
+        guard case let .data(.workspaceMutation(receipt)) = result else {
+            Issue.record("expected workspace mutation; got \(result)")
+            return
+        }
+        #expect(receipt.pane?.id == "S-split")
+        #expect(receipt.tab?.paneCount == 2)
+    }
+
+    @Test
+    func workspacePaneCloseRefusesTheLastTerminal() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneClose(nil, mode: nil),
+            origin: .external(sessionID: "S-seed", hasAutomationGrant: false)
+        )
+
+        #expect(result == .error(.wouldCloseTab))
+    }
+
+    @Test
+    func workspacePaneCloseRejectsExplicitModeForTerminalAndDevice() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed",
+            devicePanes: [
+                DevicePaneState(
+                    paneId: "P-device",
+                    deviceId: "D-1",
+                    displayName: "iPhone",
+                    family: "phone"
+                )
+            ]
+        )
+
+        let terminal = await harness.dispatcher.dispatch(
+            .workspacePaneClose("S-seed", mode: .shutdown),
+            origin: .inProcess
+        )
+        let device = await harness.dispatcher.dispatch(
+            .workspacePaneClose("P-device", mode: .detach),
+            origin: .inProcess
+        )
+
+        #expect(
+            terminal == .error(
+                .unsupportedPane(verb: "close --mode", kind: .terminal)
+            )
+        )
+        #expect(
+            device == .error(
+                .unsupportedPane(verb: "close --mode", kind: .device)
+            )
+        )
+    }
+
+    @Test
+    func concreteSecondaryTerminalReceivesInputAndCapture() async {
+        let harness = makeHarness()
+        let terminals = [
+            TerminalPaneState(
+                id: TerminalPaneID(value: 1),
+                sessionId: "S-primary",
+                capability: "cap"
+            ),
+            TerminalPaneState(
+                id: TerminalPaneID(value: 9),
+                sessionId: "S-secondary",
+                capability: "cap"
+            )
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-primary",
+            terminals: terminals
+        )
+        harness.delegate.captureResult = "secondary output"
+
+        let send = await harness.dispatcher.dispatch(
+            .workspacePaneSendInput("S-secondary", text: "ls\n", typeDelayMs: 12),
+            origin: .inProcess
+        )
+        let capture = await harness.dispatcher.dispatch(
+            .workspacePaneCaptureText("S-secondary"),
+            origin: .inProcess
+        )
+
+        guard case let .data(.workspaceMutation(receipt)) = send else {
+            Issue.record("expected input receipt; got \(send)")
+            return
+        }
+        #expect(receipt.pane?.id == "S-secondary")
+        #expect(receipt.bytes == 3)
+        #expect(
+            harness.delegate.sendInputs == [
+                .init(
+                    window: WindowID(value: 1),
+                    tab: TabID(value: 1),
+                    terminal: TerminalPaneID(value: 9),
+                    text: "ls\n",
+                    typeDelayMillis: 12
+                )
+            ]
+        )
+        guard case let .data(.workspaceCapture(result)) = capture else {
+            Issue.record("expected capture result; got \(capture)")
+            return
+        }
+        #expect(result.pane.id == "S-secondary")
+        #expect(result.text == "secondary output")
+        #expect(
+            harness.delegate.captures == [
+                .init(
+                    window: WindowID(value: 1),
+                    tab: TabID(value: 1),
+                    terminal: TerminalPaneID(value: 9)
+                )
+            ]
+        )
+    }
+
+    @Test
+    func nonTerminalInputAndCaptureAreUnsupported() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            panes: [
+                SimPaneState(
+                    paneId: "P-sim",
+                    udid: "U-sim",
+                    displayName: "iPhone",
+                    family: "phone"
+                )
+            ]
+        )
+
+        let send = await harness.dispatcher.dispatch(
+            .workspacePaneSendInput("P-sim", text: "x", typeDelayMs: nil),
+            origin: .inProcess
+        )
+        let capture = await harness.dispatcher.dispatch(
+            .workspacePaneCaptureText("P-sim"),
+            origin: .inProcess
+        )
+
+        #expect(send == .error(.unsupportedPane(verb: "send-input", kind: .simulator)))
+        #expect(capture == .error(.unsupportedPane(verb: "capture-text", kind: .simulator)))
+    }
+
+    @Test
+    func workspaceWindowProjectionDoesNotExposeHiddenSelection() async {
         let harness = makeHarness()
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 1),
             tabID: TabID(value: 1),
             sessionId: "S-A"
-            )
+        )
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 1),
             tabID: TabID(value: 2),
             sessionId: "S-B"
-            )
-        let ownResult = await harness.dispatcher.dispatch(
-            .tabInfo(.sessionId("S-A")),
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
         )
-        guard case .data(.tabInfo(let own)) = ownResult else {
-            Issue.record("expected own tabInfo"); return
+        guard let tabs = harness.workspace.window(id: WindowID(value: 1))?.tabs else {
+            Issue.record("expected window tabs")
+            return
         }
-        #expect(own.isCurrent)
-        let otherResult = await harness.dispatcher.dispatch(
-            .tabInfo(.sessionId("S-B")),
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
-        )
-        guard case .data(.tabInfo(let other)) = otherResult else {
-            Issue.record("expected other tabInfo"); return
-        }
-        #expect(other.isCurrent == false)
-    }
-
-    @Test
-    func windowsListDefaultScopesToCallerWindow() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 2),
-            tabID: TabID(value: 2),
-            sessionId: "S-B"
-            )
+        tabs.setProtectionState(.protected, id: TabID(value: 1))
+        tabs.select(id: TabID(value: 1))
         let result = await harness.dispatcher.dispatch(
-            .windowsList(all: false),
+            .workspaceWindowShow("window-1"),
             origin: .external(sessionID: "S-B", hasAutomationGrant: false)
         )
-        guard case .data(.windowsList(let payload)) = result else {
-            Issue.record("expected .data(.windowsList); got \(result)"); return
+
+        guard case let .data(.workspaceWindow(detail)) = result else {
+            Issue.record("expected window detail; got \(result)")
+            return
         }
-        #expect(payload.count == 1)
-        #expect(payload[0].index == 2)
+        #expect(detail.tabs.count == 1)
+        #expect(detail.window.selectedTabId == nil)
+        #expect(detail.tabs.first?.selected == false)
     }
 
     @Test
-    func windowsListAllEnumeratesEveryWindowInOrder() async {
+    func workspaceTabProjectionNormalizesThePublicTitle() async {
         let harness = makeHarness()
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 1),
             tabID: TabID(value: 1),
             sessionId: "S-A"
-            )
+        )
+        harness.workspace.window(id: WindowID(value: 1))?.tabs.renameTab(
+            id: TabID(value: 1),
+            to: "safe\u{202E}gnitiaps"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
+        )
+
+        guard case let .data(.workspaceTab(detail)) = result else {
+            Issue.record("expected workspace tab detail; got \(result)")
+            return
+        }
+        #expect(detail.tab.name == "safe\u{202E}gnitiaps")
+        #expect(detail.tab.title == "safegnitiaps")
+    }
+
+    @Test
+    func crossWindowMoveMapsTheVisibleIndexIntoTheRawDestinationTabs() async throws {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-caller"
+        )
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 2),
             tabID: TabID(value: 2),
-            sessionId: "S-B"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .windowsList(all: true),
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
+            sessionId: "S-hidden"
         )
-        guard case .data(.windowsList(let payload)) = result else {
-            Issue.record("expected .data(.windowsList); got \(result)"); return
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 3),
+            sessionId: "S-visible-a"
+        )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 4),
+            sessionId: "S-visible-b"
+        )
+        let destinationTabs = try #require(
+            harness.workspace.window(id: WindowID(value: 2))?.tabs
+        )
+        destinationTabs.setProtectionState(.protected, id: TabID(value: 2))
+        harness.delegate.moveImplementation = { tab, source, destination, index in
+            guard let moved = harness.workspace.window(id: source)?.tabs.detach(id: tab) else {
+                return
+            }
+            harness.workspace.window(id: destination)?.tabs.insert(moved, at: index)
         }
-        #expect(payload.count == 2)
-        #expect(payload[0].index == 1)
-        #expect(payload[1].index == 2)
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabMove("tab-1", window: "window-2", index: 1),
+            origin: .external(sessionID: "S-caller", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceMutation(receipt)) = result else {
+            Issue.record("expected committed tab move; got \(result)")
+            return
+        }
+        #expect(harness.delegate.moves.first?.atIndex == 2)
+        #expect(receipt.window?.name == "window-2")
+        #expect(destinationTabs.tabs.map(\.id) == [
+            TabID(value: 2),
+            TabID(value: 3),
+            TabID(value: 1),
+            TabID(value: 4)
+        ])
     }
 
     @Test
-    func windowsListWithoutCallerSessionReturnsEmpty() async {
+    func crossWindowMoveRefusesADelegateNoOp() async {
         let harness = makeHarness()
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 1),
             tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(.windowsList(all: false), origin: .inProcess)
-        guard case .data(.windowsList(let payload)) = result else {
-            Issue.record("expected .data(.windowsList); got \(result)"); return
-        }
-        #expect(payload.isEmpty)
-    }
-
-    // MARK: - Errors
-
-    @Test
-    func unresolvedTabRefReturnsError() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-MISSING"), mode: .detach), origin: .inProcess
+            sessionId: "S-caller"
         )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
-    }
-
-    @Test
-    func paneAttachDispatchesAttachSimPaneRouteForCurrentTab() async {
-        // Resolves caller's current tab and dispatches the existing
-        // `Route.attachSimPane` pipeline, the same one that
-        // discovery / orphan-recovery / shim-intercept boot all flow
-        // through. Verified by observing the Router's downstream
-        // `daemon.attachDevice` call: the fake records the
-        // `(sessionId, capability, udid)` triple, and the assertion
-        // pins that the current tab's session creds were forwarded
-        // and that the dispatcher canonicalized the UDID to its
-        // lowercased form on the way down.
-        let harness = makeHarness()
         appendTab(
             harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        // appendTab → addWindow sets selectedWindowID; append sets
-        // the tab's selectedIndex, so the resolver's `.current` path
-        // is satisfied without further setup.
-        let upperUDID = "7DB632B6-86D3-437D-B567-36A80E59788B"
-        let result = await harness.dispatcher.dispatch(
-            .paneAttach(udid: upperUDID), origin: .inProcess
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 2),
+            sessionId: "S-other"
         )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.fake.attachDeviceCalls.count == 1)
-        #expect(harness.fake.attachDeviceCalls.first?.sessionId == "S-A")
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabMove("tab-1", window: "window-2", index: nil),
+            origin: .external(sessionID: "S-caller", hasAutomationGrant: true)
+        )
+
         #expect(
-            harness.fake.attachDeviceCalls.first?.udid
-                == upperUDID.lowercased()
+            result == .error(
+                .internalError("tab move was not committed in the destination window")
             )
+        )
+        #expect(harness.workspace.windowContaining(tab: TabID(value: 1))?.id == WindowID(value: 1))
     }
 
     @Test
-    func devicePaneAttachDispatchesAttachDevicePaneRouteForCurrentTab() async {
-        // The `.device` arm of `device attach <ref>`: resolves the
-        // caller's current tab and dispatches `Route.attachDevicePane`,
-        // observed via the Router's downstream
-        // `daemon.attachPhysicalDevice(deviceId:sessionId:)` call.
+    func paneAttachDispatchesExistingSimulatorRoute() async {
         let harness = makeHarness()
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 1),
             tabID: TabID(value: 1),
             sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false), origin: .inProcess
         )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.fake.attachPhysicalDeviceCalls.count == 1)
+        let upperUDID = "7DB632B6-86D3-437D-B567-36A80E59788B"
+
+        let result = await harness.dispatcher.dispatch(
+            .paneAttach(udid: upperUDID),
+            origin: .inProcess
+        )
+
+        guard case .data(.workspaceMutation) = result else {
+            Issue.record("expected committed workspace receipt; got \(result)")
+            return
+        }
+        #expect(harness.fake.attachDeviceCalls.first?.sessionId == "S-A")
+        #expect(harness.fake.attachDeviceCalls.first?.udid == upperUDID.lowercased())
+    }
+
+    @Test
+    func paneAttachPreservesTheDaemonFailure() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        let udid = "7DB632B6-86D3-437D-B567-36A80E59788B"
+        let message = "pane.create: No port conforms to SimDisplayIOSurfaceRenderable"
+        harness.fake.attachError = DaemonClientError.daemon(
+            code: -32_000,
+            message: message
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .paneAttach(udid: udid),
+            origin: .inProcess
+        )
+
+        #expect(
+            result == .error(
+                .attachFailed(message: message, forwardedRPCCode: -32_000)
+            )
+        )
+        #expect(harness.fake.attachDeviceCalls.count == 1)
+        let pending = harness.workspace.window(id: WindowID(value: 1))?
+            .tabs.tab(id: TabID(value: 1))?.pendingPanes.first
+        guard case .failed = pending?.phase else {
+            Issue.record("expected the failed placeholder to remain visible")
+            return
+        }
+    }
+
+    @Test
+    func paneAttachRetriesAnExistingFailedPlaceholder() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        let udid = "7DB632B6-86D3-437D-B567-36A80E59788B"
+        harness.fake.attachFailure = { _, index in
+            index == 0
+                ? DaemonClientError.daemon(code: -32_000, message: "pane.create: failed")
+                : nil
+        }
+
+        let first = await harness.dispatcher.dispatch(
+            .paneAttach(udid: udid),
+            origin: .inProcess
+        )
+        let second = await harness.dispatcher.dispatch(
+            .paneAttach(udid: udid),
+            origin: .inProcess
+        )
+
+        guard case .error(.attachFailed) = first else {
+            Issue.record("expected the first attach to fail; got \(first)")
+            return
+        }
+        guard case .data(.workspaceMutation) = second else {
+            Issue.record("expected the explicit retry to commit; got \(second)")
+            return
+        }
+        #expect(harness.fake.attachDeviceCalls.count == 2)
+        let tab = harness.workspace.window(id: WindowID(value: 1))?
+            .tabs.tab(id: TabID(value: 1))
+        #expect(tab?.pendingPanes.isEmpty == true)
+        #expect(tab?.simPanes.count == 1)
+    }
+
+    @Test
+    func devicePaneAttachDispatchesExistingDeviceRoute() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
+            origin: .inProcess
+        )
+
+        guard case .data(.workspaceMutation) = result else {
+            Issue.record("expected committed workspace receipt; got \(result)")
+            return
+        }
         #expect(harness.fake.attachPhysicalDeviceCalls.first?.deviceId == "fd00::1")
         #expect(harness.fake.attachPhysicalDeviceCalls.first?.sessionId == "S-A")
     }
 
     @Test
-    func devicePaneAttachRelinkMovesMirrorAcrossTabs() async {
-        // The shim's contextual trigger (`relinkExisting: true`): a device
-        // already mirrored in tab A moves to the calling tab B: detach A,
-        // attach B, on the serial router drain (detach first).
+    func malformedSimulatorAttachStillFailsBeforeRPC() async {
         let harness = makeHarness()
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 1), sessionId: "S-A")
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 2), sessionId: "S-B")
-        _ = await harness.dispatcher.dispatch(
-            .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
-        )
-        await settle()
-        #expect(harness.fake.attachPhysicalDeviceCalls.count == 1)
-
-        let result = await harness.dispatcher.dispatch(
-            .devicePaneAttach(deviceId: "fd00::1", relinkExisting: true),
-            origin: .external(sessionID: "S-B", hasAutomationGrant: false)
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.fake.closePaneCalls.contains { $0.mode == .detach })
-        #expect(harness.fake.attachPhysicalDeviceCalls.count == 2)
-        #expect(harness.fake.attachPhysicalDeviceCalls.last?.sessionId == "S-B")
-        let tabA = harness.workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 1))
-        let tabB = harness.workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 2))
-        #expect(tabA?.devicePanes.contains { $0.deviceId == "fd00::1" } == false)
-        #expect(tabB?.devicePanes.contains { $0.deviceId == "fd00::1" } == true)
-    }
-
-    @Test
-    func devicePaneAttachWithoutRelinkRejectsCrossTab() async {
-        // The explicit CLI verb (`relinkExisting: false`): a device
-        // mirrored in tab A is NOT stolen by an attach from tab B. Hard
-        // reject: no second daemon attach, A keeps the mirror, no detach.
-        let harness = makeHarness()
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 1), sessionId: "S-A")
-        appendTab(harness.workspace, windowID: WindowID(value: 1), tabID: TabID(value: 2), sessionId: "S-B")
-        _ = await harness.dispatcher.dispatch(
-            .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
-        )
-        await settle()
-        #expect(harness.fake.attachPhysicalDeviceCalls.count == 1)
-
-        let result = await harness.dispatcher.dispatch(
-            .devicePaneAttach(deviceId: "fd00::1", relinkExisting: false),
-            origin: .external(sessionID: "S-B", hasAutomationGrant: false)
-        )
-        await settle()
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.internalError")
-        #expect(harness.fake.attachPhysicalDeviceCalls.count == 1)
-        #expect(harness.fake.closePaneCalls.isEmpty)
-        let tabA = harness.workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 1))
-        #expect(tabA?.devicePanes.contains { $0.deviceId == "fd00::1" } == true)
-    }
-
-    @Test
-    func paneAttachIsIdempotentWhenUDIDAlreadyInCurrentTab() async {
-        // Same-tab repeat is a no-op (no second daemon.attachDevice
-        // call), matching the agent workflow of "boot a sim, run
-        // `deviceterm device attach` once, then run it again to verify
-        // and not have it create a duplicate pane".
-        let harness = makeHarness()
-        let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
-        let existing = SimPaneState(
-            paneId: "P-1",
-            udid: udid,
-            displayName: "Sim 7db632b6",
-            family: "phone",
-            shortId: "p1",
-            name: nil
-        )
         appendTab(
             harness.workspace,
             windowID: WindowID(value: 1),
             tabID: TabID(value: 1),
-            sessionId: "S-A",
-            panes: [existing]
-            )
-        let result = await harness.dispatcher.dispatch(
-            .paneAttach(udid: udid), origin: .inProcess
+            sessionId: "S-A"
         )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.fake.attachDeviceCalls.isEmpty)
-    }
 
-    @Test
-    func paneAttachRejectsUDIDAlreadyAttachedToDifferentTab() async {
-        // Cross-tab attempt: refuses to steal the pane (which would
-        // duplicate the daemon record and break the original
-        // stream). Surfaces an internalError with a hint pointing
-        // at the GUI-drag re-link path.
-        let harness = makeHarness()
-        let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
-        let existing = SimPaneState(
-            paneId: "P-1",
-            udid: udid,
-            displayName: "Sim 7db632b6",
-            family: "phone",
-            shortId: "p1",
-            name: nil
-        )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A",
-            panes: [existing]
-            )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 2),
-            sessionId: "S-B"
-            )
-        // Make tab 2 (the empty one) the current target.
-        harness.workspace.window(id: WindowID(value: 1))?
-            .tabs.select(id: TabID(value: 2))
         let result = await harness.dispatcher.dispatch(
-            .paneAttach(udid: udid), origin: .inProcess
+            .paneAttach(udid: "not-a-uuid"),
+            origin: .inProcess
         )
+
         guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
+            Issue.record("expected error; got \(result)")
+            return
         }
         #expect(error.code == "intent.internalError")
         #expect(harness.fake.attachDeviceCalls.isEmpty)
-    }
-
-    @Test
-    func paneAttachCanonicalizesUDIDCaseAcrossDuplicateChecks() async {
-        // UDIDs are case-insensitive, so a re-attach naming the mounted
-        // pane's device in the other case must still hit the same-tab
-        // idempotency guard rather than stacking a duplicate via a second
-        // daemon.attachDevice round-trip. The guard is what makes the
-        // spelling an agent happens to pass irrelevant.
-        let harness = makeHarness()
-        let upperUDID = "7DB632B6-86D3-437D-B567-36A80E59788B"
-        let lowerUDID = upperUDID.lowercased()
-        let existing = SimPaneState(
-            paneId: "P-1",
-            udid: upperUDID,
-            displayName: "Sim 7DB632B6",
-            family: "phone",
-            shortId: "p1",
-            name: nil
-        )
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A",
-            panes: [existing]
-            )
-        let result = await harness.dispatcher.dispatch(
-            .paneAttach(udid: lowerUDID), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(harness.fake.attachDeviceCalls.isEmpty)
-    }
-
-    @Test
-    func paneAttachRejectsMalformedUDID() async {
-        // Fail fast in the dispatcher rather than relying on the
-        // daemon's terser `malformed UDID` after a round-trip, so the
-        // CLI's user sees an actionable hint instead of a bridge
-        // error code.
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .paneAttach(udid: "not-a-uuid"), origin: .inProcess
-        )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.internalError")
-        #expect(harness.fake.attachDeviceCalls.isEmpty)
-    }
-
-    @Test
-    func paneAttachWithoutCurrentTabReturnsNotFound() async {
-        // No current session, no key window with a selected tab →
-        // resolver can't pin "current," so the intent surfaces
-        // notFound rather than silently no-oping. CLI prints the
-        // resolver's hint so the caller knows to open a tab first.
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .paneAttach(udid: "7DB632B6-86D3-437D-B567-36A80E59788B"), origin: .inProcess
-        )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
-        #expect(harness.fake.attachDeviceCalls.isEmpty)
-    }
-
-    @Test
-    func sendInputForwardsToActionDelegate() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .sendInput(.sessionId("S-A"), text: "ping\n", typeDelayMillis: nil), origin: .inProcess
-        )
-        #expect(result == .ok)
-        #expect(
-            harness.actionDelegate.sendInputs == [
-            RecordingActionDelegate.SendInput(
-                window: WindowID(value: 1),
-                tab: TabID(value: 1),
-                text: "ping\n",
-                typeDelayMillis: nil
-            )
-            ]
-            )
-    }
-
-    @Test
-    func sendInputThreadsTypeDelayToActionDelegate() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        let result = await harness.dispatcher.dispatch(
-            .sendInput(.sessionId("S-A"), text: "ls\n", typeDelayMillis: 45), origin: .inProcess
-        )
-        #expect(result == .ok)
-        #expect(
-            harness.actionDelegate.sendInputs == [
-            RecordingActionDelegate.SendInput(
-                window: WindowID(value: 1),
-                tab: TabID(value: 1),
-                text: "ls\n",
-                typeDelayMillis: 45
-            )
-            ]
-            )
-    }
-
-    @Test
-    func sendInputRelaysDelegateError() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        harness.actionDelegate.sendInputError = IntentError.notFound(
-            kind: "tab",
-            ref: "1"
-        )
-        let result = await harness.dispatcher.dispatch(
-            .sendInput(.sessionId("S-A"), text: "ping", typeDelayMillis: nil), origin: .inProcess
-        )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
-    }
-
-    @Test
-    func sendInputUnresolvedTabReturnsNotFound() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .sendInput(.sessionId("S-MISSING"), text: "ping", typeDelayMillis: nil), origin: .inProcess
-        )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
-    }
-
-    @Test
-    func captureTabReturnsPayloadFromActionDelegate() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        harness.actionDelegate.captureResult = "first line\nsecond line\n"
-        let result = await harness.dispatcher.dispatch(
-            .captureTab(.sessionId("S-A")), origin: .inProcess
-        )
-        guard case .data(.tabCapture(let payload)) = result else {
-            Issue.record("expected .data(.tabCapture); got \(result)"); return
-        }
-        #expect(payload.text == "first line\nsecond line\n")
-        #expect(
-            harness.actionDelegate.captures == [
-            RecordingActionDelegate.Capture(
-                window: WindowID(value: 1),
-                tab: TabID(value: 1)
-            )
-            ]
-            )
-    }
-
-    @Test
-    func captureTabRelaysDelegateError() async {
-        let harness = makeHarness()
-        appendTab(
-            harness.workspace,
-            windowID: WindowID(value: 1),
-            tabID: TabID(value: 1),
-            sessionId: "S-A"
-            )
-        harness.actionDelegate.captureError = IntentError.notFound(
-            kind: "tab",
-            ref: "1"
-        )
-        let result = await harness.dispatcher.dispatch(
-            .captureTab(.sessionId("S-A")), origin: .inProcess
-        )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
-    }
-
-    @Test
-    func captureTabUnresolvedRefReturnsNotFound() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .captureTab(.sessionId("S-MISSING")), origin: .inProcess
-        )
-        guard case let .error(error) = result else {
-            Issue.record("expected error; got \(result)"); return
-        }
-        #expect(error.code == "intent.notFound")
     }
 }
 
-// MARK: - Helpers
-
 @MainActor
 private final class RecordingActionDelegate: IntentActionDelegate {
-    struct Rename: Equatable {
-        let window: WindowID
-        let tab: TabID
-        let name: String?
-    }
     struct SendInput: Equatable {
         let window: WindowID
         let tab: TabID
+        let terminal: TerminalPaneID
         let text: String
         let typeDelayMillis: Int?
     }
+
     struct Capture: Equatable {
         let window: WindowID
         let tab: TabID
+        let terminal: TerminalPaneID
     }
+
     struct MoveAcross: Equatable {
         let tab: TabID
         let from: WindowID
         let destination: WindowID
         let atIndex: Int
     }
-    private(set) var renames: [Rename] = []
+
+    struct PaneRename: Equatable {
+        let window: WindowID
+        let tab: TabID
+        let slot: PaneSlot
+        let daemonPaneId: String?
+        let name: String?
+    }
+
     private(set) var sendInputs: [SendInput] = []
     private(set) var captures: [Capture] = []
     private(set) var moves: [MoveAcross] = []
     private(set) var raises: [WindowID] = []
-    /// When set, the next `sendInput` call throws this error instead
-    /// of recording. Lets tests pin the dispatcher's error-relay
-    /// path.
+    private(set) var paneRenames: [PaneRename] = []
     var sendInputError: IntentError?
-    /// Text the next `captureTab` call returns (when no error is
-    /// scripted). Defaults to empty.
-    var captureResult: String = ""
-    /// When set, the next `captureTab` call throws this error.
+    var captureResult = ""
     var captureError: IntentError?
+    var moveImplementation: ((TabID, WindowID, WindowID, Int) -> Void)?
 
-    func renameTab(window: WindowID, tab: TabID, to name: String?) {
-        renames.append(Rename(window: window, tab: tab, name: name))
+    func renameTab(window: WindowID, tab: TabID, to name: String?) {}
+
+    func renamePane(
+        window: WindowID,
+        tab: TabID,
+        slot: PaneSlot,
+        daemonPaneId: String?,
+        to name: String?
+    ) {
+        paneRenames.append(
+            PaneRename(
+                window: window,
+                tab: tab,
+                slot: slot,
+                daemonPaneId: daemonPaneId,
+                name: name
+            )
+        )
     }
 
     func sendInput(
         window: WindowID,
         tab: TabID,
+        terminal: TerminalPaneID,
         text: String,
         typeDelayMillis: Int?
     ) throws {
@@ -1078,23 +712,34 @@ private final class RecordingActionDelegate: IntentActionDelegate {
             SendInput(
                 window: window,
                 tab: tab,
+                terminal: terminal,
                 text: text,
                 typeDelayMillis: typeDelayMillis
             )
         )
     }
 
-    func captureTab(window: WindowID, tab: TabID) throws -> String {
+    func captureTerminal(
+        window: WindowID,
+        tab: TabID,
+        terminal: TerminalPaneID
+    ) throws -> String {
         if let error = captureError {
             captureError = nil
             throw error
         }
-        captures.append(Capture(window: window, tab: tab))
+        captures.append(Capture(window: window, tab: tab, terminal: terminal))
         return captureResult
     }
 
-    func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int) {
-        moves.append(MoveAcross(tab: tab, from: from, destination: destination, atIndex: atIndex))
+    func moveTabAcrossWindows(
+        _ tab: TabID,
+        from: WindowID,
+        to destination: WindowID,
+        atIndex: Int
+    ) {
+        moves.append(.init(tab: tab, from: from, destination: destination, atIndex: atIndex))
+        moveImplementation?(tab, from, destination, atIndex)
     }
 
     func raiseWindow(_ window: WindowID) {

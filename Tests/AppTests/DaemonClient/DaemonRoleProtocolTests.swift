@@ -60,14 +60,14 @@ struct DaemonRoleProtocolTests {
     }
 
     @Test
-    func recordsCallsAndReturnsScriptedResults() async {
+    func recordsCallsAndReturnsScriptedResults() async throws {
         let fake = FakeDaemonClient()
         fake.sessionToReturn = SessionCreateResponse(
             sessionId: "sess",
             capability: "cap"
         )
         let tabId = UUID()
-        let session = await fake.createSession(
+        let session = try await fake.createSession(
             label: "x",
             name: "n",
             role: .agent,

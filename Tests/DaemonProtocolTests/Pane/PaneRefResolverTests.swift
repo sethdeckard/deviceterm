@@ -4,13 +4,11 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-// PaneRefResolver: the mirror of `TabRefResolver` for `--pane <ref>`.
-// The tab grammar's priority, with a device-key tier inserted:
+// PaneRefResolver resolves `--pane <ref>` for daemon-direct device commands.
+// Its priority includes a device-key tier:
 // short_id → name → device key (a sim UDID or a physical deviceId) →
-// UUID prefix → sentinel. An agent that learned the tab grammar
-// resolves panes the same way. The resolver + tests pin the contract
-// `pane info` and `pane close` rely on; `pane rename` parses but is
-// not yet implemented.
+// UUID prefix → sentinel. These tests pin the device-control and `with-pane`
+// contract; public workspace refs are resolved separately by the GUI.
 
 // MARK: - Fixtures
 

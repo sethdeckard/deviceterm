@@ -7,10 +7,9 @@ import Foundation
 ///
 /// The published value is `TabTitleViewModel.publishableTitle`: the tab's
 /// label in its normalized, bounded form, and nil whenever the label would
-/// only restate the session name the daemon already holds (or the GUI's
-/// generic fallback). It goes under the tab's PRIMARY terminal session,
-/// because `tabs.list` is per-session while a title is per-tab. A split
-/// tab's other sessions carry no title.
+/// only restate the session name the daemon already holds or the GUI's generic
+/// fallback. It is cached under the tab's primary terminal session; a split
+/// tab's other sessions carry no cached title.
 ///
 /// Three properties the naive "call the daemon from the observation" shape
 /// gets wrong, and why this type exists:
@@ -34,8 +33,7 @@ import Foundation
 /// A reconnect is the one case where an UNCHANGED title must be re-sent:
 /// the daemon's cache is memory-only, so a daemon restart or connection
 /// replacement leaves it empty while the GUI, seeing no change, would never
-/// push again, so `tabs.list` would report the session name until the next
-/// OSC event, which may never come. `republish()` forgets what was sent and
+/// push again. `republish()` forgets what was sent and
 /// pushes the current value. Its caller must fire it only after the
 /// session inventory has been re-supplied, since the daemon rejects a title
 /// for a session it doesn't hold.

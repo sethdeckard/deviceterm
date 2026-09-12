@@ -66,7 +66,7 @@ enum CommandTree {
             ?? String(describing: command).lowercased()
     }
 
-    /// Resolve a command path (`["tabs", "current"]`) to its type.
+    /// Resolve a command path (`["tab", "show"]`) to its type.
     static func command(for path: [String]) -> ParsableCommand.Type? {
         guard !path.isEmpty else { return nil }
         var current: ParsableCommand.Type = DeviceTerm.self
@@ -81,7 +81,7 @@ enum CommandTree {
     /// The longest leading run of `tokens` that names a command path.
     ///
     /// This is what lets both help spellings land on one page:
-    /// `help tabs current` and `tabs current --help` resolve the same
+    /// `help tab show` and `tab show --help` resolve the same
     /// two tokens. Trailing tokens that name nothing stop the walk
     /// rather than failing it, so `help tap 0.5 0.5` still resolves
     /// `tap` once `tap` is declared, and a verb the tree does not

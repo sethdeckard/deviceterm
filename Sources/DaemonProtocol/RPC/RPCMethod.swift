@@ -54,9 +54,8 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// All-or-none: the daemon validates every id before mutating, so a
     /// multi-terminal tab can never be left in a torn protected/unprotected
     /// state. `isProtected` is the desired absolute state (idempotent on
-    /// retry). A protected session disappears from `tabs.list` for every
-    /// caller except the owner: the "protected tab is opaque to other
-    /// principals" rule.
+    /// retry). Protection-filtered daemon session and device projections hide
+    /// a protected session from every caller except its owner.
     case sessionSetProtectedBatch = "session.setProtectedBatch"
     /// `session.restoreBatch({sessions: [RestoredSession]})
     /// → {restoredCount, sessionIds}`. A live, signature-validated GUI
@@ -94,12 +93,10 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// GUI reconciles tab presentation from this after a rejection, a stale
     /// `applied: false`, or a superseded indeterminate send.
     case sessionProtectionSnapshot = "session.protectionSnapshot"
-    /// `session.setDisplayTitle({sessionId, title}) → {ok: true}`. Publish
-    /// the tab's live label (shell OSC 0/2 title, manual rename, whichever
-    /// won the GUI's title precedence) so `tabs.list` can serve it in place
-    /// of the static name stamped at `session.create`. What crosses the
-    /// wire is the normalized, bounded form, and only when it says
-    /// something `name` does not; readers fall back to `name` otherwise.
+    /// `session.setDisplayTitle({sessionId, title}) → {ok: true}`. Cache the
+    /// tab's live label under its representative terminal session. What
+    /// crosses the wire is normalized and bounded, and the GUI omits a label
+    /// that merely repeats the session's creation-time name.
     /// A null `title` clears the cached value; the daemon holds titles in
     /// memory only and drops one with its session. `.validatedGUI`-scoped:
     /// the GUI is the only process that sees OSC sequences, so it is the
@@ -131,8 +128,9 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// decides who may drive another session's pane, and a close verdict
     /// decides who inherits its simulator.
     case sessionSetCohort = "session.setCohort"
-    case tabsList = "tabs.list"
-    case panesList = "panes.list"
+    /// Daemon-direct device-pane roster used internally by device-control
+    /// verbs. The public workspace inventory is `pane.list` below.
+    case paneDeviceList = "pane.deviceList"
 
     // shim.*
     case shimEvent = "shim.event"
@@ -174,19 +172,23 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     case physicalDeviceAttach = "physicalDevice.attach"
     /// `devices.list`: the aggregate live roster (booted sims +
     /// connected physical devices) annotated with pane/ownership state.
-    /// Session-scoped because the annotation reuses the `tabs.list`
+    /// Session-scoped because the annotation reuses the `tab.list`
     /// protected-tab opacity rules. Backs the CLI `deviceterm devices list`.
     case devicesList = "devices.list"
 
     // pane.* (lifecycle)
     case paneCreate = "pane.create"
+    /// `pane.setName({paneId, name}) → {ok: true}`. The validated GUI
+    /// mirrors a public `pane rename` into the daemon so daemon-direct device
+    /// commands resolve the same pane names as the GUI-owned workspace view.
+    case paneSetName = "pane.setName"
     /// `pane.closeById`: close a sim pane by its concrete daemon
     /// `paneId`. The lower-level primitive used by the GUI's Router
     /// fan-out (tab/window close → per-pane shutdown) and by
     /// `SimulatorPaneViewModel`'s in-pane shutdown action. The CLI's
     /// user-facing `pane close` verb is the higher-level
-    /// `RPCMethod.paneClose` below (which takes a `Wire.PaneRef` and
-    /// dispatches through the Intent layer to resolve the ref).
+    /// `RPCMethod.paneClose` below, which relays the raw public pane ref
+    /// through the Intent layer for GUI-owned workspace resolution.
     case paneCloseById = "pane.closeById"
 
     // pane.input.*
@@ -287,84 +289,46 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// `AppCommand` frames the GUI executes via its
     /// `IntentDispatcher`. The GUI subscribes once at startup;
     /// daemon-side handlers for `tab.close` / `pane.close` /
-    /// `windows.list` / etc. publish into the stream and await the
+    /// `window.list` / etc. publish into the stream and await the
     /// GUI's `app.commandResult` reply correlated by `commandId`.
     case appCommands = "app.commands"
 
     /// `app.commandResult`: the GUI calls this once per published
-    /// `AppCommand` after dispatch. Daemon-wide method (no session
-    /// creds required, since the GUI's subscription connection is what
-    /// authorizes it implicitly). The daemon's `AppCommandCoordinator`
-    /// resumes the pending continuation keyed by `commandId`.
+    /// `AppCommand` after dispatch. `.validatedGUI`-scoped and accepted only
+    /// from the active `app.commands` subscriber connection. The daemon's
+    /// `AppCommandCoordinator` resumes the pending continuation keyed by
+    /// `commandId`.
     case appCommandResult = "app.commandResult"
 
-    // MARK: - tab.*: verbs the CLI invokes; daemon publishes to GUI
-    // via the back-channel above.
+    // MARK: - Public workspace API
 
+    case windowList = "window.list"
+    case windowShow = "window.show"
+    case windowOpen = "window.open"
+    case windowFocus = "window.focus"
+    case windowClose = "window.close"
+
+    case tabList = "tab.list"
+    case tabShow = "tab.show"
     case tabOpen = "tab.open"
+    case tabFocus = "tab.focus"
     case tabClose = "tab.close"
     case tabRename = "tab.rename"
-    case tabSelect = "tab.select"
-    case tabInfo = "tab.info"
-    /// `tab.move`: reorder a tab within its window (`--to <index>`) or
-    /// move it to another window (`--to-window <ref>`). Publishes to the
-    /// GUI back-channel like the other tab verbs; the GUI reorders via
-    /// `Route.reorderTab` or relocates the live tab across windows.
     case tabMove = "tab.move"
+    case tabProtect = "tab.protect"
+    case tabUnprotect = "tab.unprotect"
 
-    // MARK: - pane.* (multi-pane CLI verbs)
-
-    case paneOpenTerminal = "pane.openTerminal"
-    /// `pane.close`: the CLI's user-facing pane close verb. Takes
-    /// `{pane: Wire.PaneRef, mode: String}` and flows through the
-    /// Intent layer (publishVerb → AppCommand → IntentDispatcher →
-    /// Router) so a ref like `--pane <shortId>` resolves against
-    /// the GUI's live workspace. The lower-level `paneCloseById`
-    /// (above) is the by-paneId primitive the Router uses internally
-    /// for tab/window-close fan-out; the two coexist deliberately so
-    /// the CLI verb keeps the natural wire name while the
-    /// daemon-internal primitive is explicit about taking a paneId.
+    case paneList = "pane.list"
+    case paneShow = "pane.show"
+    case paneSplit = "pane.split"
+    case paneFocus = "pane.focus"
     case paneClose = "pane.close"
     case paneRename = "pane.rename"
-    case paneInfo = "pane.info"
-    case paneMove = "pane.move"
+    case paneSendInput = "pane.sendInput"
+    case paneCaptureText = "pane.captureText"
+
+    /// Internal publication used by device attach and shim flows.
     case paneAttach = "pane.attach"
-
-    // MARK: - window.*
-
-    case windowOpen = "window.open"
-    case windowClose = "window.close"
-    case windowFocus = "window.focus"
-    case windowsList = "windows.list"
-
-    // MARK: - tab.* (automation-only read/write verbs)
-
-    /// `tab.sendInput`: automation-only. CLI's `deviceterm tab
-    /// send-input --tab <ref> <text>` flows through the back-channel
-    /// publish-verb to the GUI's `IntentDispatcher`, which writes
-    /// `text` into the resolved tab's terminal surface via
-    /// `IntentActionDelegate.sendInput`. Daemon registers this case
-    /// at `.automationTab` scope so a caller without a live
-    /// automation grant is rejected at the dispatcher's scope check
-    /// before reaching the handler.
-    case tabSendInput = "tab.sendInput"
-    /// `tab.capture`: automation-only. CLI's `deviceterm tab
-    /// capture [--tab <ref>]` returns the resolved tab's currently-
-    /// visible viewport as plain text. Flows through publishVerb;
-    /// the GUI reads via `IntentActionDelegate.captureTab` and
-    /// returns a `TabCapturePayload` in `app.commandResult.data`.
-    case tabCapture = "tab.capture"
-    /// `tab.setProtected`: toggle the resolved tab's protection flag.
-    /// Session-scoped (auth required) but owner-only enforcement
-    /// happens GUI-side in the IntentDispatcher: it gates the
-    /// dispatch when the resolved tab's terminals don't include
-    /// the caller's session id, returning `intent.ownerRequired`. A
-    /// tab the caller can't reach at all never gets that far: the
-    /// resolver answers `intent.notFound` and leaks nothing about
-    /// the tab's existence. The GUI resolves the tab to
-    /// its terminal-pane sessions and flips them atomically via the
-    /// daemon's `session.setProtectedBatch`.
-    case tabSetProtected = "tab.setProtected"
     /// `automation.grant`: issue live automation grants for a tab's
     /// sessions. `.validatedGUI`-scoped: only a signature-validated GUI
     /// peer over XPC may call it, and the grant is attributed to that
@@ -372,9 +336,4 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// grant, checked per request (never a persisted role) so a forged
     /// manifest role grants nothing. UDS can never reach this method.
     case automationGrant = "automation.grant"
-    /// `automation.revoke`: revoke the live automation grants for the
-    /// given sessions (tab closed or downgraded). `.validatedGUI`-scoped;
-    /// UDS can never reach it. Revocation is immediate: a socket
-    /// authenticated before the revoke loses authority on its next call.
-    case automationRevoke = "automation.revoke"
 }

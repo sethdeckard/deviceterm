@@ -136,14 +136,14 @@ public enum PaneMethods {
 
     // MARK: - Input wire shapes
 
-    // The `pane.input.*`, `pane.ax.*`, and `panes.list` request shapes
+    // The `pane.input.*`, `pane.ax.*`, and `pane.deviceList` request shapes
     // are shared `DaemonProtocol` types (`TapParams`, `SwipeParams`,
     // `MultitouchParams`, `AXPointParams`, `PanesListParams`, …), defined
     // once so the CLI and GUI clients encode the exact shape the handlers
-    // below decode. Only the `panes.list` *response* entry stays here:
+    // below decode. Only the `pane.deviceList` *response* entry stays here:
     // it is daemon-emitted, not a request the clients build.
 
-    /// One entry of the bare-array `panes.list` result. Mirrors
+    /// One entry of the bare-array `pane.deviceList` result. Mirrors
     /// `DaemonProtocol.PanesListEntry` (the client-decoded shape).
     ///
     /// `shortId` + `name` are the three-layer identifier model.
@@ -299,6 +299,23 @@ public enum PaneMethods {
             )
             if let error = result.cleanupError as? DeviceError {
                 throw DeviceMethods.mapDeviceError(error)
+            }
+            return try JSONEncoder().encode(RPCAck(success: true))
+        }
+    }
+
+    public static func setName(
+        paneCoordinator: PaneCoordinator
+    ) -> MethodRegistry.Handler {
+        { paramsJSON in
+            let params = try JSONDecoder().decode(PaneSetNameParams.self, from: paramsJSON)
+            guard let paneId = UUID(uuidString: params.paneId) else {
+                throw RPCMethodError.invalidParams("paneId must be a UUID string")
+            }
+            do {
+                try await paneCoordinator.setName(paneId: paneId, name: params.name)
+            } catch let error as PaneError {
+                throw mapPaneError(error)
             }
             return try JSONEncoder().encode(RPCAck(success: true))
         }
@@ -800,7 +817,7 @@ public enum PaneMethods {
         }
     }
 
-    /// `panes.list({sessionId, cap}) → [{paneId, udid, state}]`. This is the
+    /// `pane.deviceList({sessionId, cap}) → [{paneId, udid, state}]`. This is the
     /// session-scoped discovery the CLI resolves a paneId *through*, so it
     /// validates the payload credentials and confirms the target is the
     /// provenance-checked connection's own session (the `pane.input.*` ops
@@ -1158,7 +1175,7 @@ public enum PaneMethods {
             // drag) can re-link. `invalidParams` is the closest
             // existing code (the caller's session can't fulfill this
             // request as posed); the message identifies the udid so
-            // the caller can route through `deviceterm panes list` to
+            // the caller can route through `deviceterm pane list` to
             // find the existing owner and let the human re-link if
             // they actually want to take over.
             return RPCMethodError.invalidParams(

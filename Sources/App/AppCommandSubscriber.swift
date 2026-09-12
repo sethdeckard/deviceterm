@@ -154,7 +154,8 @@ final class AppCommandSubscriber {
                 .error(
                 commandId: command.commandId,
                 code: error.code,
-                message: error.hint
+                message: error.hint,
+                rpcCode: error.forwardedRPCCode
             )
                 )
             return
@@ -184,26 +185,32 @@ final class AppCommandSubscriber {
         commandId: String
     ) -> AppCommandResult {
         switch result {
-        case .ok:
-            return .ok(commandId: commandId)
-
         case let .data(response):
             let payload: Data
             switch response {
-            case let .tabInfo(info):
-                payload = (try? JSONEncoder().encode(info)) ?? Data("{}".utf8)
+            case let .workspaceWindows(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
 
-            case let .paneInfo(info):
-                payload = (try? JSONEncoder().encode(info)) ?? Data("{}".utf8)
+            case let .workspaceWindow(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
 
-            case let .windowsList(info):
-                payload = (try? JSONEncoder().encode(info)) ?? Data("[]".utf8)
+            case let .workspaceTabs(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
 
-            case let .tabCapture(capture):
-                payload = (try? JSONEncoder().encode(capture)) ?? Data("{}".utf8)
+            case let .workspaceTab(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
 
-            case let .tabSetProtected(result):
-                payload = (try? JSONEncoder().encode(result)) ?? Data("{}".utf8)
+            case let .workspacePanes(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
+
+            case let .workspacePane(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
+
+            case let .workspaceMutation(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
+
+            case let .workspaceCapture(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
             }
             return .data(commandId: commandId, payload: payload)
 
@@ -211,7 +218,9 @@ final class AppCommandSubscriber {
             return .error(
                 commandId: commandId,
                 code: error.code,
-                message: error.hint
+                message: error.hint,
+                details: error.details,
+                rpcCode: error.forwardedRPCCode
             )
         }
     }

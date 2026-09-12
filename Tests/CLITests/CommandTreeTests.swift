@@ -33,11 +33,11 @@ func commandTreeReportsEveryVerb() {
     // verbs represented, those two being the only ones that would still
     // run while absent from it.
     let expected: Set<String> = [
-        "tabs", "panes", "devices", "version", "dump-config", "events",
+        "devices", "version", "dump-config", "events",
         "doctor", "agents", "help", "tap", "swipe", "app-switcher",
         "long-press", "pinch", "button", "key", "text", "rotate", "crown",
         "ax", "wait", "with-pane", "tab", "pane", "device", "window",
-        "windows", "completions"
+        "completions"
     ]
     #expect(Set(CommandTree.all.map(\.name)) == expected)
 }
@@ -70,7 +70,7 @@ func rootCommandIsNamedForTheSymlinkNotTheBinary() {
 // MARK: - Generated help
 
 @Test("a declared verb's help is the generated page", arguments: [
-    "text", "tabs", "panes", "devices", "windows",
+    "text", "tab", "pane", "devices", "window",
     "doctor", "version", "dump-config", "events", "agents"
 ])
 func declaredVerbRendersGeneratedHelp(verb: String) {
@@ -92,10 +92,11 @@ func leafVerbPageListsItsFlags(verb: String) {
 }
 
 @Test("a parent verb's page names its sub-verbs", arguments: [
-    ("tabs", ["list", "current"]),
-    ("panes", ["list"]),
+    ("tab", ["list", "show", "open", "close", "rename", "focus", "move", "protect", "unprotect"]),
+    ("pane", ["list", "show", "split", "focus", "close", "rename", "send-input", "capture-text"]),
     ("devices", ["list"]),
-    ("windows", ["list"])
+    ("device", ["attach"]),
+    ("window", ["list", "show", "open", "focus", "close"])
 ])
 func parentVerbPageNamesSubVerbs(verb: String, subVerbs: [String]) {
     let page = String(data: helpOutcome(topic: verb).stdout, encoding: .utf8) ?? ""
@@ -155,11 +156,11 @@ func everyFreeTextPageStatesTheTerminatorRule() {
         let name = CommandTree.name(of: command)
         let page = DeviceTerm.helpMessage(for: command)
         #expect(
-            page.contains("Put -- before"),
+            page.contains("Put --"),
             "\(name) page does not say how to send a dashed word"
             )
         #expect(
-            page.contains("beginning with -"),
+            page.contains("beginning with -") && page.contains("flag"),
             "\(name) page does not say a dashed word is read as a flag"
             )
     }
@@ -178,7 +179,7 @@ func generatedHelpKeepsTheWrittenProse() {
 }
 
 @Test("both help spellings render one page", arguments: [
-    ["text"], ["doctor"], ["windows", "list"], ["tabs", "current"]
+    ["text"], ["doctor"], ["window", "list"], ["tab", "show"]
 ])
 func helpSpellingsAgree(path: [String]) {
     // `help <path>` and `<path> --help` resolve the same command, so a
@@ -200,11 +201,7 @@ func helpSpellingsAgree(path: [String]) {
 /// to read.
 let declaredInvocations: [[String]] = [
     ["text", "hello"],
-    ["tabs", "list"],
-    ["tabs", "current"],
-    ["panes", "list"],
     ["devices", "list"],
-    ["windows", "list"],
     ["doctor"],
     ["version"],
     ["dump-config"],
@@ -229,17 +226,22 @@ let declaredInvocations: [[String]] = [
     ["tab", "open"],
     ["tab", "close"],
     ["tab", "rename", "name"],
-    ["tab", "select"],
-    ["tab", "info"],
-    ["tab", "move", "--to", "1"],
-    ["tab", "send-input", "echo"],
-    ["tab", "capture"],
-    ["tab", "set-protected", "true"],
-    ["pane", "open", "--terminal"],
-    ["pane", "close"],
-    ["pane", "rename", "name"],
-    ["pane", "info"],
-    ["pane", "move", "--to-tab", "auth"],
+    ["tab", "focus", "auth"],
+    ["tab", "show", "auth"],
+    ["tab", "list"],
+    ["tab", "move", "auth", "--window", "main", "--index", "1"],
+    ["tab", "protect"],
+    ["tab", "unprotect"],
+    ["pane", "list"],
+    ["pane", "show", "term"],
+    ["pane", "split", "term", "--direction", "right"],
+    ["pane", "focus", "term"],
+    ["pane", "close", "term"],
+    ["pane", "rename", "term", "name"],
+    ["pane", "send-input", "term", "echo"],
+    ["pane", "capture-text", "term"],
+    ["window", "list"],
+    ["window", "show", "main"],
     ["window", "open"],
     ["window", "close"],
     ["window", "focus"],
@@ -258,10 +260,11 @@ func unknownFlagIsRejected(invocation: [String]) {
 }
 
 @Test("the parent verbs name their sub-verbs when misused", arguments: [
-    (["tabs"], ["list", "current"]),
-    (["panes"], ["list"]),
+    (["tab"], ["list", "show", "open", "close", "rename", "focus", "move", "protect", "unprotect"]),
+    (["pane"], ["list", "show", "split", "focus", "close", "rename", "send-input", "capture-text"]),
     (["devices"], ["list"]),
-    (["windows"], ["list"])
+    (["device"], ["attach"]),
+    (["window"], ["list", "show", "open", "focus", "close"])
 ])
 func parentVerbNamesItsSubVerbs(invocation: [String], expected: [String]) {
     for argv in [invocation, invocation + ["burn"]] {

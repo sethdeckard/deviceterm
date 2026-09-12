@@ -31,8 +31,8 @@ authority.
 | # | Action | Expected |
 |---|---|---|
 | 2.1 | In the Automation Tab, run `env \| grep DEVICETERM_SESSION_ROLE`. | It prints `DEVICETERM_SESSION_ROLE=automation`. |
-| 2.2 | Run `deviceterm help` and `deviceterm doctor --json`. | Help reports the automation role. The JSON doctor result reports `role: automation` and, after terminal binding completes, includes `tab.sendInput` and `tab.capture` in the complete `allowedMethods` array. Retry once if the grant is still binding. |
-| 2.3 | Open a second unprotected tab. From the Automation Tab, run `deviceterm tab capture --tab <shortId>`. | The command succeeds and prints the target tab's visible text. |
+| 2.2 | Run `deviceterm help` and `deviceterm doctor --json`. | Help reports the automation role. The JSON doctor result reports `role: automation` and, after terminal binding completes, includes `pane.sendInput` and `pane.captureText` in the complete `allowedMethods` array. Retry once if the grant is still binding. |
+| 2.3 | Open a second unprotected tab and record its terminal with `pane list`. From the Automation Tab, run `deviceterm pane capture-text <terminal>`. | The command succeeds and prints that terminal pane's visible viewport. |
 | 2.4 | Run the same capture from a regular tab. | It fails with `-32011` because the regular session has no live automation grant. |
 
 The automated suites cover the lower-level trust assertions: UDS cannot mint an automation role, an ungranted session is
@@ -42,7 +42,7 @@ refused, a granted session reaches automation verbs, and revocation takes effect
 
 | # | Action | Expected |
 |---|---|---|
-| 3.1 | In the working Automation Tab, run `./scripts/instance-guard.sh status` and identify the daemon row marked `mine`. Run `kill -9 <pid>` for that exact daemon, then wait for the app to reconnect. | The GUI reconnects, rebinds the terminal, and reissues the automation grant. `deviceterm doctor --json` again lists `tab.capture`, and capturing the unprotected tab succeeds. |
+| 3.1 | In the working Automation Tab, run `./scripts/instance-guard.sh status` and identify the daemon row marked `mine`. Run `kill -9 <pid>` for that exact daemon, then wait for the app to reconnect. | The GUI reconnects, rebinds the terminal, and reissues the automation grant. `deviceterm doctor --json` again lists `pane.captureText`, and capturing the unprotected terminal succeeds. |
 
 This row intentionally crosses the process boundary. The unit test for reconnect reissue calls the binding path with a
 fake client and cannot replace it.
@@ -51,12 +51,16 @@ fake client and cannot replace it.
 
 | # | Action | Expected |
 |---|---|---|
-| 4.1 | From a regular tab, run `deviceterm tab close` with no `--tab`. | The caller's own single-terminal tab closes. |
-| 4.2 | Open two regular tabs. From the first, run `deviceterm tab rename --tab <second> x`. | The command is refused with `-32011` and names `intent.automationRequired`. |
-| 4.3 | Split a regular tab with `deviceterm pane open --terminal`, then run `deviceterm tab close` from one pane. | The command is refused because the tab contains two sessions. |
+| 4.1 | From a regular tab, run `deviceterm tab close`. | The caller's own single-terminal tab closes. |
+| 4.2 | Open two regular tabs. From the first, run `deviceterm tab rename <second> x`. | The command is refused with `-32011` and names `intent.automationRequired`. |
+| 4.3 | Split a regular tab with `deviceterm pane split --direction right`, then run `deviceterm tab close` from one pane. | The command is refused because the tab contains two terminal sessions. |
 | 4.4 | Close the split back to one terminal and retry `deviceterm tab close`. | The tab closes. |
 | 4.5 | From an Automation Tab, rename another unprotected tab. | The rename succeeds. |
-| 4.6 | From a regular tab, run `deviceterm pane open --terminal --tab <other>`. | The command is refused with `-32011`. |
+| 4.6 | From a regular tab, run `deviceterm pane split <other-terminal> --direction right`. | The command is refused with `-32011`. |
+| 4.7 | In a split regular tab, run `deviceterm pane rename <sibling-terminal> sibling` and `deviceterm pane close <sibling-terminal>` from the first terminal. | Both commands are refused with `intent.automationRequired`; tab membership does not confer authority over a sibling terminal session. |
+| 4.8 | From the sibling terminal, rename itself, then close itself while another terminal remains. | Rename and close succeed because the target session equals the caller. |
+| 4.9 | From an Automation Tab, rename or close a terminal in another visible, unprotected tab. | The live grant satisfies the exact-session mutation check. |
+| 4.10 | Run `deviceterm pane close <terminal> --mode detach`. | The command fails with `intent.unsupportedPane`; an explicit mode is Simulator-only. |
 
 ## 5. Tab-strip markers and relaunch
 
@@ -65,9 +69,9 @@ section before booting a Simulator so quit does not present a Simulator disposit
 
 | # | Action | Expected |
 |---|---|---|
-| 5.1 | Open two regular tabs. In the first, run `deviceterm tab set-protected true`. | An accent-colored padlock appears immediately to the left of that tab's title. The other tab has no padlock. |
+| 5.1 | Open two regular tabs. In the first, run `deviceterm tab protect`. | An accent-colored padlock appears immediately to the left of that tab's title. The other tab has no padlock. |
 | 5.2 | Hover over the padlock. | The tooltip reads `Protected tab (hidden from other sessions)`. |
-| 5.3 | Run `deviceterm tab set-protected false`. | The command confirms `protected=false` and the padlock disappears after reconciliation. If it reports `pending`, the padlock remains until unprotection is confirmed. |
+| 5.3 | Run `deviceterm tab unprotect`. | The receipt confirms `protected=false` and the padlock disappears after reconciliation. |
 | 5.4 | Protect an Automation Tab. | The wand appears first, followed by the padlock and then the title. |
 | 5.5 | Right-click that tab and choose `Unprotect Tab`. | The padlock disappears after confirmation and the wand keeps its position. A rejection raises an alert and leaves the padlock visible. |
 | 5.6 | With no owned Simulator booted, quit and relaunch DeviceTerm, then open two Automation Tabs. | DeviceTerm quits without a disposition prompt. After relaunch, the menu still creates Automation Tabs. Each tab has its own session and wand, and closing one does not affect the other. |
@@ -78,11 +82,13 @@ The daemon grants device-pane control to the tab cohort. These rows need a boota
 
 | # | Action | Expected |
 |---|---|---|
-| 6.1 | Split a regular tab twice with `deviceterm pane open --terminal`. In the last terminal, run `xcrun simctl boot <udid>`. | The Simulator pane attaches to that tab. |
+| 6.1 | Split a regular tab twice with `deviceterm pane split --direction right`. In the last terminal, run `xcrun simctl boot <udid>`. | The Simulator pane attaches to that tab. |
 | 6.2 | From the booting terminal, run `deviceterm tap 0.5 0.5`. | The tap lands even though that terminal is not the tab's primary terminal. |
-| 6.3 | From another terminal in the same tab, run `deviceterm panes list`, then repeat the tap. | The Simulator pane is listed and the sibling terminal can control it. |
-| 6.4 | Run `deviceterm tab set-protected true`, then run `deviceterm devices list` from a non-primary terminal in that tab. | The attached Simulator remains visible to the tab's own terminals. |
+| 6.3 | From another terminal in the same tab, run `deviceterm pane list`, then repeat the tap. | The Simulator pane is listed and the sibling terminal can control it. |
+| 6.4 | Run `deviceterm tab protect`, then run `deviceterm devices list` from a non-primary terminal in that tab. | The attached Simulator remains visible to the tab's own terminals. |
 | 6.5 | Exit the shell that booted the Simulator. | The Simulator pane stays mounted and rendering. The surviving terminals can still control it. |
+| 6.6 | From a sibling terminal in the same tab, rename the Simulator pane, then close it without `--mode`. | Both mutations succeed under tab ownership. The close detaches and leaves the Simulator booted. |
+| 6.7 | If a physical-device pane is available, run `deviceterm pane close <device-pane> --mode detach`. | The command fails with `intent.unsupportedPane`; physical devices have no Simulator disposition mode. |
 
 ## Passing the checklist
 

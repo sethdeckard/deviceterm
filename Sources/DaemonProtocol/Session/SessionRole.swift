@@ -22,24 +22,19 @@
 ///
 /// Automation-scoped methods require a live automation grant (see
 /// `AutomationGrantStore`): a granted `.agent` reaches them and an
-/// ungranted `.automation` does not. The role rides `tabs.list` and
-/// `session.create` responses for display and diagnostics.
+/// ungranted `.automation` does not. The role rides session creation and
+/// restoration wire shapes for diagnostics and state reconstruction.
 public enum SessionRole: String, Codable, Sendable, Equatable, CaseIterable {
-    /// Default. Read/write on its tab's linked panes only; cross-tab
-    /// *pane* access is never conferred by a grant. The cross-tab *terminal*
-    /// verbs (`tab send-input`/`capture`) are a separate axis, gated by a
-    /// live automation grant, not by this role, so a *granted* agent
-    /// reaches them and an ungranted one does not.
+    /// Default descriptive role. It grants no authority by itself. A live
+    /// automation grant can authorize workspace focus and movement, mutations
+    /// of visible foreign targets, and terminal input or capture.
     case agent
 
     /// The GUI mints this for a human-opened automation tab. Descriptive
-    /// metadata, NOT the authorization gate: cross-tab send-input/capture is
-    /// authorized by a live automation grant (see `AutomationGrantStore`),
-    /// never by this role: a granted `.agent` reaches those verbs and an
-    /// ungranted `.automation` does not. Role escalation is human-only;
-    /// cross-tab pane relinking is unsupported; protection changes are
-    /// owner-scoped, and only the validated GUI issues the underlying batch
-    /// RPC. None of that varies by role, and both roles can spawn with
-    /// `--cmd`.
+    /// metadata, not the authorization gate. An ungranted automation session
+    /// has the same authority as an ungranted agent session. Grants can widen
+    /// authority over visible foreign tabs; daemon-direct device-pane methods
+    /// remain constrained by their cohort checks. Role escalation is
+    /// human-only, and both roles can spawn with `--command`.
     case automation
 }

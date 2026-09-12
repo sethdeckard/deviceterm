@@ -1244,7 +1244,7 @@ public actor DeviceCoordinator {
     /// subscribers see the boot;
     /// don't record ownership (the sim has no attributed session,
     /// matching the linkage-model's "external sims stay unattached"
-    /// property, though the user can claim it via `deviceterm pane attach`).
+    /// property, though the user can claim it via `deviceterm device attach`).
     /// `arrivedAt` defaults to now for direct callers; the notifier passes
     /// the delivery timestamp. A boot queued behind a slow shutdown handler
     /// would otherwise be timed from when it got a turn.

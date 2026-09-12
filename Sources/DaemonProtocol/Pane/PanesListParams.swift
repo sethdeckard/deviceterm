@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// Wire shape for `panes.list`.
+/// Wire shape for `pane.deviceList`.
 ///
 /// Session-scoped discovery. The daemon validates `(sessionId, cap)` and then
 /// requires `sessionId` to equal the connection's own provenance-checked

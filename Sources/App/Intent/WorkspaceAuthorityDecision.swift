@@ -3,9 +3,10 @@
 /// May this caller mutate this resolved
 /// target, or does it need an automation grant first?
 ///
-/// Ownership suffices for rename and the pane verbs. Close additionally
-/// requires a sole-terminal tab, because the trust unit is the session
-/// and a tab may hold several of them. Anything else needs a live grant.
+/// Tab rename, pane split, and mirrored-pane mutations use tab ownership.
+/// Terminal close and rename require the target session or a grant. Closing a
+/// whole tab or window additionally requires sole-terminal ownership, because
+/// a split tab holds independent sessions. Anything else needs a live grant.
 ///
 /// Pure by construction: the dispatcher resolves the target and reduces
 /// it to `WorkspaceAuthorityTarget`, so this type never reads the

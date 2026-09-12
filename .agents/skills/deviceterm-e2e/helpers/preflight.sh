@@ -29,7 +29,6 @@ dt() {
 }
 
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
-info() { printf "  · %s\n" "$1"; }
 fail() { printf "  \033[31m✗\033[0m %s\n" "$1" >&2; exit 1; }
 
 echo "deviceterm-e2e preflight:"
@@ -48,29 +47,27 @@ else
     fail "harness is running but a TCC grant is missing (see remediation above)"
 fi
 
-# 2. deviceterm is running. Inside a tab — where this skill runs —
-#    deviceterm injects DEVICETERM_SESSION into the shell, a sandbox-safe
-#    signal any process can read. Do NOT use pgrep here: an agent's Bash is
-#    often sandboxed and denied the process-argv enumeration pgrep needs, so
-#    it returns empty even while deviceterm is plainly running (that was a
-#    real false negative). The window check below is the actual proof over
-#    the daemon socket; this gate just gives a clearer message for the
-#    common in-tab case.
+# 2. This skill runs inside an authenticated deviceterm tab. DeviceTerm injects
+#    DEVICETERM_SESSION into that shell, a sandbox-safe signal any process can
+#    read. Do NOT use pgrep here: an agent's Bash is often sandboxed and denied
+#    the process-argv enumeration pgrep needs, so it can return empty while the
+#    app is running. The session-scoped window check below then proves the GUI
+#    back-channel over the daemon socket.
 if [ -n "${DEVICETERM_SESSION:-}" ]; then
     ok "inside a deviceterm tab (deviceterm is running)"
 else
-    info "DEVICETERM_SESSION unset — not inside a deviceterm tab; the window check below confirms deviceterm over the daemon socket"
+    fail "DEVICETERM_SESSION unset — run this preflight inside a deviceterm tab"
 fi
 
-# 3. deviceterm has at least one window the harness can capture. `windows
+# 3. deviceterm has at least one window the harness can capture. `window
 #    list --all --json` is the CLI ground truth: a bare JSON array of
-#    {index,isKey,tabCount,selectedTabShortId?}. `--all` is required —
-#    without it the listing is scoped to the caller's own session, so it
-#    misses every window but the agent's own tab (and is empty from a
-#    non-tab shell). An empty array means a window-less launch (a known
+#    {id,shortId,name?,index,current,focused,selectedTabId?,tabCount}.
+#    `index` is display metadata, never a reference. `--all` is required —
+#    without it the listing returns only the authenticated caller's window.
+#    An empty array means a window-less launch (a known
 #    libghostty failure on a locked/asleep display), which no capture can
 #    rescue.
-if dt windows list --all --json >/tmp/dt-e2e-windows.json 2>/tmp/dt-e2e-windows.err; then
+if dt window list --all --json >/tmp/dt-e2e-windows.json 2>/tmp/dt-e2e-windows.err; then
     # Every window object carries an "index" key; its absence means the
     # array is empty (`[]`).
     if grep -q '"index"' /tmp/dt-e2e-windows.json; then
@@ -79,11 +76,10 @@ if dt windows list --all --json >/tmp/dt-e2e-windows.json 2>/tmp/dt-e2e-windows.
         fail "deviceterm is running but reports no windows — quit it fully and reopen on an unlocked display"
     fi
 else
-    # A non-zero exit here usually means the daemon has no GUI back-channel
-    # (DeviceTerm.app isn't running or hasn't subscribed yet), not a broken
-    # daemon — surface its own message so the cause is unambiguous.
+    # A non-zero exit can mean missing session authentication or that the GUI
+    # back-channel is unavailable. Surface the CLI's own message first.
     cat /tmp/dt-e2e-windows.err >&2
-    fail "couldn't list windows — deviceterm's GUI isn't running (or its daemon back-channel isn't up yet); run 'make run', then retry"
+    fail "couldn't list windows — session authentication failed or deviceterm's GUI back-channel is unavailable"
 fi
 
 # 4. The host tab holds a live automation grant. Scenarios open, select,
@@ -94,7 +90,8 @@ fi
 #    the false pass this file exists to prevent. `allowedMethods` is
 #    derived from the live grant, so it can't lie.
 #
-#    Probe with `tab.capture`, which no scenario runs. Probing a
+#    Probe with the RPC method `pane.captureText`, which no scenario runs.
+#    `allowedMethods` carries wire method names, not CLI spellings. Probing a
 #    workspace verb the scenarios do run would make this gate depend on
 #    the same scope tagging it exists to check, so a verb tagged wrong
 #    would report a grant this tab does not hold.
@@ -102,9 +99,9 @@ fi
 #    `doctor` exits non-zero when any of its own checks fail, for reasons
 #    that have nothing to do with authority, so read the report rather
 #    than the exit status. Gate 3 already proved the daemon and GUI are
-#    up, so an absent `tab.capture` here means no grant.
+#    up, so an absent `pane.captureText` here means no grant.
 dt doctor --json >/tmp/dt-e2e-cli-doctor.json 2>/tmp/dt-e2e-cli-doctor.err || true
-if grep -q '"tab\.capture"' /tmp/dt-e2e-cli-doctor.json; then
+if grep -q '"pane\.captureText"' /tmp/dt-e2e-cli-doctor.json; then
     ok "host tab holds a live automation grant"
 else
     fail "host tab holds no automation grant — open an Automation Tab (Shell > Open Automation Tab, ⇧⌘T) and rerun the skill from it"

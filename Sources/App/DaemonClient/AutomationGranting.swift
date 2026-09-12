@@ -9,8 +9,8 @@ import Foundation
 /// (and its test fake) depends only on the surface it uses. When a terminal in
 /// an automation tab has been created AND terminal-bound, the terminal-pane
 /// container calls this so the daemon marks the session automation-authorized:
-/// the live grant that lets an in-tab CLI drive the cross-tab `tab.sendInput`
-/// / `tab.capture` verbs. Authority is the grant, not the tab's role: without
+/// the live grant that lets an in-tab CLI drive the cross-tab `pane.sendInput`
+/// / `pane.captureText` verbs. Authority is the grant, not the tab's role: without
 /// it, those verbs stay refused even in an automation tab.
 ///
 /// `automation.grant` is `.validatedGUI`-scoped, so no cap rides on the wire:

@@ -53,21 +53,46 @@ func automationGuideUsesTheCLIWaitPrimitive() throws {
 }
 
 @Test
-func automationGuideGroupsAndTargetsTabsByTabId() throws {
+func automationGuideDocumentsLiveWorkspaceProjection() throws {
     let contents = try automationGuide()
     let discovery = try section(named: "Discover State", in: contents)
-    #expect(discovery.contains("group_by(.tabId)"))
-    #expect(discovery.contains("unique | length"))
-    #expect(discovery.contains("visible session groups"))
-    #expect(discovery.contains("does\nnot mark non-GUI groups"))
-    #expect(discovery.contains("`[]` with exit 0"))
+    #expect(discovery.contains("live GUI state"))
+    #expect(discovery.contains("`{tab, panes, layout}`"))
+    #expect(discovery.contains("every terminal, Simulator, and physical-device leaf"))
+    #expect(discovery.contains("An empty list with exit 0 is a successful empty visibility projection"))
+    #expect(discovery.contains("window indices do not participate in resolution"))
+    #expect(discovery.contains("Names match exactly, never by prefix"))
 
     let driving = try section(named: "Drive Other Tabs", in: contents)
-    #expect(driving.contains("select(.name == \"auth-feature\") | .tabId"))
-    #expect(driving.contains("known to name a GUI-backed session"))
-    #expect(driving.contains("this selection is not reliable"))
-    #expect(driving.contains("tab send-input --tab \"$TARGET_TAB\""))
-    #expect(driving.contains("accepted anywhere `--tab <ref>` is accepted"))
+    #expect(driving.contains("pane send-input \"$TARGET_PANE\""))
+    #expect(driving.contains("pane capture-text \"$TARGET_PANE\""))
+    #expect(driving.contains("explicit terminal pane reference"))
+    #expect(driving.contains("live\nautomation grant"))
+}
+
+@Test
+func automationGuidePreservesOperationalSections() throws {
+    let contents = try automationGuide()
+    let headings = [
+        "### Know Your Session",
+        "### Trust the Terminal, Not the Token",
+        "### Escalate Only Through the GUI",
+        "### Open Tabs, Panes, and Windows",
+        "### Arrange, Select, and Close Surfaces",
+        "### List Tabs, Panes, Windows, and Devices",
+        "### Resolve Workspace References",
+        "### Check Health With doctor",
+        "### Diagnose Version Skew",
+        "### Open an Automation Tab",
+        "### Send Input to Another Tab",
+        "### Capture Another Tab",
+        "### Protect a Tab",
+        "### Use Wait for One-Shot Convergence",
+        "### Use Events as a Latency Signal"
+    ]
+    for heading in headings {
+        #expect(contents.contains(heading), "automation guide is missing '\(heading)'")
+    }
 }
 
 @Test

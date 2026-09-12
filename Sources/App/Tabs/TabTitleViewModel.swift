@@ -12,8 +12,8 @@ import Observation
 ///   1. manual rename: the user explicitly named it; nothing else wins
 ///   2. shell OSC 0/2 title: often command-aware ("vim foo.swift") and
 ///      worth surfacing in real time when the shell sends it
-///   3. session name: session-stable identity (e.g. worktree branch
-///      at session-create, or `deviceterm tab rename`); a
+///   3. session name: session-stable creation metadata, such as a worktree
+///      branch detected at session creation; a
 ///      meaningful default when the shell isn't emitting OSC titles
 ///   4. working-directory basename: the OSC-7 CWD, the last resort before
 ///      the generic "shell" fallback
@@ -30,8 +30,8 @@ import Observation
 final class TabTitleViewModel {
     private(set) var manualTitle: String?
     private(set) var lastOSCTitle: String?
-    /// Session-bound name (worktree branch at session.create; or a
-    /// future `deviceterm tab rename` value). Sits between the OSC title
+    /// Session-bound name, such as the worktree branch supplied at
+    /// `session.create`. Sits between the OSC title
     /// and the CWD basename in the precedence chain: a stable
     /// identifier that wins over the CWD inference but yields to a
     /// real-time OSC title from the shell.
@@ -55,18 +55,16 @@ final class TabTitleViewModel {
     }
 
     /// The label as far as it says anything the daemon doesn't already
-    /// know. `tabs.list` carries the session name in its own field, so a
-    /// label that IS the session name adds nothing, and the generic
-    /// "shell" fallback is pure noise on a daemon-wide read; both publish
-    /// as nil and consumers fall back to the name. Only a real signal (a
-    /// rename, a shell's OSC title, a CWD basename standing in for an
-    /// absent name) goes on the wire.
+    /// know. The daemon already stores the session name, so a label that is
+    /// identical to it adds nothing; the generic "shell" fallback is also
+    /// omitted. A manual title, shell OSC title, or inferred CWD basename is
+    /// cached only when it adds information.
     ///
     /// The comparison runs on the *normalized* forms, which is also what
     /// crosses the wire. Comparing raw text would let an OSC title that
     /// merely decorates the name with invisible scalars ("branch\u{200B}")
     /// read as different here and then normalize to the name downstream,
-    /// republishing what `tabs.list` already carries.
+    /// republishing what the daemon already stores.
     var publishableTitle: String? {
         // Read unconditionally so Observation keeps tracking it: the name is
         // both the fallback the daemon already has and the value every
@@ -90,9 +88,9 @@ final class TabTitleViewModel {
     /// terminal's own latest values. A no-op while the primary is unchanged;
     /// on promotion (the primary terminal of a split tab closed) it drops
     /// the departed terminal's OSC title, CWD, and session name, so the tab
-    /// stops showing one session's activity under another. That now matters
-    /// twice over: the label is published, so a stale one misattributes on
-    /// the wire as well as on screen.
+    /// stops showing one session's activity under another. The label is also
+    /// cached under the representative session, so a stale value would
+    /// misattribute activity both on screen and in daemon state.
     ///
     /// A manual rename is deliberately untouched: the user named the tab,
     /// not the terminal, and it outranks every automatic source anyway.
@@ -133,8 +131,8 @@ final class TabTitleViewModel {
 
     /// Set the session-bound name. Nil clears it.
     /// `TabContentViewController.init` calls this with the worktree
-    /// branch returned from `session.create`, and the `tab rename`
-    /// route calls it when the daemon-side name changes.
+    /// branch returned from `session.create`. Tab rename writes the separate
+    /// manual-title tier and leaves this creation metadata unchanged.
     func updateSessionName(_ name: String?) {
         guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines),
             !name.isEmpty else {

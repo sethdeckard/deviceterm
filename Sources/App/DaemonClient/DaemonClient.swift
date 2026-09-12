@@ -798,7 +798,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         }
         let response = try decode(SessionCreateResponse.self, data)
         // Auto-authenticate the long-lived GUI ↔ daemon connection so
-        // session-scoped methods invoked from the GUI (panes.list,
+        // session-scoped methods invoked from the GUI (pane.deviceList,
         // device.attach, …) pass the dispatcher's auth gate.
         do {
             try await authenticateConnection(
@@ -1138,13 +1138,11 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         return try decode(SessionSetProtectedBatchResult.self, data)
     }
 
-    /// `session.setDisplayTitle`: publish the tab's live label so
-    /// `tabs.list` can serve it in place of the static name stamped at
-    /// `session.create`. What lands is the normalized, bounded form, and
-    /// only when it says something `name` does not; readers fall back to
-    /// `name` otherwise. `.validatedGUI`-scoped, so no cap on the wire;
-    /// over the `--smoke` UDS fallback the daemon refuses it with
-    /// `scopeViolation` and the publisher stops.
+    /// `session.setDisplayTitle`: cache the tab's normalized live label under
+    /// its representative terminal session. The cache omits labels that merely
+    /// restate the creation-time session name. `.validatedGUI`-scoped, so no
+    /// cap rides on the wire; over the `--smoke` UDS fallback the daemon
+    /// refuses it with `scopeViolation` and the publisher stops.
     ///
     /// The title is normalized here as well as daemon-side: an OSC title is
     /// unbounded caller-controlled text, and bounding it before encoding
@@ -1399,6 +1397,11 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         if let attachment { body["expectedAttachment"] = attachment }
         let params = try JSONSerialization.data(withJSONObject: body)
         _ = try await request(method: .paneCloseById, params: params)
+    }
+
+    func setPaneName(paneId: String, name: String?) async throws {
+        let params = try JSONEncoder().encode(PaneSetNameParams(paneId: paneId, name: name))
+        _ = try await request(method: .paneSetName, params: params)
     }
 
     /// Subscribe to a pane's lifecycle + surface events. The returned

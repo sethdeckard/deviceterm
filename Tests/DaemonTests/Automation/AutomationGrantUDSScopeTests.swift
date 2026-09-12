@@ -6,7 +6,7 @@ import DaemonTestSupport
 import Foundation
 import Testing
 
-// The automation surface (`tab.sendInput` / `tab.capture`) is reachable over
+// The automation surface (`pane.sendInput` / `pane.captureText`) is reachable over
 // UDS, but ONLY for a session holding a live automation grant. A UDS caller
 // authenticates via cap + kernel terminal-process provenance, and the grant is
 // minted by the validated GUI, so cap + provenance + live grant (never a role)
@@ -21,10 +21,10 @@ private let liveGrantKey = GrantOrderingKey(epoch: 1, revision: 1)
 
 /// The workspace-wide verbs. They create or rearrange workspace surfaces or
 /// change which one has focus, so they need the same live grant
-/// `tab.sendInput`/`tab.capture` do. The scope gate runs before target
+/// `pane.sendInput`/`pane.captureText` do. The scope gate runs before target
 /// resolution, so the refusal never depends on which tab is named.
 private let workspaceWideMethods: [RPCMethod] = [
-    .tabOpen, .tabSelect, .tabMove, .windowOpen, .windowFocus
+    .tabOpen, .tabFocus, .tabMove, .windowOpen, .windowFocus
 ]
 
 /// The handler-reached signal: `AppCommandMethods.publishVerb` returns
@@ -62,7 +62,7 @@ private func send(
     return try client.receive()
 }
 
-@Test(arguments: [RPCMethod.tabSendInput, RPCMethod.tabCapture])
+@Test(arguments: [RPCMethod.paneSendInput, RPCMethod.paneCaptureText])
 func grantedSessionReachesAutomationVerbOverUDS(method: RPCMethod) async throws {
     let grants = AutomationGrantStore()
     let manager = SessionManager(automationGrantStore: grants)
@@ -127,7 +127,7 @@ func ungrantedSessionRefusedAutomationVerbOverUDS() async throws {
     defer { client.close() }
 
     // Authenticated but ungranted → hard scopeViolation (creds valid, no grant).
-    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.scopeViolationCode)
+    #expect(errorCode(try send(.paneCaptureText, over: client)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
@@ -144,7 +144,7 @@ func ungrantedAutomationRoleRefusedOverUDS() async throws {
     let client = try TestClient.connectAuthenticated(to: path, as: created)
     defer { client.close() }
 
-    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.scopeViolationCode)
+    #expect(errorCode(try send(.paneCaptureText, over: client)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
@@ -160,7 +160,7 @@ func unauthenticatedConnectionRefusedAutomationVerbOverUDS() async throws {
     let client = try TestClient.connect(to: path)
     defer { client.close() }
 
-    #expect(errorCode(try send(.tabCapture, over: client)) == RPCMethodError.unauthorizedCode)
+    #expect(errorCode(try send(.paneCaptureText, over: client)) == RPCMethodError.unauthorizedCode)
 }
 
 @Test
@@ -179,11 +179,11 @@ func revokingGrantRefusesSameUDSSocket() async throws {
     let client = try TestClient.connectAuthenticated(to: path, as: created)
     defer { client.close() }
 
-    #expect(errorCode(try send(.tabCapture, over: client, id: 1)) == guiUnavailableCode)
+    #expect(errorCode(try send(.paneCaptureText, over: client, id: 1)) == guiUnavailableCode)
 
     // Revoke with a newer key (the session is still live, just ungranted now).
     _ = await grants.revoke(sessionIds: [sid], key: GrantOrderingKey(epoch: 1, revision: 2))
-    #expect(errorCode(try send(.tabCapture, over: client, id: 2)) == RPCMethodError.scopeViolationCode)
+    #expect(errorCode(try send(.paneCaptureText, over: client, id: 2)) == RPCMethodError.scopeViolationCode)
 }
 
 @Test
@@ -207,8 +207,8 @@ func capabilitiesAdvertisesAutomationForGrantedSessionOverUDS() async throws {
         return
     }
     let allowed = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: bytes).allowedMethods
-    #expect(allowed.contains(RPCMethod.tabSendInput.rawValue))
-    #expect(allowed.contains(RPCMethod.tabCapture.rawValue))
+    #expect(allowed.contains(RPCMethod.paneSendInput.rawValue))
+    #expect(allowed.contains(RPCMethod.paneCaptureText.rawValue))
     for method in workspaceWideMethods {
         #expect(allowed.contains(method.rawValue))
     }
@@ -216,7 +216,7 @@ func capabilitiesAdvertisesAutomationForGrantedSessionOverUDS() async throws {
 
 @Test
 func grantGivesZeroExtraPaneReachOverUDS() async throws {
-    // A grant opens `tab.sendInput`/`tab.capture`, NOT cross-session pane
+    // A grant opens `pane.sendInput`/`pane.captureText`, NOT cross-session pane
     // input. Pane methods are `.session`-scoped and authorized by the caller's
     // pane OWNERSHIP (`PaneAccessPrincipal`), which never consults grant state,
     // so a granted session A still cannot drive a pane owned by session B. This
@@ -276,8 +276,8 @@ func capabilitiesOmitsAutomationForUngrantedSessionOverUDS() async throws {
         return
     }
     let allowed = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: bytes).allowedMethods
-    #expect(!allowed.contains(RPCMethod.tabSendInput.rawValue))
-    #expect(!allowed.contains(RPCMethod.tabCapture.rawValue))
+    #expect(!allowed.contains(RPCMethod.paneSendInput.rawValue))
+    #expect(!allowed.contains(RPCMethod.paneCaptureText.rawValue))
     // `allowedMethods` reports the connection's callable surface, so it
     // must omit verbs the dispatcher will refuse.
     for method in workspaceWideMethods {

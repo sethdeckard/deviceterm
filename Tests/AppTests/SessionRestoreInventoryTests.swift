@@ -9,7 +9,7 @@ import Testing
 // session, tab-wide role, protection derived FAIL-CLOSED from effective-hidden
 // (not committed `isProtected`), correct exclusion of un-provisioned terminals,
 // a nil (fail-don't-partial) result when a live terminal is malformed, and
-// order preservation (which defines the restored set's `tabs.list` order).
+// order preservation for the daemon's createdAt-sorted session snapshots.
 
 private func terminal(
     _ n: Int,

@@ -1045,7 +1045,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return false
         }
         if windowControllerByID.isEmpty, connected {
-            dispatchIntent(.openWindow)
+            router.dispatch(.openWindow())
             return false
         }
         return true
@@ -1173,7 +1173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// AppKit made one of the workspace's windows key: mirror that into
     /// `selectedWindowID`. Nothing else observes a plain focus change,
     /// so without this the field goes stale the moment the human clicks
-    /// another window: `windows.list` marks `isKey` on the window they
+    /// another window: `window.list` marks `focused` on the window they
     /// left, and an in-process `.current` resolves against a window
     /// nobody is looking at.
     ///
@@ -1249,14 +1249,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc
     func newWindow(_ sender: Any?) {
         guard connected, !welcomeIsGatingLaunch() else { return }
-        dispatchIntent(.openWindow)
+        router.dispatch(.openWindow())
     }
 
     /// Responder-chain fallback: ⌘T with no key window.
     @objc
     func newTab(_ sender: Any?) {
         guard connected, !welcomeIsGatingLaunch() else { return }
-        dispatchIntent(.openWindow)
+        router.dispatch(.openWindow())
     }
 
     /// Whether a first-run welcome is holding the launch sequence. The
@@ -1268,15 +1268,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard WelcomeCoordinator.shared.isGatingLaunch else { return false }
         WelcomeCoordinator.shared.bringToFront()
         return true
-    }
-
-    /// Fire-and-forget dispatcher shape for the AppKit @objc menu /
-    /// callback handlers. Mirrors `TabStripViewController`'s
-    /// `dispatchIntent` so the menu / strip surfaces share one path
-    /// to the intent layer.
-    private func dispatchIntent(_ intent: RouteIntent) {
-        let dispatcher = intentDispatcher
-        Task { _ = await dispatcher.dispatch(intent, origin: .inProcess) }
     }
 
     // MARK: - App + Help menu actions
@@ -1542,10 +1533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func openConfigEditorTab(configPath: String) {
         let configDir = (configPath as NSString).deletingLastPathComponent
         let tokens = SettingsEditorCommand.tokens(forConfigPath: configPath)
-        if workspace.selectedWindowID != nil {
-            dispatchIntent(
-                .openTab(inWindow: nil, role: .agent, cwd: configDir, cmd: tokens)
-            )
+        if let windowID = workspace.selectedWindowID {
+            router.dispatch(.newTab(windowID, cwd: configDir, cmd: tokens))
         } else {
             router.dispatch(.openWindow(cwd: configDir, command: tokens))
         }
@@ -1583,8 +1572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 tabListVM: windowState.tabs,
                 daemonClient: daemonClient,
                 paneResurrect: paneResurrect,
-                router: router,
-                intentDispatcher: intentDispatcher
+                router: router
             )
             tabController.tabTransfer = self
             let windowCtl = WindowController(content: tabController)
@@ -1653,45 +1641,76 @@ extension AppDelegate: IntentActionDelegate {
         strip.renameTab(id: tabID, to: name)
     }
 
+    func renamePane(
+        window windowID: WindowID,
+        tab tabID: TabID,
+        slot: PaneSlot,
+        daemonPaneId: String?,
+        to name: String?
+    ) async throws {
+        guard windowControllerByID[windowID] != nil else {
+            throw IntentError.notFound(kind: "window", ref: "\(windowID.value)")
+        }
+        if let daemonPaneId {
+            try await daemonClient.setPaneName(paneId: daemonPaneId, name: name)
+        }
+    }
+
     func sendInput(
         window windowID: WindowID,
         tab tabID: TabID,
+        terminal terminalID: TerminalPaneID,
         text: String,
         typeDelayMillis: Int?
     ) throws {
-        // Same window → strip → tab-content lookup as renameTab,
-        // but throws when the window or tab isn't reachable so the
-        // dispatcher relays the typed error back to the
-        // originating CLI handler (automation's
-        // `deviceterm tab send-input` should see "tab gone" rather
-        // than a misleading ok).
-        guard let windowCtl = windowControllerByID[windowID],
-            let strip = windowCtl.contentViewController as? TabStripViewController
-        else {
-            throw IntentError.notFound(
-                kind: "window",
-                ref: "\(windowID.value)"
-            )
+        guard let strip = strip(for: windowID) else {
+            throw IntentError.notFound(kind: "window", ref: "\(windowID.value)")
         }
         try strip.sendInput(
-            toTab: tabID,
+            toTerminal: terminalID,
+            inTab: tabID,
             text: text,
             typeDelayMillis: typeDelayMillis
         )
     }
 
-    func captureTab(window windowID: WindowID, tab tabID: TabID) throws -> String {
-        // Same lookup shape as sendInput; surfaces the captured
-        // viewport text or a typed error to the dispatcher.
-        guard let windowCtl = windowControllerByID[windowID],
-            let strip = windowCtl.contentViewController as? TabStripViewController
-        else {
-            throw IntentError.notFound(
-                kind: "window",
-                ref: "\(windowID.value)"
-            )
+    func captureTerminal(
+        window windowID: WindowID,
+        tab tabID: TabID,
+        terminal terminalID: TerminalPaneID
+    ) throws -> String {
+        guard let strip = strip(for: windowID) else {
+            throw IntentError.notFound(kind: "window", ref: "\(windowID.value)")
         }
-        return try strip.captureTab(id: tabID)
+        return try strip.captureTerminal(terminalID, inTab: tabID)
+    }
+
+    func focusPane(window windowID: WindowID, tab tabID: TabID, slot: PaneSlot) {
+        strip(for: windowID)?.focusPane(slot, inTab: tabID)
+    }
+
+    func tabDisplayTitle(window windowID: WindowID, tab tabID: TabID) -> String? {
+        strip(for: windowID)?.displayTitle(for: tabID)
+    }
+
+    func terminalWorkingDirectory(
+        window windowID: WindowID,
+        tab tabID: TabID,
+        terminal terminalID: TerminalPaneID
+    ) -> String? {
+        strip(for: windowID)?.workingDirectory(for: terminalID, inTab: tabID)
+    }
+
+    func focusedPane(window windowID: WindowID, tab tabID: TabID) -> PaneSlot? {
+        strip(for: windowID)?.focusedPane(inTab: tabID)
+    }
+
+    func paneLifecycle(window windowID: WindowID, tab tabID: TabID, slot: PaneSlot) -> PaneLifecycle? {
+        strip(for: windowID)?.lifecycle(for: slot, inTab: tabID)
+    }
+
+    func paneOrientation(window windowID: WindowID, tab tabID: TabID, slot: PaneSlot) -> Orientation? {
+        strip(for: windowID)?.orientation(for: slot, inTab: tabID)
     }
 
     func raiseWindow(_ windowID: WindowID) {
@@ -1709,7 +1728,7 @@ extension AppDelegate: IntentActionDelegate {
     }
 
     func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int) {
-        // CLI `deviceterm tab move --to-window`: forward to the transfer
+        // CLI `deviceterm tab move --window`: forward to the transfer
         // coordinator (same relocation the cross-window drag uses).
         moveTab(tab, from: from, to: destination, atIndex: atIndex)
     }
@@ -1748,7 +1767,7 @@ extension AppDelegate: TabTransferCoordinating {
         destVM.insert(state, at: atIndex, select: true)
         // Track the destination as the selected window so `--current`
         // window resolution (e.g. `deviceterm tab open` from the moved
-        // tab) and `windows list`'s key-window flag follow the move,
+        // tab) and `window list`'s focused-window field follow the move,
         // not just AppKit focus.
         workspace.select(id: destination)
         destStrip.view.window?.makeKeyAndOrderFront(nil)
@@ -1781,7 +1800,6 @@ extension AppDelegate: TabTransferCoordinating {
             daemonClient: daemonClient,
             paneResurrect: paneResurrect,
             router: router,
-            intentDispatcher: intentDispatcher,
             adopting: [(tab, tabContent)]
         )
         strip.tabTransfer = self

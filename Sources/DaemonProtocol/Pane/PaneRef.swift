@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// Tagged `--pane <ref>` value. Consumed by `pane info` /
-/// `pane close` / `pane rename` CLI surfaces.
+/// Tagged `--pane <ref>` value used by daemon-direct device controls.
 ///
 /// Mirrors `TabRef` for symmetry; same priority order
 /// (short_id → name → UUID prefix → sentinel) so an agent that

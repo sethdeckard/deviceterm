@@ -403,10 +403,10 @@ func paneButtonAcceptsDigitalCrown() async throws {
     #expect(!rpcError.message.contains("must be one of"))
 }
 
-// MARK: - panes.list
+// MARK: - pane.deviceList
 
 @Test
-func panesListReturnsEmptyForNewSession() async throws {
+func paneDeviceListReturnsEmptyForNewSession() async throws {
     let manager = SessionManager()
     let created = try await manager.createSession(label: nil)
     let state = created.state
@@ -424,7 +424,7 @@ func panesListReturnsEmptyForNewSession() async throws {
         RPCEnvelope(
         id: 1,
         type: .request,
-        method: "panes.list",
+        method: RPCMethod.paneDeviceList.rawValue,
         body: .params(
             try paramsBytes(
             PanesListParams(
@@ -445,7 +445,7 @@ func panesListReturnsEmptyForNewSession() async throws {
 }
 
 @Test
-func panesListRejectsWrongCapability() async throws {
+func paneDeviceListRejectsWrongCapability() async throws {
     let manager = SessionManager()
     let created = try await manager.createSession(label: nil)
     let state = created.state
@@ -464,7 +464,7 @@ func panesListRejectsWrongCapability() async throws {
         RPCEnvelope(
         id: 1,
         type: .request,
-        method: "panes.list",
+        method: RPCMethod.paneDeviceList.rawValue,
         body: .params(
             try paramsBytes(
             PanesListParams(
@@ -517,7 +517,7 @@ func paneLongPressRejectsNegativeDuration() async throws {
     #expect(rpcError.message.contains("non-negative"))
 }
 
-// MARK: - panes.list incarnation pinning
+// MARK: - pane.deviceList incarnation pinning
 
 @Test
 func panesListPinsTheCallerToItsDispatchCapturedIncarnation() async throws {

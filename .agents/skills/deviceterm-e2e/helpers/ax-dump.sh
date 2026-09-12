@@ -68,9 +68,9 @@ if report.get("truncated"):
     raise SystemExit(11)
 # Some node failed a structural or identifying read, so this tree's shape or a
 # node's identity is in doubt. Distinct from truncated, where a ceiling ran
-# out. `unreadable` separates a failed child, role, or identifier read from a
-# genuine absence: without it a failed child read looks childless and a failed
-# identifier looks like a node that carries none.
+# out. `unreadable` separates a failed child or role read from a genuine
+# absence: without it a failed child read looks childless and a failed role can
+# make traversal enter or skip the wrong subtree.
 #
 # Narrower than "any read failed". A title or a value that would not read is
 # recorded on its own node and left there, because it cannot hide a node or
@@ -109,7 +109,7 @@ if report["unreadable"]:
 
     collect(report.get("tree"))
     print(
-        "ax-dump.sh: dump failed a structural or identifying read "
+        "ax-dump.sh: dump failed a structural read "
         f"({', '.join(sorted(failed)) or 'attribute not named'}), so the "
         "tree's shape or a node's identity is in doubt",
         file=sys.stderr,
@@ -118,10 +118,11 @@ if report["unreadable"]:
 
 roles = set()
 application_nodes = 0
+window_nodes = 0
 
 
 def walk(node):
-    global application_nodes
+    global application_nodes, window_nodes
     if not isinstance(node, dict):
         return
     role = node.get("role")
@@ -131,6 +132,8 @@ def walk(node):
         # unmarked ones count toward the nested-application check below.
         if role == "AXApplication" and not node.get("cycle") and not node.get("skipped"):
             application_nodes += 1
+        if role == "AXWindow" and not node.get("cycle") and not node.get("skipped"):
+            window_nodes += 1
     for child in node.get("children") or []:
         walk(child)
 
@@ -156,8 +159,8 @@ if application_nodes > 1:
 # have UI. The daemon is a faceless agent, and a childless root is its correct,
 # complete answer when the status item is hidden. Failing there would report a
 # harness fault for a working read.
-if target == "com.deviceterm" and not roles - {"AXApplication"}:
-    print("ax-dump.sh: dump contains only AXApplication nodes", file=sys.stderr)
+if target == "com.deviceterm" and window_nodes == 0:
+    print("ax-dump.sh: DeviceTerm dump contains no AXWindow", file=sys.stderr)
     raise SystemExit(11)
 PY
 

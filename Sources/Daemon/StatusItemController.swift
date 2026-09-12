@@ -180,10 +180,9 @@ public final class StatusItemController {
         // per distinct sessionId) so `apply` can stay synchronous
         // and the menu state never spans multiple await points
         // where the snapshot could drift.
-        // Pick the best human-readable handle the session offers: a
-        // user-set `name` (worktree branch / `deviceterm tab rename`)
-        // first, then the internal `label`, then `shortId` (the
-        // Crockford base32 handle the CLI's `tabs.list` exposes).
+        // Pick the best human-readable handle the session offers: its
+        // creation-time `name` (usually a worktree branch), then the internal
+        // `label`, then its Crockford base32 terminal-pane `shortId`.
         // Falling back to `shortId` keeps a live, owned session out
         // of the menu's "Unlinked" bucket. That bucket is for sims
         // whose owning session is actually gone, NOT for a tab whose

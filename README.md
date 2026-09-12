@@ -71,11 +71,16 @@ deviceterm tap 0.5 0.5
 deviceterm text "hello"
 deviceterm swipe 0.5 0.8 0.5 0.2
 deviceterm ax tree
-deviceterm panes list --json
+deviceterm pane list --json
+deviceterm tab show --json
+deviceterm pane split --direction right
 ```
 
 Coordinates are normalized from `(0,0)` at the top left to `(1,1)` at the
-bottom right. Run `deviceterm help`, `deviceterm help <command>`, or
+bottom right. Workspace commands follow the UI hierarchy: a window contains
+tab workspaces, and a tab contains terminal, Simulator, and physical-device
+panes. The public roots are singular: `window`, `tab`, and `pane`.
+Run `deviceterm help`, `deviceterm help <command>`, or
 `deviceterm agents` inside a tab for the command reference. The public CLI and
 JSON contract follows SemVer; [`INTEGRATION.md`](docs/INTEGRATION.md) documents
 the compatibility policy and parseable shapes, and

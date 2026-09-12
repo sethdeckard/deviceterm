@@ -4,7 +4,7 @@ import Foundation
 
 public enum DaemonEventType {
     /// Pane lifecycle transition (booting / rendering / shutdown).
-    /// Wait commands observe current state through `panes.list`; this
+    /// Wait commands observe current state through `pane.deviceList`; this
     /// non-replayed event remains a separate latency signal.
     public static let paneStateChanged = "pane.stateChanged"
     /// A device has booted (shim-intercept or external simctl boot

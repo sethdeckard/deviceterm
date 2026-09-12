@@ -28,16 +28,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     private let daemonClient: any DaemonClienting
     private let paneResurrect: PaneResurrect
     private let router: Router
-    /// User-input verbs (menu actions, tab-button clicks, terminal
-    /// onExit) flow through the dispatcher so the architecture
-    /// stays "one resolver shared between CLI back-channel, deep
-    /// links, AppleScript, and menus." Internal data-driven paths
-    /// (sim-pane attach/detach driven by daemon events) stay on the
-    /// Router because they already carry concrete IDs and don't
-    /// need ref resolution.
-    private let intentDispatcher: IntentDispatcher
 
     private var tabContentByID: [TabID: TabContentViewController] = [:]
+    /// Lightweight content for a tab whose initial daemon session failed to
+    /// mint. It keeps the committed tab visible and closable without ever
+    /// provisioning a shell for the sentinel model terminal.
+    private var failedTabContentByID: [TabID: NSViewController] = [:]
     /// Outer drag-source row: `[cellsContainer, addButton]`. Empty
     /// regions report `mouseDownCanMoveWindow = true` so click-and-drag
     /// on background moves the window (the strip is mounted in the
@@ -104,7 +100,6 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         daemonClient: any DaemonClienting,
         paneResurrect: PaneResurrect,
         router: Router,
-        intentDispatcher: IntentDispatcher,
         adopting: [(TabID, TabContentViewController)] = []
     ) {
         self.windowID = windowID
@@ -112,7 +107,6 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         self.daemonClient = daemonClient
         self.paneResurrect = paneResurrect
         self.router = router
-        self.intentDispatcher = intentDispatcher
         self.adopting = adopting
         super.init(nibName: nil, bundle: nil)
     }
@@ -121,16 +115,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
     /// Name a tab's pill and closer so a dump can tell one tab from another:
-    /// both carry display titles, which collide freely. A tab whose short id
-    /// is absent, which happens only against a pre-identifier-model daemon,
-    /// is cleared rather than given a fallback format; clearing is the part
-    /// that matters, since a leftover identifier still answers a lookup.
-    ///
-    /// Applied from the same-tabs path as well as the rebuild, because the
-    /// primary terminal can change while the tab-ID list does not: close the
-    /// first terminal of a split tab and the second becomes primary, carrying
-    /// a different short id. Stamping only on rebuild would leave the pill
-    /// naming a session that no longer backs the tab.
+    /// both carry display titles, which collide freely. The supplied short ID
+    /// derives from the tab's cohort UUID, so it remains stable across terminal
+    /// splits and primary-terminal promotion.
     static func applyAccessibilityIdentifiers(
         pill: NSButton,
         close: NSButton?,
@@ -140,6 +127,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         close?.setAccessibilityIdentifier(
             shortId.map(TabAccessibilityIdentity.closeIdentifier(forTab:))
         )
+    }
+
+    static func accessibilityShortID(for tab: TabState) -> String? {
+        WorkspaceShortID.make(from: tab.cohortId)
     }
 
     override func loadView() {
@@ -296,9 +287,14 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // tear-off tab carries its label and OSC-7 path across with it, so no
         // further event is necessarily coming to trigger another pass.
         guard let index = tabListVM.selectedIndex,
-            tabListVM.tabs.indices.contains(index),
-            let tabContent = tabContentByID[tabListVM.tabs[index].id] else { return }
-        applyWindowMetadata(for: tabContent)
+            tabListVM.tabs.indices.contains(index) else { return }
+        let tab = tabListVM.tabs[index]
+        if let tabContent = tabContentByID[tab.id] {
+            applyWindowMetadata(for: tabContent)
+        } else if failedTabContentByID[tab.id] != nil {
+            view.window?.title = displayTitle(for: tab)
+            view.window?.representedFilename = ""
+        }
     }
 
     /// Sync the host window's `backgroundColor` to the ghostty
@@ -327,6 +323,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             tabContent.teardown()
         }
         tabContentByID.removeAll()
+        failedTabContentByID.removeAll()
     }
 
     // MARK: - Cross-window tab transfer (live-VC relocation)
@@ -366,26 +363,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     // MARK: - Menu actions
     //
-    // Each user-input verb constructs a `RouteIntent` and dispatches
-    // through `IntentDispatcher`. `WindowRef.windowID(self.windowID)`
-    // pins the action to THIS strip's window: `.current` would resolve
-    // through the workspace selection, which can still name another
-    // window at the instant a +/⌘T click lands in this one.
-    // `TabRef.sessionId` is the unambiguous handle for per-tab
-    // buttons (we hold the tabID, we look up the sessionId on the
-    // way to the dispatcher). Dispatching through the intent layer
-    // keeps menu/CLI/deep-link sources behind one resolver.
+    // AppKit actions already hold concrete GUI IDs, so they dispatch Routes
+    // directly. Only external workspace commands pass through RouteIntent and
+    // its public-ref resolver.
 
     @objc
     func newTab(_ sender: Any?) {
-        dispatchIntent(
-            .openTab(
-            inWindow: .windowID(windowID),
-            role: .agent,
-            cwd: nil,
-            cmd: nil
-        )
-            )
+        router.dispatch(.newTab(windowID))
     }
 
     /// Shell → "Open Automation Tab". The product-UI path for
@@ -394,14 +378,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// menu emissions pass the typed `.automation` enum directly.
     @objc
     func openAutomationTab(_ sender: Any?) {
-        dispatchIntent(
-            .openTab(
-            inWindow: .windowID(windowID),
-            role: .automation,
-            cwd: nil,
-            cmd: nil
-        )
-            )
+        router.dispatch(.openAutomationTab(windowID))
     }
 
     /// ⌥⌘W / Shell → Close Tab on the current selection.
@@ -465,9 +442,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     @objc
     private func selectTabFromButton(_ sender: NSButton) {
         let tabID = TabID(value: sender.tag)
-        guard let sessionId = tabListVM.tab(id: tabID)?.primaryTerminal.sessionId
-        else { return }
-        dispatchIntent(.selectTab(.sessionId(sessionId)))
+        guard tabListVM.tab(id: tabID) != nil else { return }
+        router.dispatch(.selectTab(windowID, tabID))
     }
 
     // Window → tab navigation. These live in the main file rather than an
@@ -521,17 +497,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// observe the selections preceding them.
     private func selectTab(at index: Int?) {
         guard let index, let tab = tabListVM.tabs[safe: index] else { return }
-        dispatchIntent(.selectTab(.sessionId(tab.primaryTerminal.sessionId)))
-    }
-
-    /// Fire-and-forget shape for menu / button handlers whose failure is
-    /// benign (select, reorder): they trigger the GUI mutation and drop
-    /// the result. Handlers whose rejection the human must see (protection)
-    /// await the result and surface it themselves; don't route those
-    /// through here.
-    private func dispatchIntent(_ intent: RouteIntent) {
-        let dispatcher = intentDispatcher
-        Task { _ = await dispatcher.dispatch(intent, origin: .inProcess) }
+        router.dispatch(.selectTab(windowID, tab.id))
     }
 
     @objc
@@ -586,32 +552,50 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         tabContent.renameManually(to: name ?? "")
     }
 
-    /// Forward an intent-layer `sendInput` to the named tab. Throws
-    /// `IntentError.notFound` when the tab isn't hosted by this
-    /// strip: the dispatcher relays the typed error back to the
-    /// originating CLI so an automation sees "tab gone" rather
-    /// than a misleading ok. Re-throws any error from the
-    /// underlying VC chain (typically `TerminalSurfaceError.notAttached`
-    /// when the tab's terminal couldn't bring up a surface).
     func sendInput(
-        toTab tabID: TabID,
+        toTerminal terminalID: TerminalPaneID,
+        inTab tabID: TabID,
         text: String,
         typeDelayMillis: Int?
     ) throws {
         guard let tabContent = tabContentByID[tabID] else {
             throw IntentError.notFound(kind: "tab", ref: "\(tabID.value)")
         }
-        try tabContent.sendInput(text, typeDelayMillis: typeDelayMillis)
+        try tabContent.sendInput(
+            to: terminalID,
+            text: text,
+            typeDelayMillis: typeDelayMillis
+        )
     }
 
-    /// Forward an intent-layer `captureTab` request to the named
-    /// tab. Same notFound / re-throw shape as `sendInput`. Returns
-    /// the captured viewport text.
-    func captureTab(id tabID: TabID) throws -> String {
+    func captureTerminal(_ terminalID: TerminalPaneID, inTab tabID: TabID) throws -> String {
         guard let tabContent = tabContentByID[tabID] else {
             throw IntentError.notFound(kind: "tab", ref: "\(tabID.value)")
         }
-        return try tabContent.captureScreen()
+        return try tabContent.captureTerminal(terminalID)
+    }
+
+    func focusPane(_ slot: PaneSlot, inTab tabID: TabID) {
+        tabListVM.select(id: tabID)
+        tabContentByID[tabID]?.focusPane(slot)
+    }
+
+    func displayTitle(for tabID: TabID) -> String? { tabContentByID[tabID]?.displayTitle }
+
+    func workingDirectory(for terminalID: TerminalPaneID, inTab tabID: TabID) -> String? {
+        tabContentByID[tabID]?.workingDirectory(for: terminalID)
+    }
+
+    func focusedPane(inTab tabID: TabID) -> PaneSlot? {
+        tabContentByID[tabID]?.focusedPane()
+    }
+
+    func lifecycle(for slot: PaneSlot, inTab tabID: TabID) -> PaneLifecycle? {
+        tabContentByID[tabID]?.lifecycle(for: slot)
+    }
+
+    func orientation(for slot: PaneSlot, inTab tabID: TabID) -> Orientation? {
+        tabContentByID[tabID]?.orientation(for: slot)
     }
 
     /// Repair an orphaned first responder in the selected tab, if it
@@ -654,8 +638,6 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // sim-ownership answer still reflects the sessions
             // captured at the gesture.
             guard let tab = self.tabListVM.tab(id: tabID) else { return }
-            let sessionId = tab.primaryTerminal.sessionId
-            guard !sessionId.isEmpty else { return }
             let paneCount = PaneTreeOps.leavesInOrder(tab.paneTree).count
             let config = ConfigFile()
             let pinned = affected
@@ -693,10 +675,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 guard self.tabListVM.tab(id: tabID) != nil else { return }
                 switch decision {
                 case .detach:
-                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .detach))
+                    self.router.dispatch(.closeTab(self.windowID, tabID, mode: .detach))
 
                 case .shutdown:
-                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: .shutdown))
+                    self.router.dispatch(.closeTab(self.windowID, tabID, mode: .shutdown))
 
                 case .cancel:
                     return
@@ -714,11 +696,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     }
                 ) {
                     guard self.tabListVM.tab(id: tabID) != nil else { return }
-                    self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
+                    self.router.dispatch(.closeTab(self.windowID, tabID, mode: mode))
                 }
 
             case let .close(mode):
-                self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
+                self.router.dispatch(.closeTab(self.windowID, tabID, mode: mode))
             }
         }
     }
@@ -817,8 +799,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             case let .close(gateMode):
                 mode = gateMode
             }
-            for sessionId in sessionIDs {
-                self.dispatchIntent(.closeTab(.sessionId(sessionId), mode: mode))
+            for target in targets {
+                self.router.dispatch(.closeTab(self.windowID, target.id, mode: mode))
             }
         }
     }
@@ -844,24 +826,29 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     func toggleProtectionFromMenu(_ sender: NSMenuItem) {
         guard let tabID = sender.representedObject as? TabID,
             let tab = tabListVM.tab(id: tabID) else { return }
-        let sessionId = tab.primaryTerminal.sessionId
-        guard !sessionId.isEmpty else { return }
         // Toggle relative to what's shown *now* (effective-hidden), so a
         // menu action during an in-flight transition flips the right way.
         let makeProtected = !tab.isEffectivelyProtected
-        let dispatcher = intentDispatcher
         Task { @MainActor [weak self] in
-            let result = await dispatcher.dispatch(
-                .setTabProtected(.sessionId(sessionId), isProtected: makeProtected),
-                origin: .inProcess
+            guard let self else { return }
+            let outcome = await self.router.applyTabProtection(
+                tab: tabID,
+                isProtected: makeProtected
             )
             // Unlike a CLI caller, the human at the protection menu has no
             // result stream to read: surface a rejection as an alert rather
             // than dropping it silently. The tab stays fail-closed, so a
             // failed "protect" leaves it hidden but unconfirmed; the user
             // needs to know it didn't take.
-            if case let .error(error) = result {
-                self?.presentProtectionChangeFailure(makeProtected: makeProtected, error: error)
+            if outcome != .committed {
+                self.presentProtectionChangeFailure(
+                    makeProtected: makeProtected,
+                    error: .internalError(
+                        outcome == .pending
+                            ? "tab protection is still pending"
+                            : "tab protection was rejected"
+                    )
+                )
             }
         }
     }
@@ -902,40 +889,25 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // OSC 7 has landed yet.
         let role = tabListVM.tab(id: tabID)?.role ?? .agent
         let cwd = tabContentByID[tabID]?.latestWorkingDirectory
-        dispatchIntent(
-            .openTab(
-                inWindow: .windowID(windowID),
-                role: role,
-                cwd: cwd,
-                cmd: nil
-            )
-        )
+        switch role {
+        case .agent:
+            router.dispatch(.newTab(windowID, cwd: cwd))
+
+        case .automation:
+            router.dispatch(.openAutomationTab(windowID, cwd: cwd))
+        }
     }
 
     @objc
     func newTabFromMenu(_ sender: NSMenuItem) {
         // Identical to ⌘T / the strip's "+" button. Provided in the
         // context menu so the right-click is a one-stop surface.
-        dispatchIntent(
-            .openTab(
-                inWindow: .windowID(windowID),
-                role: .agent,
-                cwd: nil,
-                cmd: nil
-            )
-        )
+        router.dispatch(.newTab(windowID))
     }
 
     @objc
     func openAutomationTabFromMenu(_ sender: NSMenuItem) {
-        dispatchIntent(
-            .openTab(
-                inWindow: .windowID(windowID),
-                role: .automation,
-                cwd: nil,
-                cmd: nil
-            )
-        )
+        router.dispatch(.openAutomationTab(windowID))
     }
 
     @objc
@@ -981,10 +953,28 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 if removed.isViewLoaded { removed.view.removeFromSuperview() }
             }
         }
+        for id in Array(failedTabContentByID.keys) where !liveIDs.contains(id) {
+            guard let removed = failedTabContentByID.removeValue(forKey: id) else { continue }
+            removed.removeFromParent()
+            if removed.isViewLoaded { removed.view.removeFromSuperview() }
+        }
         // Create VCs for new tabs. Failures show an alert; the Router has
         // already minted the daemon session, so a provisioning failure
         // here strands it until the user closes the tab.
         for tab in tabs where tabContentByID[tab.id] == nil {
+            if tab.lifecycle == .failed {
+                if failedTabContentByID[tab.id] == nil {
+                    let failed = makeFailedTabContent(
+                        message: tab.failureMessage ?? "The terminal session could not be created."
+                    )
+                    addChild(failed)
+                    failedTabContentByID[tab.id] = failed
+                }
+                continue
+            }
+            if let failed = failedTabContentByID.removeValue(forKey: tab.id) {
+                failed.removeFromParent()
+            }
             do {
                 let tabContent = try TabContentViewController(
                     tabID: tab.id,
@@ -1043,10 +1033,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     private func wireTerminalExit(of tabContent: TabContentViewController) {
         let tabListVM = self.tabListVM
         let router = self.router
-        let dispatcher = self.intentDispatcher
+        let windowID = self.windowID
         let tabID = tabContent.tabID
-        tabContent.onTerminalExit = { [weak tabContent] terminalID in
-            guard let tabContent else { return }
+        tabContent.onTerminalExit = { terminalID in
             let tab = tabListVM.tab(id: tabID)
             if let tab, tab.terminals.count > 1 {
                 router.dispatch(
@@ -1058,16 +1047,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                     )
                 return
             }
-            // Last terminal in this tab: close the whole tab through
-            // the dispatcher. Use the primary terminal's sessionId
-            // since that's the only one remaining at this point.
-            let sessionId = tabContent.sessionId
-            Task {
-                _ = await dispatcher.dispatch(
-                    .closeTab(.sessionId(sessionId), mode: .detach),
-                    origin: .inProcess
-                )
-            }
+            // Last terminal in this tab: close the whole tab explicitly.
+            router.dispatch(.closeTab(windowID, tabID, mode: .detach))
         }
         tabContent.onTerminalCloseRequested = { [weak self] terminalID in
             guard let self else { return }
@@ -1104,9 +1085,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         soloPillMaxWidth?.isActive = tabs.count == 1
         soloPillTargetWidth?.isActive = tabs.count == 1
         for (idx, tab) in tabs.enumerated() {
-            guard let tabContent = tabContentByID[tab.id] else { continue }
             let title = TabTitleButton(
-                title: tabContent.displayTitle,
+                title: displayTitle(for: tab),
                 target: self,
                 action: #selector(selectTabFromButton(_:))
             )
@@ -1175,7 +1155,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             close.toolTip = "Close Tab"
             close.setContentHuggingPriority(.required, for: .horizontal)
             Self.applyAccessibilityIdentifiers(
-                pill: title, close: close, shortId: tab.primaryTerminal.shortId
+                pill: title, close: close, shortId: Self.accessibilityShortID(for: tab)
             )
             // Reserve space always but fade alpha 0 → 1 on hover so
             // entering the cell doesn't reflow the layout.
@@ -1216,11 +1196,41 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         view.window?.representedFilename = tabContent.proxyIconPath ?? ""
     }
 
+    private func displayTitle(for tab: TabState) -> String {
+        tabContentByID[tab.id]?.displayTitle
+            ?? tab.name
+            ?? (tab.lifecycle == .failed ? "Tab creation failed" : "shell")
+    }
+
+    private func makeFailedTabContent(message: String) -> NSViewController {
+        let controller = NSViewController()
+        let root = NSView()
+        let title = NSTextField(labelWithString: "Terminal session could not be created")
+        title.font = .preferredFont(forTextStyle: .title2)
+        let detail = NSTextField(wrappingLabelWithString: message)
+        detail.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [title, detail])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 40),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -40)
+        ])
+        controller.view = root
+        return controller
+    }
+
     private func applySelection(for tabs: [TabState]) {
         guard let index = tabListVM.selectedIndex,
-            tabs.indices.contains(index),
-            let tabContent = tabContentByID[tabs[index].id] else { return }
-        let selectedID = tabs[index].id
+            tabs.indices.contains(index) else { return }
+        let selected = tabs[index]
+        let selectedID = selected.id
+        guard let selectedContent = tabContentByID[selectedID]
+            ?? failedTabContentByID[selectedID] else { return }
         let selectionChanged = (lastSelectedID != selectedID)
 
         // Selected-state styling: flip the cell's `isSelected` flag,
@@ -1238,24 +1248,29 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             cell.isSelected = isSelected
         }
         applySeparators()
-        applyWindowMetadata(for: tabContent)
+        if let tabContent = selectedContent as? TabContentViewController {
+            applyWindowMetadata(for: tabContent)
+        } else {
+            view.window?.title = displayTitle(for: selected)
+            view.window?.representedFilename = ""
+        }
 
         // Only swap the content view and refocus on a *real* selection
         // change: a title/CWD-driven re-render must not steal first
         // responder from a sim pane the user focused.
         if selectionChanged {
             content.subviews.forEach { $0.removeFromSuperview() }
-            tabContent.view.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(tabContent.view)
+            selectedContent.view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(selectedContent.view)
             NSLayoutConstraint.activate(
                 [
-                tabContent.view.topAnchor.constraint(equalTo: content.topAnchor),
-                tabContent.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-                tabContent.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-                tabContent.view.trailingAnchor.constraint(equalTo: content.trailingAnchor)
+                selectedContent.view.topAnchor.constraint(equalTo: content.topAnchor),
+                selectedContent.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+                selectedContent.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                selectedContent.view.trailingAnchor.constraint(equalTo: content.trailingAnchor)
                 ]
                 )
-            tabContent.restoreRememberedFocus()
+            (selectedContent as? TabContentViewController)?.restoreRememberedFocus()
             lastSelectedID = selectedID
         }
     }
@@ -1306,12 +1321,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // Look up by TabID rather than array index: same reasoning
             // as `applySelection`'s TabID-keyed loop.
             guard let cell = cell(forTab: tab.id),
-                let button = cell.titleButton,
-                let tabContent = tabContentByID[tab.id] else { continue }
-            button.title = tabContent.displayTitle
+                let button = cell.titleButton else { continue }
+            button.title = displayTitle(for: tab)
             applyMarkers(to: cell, tab: tab)
             Self.applyAccessibilityIdentifiers(
-                pill: button, close: cell.closeButton, shortId: tab.primaryTerminal.shortId
+                pill: button, close: cell.closeButton, shortId: Self.accessibilityShortID(for: tab)
             )
             // Rebuild the per-tab context menu so protection toggle title
             // ("Protect Tab" ↔ "Unprotect Tab"), check state, and the

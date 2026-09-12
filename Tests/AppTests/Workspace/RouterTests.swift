@@ -66,7 +66,7 @@ struct RouterTests {
         // (production: WorktreeName.detect on the GUI's CWD) lands
         // on the session.create call. The detector returning a value
         // populates the tab's `name` so the GUI's tabs strip + CLI
-        // tabs list auto-label with the branch.
+        // `tab list` auto-label with the branch.
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake, detectWorktreeName: { "feature-branch" })
         router.dispatch(.openWindow())
@@ -1054,8 +1054,8 @@ struct RouterTests {
         // Adding a terminal to a protected tab must seed the new
         // session's protection atomically at create time via
         // `initialProtected: true`, not a follow-up toggle, which
-        // would race the create's own persist/publish and leave the
-        // new session briefly visible on `tabs.list`.
+        // would race the create's own persist/publish and briefly expose the
+        // new session through daemon session or device projections.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S1", capability: "C1"),
@@ -1162,7 +1162,8 @@ struct RouterTests {
         // opened while a protected→unprotected transition is pending must be minted
         // PROTECTED (fail-closed from the still-hidden tab), not declassified
         // to the transition's unprotected target: otherwise it would be
-        // daemon-unprotected and exposed via tabs.list before the tab commits.
+        // daemon-unprotected and exposed through daemon projections before the
+        // tab commits.
         let fake = FakeDaemonClient()
         fake.sessionSequence = [
             SessionCreateResponse(sessionId: "S1", capability: "C1"),

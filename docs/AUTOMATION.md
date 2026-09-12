@@ -1,17 +1,17 @@
 # Automating DeviceTerm
 
 Use the `deviceterm` CLI to control DeviceTerm itself: open and arrange tabs,
-panes, and windows, inspect workspace state, drive other tabs from an
+panes, and windows, inspect workspace state, drive terminal panes from an
 automation tab, wait for device state, and consume events. The caller can be a
 person at a prompt, a script, an agent, or a program coordinating several
 agents; the commands and rules are the same.
 
-Run these commands from a shell inside a DeviceTerm tab. The tab provides the
-session identity that authorizes them.
+Run these commands from a shell inside a DeviceTerm tab. The terminal pane
+provides the session identity that authorizes them.
 
-Driving the device inside a pane (touch, keys, buttons, accessibility) is
-covered in [`USAGE.md`](USAGE.md). The JSON shapes, exit codes, and stability
-promises behind every command here are defined in
+Driving the device inside a pane, including touch, keys, buttons, and
+accessibility, is covered in [`USAGE.md`](USAGE.md). The JSON shapes, exit
+codes, and stability promises behind every command here are defined in
 [`INTEGRATION.md`](INTEGRATION.md).
 
 Skills that teach a coding agent to use these commands live in
@@ -30,65 +30,77 @@ separate repository.
 
 Authority has three levels.
 
-An **ordinary tab** reads its caller-visible workspace and mutates only
-itself: its own device panes, its own title, its own splits. It sees every
-unprotected tab, which it needs in order to find its own things, and it can
-touch none of them.
+An **ordinary tab** reads its caller-visible workspace and performs mutations
+contained to workspace objects it owns. A terminal session can rename or split
+its own tab, close that tab when it is the sole terminal, close or rename its
+own terminal pane, and operate on Simulator and physical-device panes in its
+tab.
 
-One exception, and it belongs to the shim rather than to you. Running
-`devicectl install` or `launch` in a tab moves that device's mirror to it,
-out of whichever unprotected tab was showing it, on the reasoning that the
-device context followed your command. `deviceterm device attach` refuses
-the same move and tells you to drag the pane across instead.
+Terminal panes remain separate trust units. Owning one terminal in a split tab
+does not allow a caller to close or rename a sibling terminal pane.
+
+One exception belongs to the shim rather than to you. Running `devicectl
+install` or `launch` in a tab moves that device's mirror to it, out of whichever
+unprotected tab was showing it, on the reasoning that the device context
+followed your command. `deviceterm device attach` refuses the same move and
+tells you to drag the pane across instead.
 
 Opening an **automation tab** causes the GUI to issue that tab a live grant.
 Its role stays descriptive if the grant is missing or revoked, so the tab keeps
-its name and its badge while holding no authority.
+its name and badge while holding no automation authority.
 
-The grant adds three groups: creating and arranging surfaces (`tab open`,
-`tab select`, `tab move`, `window open`, `window focus`), reading or typing
-into another tab (`tab capture`, `tab send-input`), and the workspace verbs
-whose ownership requirement you don't meet (`tab close`, `window close`,
-`tab rename`, `pane open --terminal`, `pane close`). That last group covers
-a tab that isn't yours, and it covers closing one of your own that a second
-terminal shares.
+Eight commands always require the grant because they create or rearrange
+workspace surfaces, change global focus, or drive a terminal:
 
-A **protected tab** is invisible to other sessions, and a grant does not
-reach it. Opt a tab out of everything above with
-[`tab set-protected`](#protect-a-tab).
+- `tab open`
+- `tab focus`
+- `tab move`
+- `window open`
+- `window focus`
+- `pane focus`
+- `pane send-input`
+- `pane capture-text`
 
-Creating and arranging surfaces is gated even when the target is your own
-tab, because the effect isn't contained to it: a reorder can shift other tabs,
-and selecting one can replace the visible tab and pane focus in that
-window.
+The grant also satisfies target-level ownership checks for commands such as
+`tab close`, `window close`, `tab rename`, `tab protect`, `tab unprotect`,
+`pane split`, `pane close`, and `pane rename`.
 
-The consequence is that a script can't open new tabs or windows for itself. An
-ordinary tab can still split itself with `pane open --terminal`; anything that
-mints a tab or a window needs a person to open the first automation tab.
+A **protected tab** is invisible to sessions outside it, and a grant does not
+make it visible. Opt a tab out of cross-session discovery and control with
+[`tab protect`](#protect-a-tab).
+
+Creating and arranging surfaces is gated even when the target is your own tab,
+because the effect is not contained to it. Reordering can shift other tabs,
+and focusing one can replace the visible tab and pane focus in that window.
+
+The consequence is that an ordinary script cannot open new tabs or windows for
+itself. It can still split its own tab with `pane split`; anything that mints a
+tab or window needs a person to open the first automation tab.
 
 ### Know Your Session
 
 DeviceTerm injects a session identity into every terminal pane's shell:
 `DEVICETERM_SESSION` holds the session id, `DEVICETERM_SESSION_CAP` holds the
 session credential, and companion variables locate the daemon socket and the
-per-session shim directory. The CLI reads them transparently; no command
-takes a credential flag or operand.
+per-session shim directory. The CLI reads them transparently; no command takes
+a credential flag or operand.
 
 A terminal split is its own session. The GUI treats the tab as one workspace,
-but each terminal pane carries a separate CLI identity with its own
-credential.
+but each terminal pane carries a separate CLI identity with its own credential.
+The terminal pane's public pane id is that session id.
 
-Device panes are scoped to the tab. Every terminal session in a tab drives
-and lists the tab's device panes, whichever of them booted or attached the
-device; sharing a tab is the consent gesture. A pane in another tab is
-refused with the same error as an unknown pane.
+Device panes are scoped to the tab. Every terminal session in a tab drives the
+tab's Simulator and physical-device panes, whichever terminal booted or
+attached the device. Sharing a tab is the consent gesture. A device pane in
+another tab is refused with the same error as an unknown pane.
 
 Closing one terminal of a split tab hands its device panes to the surviving
 terminals instead of orphaning them.
 
-The GUI registers a new split's session with the daemon a moment after the
-session exists, so a device command racing that window can see a brief
-refusal. Retry it.
+A newly created terminal can have a session id before its shell surface is
+attached. An open or split receipt therefore makes the terminal addressable,
+but does not assert that input is ready. A request racing surface attachment
+can fail and should be retried after the terminal becomes usable.
 
 The session's role is readable without a daemon round-trip:
 
@@ -108,26 +120,27 @@ live ancestor, must match the terminal the session is bound to.
 What earns trust is reaching the session's terminal, either by running in it
 or by descending from something that does. Child processes normally inherit
 the tab's terminal and may control the session, which is why the cap is
-deliberately visible to them; don't strip it from a subprocess environment. A
-detached child (`setsid`, a daemonized process) remains authorized only while
-its live parent chain reaches the tab, which is what lets an agent harness
-drive the session it is running inside. Orphan it, so no live ancestor is left
-in the terminal, and it is refused. So is a process elsewhere that copied the
-cap: it has no ancestor in the tab at all.
+deliberately visible to them. Do not strip it from a subprocess environment.
+
+A detached child, such as a process started with `setsid`, remains authorized
+only while its live parent chain reaches the tab. This lets an agent harness
+drive the session it is running inside. Orphan it so no live ancestor is left
+in the terminal, and it is refused. A process elsewhere that copied the cap is
+also refused because it has no ancestor in the tab.
 
 ### Escalate Only Through the GUI
 
-Cross-tab input and capture require a live automation grant, and only the
-GUI issues one, when a person opens an automation tab. There is no CLI verb
-for escalation, and constructing the raw request by hand does not work: the
-daemon refuses it from anything but the validated GUI.
+Cross-tab terminal input and capture require a live automation grant, and only
+the GUI issues one when a person opens an automation tab. There is no CLI verb
+for escalation, and constructing the raw request by hand does not work. The
+daemon refuses grant creation from anything but the validated GUI.
 
-A role string such as `"automation"` is descriptive metadata. Without a
-live grant, cross-tab input and capture fail with `error.scope_violation`
-even when `DEVICETERM_SESSION_ROLE` says `automation`.
+A role string such as `"automation"` is descriptive metadata. Without a live
+grant, an automation-scoped command fails with
+`intent.automationRequired` even when `DEVICETERM_SESSION_ROLE` still says
+`automation`.
 
-[Open an Automation Tab](#open-an-automation-tab) covers the grant
-lifecycle.
+[Open an Automation Tab](#open-an-automation-tab) covers the grant lifecycle.
 
 ## Control the Workspace
 
@@ -136,26 +149,38 @@ lifecycle.
 Create workspace surfaces from a script or agent:
 
 ```sh
-deviceterm tab open --cwd "$PWD" --cmd 'make test'
-deviceterm pane open --terminal --cwd "$PWD"
+deviceterm tab open --cwd "$PWD" --command 'make test'
+deviceterm pane split --direction right
 deviceterm window open
 ```
 
-`tab open` mints a fresh tab, `pane open --terminal` splits the current tab
-with another terminal pane, and `window open` mints a new window holding one
-fresh tab. `--cmd` is typed into the new shell after attach, so the command
-runs once and the shell stays interactive.
+`tab open` creates a tab with an initial terminal pane. `pane split` creates a
+terminal beside an existing pane in the caller's tab. `window open` creates a
+window containing a tab and its initial terminal. `--command` is typed into the
+new tab's login shell after it attaches, so the command runs once and the shell
+stays interactive.
 
-`tab open` and `window open` need a live automation grant, and an ordinary
-tab is refused with `error.scope_violation`. `pane open --terminal` doesn't,
-because it splits the tab the caller is already in. Naming another tab with
-`--tab` does need one.
+`tab open` and `window open` need a live automation grant. `pane split` does
+not need one when it targets a tab the caller owns. Splitting another visible
+tab requires a grant.
 
-A success receipt means the GUI accepted the mutation for asynchronous
-processing; it does not prove the change completed, and it does not return
-the new session id. Confirm the outcome with the list commands; the event
-stream cannot confirm it, because another session's lifecycle events are not
-delivered to yours. Receipt shapes are defined in
+Open and split mutations wait for terminal session creation:
+
+- `window open` returns the committed window, first tab, and initial terminal
+  pane.
+- `tab open` returns the host window, new tab, and initial terminal pane.
+- `pane split` returns the host tab and new terminal pane.
+
+The pane's id is therefore available to the next command without polling.
+These receipts wait for the session id, not for shell or surface readiness.
+
+A tab can commit before creation of its initial terminal fails. The command
+then fails with `intent.mutationFailed` while retaining the tab on screen.
+In JSON mode, `error.details.committed.tab` contains the committed tab,
+including its id and failed state. Keep that id if the script needs to inspect,
+rename, or close the retained tab.
+
+Receipt shapes are defined in
 [workspace receipts](INTEGRATION.md#workspace-receipts).
 
 ### Arrange, Select, and Close Surfaces
@@ -163,96 +188,171 @@ delivered to yours. Receipt shapes are defined in
 Reorder, retitle, focus, and close surfaces by reference:
 
 ```sh
-deviceterm tab move --tab abc123 --to 0
+deviceterm tab move abc123 --window def456 --index 0
 deviceterm tab rename "auth-feature"
-deviceterm tab select --tab abc123
-deviceterm window focus --window 2
+deviceterm tab focus abc123
+deviceterm window focus f0a123
 deviceterm tab close --mode shutdown
+deviceterm pane close sim123 --mode detach
 ```
 
-`tab move` also accepts `--to-window <ref>` to move the tab to another
-window. `tab close` and `window close` take `--mode <detach|shutdown>` to
-decide what happens to owned Simulators, the same decision the GUI close
-prompt offers.
+`tab move` moves a tab to the named window. It appends unless `--index`
+supplies a zero-based destination index. Moving within the same window requires
+`--index`.
 
-`tab select`, `tab move`, and `window focus` need a live automation grant,
-including when the target is your own tab. An ordinary tab is refused with
-`error.scope_violation`.
+`tab close` and `window close` take `--mode <detach|shutdown>` to decide what
+happens to linked Simulators, the same decision the GUI close prompt offers.
+The CLI never prompts.
 
-`tab rename` needs one only to leave your own tab. Without a grant you can
-retitle a tab you own a terminal in, and nothing else.
+`tab focus`, `tab move`, and `window focus` need a live automation grant,
+including when the target is the caller's own tab or window.
 
-`tab close` asks for more. Without a grant it reaches only a tab you own
-*and* hold the single terminal of, because closing a split tab ends whatever
-is running in the other panes, and those are other sessions. That is the
-same outcome as closing someone else's tab, reached by a different route.
+`tab rename` needs a grant only when the caller does not own a terminal in the
+target tab.
 
-Either refusal arrives as daemon error `-32011`, with a message starting
-`intent.automationRequired`, which is what separates a permission refusal
-from a tab that isn't there.
+`tab close` has a stronger ownership rule. Without a grant, it reaches only a
+tab whose sole terminal is the caller. Closing a split tab would end the other
+terminal sessions, so it requires a grant.
 
-`window close` inherits both rules, since it closes every tab in the window.
-It refuses a window holding a tab you can't see, so it can't tear down a
-co-hosted protected tab, and it refuses one holding any tab you don't
-solely own.
+`window close` applies the same sole-terminal rule to every tab it contains.
+It refuses a window holding a tab the caller cannot see, so it cannot tear down
+a co-hosted protected tab.
 
-`pane close` and `pane info` resolve Simulator panes only. Close a
-physical-device pane in the GUI.
+`pane close` and `pane rename` work for terminal, Simulator, and
+physical-device panes. Their authority depends on pane kind:
 
-`pane close` takes the same `--mode <detach|shutdown>`, defaulting to
-`detach`. The CLI never prompts, so `--mode` is how a script answers the
-question the GUI asks.
+- A terminal pane requires that exact pane's session or a live automation
+  grant. Owning a sibling terminal in the same tab is not enough.
+- A Simulator or physical-device pane requires ownership of a terminal in its
+  tab or a live automation grant. The daemon retains its cohort authorization
+  check for the pane-targeted request.
 
-`pane rename` and `pane move` are not implemented; see
-[unsupported workspace verbs](INTEGRATION.md#unsupported-workspace-verbs).
+Closing the last terminal pane would implicitly close its tab, so
+`pane close` refuses with `intent.wouldCloseTab`. Use `tab close` when closing
+the workspace is intended.
+
+An explicit `pane close --mode <detach|shutdown>` is valid only for a
+Simulator. Supplying `--mode` for a terminal or physical-device pane fails
+with `intent.unsupportedPane` after the pane reference resolves. Omitting
+`--mode` closes those pane kinds normally and uses `detach` for a Simulator.
+
+Both rename commands accept at most two positional arguments:
+
+```sh
+deviceterm tab rename "auth feature"
+deviceterm tab rename abc123 "auth feature"
+deviceterm pane rename "build shell"
+deviceterm pane rename term123 "build shell"
+```
+
+One positional argument names the current tab or pane. Two use the first as
+the target and the second as the name. Quote a multi-word name so it remains
+one argument. More than two positionals is a usage error.
+
+Pass a quoted empty name to clear it:
+
+```sh
+deviceterm tab rename ''
+deviceterm pane rename term123 ''
+```
+
+A name beginning with `-` must follow `--` so it is not parsed as an option.
 
 ## Discover State
 
 ### List Tabs, Panes, Windows, and Devices
 
+The public workspace hierarchy is window, tab, pane:
+
 ```sh
-deviceterm tabs list
-deviceterm panes list
-deviceterm windows list
+deviceterm window list
+deviceterm tab list
+deviceterm pane list
 deviceterm devices list
 ```
 
-`tabs list` returns one row per live daemon session. Each GUI terminal pane has
-a session, so a split tab produces several rows. In JSON mode, every row has a
-required `tabId`. GUI terminal sessions in one tab share it; a session without
-a GUI tab uses its `sessionId`.
+`window list` returns the caller's window. Add `--all` for every
+caller-visible window.
 
-Group rows without calling `tab info`:
+`tab list` returns one row per GUI tab in the caller's window. Add `--all` to
+span every caller-visible window, or use `--window <ref>` to select one
+window. A split tab is still one tab row.
+
+`pane list` returns every terminal, Simulator, and physical-device leaf in the
+target tab's layout order. It defaults to the caller's tab; use
+`--tab <ref>` for another caller-visible tab.
+
+`devices list` reports DeviceTerm-owned booted Simulators and connected physical
+devices. It is the device roster, not the GUI pane layout. An externally
+booted Simulator stays absent until it is attached; see
+[device roster rows](INTEGRATION.md#device-roster-rows).
+
+An empty list with exit 0 is a successful empty visibility projection.
+Failures exit nonzero and emit a JSON error envelope.
+
+Pass `--json` to any list for the machine-readable shapes defined in
+[Discovery and State](INTEGRATION.md#discovery-and-state).
+
+Inspect an individual object with `show`:
 
 ```sh
-rows=$(deviceterm tabs list --json) || exit $?
-
-printf '%s\n' "$rows" |
-  jq 'sort_by(.tabId) | group_by(.tabId)'
-
-printf '%s\n' "$rows" |
-  jq 'map(.tabId) | unique | length'
+deviceterm window show
+deviceterm tab show
+deviceterm pane show
 ```
 
-The second pipeline counts visible session groups. It equals the visible
-GUI-tab count only when every visible session is GUI-backed; `tabs.list` does
-not mark non-GUI groups.
+`window show` returns `{window, tabs}`. `tab show` returns
+`{tab, panes, layout}`. Its pane array contains every pane kind in layout order,
+and `layout` is the recursive public split tree. `pane show` returns one
+`WorkspacePane` with kind-specific terminal, Simulator, or physical-device
+details.
 
-The command shows unprotected sessions plus the protected rows visible to the
-caller. `[]` with exit 0 is a successful empty visibility projection; failures
-exit nonzero and emit a JSON error envelope. `tabs current` prints only the
-caller's row.
+The public projection comes from live GUI state. It is not reconstructed from
+daemon session rows. A tab whose initial terminal creation failed remains
+visible with `state` set to `failed`, an empty pane list, and no live layout.
 
-`panes list` returns the device panes of the caller's tab.
-`windows list` returns the caller's own window; add `--all` for every window
-visible to the caller.
+### Resolve Workspace References
 
-`devices list` reports DeviceTerm-owned booted Simulators and connected
-physical devices. An externally booted Simulator stays absent until you
-attach it; see [device roster rows](INTEGRATION.md#device-roster-rows).
+The CLI sends raw references to the GUI. Resolution is case-insensitive and
+uses ordered tiers.
 
-Pass `--json` to any list for the machine-readable row shapes defined in
-[Discovery and State](INTEGRATION.md#discovery-and-state).
+Window and tab references resolve as:
+
+1. exact short id;
+2. exact full UUID;
+3. exact unique name;
+4. unique full-UUID prefix.
+
+Pane references resolve as:
+
+1. exact short id;
+2. exact full pane id;
+3. exact unique name;
+4. exact Simulator UDID or physical-device id;
+5. unique full-pane-id prefix.
+
+Names match exactly, never by prefix. A name matching more than one visible
+object is ambiguous.
+
+Window and tab short ids are the first six lowercase hexadecimal characters
+of their UUIDs. Pane short ids are six lowercase Crockford base32 characters.
+A terminal pane's full pane id is its session id.
+
+The one-based `index` printed for a window is display metadata. It is never a
+window reference. A numeric-looking window short id remains unambiguous because
+window indices do not participate in resolution.
+
+An omitted reference, or the literal `current`, is resolved from the calling
+terminal session. It does not borrow whichever window, tab, or pane currently
+has GUI focus. For an external caller:
+
+- current window means the window containing its terminal;
+- current tab means the tab containing its terminal;
+- current pane means that terminal pane.
+
+Focus and current are separate fields in the JSON projection. Focus describes
+the GUI's present keyboard selection; current describes the calling session's
+workspace identity.
 
 ### Check Health With doctor
 
@@ -262,8 +362,8 @@ deviceterm doctor
 
 `doctor` checks the session environment, the `xcrun` shim, the daemon socket
 and handshake, session authentication, linked device panes, and the methods
-the daemon admits for this session. Use `--json` in a script and branch on
-the exit status. The report shape and check names are defined in
+the daemon admits for this session. Use `--json` in a script and branch on the
+exit status. The report shape and check names are defined in
 [the doctor report](INTEGRATION.md#doctor-report).
 
 ### Diagnose Version Skew
@@ -275,9 +375,13 @@ deviceterm version --json
 ```
 
 Compare the `daemon` and `rpcWire` fields. A missing `daemon` field means the
-version probe did not complete; it does not prove that no daemon is
-reachable. Field semantics and a ready-made check are in
+version probe did not complete; it does not prove that no daemon is reachable.
+Field semantics and a ready-made check are in
 [the version report](INTEGRATION.md#version-report).
+
+The public release version and internal wire version are different contracts.
+The release version follows public CLI and JSON compatibility. The wire
+version coordinates the bundled app, daemon, CLI, and shim during an update.
 
 ## Drive Other Tabs
 
@@ -285,95 +389,109 @@ reachable. Field semantics and a ready-made check are in
 
 Open the tab with **Shell ▸ Open Automation Tab** or ⇧⌘T.
 
-The GUI issues that tab's terminal session a live automation grant. The
-grant lives in daemon memory and is checked on every request that needs it.
-It's revoked when the tab closes, when the issuing GUI connection is lost, or
-when the session ends.
+The GUI issues that tab's terminal session a live automation grant. The grant
+lives in daemon memory and is checked on every request that needs it. It is
+revoked when the tab closes, when the issuing GUI connection is lost, or when
+the session ends.
 
-The grant covers `tab capture` and `tab send-input`, plus `tab open`,
-`tab select`, `tab move`, `window open`, and `window focus`. An ordinary tab
-receives `error.scope_violation` for all seven, and the CLI cannot grant
-authority to itself.
+The grant covers `tab open`, `tab focus`, `tab move`, `window open`,
+`window focus`, `pane focus`, `pane send-input`, and `pane capture-text`.
+An ordinary tab receives `intent.automationRequired` for those commands, and
+the CLI cannot grant authority to itself.
+
+The same grant satisfies ownership checks for visible targets. It does not
+make a foreign protected tab visible.
 
 ### Send Input to Another Tab
 
-When `auth-feature` is known to name a GUI-backed session, discover its shared
-full `tabId` and use it when work must run once per GUI tab:
+Find the target tab and select a terminal pane from its live projection:
 
 ```sh
-rows=$(deviceterm tabs list --json) || exit $?
+detail=$(deviceterm tab show auth-feature --json) || exit $?
 
-TARGET_TAB=$(
-  printf '%s\n' "$rows" |
+TARGET_PANE=$(
+  printf '%s\n' "$detail" |
     jq -er '
-      [.[] | select(.name == "auth-feature") | .tabId] |
-      unique |
-      if length == 1 then .[0]
-      else error("expected exactly one matching tab")
+      [.panes[] | select(.kind == "terminal")] |
+      if length == 1 then .[0].id
+      else error("expected exactly one terminal pane")
       end
     '
 )
 
-deviceterm tab send-input --tab "$TARGET_TAB" 'make test\n'
+deviceterm pane send-input "$TARGET_PANE" -- 'make test\n'
 ```
 
-`tabs.list` does not mark GUI-backed rows. If a non-GUI session can use the
-same name, this selection is not reliable and its `tabId` will not resolve in
-GUI workspace verbs.
+The tab name resolves only when it is an exact unique name. If the tab contains
+several terminal panes, choose one by its id, short id, or unique pane name
+instead of assuming a primary terminal.
 
-The full `tabId` is accepted anywhere `--tab <ref>` is accepted. Short IDs
-remain convenient for interactive use, but they identify individual session
-rows and are not the grouping key for split tabs.
+`pane send-input` requires an explicit terminal pane reference and a live
+automation grant. It does not accept a tab reference.
 
-Instant input is dispatched before the command returns. With `--type-delay
-<ms>`, typing is animated one character at a time and the command returns as
-soon as the typing is enqueued, so it may still be running. Neither result
-confirms that the target shell executed anything. Receipt fields and pacing
-limits are defined in [send input](INTEGRATION.md#send-input).
+Instant input is dispatched before the command returns. With
+`--type-delay <ms>`, typing is animated one character at a time and the
+command returns as soon as typing is enqueued, so it may still be running.
+Neither result confirms that the target shell executed anything.
+
+The success receipt includes the committed terminal pane, the UTF-8 byte
+count, and the optional effective delay. It never echoes the text. Receipt
+fields and pacing limits are defined in
+[send input](INTEGRATION.md#send-input).
 
 ### Capture Another Tab
 
+Capture the selected terminal pane:
+
 ```sh
-deviceterm tab capture --tab "$TARGET_TAB"
+deviceterm pane capture-text "$TARGET_PANE"
 ```
 
-The capture is the target's currently visible terminal viewport; scrollback
-is not included. Human output is the raw text, so a redirect saves the
-screen; `--json` wraps it as `{text}`. See
-[capture a viewport](INTEGRATION.md#capture-a-viewport).
+The capture is that terminal pane's currently visible viewport; scrollback is
+not included. Human output is the raw text, so a redirect saves the screen.
+`--json` returns `{pane, text}`.
+
+The command requires an explicit terminal pane reference and a live automation
+grant. See [capture a viewport](INTEGRATION.md#capture-a-viewport).
 
 ### Protect a Tab
 
 Protect the current tab when other sessions should not see or control it:
 
 ```sh
-deviceterm tab set-protected true
+deviceterm tab protect
 ```
 
 Every terminal session in the tab changes together. Other sessions cannot
-list the protected tab or its panes, resolve its references, capture it, or
-send input to it; your own sessions keep access. Automation grants do not
-bypass protection, so an automation tab cannot capture or type into a tab
-once that target is protected.
+list the protected tab or its panes, resolve its references, capture a terminal
+inside it, or send input to it. Sessions inside the tab keep access.
 
-Protecting a tab doesn't lock you out of it. Your own sessions still reach it,
-so you can unprotect it from inside:
+Automation grants do not bypass protection. An automation tab cannot capture
+or type into a foreign tab once that target is protected.
+
+Protecting a tab does not lock its own sessions out. Unprotect it from inside:
 
 ```sh
-deviceterm tab set-protected false
+deviceterm tab unprotect
 ```
 
-Only a tab the caller owns a terminal in can be flipped, in either direction.
-A caller that owns no terminal there is refused with `intent.ownerRequired`,
-and holding an automation grant doesn't change that. The receipt's
-`committed` field distinguishes a confirmed change from one the GUI is still
-converging on; see [set protection](INTEGRATION.md#set-protection).
+Without a grant, both directions require the caller to own a terminal in the
+target tab. A caller targeting a visible tab it does not own receives
+`intent.automationRequired`.
+
+A grant can protect a visible, unprotected foreign tab. Protection then hides
+that tab from the automation caller, so the caller cannot resolve it to
+unprotect it from outside. A foreign protected target fails as
+`intent.notFound`, because grants never widen visibility.
+
+Each command returns a workspace mutation receipt whose `tab.protected` value
+is the committed state. A definite daemon refusal, indeterminate transition,
+or superseding mutation is a command failure rather than an optimistic success
+receipt. See [set protection](INTEGRATION.md#set-protection).
 
 A protected tab's pill carries a lock in the tab strip, beside the wand if the
-tab is also an automation tab. The lock follows what is hidden right now rather
-than what the daemon has confirmed: it appears the moment you protect a tab,
-and it stays on through an unprotect the daemon hasn't confirmed, so it can
-disagree with the receipt's `committed` field while a change converges.
+tab is also an automation tab. The lock reflects the tab's effective protected
+state.
 
 ## Wait for Device State
 
@@ -416,13 +534,14 @@ deviceterm wait ax --label "Saving..." --match contains --state absent
 Human output reports `condition=ax.disappears` and `matches=0`. With `--json`
 the receipt's condition is `ax.disappears` and `observation.matchCount` is 0.
 
-DeviceTerm won't conclude absence from an observation that didn't see
+DeviceTerm will not conclude absence from an observation that did not see
 everything, because the element could be in the part that went unseen. A
 truncated sweep reports `wait.inconclusive` at once, and an unsupported tree
 walk reports `wait.unsupported`. An incomplete tree is retried, and reports
 `wait.inconclusive` only if no complete observation arrives before the
-deadline. An element still matching at the deadline is an ordinary `wait.timeout`,
-because a sighting settles the question whatever else the observation missed.
+deadline. An element still matching at the deadline is an ordinary
+`wait.timeout`, because a sighting settles the question whatever else the
+observation missed.
 
 Tree observation is the default. On a family where the tree walk is
 unavailable, use a sweep:
@@ -441,11 +560,11 @@ Read the matched elements with `--json`. Human output reports only the match
 count. The receipt lists up to 20 entries under `matches`, with `matchCount`
 for the true total.
 
-Presentational roles rank last, entries with no `normalizedCenter` rank next to
-last, and smaller frames rank first, so `matches[0]` is the element you are
+Presentational roles rank last, entries with no `normalizedCenter` rank next
+to last, and smaller frames rank first, so `matches[0]` is the element you are
 most likely able to operate.
 
-The ordering is a heuristic. Don't pick from the list. Two commands act on a
+The ordering is a heuristic. Do not pick from the list. Two commands act on a
 match, and both make the same selection:
 
 ```sh
@@ -461,39 +580,41 @@ shell commands by matching a prefix can cover `deviceterm tap --label`; it
 cannot cover a `$(...)` substitution wrapped around `--print center`.
 
 Both refuse rather than guess. `wait.unreachable` means nothing eligible
-matched, `wait.ambiguous` means several unrelated elements did. Narrow with
-`--role`, `--value`, or `--identifier`. A refusal sends no tap either way, so
-a refused `tap` costs an exit code rather than an input you can't take back.
+matched, and `wait.ambiguous` means several unrelated elements did. Narrow
+with `--role`, `--value`, or `--identifier`. A refusal sends no tap either way,
+so a refused `tap` costs an exit code rather than an input you cannot take
+back.
 
 What a refusal writes differs. `--print center` writes nothing at all, so one
 piped onward supplies no coordinate. `tap --json` writes the same error
 envelope every other JSON failure writes, so test the exit code rather than
 stdout emptiness.
 
-`tap` accepts the whole selector, `--source sweep` and its `--step` and
-`--budget` included. Its receipt reports the coordinate tapped, and the role
-when it is a single word; `--json` adds `role`, `label`, `identifier`,
-`matchCount`, and `elapsedMs`.
+`tap` accepts the whole selector, including `--source sweep` and its `--step`
+and `--budget`. Its receipt reports the coordinate tapped, and the role when it
+is a single word. `--json` adds `role`, `label`, `identifier`, `matchCount`,
+and `elapsedMs`.
 
-An observation that didn't see everything isn't proof the element is absent.
+An observation that did not see everything is not proof the element is absent.
 Where a plain `wait ax` has nothing else to report, it reports that observation
 instead of a bare `wait.timeout`, with the daemon's note as the message and
 `note` and `noteCode` in `details`.
 
-The error code says which kind. `wait.inconclusive` means coverage fell short of
-the screen. `wait.unsupported` means full coverage was unavailable, two ways: a
-pane with no accessibility capability yields no observation at all, while a
-family whose tree walk doesn't enumerate still returns its root and carries a
-`noteCode`. That field is what tells them apart, and only the second is helped
-by another `--source`.
+The error code says which kind. `wait.inconclusive` means coverage fell short
+of the screen. `wait.unsupported` means full coverage was unavailable in one
+of two ways: a pane with no accessibility capability yields no observation at
+all, while a family whose tree walk does not enumerate still returns its root
+and carries a `noteCode`. That field tells them apart, and only the second is
+helped by another `--source`.
 
 Because the root survives the second case, a query the root itself matches
 succeeds rather than reporting `wait.unsupported`.
 
 Branch on `noteCode` for the remedy. `ax.watchOSEnumerationUnsupported` and
-`ax.treeIncomplete` both send you to `--source sweep`. `ax.sweepTruncated`
-means a larger `--budget` may help, and `ax.sweepTruncatedAtMaxBudget` means it
-can't, so widen `--step` or retry when the pane is quieter.
+`ax.treeIncomplete` both send you to `--source sweep`.
+`ax.sweepTruncated` means a larger `--budget` may help, and
+`ax.sweepTruncatedAtMaxBudget` means it cannot, so widen `--step` or retry when
+the pane is quieter.
 
 Wait for an observed orientation and a stable rendered surface:
 
@@ -548,8 +669,8 @@ closes the stream.
 
 Use `deviceterm wait` when correctness depends on reaching a final observable
 condition. Use events for long-running observation or as a low-latency signal
-to refresh current state. Event shapes, ordering, and loss behavior are defined
-in [Events](INTEGRATION.md#events).
+to refresh current state. Event shapes, ordering, and loss behavior are
+defined in [Events](INTEGRATION.md#events).
 
 An external Simulator can emit boot and shutdown events while staying absent
 from `devices list`; use `xcrun simctl` when you need its metadata.

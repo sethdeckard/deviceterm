@@ -8,6 +8,17 @@ import Testing
 /// coordinates have to land on that same edge, so the two are resolved
 /// together; a pair that disagrees arms nothing.
 struct AppSwitcherGesturePlanTests {
+    /// A dwell at mid-screen can already have committed the edge gesture to
+    /// Home. Keep the pause in the shallow switcher band used by the proven
+    /// physical-device trajectory instead.
+    @Test
+    func simulatorTrajectoryDwellsBeforeTheHomeCommitThreshold() {
+        #expect(AppSwitcherGesture.fromY == 0.99)
+        #expect(AppSwitcherGesture.toY == 0.78)
+        #expect(AppSwitcherGesture.fromY - AppSwitcherGesture.toY < 0.25)
+        #expect(AppSwitcherGesture.holdMs > 0)
+    }
+
     /// Each orientation plays in its own frame, tagged with its own
     /// live-confirmed edge value.
     @Test(

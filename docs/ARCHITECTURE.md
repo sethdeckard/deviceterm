@@ -45,7 +45,7 @@ flowchart TD
         SI["NSStatusItem (menu bar)"] ~~~ IM["IdleMonitor (lifetime predicate)"]
     end
     subgraph tools["Per-session helpers (symlinked into bin/)"]
-        CLI["deviceterm tap / swipe / ax tree / panes list / attach"]
+        CLI["deviceterm tap / swipe / ax tree / pane list / device attach"]
         SHIM["deviceterm-shim (xcrun / simctl wrapper)"]
     end
     DC -->|"XPC (mach service)"| XS
@@ -883,10 +883,12 @@ provenance arm) server-side from the transport peer, the audit token on
 XPC or the `LOCAL_PEERTOKEN` identity on UDS, so no caller-supplied owner
 pid rides on the wire.
 
-`shortId` is a 6-char Crockford base32 identifier the `--tab <ref>`
-resolver uses. `name` is stored verbatim from the request and never
-renamed afterward; the GUI supplies a worktree-derived branch when it
-detects one. `role` defaults to `"agent"`.
+`shortId` is a 6-char Crockford base32 identifier for this session. Because a
+terminal pane's public ID is its session ID, the same value is that terminal
+pane's short ID. It is not a public tab short ID: the GUI derives a tab's
+six-lowercase-hex short ID from the tab cohort UUID. `name` is stored verbatim
+from the request and never renamed afterward; the GUI supplies a
+worktree-derived branch when it detects one. `role` defaults to `"agent"`.
 
 `tabId` is an optional full UUID used to identify the GUI tab containing
 the session. The GUI mints it before creating the tab's primary terminal
@@ -913,8 +915,8 @@ and are unaffected.
 `initialProtected` (default false) seeds the protection flag in the same
 actor turn the session is inserted. The GUI passes `true` for a terminal
 joining an already-protected tab, so the new session is never observable as
-unprotected on `tabs.list`; a follow-up toggle would race the create's own
-publish.
+unprotected in another caller's workspace projection; a follow-up toggle would
+race the create's own publish.
 
 #### `session.authenticate`
 
@@ -925,7 +927,7 @@ publish.
 Binds the calling connection to the named session for its lifetime; the
 dispatcher then authorizes session-scoped methods from the connection's
 auth state rather than per-call creds. A few legacy handlers
-(`session.close`, `panes.list`, `pane.create`, `device.attach`,
+(`session.close`, `pane.deviceList`, `pane.create`, `device.attach`,
 `shim.event`) still carry `(sessionId, cap)` in their params and
 re-validate it. `device.boot` carries the pair only with a GUI-originated
 causal claim, and validates it the same way. The later
@@ -1084,7 +1086,7 @@ steady-state syncs that fire no terminal rebinding.
 
 Protection is seeded fail-closed in the same actor turn, so a
 mid-transition tab restores protected, never briefly unprotected. Entry
-order defines the restored set's `tabs.list` order. Processing any non-stale batch,
+order preserves the GUI's session nomination order. Processing any non-stale batch,
 including an empty one, releases the restoration barrier (see
 `session.authenticate` and "State recovery"). The GUI re-sends its whole
 inventory with a fresh revision on every reconnect. The bearer cap is
@@ -1120,8 +1122,8 @@ presentation only from an `applied: true` reply and reconciles ambiguous
 outcomes via `session.protectionSnapshot`, never from a request-time
 snapshot.
 
-A protected session disappears from `tabs.list` for every caller except the
-owner; the daemon's `sessions(visibleTo:)` filter reads the dispatcher's
+A protected session disappears from caller-visible daemon rosters for every
+caller except the owner; the daemon's `sessions(visibleTo:)` filter reads the dispatcher's
 `originatingSessionId` task-local. The GUI is the only legitimate caller:
 it resolves a tab to its session set and applies the owner check GUI-side
 before building the batch.
@@ -1159,12 +1161,11 @@ superseded indeterminate send.
 The peer's audit token is the authority; no capability rides on the wire,
 and a UDS caller is refused with `error.scope_violation`.
 
-Publishes the tab's live label (the shell's OSC 0/2 title, a manual
-rename, or whatever else won the GUI's title precedence) in the optional,
-bounded, normalized form `tabs.list` serves in place of the static `name`
-stamped at `session.create`. It is omitted whenever it would say nothing
-`name` does not already, and readers fall back to `name` whenever it is
-absent.
+Publishes the tab's live label (the shell's OSC 0/2 title, a manual rename, or
+whatever else won the GUI's title precedence) into the daemon's optional,
+bounded session metadata. Public `tab.list` reads the GUI projection directly;
+this cached value remains available to daemon-internal diagnostics and
+version-skew paths.
 
 The GUI is the only writer by construction: it is the only process that
 sees OSC sequences. It pushes under the tab's primary terminal's session
@@ -1175,9 +1176,9 @@ flushes once per window instead of being postponed indefinitely. The GUI
 republishes each live tab's title after a reconnect, once the session
 inventory has been re-supplied, so the push lands on a session the daemon
 holds. That republish is required because the daemon cache is memory-only:
-a daemon restart or connection replacement would otherwise leave
-`tabs.list` reporting the session name until the next OSC event, which
-may never come.
+a daemon restart or connection replacement would otherwise leave the daemon's
+cached title at the session name until the next OSC event, which may never
+come.
 
 A refusal that says the transport structurally can't accept the method
 stops that tab's publisher rather than earning a refusal for every title
@@ -1216,6 +1217,11 @@ Unicode property identifies, namely `U+2800` BRAILLE PATTERN BLANK, which
 is handled as a space: trimmed at the edges, never counted as content,
 but kept between braille characters where it is the word separator.
 
+`WorkspaceProjection` applies the same normalizer independently when it builds
+the public `WorkspaceTab.title`. It normalizes the live GUI title, then falls
+back through the tab name, primary terminal name, and `Terminal`. This path
+does not read the daemon's per-session title cache.
+
 A push arriving from a connection strictly older than the one that last
 wrote that session's title is dropped: handler tasks are not FIFO, so a
 push admitted on a connection the GUI has already replaced could
@@ -1238,7 +1244,8 @@ never owned.
 A cohort is the set of sessions that jointly control a device pane, which is
 how pane authority reaches every terminal in a tab instead of only the
 terminal that attached the device. For GUI tabs, the GUI's stable `cohortId`
-is also the `tabId` stored on every session and exposed by `tabs.list`. The
+is also the `tabId` stored on every session and exposed as
+`WorkspaceTab.id` by `tab.list`. The
 daemon stores that UUID, an ordered membership of verified session
 incarnations, and one representative used for attribution. The shared
 identifier describes grouping but grants no authority: only the validated GUI
@@ -1330,98 +1337,36 @@ retired.
 Cohorts take effect once the GUI calls `session.setCohort`; a pane with no
 cohort answers to its own session, the compatibility path.
 
-#### `tabs.list`
-
-- Params: `{}` (body ignored)
-- Result: bare array `[{sessionId, tabId, shortId, name?, displayTitle?, label?}]`
-- Scope: daemon-wide
-
-One entry is returned per live daemon session, not per GUI tab. `sessionId`
-identifies that daemon session. Each GUI terminal pane has a session, so a split
-tab produces multiple rows.
-
-Required `tabId` is the grouping UUID. Every terminal session in one GUI tab
-shares its tab UUID. It remains stable for the tab's lifetime, including
-daemon-only restarts and primary-terminal promotion, and is accepted directly
-by workspace verbs as `--tab <tabId>`.
-
-A session created or restored without a GUI tab UUID self-groups under its
-`sessionId`. Group rows by `tabId`; GUI-backed groups correspond to tabs.
-Distinct groups can also include non-GUI sessions, and the response does not
-distinguish them. `name` is the session's worktree branch captured at
-`session.create`; `shortId` is its six-character convenience reference. The
-result remains a bare array rather than a wrapper object.
-
-`displayTitle` is the GUI's live tab label as last pushed via
-`session.setDisplayTitle`, in the optional, bounded, normalized form
-described there. It is not an identifier and never resolves a
-`--tab <ref>`, since it changes as often as the shell redraws its prompt;
-readers fall back to `name` whenever it is absent. It is absent when no
-GUI has pushed one (including after a daemon restart, until the GUI
-republishes), when the tab's label carries nothing beyond `name` (the
-label is the name, or the GUI's generic fallback for a tab with no name,
-no title, and no known directory), and for the non-primary terminals of a
-split tab. For an unprotected session it is public metadata: a program
-that emits an OSC title is publishing that string to every observer that
-can see the tab.
-
-A fresh daemon starts with no sessions (nothing is rehydrated from disk);
-the list is populated by `session.create` and by the validated GUI's
-`session.restoreBatch` after a daemon-only restart, so it never accumulates a
-cross-restart graveyard. Protected sessions remain visible only according to
-the existing caller-relative protection filter. An empty or shortened array
-is therefore a successful visibility projection, not an error.
-
-#### `panes.list`
+#### `pane.deviceList`
 
 - Params: `{sessionId, cap}`
 - Result: bare array
   `[{paneId, udid, state, family, shortId, name?, capabilities, target, orientationConfirmationSupported?, orientation?, surface?}]`
 - Scope: session
 
-The panes the session may drive: its cohort's, plus its own unbound ones.
-The payload `(sessionId, cap)` is provenance-checked
-and must name the connection's own session; the validated GUI peer is the
-sole cross-session exception. `family` is the coarse device
-class; `capabilities` and `target` are as in `pane.create`.
+This is the daemon-direct roster for device control, waits, and the doctor
+authentication probe. It lists the device panes the authenticated session may
+drive: its cohort's panes plus its own unbound panes. It does not include
+terminal panes and is not the public workspace inventory.
 
-Backs `deviceterm panes list` and the CLI's pane resolution: input
-commands resolve their target paneId through this (default is the
-tab's sole device pane, `--pane` to disambiguate).
+The payload credentials must name the connection's provenance-checked session;
+the validated GUI is the sole cross-session exception. `family`,
+`capabilities`, and `target` match `pane.create`.
 
-`orientationConfirmationSupported` reports whether the current backend can
-produce confirmed orientation evidence. It is true for a Simulator with a live
-display-orientation observer and for a physical device whose relay reports
-rotation outcomes. `orientation` remains absent until the first confirmation.
-A true support signal with absent orientation means no confirmation has been
-observed yet.
+Public `deviceterm pane list` uses the GUI-backed `pane.list` workspace
+method instead. Keeping these surfaces separate prevents the daemon's backend
+roster from being mistaken for the GUI layout.
 
-`surface`, when a current rendered surface exists, is
-`{sequence, width, height}`. `sequence` is the pane-local surface sequence and
-the dimensions are the IOSurface pixel dimensions. The support, orientation,
-and surface fields are optional for version skew.
+`orientationConfirmationSupported` reports whether the backend can produce
+confirmed orientation evidence. `orientation` remains absent until the first
+confirmation. `surface`, when present, is
+`{sequence, width, height}`.
 
-The CLI implements waits without another RPC method. It probes current state
-immediately, then at a non-overlapping 100 ms cadence until its monotonic
-deadline. Each RPC receives the smaller of the remaining overall time and its
-normal command-specific RPC ceiling. Authentication, response reads, and
-retryable session-readiness delays spend that single RPC deadline. When the
-remaining overall time is the limiting deadline, expiry becomes `wait.timeout`.
-An earlier command-specific RPC deadline remains `transport.timeout`. Other
-failed queries return immediately under their shared classifications.
-
-An explicit pane reference may appear after a wait starts. After the first
-resolution, the CLI pins the wait to that pane ID. AX waits pair each pane-list
-probe with one tree or sweep query. Orientation waits require two consecutive
-matching observations with stable positive surface dimensions.
-
-For a sweep-based AX wait, the CLI reduces the requested or default daemon work
-budget to the milliseconds remaining before the overall wait deadline. A wait
-that times out therefore does not leave a longer sweep holding the pane's
-accessibility queue, apart from an already in-flight bridge call that the
-daemon cannot interrupt.
-
-### Devices
+The CLI implements device waits without another RPC method. It probes this
+roster immediately, then at a non-overlapping 100 ms cadence until its
+monotonic deadline. Each RPC receives the smaller of the remaining overall
+time and its normal command-specific ceiling. After first resolution, the CLI
+pins the wait to the resolved pane ID.
 
 #### `device.list`
 
@@ -1616,7 +1561,7 @@ connected devices that share a name.
 Not a `simctl list` or `devicectl list` clone: it never enumerates
 shutdown or never-booted sims; the value added is the pane and ownership
 layer. The `ownerSessionId` annotation obeys the same protected-tab
-opacity rule as `tabs.list`: a device attached only in a protected session
+protection opacity rule: a device attached only in a protected session
 the caller doesn't own reads as `attached: false`. Backs
 `deviceterm devices list`.
 
@@ -1672,7 +1617,7 @@ a peer that omits the block leaves the client on `missingBlockFallback`.
 The added `location` flag reads `false` when absent from a present block;
 the original fields remain required.
 
-Starting the display suspends, so the record stays out of `panes.list` until it
+Starting the display suspends, so the record stays out of `pane.deviceList` until it
 is fully started. The create claims the target instead, and a competing create
 parks on that claim rather than being handed a record whose frames have not
 started. A session close invalidates the claim through its owner incarnation,
@@ -1694,6 +1639,16 @@ Orphan re-attach and most pane creation use `device.attach` instead: this
 method only creates the pane and leaves daemon ownership pointed at any
 prior owner.
 
+#### `pane.setName`
+
+- Params: `{paneId, name?}`
+- Result: `{ok}`
+- Scope: validated GUI
+
+Mirrors a GUI-committed pane name into the daemon's device-pane roster so
+daemon-direct device commands resolve the same stable name as public workspace
+reads. A missing name clears the manual name.
+
 #### `pane.closeById`
 
 - Params: `{paneId, mode?, expectedAttachment?}`
@@ -1708,7 +1663,7 @@ default when `mode` is omitted, drops the pane and leaves the sim
 running; `"shutdown"` also shuts down the sim.
 
 Closing a pane whose gesture still holds contact does not tear it down.
-The pane is retired instead: gone from `panes.list` and from every further
+The pane is retired instead: gone from `pane.deviceList` and from every further
 request, but its backend stays alive until the gesture releases, because
 pulling it out mid-gesture strands the contact.
 
@@ -2547,282 +2502,286 @@ unsubscribe the live GUI.
 - Scope: validated GUI
 
 The GUI's per-command reply on the back-channel; `data` is the verb's
-JSON payload as a base64 string, `error` is `{code, message}`. Accepted
+JSON payload as a base64 string, and `error` is
+`{code, message, details?, rpcCode?}`. `rpcCode` is present when the GUI must
+return a pane-attach failure as a numeric RPC error rather than an intent
+error. A daemon reply keeps its original code and message. A GUI-local
+transport failure or timeout uses `-32000`. The daemon relays a supplied
+numeric code unchanged to the originating caller. When `rpcCode` is absent,
+the normal intent-error mapping applies.
+Accepted
 only from the current subscriber connection: a result from any other
 connection is refused with `error.scope_violation`, so a second local
 process can't forge replies. The daemon's `AppCommandCoordinator` keys
 pending continuations by `commandId` and resumes the matching awaiting
-CLI handler. A 4 s timeout surfaces a wedged GUI as
-`intent.guiUnavailable`, held under the CLI's own 5 s default to reserve
-time for that coded error to get back before the transport deadline
-(`AppCommandDeadline`).
+CLI handler. Read operations retain the 4 second GUI and 5 second CLI
+budgets. Workspace mutations use 17 seconds in the daemon and 18 seconds in
+the CLI because they await committed AppKit and session state. In both cases
+the margin reserves time for `intent.guiUnavailable` to return before the
+transport deadline (`AppCommandDeadline`).
 
 ### Workspace verbs
 
-CLI workspace verbs flow through the back-channel above: the daemon
-validates authentication, the dispatcher binds
-`SessionDispatchContext.originatingSessionId` (a task-local) for the
-publish-verb handler, and a typed `AppCommand` is published and awaited;
-the GUI's reply becomes the caller's result. The CLI never threads
-credentials in params; the wire shapes stay clean.
+Public workspace verbs publish a typed `AppCommand` through the GUI
+back-channel. The GUI resolves refs against its live workspace, commits the
+operation, and returns public projection objects. The CLI never threads
+credentials in individual params.
 
-Refs on the wire are typed `{type, value?}` objects. A tab ref's `type` is one
-of `current`, `sessionId`, `shortId`, or `name`. The `sessionId` tag represents
-a full UUID-shaped tab reference. The GUI resolver matches either a terminal's
-`sessionId` or the tab's shared `tabId`, allowing a GUI-backed `tabs.list`
-grouping key to be passed directly to `--tab`. A pane ref's type is one of
-`current`, `paneId`, `udid`, or `shortId`; a window ref's is one of `current`,
-`index` (the value is the stringified index), or `keyed`.
-`current` resolves origin-aware: an external caller's `.current` is its
-own tab or window, not the human's key window, and `.index` counts the
-caller-visible window projection (see "GUI command back-channel").
+Refs are raw optional strings, not tagged ref objects, and resolve
+case-insensitively. Window and tab refs accept an exact short ID, exact full
+UUID, exact unique name, or unique full-UUID prefix. Pane refs accept an exact
+short ID, exact full ID, exact unique name, exact Simulator UDID or physical
+device ID, or unique full-ID prefix. Names match exactly, never by prefix. A
+window's one-based index is output metadata and never resolves as a ref.
 
-Most verbs here are session-scoped. `windows.list` stays daemon-wide, and
-`tab.open`, `tab.select`, `tab.move`, `window.open`, and `window.focus`
-need an automation grant, because they affect workspace structure or focus
-rather than anything inside the caller's own tab.
+An omitted ref or `current` means origin-aware current state. For an external
+caller it is the window, tab, or terminal pane containing the caller's session,
+not whatever the person last focused in the GUI. Window and tab short IDs are
+the first six lowercase hexadecimal characters of their UUIDs. Pane short IDs
+are daemon-minted, six-character lowercase Crockford base32 values.
 
-Scope is not the whole authorization story for the rest of them.
-`tab.close`, `tab.rename`, `pane.openTerminal`, `pane.close`, and
-`window.close` stay session-scoped because a caller really can invoke them
-on its own tab. The GUI then authorizes the resolved target and refuses
-anything outside the caller's own tab without a live grant.
-`daemon.capabilities` advertises scope only, so it is deliberately the
-coarser of the two, the same way pane ownership already works.
+Read methods and `pane.captureText` use the ordinary 4 second GUI and 5
+second CLI budgets. Mutations may wait for AppKit reconciliation or terminal
+session creation and use the 17 second GUI and 18 second CLI budgets.
 
-#### `tab.open`
+Mutation results are `WorkspaceMutationReceipt` objects with `ok: true`
+plus the committed `window`, `tab`, `pane`, or `closed` object relevant
+to the verb. They never echo the unresolved request. Workspace list/show
+results use `WorkspaceWindow`, `WorkspaceTab`, `WorkspacePane`,
+`WorkspaceWindowDetail`, and `WorkspaceTabDetail`.
 
-- Params: `{window?, role, cwd?, cmd?}`
-- Result: `{ok}`
-- Scope: automation tab
+#### `window.list`
 
-Opens a tab, optionally in a given window and working directory, running
-an optional command. `role` rides the wire, but the GUI translator
-forces `agent` regardless of the value; an automation tab is opened
-only from the GUI menu.
-
-A new tab is workspace structure, not something inside the caller's own
-tab, so an ungranted session is refused with `error.scope_violation`. A
-script can't bootstrap a workspace for itself; a person opens the first
-automation tab.
-
-#### `tab.close`
-
-- Params: `{tab, mode}`
-- Result: `{ok}`
+- Params: `{all}`
+- Result: `[WorkspaceWindow]`
 - Scope: session
 
-Closes the resolved tab. `mode` is `"detach"` (keep sims running) or
-`"shutdown"` (close panes and shut down sims). Without a live automation
-grant the caller reaches only a tab it owns, and only while it holds that
-tab's single terminal; a split tab holds other sessions. Refused with
-`intent.automationRequired`.
+Lists the caller's window, or every caller-visible window when `all` is true.
+The GUI projection filters protected tabs before computing indices and counts.
 
-#### `tab.rename`
+#### `window.show`
 
-- Params: `{tab, name?}`
-- Result: `{ok}`
+- Params: `{window?}`
+- Result: `WorkspaceWindowDetail {window, tabs}`
 - Scope: session
 
-Renames the resolved tab. For actions that don't fit the Route shape,
-rename included, the GUI's `IntentDispatcher` calls an injected
-`IntentActionDelegate`. Without a live automation grant the caller reaches
-only a tab it owns a terminal in.
-
-#### `tab.select`
-
-- Params: `{tab}`
-- Result: `{ok}`
-- Scope: automation tab
-
-Selects the resolved tab. Gated even when the target is the caller's own
-tab: selection can replace the visible tab and pane focus in that
-window.
-
-#### `tab.info`
-
-- Params: `{tab}`
-- Result: `{sessionId, shortId?, name?, role, cwd?, label?, isCurrent, simPanes}`;
-  each `simPanes` element is `{paneId, udid, shortId?, displayName, family}`
-- Scope: session
-
-Read-only: the GUI answers inline from the workspace rather than
-dispatching a Route.
-
-#### `tab.move`
-
-- Params: `{tab, toIndex?, toWindow?}`
-- Result: `{ok}`
-- Scope: automation tab
-
-Reorders a tab within its window (`toWindow` nil, `toIndex` required) or
-relocates it to a different window (`toWindow` set; a nil `toIndex`
-appends). A `toWindow` that resolves to the tab's own window is treated
-as a same-window reorder and still requires `toIndex`. Cross-window
-relocation moves the tab's live view controller,
-so the GUI performs it in the AppDelegate transfer coordinator rather
-than the Router.
-
-Gated even when the target is the caller's own tab. A reorder can shift other
-tabs' positions, and `toWindow` moves the tab into what may be another agent's
-window.
-
-#### `tab.setProtected`
-
-- Params: `{tab, isProtected}`
-- Result: `{isProtected, committed}` or an error
-- Scope: session
-
-Owner-only on the GUI side: the `IntentDispatcher` handler for
-`RouteIntent.setTabProtected` rejects when the resolved tab's terminals
-don't include the caller's session id, judged by origin, so the human
-menu always passes and an external caller must own a terminal in the
-tab. An automation grant does not widen this gate; the handler ignores the
-grant bit.
-
-The rejection is `intent.ownerRequired`. The gate runs after resolution,
-which already refuses a foreign protected tab, so what reaches it is a tab the
-caller can see in `tabs list`, and naming the reason leaks nothing. If a
-non-owner reaches this gate with an effectively protected tab, the
-fail-closed fallback is `intent.notFound`; the accessibility predicate
-prevents that state.
-
-The GUI drives an awaited, fail-closed transition: an
-unprotected-to-protected request hides the tab immediately, before any
-round-trip, while a protected-to-unprotected one stays hidden until the
-daemon acks. The GUI converges the daemon via `session.setProtectedBatch`
-(with a post-ack membership recheck) and returns the real outcome.
-`committed: true` means the daemon applied it. `committed: false` means
-the requested state remains unconfirmed: a deadline, an indeterminate
-transport loss, a same-state supersession, or tab disappearance. A
-definite refusal or an opposite-state supersession is a command failure.
-The CLI therefore reports the daemon's state, never an optimistic echo.
-
-Ordering is daemon-enforced by the batch's `(epoch, revision)` key, so
-the GUI does not serialize sends and a stalled or reconnected send can
-never reorder. Presentation is fail-closed and driven only by
-authoritative signals: a tab is exposed only by the owning transition's
-highest-key unprotect `applied: true` or a fenced uniform-unprotected
-`session.protectionSnapshot`; a definite rejection or a stale
-`applied: false` triggers a fenced-snapshot reconcile (the tab stays
-hidden unless that snapshot is fenced and uniform-unprotected) rather than
-any local guess.
-
-New terminals added to a protected tab via `Route.openTerminalPane`
-inherit the protection bit atomically at creation (`session.create` with
-`initialProtected: true`), never a follow-up toggle.
-
-#### `pane.openTerminal`
-
-- Params: `{tab?, cwd?, cmd?}`
-- Result: `{ok}`
-- Scope: session
-
-Opens a terminal split in the resolved tab; unlike the tab verbs, the
-`tab` ref itself is optional here. The new terminal is its own session.
-With no `tab` and no current tab, the GUI opens a fresh window and tab
-instead, and `cwd`/`cmd` are dropped on that fallback because the
-open-window route has no surface for them. An omitted `tab` resolves to the
-caller's own tab, so only the named form can land elsewhere, and that needs
-a live automation grant.
-
-#### `pane.close`
-
-- Params: `{pane, mode}`
-- Result: `{ok}`
-- Scope: session
-
-The user-facing `deviceterm pane close`, flowing through the
-back-channel so the ref is resolved against the GUI's live workspace.
-The lower-level `pane.closeById` is the daemon-internal primitive the
-Router uses for tab and window close fan-out; both coexist deliberately.
-`mode` is `"detach"` or `"shutdown"`. Authorized against the pane's host
-tab: without a live automation grant the caller reaches only panes in a tab
-it owns a terminal in.
-
-The host tab is the whole of it on this path. The daemon's pane-ownership
-check (`PaneCoordinator.authorize`) constrains a session calling
-`pane.closeById` directly, but the GUI reaches it as the validated peer, a
-`.guiPeer` principal that spans sessions by design. So a second terminal in
-a shared tab can close a pane the tab's primary session owns.
-
-#### `pane.rename`, `pane.move`
-
-- Params: typed per verb
-- Result: error
-- Scope: session
-
-Registered for forward compatibility but not implemented. The GUI
-returns `intent.internalError`. The CLI carries success renderers for
-both, but they remain unreachable because the GUI fails the call first.
-
-#### `pane.info`
-
-- Params: `{pane}`
-- Result: `{paneId, udid, shortId?, name?, displayName, family, linkedSessionId}`
-- Scope: session
-
-Read-only: answered inline from the workspace.
-
-#### `pane.attach`
-
-- Params: `{target, relinkExisting?}`
-- Result: `{ok}`
-- Scope: session
-
-Mounts a device pane by `target` (a `PaneTarget`): `{"sim": {"udid"}}`
-claims an unlinked sim (an external sim, or one left over from a closed
-agent tab); `{"device": {"deviceId"}}` mounts a physically-connected
-device. The GUI dispatches the matching route through the back-channel.
-
-`relinkExisting` (absent reads as `false`) decides what happens when the
-target is already mirrored elsewhere. The shim's contextual auto-attach
-sends `true`, one-mirror-latest-wins, a cross-tab move; explicit
-`deviceterm device attach` sends `false` and keeps the cross-tab reject,
-leaving the GUI drag as the relocation path.
+Shows one window and its caller-visible tabs.
 
 #### `window.open`
 
 - Params: `{}`
-- Result: `{ok}`
+- Result: receipt with `window`, first `tab`, and initial terminal `pane`
 - Scope: automation tab
 
-Opens a new window.
-
-#### `window.close`
-
-- Params: `{window, mode}`
-- Result: `{ok}`
-- Scope: session
-
-Closes the resolved window. Refused if the target window also holds a
-tab the caller can't see, so it can't tear down a co-hosted foreign
-protected tab. `mode` is `"detach"` or `"shutdown"`. It also refuses a
-window holding any tab the caller doesn't solely own, unless the caller
-holds a live automation grant, because closing the window closes those
-tabs.
+Waits for the window, tab, and terminal session to commit. It does not wait for
+the shell surface to attach.
 
 #### `window.focus`
 
-- Params: `{window}`
-- Result: `{ok}`
+- Params: `{window?}`
+- Result: receipt with committed `window`, selected `tab`, and focused `pane`
 - Scope: automation tab
 
-Focuses the resolved window. Gated even on the caller's own window: bringing
-a window forward takes the human's attention, and which window is key is
-shared state.
+Raises the window and synchronizes workspace selection.
 
-#### `windows.list`
+#### `window.close`
 
-- Params: `{all}`
-- Result: `[{index, isKey, tabCount, selectedTabShortId?}]`
-- Scope: daemon-wide
+- Params: `{window?, mode}`
+- Result: receipt with `closed.resource == "window"` and `mode`
+- Scope: session
 
-Defaults to the caller's window; `all: true` returns every window in the
-caller-visible projection. Windows and tabs another session protects are
-omitted, and indices and counts cover only the visible ones. An
-out-of-tab caller gets an empty list by default and the caller-visible
-projection with `all`.
+`mode` is `"detach"` or `"shutdown"`. Without automation authority every
+tab in the window must be visible and solely owned by the caller.
+
+#### `tab.list`
+
+- Params: `{window?, all}`
+- Result: `[WorkspaceTab]`
+- Scope: session
+
+Lists tabs in the caller's window, one selected window, or all visible windows.
+One row represents one GUI tab even when it holds several terminal sessions.
+
+#### `tab.show`
+
+- Params: `{tab?}`
+- Result: `WorkspaceTabDetail {tab, panes, layout}`
+- Scope: session
+
+Returns every pane kind in layout order and the recursive split tree.
+
+#### `tab.open`
+
+- Params: `{window?, cwd?, command?}`
+- Result: receipt with host `window`, new `tab`, and initial terminal `pane`
+- Scope: automation tab
+
+`command` is an optional string array; the CLI supplies one entry from
+`--command`. The route waits for `session.create` and uses that session ID as
+the terminal pane ID. It does not wait for shell attachment.
+
+If the tab commits and session creation fails, the failed tab remains visible
+with lifecycle `failed`. The result is `intent.mutationFailed` with the
+receipt encoded in `error.details.committed`, so the caller can still address
+or close it.
+
+#### `tab.focus`
+
+- Params: `{tab?}`
+- Result: receipt with `window` and `tab`
+- Scope: automation tab
+
+Selects the tab and raises its window.
+
+#### `tab.close`
+
+- Params: `{tab?, mode}`
+- Result: receipt with `closed.resource == "tab"` and `mode`
+- Scope: session
+
+An ungranted caller may close only a tab it owns as the sole terminal session.
+
+#### `tab.rename`
+
+- Params: `{tab?, name?}`
+- Result: receipt with committed `tab`
+- Scope: session
+
+Assigns or clears the stable tab name. The GUI's dynamic title remains a
+separate display field.
+
+#### `tab.move`
+
+- Params: `{tab?, window, index?}`
+- Result: receipt with destination `window` and moved `tab`
+- Scope: automation tab
+
+Moves the tab to `window`, appending when `index` is absent. A same-window
+move requires the zero-based `index`.
+
+#### `tab.protect`
+
+- Params: `{tab?}`
+- Result: receipt whose `tab.protected` is true
+- Scope: session
+
+Target-tab ownership or a live automation grant is required. The GUI applies
+the fail-closed `session.setProtectedBatch` transition and returns only after
+it commits. A grant widens authority over visible tabs, not visibility itself.
+
+#### `tab.unprotect`
+
+- Params: `{tab?}`
+- Result: receipt whose `tab.protected` is false
+- Scope: session
+
+Target-tab ownership or a live automation grant is required. A foreign
+protected tab is absent from the resolver even for a granted caller, so only
+an owning terminal can resolve that tab to unprotect it.
+
+#### `pane.list`
+
+- Params: `{tab?}`
+- Result: `[WorkspacePane]`
+- Scope: session
+
+Lists terminal, Simulator, and physical-device panes from the GUI in layout
+order. This is the public workspace inventory; daemon-direct device commands
+use `pane.deviceList` instead.
+
+#### `pane.show`
+
+- Params: `{pane?}`
+- Result: `WorkspacePane`
+- Scope: session
+
+Returns one pane with common identity, focus, and capabilities plus its
+`terminal`, `simulator`, or `device` detail object.
+
+#### `pane.split`
+
+- Params: `{pane?, direction}`
+- Result: receipt with host `tab` and new terminal `pane`
+- Scope: session
+
+`direction` is `"left"`, `"right"`, `"up"`, or `"down"` relative to the
+anchor pane. The operation waits for session creation and returns its ID as the
+new terminal pane ID.
+
+#### `pane.focus`
+
+- Params: `{pane?}`
+- Result: receipt with `window`, `tab`, and `pane`
+- Scope: automation tab
+
+Selects and raises the pane's window and tab, then gives that pane keyboard
+focus.
+
+#### `pane.close`
+
+- Params: `{pane?, mode?}`
+- Result: receipt with `closed.resource == "pane"` and resolved `mode`
+- Scope: session
+
+Closes any pane kind. An omitted `mode` resolves to `"detach"`. An explicit
+mode is accepted only after the pane ref resolves to a Simulator; a terminal
+or physical-device target fails with `intent.unsupportedPane`. Closing the
+last terminal pane is refused with `intent.wouldCloseTab` so a pane command
+cannot implicitly erase the tab workspace.
+
+For an ungranted external caller, a terminal target must be the pane backed by
+the caller's exact session. Simulator and physical-device targets retain
+target-tab ownership and then pass through the daemon's cohort authorization.
+A live automation grant satisfies either GUI mutation check.
+
+#### `pane.rename`
+
+- Params: `{pane?, name?}`
+- Result: receipt with committed `pane`
+- Scope: session
+
+Assigns or clears a stable pane name. Simulator and physical-device names are
+also synchronized to the daemon-direct device roster.
+
+Authority matches `pane.close`: terminal targets require the caller's exact
+session or a grant, while Simulator and physical-device targets use target-tab
+ownership or a grant before the daemon's existing cohort check.
+
+#### `pane.sendInput`
+
+- Params: `{pane, text, typeDelayMs?}`
+- Result: receipt with terminal `pane`, `bytes`, and `typeDelayMs?`
+- Scope: automation tab
+
+The pane ref is required and must resolve to a terminal. The reply reports
+dispatch or paced-input enqueue and never echoes `text`.
+
+#### `pane.captureText`
+
+- Params: `{pane}`
+- Result: `WorkspaceCaptureResult {pane, text}`
+- Scope: automation tab
+
+The pane ref is required and must resolve to a terminal. The text is the
+visible viewport, not scrollback.
+
+#### `pane.attach`
+
+- Params: `{target, relinkExisting?}`
+- Result: receipt with host `tab` and attached `pane`
+- Scope: session
+
+Internal AppCommand used by shim auto-attach and `device attach`. A Simulator
+target carries `udid`; a physical target carries `deviceId`. Explicit CLI
+attach uses `relinkExisting: false`.
+
+A pending or failed placeholder is GUI presentation state, not a committed
+`WorkspacePane`. The explicit route waits until the pane appears in the GUI
+projection, but not until it reaches rendering state. If attach fails, the
+placeholder remains in its layout slot. Repeating `device attach` for that
+target retries the existing placeholder instead of allocating another slot.
+The failure preserves the daemon's numeric RPC code and message; a GUI-local
+transport failure or timeout reports `-32000`.
 
 ### Automation
 
@@ -2832,95 +2791,14 @@ projection with `all`.
 - Result: `{applied}`
 - Scope: validated GUI
 
-Issues live automation grants (leases) for a tab's sessions,
-attributed to the issuing GUI connection, which is read server-side from
-the dispatch context, never the payload. Automation authority is the
-presence of a live grant, checked per request, never a persisted role:
-a forged role grants nothing, and nothing role-bearing is persisted at
-all.
+Issues live automation leases attributed to the validated GUI connection.
+Authority is checked per request and is never inferred from `SessionRole`.
+Ordering is last-write-wins by GUI connection epoch and revision.
 
-Ordering is last-write-wins by an `(epoch, revision)` key, where the
-epoch is the issuing XPC connection id, so a reconnected GUI dominates
-and a stale request loses; a revoke leaves a tombstone so a late grant
-can't resurrect it. Every target must be a live session before anything
-mutates (`invalidParams`, all-or-none).
-
-Grants are never persisted: they live only in memory, so the store is
-empty after a daemon restart and can be repopulated only over this
-validated-GUI connection. The GUI is the sole issuer: it grants an
-automation tab's session once that terminal binds, so the grant rests
-on a live, terminal-bound session, and it reissues on reconnect after
-the terminal rebinds. Revocation is implicit too: closing a tab or
-terminal calls `session.close`, and the store revokes on session
-removal.
-
-#### `automation.revoke`
-
-- Params: `{sessionIds, revision}`
-- Result: `{applied}`
-- Scope: validated GUI
-
-Revokes the live grants for the given sessions (tab closed or
-downgraded), ordered by the same `(epoch, revision)` key. Revocation is
-immediate: a socket authenticated before the revoke fails its next
-automation call, because the scope check reads live grant state.
-Grants are also revoked automatically when the issuing GUI connection
-disappears and when a session is removed.
-
-Idempotent: a target whose session is already gone is treated as
-already-revoked and stores nothing, so a late or spurious revoke can't
-accrete tombstones. `applied: true` means revoked for every target, a
-convergence rather than necessarily a state change; `applied: false`
-comes back when a live target's stored key is at least as new as this
-one. Dominance is strict, so an exactly-replayed revision loses too.
-
-#### `tab.sendInput`
-
-- Params: `{tab, text, typeDelayMillis?}`
-- Result: `{ok}`
-- Scope: automation tab
-
-Writes `text` into the resolved tab's terminal as though the user had
-typed it. Authorization is a live automation grant for the session,
-checked per request, never a role; a caller without a grant is rejected
-at the dispatcher's scope check with `error.scope_violation`.
-
-Reachable over both transports for a session that holds a grant: a
-validated-GUI XPC connection, or the CLI inside a granted automation
-tab, since a UDS session authenticates via cap plus kernel
-terminal-process provenance. The GUI issues the grant when an
-automation tab's terminal binds and reissues it on reconnect, so
-`deviceterm tab send-input` works from inside such a tab; an ordinary
-agent tab holds no grant and is refused. Only escalation stays
-XPC-GUI-only: grants are minted solely by the validated GUI
-(`automation.grant`), so a UDS caller can only exercise a grant it was
-given, never issue one.
-
-The receipt reports the target tab and the UTF-8 byte count, plus
-`typeDelayMillis` in the JSON receipt, and never the typed text. The CLI
-decodes C-style escapes (`\n`, `\r`, `\xNN`, and the rest) at parse time
-so the documented examples drive the shell. `typeDelayMillis`, when
-positive, makes the GUI animate the injection one `Character` at a time
-(for screencasts) on a per-tab serial task; the reply returns as soon as
-the animation is enqueued, non-blocking, so the back-channel drain and
-the daemon's publish deadline aren't held for the typing duration. Zero
-or absent is the instant one-shot. The CLI caps the value at 1000 ms.
-
-#### `tab.capture`
-
-- Params: `{tab}`
-- Result: `{text}`
-- Scope: automation tab
-
-Returns the resolved tab's currently-visible viewport as plain text;
-there are no scrollback or line-count flags. Authorization is a live
-automation grant, per request, never a role, reachable over both
-transports exactly as `tab.sendInput`.
-
-CLI human mode writes the captured text to stdout, appending a trailing
-newline only when the text lacks one (so
-`deviceterm tab capture > screen.txt` saves the screen); `--json` emits
-the payload.
+There is no public revoke method. Session removal, issuing-GUI disconnect, and
+other internal lifecycle paths revoke leases directly in
+`AutomationGrantStore`. Keeping revocation off the RPC surface prevents a UDS
+caller from trying to escalate or reshape grants.
 
 ## Location simulation is a GUI affordance, enforced by scope
 
@@ -3230,48 +3108,49 @@ Three properties hold for physical panes:
   shared connection) and ignored from UDS. It does NOT copy the legacy
   sim `device.attach({udid, sessionId, cap})` credential shape.
 - **Protected-tab opacity.** `devices.list`'s ownership annotation reuses
-  the `tabs.list` opacity predicate verbatim: a device attached only in a
+  the session-protection opacity predicate verbatim: a device attached only in a
   protected session the caller can't see reads as unattached.
 
 ## GUI command back-channel
 
 The workspace CLI's `AppCommand`-backed verbs (the `deviceterm tab`,
-`pane`, `device attach`, `window`, and `windows` families) need to read
+`pane`, `device attach`, and `window` families) need to read
 or *mutate* GUI-owned state (tabs, panes, windows), state the daemon
 doesn't hold. Both the CLI back-channel for these verbs AND a future
 deep-link / AppleScript / URL-handler input boundary share the same
 need: translate an external request into a typed intent that the
 GUI's existing navigation machinery executes.
 
-The architecture is a single Intent layer that every external source
-funnels through:
+External request sources share one intent boundary. GUI-owned menus,
+shortcuts, and tab-strip actions already hold concrete GUI IDs and dispatch
+`Route` values directly:
 
 ```mermaid
 flowchart TD
-    SRC1["CLI (back-channel)"] -->|AppCommand| CT[CLIIntentTranslator]
-    SRC2["Deep link (future)"] -->|URL| DP["DeepLinkParser (future)"]
-    SRC3["Menu (NSMenuItem action)"] -->|"RouteIntent built inline"| RI
-    CT --> RI["RouteIntent (source-agnostic; refs by tabId / sessionId / shortId / udid / name)"]
-    DP --> RI
-    RI --> ID["IntentDispatcher: resolves refs to GUI IDs, validates, synthesizes Routes"]
-    ID --> R["Router.dispatch(Route), the unchanged surface"]
-    R --> AK["AppKit reconcile (existing)"]
+    CLI["CLI workspace verb"] -->|AppCommand| CT[CLIIntentTranslator]
+    FUTURE["Future external source"] --> PARSER["Source parser"]
+    CT --> RI["RouteIntent with raw string refs"]
+    PARSER --> RI
+    RI --> ID["IntentDispatcher"]
+    ID -->|"resolve, authorize, project"| WS["Live GUI workspace"]
+    ID -->|"dispatch and await"| R[Router]
+    R --> AK["AppKit and terminal-session commit"]
+    GUI["Menus, shortcuts, tab strip"] -->|"concrete GUI IDs"| R
 ```
 
 Components:
 
 - **`RouteIntent`** (`Sources/App/Intent/RouteIntent.swift`): typed
-  intent enum with one case per verb. Carries external refs
-  (`TabRef`, `PaneRef`, `WindowRef`) rather than GUI-internal
-  `WindowID` / `TabID`.
-- **`IntentResolver`**: reads the workspace to translate refs.
-  `TabRef.current` resolves to either the CLI's authenticated session
-  or the key window's selected tab.
-- **`IntentDispatcher`**: single consumer. For mutating intents,
-  synthesizes a `Route` and dispatches via `Router`. For read-only
-  intents (`*.info`, `windowsList`), reads from the workspace and
-  returns the payload inline. For actions that don't fit the Route
-  shape (rename), calls an injected `IntentActionDelegate`.
+  intent enum with one case per external workspace verb. It preserves refs as
+  raw optional strings so every ref resolves against one live snapshot.
+- **`IntentResolver`**: reads the caller-visible workspace to translate raw
+  refs. Omitted refs and `current` resolve against the authenticated session
+  for an external caller, or GUI selection for an in-process caller.
+- **`IntentDispatcher`**: single external-intent consumer. It resolves and
+  authorizes a target, dispatches a `Route` or calls the narrow injected
+  `IntentActionDelegate`, awaits the mutation's committed GUI and session
+  state, then returns a public projection. Singular list and show intents read
+  that projection directly.
 - **`AppCommandSubscriber`** (`Sources/App/AppCommandSubscriber.swift`):
   the GUI's drain loop on the `app.commands` subscription. Translates
   each `AppCommand` to a `RouteIntent`, dispatches, and replies via
@@ -3288,16 +3167,14 @@ Components:
   bound by both dispatchers (`RPCConnection`, `XPCConnection`) around
   every handler call. The
   publish-verb handlers read it to stamp `originatingSessionId` on
-  the `AppCommand`, so the GUI's `IntentResolver` can resolve
-  `TabRef.current` / `PaneRef.current` against the calling tab's
-  identity (the CLI never threads creds in params; the wire shape
-  stays clean).
+  the `AppCommand`, so the GUI's `IntentResolver` can resolve an omitted ref or
+  raw `current` against the calling terminal's identity. The CLI never threads
+  credentials in command params, so the wire shape stays clean.
 
-Mutating intents use optimistic-ok semantics: the CLI gets
-"ok" once the Router has *accepted* the Route; the actual reconcile
-happens shortly after on the MainActor drain. Read-only intents
-return real data inline. If a user-visible race ever surfaces, routes
-can carry completion handles for stricter semantics.
+Mutating intents return only after the relevant AppKit reconciliation and,
+for terminal creation, `session.create` have committed. Their
+`WorkspaceMutationReceipt` contains resolved public objects rather than the
+request token. Read-only intents return a live projection inline.
 
 Single-subscriber assumption: DeviceTerm runs one GUI process per
 daemon. The coordinator's `subscribe()` replaces any prior
@@ -3325,7 +3202,8 @@ The command's env carries `DEVICETERM_SESSION`, `DEVICETERM_SESSION_CAP`,
 
 The daemon is **not** in the PTY path. libghostty owns the master FD; the
 GUI consumes bytes through `GhosttyTerminalSurface` directly. The daemon
-sees the tab as a session only.
+sees each terminal pane as its own session. The shared `tabId` groups those
+sessions into a GUI tab cohort but is not itself authority.
 
 Sim panes piggyback on the existing session:
 `device.attach(udid, sessionId, cap)` transfers ownership of the booted sim
@@ -3334,10 +3212,10 @@ and creates the pane, then `pane.subscribe(paneId)` starts the
 
 ## Tab semantics (and CLI scoping)
 
-- **One terminal pane = one session UUID.** A tab holds one or more
-  terminal panes; the primary terminal is the tab's representative
-  session for tab-scoped operations (`tab info`, sim-pane attribution),
-  and tab-wide operations fan out over every terminal's session.
+- **One terminal pane = one session UUID.** A tab holds one or more terminal
+  panes and has its own cohort UUID. Public tab reads and refs use the cohort
+  identity; no primary terminal represents the tab on the public CLI.
+  Tab-wide operations fan out over every terminal session where needed.
 - Tab close with an owned booted sim → app-modal alert (unless
   suppressed): **Detach** (default, keeps sims running), **Shut Down
   Sims**, or **Cancel**. A tab owning no booted sim closes silently in
@@ -3346,13 +3224,14 @@ and creates the pane, then `pane.subscribe(paneId)` starts the
   **Shut Down All & Quit**.
 - **CLI scope:** the `DEVICETERM_SESSION` env var inside a terminal
   pane's shell scopes `deviceterm` commands to that pane's session.
-  `deviceterm panes list` shows the calling tab's panes; there is no
-  daemon-wide pane view over the CLI, because panes are cohort-scoped:
+  `deviceterm pane list` reads every caller-visible terminal, Simulator, and
+  physical-device pane from the GUI in layout order. Daemon-direct device
+  verbs still use the cohort-scoped `pane.deviceList` inventory:
   `PaneCoordinator.authorize` admits a `.session` principal only to a pane
   whose cohort membership contains it (or, for a pane with no cohort, whose
-  `Record.sessionId` matches; the validated GUI peer alone spans tabs), and a
-  foreign paneId is indistinguishable from an unknown one
-  (both `error.not_found`), so a leaked UUID names nothing reachable.
+  `Record.sessionId` matches; the validated GUI peer alone spans tabs). A
+  foreign paneId is indistinguishable from an unknown one, so a leaked UUID
+  names nothing reachable.
 - **Cross-tab attach: explicit is refused, shim relink moves.**
   `deviceterm device attach <ref>` naming a device already attached
   elsewhere is rejected rather than relinked, and the GUI's pane drag
@@ -3647,11 +3526,10 @@ Two further accepted limitations sit alongside these. `device.shutdown` is
 user-scoped, so a same-uid caller can shut down any sim, a device-lifecycle
 action rather than per-tab protection state).
 
-And the back-channel's cross-session reach to any *unprotected* tab
-(`tab.close/rename`, `windows.list`) is the deliberate protected/unprotected
-split. `tab.sendInput` and `tab.capture` additionally require an automation
-grant, as do `tab.select` and `tab.move`, and protected tabs stay
-owner-scoped and opaque.
+And the back-channel's cross-session reach to any *unprotected* tab is the
+deliberate protected/unprotected split. `pane.sendInput`,
+`pane.captureText`, `pane.focus`, `tab.focus`, and `tab.move` require an
+automation grant, while protected tabs stay owner-scoped and opaque.
 
 ## UI framework boundaries
 
@@ -3831,17 +3709,21 @@ tab case re-enters the responder chain at `TabStripViewController.closeTab`
 so the detach-or-shut-down prompt runs, and ⌥⌘W reaches that item directly
 whatever ⌘W currently resolves to.
 
-**Pane roots publish an accessibility identity.** Each terminal and
-sim/device pane's wrapper view is an `AXGroup` carrying
+**Pane and tab roots publish accessibility identity.** Each committed terminal
+and sim/device pane's wrapper view is an `AXGroup` carrying
 `deviceterm.pane.<kind>.<key>` and answering `AXFocused`. The pending
-(attach-in-flight) placeholder carries its `deviceterm.pane.pending.<key>`
-identifier but is not promoted to an `AXGroup` and answers no
-`AXFocused`. This is an observability contract with the out-of-process
-UI-test harness rather than user-facing text: pane identity lives in GUI
-nav state no CLI verb exposes, and `panes list` is a daemon RPC that
-enumerates device panes only, so without it a harness can neither count
-panes nor say which one has focus. `scripts/test-uitest.sh` asserts a
-split adds a pane and an arrow moves focus through exactly this.
+placeholder is also an `AXGroup`, carrying
+`deviceterm.pane.pending.<key>` and reporting `AXFocused` as false. It remains
+GUI-only and is not a committed `WorkspacePane`, so exclude it from public
+projection counts.
+Each tab pill carries `deviceterm.tab.<shortId>`, where `shortId` is the stable
+six-lowercase-hex handle derived from the tab cohort UUID.
+
+This is an observability contract for the out-of-process UI-test harness, not
+user-facing text. The harness compares AppKit's accessibility tree with the
+public GUI workspace projection, then verifies pane count, tab identity, and
+focus without reaching into process memory. `scripts/test-uitest.sh` asserts
+that a split adds a pane and an arrow moves focus through this identity.
 
 ## Concurrency model
 

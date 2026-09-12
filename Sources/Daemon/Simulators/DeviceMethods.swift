@@ -542,7 +542,7 @@ public enum DeviceMethods {
 
     /// Encode the array of devices into the bare-array result shape
     /// per `docs/ARCHITECTURE.md` ("`device.list` result is `[...]`, not
-    /// `{"devices": [...]}`"). Same convention as `tabs.list`.
+    /// `{"devices": [...]}`"). Same convention as `tab.list`.
     private static func encodeEntries(
         _ infos: [CSBDeviceInfo],
         coordinator: DeviceCoordinator

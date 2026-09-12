@@ -30,15 +30,15 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
     /// Optional session name, as supplied at `session.create` and
     /// echoed back. Nil when none was supplied, and never rewritten
     /// afterward: a manual tab title lives in `TabTitleViewModel`.
-    let name: String?
+    var name: String?
     /// Startup-only working directory for the shell. Threaded through
-    /// from `deviceterm tab open --cwd <path>` / `pane open --terminal
-    /// --cwd <path>`. Consumed once at `TerminalPaneViewController`
+    /// from `deviceterm tab open --cwd <path>` or a programmatic terminal
+    /// split. Consumed once at `TerminalPaneViewController`
     /// attach time and ignored by the reconcile loop, since the field
     /// describes how to spawn the shell, not durable state.
     let cwd: String?
     /// Startup-only command line typed into the shell after attach
-    /// (libghostty's `initial_input`). Threaded through from `--cmd
+    /// (libghostty's `initial_input`). Threaded through from `--command
     /// '<cmd>'`. Same lifecycle as `cwd`: consumed at attach, not
     /// re-read on reconcile. Array on the wire so a programmatic
     /// caller can send argv-style; the CLI sends a single string in

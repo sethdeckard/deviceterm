@@ -3,7 +3,7 @@
 import DaemonProtocol
 import Foundation
 
-/// Resolution result from `panes.list`: the daemon's canonical
+/// Resolution result from `pane.deviceList`: the daemon's canonical
 /// `paneId` (UUID), the canonical lowercased `udid` from the
 /// daemon's pane record (NOT the caller-typed `--pane` argument;
 /// daemon's is the truth), and the `shortId` for display when

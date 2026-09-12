@@ -554,8 +554,8 @@ func axWaitMatchesARecursiveElementOnALaterProbe() throws {
 
     #expect(outcome.exitCode == 0)
     #expect(transport.sent.map(\.method) == [
-        RPCMethod.panesList.rawValue, RPCMethod.paneAXTree.rawValue,
-        RPCMethod.panesList.rawValue, RPCMethod.paneAXTree.rawValue
+        RPCMethod.paneDeviceList.rawValue, RPCMethod.paneAXTree.rawValue,
+        RPCMethod.paneDeviceList.rawValue, RPCMethod.paneAXTree.rawValue
     ])
 }
 
@@ -1198,7 +1198,7 @@ func watchTreeWaitIsUnsupportedWhenTheTreeSaysSo() throws {
     #expect(outcome.failure?.code == .waitUnsupported)
     // The refusal depends on the AX response, so it requires one AX probe.
     #expect(transport.sent.map(\.method) == [
-        RPCMethod.panesList.rawValue, RPCMethod.paneAXTree.rawValue
+        RPCMethod.paneDeviceList.rawValue, RPCMethod.paneAXTree.rawValue
     ])
     let details = try waitFailureDetails(outcome)
     #expect(details["note"] as? String == note.rawValue)
@@ -1325,7 +1325,7 @@ func inaccessiblePaneWaitIsUnsupportedWithoutAnAXProbe() throws {
     )
 
     #expect(outcome.failure?.code == .waitUnsupported)
-    #expect(transport.sent.map(\.method) == [RPCMethod.panesList.rawValue])
+    #expect(transport.sent.map(\.method) == [RPCMethod.paneDeviceList.rawValue])
 }
 
 @Test

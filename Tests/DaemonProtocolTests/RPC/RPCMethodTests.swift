@@ -11,8 +11,8 @@ import Testing
 // see both modules.
 
 @Test
-func rpcMethodCaseCountIs71() {
-    #expect(RPCMethod.allCases.count == 71)
+func rpcMethodCaseCountIs74() {
+    #expect(RPCMethod.allCases.count == 74)
 }
 
 @Test
@@ -30,8 +30,12 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.sessionClose, "session.close"),
     (RPCMethod.sessionAuthenticate, "session.authenticate"),
     (RPCMethod.sessionBindTerminal, "session.bindTerminal"),
-    (RPCMethod.tabsList, "tabs.list"),
-    (RPCMethod.panesList, "panes.list"),
+    (RPCMethod.sessionSetProtectedBatch, "session.setProtectedBatch"),
+    (RPCMethod.sessionRestoreBatch, "session.restoreBatch"),
+    (RPCMethod.sessionProtectionSnapshot, "session.protectionSnapshot"),
+    (RPCMethod.sessionSetDisplayTitle, "session.setDisplayTitle"),
+    (RPCMethod.sessionSetCohort, "session.setCohort"),
+    (RPCMethod.paneDeviceList, "pane.deviceList"),
     (RPCMethod.shimEvent, "shim.event"),
     (RPCMethod.deviceList, "device.list"),
     (RPCMethod.deviceBoot, "device.boot"),
@@ -39,7 +43,11 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.deviceAttach, "device.attach"),
     (RPCMethod.deviceReconcileBootClaim, "device.reconcileBootClaim"),
     (RPCMethod.deviceRestoreOwnership, "device.restoreOwnership"),
+    (RPCMethod.physicalDeviceList, "physicalDevice.list"),
+    (RPCMethod.physicalDeviceAttach, "physicalDevice.attach"),
+    (RPCMethod.devicesList, "devices.list"),
     (RPCMethod.paneCreate, "pane.create"),
+    (RPCMethod.paneSetName, "pane.setName"),
     (RPCMethod.paneCloseById, "pane.closeById"),
     (RPCMethod.paneInputTap, "pane.input.tap"),
     (RPCMethod.paneInputTouch, "pane.input.touch"),
@@ -66,29 +74,30 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.daemonCapabilities, "daemon.capabilities"),
     (RPCMethod.appCommands, "app.commands"),
     (RPCMethod.appCommandResult, "app.commandResult"),
+    (RPCMethod.windowList, "window.list"),
+    (RPCMethod.windowShow, "window.show"),
+    (RPCMethod.windowOpen, "window.open"),
+    (RPCMethod.windowFocus, "window.focus"),
+    (RPCMethod.windowClose, "window.close"),
+    (RPCMethod.tabList, "tab.list"),
+    (RPCMethod.tabShow, "tab.show"),
     (RPCMethod.tabOpen, "tab.open"),
+    (RPCMethod.tabFocus, "tab.focus"),
     (RPCMethod.tabClose, "tab.close"),
     (RPCMethod.tabRename, "tab.rename"),
-    (RPCMethod.tabSelect, "tab.select"),
-    (RPCMethod.tabInfo, "tab.info"),
     (RPCMethod.tabMove, "tab.move"),
-    (RPCMethod.paneOpenTerminal, "pane.openTerminal"),
+    (RPCMethod.tabProtect, "tab.protect"),
+    (RPCMethod.tabUnprotect, "tab.unprotect"),
+    (RPCMethod.paneList, "pane.list"),
+    (RPCMethod.paneShow, "pane.show"),
+    (RPCMethod.paneSplit, "pane.split"),
+    (RPCMethod.paneFocus, "pane.focus"),
     (RPCMethod.paneClose, "pane.close"),
     (RPCMethod.paneRename, "pane.rename"),
-    (RPCMethod.paneInfo, "pane.info"),
-    (RPCMethod.paneMove, "pane.move"),
+    (RPCMethod.paneSendInput, "pane.sendInput"),
+    (RPCMethod.paneCaptureText, "pane.captureText"),
     (RPCMethod.paneAttach, "pane.attach"),
-    (RPCMethod.windowOpen, "window.open"),
-    (RPCMethod.windowClose, "window.close"),
-    (RPCMethod.windowFocus, "window.focus"),
-    (RPCMethod.windowsList, "windows.list"),
-    (RPCMethod.tabSendInput, "tab.sendInput"),
-    (RPCMethod.tabCapture, "tab.capture"),
-    (RPCMethod.sessionSetProtectedBatch, "session.setProtectedBatch"),
-    (RPCMethod.sessionProtectionSnapshot, "session.protectionSnapshot"),
-    (RPCMethod.sessionSetDisplayTitle, "session.setDisplayTitle"),
-    (RPCMethod.sessionSetCohort, "session.setCohort"),
-    (RPCMethod.tabSetProtected, "tab.setProtected")
+    (RPCMethod.automationGrant, "automation.grant")
     ]
     )
 func rpcMethodRawValue(method: RPCMethod, wire: String) {

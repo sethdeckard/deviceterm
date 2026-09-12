@@ -9,7 +9,7 @@ import Testing
 // the predicates both the dispatcher's scope check and
 // `daemon.capabilities` consult. Advertising and enforcement
 // disagreeing is the bug this guards: a caller told it may run
-// `tab.capture` and then refused is worse than never being offered it.
+// `pane.captureText` and then refused is worse than never being offered it.
 
 @Test
 func automationTabUnreachableWithoutAGrant() {

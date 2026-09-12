@@ -67,18 +67,23 @@ private func daemonErrorCode(code: Int, message: String) -> CLIErrorCode {
     }
 }
 
-private func daemonErrorDetails(code: Int) -> Data? {
-    try? JSONSerialization.data(withJSONObject: ["rpcCode": code], options: [.sortedKeys])
+private func daemonErrorDetails(code: Int, details: Data?) -> Data? {
+    var object: [String: Any] = ["rpcCode": code]
+    if let details,
+        let supplied = try? JSONSerialization.jsonObject(with: details) as? [String: Any] {
+        object.merge(supplied) { _, supplied in supplied }
+    }
+    return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 
 /// Map a thrown error to its stable code plus the existing stderr shape.
 func errorOutcome(_ error: Error) -> CommandOutcome {
     switch error {
-    case let CLIError.daemon(code, message):
+    case let CLIError.daemon(code, message, details):
         return .failure(
             code: daemonErrorCode(code: code, message: message),
             message: message,
-            details: daemonErrorDetails(code: code),
+            details: daemonErrorDetails(code: code, details: details),
             stderr: "daemon error \(code): \(message)"
         )
 
@@ -122,36 +127,12 @@ func run(
 ) -> CommandOutcome {
     do {
         switch command {
-        case .tabsList:
-            return try handleTabsList(
-                transport: transport,
-                output: output,
-                currentSession: envValue(DeviceTermEnv.session)
-            )
-
-        case .tabsCurrent:
-            return try handleTabsCurrent(
-                transport: transport,
-                output: output,
-                currentSession: envValue(DeviceTermEnv.session)
-            )
-
-        case .panesList:
-            return try handlePanesList(
-                transport: transport,
-                output: output,
-                creds: try readSessionCredentials()
-            )
-
         case .devicesList:
             // devices.list is session-scoped via connection auth; enforce
             // in-tab up front so an out-of-tab caller gets the same clear
             // "not inside a deviceterm tab" error every other verb gives.
             _ = try readSessionCredentials()
             return try handleDevicesList(transport: transport, output: output)
-
-        case let .windowsList(all):
-            return try handleWindowsList(all: all, transport: transport, output: output)
 
         case let .tap(pane, x, y):
             return try sendResolved(
@@ -473,235 +454,176 @@ func run(
                 output: output
             )
 
-        case let .tabOpen(windowRef, cwd, cmd):
-            return try sendWorkspaceMutation(
+        case let .windowList(all):
+            return try sendWorkspaceData(
                 transport: transport,
                 output: output,
-                build: { try CLICommands.tabOpenRequest(window: windowRef, cwd: cwd, cmd: cmd) },
-                humanEcho: {
-                    let label = windowRef.map(CLICommands.echoLabel) ?? "current"
-                    return "ok window=\(label)"
-                },
-                jsonReceipt: {
-                    let label = windowRef.map(CLICommands.echoLabel) ?? "current"
-                    return Receipt.TabOpen(window: label)
-                }
+                build: { try CLICommands.windowListRequest(all: all) },
+                humanRender: formatWorkspaceWindows
             )
 
-        case let .tabClose(tabRef, mode):
-            return try sendWorkspaceMutation(
+        case let .windowShow(window):
+            return try sendWorkspaceData(
                 transport: transport,
                 output: output,
-                build: { try CLICommands.tabCloseRequest(tab: tabRef, mode: mode) },
-                humanEcho: { "ok tab=\(CLICommands.echoLabel(tabRef)) mode=\(mode)" },
-                jsonReceipt: { Receipt.TabClose(tab: CLICommands.echoLabel(tabRef), mode: mode) }
+                build: { try CLICommands.windowShowRequest(window: window) },
+                humanRender: formatWorkspaceWindowDetail
             )
-
-        case let .tabRename(tabRef, name):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.tabRenameRequest(tab: tabRef, name: name) },
-                humanEcho: {
-                    let target = CLICommands.echoLabel(tabRef)
-                    return name.map { "ok tab=\(target) name=\($0)" }
-                        ?? "ok tab=\(target) name=(auto)"
-                },
-                jsonReceipt: { Receipt.TabRename(tab: CLICommands.echoLabel(tabRef), name: name) }
-            )
-
-        case let .tabSelect(tabRef):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.tabSelectRequest(tab: tabRef) },
-                humanEcho: { "ok tab=\(CLICommands.echoLabel(tabRef))" },
-                jsonReceipt: { Receipt.TabSelect(tab: CLICommands.echoLabel(tabRef)) }
-            )
-
-        case let .tabInfo(tabRef):
-            return try sendWorkspaceInfo(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.tabInfoRequest(tab: tabRef) },
-                humanRender: { (payload: TabInfoPayload) in formatTabInfo(payload) }
-            )
-
-        case let .tabMove(tabRef, toIndex, toWindow):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: {
-                    try CLICommands.tabMoveRequest(
-                        tab: tabRef,
-                        toIndex: toIndex,
-                        toWindow: toWindow
-                    )
-                },
-                humanEcho: {
-                    var parts = ["ok tab=\(CLICommands.echoLabel(tabRef))"]
-                    if let toWindow { parts.append("window=\(CLICommands.echoLabel(toWindow))") }
-                    if let toIndex { parts.append("to=\(toIndex)") }
-                    return parts.joined(separator: " ")
-                },
-                jsonReceipt: {
-                    Receipt.TabMove(
-                        tab: CLICommands.echoLabel(tabRef),
-                        toIndex: toIndex,
-                        toWindow: toWindow.map(CLICommands.echoLabel)
-                    )
-                }
-            )
-
-        case let .paneOpenTerminal(tabRef, cwd, cmd):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.paneOpenTerminalRequest(tab: tabRef, cwd: cwd, cmd: cmd) },
-                humanEcho: {
-                    let target = tabRef.map(CLICommands.echoLabel) ?? "current"
-                    return "ok tab=\(target)"
-                },
-                jsonReceipt: {
-                    let target = tabRef.map(CLICommands.echoLabel) ?? "current"
-                    return Receipt.PaneOpenTerminal(tab: target)
-                }
-            )
-
-        case let .paneClose(paneRef, mode):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.paneCloseRequest(pane: paneRef, mode: mode) },
-                humanEcho: { "ok pane=\(CLICommands.echoLabel(paneRef)) mode=\(mode)" },
-                jsonReceipt: { Receipt.PaneClose(pane: CLICommands.echoLabel(paneRef), mode: mode) }
-            )
-
-        case let .paneRename(paneRef, name):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.paneRenameRequest(pane: paneRef, name: name) },
-                humanEcho: {
-                    let target = CLICommands.echoLabel(paneRef)
-                    return name.map { "ok pane=\(target) name=\($0)" }
-                        ?? "ok pane=\(target) name=(auto)"
-                },
-                jsonReceipt: { Receipt.PaneRename(pane: CLICommands.echoLabel(paneRef), name: name) }
-            )
-
-        case let .paneInfo(paneRef):
-            return try sendWorkspaceInfo(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.paneInfoRequest(pane: paneRef) },
-                humanRender: { (payload: PaneInfoPayload) in formatPaneInfo(payload) }
-            )
-
-        case let .paneMove(paneRef, toTabRef):
-            return try sendWorkspaceMutation(
-                transport: transport,
-                output: output,
-                build: { try CLICommands.paneMoveRequest(pane: paneRef, toTab: toTabRef) },
-                humanEcho: {
-                    "ok pane=\(CLICommands.echoLabel(paneRef)) "
-                    + "toTab=\(CLICommands.echoLabel(toTabRef))"
-                },
-                jsonReceipt: {
-                    Receipt.PaneMove(
-                        pane: CLICommands.echoLabel(paneRef),
-                        toTab: CLICommands.echoLabel(toTabRef)
-                    )
-                }
-            )
-
-        case let .deviceAttach(ref):
-            return try handleDeviceAttach(ref: ref, transport: transport, output: output)
 
         case .windowOpen:
             return try sendWorkspaceMutation(
                 transport: transport,
                 output: output,
-                build: { try CLICommands.windowOpenRequest() },
-                humanEcho: { "ok" },
-                jsonReceipt: { Receipt.WindowOpen() }
+                build: { try CLICommands.windowOpenRequest() }
             )
 
-        case let .windowClose(windowRef, mode):
+        case let .windowFocus(window):
             return try sendWorkspaceMutation(
                 transport: transport,
                 output: output,
-                build: { try CLICommands.windowCloseRequest(window: windowRef, mode: mode) },
-                humanEcho: { "ok window=\(CLICommands.echoLabel(windowRef)) mode=\(mode)" },
-                jsonReceipt: {
-                    Receipt.WindowClose(window: CLICommands.echoLabel(windowRef), mode: mode)
-                }
+                build: { try CLICommands.windowFocusRequest(window: window) }
             )
 
-        case let .windowFocus(windowRef):
+        case let .windowClose(window, mode):
             return try sendWorkspaceMutation(
                 transport: transport,
                 output: output,
-                build: { try CLICommands.windowFocusRequest(window: windowRef) },
-                humanEcho: { "ok window=\(CLICommands.echoLabel(windowRef))" },
-                jsonReceipt: { Receipt.WindowFocus(window: CLICommands.echoLabel(windowRef)) }
+                build: { try CLICommands.windowCloseRequest(window: window, mode: mode) }
             )
 
-        case let .tabSendInput(tabRef, text, typeDelay):
-            // Paced typing is non-blocking on the GUI side: the ack
-            // returns once the animation is enqueued, so the default
-            // response timeout is fine regardless of how long the
-            // string takes to type out.
+        case let .tabList(window, all):
+            return try sendWorkspaceData(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabListRequest(window: window, all: all) },
+                humanRender: formatWorkspaceTabs
+            )
+
+        case let .tabShow(tab):
+            return try sendWorkspaceData(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabShowRequest(tab: tab) },
+                humanRender: formatWorkspaceTabDetail
+            )
+
+        case let .tabOpen(window, cwd, command):
             return try sendWorkspaceMutation(
                 transport: transport,
                 output: output,
                 build: {
-                    try CLICommands.tabSendInputRequest(
-                        tab: tabRef,
-                        text: text,
-                        typeDelayMillis: typeDelay
-                    )
-                },
-                humanEcho: { "ok tab=\(CLICommands.echoLabel(tabRef)) bytes=\(text.utf8.count)" },
-                jsonReceipt: {
-                    Receipt.TabSendInput(
-                        tab: CLICommands.echoLabel(tabRef),
-                        bytes: text.utf8.count,
-                        typeDelayMillis: typeDelay
+                    try CLICommands.tabOpenRequest(
+                        window: window,
+                        cwd: cwd,
+                        command: command
                     )
                 }
             )
 
-        case let .tabCapture(tabRef):
-            return try handleTabCapture(tabRef: tabRef, transport: transport, output: output)
-
-        case let .tabSetProtected(tabRef, isProtected):
-            // The GUI drives protection as an awaited transition, so the
-            // result reports the daemon's real state: a definite rejection
-            // throws here (surfaced as a failure), while a committed or
-            // still-converging (`committed == false`) outcome comes back as
-            // a `TabSetProtectedResult` we render honestly.
-            let data = try transport.send(
-                try CLICommands.tabSetProtectedRequest(tab: tabRef, isProtected: isProtected)
+        case let .tabFocus(tab):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabFocusRequest(tab: tab) }
             )
-            let result = try JSONDecoder().decode(TabSetProtectedResult.self, from: data)
-            let label = CLICommands.echoLabel(tabRef)
-            switch output {
-            case .human:
-                let line = result.committed
-                    ? "ok tab=\(label) protected=\(result.isProtected)"
-                    : "pending tab=\(label) protected=\(result.isProtected) (unconfirmed)"
-                return .stdout(line + "\n")
 
-            case .json:
-                return .stdout(try encodeJSONReceipt(
-                    Receipt.TabSetProtected(
-                        tab: label,
-                        isProtected: result.isProtected,
-                        committed: result.committed
+        case let .tabClose(tab, mode):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabCloseRequest(tab: tab, mode: mode) }
+            )
+
+        case let .tabRename(tab, name):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabRenameRequest(tab: tab, name: name) }
+            )
+
+        case let .tabMove(tab, window, index):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabMoveRequest(tab: tab, window: window, index: index) }
+            )
+
+        case let .tabProtect(tab):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabProtectionRequest(tab: tab, protected: true) }
+            )
+
+        case let .tabUnprotect(tab):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.tabProtectionRequest(tab: tab, protected: false) }
+            )
+
+        case let .paneList(tab):
+            return try sendWorkspaceData(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.paneListRequest(tab: tab) },
+                humanRender: formatWorkspacePanes
+            )
+
+        case let .paneShow(pane):
+            return try sendWorkspaceData(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.paneShowRequest(pane: pane) },
+                humanRender: formatWorkspacePane
+            )
+
+        case let .paneSplit(pane, direction):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.paneSplitRequest(pane: pane, direction: direction) }
+            )
+
+        case let .paneFocus(pane):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.paneFocusRequest(pane: pane) }
+            )
+
+        case let .paneClose(pane, mode):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.paneCloseRequest(pane: pane, mode: mode) }
+            )
+
+        case let .paneRename(pane, name):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.paneRenameRequest(pane: pane, name: name) }
+            )
+
+        case let .paneSendInput(pane, text, typeDelay):
+            return try sendWorkspaceMutation(
+                transport: transport,
+                output: output,
+                build: {
+                    try CLICommands.paneSendInputRequest(
+                        pane: pane,
+                        text: text,
+                        typeDelayMs: typeDelay
                     )
-                ))
-            }
+                }
+            )
+
+        case let .paneCaptureText(pane):
+            return try handlePaneCaptureText(pane: pane, transport: transport, output: output)
+
+        case let .deviceAttach(ref):
+            return try handleDeviceAttach(ref: ref, transport: transport, output: output)
 
         // Meta / special verbs. The doc-dump and diagnostic verbs return
         // a rendered outcome; `with-pane` and `events` own their I/O and
@@ -756,7 +678,7 @@ func resolvePane(
     creds: (sessionId: String, cap: String)? = nil
 ) throws -> ResolvedPane {
     let creds = try creds ?? readSessionCredentials()
-    let request = try CLICommands.panesListRequest(sessionId: creds.sessionId, cap: creds.cap)
+    let request = try CLICommands.paneDeviceListRequest(sessionId: creds.sessionId, cap: creds.cap)
     let result = try transport.send(request)
     let panes = try JSONDecoder().decode([PanesListEntry].self, from: result)
 
@@ -774,7 +696,7 @@ func resolvePane(
         case .sentinel, .notFound:
             throw CLIError.paneNotFound(
                 "no pane matching '\(refValue)' in this tab; "
-                + "run `deviceterm panes list`"
+                + "run `deviceterm pane list`"
             )
         }
     }
@@ -1016,30 +938,34 @@ func handleSwipe(
 
 // MARK: - Workspace verb helpers
 
-/// Build + send a mutating workspace verb, then render its receipt.
-/// Human mode returns the `ok …` echo line; JSON mode returns the
-/// per-verb Receipt struct. Errors throw to the driver.
-func sendWorkspaceMutation<Receipt: Encodable>(
+/// Build and send a workspace mutation, then render the committed receipt
+/// supplied by the GUI. The CLI never reconstructs mutation results from the
+/// requested arguments.
+func sendWorkspaceMutation(
     transport: CLITransport,
     output: OutputMode,
-    build: () throws -> RPCEnvelope,
-    humanEcho: () -> String,
-    jsonReceipt: () -> Receipt
+    build: () throws -> RPCEnvelope
 ) throws -> CommandOutcome {
-    _ = try transport.send(try build())
+    let data = try transport.send(
+        try build(),
+        timeoutSeconds: AppCommandDeadline.workspaceCLIRequestTimeoutSeconds
+    )
     switch output {
     case .human:
-        return .stdout(humanEcho() + "\n")
+        let receipt = try JSONDecoder().decode(WorkspaceMutationReceipt.self, from: data)
+        return .stdout(formatWorkspaceMutation(receipt) + "\n")
 
     case .json:
-        return .stdout(try encodeJSONReceipt(jsonReceipt()))
+        var out = data
+        out.append(0x0A)
+        return .stdout(out)
     }
 }
 
-/// Build + send a read-only workspace verb and render the payload.
+/// Build and send a read-only workspace verb and render the payload.
 /// Human mode formats via `humanRender`; JSON mode returns the daemon's
-/// payload bytes verbatim + a newline (preserving field ordering).
-func sendWorkspaceInfo<Payload: Decodable>(
+/// payload bytes verbatim plus a newline.
+func sendWorkspaceData<Payload: Decodable>(
     transport: CLITransport,
     output: OutputMode,
     build: () throws -> RPCEnvelope,
@@ -1074,13 +1000,9 @@ func handleDeviceAttach(
         from: try transport.send(CLICommands.devicesListRequest())
     )
     let target: PaneTarget
-    let echoId: String
-    let echoKind: DeviceKind
     switch CLICommands.resolveDeviceAttach(ref: ref, roster: roster) {
-    case let .target(resolvedTarget, id, kind):
+    case let .target(resolvedTarget, _, _):
         target = resolvedTarget
-        echoId = id
-        echoKind = kind
 
     case .notFound:
         return .failure(
@@ -1091,31 +1013,24 @@ func handleDeviceAttach(
     case let .ambiguous(ids):
         return .failure("'\(ref)' is ambiguous; matches: \(ids.joined(separator: ", "))")
     }
-    _ = try transport.send(try CLICommands.deviceAttachRequest(target: target))
-    switch output {
-    case .human:
-        return .stdout("ok target=\(echoId) kind=\(echoKind.rawValue)\n")
-
-    case .json:
-        return .stdout(try encodeJSONReceipt(
-            Receipt.DeviceAttach(target: echoId, kind: echoKind.rawValue)
-        ))
-    }
+    return try sendWorkspaceMutation(
+        transport: transport,
+        output: output,
+        build: { try CLICommands.deviceAttachRequest(target: target) }
+    )
 }
 
-/// `deviceterm tab capture`: human mode writes the captured text raw
-/// (so a redirect saves the screen), appending a newline only when the
-/// text doesn't already end with one; JSON mode emits the daemon's
-/// payload verbatim + a newline.
-func handleTabCapture(
-    tabRef: Wire.TabRef,
+/// `deviceterm pane capture-text`: human mode writes captured text raw;
+/// JSON mode emits the pane plus text payload.
+func handlePaneCaptureText(
+    pane: String,
     transport: CLITransport,
     output: OutputMode
 ) throws -> CommandOutcome {
-    let data = try transport.send(try CLICommands.tabCaptureRequest(tab: tabRef))
+    let data = try transport.send(try CLICommands.paneCaptureTextRequest(pane: pane))
     switch output {
     case .human:
-        let payload = try JSONDecoder().decode(TabCapturePayload.self, from: data)
+        let payload = try JSONDecoder().decode(WorkspaceCaptureResult.self, from: data)
         var out = Data(payload.text.utf8)
         if !payload.text.hasSuffix("\n") { out.append(0x0A) }
         return .stdout(out)
@@ -1124,120 +1039,6 @@ func handleTabCapture(
         var out = data
         out.append(0x0A)
         return .stdout(out)
-    }
-}
-
-// MARK: - Read-only listing handlers
-
-/// `deviceterm tabs list`. Human column shape marker\tshort_id\tname\t
-/// sessionId\tlabel remains fixed; `--json` emits `TabsListRow` values with a
-/// required, validated `tabId` grouping/reference UUID. The
-/// current row is decided from `currentSession` (the caller's
-/// `DEVICETERM_SESSION`), no daemon round-trip needed for it.
-func handleTabsList(
-    transport: CLITransport,
-    output: OutputMode,
-    currentSession: String?
-) throws -> CommandOutcome {
-    let result = try transport.send(CLICommands.tabsListRequest())
-    let entries = try decodeTabsListEntries(result)
-    switch output {
-    case .human:
-        return .lines(
-            TabsListFormatter.formatList(
-                entries: entries,
-                currentSessionId: currentSession
-            )
-        )
-
-    case .json:
-        let rows = entries.map { entry in
-            Receipt.TabsListRow(
-                current: entry.sessionId == currentSession,
-                shortId: entry.shortId,
-                name: entry.name,
-                displayTitle: entry.displayTitle,
-                sessionId: entry.sessionId,
-                label: entry.label,
-                tabId: entry.tabId
-            )
-        }
-        return .stdout(try encodeJSONReceipt(rows))
-    }
-}
-
-/// `deviceterm tabs current`: the row matching `DEVICETERM_SESSION`, with the
-/// same required JSON `tabId` as list mode. Out-of-tab or a stale session id is
-/// a typed domain error (stderr + exit 1) with a recovery hint.
-func handleTabsCurrent(
-    transport: CLITransport,
-    output: OutputMode,
-    currentSession: String?
-) throws -> CommandOutcome {
-    guard let currentSession, !currentSession.isEmpty else {
-        return .failure(
-            code: .sessionRequired,
-            message: "not inside a deviceterm tab (\(DeviceTermEnv.session) unset); "
-                + "run `deviceterm tabs list` to see open tabs"
-        )
-    }
-    let result = try transport.send(CLICommands.tabsListRequest())
-    let entries = try decodeTabsListEntries(result)
-    guard let entry = entries.first(where: { $0.sessionId == currentSession }) else {
-        return .failure(
-            code: .sessionUnauthorized,
-            message: "\(DeviceTermEnv.session)=\(currentSession) has no live tab; "
-                + "the daemon may have restarted; try opening a fresh tab"
-        )
-    }
-    switch output {
-    case .human:
-        return .stdout(TabsListFormatter.formatRow(entry: entry, isCurrent: true) + "\n")
-
-    case .json:
-        let row = Receipt.TabsListRow(
-            current: true,
-            shortId: entry.shortId,
-            name: entry.name,
-            displayTitle: entry.displayTitle,
-            sessionId: entry.sessionId,
-            label: entry.label,
-            tabId: entry.tabId
-        )
-        return .stdout(try encodeJSONReceipt(row))
-    }
-}
-
-private func decodeTabsListEntries(_ data: Data) throws -> [TabsListEntry] {
-    let entries = try JSONDecoder().decode([TabsListEntry].self, from: data)
-    guard entries.allSatisfy({ UUID(uuidString: $0.tabId) != nil }) else {
-        throw CLIError.invalidResponse("tabs.list returned a malformed tabId")
-    }
-    return entries
-}
-
-/// `deviceterm panes list`. Human columns paneId\tudid\tstate\tfamily\t
-/// type (sim|device); `--json` emits the wire `PanesListEntry` array.
-func handlePanesList(
-    transport: CLITransport,
-    output: OutputMode,
-    creds: (sessionId: String, cap: String)
-) throws -> CommandOutcome {
-    let request = try CLICommands.panesListRequest(sessionId: creds.sessionId, cap: creds.cap)
-    let result = try transport.send(request)
-    let panes = try JSONDecoder().decode([PanesListEntry].self, from: result)
-    switch output {
-    case .human:
-        return .lines(
-            panes.map { pane in
-                let family = DeviceFamily(wire: pane.family ?? "").rawValue
-                return "\(pane.paneId)\t\(pane.udid)\t\(pane.state.rawValue)"
-                    + "\t\(family)\t\(paneTypeLabel(pane))"
-            }
-        )
-
-    case .json:
-        return .stdout(try encodeJSONReceipt(panes))
     }
 }
 
@@ -1258,26 +1059,5 @@ func handleDevicesList(
 
     case .json:
         return .stdout(try encodeJSONReceipt(roster))
-    }
-}
-
-/// `deviceterm windows list [--all]`. Human rows via `formatWindowsList`;
-/// `--json` emits the daemon's payload bytes verbatim (preserving field
-/// order), each with a trailing newline.
-func handleWindowsList(
-    all: Bool,
-    transport: CLITransport,
-    output: OutputMode
-) throws -> CommandOutcome {
-    let data = try transport.send(try CLICommands.windowsListRequest(all: all))
-    switch output {
-    case .human:
-        let payload = try JSONDecoder().decode([WindowInfoPayload].self, from: data)
-        return .stdout(formatWindowsList(payload) + "\n")
-
-    case .json:
-        var out = data
-        out.append(0x0A)
-        return .stdout(out)
     }
 }

@@ -6,20 +6,31 @@
 ///
 /// This is a behavior-grouping extension, not a conformance split.
 extension HelpCatalog {
-    /// What `--tab` / `--pane` / `--window` accept on the workspace
-    /// verbs. Both the `refs` topic and the workspace group note render
-    /// this, so the columns can't drift apart.
-    ///
-    /// Scoped to those verbs deliberately: `parsePaneRef` encodes only
-    /// `paneId` / `shortId` / `current`, while the input and AX verbs
-    /// resolve a wider `--pane`. Stating the grammar without naming the
-    /// verbs it covers would contradict the `targeting` topic.
+    /// What raw window, tab, and pane refs accept on workspace verbs.
+    /// Both the `refs` topic and the workspace group note render this,
+    /// so the grammar can't drift apart.
     static let refsLegend = """
-      Refs on the workspace verbs (tab, tabs, pane, window, windows):
-        --tab     <tabId-uuid> | <sessionId-uuid> | <shortId>
-                  | "<name>" | current
-        --pane    <paneId-uuid>    | <shortId> | current
-        --window  <1-based-index>  | current
+      Workspace refs are raw strings resolved case-insensitively against the
+      GUI's live projection:
+        <window>  exact short ID | exact full UUID | exact unique name |
+                  unique full-UUID prefix
+        <tab>     exact short ID | exact full UUID | exact unique name |
+                  unique full-UUID prefix
+        <pane>    exact short ID | exact full ID | exact unique name |
+                  exact device key | unique full-ID prefix
+
+      Names match exactly, never by prefix. A window's one-based index is
+      display-order metadata from `window list`, not a reference.
+
+      Window and tab short IDs are the first six lowercase hexadecimal
+      characters of their UUIDs. Pane short IDs are six lowercase Crockford
+      base32 characters minted for the terminal session or device pane. A
+      terminal pane's full ID is its session ID.
+
+      Omitted refs and `current` select the object containing the calling
+      terminal. For a pane, that is the calling terminal pane, not the pane the
+      person most recently focused. `--window` and `--tab` accept the same refs
+      when they scope a list or choose a destination.
 
       Input and AX commands take a wider --pane. See
       `deviceterm help targeting`.
@@ -58,7 +69,7 @@ extension HelpCatalog {
         HelpTopic(
             "refs",
             .concept,
-            summary: "What --tab, --pane, and --window accept on workspace verbs",
+            summary: "How workspace commands resolve object references",
             detail: refsLegend
         ),
         HelpTopic(

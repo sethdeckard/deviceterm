@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Reply for `automation.grant` / `automation.revoke`.
+/// Reply for `automation.grant`.
 ///
 /// `applied` is whether the batch was accepted and its intended end-state now
 /// holds for every target: all-or-none, last-write-wins by the `(epoch,

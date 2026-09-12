@@ -4,12 +4,10 @@
 /// pane's root view carries.
 ///
 /// The out-of-process UI-test harness can read a window's accessibility
-/// tree but has no other way to ask "how many panes does this tab hold"
-/// or "which one has focus". Pane identity lives entirely in nav state,
-/// which the harness cannot see. `panes list` enumerates device panes
-/// only; terminal panes are sessions and never appear there. An
-/// identifier on the pane's root view is what makes splits, closes, and
-/// focus movement assertable from outside.
+/// tree and must verify that pane identity and focus are exposed through
+/// AppKit accessibility, independently of the public `pane list` projection.
+/// An identifier on each root view makes splits, closes, and focus movement
+/// assertable from outside the process.
 ///
 /// The strings are an observability contract with that harness, not
 /// user-visible text, so they stay machine-shaped and stable.

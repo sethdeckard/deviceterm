@@ -10,128 +10,178 @@ import Foundation
 /// directly, since Swift only synthesizes an `internal` memberwise init
 /// for `public` structs with `public let` members.
 public enum AppCommandParams {
+    public struct ListWindows: Codable, Sendable, Equatable {
+        public let all: Bool
+
+        public init(all: Bool) { self.all = all }
+    }
+
+    public struct ShowWindow: Codable, Sendable, Equatable {
+        public let window: String?
+
+        public init(window: String?) { self.window = window }
+    }
+
+    public struct OpenWindow: Codable, Sendable, Equatable {
+        public init() {}
+    }
+
+    public struct FocusWindow: Codable, Sendable, Equatable {
+        public let window: String?
+
+        public init(window: String?) { self.window = window }
+    }
+
+    public struct CloseWindow: Codable, Sendable, Equatable {
+        public let window: String?
+        public let mode: WorkspaceCloseMode
+
+        public init(window: String?, mode: WorkspaceCloseMode) {
+            self.window = window
+            self.mode = mode
+        }
+    }
+
+    public struct ListTabs: Codable, Sendable, Equatable {
+        public let window: String?
+        public let all: Bool
+
+        public init(window: String?, all: Bool) {
+            self.window = window
+            self.all = all
+        }
+    }
+
+    public struct ShowTab: Codable, Sendable, Equatable {
+        public let tab: String?
+
+        public init(tab: String?) { self.tab = tab }
+    }
+
     public struct OpenTab: Codable, Sendable, Equatable {
-        /// Optional window ref, encoded shape per `Wire.WindowRef`.
-        public let window: Wire.WindowRef?
-        /// `"agent"` or `"automation"`. Always agent over the
-        /// CLI back-channel: no CLI verb emits automation. The
-        /// field exists for menu / deep-link translators.
-        public let role: String
+        public let window: String?
         public let cwd: String?
-        public let cmd: [String]?
+        public let command: [String]?
 
         public init(
-            window: Wire.WindowRef?,
-            role: String,
+            window: String?,
             cwd: String?,
-            cmd: [String]?
+            command: [String]?
         ) {
             self.window = window
-            self.role = role
             self.cwd = cwd
-            self.cmd = cmd
+            self.command = command
         }
     }
 
     public struct CloseTab: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
-        public let mode: String  // "detach" | "shutdown"
+        public let tab: String?
+        public let mode: WorkspaceCloseMode
 
-        public init(tab: Wire.TabRef, mode: String) {
+        public init(tab: String?, mode: WorkspaceCloseMode) {
             self.tab = tab
             self.mode = mode
         }
     }
 
     public struct RenameTab: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
+        public let tab: String?
         public let name: String?
 
-        public init(tab: Wire.TabRef, name: String?) {
+        public init(tab: String?, name: String?) {
             self.tab = tab
             self.name = name
         }
     }
 
-    public struct SelectTab: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
+    public struct FocusTab: Codable, Sendable, Equatable {
+        public let tab: String?
 
-        public init(tab: Wire.TabRef) { self.tab = tab }
-    }
-
-    public struct TabInfo: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
-
-        public init(tab: Wire.TabRef) { self.tab = tab }
+        public init(tab: String?) { self.tab = tab }
     }
 
     public struct MoveTab: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
-        /// Destination slot within the target window. Nil means "append
-        /// at the end" (natural for a cross-window move with no explicit
-        /// index).
-        public let toIndex: Int?
-        /// Destination window. Nil means "same window" (a pure reorder,
-        /// where `toIndex` is required).
-        public let toWindow: Wire.WindowRef?
+        public let tab: String?
+        public let window: String
+        public let index: Int?
 
-        public init(tab: Wire.TabRef, toIndex: Int?, toWindow: Wire.WindowRef?) {
+        public init(tab: String?, window: String, index: Int?) {
             self.tab = tab
-            self.toIndex = toIndex
-            self.toWindow = toWindow
+            self.window = window
+            self.index = index
         }
     }
 
-    public struct OpenPaneTerminal: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef?
-        public let cwd: String?
-        public let cmd: [String]?
+    public struct SetTabProtection: Codable, Sendable, Equatable {
+        public let tab: String?
 
-        public init(
-            tab: Wire.TabRef?,
-            cwd: String?,
-            cmd: [String]?
-        ) {
-            self.tab = tab
-            self.cwd = cwd
-            self.cmd = cmd
+        public init(tab: String?) { self.tab = tab }
+    }
+
+    public struct ListPanes: Codable, Sendable, Equatable {
+        public let tab: String?
+
+        public init(tab: String?) { self.tab = tab }
+    }
+
+    public struct ShowPane: Codable, Sendable, Equatable {
+        public let pane: String?
+
+        public init(pane: String?) { self.pane = pane }
+    }
+
+    public struct SplitPane: Codable, Sendable, Equatable {
+        public let pane: String?
+        public let direction: WorkspaceSplitDirection
+
+        public init(pane: String?, direction: WorkspaceSplitDirection) {
+            self.pane = pane
+            self.direction = direction
         }
+    }
+
+    public struct FocusPane: Codable, Sendable, Equatable {
+        public let pane: String?
+
+        public init(pane: String?) { self.pane = pane }
     }
 
     public struct ClosePane: Codable, Sendable, Equatable {
-        public let pane: Wire.PaneRef
-        public let mode: String
+        public let pane: String?
+        public let mode: WorkspaceCloseMode?
 
-        public init(pane: Wire.PaneRef, mode: String) {
+        public init(pane: String?, mode: WorkspaceCloseMode?) {
             self.pane = pane
             self.mode = mode
         }
     }
 
     public struct RenamePane: Codable, Sendable, Equatable {
-        public let pane: Wire.PaneRef
+        public let pane: String?
         public let name: String?
 
-        public init(pane: Wire.PaneRef, name: String?) {
+        public init(pane: String?, name: String?) {
             self.pane = pane
             self.name = name
         }
     }
 
-    public struct PaneInfo: Codable, Sendable, Equatable {
-        public let pane: Wire.PaneRef
+    public struct SendPaneInput: Codable, Sendable, Equatable {
+        public let pane: String
+        public let text: String
+        public let typeDelayMs: Int?
 
-        public init(pane: Wire.PaneRef) { self.pane = pane }
+        public init(pane: String, text: String, typeDelayMs: Int?) {
+            self.pane = pane
+            self.text = text
+            self.typeDelayMs = typeDelayMs
+        }
     }
 
-    public struct MovePane: Codable, Sendable, Equatable {
-        public let pane: Wire.PaneRef
-        public let toTab: Wire.TabRef
+    public struct CapturePaneText: Codable, Sendable, Equatable {
+        public let pane: String
 
-        public init(pane: Wire.PaneRef, toTab: Wire.TabRef) {
-            self.pane = pane
-            self.toTab = toTab
-        }
+        public init(pane: String) { self.pane = pane }
     }
 
     /// Mount a device pane (`deviceterm device attach <ref>`). `target`
@@ -172,77 +222,6 @@ public enum AppCommandParams {
                 Bool.self,
                 forKey: .relinkExisting
             ) ?? false
-        }
-    }
-
-    public struct OpenWindow: Codable, Sendable, Equatable {
-        public init() {}
-    }
-
-    public struct CloseWindow: Codable, Sendable, Equatable {
-        public let window: Wire.WindowRef
-        public let mode: String
-
-        public init(window: Wire.WindowRef, mode: String) {
-            self.window = window
-            self.mode = mode
-        }
-    }
-
-    public struct FocusWindow: Codable, Sendable, Equatable {
-        public let window: Wire.WindowRef
-
-        public init(window: Wire.WindowRef) { self.window = window }
-    }
-
-    public struct WindowsList: Codable, Sendable, Equatable {
-        public let all: Bool
-
-        public init(all: Bool) { self.all = all }
-    }
-
-    public struct TabSendInput: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
-        /// UTF-8 text to inject into the tab's shell. Engine
-        /// processes it through the normal input pipeline, so
-        /// control sequences (`\n`, `\r`, `\x03`, …) work the same
-        /// as if the user had typed them at the keyboard.
-        public let text: String
-        /// Optional per-character typing delay in milliseconds. When
-        /// `nil` or `0` the text is delivered in one shot (the
-        /// default, backward-compatible behavior). When positive the
-        /// GUI animates the injection one `Character` at a time with
-        /// this delay between them, so a screencast shows the command
-        /// being "typed" rather than pasted. The call is non-blocking:
-        /// it returns once the animation is enqueued, so the
-        /// back-channel ack isn't held for the typing duration.
-        /// Concurrent paced calls to one tab type out in order.
-        public let typeDelayMillis: Int?
-
-        public init(
-            tab: Wire.TabRef,
-            text: String,
-            typeDelayMillis: Int? = nil
-        ) {
-            self.tab = tab
-            self.text = text
-            self.typeDelayMillis = typeDelayMillis
-        }
-    }
-
-    public struct TabCapture: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
-
-        public init(tab: Wire.TabRef) { self.tab = tab }
-    }
-
-    public struct SetTabProtected: Codable, Sendable, Equatable {
-        public let tab: Wire.TabRef
-        public let isProtected: Bool
-
-        public init(tab: Wire.TabRef, isProtected: Bool) {
-            self.tab = tab
-            self.isProtected = isProtected
         }
     }
 }

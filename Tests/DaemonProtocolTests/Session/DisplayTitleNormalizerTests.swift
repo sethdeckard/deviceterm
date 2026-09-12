@@ -4,9 +4,9 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-// A display title is written by whatever program runs in the tab and is
-// then republished to every `tabs.list` reader, so the normalizer is a
-// security boundary, not a formatting nicety: it has to strip the
+// A display title is written by whatever program runs in the tab and crosses
+// process and public-JSON boundaries, so the normalizer is a security boundary,
+// not a formatting nicety: it has to strip the
 // scalars that let one tab impersonate another, bound the value, and cut
 // only on grapheme boundaries so a hostile title can't be truncated into
 // invalid UTF-8.
@@ -27,7 +27,7 @@ func normalizesNilAndBlankToNil() {
 @Test
 func stripsControlScalars() {
     // C0 (bell, newline, tab), DEL, and C1 all go: a label that carries
-    // them breaks any line-oriented consumer of `tabs list`.
+    // them breaks any line-oriented consumer of `tab list`.
     #expect(DisplayTitleNormalizer.normalize("vim\u{07} foo\nbar\u{7F}\u{85}")
         == "vim foobar")
 }

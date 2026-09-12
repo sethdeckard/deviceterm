@@ -18,9 +18,9 @@ private final class PressRecorder: NSObject {
 
 /// The tab-strip identifiers are an observability contract with out-of-process
 /// accessibility consumers: filter the shared prefix to collect the controls,
-/// compare a full identifier against what `tabs list --json` reports. It is a
-/// join key with the CLI rather than a durable handle, since it names a tab's
-/// current primary session and follows a change of primary terminal.
+/// then compare a full identifier against what `tab list --json` reports. The
+/// ID derives from the stable tab UUID, so it remains a durable join key when
+/// the primary terminal changes.
 ///
 /// Uniqueness carries the weight here. A pill's title comes from a precedence
 /// chain that sibling tabs routinely resolve to the same string; the identifier
@@ -99,8 +99,8 @@ struct TabAccessibilityIdentityTests {
     @Test
     func stampingClearsRatherThanLeavingAStaleName() {
         // The strip restamps in place, so clearing has to actually clear: a
-        // leftover identifier would still answer a lookup and name a session
-        // that no longer backs the tab.
+        // leftover identifier would still answer a lookup and name a tab that
+        // no longer occupies that pill.
         let pill = NSButton()
         let close = NSButton()
         TabStripViewController.applyAccessibilityIdentifiers(
@@ -114,7 +114,7 @@ struct TabAccessibilityIdentityTests {
     }
 
     @Test
-    func stampingRenamesWhenThePrimaryTerminalChanges() {
+    func stampingReplacesAnOldIdentifier() {
         let pill = NSButton()
         let close = NSButton()
         TabStripViewController.applyAccessibilityIdentifiers(
@@ -125,6 +125,33 @@ struct TabAccessibilityIdentityTests {
         )
         #expect(pill.accessibilityIdentifier() == "deviceterm.tab.bbb222")
         #expect(close.accessibilityIdentifier() == "deviceterm.tab.bbb222.close")
+    }
+
+    @Test
+    func tabIdentifierStaysCohortBasedWhenPrimaryTerminalChanges() throws {
+        let cohort = try #require(UUID(uuidString: "12345678-1234-1234-1234-123456789abc"))
+        var tab = TabState(
+            id: TabID(value: 1),
+            terminals: [
+                TerminalPaneState(
+                    id: TerminalPaneID(value: 1),
+                    sessionId: "session-a",
+                    capability: "cap-a",
+                    shortId: "aaaaaa"
+                )
+            ],
+            simPanes: [],
+            cohortId: cohort
+        )
+        #expect(TabStripViewController.accessibilityShortID(for: tab) == "123456")
+
+        tab.terminals[0] = TerminalPaneState(
+            id: TerminalPaneID(value: 2),
+            sessionId: "session-b",
+            capability: "cap-b",
+            shortId: "bbbbbb"
+        )
+        #expect(TabStripViewController.accessibilityShortID(for: tab) == "123456")
     }
 
     @Test

@@ -90,20 +90,20 @@ func parseHelpRejectsABareAllFlag() {
 
 @Test
 func parseHelpTopicOutranksATrailingAllFlag() {
-    // `--all` is a real flag on `windows list`, so a reader who copies
+    // `--all` is a real flag on `window list`, so a reader who copies
     // the signature into a help request must still reach the page. The
     // rejection above applies only when no topic was named; otherwise
     // the documented "operands after the topic are ignored" rule wins.
     //
     // The topic is the longest command path the tail names, so this
-    // lands on `windows list` rather than its parent.
+    // lands on `window list` rather than its parent.
     #expect(
-        CLICommands.parse(["deviceterm", "help", "windows", "list", "--all"])
-        == .help(topic: "windows list")
+        CLICommands.parse(["deviceterm", "help", "window", "list", "--all"])
+        == .help(topic: "window list")
         )
     #expect(
-        CLICommands.parse(["deviceterm", "help", "windows", "--all"])
-        == .help(topic: "windows")
+        CLICommands.parse(["deviceterm", "help", "window", "--all"])
+        == .help(topic: "window")
         )
 }
 
@@ -198,7 +198,7 @@ func overviewListsEveryTopLevelVerb() {
 func overviewOmitsSubcommands() {
     // Subcommands live only on their parent's page, which is what keeps
     // the command list scannable.
-    for subcommand in ["tab open", "tab send-input", "ax sweep", "tabs list", "windows list"] {
+    for subcommand in ["tab open", "pane send-input", "ax sweep", "tab list", "window list"] {
         #expect(
             !HelpText.overview.contains(subcommand),
             "subcommand leaked into the command list: \(subcommand)"
@@ -233,12 +233,12 @@ func overviewCarriesTheCoordinateConvention() {
 }
 
 @Test
-func tabHelpExplainsHowToSendDashedWordsLiterally() {
-    // `tab send-input` types arbitrary text, so the page has to say how
+func paneHelpExplainsHowToSendDashedWordsLiterally() {
+    // `pane send-input` types arbitrary text, so the page has to say how
     // to send a word the parser would otherwise claim as a flag.
-    let detail = HelpCatalog.topic(named: "tab")?.detail ?? ""
-    #expect(detail.contains("A word beginning with - is read as a flag"))
-    #expect(detail.contains("Put `--` before the text to send"))
+    let detail = HelpCatalog.topic(named: "pane")?.detail ?? ""
+    #expect(detail.contains("beginning with - is read as a flag"))
+    #expect(detail.contains("to send such a word literally"))
 }
 
 // MARK: - Pages
@@ -261,7 +261,7 @@ func pageCarriesItsGroupNote() {
     // the coordinate convention, and one on `help tab` never learns
     // what `--tab` accepts.
     #expect(HelpText.page(forTopic: "tap")?.contains("Coords are normalized") == true)
-    #expect(HelpText.page(forTopic: "tab")?.contains("Refs on the workspace verbs") == true)
+    #expect(HelpText.page(forTopic: "tab")?.contains("Workspace refs are raw strings") == true)
 }
 
 @Test
@@ -284,11 +284,11 @@ func everyPaneTargetedPageNamesTheSelector() {
 
 @Test
 func refsTopicScopesItselfToWorkspaceVerbs() {
-    // `parsePaneRef` encodes only paneId / shortId / current, while the
-    // input and AX verbs resolve a wider --pane. Stating the workspace
-    // grammar unscoped would contradict `help targeting`.
+    // GUI workspace refs and daemon-direct device targeting have different
+    // candidate sets. Stating the workspace grammar unscoped would
+    // contradict `help targeting`.
     let refs = HelpText.page(forTopic: "refs") ?? ""
-    #expect(refs.contains("workspace verbs"))
+    #expect(refs.contains("Workspace refs"))
     #expect(refs.contains("deviceterm help targeting"))
 }
 
@@ -313,8 +313,6 @@ func helpListsEveryUserFacingVerb() {
     // Each must surface in some topic's prose; the exact line shape is
     // the per-command synopsis area.
     let verbs = [
-        "tabs list",
-        "panes list",
         "devices list",
         "tap",
         "swipe",
@@ -328,25 +326,29 @@ func helpListsEveryUserFacingVerb() {
         "ax tree",
         "ax point",
         "ax sweep",
+        "window list [--all]",
+        "window show [<window>]",
+        "window open",
+        "window focus [<window>]",
+        "window close [<window>]",
+        "tab list [--window <ref> | --all]",
+        "tab show [<tab>]",
         "tab open [--window <ref>]",
         "tab close",
         "tab rename",
-        "tab select",
-        "tab info",
+        "tab focus",
         "tab move",
-        "tab set-protected",
-        "tab send-input",
-        "tab capture",
-        "pane open --terminal [--tab <ref>]",
+        "tab protect",
+        "tab unprotect",
+        "pane list [--tab <ref>]",
+        "pane show [<pane>]",
+        "pane split [<pane>]",
+        "pane focus [<pane>]",
         "pane close",
-        "pane info",
+        "pane send-input <pane>",
+        "pane capture-text <pane>",
         "device attach <ref>",
         "pane rename",
-        "pane move",
-        "window open",
-        "window close",
-        "window focus",
-        "windows list",
         "completions install"
     ]
     let prose = allTopicProse
@@ -363,18 +365,22 @@ func helpDocumentsShellCompletionInstall() {
 }
 
 @Test
-func workspaceRefsDocumentTabAndSessionUUIDs() {
-    #expect(HelpCatalog.refsLegend.contains("<tabId-uuid>"))
-    #expect(HelpCatalog.refsLegend.contains("<sessionId-uuid>"))
+func workspaceRefsDocumentLiveProjectionResolution() {
+    #expect(HelpCatalog.refsLegend.contains("resolved case-insensitively against the"))
+    #expect(HelpCatalog.refsLegend.contains("live projection"))
+    #expect(HelpCatalog.refsLegend.contains("exact short ID"))
+    #expect(HelpCatalog.refsLegend.contains("exact unique name"))
+    #expect(HelpCatalog.refsLegend.contains("Names match exactly, never by prefix"))
+    #expect(HelpCatalog.refsLegend.contains("display-order metadata"))
+    #expect(HelpCatalog.refsLegend.contains("terminal pane's full ID is its session ID"))
 }
 
 @Test
-func tabsHelpQualifiesNonGUIGrouping() {
-    let tabs = HelpCatalog.topic(named: "tabs")?.detail ?? ""
-    #expect(tabs.contains("Human output uses"))
-    #expect(tabs.contains("only these five tab-separated columns"))
-    #expect(tabs.contains("GUI-backed groups correspond to tabs"))
-    #expect(tabs.contains("include non-GUI session groups"))
+func tabHelpDefinesTheWorkspace() {
+    let tab = HelpCatalog.topic(named: "tab")?.detail ?? ""
+    #expect(tab.contains("A tab is the workspace"))
+    #expect(tab.contains("terminal,\n  Simulator, and physical-device panes"))
+    #expect(tab.contains("WorkspaceTab objects"))
 }
 
 @Test

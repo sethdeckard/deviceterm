@@ -67,10 +67,9 @@ final class TabContentViewController: NSViewController {
     /// (automation tabs only; a no-op otherwise). Per-tab: its retry loops are
     /// cancelled when the tab (and this VC) tears down.
     private let grantCoordinator: AutomationGrantCoordinator
-    /// Keeps the daemon's copy of this tab's live label current, so
-    /// `tabs.list` can serve it in place of the static name from
-    /// `session.create`. Per-tab: its pending push is dropped when the tab
-    /// (and this VC) tears down.
+    /// Keeps the daemon's per-session cache of this tab's live label current.
+    /// Per-tab: its pending push is dropped when the tab and this controller
+    /// tear down.
     private let titlePublisher: DisplayTitlePublisher
     private let daemonSocketPath: String
     /// Handle for this tab's reconnect observer, removed on teardown.
@@ -118,10 +117,9 @@ final class TabContentViewController: NSViewController {
     /// default).
     private(set) var latestWorkingDirectory: String?
 
-    /// Sessions exposed for legacy tab-scoped consumers (status item
-    /// grouping, the discovery snapshot's ownership filter, the
-    /// automation-only `sendInput` / `captureScreen` default-target
-    /// path). All resolve to the **primary** terminal's session, the
+    /// Session exposed for tab-scoped consumers such as status-item grouping
+    /// and the discovery snapshot's ownership filter. These resolve to the
+    /// **primary** terminal's session, the
     /// authoritative "which session represents this tab" answer for
     /// surfaces that don't yet model per-terminal sessions.
     var sessionId: String { primaryTerminalSessionId }
@@ -320,9 +318,8 @@ final class TabContentViewController: NSViewController {
     /// what a pass accesses. This re-fires both when the title changes and when
     /// closing the primary terminal of a split tab re-seats `primaryTerminal`
     /// onto a different session. It reports the *publishable* label, not the
-    /// rendered one: a label that merely restates the session name (or the
-    /// generic fallback) publishes as a clear, since `tabs.list` already
-    /// carries the name.
+    /// rendered one: a label that merely restates the session name or generic
+    /// fallback publishes as a clear because the cache adds no information.
     private func reportDisplayTitle() {
         let title = titleModel.publishableTitle
         let sessionId = primaryTerminalSessionId
@@ -398,20 +395,6 @@ final class TabContentViewController: NSViewController {
     }
     func renameManually(to title: String) { titleModel.renameManually(to: title) }
 
-    /// Forward an intent-layer `sendInput` to the primary terminal
-    /// pane's surface so the bytes flow through libghostty's input
-    /// pipeline. Called by `AppDelegate`'s `IntentActionDelegate`
-    /// bridging for the automation-only `deviceterm tab send-input`
-    /// verb. Throws when the underlying surface refuses input (e.g.
-    /// attach hasn't completed even after forced view load); the
-    /// dispatcher relays the typed error.
-    func sendInput(_ text: String, typeDelayMillis: Int?) throws {
-        guard let primary = primaryTerminalVC() else {
-            throw TerminalSurfaceError.notAttached
-        }
-        try primary.sendInput(text, typeDelayMillis: typeDelayMillis)
-    }
-
     /// Focus the pane this tab last held focus in, falling back to the
     /// primary terminal, then to the first mounted pane in display
     /// order. Called when the tab becomes the selected one, after its
@@ -441,26 +424,73 @@ final class TabContentViewController: NSViewController {
         restoreRememberedFocus()
     }
 
-    /// Resolve the **original** primary terminal pane VC, the one
-    /// the daemon session bound to at tab open. Tab-scoped operations
-    /// (automation's `sendInput` / `captureScreen`) must target this
-    /// session regardless of where the user has dragged the pane in
-    /// the tree. Reading nav-state's `primaryTerminal.id` on every call
-    /// keeps the answer stable across rearranges.
-    func primaryTerminalVC() -> TerminalPaneViewController? {
-        guard let primaryID = tabListVM.tab(id: tabID)?.primaryTerminal.id else { return nil }
-        return splitVC.terminalVC(for: primaryID)
+    func sendInput(
+        to terminalID: TerminalPaneID,
+        text: String,
+        typeDelayMillis: Int?
+    ) throws {
+        guard let terminal = terminalVCByID[terminalID] else {
+            throw IntentError.notFound(kind: "pane", ref: "terminal \(terminalID.value)")
+        }
+        try terminal.sendInput(text, typeDelayMillis: typeDelayMillis)
     }
 
-    /// Read the primary terminal pane's currently-visible viewport as
-    /// plain text. Called by `AppDelegate`'s `IntentActionDelegate`
-    /// for `deviceterm tab capture`. Mirrors `sendInput`'s
-    /// force-load-then-throw shape.
-    func captureScreen() throws -> String {
-        guard let primary = primaryTerminalVC() else {
-            throw TerminalSurfaceError.notAttached
+    func captureTerminal(_ terminalID: TerminalPaneID) throws -> String {
+        guard let terminal = terminalVCByID[terminalID] else {
+            throw IntentError.notFound(kind: "pane", ref: "terminal \(terminalID.value)")
         }
-        return try primary.captureScreen()
+        return try terminal.captureScreen()
+    }
+
+    func focusPane(_ slot: PaneSlot) { splitVC.restoreFocus(to: slot) }
+
+    func workingDirectory(for terminalID: TerminalPaneID) -> String? {
+        terminalVCByID[terminalID]?.lastWorkingDirectory
+    }
+
+    func focusedPane() -> PaneSlot? { splitVC.focusedSlot() }
+
+    func lifecycle(for slot: PaneSlot) -> PaneLifecycle? {
+        let state: SimulatorPaneState?
+        switch slot {
+        case let .sim(udid):
+            state = simPaneVCByUDID[udid]?.currentState
+
+        case let .device(deviceId):
+            state = devicePaneVCByID[deviceId]?.currentState
+
+        case .terminal, .pending:
+            return nil
+        }
+        switch state {
+        case .booting:
+            return .booting
+
+        case .rendering:
+            return .rendering
+
+        case .shutdown:
+            return .shutdown
+
+        case .failed:
+            return .failed
+
+        case nil:
+            return nil
+        }
+    }
+
+    func orientation(for slot: PaneSlot) -> Orientation? {
+        switch slot {
+        case let .sim(udid):
+            simPaneVCByUDID[udid]?.currentOrientation
+
+        case let .device(deviceId):
+            devicePaneVCByID[deviceId]?.currentOrientation
+
+        case .terminal, .pending:
+            nil
+        }
     }
 
     // MARK: - Lifecycle
@@ -646,8 +676,8 @@ final class TabContentViewController: NSViewController {
             // The session is now terminal-bound. For an automation tab, hand
             // it to the grant coordinator, which issues (and, on transient
             // failure, retries with fresh revisions) the live automation
-            // grant so an in-tab CLI can drive the cross-tab `tab.send-input` /
-            // `tab.capture` verbs, gated on bind (not create) so the grant
+            // grant so an in-tab CLI can drive the cross-tab `pane.sendInput` /
+            // `pane.captureText` verbs, gated on bind (not create) so the grant
             // never precedes the moment the session can be authenticated. Fires
             // on every successful bind, so a reconnect rebind reissues. This
             // schedules the work and returns immediately.

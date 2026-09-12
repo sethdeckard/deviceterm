@@ -497,8 +497,9 @@ The daemon vends two transports with different trust models. UDS (the CLI /
 shim path) authenticates a session with a capability PLUS the caller's kernel
 peer provenance (`LOCAL_PEERTOKEN` → the caller's POSIX session / controlling
 tty, matched against the session's bound terminal). It is not cap-only. It
-reaches `.automationTab` scope (`tab.send-input`/`tab.capture`, plus the
-workspace-wide `tab.open`/`tab.select`/`tab.move`/`window.open`/`window.focus`)
+reaches `.automationTab` scope (`pane.sendInput`/`pane.captureText`, plus
+`tab.open`/`tab.focus`/`tab.move`, `pane.focus`, `window.open`, and
+`window.focus`)
 only when its session currently holds a **live automation grant**, re-checked
 per request;
 authority is the grant plus that provenance, never a role. What UDS can never do
@@ -595,6 +596,11 @@ core rules to keep in hand at PR time:
   cohort falls back to its own session; a pane naming a retired cohort admits
   nobody; the validated GUI peer spans sessions. A foreign paneId is a hard
   reject indistinguishable from an unknown one. No cap logged either way.
+  For GUI workspace `pane close` and `pane rename`, a terminal pane remains
+  its own trust unit: an ungranted caller may mutate only the pane whose
+  session matches the caller. Simulator and physical-device panes retain tab
+  ownership, then pass through the daemon's existing cohort authorization. A
+  live grant widens mutation authority but never protected-tab visibility.
   Tab-targeted calls are likewise authorized per-request, in the GUI, against
   the caller's tab ownership (`WorkspaceAuthorityDecision`): without a live
   automation grant a session reaches only tabs it owns a terminal in, and

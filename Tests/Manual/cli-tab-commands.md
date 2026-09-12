@@ -1,52 +1,68 @@
-# Workspace CLI Verbs Manual Checklist
+# Workspace CLI Manual Checklist
 
-This checklist covers workspace CLI behavior that still needs a live Simulator or a visible multi-window transition.
+This checklist covers the live parts of the singular workspace CLI that need
+real AppKit state, terminal sessions, or a Simulator. Unit tests pin parsing,
+wire shapes, reference resolution, receipts, authority, and partial failure.
 
-Run `make verify` first. It covers command parsing, request and receipt shapes, reference resolution, authority decisions,
-Router dispatch, GUI-unavailable errors, and expired-command rejection.
-
-The `deviceterm-e2e` skill covers the end-to-end tab lifecycle and terminal-pane creation through CLI mutation plus
-accessibility and pixel verification. Those assertions do not need to be repeated here.
+Run `make verify` first. Use the `deviceterm-e2e` skill for pixel and
+accessibility verification of DeviceTerm's own tab and pane chrome.
 
 ## Preconditions
 
-- Run `make verify`.
-- Stop this checkout's app and daemon with `make kill-daemon`.
-- Launch with `make run`. Stop if it prints a `deviceterm-make: BUSY:` line.
-- Confirm `deviceterm tabs current` succeeds in the first tab.
+- Stop this checkout with `make kill-daemon`, then launch it with `make run`.
+  Stop if either command prints a `deviceterm-make: BUSY:` line.
+- Open one regular tab and one Automation Tab.
+- In the regular tab, confirm `deviceterm tab show --json` returns one terminal
+  pane whose `id` equals `terminal.sessionId`.
+- Record the Automation Tab's terminal pane ID from `deviceterm pane list`.
 
-From an agent running in an Automation Tab, invoke the `deviceterm-e2e` skill and run playbook scenarios 1 and 2. Both
-scenarios must pass before continuing with this checklist. They do not boot a Simulator or quit DeviceTerm, so no orphan
-recovery is expected. Open a normal tab for section 1.
-
-## 1. Simulator pane commands
-
-Boot a shutdown Simulator from the DeviceTerm tab before starting this section.
+## 1. Tabs are workspaces and panes are leaves
 
 | # | Action | Expected |
 |---|---|---|
-| 1.1 | Run `deviceterm pane info`. | The output identifies the attached Simulator pane, including its pane ID, UDID, display name, family, and session. |
-| 1.2 | Open another tab, return to the Simulator's tab, and run `deviceterm pane rename --pane <shortId> test-name`. | The command reaches the GUI, exits 1, and reports `intent.internalError` with `pane rename is not implemented`. |
-| 1.3 | From the same tab, run `deviceterm pane move --pane <shortId> --to-tab <other-tab>`. | The command reaches the GUI, exits 1, and reports `intent.internalError` with `pane move is not implemented`. |
-| 1.4 | Run `deviceterm pane close --pane <shortId>`. | The command prints `ok pane=<shortId> mode=detach`. The pane closes and the Simulator keeps running. |
-| 1.5 | Reattach the Simulator, then run `deviceterm pane close --pane <shortId> --mode shutdown`. | The pane closes and the Simulator shuts down. |
-| 1.6 | With no Simulator pane in the tab, run `deviceterm pane info`. | The command exits 1 with `intent.notFound` and reports that the tab has no Simulator panes. |
+| 1.1 | In the regular tab, run `deviceterm pane split --direction right --json`. | The receipt contains the host tab and a new terminal pane. Its `id` equals `terminal.sessionId`; no polling was needed to discover it. |
+| 1.2 | Run `deviceterm tab show --json`. | `panes` contains both terminals in visible order and `layout` is a recursive split with one leaf for each pane ID. |
+| 1.3 | Run `deviceterm pane show <new-pane> --json`. | The result identifies the terminal kind, host tab, focus state, capabilities, CWD, and session ID. |
+| 1.4 | Run `deviceterm pane rename <new-pane> "test runner"`, then address it as `"test runner"` with `pane show`. | The committed pane receipt and subsequent read carry the stable name. |
+| 1.5 | Close the new pane, then try to close the remaining terminal with `deviceterm pane close`. | The first close succeeds. The second is refused with `intent.wouldCloseTab`; `tab close` is the explicit workspace-removal command. |
 
-## 2. Window commands
+## 2. Tab creation returns an addressable terminal
 
-Open an Automation Tab and run every command in this section from it. Opening or focusing a window requires the live
-automation grant. Closing window 2 requires it because that window contains another session's tab.
+Run this section from the Automation Tab.
 
 | # | Action | Expected |
 |---|---|---|
-| 2.1 | Run `deviceterm window open`. | The command prints `ok`. A second window opens with one fresh agent-role tab. |
-| 2.2 | Click the original window's Automation Tab. | The original window becomes key and window 2 remains open in the background. |
-| 2.3 | Run `deviceterm windows list --all`. | One row appears for each visible window. Window 1 carries the `*` key-window marker. |
-| 2.4 | Run `deviceterm windows list --all --json`. | The output is a `WindowInfoPayload` array whose window count and selected-tab identifiers match the visible windows. |
-| 2.5 | Run `deviceterm window focus --window 2`. | The command prints `ok window=2`. Window 2 comes forward and becomes key. |
-| 2.6 | Return to the Automation Tab and run `deviceterm window close --window 2`. | The command prints `ok window=2 mode=detach`. Window 2 closes and the original window remains. |
+| 2.1 | Run `deviceterm tab open --cwd "$PWD" --json`. | One receipt contains the committed window, tab, and initial terminal pane. The pane ID equals its session ID. |
+| 2.2 | Immediately run `deviceterm pane show <receipt-pane-id> --json`. | The pane resolves without polling `pane list`. Shell attachment may still be pending; the creation receipt promises a session ID, not shell readiness. |
+| 2.3 | Run `deviceterm tab rename <new-tab> api-work`, then `deviceterm tab focus api-work`. | Both receipts return the committed tab. The named tab becomes selected and its window becomes key. |
+| 2.4 | Run `deviceterm tab list --json`. | One row represents each visible GUI tab, regardless of how many terminal panes it contains. |
+| 2.5 | Protect the new tab from one of its own terminals, then list tabs from another tab. | `tab protect` returns `protected: true`; the protected tab and all of its panes disappear from the foreign projection. `tab unprotect` restores them. |
+
+## 3. Simulator panes use the same hierarchy
+
+Boot a shutdown Simulator from a terminal in the regular tab.
+
+| # | Action | Expected |
+|---|---|---|
+| 3.1 | Run `deviceterm pane list`, then `deviceterm pane show <sim-pane> --json`. | The list includes terminal and Simulator leaves. The detail contains the Simulator UDID, display name, family, rendering state, orientation, dimensions, and capabilities. |
+| 3.2 | Rename the Simulator pane and use the new name as `--pane` for `deviceterm tap 0.5 0.5`. | The rename receipt is committed, daemon-direct targeting sees the same name, and the tap lands. |
+| 3.3 | Run `deviceterm pane close <sim-pane>`. | The pane closes and the Simulator remains booted because detach is the default. |
+| 3.4 | Reattach it with `deviceterm device attach <udid>`, then run `deviceterm pane close <sim-pane> --mode shutdown`. | Attach returns the committed tab and pane. The close removes the pane and shuts down the Simulator. |
+
+## 4. Windows contain tab workspaces
+
+Run this section from the Automation Tab.
+
+| # | Action | Expected |
+|---|---|---|
+| 4.1 | Run `deviceterm window open --json`. | A second window opens. The receipt contains its window, first tab, and initial terminal pane. |
+| 4.2 | Return to the original Automation Tab and run `deviceterm window list --all --json`. Save the second window's `id` or `shortId` as `<window-ref>`. | One `WorkspaceWindow` appears per visible window with correct one-based index metadata, focus state, selected tab IDs, and tab counts. The index is not a reference. |
+| 4.3 | Run `deviceterm window show <window-ref> --json`. | The detail contains the saved window and its caller-visible tab rows. |
+| 4.4 | Run `deviceterm tab move <tab> --window <window-ref> --index 0`. | The receipt contains the moved tab and destination window; the GUI order matches index 0. |
+| 4.5 | Run `deviceterm window focus <window-ref>`, then `deviceterm window close <window-ref> --mode detach`. | The saved window becomes key, then closes. The close receipt identifies the committed closed window and selected mode. |
 
 ## Passing the checklist
 
-A release passes this layer when every row succeeds after `make verify` and the `deviceterm-e2e` prerequisite have
-passed. Do not commit a separate run log; fixes and the release commit are the record.
+A release passes this layer when every applicable row succeeds after
+`make verify` and the `deviceterm-e2e` prerequisite. Do not commit a separate
+run log; fixes and the release commit are the record.

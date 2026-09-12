@@ -68,8 +68,8 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     /// this pane. See the gate on that method for what it protects.
     private var hasClaimedInitialFocus = false
     private let environment: [String: String]
-    /// One-shot startup hint from `deviceterm tab open --cwd <path>` /
-    /// `pane open --terminal --cwd <path>`. Threads through to
+    /// One-shot startup hint from `deviceterm tab open --cwd <path>` or a
+    /// programmatic terminal split. Threads through to
     /// libghostty's `config.working_directory`; nil falls back to the
     /// GUI process's CWD (libghostty's default).
     private let cwd: String?
@@ -306,7 +306,7 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
 
         do {
             // libghostty types `initial_input` into the shell after
-            // attach, so wrap the user's `--cmd '<cmd>'` with a
+            // attach, so wrap the user's `--command '<cmd>'` with a
             // trailing newline to drive execution. Joining with
             // spaces handles a programmatic caller that splits its
             // command into argv-shaped tokens (CLI sends a single
@@ -438,7 +438,7 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     }
 
     /// Inject `text` into the surface's input pipeline. Called by
-    /// the intent layer for `deviceterm tab send-input`. Forces the
+    /// the intent layer for `deviceterm pane send-input`. Forces the
     /// view to load if the VC has never been activated (background
     /// tabs that haven't been selected yet won't have run
     /// viewDidLoad, and therefore won't have called `attach`),
@@ -520,7 +520,7 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     }
 
     /// Read the surface's currently-visible viewport as plain text.
-    /// Called by the intent layer for `deviceterm tab capture`. Same
+    /// Called by the intent layer for `deviceterm pane capture-text`. Same
     /// forced-load shape as `sendInput` so a never-activated tab
     /// still presents its scrollback rather than an empty string,
     /// but throws if the surface is still unavailable after the

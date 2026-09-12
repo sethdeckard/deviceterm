@@ -40,7 +40,7 @@ func payloadCredentialsCannotTargetForeignSession() async throws {
         RPCEnvelope(
             id: 1,
             type: .request,
-            method: RPCMethod.panesList.rawValue,
+            method: RPCMethod.paneDeviceList.rawValue,
             body: .params(try panesListParams(victim.state.id.uuidString, victim.capability.token))
         )
     )
@@ -56,14 +56,14 @@ func payloadCredentialsCannotTargetForeignSession() async throws {
         RPCEnvelope(
             id: 2,
             type: .request,
-            method: RPCMethod.panesList.rawValue,
+            method: RPCMethod.paneDeviceList.rawValue,
             body: .params(
                 try panesListParams(harness.state.id.uuidString, harness.capability.token)
             )
         )
     )
     guard case .result = try client.receive().body else {
-        Issue.record("own-session panes.list should succeed")
+        Issue.record("own-session pane.deviceList should succeed")
         return
     }
 }
@@ -87,7 +87,7 @@ func closedSessionRefusesAlreadyAuthenticatedSocket() async throws {
         RPCEnvelope(
             id: 1,
             type: .request,
-            method: RPCMethod.panesList.rawValue,
+            method: RPCMethod.paneDeviceList.rawValue,
             body: .params(
                 try panesListParams(harness.state.id.uuidString, harness.capability.token)
             )
@@ -279,7 +279,7 @@ func anchoredAncestryAuthorizesUntilTheChainIsSevered() async throws {
         RPCEnvelope(
             id: 1,
             type: .request,
-            method: RPCMethod.panesList.rawValue,
+            method: RPCMethod.paneDeviceList.rawValue,
             body: .params(try panesListParams(created.state.id.uuidString, created.capability.token))
         )
     )
@@ -304,7 +304,7 @@ func anchoredAncestryAuthorizesUntilTheChainIsSevered() async throws {
         RPCEnvelope(
             id: 3,
             type: .request,
-            method: RPCMethod.panesList.rawValue,
+            method: RPCMethod.paneDeviceList.rawValue,
             body: .params(try panesListParams(created.state.id.uuidString, created.capability.token))
         )
     )
@@ -333,7 +333,7 @@ func anchoredAncestryAuthorizesUntilTheChainIsSevered() async throws {
         RPCEnvelope(
             id: 4,
             type: .request,
-            method: RPCMethod.panesList.rawValue,
+            method: RPCMethod.paneDeviceList.rawValue,
             body: .params(try panesListParams(created.state.id.uuidString, created.capability.token))
         )
     )

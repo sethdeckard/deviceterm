@@ -90,11 +90,11 @@ struct AppCommandCoordinatorTests {
     func publishWithoutSubscriberFailsImmediately() async {
         let coord = AppCommandCoordinator()
         let outcome = await coord.publishAndAwait(
-            kind: .windowsList,
+            kind: .windowList,
             originatingSessionId: nil,
             params: Data(#"{"all":false}"#.utf8)
         )
-        if case let .error(code, _) = outcome {
+        if case let .error(code, _, _, _) = outcome {
             #expect(code == "intent.guiUnavailable")
         } else {
             Issue.record("expected .error; got \(outcome)")
@@ -111,12 +111,12 @@ struct AppCommandCoordinatorTests {
             for await _ in stream { /* drop */ }
         }
         let outcome = await coord.publishAndAwait(
-            kind: .windowsList,
+            kind: .windowList,
             originatingSessionId: nil,
             params: Data(#"{"all":false}"#.utf8),
             timeoutMs: 50
         )
-        if case let .error(code, _) = outcome {
+        if case let .error(code, _, _, _) = outcome {
             #expect(code == "intent.guiUnavailable")
         } else {
             Issue.record("expected .error; got \(outcome)")
@@ -135,7 +135,7 @@ struct AppCommandCoordinatorTests {
         let before = AppCommandDeadline.nowMonotonicNanos()
         let publishTask = Task {
             await coord.publishAndAwait(
-                kind: .windowsList,
+                kind: .windowList,
                 originatingSessionId: nil,
                 params: Data(#"{"all":false}"#.utf8),
                 timeoutMs: timeoutMs
@@ -176,7 +176,7 @@ struct AppCommandCoordinatorTests {
         // Publish + immediately drop the subscriber.
         let publishTask = Task {
             await coord.publishAndAwait(
-                kind: .tabInfo,
+                kind: .tabShow,
                 originatingSessionId: nil,
                 params: Data(#"{"tab":{"type":"current"}}"#.utf8),
                 timeoutMs: 5_000
@@ -186,7 +186,7 @@ struct AppCommandCoordinatorTests {
         #expect(pendingArrived)
         onCancel()
         let outcome = await publishTask.value
-        if case let .error(code, _) = outcome {
+        if case let .error(code, _, _, _) = outcome {
             #expect(code == "intent.guiUnavailable")
         } else {
             Issue.record("expected .error; got \(outcome)")
@@ -210,5 +210,39 @@ struct AppCommandCoordinatorTests {
         #expect(accepted)
         let count = await coord.pendingCount
         #expect(count == 0)
+    }
+
+    @Test
+    func publishVerbForwardsAGUIObservedDaemonErrorCode() async throws {
+        let coordinator = AppCommandCoordinator()
+        let (stream, _) = await coordinator.subscribe(connectionId: 1)
+        let responder = Task {
+            for await command in stream {
+                _ = await coordinator.deliverResult(
+                    .error(
+                        commandId: command.commandId,
+                        code: "intent.attachFailed",
+                        message: "pane.create: display unavailable",
+                        rpcCode: RPCErrorCode.serverError
+                    ),
+                    from: 1
+                )
+                return
+            }
+        }
+        let handler = AppCommandMethods.publishVerb(
+            kind: .paneAttach,
+            coordinator: coordinator,
+            automationGrant: nil
+        )
+
+        do {
+            _ = try await handler(Data(#"{"target":{"kind":"sim","udid":"U"}}"#.utf8))
+            Issue.record("expected the forwarded pane.create failure")
+        } catch let error as RPCMethodError {
+            #expect(error.code == RPCErrorCode.serverError)
+            #expect(error.message == "pane.create: display unavailable")
+        }
+        await responder.value
     }
 }

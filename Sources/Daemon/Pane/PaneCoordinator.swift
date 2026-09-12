@@ -160,7 +160,7 @@ public actor PaneCoordinator {
         let shortId: String
         /// Optional human-set name. Nil at create and mutable for the
         /// pane's lifetime once the shipped `pane rename` command is
-        /// implemented. Visible on `panes.list` rows.
+        /// implemented. Visible on `pane.deviceList` rows.
         var name: String?
         /// Human-readable device type from `SimDeviceType.name`.
         /// Captured at create time so subsequent attach responses
@@ -168,7 +168,7 @@ public actor PaneCoordinator {
         /// without re-querying the bridge.
         let deviceType: String?
         /// Wire projection of the backend's capability set, cached at
-        /// create time so `panes.list` can still report it after the
+        /// create time so `pane.deviceList` can still report it after the
         /// pane shuts down (when `backend` is nil).
         let capabilities: PaneCapabilities
         /// What drives this pane's frames + input. A `SimDeviceBackend`
@@ -661,7 +661,7 @@ public actor PaneCoordinator {
 
     private var panes: [UUID: Record] = [:]
     /// Panes removed from `panes` whose teardown or external cleanup is still
-    /// in progress. Authorization and `panes.list` ignore these: a retired pane
+    /// in progress. Authorization and `pane.deviceList` ignore these: a retired pane
     /// is gone to every caller. Its own cleanup, and any gesture that captured
     /// it, still reach it by identity.
     ///
@@ -2570,7 +2570,7 @@ public actor PaneCoordinator {
     /// Teardown that suspends instead of holding this actor.
     ///
     /// Simulator shutdown waits on the display lane, so running it inline stops
-    /// the coordinator answering anything (a `panes.list` included) for as long
+    /// the coordinator answering anything (a `pane.deviceList` included) for as long
     /// as CoreSimulator takes. Clearing `record.backend` first is what fences
     /// new requests immediately rather than only once the wait ends; retirement
     /// still awaits the result, because it must not release the target while a
@@ -4094,10 +4094,18 @@ public actor PaneCoordinator {
         return representative
     }
 
-    /// Panes a session may drive, which backs `panes.list` and the CLI's
-    /// pane resolution. Every pane's identity is reported via its target key
-    /// (a sim UDID or a physical device id). Sorted by paneId for stable
-    /// output.
+    /// Update the optional user-facing name of a live daemon-backed pane.
+    /// The GUI is the sole caller; the RPC layer validates its peer before
+    /// entering the coordinator.
+    public func setName(paneId: UUID, name: String?) throws {
+        guard let record = panes[paneId] else { throw PaneError.notFound(paneId: paneId) }
+        record.name = name
+    }
+
+    /// Panes a session may drive, which backs the daemon-direct device-pane
+    /// roster and CLI device resolution. Every pane's identity is reported
+    /// via its target key (a sim UDID or a physical device id). Sorted by
+    /// paneId for stable output.
     ///
     /// Cohort-scoped, so a sibling terminal sees the tab's panes rather than an
     /// empty list. This is the discovery half of tab-scoped control: without

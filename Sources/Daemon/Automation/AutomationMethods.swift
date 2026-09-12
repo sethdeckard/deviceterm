@@ -3,7 +3,7 @@
 import DaemonProtocol
 import Foundation
 
-/// Handlers for `automation.grant` / `automation.revoke`.
+/// Handler for `automation.grant`.
 ///
 /// Both are `.validatedGUI`-scoped, so the dispatcher admits them only over
 /// XPC from a signature-validated GUI peer. UDS can never reach them. The
@@ -13,11 +13,9 @@ import Foundation
 ///
 /// Payload handling is all-or-none: a malformed session id fails
 /// `[UUID]` decoding and the request is rejected `invalidParams` before any
-/// mutation; a grant additionally requires that **every** target is a live
-/// session: enforced atomically inside the store against its live-session
-/// set. A revoke does not require live targets: a session already gone is
-/// treated as already-revoked and stores nothing (so a late or spurious
-/// revoke can't accrete tombstones), while live targets are tombstoned.
+/// mutation; every target must be a live session, enforced atomically inside
+/// the store against its live-session set. Revocation remains an internal
+/// lifecycle operation on `AutomationGrantStore`, not a public RPC verb.
 enum AutomationMethods {
     static func grant(store: AutomationGrantStore) -> MethodRegistry.Handler {
         { paramsJSON in
@@ -42,18 +40,6 @@ enum AutomationMethods {
             case .notApplied:
                 return try JSONEncoder().encode(AutomationGrantResult(applied: false))
             }
-        }
-    }
-
-    static func revoke(store: AutomationGrantStore) -> MethodRegistry.Handler {
-        { paramsJSON in
-            let params = try decodeParams(paramsJSON, verb: "automation.revoke")
-            guard let context = DispatchPeerContext.current else {
-                throw RPCMethodError.unauthorized("automation.revoke requires a dispatch context")
-            }
-            let key = GrantOrderingKey(epoch: context.connectionId, revision: params.revision)
-            let applied = await store.revoke(sessionIds: params.sessionIds, key: key)
-            return try JSONEncoder().encode(AutomationGrantResult(applied: applied))
         }
     }
 

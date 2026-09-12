@@ -853,8 +853,9 @@ actor RPCConnection {
                 method: nil,
                 body: .error(
                     RPCError(
-                    code: methodError.code,
-                    message: methodError.message
+                        code: methodError.code,
+                        message: methodError.message,
+                        details: methodError.details
                 )
                     )
             )
@@ -889,7 +890,8 @@ actor RPCConnection {
         } catch let methodError as RPCMethodError {
             let errorResponse = RPCError(
                 code: methodError.code,
-                message: methodError.message
+                message: methodError.message,
+                details: methodError.details
             )
             await send(
                 envelope: RPCEnvelope(

@@ -153,7 +153,12 @@ public extension RPCEnvelope {
                 throw RPCEnvelopeError.invalidError
             }
             let msg = errorDict["msg"] as? String ?? ""
-            body = .error(RPCError(code: codeNumber.intValue, message: msg))
+            let details = try errorDict["details"].map {
+                try JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])
+            }
+            body = .error(
+                RPCError(code: codeNumber.intValue, message: msg, details: details)
+            )
         } else if let params = dict["params"] {
             let paramsData = try JSONSerialization.data(withJSONObject: params, options: [])
             body = .params(paramsData)
@@ -192,10 +197,17 @@ public extension RPCEnvelope {
             dict["result"] = try JSONSerialization.jsonObject(with: data, options: [])
 
         case let .error(error):
-            dict["error"] = [
+            var errorObject = [
                 "code": NSNumber(value: error.code),
                 "msg": error.message
             ] as [String: Any]
+            if let details = error.details {
+                errorObject["details"] = try JSONSerialization.jsonObject(
+                    with: details,
+                    options: []
+                )
+            }
+            dict["error"] = errorObject
         }
         guard JSONSerialization.isValidJSONObject(dict) else {
             throw RPCEnvelopeError.bodyEncodeFailed

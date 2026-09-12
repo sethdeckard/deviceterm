@@ -48,8 +48,8 @@ struct TabTitleViewModelTests {
 
     @Test
     func sessionNameAlsoFallsBackPastEmptyInputs() {
-        // Clearing the session name (e.g. a `tab rename` to
-        // nothing) falls back to the CWD basename, then "shell":
+        // Clearing creation-time session metadata falls back to the CWD
+        // basename, then "shell":
         // the chain collapses cleanly through the optionals.
         let model = TabTitleViewModel()
         model.updateSessionName("branch")
@@ -64,8 +64,8 @@ struct TabTitleViewModelTests {
 
     @Test
     func publishableTitleDropsWhatTheSessionNameAlreadySays() {
-        // `tabs.list` carries the session name in its own field, so the
-        // wire value is the label only when the label says more.
+        // The daemon already carries the session name, so the cached label is
+        // present only when it says more.
         let model = TabTitleViewModel()
         #expect(model.publishableTitle == nil)       // the generic fallback
         model.updateWorkingDirectory(path: "/tmp/foo")
@@ -87,7 +87,7 @@ struct TabTitleViewModelTests {
         // The comparison has to run on what actually crosses the wire.
         // Comparing raw text lets a title that only decorates the name with
         // invisible scalars read as different here and then normalize to the
-        // name downstream, republishing what `tabs.list` already carries.
+        // name downstream, republishing what the daemon already carries.
         let model = TabTitleViewModel()
         model.updateSessionName("branch")
         model.updateOSCTitle("branch\u{200B}")

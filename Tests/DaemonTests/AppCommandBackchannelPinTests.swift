@@ -10,7 +10,7 @@ import Testing
 // `.validatedGUI`-scoped and pinned to one connection. Two properties:
 //
 //   1. Scope: no UDS caller reaches it, whatever its role. A rogue
-//      local process can't evict the real GUI or read `tab.sendInput`
+//      local process can't evict the real GUI or read `pane.sendInput`
 //      payloads in flight, because it can't subscribe at all.
 //   2. Connection pin: even among validated peers, only the *current
 //      subscriber connection* may deliver results, and only a teardown
@@ -91,7 +91,7 @@ func deliverResultFromNonSubscriberConnectionIsRefused() async {
     }
     let publishTask = Task {
         await coord.publishAndAwait(
-            kind: .tabInfo,
+            kind: .tabShow,
             originatingSessionId: nil,
             params: Data(#"{"tab":{"type":"current"}}"#.utf8),
             timeoutMs: 5_000
@@ -122,7 +122,7 @@ func resubscribeFromNewConnectionEvictsAndFailsPending() async {
     let dropper = Task { for await _ in stream1 { /* never acks */ } }
     let publishTask = Task {
         await coord.publishAndAwait(
-            kind: .tabInfo,
+            kind: .tabShow,
             originatingSessionId: nil,
             params: Data(#"{"tab":{"type":"current"}}"#.utf8),
             timeoutMs: 5_000
@@ -134,7 +134,7 @@ func resubscribeFromNewConnectionEvictsAndFailsPending() async {
     // Last-wins: it takes over, and the prior subscriber's in-flight
     // command fails immediately rather than hanging until timeout.
     let (stream2, _) = await coord.subscribe(connectionId: 2)
-    if case let .error(code, _) = await publishTask.value {
+    if case let .error(code, _, _, _) = await publishTask.value {
         #expect(code == "intent.guiUnavailable")
     } else {
         Issue.record("expected the evicted subscriber's command to fail")

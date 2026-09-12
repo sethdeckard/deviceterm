@@ -12,7 +12,7 @@ import Foundation
 /// what remains here is the request encoding they share, plus the
 /// coordinate and selector checks a declaration cannot state. The
 /// read-only listing builders
-/// (`tabsListRequest` / `panesListRequest`) ride along here too, next to
+/// The internal device-pane roster request rides along here too, next to
 /// the input builders they resemble.
 ///
 /// This is a behavior-grouping extension, not a conformance split. It
@@ -143,14 +143,9 @@ extension CLICommands {
 
     // MARK: - Input & listing request builders
 
-    /// `deviceterm tabs list`: no params.
-    public static func tabsListRequest() -> RPCEnvelope {
-        RPCEnvelope(id: 1, type: .request, method: RPCMethod.tabsList.rawValue, body: .empty)
-    }
-
-    /// `deviceterm panes list`: session-scoped, so it carries credentials.
-    public static func panesListRequest(sessionId: String, cap: String) throws -> RPCEnvelope {
-        try request(method: .panesList, body: PanesListParams(sessionId: sessionId, cap: cap))
+    /// Daemon-direct device-pane roster used to resolve device-control verbs.
+    public static func paneDeviceListRequest(sessionId: String, cap: String) throws -> RPCEnvelope {
+        try request(method: .paneDeviceList, body: PanesListParams(sessionId: sessionId, cap: cap))
     }
 
     public static func tapRequest(paneId: String, x: Double, y: Double) throws -> RPCEnvelope {

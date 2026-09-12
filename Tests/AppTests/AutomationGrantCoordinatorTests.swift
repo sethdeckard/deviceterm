@@ -56,7 +56,7 @@ private func drain(_ coord: AutomationGrantCoordinator) async {
 /// tab is never granted. Reconnect rebind reissues under the fresh epoch.
 ///
 /// Paired with the daemon half (`AutomationGrantUDSScopeTests`, a granted UDS
-/// session reaches `tab.sendInput`/`tab.capture`), this is the end-to-end
+/// session reaches `pane.sendInput`/`pane.captureText`), this is the end-to-end
 /// "open automation tab → grant issued → CLI reaches the verbs" chain, split
 /// at the process boundary a unit test can't cross.
 @MainActor

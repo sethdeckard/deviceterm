@@ -5,7 +5,7 @@ import Foundation
 /// Failures the CLI driver renders during command execution.
 enum CLIError: Error {
     case classified(code: CLIErrorCode, message: String)
-    case daemon(code: Int, message: String)
+    case daemon(code: Int, message: String, details: Data? = nil)
     /// The CLI was run outside a deviceterm tab (no session creds in the
     /// env). The associated message is the stderr body (no `deviceterm:`
     /// prefix); the driver renders it.

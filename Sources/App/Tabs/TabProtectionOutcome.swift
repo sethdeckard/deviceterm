@@ -4,8 +4,8 @@ import DaemonProtocol
 import Foundation
 
 /// First decisive outcome of an awaited tab-protection transition, reported
-/// to the intent layer so `tab set-protected` reflects the daemon's real
-/// state. `.pending` means the requested state remains unconfirmed because
+/// to the intent layer so `tab protect` and `tab unprotect` reflect the
+/// daemon's real state. `.pending` means the requested state remains unconfirmed because
 /// of a deadline, indeterminate transport loss, same-state supersession, or
 /// tab disappearance.
 enum TabProtectionOutcome: Sendable, Equatable {

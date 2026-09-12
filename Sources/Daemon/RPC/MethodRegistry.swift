@@ -254,8 +254,8 @@ public extension MethodRegistry.ScopedHandler {
     /// (from the `AutomationGrantStore`, checked per request); otherwise
     /// it rejects with `error.scope_violation` before the handler runs.
     /// Authority is the grant, not the role: a granted `.agent` reaches it,
-    /// an ungranted `.automation` does not. `tab.sendInput` and
-    /// `tab.capture` carry this scope. Reachable over BOTH transports for a
+    /// an ungranted `.automation` does not. `pane.sendInput` and
+    /// `pane.captureText` carry this scope. Reachable over BOTH transports for a
     /// granted session: the GUI's validated XPC connection, and UDS from the
     /// CLI inside a granted tab. A UDS session authenticates via cap + kernel
     /// terminal-process provenance, so the grant rests on a real identity, not

@@ -65,7 +65,7 @@ func paneAlreadyAttachedMapsToInvalidParamsWithUDIDInMessage() {
     // live pane under another session. The RPC layer maps it to
     // `invalidParams` with the udid in the message so a CLI caller
     // sees a hint they can act on (look up the existing owner via
-    // `deviceterm panes list`, or ask the human to re-link via GUI
+    // `deviceterm pane list`, or ask the human to re-link via GUI
     // drag; no CLI verb performs a cross-session move).
     let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
     let mapped = PaneMethods.mapPaneError(

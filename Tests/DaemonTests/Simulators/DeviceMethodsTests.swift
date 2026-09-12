@@ -334,7 +334,7 @@ func stateNameMapsAllKnownCases() {
 @Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))
 func liveDeviceListAllReturnsBareArray() async throws {
     // The result body is JSON `[…]`, not `{"devices": […]}`, matching
-    // tabs.list's wire shape and the canonical schema in
+    // tab.list's wire shape and the canonical schema in
     // docs/ARCHITECTURE.md.
     let coordinator = DeviceCoordinator()
     let path = tempSocketPath(prefix: "deviceterm-dev")

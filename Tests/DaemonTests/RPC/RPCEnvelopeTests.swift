@@ -136,7 +136,7 @@ func encodingProducesStableKeyOrder() throws {
     let envelope = RPCEnvelope(
         id: 3,
         type: .request,
-        method: "tabs.list",
+        method: "tab.list",
         body: .empty
     )
     let first = try envelope.encode()

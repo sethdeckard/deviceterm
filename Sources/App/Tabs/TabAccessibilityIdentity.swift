@@ -10,17 +10,11 @@
 /// consumer reading an accessibility dump can count pills but cannot say which
 /// pill it selected, and cannot address one to drive it.
 ///
-/// Keyed on the daemon-minted `shortId` because that is what `tabs list --json`
-/// reports and what `--tab <ref>` resolves first, so a single identifier joins
-/// an accessibility view of the strip to the CLI's. The field is optional only
-/// for compatibility with a pre-identifier-model daemon response; when it is
-/// absent the control carries no identifier rather than a second identifier
-/// format, since one shape is what lets a consumer compare whole strings.
-///
-/// This names a tab's CURRENT primary session, not the tab itself: closing the
-/// first terminal of a split tab promotes the second, and the identifier
-/// follows. That is what keeps it agreeing with `tabs list --json`, and it is
-/// why it is a join key rather than a durable handle.
+/// Keyed on the six-character short ID derived from the tab's stable cohort
+/// UUID. That is what `tab list --json` reports and what a tab ref resolves,
+/// so a single identifier joins an accessibility view of the strip to the
+/// CLI's live workspace projection. It names the tab itself and therefore
+/// stays stable when a split terminal closes or the primary terminal changes.
 ///
 /// The strings are an observability contract with those consumers, not
 /// user-visible text, so their shape stays machine-readable and fixed even as
@@ -47,7 +41,7 @@ enum TabAccessibilityIdentity {
     /// its own prefix so a consumer filtering the tab prefix finds the pill
     /// and its closer together.
     ///
-    /// The suffix cannot be read as some other tab's pill because a short id
+    /// The suffix cannot be read as some other tab's pill because a short ID
     /// is a fixed six characters, so no id equals `<id>.close`.
     static func closeIdentifier(forTab shortId: String) -> String {
         "\(prefix).\(shortId).close"

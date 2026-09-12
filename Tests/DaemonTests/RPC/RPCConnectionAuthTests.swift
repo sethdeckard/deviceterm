@@ -30,13 +30,13 @@ func sessionMethodWithoutAuthRejectedByDispatcher() async throws {
     defer { client.close() }
 
     // No `session.authenticate` frame. Dispatcher should reject any
-    // .session call before the handler sees it. `panes.list` is the
+    // .session call before the handler sees it. `pane.deviceList` is the
     // simplest session-scoped call.
     try client.send(
         RPCEnvelope(
         id: 1,
         type: .request,
-        method: "panes.list",
+        method: RPCMethod.paneDeviceList.rawValue,
         body: .params(
             try paramsBytes(
             PanesListParams(
@@ -66,7 +66,7 @@ func daemonWideMethodWorksWithoutAuth() async throws {
 
     // No auth: `daemon.ping` must still respond cleanly. Confirms
     // the dispatcher only gates .session/.automationTab/.validatedGUI
-    // scopes, not .daemonWide ones; out-of-tab `deviceterm tabs list` /
+    // scopes, not .daemonWide ones; out-of-tab `deviceterm tab list` /
     // `deviceterm version` work for stock-terminal callers.
     try client.send(
         RPCEnvelope(
@@ -102,7 +102,7 @@ func sessionMethodWorksAfterExplicitAuth() async throws {
         RPCEnvelope(
         id: 1,
         type: .request,
-        method: "panes.list",
+        method: RPCMethod.paneDeviceList.rawValue,
         body: .params(
             try paramsBytes(
             PanesListParams(
@@ -115,7 +115,7 @@ func sessionMethodWorksAfterExplicitAuth() async throws {
         )
     let response = try client.receive()
     guard case .result = response.body else {
-        Issue.record("expected .result for auth'd panes.list, got \(response.body)")
+        Issue.record("expected .result for auth'd pane.deviceList, got \(response.body)")
         return
     }
 }
@@ -189,7 +189,7 @@ func authenticateReplacesPriorAuthState() async throws {
         RPCEnvelope(
         id: 2,
         type: .request,
-        method: "panes.list",
+        method: RPCMethod.paneDeviceList.rawValue,
         body: .params(
             try paramsBytes(
             PanesListParams(
@@ -234,10 +234,10 @@ func automationScopeRejectedOverUDSEvenWithAutomationRole() async throws {
         RPCEnvelope(
         id: 1,
         type: .request,
-        method: RPCMethod.tabCapture.rawValue,
+        method: RPCMethod.paneCaptureText.rawValue,
         body: .params(
             try paramsBytes(
-            AppCommandParams.TabCapture(tab: Wire.TabRef(type: "current", value: nil))
+            AppCommandParams.CapturePaneText(pane: "current")
         )
             )
     )
@@ -272,10 +272,10 @@ func automationScopeRejectedOverUDSWithAgentRole() async throws {
         RPCEnvelope(
         id: 1,
         type: .request,
-        method: RPCMethod.tabCapture.rawValue,
+        method: RPCMethod.paneCaptureText.rawValue,
         body: .params(
             try paramsBytes(
-            AppCommandParams.TabCapture(tab: Wire.TabRef(type: "current", value: nil))
+            AppCommandParams.CapturePaneText(pane: "current")
         )
             )
     )

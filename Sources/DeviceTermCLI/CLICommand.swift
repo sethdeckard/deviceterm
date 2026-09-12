@@ -7,7 +7,7 @@ import Foundation
 /// this enum to pin dispatch behavior without spawning a process. The
 /// `pane` on each pane-targeted case is the optional targeting ref
 /// (from `--pane`); `resolvePane` in `CommandDispatch.swift` resolves
-/// it to a concrete paneId via `panes.list` + `PaneRefResolver`.
+/// it to a concrete paneId via `pane.deviceList` + `PaneRefResolver`.
 ///
 /// Kept free of side effects so Tests/CLITests can drive the parse
 /// directly. `CLIMain` and the command runners own env reads, stderr,
@@ -21,13 +21,6 @@ import Foundation
 /// the tab shows a single device pane). `--duration`, `--hold`,
 /// `--velocity`, and `--step` are the input-specific modifiers.
 public enum CLICommand: Equatable, Sendable {
-    case tabsList
-    /// `deviceterm tabs current`: print the caller's own tab row (the
-    /// one whose `sessionId` matches `DEVICETERM_SESSION`). Exits
-    /// non-zero when the env is unset or the matching row is missing
-    /// from `tabs.list`.
-    case tabsCurrent
-    case panesList
     case tap(
         pane:
         String?,
@@ -153,7 +146,7 @@ public enum CLICommand: Equatable, Sendable {
     ///
     /// `topic` is nil for a bare trigger. Otherwise it is the longest
     /// leading run of non-flag tokens naming a declared command path
-    /// (`tabs current`, space-separated), falling back to the first
+    /// (`tab show`, space-separated), falling back to the first
     /// non-flag token for a verb the command tree does not declare
     /// (`deviceterm help crown`). It is not validated here: the
     /// dispatcher resolves a declared path through `CommandTree` and
@@ -219,93 +212,40 @@ public enum CLICommand: Equatable, Sendable {
     // `current` is the implicit default when a `--tab` / `--pane` /
     // `--window` ref is omitted.
 
-    /// `deviceterm tab open [--window <ref>] [--cwd <path>] [--cmd '<cmd>']`:
+    case tabList(window: String?, all: Bool)
+    case tabShow(tab: String?)
+    /// `deviceterm tab open [--window <ref>] [--cwd <path>] [--command '<cmd>']`:
     /// mints a new agent-role tab in the chosen window (defaults
     /// to the caller's own window, not the human's key window). `--cwd`
     /// overrides the new shell's
-    /// startup directory; `--cmd '<cmd>'` is typed into the shell
+    /// startup directory; `--command '<cmd>'` is typed into the shell
     /// after attach (libghostty's `initial_input`) so the command
     /// runs once and leaves the user at an interactive prompt.
     case tabOpen(
-        window: Wire.WindowRef?,
+        window: String?,
         cwd: String? = nil,
-        cmd: String? = nil
+        command: String? = nil
     )
-    /// `deviceterm tab close [--tab <ref>] [--mode <detach|shutdown>]`:
+    /// `deviceterm tab close [<ref>] [--mode <detach|shutdown>]`:
     /// closes the named tab (default: caller's current tab) with
     /// the chosen close mode for any linked sims.
     case tabClose(
-        tab:
-        Wire.TabRef,
-        mode: String
+        tab: String?,
+        mode: WorkspaceCloseMode
         )
-    /// `deviceterm tab rename [--tab <ref>] [<name>]`: applies a
-    /// manual title to the named tab. Omit the positional name to
-    /// restore the automatic title (CWD / OSC / session name).
-    case tabRename(
-        tab:
-        Wire.TabRef,
-        name: String?
-        )
-    /// `deviceterm tab select [--tab <ref>]`: focus the named tab in
-    /// its window.
-    case tabSelect(
-        tab:
-        Wire.TabRef
-        )
-    /// `deviceterm tab info [--tab <ref>]`: print a structured
-    /// description of the named tab (role, session, linked sim
-    /// panes).
-    case tabInfo(
-        tab:
-        Wire.TabRef
-        )
-    /// `deviceterm tab move [--tab <ref>] [--to <index>]
-    /// [--to-window <ref>]`: reorder the named tab within its window
-    /// (`--to`) or move it to another window (`--to-window`, optionally
-    /// at `--to`). At least one of `--to` / `--to-window` is required.
-    case tabMove(
-        tab: Wire.TabRef,
-        toIndex: Int?,
-        toWindow: Wire.WindowRef?
-        )
-    /// `deviceterm pane open --terminal [--tab <ref>] [--cwd <path>]
-    /// [--cmd '<cmd>']`: open a fresh terminal pane alongside the
-    /// tab's existing panes, splitting the tab rather than opening a
-    /// new one. `--cwd` and `--cmd '<cmd>'` semantics match
-    /// `tab open`.
-    case paneOpenTerminal(
-        tab: Wire.TabRef?,
-        cwd: String? = nil,
-        cmd: String? = nil
-    )
-    /// `deviceterm pane close [--pane <ref>] [--mode <detach|shutdown>]`:
-    /// detach or shut down the named sim pane.
-    case paneClose(
-        pane:
-        Wire.PaneRef,
-        mode: String
-        )
-    /// `deviceterm pane rename [--pane <ref>] [<name>]`: unsupported;
-    /// the daemon returns `intent.internalError`.
-    case paneRename(
-        pane:
-        Wire.PaneRef,
-        name: String?
-        )
-    /// `deviceterm pane info [--pane <ref>]`: print a structured
-    /// description of the named sim pane.
-    case paneInfo(
-        pane:
-        Wire.PaneRef
-        )
-    /// `deviceterm pane move [--pane <ref>] --to-tab <ref>`: unsupported;
-    /// the daemon returns `intent.internalError`.
-    case paneMove(
-        pane:
-        Wire.PaneRef,
-        toTab: Wire.TabRef
-        )
+    case tabRename(tab: String?, name: String?)
+    case tabFocus(tab: String?)
+    case tabMove(tab: String?, window: String, index: Int?)
+    case tabProtect(tab: String?)
+    case tabUnprotect(tab: String?)
+    case paneList(tab: String?)
+    case paneShow(pane: String?)
+    case paneSplit(pane: String?, direction: WorkspaceSplitDirection)
+    case paneFocus(pane: String?)
+    case paneClose(pane: String?, mode: WorkspaceCloseMode?)
+    case paneRename(pane: String?, name: String?)
+    case paneSendInput(pane: String, text: String, typeDelay: Int?)
+    case paneCaptureText(pane: String)
     /// `deviceterm device attach <ref>`: the unified explicit-attach
     /// verb. `<ref>` resolves against the `devices.list` roster to any
     /// device: an already-booted/orphan **sim** (claimed into the
@@ -320,67 +260,27 @@ public enum CLICommand: Equatable, Sendable {
         )
     /// `deviceterm devices list`: the aggregate live roster (owned booted sims
     /// + connected physical devices), each annotated with its pane /
-    /// ownership state. Superset of `panes list`; backed by the
+    /// ownership state. Backend roster complement to `pane list`; backed by the
     /// session-scoped `devices.list` RPC. Not a `simctl list` clone.
     /// Never enumerates shutdown / never-booted sims.
     case devicesList
     /// `deviceterm window open`: mint a new window with one fresh
     /// agent-role tab.
     case windowOpen
-    /// `deviceterm window close [--window <ref>] [--mode <detach|shutdown>]`:
+    case windowList(all: Bool)
+    case windowShow(window: String?)
+    /// `deviceterm window close [<ref>] [--mode <detach|shutdown>]`:
     /// close the named window (default: the caller's own window, not
     /// the human's key window; refused if it also holds a tab the caller
     /// can't see).
     case windowClose(
-        window:
-        Wire.WindowRef,
-        mode: String
+        window: String?,
+        mode: WorkspaceCloseMode
         )
-    /// `deviceterm window focus [--window <ref>]`: bring the named
+    /// `deviceterm window focus [<ref>]`: bring the named
     /// window forward.
     case windowFocus(
-        window:
-        Wire.WindowRef
-        )
-    /// `deviceterm windows list [--all]`: list the visible windows.
-    /// Default scopes to the caller's window; `--all` returns every
-    /// window the caller may see (the dispatcher scopes by the intent's
-    /// origin, filtering out windows that hold only foreign-protected
-    /// tabs). `--all` is not role-gated: any caller can widen the scope.
-    case windowsList(
-        all:
-        Bool
-        )
-    /// `deviceterm tab send-input [--tab <ref>] [--type-delay <ms>]
-    /// <text>`: write text into the resolved tab's terminal as
-    /// though the user had typed it. Authorized by a live automation
-    /// grant, not a role; a caller without a grant is rejected at the
-    /// dispatcher's scope check with `error.scope_violation`. `typeDelay`,
-    /// when positive, animates the injection one character at a time (for
-    /// screencasts); `nil` = the instant one-shot.
-    case tabSendInput(
-        tab:
-        Wire.TabRef,
-        text: String,
-        typeDelay: Int?
-        )
-    /// `deviceterm tab capture [--tab <ref>]`: print the resolved
-    /// tab's currently-visible viewport to stdout. Authorized by a live
-    /// automation grant, not a role. Human mode emits the raw text;
-    /// `--json` emits a `{text}` object (`TabCapturePayload`).
-    case tabCapture(
-        tab:
-        Wire.TabRef
-        )
-    /// `deviceterm tab set-protected <true|false> [--tab <ref>]`:
-    /// toggle the resolved tab's protection flag. Defaults to the
-    /// caller's tab. Owner-only through the GUI's origin gate; the
-    /// underlying batch RPC is restricted to the validated GUI, and
-    /// automation can't flip another tab's protection bit.
-    case tabSetProtected(
-        tab:
-        Wire.TabRef,
-        isProtected: Bool
+        window: String?
         )
 
     /// Text the parser answered with itself: a completion callback's

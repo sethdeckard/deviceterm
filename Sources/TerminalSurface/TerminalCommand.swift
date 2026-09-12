@@ -25,7 +25,7 @@ public struct TerminalCommand: Sendable, Equatable {
     public var workingDirectory: String?
     /// Bytes fed into the surface as if the user typed them, after the
     /// shell is up. Maps to libghostty's `config.initial_input`. Use
-    /// for `deviceterm tab open --cmd 'foo'`-style startup commands so the
+    /// for `deviceterm tab open --command 'foo'` startup commands so the
     /// command runs once and the user stays at an interactive prompt
     /// (rather than `executable = "$SHELL -c foo"` semantics, which
     /// would exit the pane the moment `foo` returns).

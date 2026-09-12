@@ -70,10 +70,12 @@ public struct RPCMethodError: Error, Sendable, Equatable {
 
     public let code: Int
     public let message: String
+    public let details: Data?
 
-    public init(code: Int, message: String) {
+    public init(code: Int, message: String, details: Data? = nil) {
         self.code = code
         self.message = message
+        self.details = details
     }
 
     public static func invalidParams(_ message: String) -> RPCMethodError {

@@ -81,7 +81,7 @@ func capabilitiesWithNoCredsReturnsNullRoleAndDaemonWideSubset() async throws {
     // .session-tagged method must be absent. Sanity-check via a
     // session method that exists.
     #expect(!response.allowedMethods.contains("pane.input.tap"))
-    #expect(!response.allowedMethods.contains("panes.list"))
+    #expect(!response.allowedMethods.contains(RPCMethod.paneDeviceList.rawValue))
     // Regression guard: `shim.event` validates session creds
     // internally and rejects unauthenticated callers, so the
     // capability advertising must NOT list it for no-session
@@ -92,7 +92,7 @@ func capabilitiesWithNoCredsReturnsNullRoleAndDaemonWideSubset() async throws {
     // (otherwise out-of-tab callers couldn't discover it).
     #expect(response.allowedMethods.contains("daemon.capabilities"))
     #expect(response.allowedMethods.contains("daemon.ping"))
-    #expect(response.allowedMethods.contains("tabs.list"))
+    #expect(!response.allowedMethods.contains(RPCMethod.tabList.rawValue))
 }
 
 @Test
@@ -107,7 +107,7 @@ func capabilitiesWithAgentCredsReturnsAgentRoleAndSessionSubset() async throws {
     // representative members of each scope.
     #expect(response.allowedMethods.contains("daemon.ping"))
     #expect(response.allowedMethods.contains("pane.input.tap"))
-    #expect(response.allowedMethods.contains("panes.list"))
+    #expect(response.allowedMethods.contains(RPCMethod.paneDeviceList.rawValue))
     // shim.event is .session, so agents (who have creds) DO see
     // it in their allowedMethods. Pin both directions of the
     // tagging: visible to agents (here) and absent for no-creds
@@ -129,8 +129,8 @@ func capabilitiesWithAutomationCredsReturnsAutomationRole() async throws {
     // The role is reported, but it grants nothing: an ungranted UDS session
     // omits automation capabilities. The grant-based advertising matrix is
     // exercised over XPC in `AutomationGrantScopeTests`.
-    #expect(!response.allowedMethods.contains(RPCMethod.tabCapture.rawValue))
-    #expect(!response.allowedMethods.contains(RPCMethod.tabSendInput.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.paneCaptureText.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.paneSendInput.rawValue))
     // The `.validatedGUI` back-channel is never advertised to a
     // credentialed CLI caller: only a validated XPC GUI peer reaches
     // it, and this path has no such peer.
@@ -153,20 +153,20 @@ func capabilitiesWithAgentCredsOmitsAutomationMethods() async throws {
     let handler = try capabilitiesHandler(registry)
     let response = try await invokeCapabilities(handler, session: state)
     #expect(response.role == .agent)
-    #expect(!response.allowedMethods.contains(RPCMethod.tabCapture.rawValue))
-    #expect(!response.allowedMethods.contains(RPCMethod.tabSendInput.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.paneCaptureText.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.paneSendInput.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.sessionSetProtectedBatch.rawValue))
     // The workspace-wide verbs sit behind the same grant, so an ungranted
     // tab isn't advertised them either. What it keeps is the daemon-wide
     // and session-scoped surface.
     #expect(!response.allowedMethods.contains(RPCMethod.tabOpen.rawValue))
-    #expect(!response.allowedMethods.contains(RPCMethod.tabSelect.rawValue))
+    #expect(!response.allowedMethods.contains(RPCMethod.tabFocus.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.tabMove.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.windowOpen.rawValue))
     #expect(!response.allowedMethods.contains(RPCMethod.windowFocus.rawValue))
     #expect(response.allowedMethods.contains(RPCMethod.tabClose.rawValue))
     #expect(response.allowedMethods.contains(RPCMethod.tabRename.rawValue))
-    #expect(response.allowedMethods.contains(RPCMethod.paneOpenTerminal.rawValue))
+    #expect(response.allowedMethods.contains(RPCMethod.paneSplit.rawValue))
 }
 
 @Test
@@ -259,8 +259,8 @@ func capabilitiesOverUDSOmitsAutomationMethods() async throws {
     }
     let decoded = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: payload)
     #expect(decoded.role == .automation)
-    #expect(!decoded.allowedMethods.contains(RPCMethod.tabCapture.rawValue))
-    #expect(!decoded.allowedMethods.contains(RPCMethod.tabSendInput.rawValue))
+    #expect(!decoded.allowedMethods.contains(RPCMethod.paneCaptureText.rawValue))
+    #expect(!decoded.allowedMethods.contains(RPCMethod.paneSendInput.rawValue))
     // The rest of the surface is unaffected.
-    #expect(decoded.allowedMethods.contains(RPCMethod.panesList.rawValue))
+    #expect(decoded.allowedMethods.contains(RPCMethod.paneDeviceList.rawValue))
 }

@@ -8,11 +8,11 @@ import Testing
 /// which one the GUI-served verbs print.
 ///
 /// The daemon canonicalizes to lowercase at create and reports that back as
-/// `PaneCreateResponse.target`, so a daemon-served verb (`panes list`) prints
+/// `PaneCreateResponse.target`, so the internal `pane.deviceList` roster uses
 /// lowercase. The attach paths reach the Router with whatever case they were
 /// handed: discovery and orphan recovery pass simctl's uppercase through. The
-/// GUI stores the daemon's spelling so its own verbs stay string-comparable
-/// with the daemon's, which is what an agent diffing two outputs relies on.
+/// GUI stores the daemon's spelling so public `pane show` and daemon-direct
+/// device operations stay string-comparable.
 @MainActor
 struct PaneUDIDCaseTests {
     private struct Harness {
@@ -104,7 +104,7 @@ struct PaneUDIDCaseTests {
     @Test
     func aPeerThatSendsNoTargetStillGetsTheCanonicalForm() async {
         // `target` is optional-decoded for daemon-version skew. A peer that
-        // omits it canonicalized the UDID behind its own `panes list`
+        // omits it canonicalized the UDID behind its own `pane.deviceList`
         // anyway, so echoing the caller's spelling here would leave the two
         // disagreeing for exactly the callers this is meant to help.
         let harness = await makeHarness(target: nil)
@@ -127,19 +127,19 @@ struct PaneUDIDCaseTests {
     }
 
     @Test
-    func paneInfoReportsTheSameStringADaemonServedListWould() async {
-        // `panes list` is answered by the daemon off its own record, so it
-        // prints `target`; `pane info` is answered here off the mounted pane.
-        // Two readers of one pane, and they must name it identically.
+    func workspacePaneShowReportsTheSameStringAsTheDaemonRoster() async {
+        // `pane.deviceList` is answered by the daemon off its own record, while
+        // the workspace projection reads the mounted GUI pane. Both
+        // readers must name the same Simulator identically.
         let harness = await makeHarness(target: .sim(udid: Self.canonical))
         await attach(harness)
         let result = await harness.dispatcher.dispatch(
-            .paneInfo(.udid(Self.canonical)), origin: .inProcess
+            .workspacePaneShow(Self.canonical), origin: .inProcess
         )
-        guard case let .data(.paneInfo(payload)) = result else {
-            Issue.record("expected .data(.paneInfo); got \(result)")
+        guard case let .data(.workspacePane(payload)) = result else {
+            Issue.record("expected .data(.workspacePane); got \(result)")
             return
         }
-        #expect(payload.udid == Self.canonical)
+        #expect(payload.simulator?.udid == Self.canonical)
     }
 }

@@ -7,8 +7,8 @@ import Testing
 
 // Doctor check primitives + report formatting.
 //
-// `doctorOutcome` gathers I/O (env reads, socket connect,
-// daemon ping, tabs.list, panes.list); the primitives below are pure
+// `doctorOutcome` gathers I/O (env reads, socket connect, daemon ping,
+// pane.deviceList, and daemon.capabilities); the primitives below are pure
 // functions of their inputs. Tests pin status semantics + the
 // load-bearing fields of the human report.
 
@@ -157,44 +157,44 @@ func xcrunCheckRejectsDeeperPathInsideShim() {
 // MARK: - sessionLivenessCheck
 
 @Test
-func sessionLivenessCheckOkWhenFoundInTabs() {
+func sessionLivenessCheckOkWhenAuthenticated() {
     let check = Doctor.sessionLivenessCheck(
         envSessionId: "11111111-1111-1111-1111-111111111111",
-        foundInTabs: true
+        authenticated: true
     )
     #expect(check.status == .ok)
 }
 
 @Test
-func sessionLivenessCheckFailsWhenSessionNotInTabs() {
+func sessionLivenessCheckFailsWhenSessionIsRejected() {
     // Stale shell env after a daemon restart: the env carries
     // a sessionId that the daemon no longer knows. Catches it
     // here before any session-scoped command flies and gets a
     // generic `error.unauthorized`.
     let check = Doctor.sessionLivenessCheck(
         envSessionId: "11111111-1111-1111-1111-111111111111",
-        foundInTabs: false
+        authenticated: false
     )
     #expect(check.status == .fail)
-    #expect(check.detail.contains("not in tabs.list"))
+    #expect(check.detail.contains("was not accepted by the daemon"))
     #expect(check.detail.contains("open a fresh tab"))
 }
 
-// MARK: - panesAuthorizationCheck
+// MARK: - paneAuthorizationCheck
 
 @Test
-func panesAuthorizationCheckOkWhenNoError() {
-    let check = Doctor.panesAuthorizationCheck(error: nil)
+func paneAuthorizationCheckOkWhenNoError() {
+    let check = Doctor.paneAuthorizationCheck(error: nil)
     #expect(check.status == .ok)
 }
 
 @Test
-func panesAuthorizationCheckFailsOnDaemonError() {
+func paneAuthorizationCheckFailsOnDaemonError() {
     // The first call here that proves the cap is honored. Cap
     // mismatch surfaces as an unauthorized error; doctor catches
     // it explicitly rather than letting it slip past as a
     // missing `targets` field.
-    let check = Doctor.panesAuthorizationCheck(
+    let check = Doctor.paneAuthorizationCheck(
         error: "daemon -32001: invalid sessionId or cap"
     )
     #expect(check.status == .fail)
@@ -417,8 +417,8 @@ func formatHumanRendersRoleAndAllowedMethodsWhenPopulated() {
         allowedMethods: [
             "daemon.ping",
             "daemon.capabilities",
-            "tabs.list",
-            "panes.list",
+            "tab.list",
+            "pane.deviceList",
             "pane.input.tap",
             "pane.input.swipe",
             "session.close"

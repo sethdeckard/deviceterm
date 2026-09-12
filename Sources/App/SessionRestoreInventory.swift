@@ -16,9 +16,10 @@ import DaemonProtocol
 /// Protection is derived FAIL-CLOSED from `isEffectivelyProtected`, not
 /// committed `isProtected`: a tab mid-transition to protected
 /// (`.pendingProtected`) restores protected so it is never briefly exposed
-/// through `tabs.list`. Entry
-/// order is significant (it defines the restored set's `tabs.list` ordering)
-/// so tabs are walked in workspace order and terminals in tab order.
+/// through daemon session or device projections. Entry order is significant:
+/// the daemon assigns restored `createdAt` values in this order and sorts its
+/// session snapshots by that field. Tabs are walked in workspace order and
+/// terminals in tab order.
 enum SessionRestoreInventory {
     /// Map the workspace's tabs (in order) to the restore inventory. The result
     /// is **complete with respect to real daemon sessions**: the only excluded

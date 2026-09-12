@@ -12,8 +12,10 @@
 /// the foreground app (it just scrolls).
 ///
 /// Coords are in displayed space, as everywhere on the input surface:
-/// (0.5, ~1.0) is the bottom-edge center of what the viewer sees, (0.5,
-/// 0.5) is mid-screen. Both the coordinates and the originating edge's
+/// (0.5, ~1.0) is the bottom-edge center of what the viewer sees. The target
+/// stays about one fifth of the screen in from that edge: far enough to fan
+/// out the switcher, but short of the travel that commits the gesture to Home.
+/// Both the coordinates and the originating edge's
 /// `IndigoHIDEdge` value rotate with the device, and the daemon resolves
 /// them together at the input boundary (`plan(for:)`) from its
 /// authoritative presentation orientation, rather than from a client
@@ -43,9 +45,10 @@ public enum AppSwitcherGesture {
     /// Swipe origin: bottom-edge center.
     public static let fromX = 0.5
     public static let fromY = 0.99
-    /// Swipe target: mid-screen. The dwell happens here.
+    /// Swipe target: about one fifth of the screen in from the edge. The dwell
+    /// happens here, before the gesture crosses the Home commit threshold.
     public static let toX = 0.5
-    public static let toY = 0.5
+    public static let toY = 0.78
     /// Upward-motion time before the dwell.
     public static let durationMs = 600
     /// Active dwell at the target before lifting, which makes the gesture

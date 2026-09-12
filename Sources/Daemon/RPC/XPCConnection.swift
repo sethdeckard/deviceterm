@@ -1012,7 +1012,8 @@ public actor XPCConnection {
                 body: .error(
                     RPCError(
                         code: methodError.code,
-                        message: methodError.message
+                        message: methodError.message,
+                        details: methodError.details
                     )
                 )
             )
@@ -1235,7 +1236,11 @@ public actor XPCConnection {
     /// Map a subscription-handler error to its wire error.
     private func mapSubscriptionError(_ error: Error) -> RPCError {
         if let methodError = error as? RPCMethodError {
-            return RPCError(code: methodError.code, message: methodError.message)
+            return RPCError(
+                code: methodError.code,
+                message: methodError.message,
+                details: methodError.details
+            )
         }
         return RPCError(
             code: RPCErrorCode.serverError,

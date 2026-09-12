@@ -5,7 +5,7 @@
 ///
 /// This is the single switch that closes the whole external-caller
 /// resolver surface (tab / pane / window resolution and listing), not
-/// just `tab send-input` / `tab capture`. It is a *required* parameter of
+/// just `pane send-input` / `pane capture-text`. It is a *required* parameter of
 /// every resolution entry point and of `IntentDispatcher.dispatch`. There is
 /// no default, so a future call site cannot silently obtain unrestricted
 /// in-process resolution by omitting an argument. The only way to express

@@ -5,25 +5,8 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-/// Parser surface for the tab / pane /
-/// window / windows verbs.
-///
-/// Every verb gets a happy-path test that pins the exact `CLICommand`
-/// the parser emits, plus malformed/usage tests for the verbs whose
-/// usage messages were designed to point at the right shape. Covers
-/// the standing parser-test invariant: "every verb's parse surface
-/// gets happy + malformed coverage."
+/// Parser and wire-builder coverage for the singular workspace command tree.
 struct WorkspaceCommandsTests {
-    // MARK: - Ref parsing
-
-    /// Each row exercises one `parseTabRef` discrimination rule.
-    private struct TabRefCase {
-        let raw: String?
-        let type: String
-        let value: String?
-    }
-
-    /// Roster fixture for the `device attach` resolution tests.
     private static let attachRoster = [
         DeviceRosterEntry(
             id: "5E6F7A8B-PHONE-0000-0000-000000000000",
@@ -39,1398 +22,381 @@ struct WorkspaceCommandsTests {
         )
     ]
 
-    @Test
-    func tabRefRoundTripDiscriminations() {
-        let cases: [TabRefCase] = [
-            TabRefCase(raw: nil, type: "current", value: nil),
-            TabRefCase(raw: "", type: "current", value: nil),
-            TabRefCase(raw: "current", type: "current", value: nil),
-            TabRefCase(
-                raw: "550E8400-E29B-41D4-A716-446655440000",
-                type: "sessionId",
-                value: "550E8400-E29B-41D4-A716-446655440000"
-            ),
-            TabRefCase(raw: "abc123", type: "shortId", value: "abc123"),
-            TabRefCase(
-                raw: "auth-feature",
-                type: "name",
-                value: "auth-feature"
-            ),
-            TabRefCase(
-                raw: "With Spaces",
-                type: "name",
-                value: "With Spaces"
-            )
-        ]
-        for testCase in cases {
-            let ref = CLICommands.parseTabRef(testCase.raw)
-            #expect(
-                ref.type == testCase.type,
-                "input=\(testCase.raw ?? "nil")"
-                )
-            #expect(
-                ref.value == testCase.value,
-                "input=\(testCase.raw ?? "nil")"
-                )
+    private static func params<Value: Decodable>(
+        _ envelope: RPCEnvelope,
+        as type: Value.Type = Value.self
+    ) throws -> Value {
+        guard case let .params(data) = envelope.body else {
+            Issue.record("expected params body")
+            throw CocoaError(.coderReadCorrupt)
+        }
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    private static func expectUsage(_ command: CLICommand) {
+        guard case .usage = command else {
+            Issue.record("expected .usage; got \(command)")
+            return
         }
     }
 
+    // MARK: - Singular command tree
+
     @Test
-    func paneRefDistinguishesUUIDsFromShortIds() {
-        let uuid = CLICommands.parsePaneRef(
-            "550E8400-E29B-41D4-A716-446655440000"
+    func pluralWorkspaceRootsAreRetired() {
+        Self.expectUsage(CLICommands.parse(["deviceterm", "windows", "list"]))
+        Self.expectUsage(CLICommands.parse(["deviceterm", "tabs", "list"]))
+        Self.expectUsage(CLICommands.parse(["deviceterm", "panes", "list"]))
+    }
+
+    @Test
+    func windowCommandsParseRawReferences() {
+        #expect(CLICommands.parse(["deviceterm", "window", "list"]) == .windowList(all: false))
+        #expect(CLICommands.parse(["deviceterm", "window", "list", "--all"]) == .windowList(all: true))
+        #expect(CLICommands.parse(["deviceterm", "window", "show", "2"]) == .windowShow(window: "2"))
+        #expect(CLICommands.parse(["deviceterm", "window", "open"]) == .windowOpen)
+        #expect(CLICommands.parse(["deviceterm", "window", "focus", "main"]) == .windowFocus(window: "main"))
+        #expect(
+            CLICommands.parse(["deviceterm", "window", "close", "abc123", "--mode", "shutdown"])
+                == .windowClose(window: "abc123", mode: .shutdown)
         )
-        #expect(uuid.type == "paneId")
-        let short = CLICommands.parsePaneRef("ab12cd")
-        #expect(short.type == "shortId")
-        let current = CLICommands.parsePaneRef(nil)
-        #expect(current.type == "current")
     }
 
     @Test
-    func windowRefDistinguishesIndexFromKeyed() {
-        let index = CLICommands.parseWindowRef("2")
-        #expect(index.type == "index")
-        #expect(index.value == "2")
-        let keyed = CLICommands.parseWindowRef("main")
-        #expect(keyed.type == "keyed")
-        let current = CLICommands.parseWindowRef("current")
-        #expect(current.type == "current")
-    }
-
-    @Test(
-        arguments: [
-        ("detach", "detach"),
-        ("shutdown", "shutdown"),
-        ("garbage", "detach"),
-        // unknown falls back to safest
-        (nil as String?, "detach")
-        ]
+    func windowCloseDefaultsToCurrentAndDetach() {
+        #expect(
+            CLICommands.parse(["deviceterm", "window", "close"])
+                == .windowClose(window: nil, mode: .detach)
         )
-    func closeModeNormalization(raw: String?, expected: String) {
-        #expect(CLICommands.parseCloseMode(raw) == expected)
-    }
-
-    // MARK: - Tab subcommands
-
-    @Test
-    func tabOpenBareDefaultsToCurrentWindow() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "open"])
-        if case let .tabOpen(window, cwd, cmdLine) = cmd {
-            #expect(window == nil)  // omitted → no override at the parser layer
-            #expect(cwd == nil)
-            #expect(cmdLine == nil)
-        } else {
-            Issue.record("expected .tabOpen; got \(cmd)")
-        }
     }
 
     @Test
-    func tabOpenWithWindow() {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "open", "--window", "2"]
+    func windowCloseRejectsUnknownMode() {
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "window", "close", "--mode", "erase"])
         )
-        if case let .tabOpen(window, _, _) = cmd {
-            #expect(window?.type == "index")
-            #expect(window?.value == "2")
-        } else {
-            Issue.record("expected .tabOpen; got \(cmd)")
-        }
     }
 
-    /// `--cwd` overrides the new shell's startup directory. Parser
-    /// threads it onto `tabOpen`, the wire honors it via
-    /// `OpenTab.cwd`, and the GUI sets it on libghostty's surface
-    /// config.
     @Test
-    func tabOpenAcceptsCwdFlag() {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "open", "--cwd", "/proj"]
+    func tabReadCommandsParseRawReferences() {
+        #expect(CLICommands.parse(["deviceterm", "tab", "list"]) == .tabList(window: nil, all: false))
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "list", "--window", "2"])
+                == .tabList(window: "2", all: false)
         )
-        if case let .tabOpen(_, cwd, _) = cmd {
-            #expect(cwd == "/proj")
-        } else {
-            Issue.record("expected .tabOpen; got \(cmd)")
-        }
-    }
-
-    /// `--cmd '<cmd>'` is typed into the shell after attach. The
-    /// CLI takes the value as a single string and the GUI joins on
-    /// spaces (degenerate for single-string) before handing to
-    /// libghostty's `initial_input`.
-    @Test
-    func tabOpenAcceptsCmdFlag() {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "open", "--cmd", "claude --print"]
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "list", "--all"])
+                == .tabList(window: nil, all: true)
         )
-        if case let .tabOpen(_, _, cmdLine) = cmd {
-            #expect(cmdLine == "claude --print")
-        } else {
-            Issue.record("expected .tabOpen; got \(cmd)")
-        }
+        #expect(CLICommands.parse(["deviceterm", "tab", "show", "auth"]) == .tabShow(tab: "auth"))
     }
 
     @Test
-    func tabOpenRejectsUnknownTail() {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "open", "garbage-positional"]
+    func tabListRejectsWindowWithAll() {
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "tab", "list", "--window", "2", "--all"])
         )
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
     }
 
     @Test
-    func tabMoveReordersWithinWindow() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "move", "--to", "0"])
-        if case let .tabMove(tab, toIndex, toWindow) = cmd {
-            #expect(tab.type == "current")
-            #expect(toIndex == 0)
-            #expect(toWindow == nil)
-        } else {
-            Issue.record("expected .tabMove; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabMoveToAnotherWindow() {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "move", "--tab", "ab12cd", "--to-window", "2", "--to", "1"]
+    func tabOpenParsesWindowCwdAndCommand() {
+        #expect(
+            CLICommands.parse([
+                "deviceterm", "tab", "open",
+                "--window", "main", "--cwd", "/proj", "--command", "claude --print"
+            ]) == .tabOpen(window: "main", cwd: "/proj", command: "claude --print")
         )
-        if case let .tabMove(tab, toIndex, toWindow) = cmd {
-            #expect(tab.type == "shortId")
-            #expect(tab.value == "ab12cd")
-            #expect(toWindow?.type == "index")
-            #expect(toWindow?.value == "2")
-            #expect(toIndex == 1)
-        } else {
-            Issue.record("expected .tabMove; got \(cmd)")
-        }
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "open"])
+                == .tabOpen(window: nil, cwd: nil, command: nil)
+        )
     }
 
     @Test
-    func tabMoveRequiresADestination() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "move", "--tab", "ab12cd"])
-        if case .usage = cmd {
-            // expected: neither --to nor --to-window
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
+    func tabMutationsParse() {
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "close", "auth", "--mode", "shutdown"])
+                == .tabClose(tab: "auth", mode: .shutdown)
+        )
+        #expect(CLICommands.parse(["deviceterm", "tab", "focus", "auth"]) == .tabFocus(tab: "auth"))
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "move", "auth", "--window", "2", "--index", "1"])
+                == .tabMove(tab: "auth", window: "2", index: 1)
+        )
+        #expect(CLICommands.parse(["deviceterm", "tab", "protect", "auth"]) == .tabProtect(tab: "auth"))
+        #expect(CLICommands.parse(["deviceterm", "tab", "unprotect"]) == .tabUnprotect(tab: nil))
     }
 
     @Test
-    func tabMoveRejectsNonIntegerIndex() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "move", "--to", "left"])
-        if case .usage = cmd {
-            // expected: --to must be an integer
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
+    func tabMoveRequiresWindowAndNonnegativeIndex() {
+        Self.expectUsage(CLICommands.parse(["deviceterm", "tab", "move", "auth"]))
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "tab", "move", "auth", "--window", "2", "--index", "-1"])
+        )
     }
 
     @Test
-    func tabMoveRejectsPositionalTail() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "move", "0"])
-        if case .usage = cmd {
-            // expected: index goes on --to, not a positional
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabCloseDefaultsToCurrentAndDetach() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "close"])
-        if case let .tabClose(ref, mode) = cmd {
-            #expect(ref.type == "current")
-            #expect(mode == "detach")
-        } else {
-            Issue.record("expected .tabClose; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabCloseWithRefAndShutdownMode() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "close",
-            "--tab",
-            "abc123",
-            "--mode",
-            "shutdown"
-            ]
-            )
-        if case let .tabClose(ref, mode) = cmd {
-            #expect(ref.type == "shortId")
-            #expect(ref.value == "abc123")
-            #expect(mode == "shutdown")
-        } else {
-            Issue.record("expected .tabClose; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabRenameWithNamePositional() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "rename",
-            "--tab",
-            "auth",
-            "feature-x"
-            ]
-            )
-        if case let .tabRename(ref, name) = cmd {
-            #expect(ref.value == "auth")
-            #expect(name == "feature-x")
-        } else {
-            Issue.record("expected .tabRename; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabRenameWithoutNameRestoresAuto() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "rename"])
-        if case let .tabRename(_, name) = cmd {
-            #expect(name == nil)
-        } else {
-            Issue.record("expected .tabRename; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabRenameJoinsMultiTokenNames() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "rename",
-            "billing",
-            "v2"
-            ]
-            )
-        if case let .tabRename(_, name) = cmd {
-            #expect(name == "billing v2")
-        } else {
-            Issue.record("expected .tabRename; got \(cmd)")
-        }
+    func tabRenameSupportsCurrentAndExplicitTab() {
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "rename", "Build Workspace"])
+                == .tabRename(tab: nil, name: "Build Workspace")
+        )
+        #expect(
+            CLICommands.parse(["deviceterm", "tab", "rename", "auth", "Feature Work"])
+                == .tabRename(tab: "auth", name: "Feature Work")
+        )
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "tab", "rename", "auth", "Feature", "Work"])
+        )
+        Self.expectUsage(CLICommands.parse(["deviceterm", "tab", "rename"]))
     }
 
     @Test(arguments: ["--help", "-h"])
-    func tabRenameHelpFlagAsksForHelp(trigger: String) {
-        // A help flag reaches the rename page rather than becoming the
-        // new name. `--` is how the literal is typed.
+    func tabRenameHelpFlagRequestsHelp(trigger: String) {
         #expect(
             CLICommands.parse(["deviceterm", "tab", "rename", trigger])
-            == .help(topic: "tab rename")
-            )
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func tabRenameHelpFlagAsksForHelpWithTabFlag(trigger: String) {
-        // The `--tab <ref>` selector doesn't change what the trigger
-        // means.
-        #expect(
-            CLICommands.parse(["deviceterm", "tab", "rename", "--tab", "auth", trigger])
-            == .help(topic: "tab rename")
-            )
-    }
-
-    @Test
-    func tabRenameKeepsBareHelpAsName() {
-        // `help` is a plausible tab name, so only the flag-shaped
-        // triggers are treated as a request for the shape.
-        let cmd = CLICommands.parse(["deviceterm", "tab", "rename", "help"])
-        if case let .tabRename(_, name) = cmd {
-            #expect(name == "help")
-        } else {
-            Issue.record("expected .tabRename; got \(cmd)")
-        }
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func tabRenameTerminatorForcesHelpFlagAsName(trigger: String) {
-        // `--` means the same thing here as everywhere else in the
-        // parser: what follows is literal, terminator dropped. It is
-        // what separates a name that looks like a help flag from a
-        // request for the page.
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "rename", "--", trigger]
-            )
-        if case let .tabRename(_, name) = cmd {
-            #expect(name == trigger)
-        } else {
-            Issue.record("expected .tabRename for '\(trigger)'; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabRenameKeepsHelpFlagInsideLongerName() {
-        // A help flag anywhere ahead of `--` asks for help, so naming a
-        // tab after one takes the terminator.
-        #expect(
-            CLICommands.parse(["deviceterm", "tab", "rename", "sprint", "--help"])
-            == .help(topic: "tab rename")
-            )
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "rename", "--", "sprint", "--help"]
-            )
-        if case let .tabRename(_, name) = cmd {
-            #expect(name == "sprint --help")
-        } else {
-            Issue.record("expected .tabRename; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSetProtectedAcceptsTrueAndFalse() {
-        // Both the positive and negative forms parse cleanly; the
-        // boolean lands as the second element of the
-        // `.tabSetProtected` case.
-        let onCmd = CLICommands.parse(["deviceterm", "tab", "set-protected", "true"])
-        if case let .tabSetProtected(_, isProtected) = onCmd {
-            #expect(isProtected == true)
-        } else {
-            Issue.record("expected .tabSetProtected; got \(onCmd)")
-        }
-        let offCmd = CLICommands.parse(["deviceterm", "tab", "set-protected", "false"])
-        if case let .tabSetProtected(_, isProtected) = offCmd {
-            #expect(isProtected == false)
-        } else {
-            Issue.record("expected .tabSetProtected; got \(offCmd)")
-        }
-    }
-
-    @Test
-    func tabSetProtectedAcceptsCommonSynonyms() {
-        // The synonyms documented at parse time (yes/no, on/off,
-        // 1/0) should all parse cleanly so an agent typing a
-        // sloppy shorthand doesn't trip over the verb.
-        let cases: [(String, Bool)] = [
-            ("yes", true),
-            ("no", false),
-            ("on", true),
-            ("off", false),
-            ("1", true),
-            ("0", false)
-        ]
-        for (raw, expected) in cases {
-            let cmd = CLICommands.parse(
-                ["deviceterm", "tab", "set-protected", raw]
-            )
-            if case let .tabSetProtected(_, isProtected) = cmd {
-                #expect(isProtected == expected, "for raw=\(raw)")
-            } else {
-                Issue.record("expected .tabSetProtected for \(raw); got \(cmd)")
-            }
-        }
-    }
-
-    @Test
-    func tabSetProtectedRejectsUnknownBoolean() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "set-protected", "maybe"])
-        if case .usage = cmd {
-            // Expected: non-boolean tokens land at usage.
-        } else {
-            Issue.record("expected .usage for typo; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSetProtectedRequiresPositional() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "set-protected"])
-        if case .usage = cmd {
-            // Expected: the verb has no useful default for the bool.
-        } else {
-            Issue.record("expected .usage for missing positional; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSetProtectedForwardsTabRef() {
-        // `--tab <ref>` resolves to the wire-encoded ref; without
-        // the flag the ref defaults to `.current`.
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "set-protected",
-            "true",
-            "--tab",
-            "billing"
-            ]
-            )
-        if case let .tabSetProtected(ref, _) = cmd {
-            #expect(ref.value == "billing")
-        } else {
-            Issue.record("expected .tabSetProtected; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSelect() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "select",
-            "--tab",
-            "abc123"
-            ]
-            )
-        if case let .tabSelect(ref) = cmd {
-            #expect(ref.type == "shortId")
-        } else {
-            Issue.record("expected .tabSelect; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabInfo() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "info",
-            "--tab",
-            "abc123"
-            ]
-            )
-        if case let .tabInfo(ref) = cmd {
-            #expect(ref.value == "abc123")
-        } else {
-            Issue.record("expected .tabInfo; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabUnknownSubcommandIsUsage() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "make-tea"])
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    // MARK: - tab send-input (automation-only)
-
-    @Test
-    func tabSendInputJoinsMultiTokenText() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "send-input",
-            "--tab",
-            "abc123",
-            "echo",
-            "hi"
-            ]
-            )
-        if case let .tabSendInput(ref, text, typeDelay) = cmd {
-            #expect(ref.type == "shortId")
-            #expect(ref.value == "abc123")
-            #expect(text == "echo hi")
-            #expect(typeDelay == nil)
-        } else {
-            Issue.record("expected .tabSendInput; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSendInputDecodesEscapeSequences() {
-        // Documented example: deviceterm tab send-input 'echo hi\n'.
-        // POSIX shells pass `echo hi\n` (literal backslash + n)
-        // through; the parser must decode to the actual LF byte
-        // so the shell sees Enter.
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "send-input",
-            "echo hi\\n"
-            ]
-            )
-        if case let .tabSendInput(_, text, _) = cmd {
-            #expect(text == "echo hi\n")
-        } else {
-            Issue.record("expected .tabSendInput; got \(cmd)")
-        }
-    }
-
-    @Test(
-        arguments: [
-        ("\\n", "\n"),
-        ("\\r", "\r"),
-        ("\\t", "\t"),
-        ("\\\\", "\\"),
-        ("\\0", "\0"),
-        ("\\e", "\u{1B}"),
-        ("\\x03", "\u{03}"),
-        ("\\x7F", "\u{7F}"),
-        ("hello\\nworld", "hello\nworld")
-        ]
-        )
-    func decodeEscapesHonorsCStyleSet(raw: String, expected: String) {
-        #expect(CLICommands.decodeEscapes(raw) == expected)
-    }
-
-    @Test
-    func decodeEscapesPreservesUnknownAndDangling() {
-        // Unknown escape: \z stays as `\z` rather than silently
-        // dropping the backslash.
-        #expect(CLICommands.decodeEscapes("\\z") == "\\z")
-        // Dangling backslash at EOL preserves literally.
-        #expect(CLICommands.decodeEscapes("end\\") == "end\\")
-        // Malformed \x (no hex pair) preserves literally.
-        #expect(CLICommands.decodeEscapes("\\x") == "\\x")
-    }
-
-    @Test
-    func tabSendInputDefaultsToCurrentTab() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "send-input",
-            "ping"
-            ]
-            )
-        if case let .tabSendInput(ref, text, typeDelay) = cmd {
-            #expect(ref.type == "current")
-            #expect(text == "ping")
-            #expect(typeDelay == nil)
-        } else {
-            Issue.record("expected .tabSendInput; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSendInputRejectsEmptyText() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "send-input"])
-        if case .usage = cmd {
-            // expected: no text is a usage error
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func tabSendInputHelpFlagAsksForHelp(trigger: String) {
-        #expect(
-            CLICommands.parse(["deviceterm", "tab", "send-input", trigger])
-            == .help(topic: "tab send-input")
-            )
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func tabSendInputHelpFlagAsksForHelpWithSelectors(trigger: String) {
-        #expect(
-            CLICommands.parse(
-            [
-            "deviceterm", "tab", "send-input", "--tab", "auth",
-            "--type-delay", "45", trigger
-            ]
-            ) == .help(topic: "tab send-input")
-            )
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func tabSendInputTerminatorForcesHelpFlagAsText(trigger: String) {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "send-input", "--", trigger]
-            )
-        if case let .tabSendInput(_, text, _) = cmd {
-            #expect(text == trigger)
-        } else {
-            Issue.record("expected .tabSendInput for '\(trigger)'; got \(cmd)")
-        }
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func tabSendInputKeepsHelpFlagInsideLongerText(trigger: String) {
-        // A help flag anywhere ahead of `--` asks for help, so sending
-        // one as text takes the terminator.
-        #expect(
-            CLICommands.parse(["deviceterm", "tab", "send-input", "echo", trigger])
-            == .help(topic: "tab send-input")
-            )
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "send-input", "--", "echo", trigger]
-            )
-        if case let .tabSendInput(_, text, _) = cmd {
-            #expect(text == "echo \(trigger)")
-        } else {
-            Issue.record("expected .tabSendInput for '\(trigger)'; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSendInputParsesTypeDelay() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "send-input",
-            "--type-delay",
-            "45",
-            "--",
-            "echo hi\\n"
-            ]
-            )
-        if case let .tabSendInput(_, text, typeDelay) = cmd {
-            #expect(text == "echo hi\n")
-            #expect(typeDelay == 45)
-        } else {
-            Issue.record("expected .tabSendInput; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSendInputAcceptsZeroTypeDelay() {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "send-input", "--type-delay", "0", "ping"]
-            )
-        if case let .tabSendInput(_, _, typeDelay) = cmd {
-            #expect(typeDelay == 0)
-        } else {
-            Issue.record("expected .tabSendInput; got \(cmd)")
-        }
-    }
-
-    @Test(arguments: ["abc", "-5", "4.5", ""])
-    func tabSendInputRejectsMalformedTypeDelay(raw: String) {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "tab", "send-input", "--type-delay", raw, "ping"]
-            )
-        if case .usage = cmd {
-            // expected: a non-negative integer is required
-        } else {
-            Issue.record("expected .usage for --type-delay '\(raw)'; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSendInputCapsHugeTypeDelay() {
-        // A parse-time cap keeps the wire value bounded so no
-        // downstream arithmetic overflows (e.g. Int.max × text.count).
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm", "tab", "send-input",
-            "--type-delay", String(Int.max),
-            "ping"
-            ]
-            )
-        if case let .tabSendInput(_, _, typeDelay) = cmd {
-            #expect(typeDelay == CLICommands.maxTypeDelayMillis)
-        } else {
-            Issue.record("expected .tabSendInput; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabSendInputRequestEncodesParams() throws {
-        let envelope = try CLICommands.tabSendInputRequest(
-            tab: Wire.TabRef(type: "sessionId", value: "S-A"),
-            text: "hello"
-        )
-        #expect(envelope.method == RPCMethod.tabSendInput.rawValue)
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.TabSendInput.self,
-            from: data
-        )
-        #expect(decoded.tab.type == "sessionId")
-        #expect(decoded.tab.value == "S-A")
-        #expect(decoded.text == "hello")
-        #expect(decoded.typeDelayMillis == nil)
-    }
-
-    @Test
-    func tabSendInputRequestEncodesTypeDelay() throws {
-        let envelope = try CLICommands.tabSendInputRequest(
-            tab: Wire.TabRef(type: "sessionId", value: "S-A"),
-            text: "hello",
-            typeDelayMillis: 45
-        )
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.TabSendInput.self,
-            from: data
-        )
-        #expect(decoded.typeDelayMillis == 45)
-    }
-
-    // MARK: - tab capture (automation-only)
-
-    @Test
-    func tabCaptureDefaultsToCurrentTab() {
-        let cmd = CLICommands.parse(["deviceterm", "tab", "capture"])
-        if case let .tabCapture(ref) = cmd {
-            #expect(ref.type == "current")
-        } else {
-            Issue.record("expected .tabCapture; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabCaptureWithExplicitRef() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "capture",
-            "--tab",
-            "abc123"
-            ]
-            )
-        if case let .tabCapture(ref) = cmd {
-            #expect(ref.type == "shortId")
-            #expect(ref.value == "abc123")
-        } else {
-            Issue.record("expected .tabCapture; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabCaptureRejectsUnknownTail() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "tab",
-            "capture",
-            "garbage-positional"
-            ]
-            )
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    @Test
-    func tabCaptureRequestEncodesParams() throws {
-        let envelope = try CLICommands.tabCaptureRequest(
-            tab: Wire.TabRef(type: "sessionId", value: "S-A")
-        )
-        #expect(envelope.method == RPCMethod.tabCapture.rawValue)
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.TabCapture.self,
-            from: data
-        )
-        #expect(decoded.tab.type == "sessionId")
-        #expect(decoded.tab.value == "S-A")
-    }
-
-    @Test
-    func tabBareIsUsage() {
-        let cmd = CLICommands.parse(["deviceterm", "tab"])
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    // MARK: - Pane subcommands
-
-    @Test
-    func paneOpenTerminal() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "open",
-            "--terminal"
-            ]
-            )
-        if case let .paneOpenTerminal(tab, cwd, cmdLine) = cmd {
-            #expect(tab == nil)
-            #expect(cwd == nil)
-            #expect(cmdLine == nil)
-        } else {
-            Issue.record("expected .paneOpenTerminal; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneOpenTerminalWithTab() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "open",
-            "--terminal",
-            "--tab",
-            "abc123"
-            ]
-            )
-        if case let .paneOpenTerminal(tab, _, _) = cmd {
-            #expect(tab?.type == "shortId")
-            #expect(tab?.value == "abc123")
-        } else {
-            Issue.record("expected .paneOpenTerminal; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneOpenWithoutTerminalIsUsage() {
-        let cmd = CLICommands.parse(["deviceterm", "pane", "open"])
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    /// `--cwd` and `--cmd` thread to the `OpenPaneTerminal` wire
-    /// shape so the new terminal's libghostty surface honors them.
-    @Test
-    func paneOpenTerminalAcceptsCwdAndCmdFlags() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "open",
-            "--terminal",
-            "--cwd",
-            "/proj",
-            "--cmd",
-            "claude --print"
-            ]
-            )
-        if case let .paneOpenTerminal(_, cwd, cmdLine) = cmd {
-            #expect(cwd == "/proj")
-            #expect(cmdLine == "claude --print")
-        } else {
-            Issue.record("expected .paneOpenTerminal; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneOpenTerminalRejectsUnknownTail() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "open",
-            "--terminal",
-            "garbage"
-            ]
-            )
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneClose() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "close",
-            "--pane",
-            "ab12cd"
-            ]
-            )
-        if case let .paneClose(ref, mode) = cmd {
-            #expect(ref.type == "shortId")
-            #expect(mode == "detach")
-        } else {
-            Issue.record("expected .paneClose; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneRenameWithName() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "rename",
-            "--pane",
-            "ab12cd",
-            "iphone-15"
-            ]
-            )
-        if case let .paneRename(_, name) = cmd {
-            #expect(name == "iphone-15")
-        } else {
-            Issue.record("expected .paneRename; got \(cmd)")
-        }
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func paneRenameHelpFlagAsksForHelp(trigger: String) {
-        #expect(
-            CLICommands.parse(["deviceterm", "pane", "rename", trigger])
-            == .help(topic: "pane rename")
-            )
-    }
-
-    @Test
-    func paneRenameKeepsBareHelpAsName() {
-        let cmd = CLICommands.parse(["deviceterm", "pane", "rename", "help"])
-        if case let .paneRename(_, name) = cmd {
-            #expect(name == "help")
-        } else {
-            Issue.record("expected .paneRename; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneRenameKeepsHelpFlagInsideLongerName() {
-        #expect(
-            CLICommands.parse(["deviceterm", "pane", "rename", "sim", "--help"])
-            == .help(topic: "pane rename")
-            )
-        let cmd = CLICommands.parse(
-            ["deviceterm", "pane", "rename", "--", "sim", "--help"]
-            )
-        if case let .paneRename(_, name) = cmd {
-            #expect(name == "sim --help")
-        } else {
-            Issue.record("expected .paneRename; got \(cmd)")
-        }
-    }
-
-    @Test(arguments: ["--help", "-h"])
-    func paneRenameTerminatorForcesHelpFlagAsName(trigger: String) {
-        let cmd = CLICommands.parse(
-            ["deviceterm", "pane", "rename", "--", trigger]
-            )
-        if case let .paneRename(_, name) = cmd {
-            #expect(name == trigger)
-        } else {
-            Issue.record("expected .paneRename for '\(trigger)'; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneInfo() {
-        let cmd = CLICommands.parse(["deviceterm", "pane", "info"])
-        if case let .paneInfo(ref) = cmd {
-            #expect(ref.type == "current")
-        } else {
-            Issue.record("expected .paneInfo; got \(cmd)")
-        }
-    }
-
-    @Test
-    func paneMoveRequiresToTab() {
-        let withFlag = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "move",
-            "--pane",
-            "ab12cd",
-            "--to-tab",
-            "auth"
-            ]
-            )
-        if case let .paneMove(pane, toTab) = withFlag {
-            #expect(pane.value == "ab12cd")
-            #expect(toTab.value == "auth")
-        } else {
-            Issue.record("expected .paneMove; got \(withFlag)")
-        }
-
-        let missingFlag = CLICommands.parse(
-            [
-            "deviceterm",
-            "pane",
-            "move",
-            "--pane",
-            "ab12cd"
-            ]
-            )
-        if case .usage = missingFlag {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(missingFlag)")
-        }
-    }
-
-    @Test
-    func deviceAttachParsesRef() {
-        let cmd = CLICommands.parse(["deviceterm", "device", "attach", "U-iphone17"])
-        if case let .deviceAttach(ref) = cmd {
-            #expect(ref == "U-iphone17")
-        } else {
-            Issue.record("expected .deviceAttach; got \(cmd)")
-        }
-
-        // A bare ref-less `device attach` is a usage error.
-        if case .usage = CLICommands.parse(["deviceterm", "device", "attach"]) {
-            // expected
-        } else {
-            Issue.record("expected .usage for ref-less device attach")
-        }
-        // An extra positional past the ref is a usage error too.
-        if case .usage = CLICommands.parse(
-            ["deviceterm", "device", "attach", "a", "b"]
-        ) {
-            // expected
-        } else {
-            Issue.record("expected .usage for device attach with extra positional")
-        }
-    }
-
-    @Test
-    func paneAttachSubverbIsRetired() {
-        // `pane attach` was retired in favor of `device attach <ref>`;
-        // the parser no longer recognizes it.
-        if case .usage = CLICommands.parse(
-            ["deviceterm", "pane", "attach", "U-iphone17"]
-        ) {
-            // expected
-        } else {
-            Issue.record("expected .usage for retired pane attach")
-        }
-    }
-
-    // MARK: - device attach resolution (roster + external-sim fallback)
-
-    @Test
-    func resolveDeviceAttachUsesRosterSimEntry() {
-        let result = CLICommands.resolveDeviceAttach(
-            ref: "iPhone 17 Pro",
-            roster: Self.attachRoster
+                == .help(topic: "tab rename")
         )
         #expect(
-            result == .target(
-                .sim(udid: "5E6F7A8B-PHONE-0000-0000-000000000000"),
-                id: "5E6F7A8B-PHONE-0000-0000-000000000000",
-                kind: .sim
+            CLICommands.parse(["deviceterm", "tab", "rename", "--", trigger])
+                == .tabRename(tab: nil, name: trigger)
+        )
+    }
+
+    @Test
+    func paneReadAndLayoutCommandsParseRawReferences() {
+        #expect(CLICommands.parse(["deviceterm", "pane", "list"]) == .paneList(tab: nil))
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "list", "--tab", "auth"])
+                == .paneList(tab: "auth")
+        )
+        #expect(CLICommands.parse(["deviceterm", "pane", "show", "term"]) == .paneShow(pane: "term"))
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "split", "term", "--direction", "right"])
+                == .paneSplit(pane: "term", direction: .right)
+        )
+        #expect(CLICommands.parse(["deviceterm", "pane", "focus", "term"]) == .paneFocus(pane: "term"))
+    }
+
+    @Test
+    func paneSplitRequiresKnownDirection() {
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "split", "term"]))
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "pane", "split", "term", "--direction", "diagonal"])
+        )
+    }
+
+    @Test
+    func paneCloseAndRenameParse() {
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "close", "sim", "--mode", "shutdown"])
+                == .paneClose(pane: "sim", mode: .shutdown)
+        )
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "close", "term"])
+                == .paneClose(pane: "term", mode: nil)
+        )
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "rename", "term", "Logs Tail"])
+                == .paneRename(pane: "term", name: "Logs Tail")
+        )
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "pane", "rename", "term", "Logs", "Tail"])
+        )
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "rename"]))
+    }
+
+    @Test
+    func paneTerminalCommandsRequireAnExplicitPane() {
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "send-input", "term", "hello", "world"])
+                == .paneSendInput(pane: "term", text: "hello world", typeDelay: nil)
+        )
+        #expect(
+            CLICommands.parse([
+                "deviceterm", "pane", "send-input", "term", "--type-delay", "7", #"one\ntwo"#
+            ]) == .paneSendInput(pane: "term", text: "one\ntwo", typeDelay: 7)
+        )
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "capture-text", "term"])
+                == .paneCaptureText(pane: "term")
+        )
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "send-input", "term"]))
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "capture-text"]))
+    }
+
+    @Test
+    func paneSendInputValidatesAndCapsTypeDelay() {
+        Self.expectUsage(
+            CLICommands.parse([
+                "deviceterm", "pane", "send-input", "term", "--type-delay", "-1", "x"
+            ])
+        )
+        #expect(
+            CLICommands.parse([
+                "deviceterm", "pane", "send-input", "term", "--type-delay", "9000", "x"
+            ]) == .paneSendInput(
+                pane: "term",
+                text: "x",
+                typeDelay: CLICommands.maxTypeDelayMillis
             )
         )
     }
 
     @Test
-    func resolveDeviceAttachUsesRosterDeviceEntry() {
-        let result = CLICommands.resolveDeviceAttach(
-            ref: "fd00:1234::a1b2",
-            roster: Self.attachRoster
-        )
+    func removedPaneOpenMoveAndAttachFormsAreUsage() {
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "open", "terminal"]))
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "move", "term"]))
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "attach", "phone"]))
+    }
+
+    // MARK: - Exact wire requests
+
+    @Test
+    func windowRequestsEncodeRawRefsAndModes() throws {
+        let list = try CLICommands.windowListRequest(all: true)
+        #expect(list.method == RPCMethod.windowList.rawValue)
+        #expect(try Self.params(list, as: AppCommandParams.ListWindows.self) == .init(all: true))
+
+        let close = try CLICommands.windowCloseRequest(window: "2", mode: .shutdown)
+        #expect(close.method == RPCMethod.windowClose.rawValue)
         #expect(
-            result == .target(
-                .device(deviceId: "fd00:1234::a1b2"),
-                id: "fd00:1234::a1b2",
-                kind: .device
-            )
+            try Self.params(close, as: AppCommandParams.CloseWindow.self)
+                == .init(window: "2", mode: .shutdown)
         )
     }
 
     @Test
-    func resolveDeviceAttachFallsBackToSimUDIDForUnownedBootedSim() {
-        // Regression guard: an externally-booted / orphan sim isn't
-        // in the owned-sim roster, so a bare UUID ref must pass through
-        // as a sim target (the claim path the retired `pane attach`
-        // subverb served), not be rejected.
-        let external = "AAAAAAAA-1111-2222-3333-444444444444"
-        let result = CLICommands.resolveDeviceAttach(
-            ref: external,
-            roster: Self.attachRoster
+    func tabRequestsEncodeRawRefsAndOptions() throws {
+        let open = try CLICommands.tabOpenRequest(window: "main", cwd: "/tmp", command: "pwd")
+        #expect(open.method == RPCMethod.tabOpen.rawValue)
+        #expect(
+            try Self.params(open, as: AppCommandParams.OpenTab.self)
+                == .init(window: "main", cwd: "/tmp", command: ["pwd"])
         )
-        #expect(result == .target(.sim(udid: external), id: external, kind: .sim))
+
+        let move = try CLICommands.tabMoveRequest(tab: "auth", window: "2", index: 1)
+        #expect(move.method == RPCMethod.tabMove.rawValue)
+        #expect(
+            try Self.params(move, as: AppCommandParams.MoveTab.self)
+                == .init(tab: "auth", window: "2", index: 1)
+        )
+
+        let protect = try CLICommands.tabProtectionRequest(tab: "auth", protected: true)
+        #expect(protect.method == RPCMethod.tabProtect.rawValue)
+        #expect(
+            try Self.params(protect, as: AppCommandParams.SetTabProtection.self)
+                == .init(tab: "auth")
+        )
     }
 
     @Test
-    func resolveDeviceAttachRejectsUnknownNonUUIDRef() {
-        // A non-UUID miss is a typo / unknown name: hard not-found, so
-        // the CLI surfaces the friendlier roster error.
+    func paneRequestsEncodeExplicitTerminalTarget() throws {
+        let split = try CLICommands.paneSplitRequest(pane: "term", direction: .left)
+        #expect(split.method == RPCMethod.paneSplit.rawValue)
         #expect(
-            CLICommands.resolveDeviceAttach(ref: "typo", roster: Self.attachRoster)
-            == .notFound
+            try Self.params(split, as: AppCommandParams.SplitPane.self)
+                == .init(pane: "term", direction: .left)
         )
+
+        let send = try CLICommands.paneSendInputRequest(pane: "term", text: "ls\n", typeDelayMs: 4)
+        #expect(send.method == RPCMethod.paneSendInput.rawValue)
+        #expect(
+            try Self.params(send, as: AppCommandParams.SendPaneInput.self)
+                == .init(pane: "term", text: "ls\n", typeDelayMs: 4)
+        )
+
+        let capture = try CLICommands.paneCaptureTextRequest(pane: "term")
+        #expect(capture.method == RPCMethod.paneCaptureText.rawValue)
+        #expect(
+            try Self.params(capture, as: AppCommandParams.CapturePaneText.self)
+                == .init(pane: "term")
+        )
+    }
+
+    // MARK: - Device attach remains device-scoped
+
+    @Test
+    func deviceAttachParsesAndRetainsDeviceList() {
+        #expect(
+            CLICommands.parse(["deviceterm", "device", "attach", "phone"])
+                == .deviceAttach(ref: "phone")
+        )
+        #expect(CLICommands.parse(["deviceterm", "devices", "list"]) == .devicesList)
+    }
+
+    @Test
+    func resolveDeviceAttachUsesRosterKinds() {
+        #expect(
+            CLICommands.resolveDeviceAttach(ref: "iPhone 17 Pro", roster: Self.attachRoster)
+                == .target(
+                    .sim(udid: "5E6F7A8B-PHONE-0000-0000-000000000000"),
+                    id: "5E6F7A8B-PHONE-0000-0000-000000000000",
+                    kind: .sim
+                )
+        )
+        #expect(
+            CLICommands.resolveDeviceAttach(ref: "field-unit", roster: Self.attachRoster)
+                == .target(.device(deviceId: "fd00:1234::a1b2"), id: "fd00:1234::a1b2", kind: .device)
+        )
+    }
+
+    @Test
+    func resolveDeviceAttachFallsBackOnlyForUUID() {
+        let udid = "550E8400-E29B-41D4-A716-446655440000"
+        #expect(
+            CLICommands.resolveDeviceAttach(ref: udid, roster: Self.attachRoster)
+                == .target(.sim(udid: udid), id: udid, kind: .sim)
+        )
+        #expect(CLICommands.resolveDeviceAttach(ref: "missing", roster: Self.attachRoster) == .notFound)
     }
 
     @Test
     func resolveDeviceAttachSurfacesAmbiguity() {
         let roster = [
-            DeviceRosterEntry(id: "U-1", kind: .sim, name: "twin"),
-            DeviceRosterEntry(id: "U-2", kind: .sim, name: "twin")
+            DeviceRosterEntry(id: "one", kind: .sim, name: "twin", state: "Booted"),
+            DeviceRosterEntry(id: "two", kind: .device, name: "twin", state: "connected")
         ]
         #expect(
             CLICommands.resolveDeviceAttach(ref: "twin", roster: roster)
-            == .ambiguous(ids: ["U-1", "U-2"])
+                == .ambiguous(ids: ["one", "two"])
         )
     }
 
     @Test
-    func devicesListParses() {
-        #expect(CLICommands.parse(["deviceterm", "devices", "list"]) == .devicesList)
-        if case .usage = CLICommands.parse(["deviceterm", "devices", "wiggle"]) {
-            // expected
-        } else {
-            Issue.record("expected .usage for unknown devices subcommand")
-        }
-        // Bare `devices` (no subcommand) is a usage error.
-        if case .usage = CLICommands.parse(["deviceterm", "devices"]) {
-            // expected
-        } else {
-            Issue.record("expected .usage for bare devices")
-        }
-    }
-
-    @Test
-    func deviceNounMalformedIsUsage() {
-        // Bare `device` and an unknown `device` subcommand both surface
-        // the usage hint.
-        for argv in [["deviceterm", "device"], ["deviceterm", "device", "wiggle"]] {
-            if case .usage = CLICommands.parse(argv) {
-                // expected
-            } else {
-                Issue.record("expected .usage for \(argv)")
-            }
-        }
-    }
-
-    @Test
-    func paneUnknownSubcommandIsUsage() {
-        let cmd = CLICommands.parse(["deviceterm", "pane", "wiggle"])
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    // MARK: - Window subcommands
-
-    @Test
-    func windowOpen() {
-        #expect(CLICommands.parse(["deviceterm", "window", "open"]) == .windowOpen)
-    }
-
-    @Test
-    func windowCloseDefaults() {
-        let cmd = CLICommands.parse(["deviceterm", "window", "close"])
-        if case let .windowClose(ref, mode) = cmd {
-            #expect(ref.type == "current")
-            #expect(mode == "detach")
-        } else {
-            Issue.record("expected .windowClose; got \(cmd)")
-        }
-    }
-
-    @Test
-    func windowFocusWithIndex() {
-        let cmd = CLICommands.parse(
-            [
-            "deviceterm",
-            "window",
-            "focus",
-            "--window",
-            "2"
-            ]
-            )
-        if case let .windowFocus(ref) = cmd {
-            #expect(ref.type == "index")
-            #expect(ref.value == "2")
-        } else {
-            Issue.record("expected .windowFocus; got \(cmd)")
-        }
-    }
-
-    @Test
-    func windowUnknownSubcommandIsUsage() {
-        let cmd = CLICommands.parse(["deviceterm", "window", "tilt"])
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    // MARK: - Windows verb
-
-    @Test
-    func windowsList() {
-        #expect(
-            CLICommands.parse(["deviceterm", "windows", "list"])
-            == .windowsList(all: false)
-            )
-    }
-
-    @Test
-    func windowsListAll() {
-        #expect(
-            CLICommands.parse(["deviceterm", "windows", "list", "--all"])
-            == .windowsList(all: true)
-            )
-    }
-
-    @Test
-    func windowsUnknownSubcommandIsUsage() {
-        let cmd = CLICommands.parse(["deviceterm", "windows", "spin"])
-        if case .usage = cmd {
-            // expected
-        } else {
-            Issue.record("expected .usage; got \(cmd)")
-        }
-    }
-
-    // MARK: - Request builders
-
-    @Test
-    func tabCloseRequestEncodesWireParams() throws {
-        let envelope = try CLICommands.tabCloseRequest(
-            tab: Wire.TabRef(type: "current", value: nil),
-            mode: "shutdown"
-        )
-        #expect(envelope.method == RPCMethod.tabClose.rawValue)
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.CloseTab.self,
-            from: data
-        )
-        #expect(decoded.tab.type == "current")
-        #expect(decoded.mode == "shutdown")
-    }
-
-    @Test
-    func deviceAttachRequestEncodesSimTarget() throws {
-        let envelope = try CLICommands.deviceAttachRequest(
-            target: .sim(udid: "U-iphone17")
-        )
+    func deviceAttachRequestUsesInternalPaneAttachMethod() throws {
+        let envelope = try CLICommands.deviceAttachRequest(target: .device(deviceId: "phone"))
         #expect(envelope.method == RPCMethod.paneAttach.rawValue)
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.PaneAttach.self,
-            from: data
+        #expect(
+            try Self.params(envelope, as: AppCommandParams.PaneAttach.self)
+                == .init(target: .device(deviceId: "phone"))
         )
-        #expect(decoded.target == .sim(udid: "U-iphone17"))
     }
 
-    @Test
-    func deviceAttachRequestEncodesDeviceTarget() throws {
-        let envelope = try CLICommands.deviceAttachRequest(
-            target: .device(deviceId: "fd00::1")
-        )
-        #expect(envelope.method == RPCMethod.paneAttach.rawValue)
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.PaneAttach.self,
-            from: data
-        )
-        #expect(decoded.target == .device(deviceId: "fd00::1"))
-    }
+    // MARK: - Shared normalization
 
     @Test
-    func devicesListRequestHasNoBody() {
-        let envelope = CLICommands.devicesListRequest()
-        #expect(envelope.method == RPCMethod.devicesList.rawValue)
-        // Session comes from the connection's authenticated context,
-        // so the request carries no params body.
-        guard case .empty = envelope.body else {
-            Issue.record("expected .empty body; got \(envelope.body)")
-            return
-        }
-    }
-
-    @Test
-    func windowsListRequestCarriesAllFlag() throws {
-        let envelope = try CLICommands.windowsListRequest(all: true)
-        #expect(envelope.method == RPCMethod.windowsList.rawValue)
-        guard case let .params(data) = envelope.body else {
-            Issue.record("expected .params body"); return
-        }
-        let decoded = try JSONDecoder().decode(
-            AppCommandParams.WindowsList.self,
-            from: data
-        )
-        #expect(decoded.all)
-    }
-
-    // MARK: - CWD normalization
-
-    /// `--cwd` is resolved against the CLI process's CWD before
-    /// the wire encoding so libghostty's `working_directory` (which
-    /// requires absolute paths) doesn't silently ignore relative
-    /// or `~`-prefixed paths. `nil` and empty pass through unchanged.
-    @Test
-    func normalizeCwdLeavesAbsolutePathsAlone() {
-        #expect(CLICommands.normalizeCwd("/tmp") == "/tmp")
-        #expect(CLICommands.normalizeCwd("/usr/local/bin") == "/usr/local/bin")
-    }
-
-    @Test
-    func normalizeCwdResolvesTilde() {
-        let home = NSHomeDirectory()
-        #expect(CLICommands.normalizeCwd("~") == home)
-        #expect(CLICommands.normalizeCwd("~/proj") == "\(home)/proj")
-    }
-
-    @Test
-    func normalizeCwdResolvesRelativeAgainstCWD() {
+    func normalizeCwdResolvesAndStandardizesPaths() {
         let cwd = FileManager.default.currentDirectoryPath
         #expect(CLICommands.normalizeCwd(".") == cwd)
         #expect(CLICommands.normalizeCwd("subdir") == "\(cwd)/subdir")
-    }
-
-    @Test
-    func normalizeCwdCollapsesDoubleDots() {
-        // `/tmp/foo/..` standardizes to `/tmp`, and the same logic catches
-        // `./../foo` against the CLI's CWD too. Test the absolute
-        // case since the CWD-relative one depends on the test
-        // runner's location.
         #expect(CLICommands.normalizeCwd("/tmp/foo/..") == "/tmp")
-    }
-
-    @Test
-    func normalizeCwdPassesNilAndEmptyThrough() {
         #expect(CLICommands.normalizeCwd(nil) == nil)
         #expect(CLICommands.normalizeCwd("")?.isEmpty == true)
     }
 
-    // MARK: - Echo labels
+    @Test(arguments: [
+        (#"line\nnext"#, "line\nnext"),
+        (#"tab\tvalue"#, "tab\tvalue"),
+        (#"slash\\value"#, "slash\\value")
+    ])
+    func decodeEscapesHonorsCStyleSet(raw: String, expected: String) {
+        #expect(CLICommands.decodeEscapes(raw) == expected)
+    }
 
     @Test
-    func echoLabels() {
-        #expect(
-            CLICommands.echoLabel(
-            Wire.TabRef(type: "current", value: nil)
-        ) == "current"
-            )
-        #expect(
-            CLICommands.echoLabel(
-            Wire.TabRef(type: "sessionId", value: "S-A")
-        ) == "S-A"
-            )
-        #expect(
-            CLICommands.echoLabel(
-            Wire.PaneRef(type: "shortId", value: "ab12")
-        ) == "ab12"
-            )
-        #expect(
-            CLICommands.echoLabel(
-            Wire.WindowRef(type: "index", value: "2")
-        ) == "2"
-            )
+    func decodeEscapesPreservesUnknownAndDanglingEscapes() {
+        #expect(CLICommands.decodeEscapes(#"\z"#) == #"\z"#)
+        #expect(CLICommands.decodeEscapes("end\\") == "end\\")
     }
 }

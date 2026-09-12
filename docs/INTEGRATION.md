@@ -29,7 +29,7 @@ Pass `--json` to commands that normally provide human-readable lists, reports,
 or receipts:
 
 ```sh
-deviceterm panes list --json
+deviceterm pane list --json
 deviceterm tap 0.5 0.5 --json
 deviceterm doctor --json
 ```
@@ -83,7 +83,7 @@ Daemon failures include their numeric RPC code when available:
 {
   "error": {
     "code": "intent.automationRequired",
-    "message": "intent.automationRequired: tab.send-input requires automation authority",
+    "message": "intent.automationRequired: pane.sendInput requires automation authority",
     "details": {
       "rpcCode": -32011
     }
@@ -119,6 +119,15 @@ Current shared codes are:
 | `rpc.invalidParams` | The daemon rejected the RPC parameters |
 | `rpc.serverError` | The daemon reported an internal server failure |
 | `rpc.error` | The daemon returned an otherwise unclassified RPC error |
+| `intent.notFound` | No caller-visible workspace object matched the reference |
+| `intent.ambiguous` | More than one caller-visible object matched within a resolution tier |
+| `intent.guiUnavailable` | The GUI back-channel was absent or missed its deadline |
+| `intent.userCancelled` | The person cancelled a GUI confirmation |
+| `intent.automationRequired` | The resolved target requires ownership the caller lacks or a live grant |
+| `intent.wouldCloseTab` | Closing the selected terminal would remove the tab's final terminal |
+| `intent.unsupportedPane` | The selected pane kind does not support the requested operation |
+| `intent.mutationFailed` | A compound mutation partially committed; inspect `error.details.committed` |
+| `intent.internalError` | A DeviceTerm invariant failed after the request reached the GUI |
 
 An `intent.*` code supplied by the daemon passes through unchanged. Commands
 may define additional dotted codes for their own outcomes; those codes are
@@ -247,33 +256,45 @@ DeviceTerm exposes several identifier layers:
 
 | Field | Meaning |
 |---|---|
-| `tabId` | Required grouping UUID. GUI terminal sessions share their tab UUID; other sessions use `sessionId`. A GUI-backed value is stable for the open tab's lifetime and accepted by `--tab` |
-| `sessionId` | Daemon session UUID. Each terminal session has one, so a split tab can have several |
-| `paneId` | UUID for one device pane |
-| `shortId` | Short display and reference handle. Optional during version skew |
-| `name` | Optional human-assigned or creation-time name. It may be absent or ambiguous |
-| `displayTitle` | Live GUI title. It is display metadata, not an identifier |
-| `udid` in a pane | The pane's device key: a Simulator UDID (lowercase) or physical CoreDevice device ID |
+| `WorkspaceWindow.id` | Stable UUID for one live GUI window |
+| `WorkspaceTab.id` | Stable UUID for one live tab workspace |
+| `WorkspacePane.id` | Stable UUID for one layout leaf; for a terminal it equals `sessionId` |
+| Window or tab `shortId` | First six lowercase hexadecimal characters of the object's UUID |
+| Pane `shortId` | Six lowercase Crockford base32 characters minted for the session or device pane |
+| `name` | Optional user-assigned stable name. Matching is case-insensitive and exact; duplicates are ambiguous |
+| `WorkspaceWindow.index` | One-based display-order metadata after visibility filtering; never a reference |
+| `WorkspaceTab.title` | Normalized GUI title, capped at 256 UTF-8 bytes. It is display metadata, not an identifier |
+| `udid` in a Simulator pane | Lowercase Simulator UDID |
+| `deviceId` in a physical-device pane | CoreDevice device ID |
 | `id` in the device roster | A Simulator UDID (lowercase) or physical CoreDevice device ID |
 
 A Simulator UDID is a case-insensitive UUID, and case is where two outputs stop
-comparing equal. DeviceTerm prints a *resolved* one lowercase: `panes list`,
-`pane info`, `tab info`, `devices list`, input receipts, and the event stream.
+comparing equal. DeviceTerm prints a *resolved* one lowercase: `pane list`,
+`pane show`, `tab show`, `devices list`, input receipts, and the event stream.
 `simctl` prints the same UDID uppercase, and physical device IDs keep the
 uppercase form `devicectl` reports.
 
-A receipt that echoes an unresolved reference is the exception. `device attach`
-on an externally booted Simulator has no roster entry to resolve against, so it
-prints back the spelling you gave it.
-
 References resolve case-insensitively, so once a Simulator is attached, its
 uppercase UDID from `simctl list devices` works as a `--pane` argument. Case
-matters only when you compare strings, and only when one side came from outside
-DeviceTerm.
+matters only when comparing strings from different tools.
 
-Workspace receipts generally echo the reference supplied by the caller, such
-as `"current"` or `"abc123"`. They do not promise to replace it with a resolved
-UUID.
+Workspace refs are raw strings. A window or tab accepts an exact short ID,
+exact full UUID, exact unique name, or unique full-UUID prefix. A pane accepts
+an exact short ID, exact full ID, exact unique name, exact Simulator UDID or
+physical device ID, or unique full-ID prefix. Names never match by prefix.
+Window indices are output metadata only.
+
+An omitted ref or `current` selects the object containing the calling
+terminal. For a pane, that means the calling terminal pane, not the pane most
+recently focused in the GUI. Workspace receipts carry resolved, committed
+objects and never echo an unresolved `"current"` or `"abc123"` token.
+
+Rename grammar is deliberately bounded. `tab rename [<tab>] <name>` and
+`pane rename [<pane>] <name>` accept one positional argument for the current
+object or two for an explicit target. Quote a name containing spaces. A word
+beginning with `-` is read as a flag, so put `--` before it to use it literally.
+More than two positionals is a usage error. Pass a quoted empty string to clear
+the name.
 
 ### Respect Authorization Scope
 
@@ -295,23 +316,23 @@ This guide uses four scope labels:
 
 A role such as `"automation"` is descriptive metadata. The commands marked
 Automation below require a live grant, not the role string alone. Only the
-GUI issues a grant; see [`AUTOMATION.md`](AUTOMATION.md#drive-other-tabs).
+GUI issues a grant; see
+[`AUTOMATION.md`](AUTOMATION.md#understand-tabs-sessions-and-authority).
 
-Protected sessions remain opaque to other callers. Lists omit protected
-sessions, panes, and ownership annotations unless the caller owns that
-protected tab.
+Protected tabs remain opaque to other callers. Lists omit protected tabs and
+their panes unless the caller owns that protected tab.
 
 ## Surface Matrix
 
 | Command | Machine Output | Scope | Completion Meaning | Stability |
 |---|---|---|---|---|
-| `tabs list --json` | Array of tab rows | Daemon-wide | Current visible session snapshot | Stable-additive |
-| `tabs current --json` | One tab row | Current session environment | Matching live session found | Stable-additive |
-| `panes list --json` | Array of pane rows | Session | Current device panes of the caller's tab | Stable-additive |
+| `window list --json` | Array of workspace window rows | Session | Current GUI projection | Stable-additive |
+| `window show --json` | Window detail object | Session | Current GUI projection | Stable-additive |
+| `tab list --json` | Array of tab workspace rows | Session | Current GUI projection | Stable-additive |
+| `tab show --json` | Tab, panes, and layout | Session | Current GUI projection | Stable-additive |
+| `pane list --json` | Array of every pane kind | Session | Current GUI projection in layout order | Stable-additive |
+| `pane show --json` | One terminal, Simulator, or device pane | Session | Current GUI projection | Stable-additive |
 | `devices list --json` | Array of device roster rows | Session | Current owned-Simulator and connected-device snapshot | Stable-additive |
-| `windows list --json` | Array of window rows | Daemon-wide | Current caller-visible window projection | Stable-additive |
-| `tab info --json` | Tab information object | Session | Current GUI workspace snapshot | Stable-additive |
-| `pane info --json` | Simulator pane information object | Session | Current GUI workspace snapshot | Stable-additive |
 | `doctor --json` | Doctor report | None required; session fields are conditional | Checks completed | Stable-additive except diagnostic prose |
 | `version --json` | Version report | Local, with optional daemon probe | Local report completed | Stable-additive |
 | `dump-config --json` | Configuration report | Local | Configuration file parsed | Stable-additive |
@@ -324,19 +345,20 @@ protected tab.
 | `wait surface quiescent` with `--json` | Wait receipt | Session | Rendered surface unchanged for the settle window before the deadline | Stable-additive |
 | `tab rename` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `tab close` with `--json` | Workspace receipt | Session and sole-terminal tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
-| `tab open`, `tab select`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
-| `pane open --terminal`, `pane close` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI returned success for the requested mutation | Stable-additive |
-| `device attach --json` | Device attachment receipt | Session | GUI accepted the attachment; rendering may still be pending | Stable-additive |
+| `tab open`, `tab focus`, `tab move` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
+| `pane split` with `--json` | Workspace receipt | Session and target-tab ownership, or automation | GUI committed the terminal split | Stable-additive |
+| `pane close`, `pane rename` with `--json` | Workspace receipt | Exact target-session ownership for a terminal; target-tab ownership for a Simulator or device; or automation | GUI committed the mutation | Stable-additive |
+| `device attach --json` | Workspace receipt | Session | GUI committed pane attachment; rendering may still be pending | Stable-additive |
 | `window close` with `--json` | Workspace receipt | Session and sole-terminal ownership of every tab in the window, or automation | GUI returned success for the requested mutation | Stable-additive |
 | `window open`, `window focus` with `--json` | Workspace receipt | Automation | GUI returned success for the requested mutation | Stable-additive |
-| `tab set-protected --json` | Protection receipt | Session and tab ownership | Reports whether the requested state was confirmed | Stable-additive |
-| `tab send-input --json` | Input receipt | Automation | Instant input was dispatched; positively paced typing was enqueued and may still be running | Stable-additive |
-| `tab capture --json` | `{text}` | Automation | Visible viewport captured | Stable-additive |
+| `tab protect`, `tab unprotect` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI committed the protection state | Stable-additive |
+| `pane focus --json` | Workspace receipt | Automation | GUI committed focus across window, tab, and pane | Stable-additive |
+| `pane send-input --json` | Workspace receipt | Automation | Input was dispatched or paced typing was enqueued | Stable-additive |
+| `pane capture-text --json` | `{pane, text}` | Automation | Visible terminal viewport captured | Stable-additive |
 | `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper and `normalizedCenter`; best-effort Apple fields |
 | `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep stopped, having finished the grid or spent its budget | Stable-additive wrapper and child `normalizedCenter`; best-effort Apple fields |
 | `events` | JSON Lines stream | Session | Subscription remains active until EOF or termination | Stable-additive |
 | `with-pane` | Child-owned stdout and stderr | Session | Child process exited | Stable exit forwarding |
-| `pane rename`, `pane move` | No success shape | Session | Unsupported; command fails | Stable unsupported status |
 | `help`, `agents` | Prose | Local, with optional daemon discovery | Documentation printed | Not a JSON contract |
 | `completions install` | Prose and a written completion file | Local | Completion file installed | Not a JSON contract |
 
@@ -438,148 +460,143 @@ genuinely applies on absence (`simulator-app-advisory`, `auto-update`,
 
 Entries are sorted by key. Warning text is diagnostic prose and best-effort.
 
-### Tab Rows
+### Tab Rows and Details
 
-`tabs list --json` returns an array. `tabs current --json` returns one object
-with the same row shape:
+`tab list --json` returns one row for each real GUI tab workspace. By
+default it lists the calling terminal's window. `--window <ref>` selects one
+window; `--all` spans the caller-visible workspace.
 
 ```jsonc
 {
+  "id": "11111111-1111-1111-1111-111111111111",
+  "shortId": "111111",
+  "name": "auth-feature",
+  "title": "vim Login.swift",
+  "windowId": "22222222-2222-2222-2222-222222222222",
   "current": true,
-  "tabId": "11111111-1111-1111-1111-111111111111",
-  "sessionId": "550E8400-E29B-41D4-A716-446655440000",
-  "shortId": "abc123",               // optional
-  "name": "auth-feature",            // optional
-  "displayTitle": "vim Login.swift", // optional
-  "label": "agent"                   // optional
+  "selected": true,
+  "protected": false,
+  "state": "ready",
+  "paneCount": 3
 }
 ```
 
-`current`, `tabId`, and `sessionId` are required. Other keys are omitted when
-unavailable.
+All fields except `name` are required. `state` is `"opening"`,
+`"ready"`, or `"failed"`. `current` means the calling terminal belongs to
+the tab. `selected` means the tab is selected in its host window; these are
+distinct for a selected tab in another visible window.
 
-`tabs list` returns one row per live daemon session. Each GUI terminal pane has
-a session, so a split tab produces multiple rows with one shared `tabId`.
-Sessions without a GUI tab self-group under `sessionId`.
+A tab ref accepts its exact `shortId`, exact full `id`, exact unique `name`,
+or a unique full-ID prefix. Name prefixes and the dynamic `title` are not
+references.
 
-Group rows and count visible session groups without follow-up calls:
-
-```sh
-rows=$(deviceterm tabs list --json) || exit $?
-
-printf '%s\n' "$rows" | jq 'sort_by(.tabId) | group_by(.tabId)'
-printf '%s\n' "$rows" | jq 'map(.tabId) | unique | length'
-```
-
-GUI-backed groups correspond to tabs, and their full `tabId` can be passed
-directly to `--tab`. The response does not distinguish non-GUI groups, so the
-distinct count is not always a GUI-tab count.
-
-Successful discovery always emits one newline-terminated JSON document. `[]`
-with exit 0 means no daemon sessions are visible to this caller. A failure
-exits nonzero and emits the shared `{"error": ...}` envelope, so it cannot be
-mistaken for an empty workspace. A response that cannot be decoded, omits
-required `tabId`, or contains a malformed `tabId` fails with
-`protocol.invalidResponse`.
-
-Unprotected sessions are visible to every caller. A protected session is
-visible only to its owner. An out-of-tab caller sees unprotected sessions and
-every row has `current: false`.
-
-`name` is creation-time session metadata. `tab rename` changes the GUI title
-but does not mutate this field.
-
-`displayTitle` is the GUI's current normalized title for the primary terminal
-session. It may disappear after a daemon restart until the GUI republishes it.
-Do not use it as a `--tab` reference.
-
-### Pane Rows
-
-`panes list --json` returns the calling tab's device panes:
+`tab show <ref> --json` returns the row, its panes in layout order, and
+the recursive split layout:
 
 ```jsonc
 {
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
-  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
-  "state": "rendering",
-  "family": "phone",
+  "tab": { "...": "WorkspaceTab" },
+  "panes": [
+    { "...": "WorkspacePane" }
+  ],
+  "layout": {
+    "type": "split",
+    "axis": "horizontal",
+    "extents": [0.5, 0.5],
+    "children": [
+      {"type": "pane", "paneId": "550e8400-e29b-41d4-a716-446655440000"},
+      {"type": "pane", "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338"}
+    ]
+  }
+}
+```
+
+`layout` is optional for a tab without a usable pane tree. A pane leaf is
+`{type: "pane", paneId}`. A split node is
+`{type: "split", axis, extents, children}`, where `axis` is
+`"horizontal"` or `"vertical"`.
+
+An empty `tab list` result is a successful caller-visible projection. A
+protected tab is visible only to its owning sessions. Each GUI tab produces one
+row, regardless of how many terminal splits it contains.
+
+### Pane Rows and Details
+
+`pane list --json` returns every terminal, Simulator, and physical-device
+pane in layout order. It defaults to the calling terminal's tab;
+`--tab <ref>` selects another visible tab.
+
+Terminal pane:
+
+```jsonc
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "shortId": "term01",
+  "name": "test runner",
+  "kind": "terminal",
+  "tabId": "11111111-1111-1111-1111-111111111111",
+  "current": true,
+  "focused": true,
+  "capabilities": ["sendInput", "captureText"],
+  "terminal": {
+    "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+    "cwd": "/Users/example/project"
+  }
+}
+```
+
+Simulator pane:
+
+```jsonc
+{
+  "id": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "shortId": "phn001",
-  "name": "Primary Phone",
-  "capabilities": {
-    "touch": true,
-    "key": true,
-    "text": true,
-    "button": true,
-    "rotate": true,
-    "crown": true,
-    "accessibility": true,
-    "location": true
-  },
-  "target": {
-    "sim": {
-      "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
+  "kind": "simulator",
+  "tabId": "11111111-1111-1111-1111-111111111111",
+  "current": false,
+  "focused": false,
+  "capabilities": ["touch", "key", "text", "button", "rotate", "accessibility"],
+  "simulator": {
+    "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
+    "displayName": "iPhone 17 Pro",
+    "family": "phone",
+    "state": "rendering",
+    "orientation": "portrait",
+    "pixelWidth": 1206,
+    "pixelHeight": 2622,
+    "capabilities": {
+      "touch": true,
+      "key": true,
+      "text": true,
+      "button": true,
+      "rotate": true,
+      "crown": false,
+      "accessibility": true,
+      "location": true
     }
   }
 }
 ```
 
-Required fields:
+A physical-device pane has `kind: "device"` and a `device` object with
+the same display, state, orientation, pixel, and backend capability fields,
+plus `deviceId` instead of `udid`.
 
-| Field | Type | Meaning |
-|---|---|---|
-| `paneId` | string | Pane UUID |
-| `udid` | string | Device key for either backend. Simulator UDIDs are lowercase |
-| `state` | string | Current pane lifecycle |
+The common fields `id`, `shortId`, `kind`, `tabId`, `current`,
+`focused`, and `capabilities` are required; `name` is optional. Exactly
+one of `terminal`, `simulator`, or `device` is present according to
+`kind`. Current workspace capabilities are `sendInput`, `captureText`,
+`touch`, `key`, `text`, `button`, `rotate`, `crown`,
+`accessibility`, and `location`. Integrations should branch on the list
+rather than infer support from `kind`.
 
-Current lifecycle values are:
+A terminal pane's `id` is its `sessionId`. That identity is available as
+soon as `tab open` or `pane split` commits session creation; it does not
+mean the shell surface has attached yet.
 
-- `"booting"`
-- `"rendering"`
-- `"shutdown"`
-- `"failed"`
-
-Optional fields:
-
-| Field | Meaning |
-|---|---|
-| `family` | `"watch"`, `"phone"`, `"pad"`, `"tv"`, `"unknown"`, or a future value |
-| `shortId` | Short pane reference |
-| `name` | Optional pane name |
-| `capabilities` | Per-pane device capabilities; see below for what each flag gates |
-| `target` | Backend-neutral device discriminator |
-| `orientationConfirmationSupported` | Whether the backend can produce confirmed orientation evidence; absent for version skew |
-| `orientation` | Latest confirmed orientation; absent until confirmation is available |
-| `surface` | Current `{sequence, width, height}` surface metadata; absent before a surface exists |
-
-A physical-device target uses:
-
-```json
-{
-  "device": {
-    "deviceId": "00008130-001C195E0E91802E"
-  }
-}
-```
-
-A current daemon emits `capabilities` and `target`. Their optional encoding
-permits an older daemon to remain decodable during an update.
-
-If `target` is absent, treat the pane as a Simulator for compatibility with
-older releases. If a new capability flag is absent from a present capabilities
-object, treat that capability as unsupported.
-
-Seven flags gate a CLI verb family: `touch`, `key`, `text`, `button`, `rotate`,
-`crown`, and `accessibility`. `location` is the exception, and `location: true`
-does not mean you can set a position from the CLI.
-
-What it gates is a GUI affordance: the Location submenu, in the Device menu and
-in a device pane's context menu. `pane.location.*` is GUI-only, and `location`
-is on the CLI's no-simctl-wrappers list, so there is deliberately no verb behind
-it.
-
-`touch` carries an exception of its own. On a physical device it covers `tap`,
-`swipe`, `long-press`, and `app-switcher` but not `pinch`, which is refused
-whatever `touch` reports. A Simulator supports all five.
+`pane show <ref> --json` returns the same `WorkspacePane` shape for one
+pane. A pane ref accepts an exact `shortId`, exact full `id`, exact unique
+`name`, exact Simulator UDID or physical device ID, or unique full-ID prefix.
 
 ### Device Roster Rows
 
@@ -620,87 +637,40 @@ When another caller owns a protected attachment, the entry reports
 `attached: false` and omits `ownerSessionId`. This is intentionally
 indistinguishable from an unattached device.
 
-### Window Rows
+### Window Rows and Details
 
-`windows list --json` returns:
+`window list --json` returns the calling terminal's window. `--all` returns
+every caller-visible window:
 
 ```jsonc
 [
   {
+    "id": "22222222-2222-2222-2222-222222222222",
+    "shortId": "222222",
+    "name": "automation",
     "index": 1,
-    "isKey": true,
-    "tabCount": 3,
-    "selectedTabShortId": "abc123"
+    "current": true,
+    "focused": true,
+    "selectedTabId": "11111111-1111-1111-1111-111111111111",
+    "tabCount": 3
   }
 ]
 ```
 
-`index`, `isKey`, and `tabCount` are required. `selectedTabShortId` is omitted
-when unavailable.
+All fields except `name` and `selectedTabId` are required. `current`
+means the calling terminal belongs to this window. `focused` is the GUI's
+key-window state. `selectedTabId` is omitted when the window's selected tab is
+hidden from the caller; every returned tab then has `selected: false`. A window
+ref accepts an exact `shortId`, exact full `id`, exact unique `name`, or unique
+full-ID prefix. The one-based `index` is display-order metadata and never
+resolves as a ref.
 
-Without `--all`, an in-tab caller receives its own window. An out-of-tab caller
-receives an empty array.
+Windows containing only foreign protected tabs are omitted. Indices and counts
+are computed after visibility filtering, so hidden tabs do not leak through
+gaps or totals.
 
-With `--all`, DeviceTerm returns the caller-visible window projection. Windows
-containing only foreign protected tabs are omitted, and indices and counts are
-computed after that filtering.
-
-### Tab Information
-
-`tab info --json` returns:
-
-```jsonc
-{
-  "sessionId": "550E8400-E29B-41D4-A716-446655440000",
-  "shortId": "abc123",
-  "name": "auth-feature",
-  "role": "agent",
-  "isCurrent": true,
-  "simPanes": [
-    {
-      "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
-      "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
-      "shortId": "phn001",
-      "displayName": "iPhone 17 Pro",
-      "family": "phone"
-    }
-  ]
-}
-```
-
-Required top-level fields are `sessionId`, `role`, `isCurrent`, and `simPanes`.
-The other fields are optional. `cwd` and `label` are reserved optional fields;
-the current GUI omits them.
-
-`sessionId`, `shortId`, and `name` describe the GUI tab's primary terminal
-session. `isCurrent` is true when the calling terminal belongs to the resolved
-tab, including a non-primary split terminal.
-
-`simPanes` contains Simulator panes only. It does not enumerate physical-device
-panes. Use `panes list --json` for the backend-neutral pane roster.
-
-### Pane Information
-
-`pane info --json` returns:
-
-```jsonc
-{
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
-  "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
-  "shortId": "phn001",
-  "name": "Primary Phone",
-  "displayName": "iPhone 17 Pro",
-  "family": "phone",
-  "linkedSessionId": "550E8400-E29B-41D4-A716-446655440000"
-}
-```
-
-`shortId` and `name` are optional. Every other field is required.
-
-`pane info` currently resolves Simulator panes only. Use `panes list --json`
-to inspect physical-device panes.
-
-`linkedSessionId` is the primary terminal session of the containing tab.
+`window show <ref> --json` returns `{window, tabs}` using the same
+`WorkspaceWindow` and `WorkspaceTab` shapes.
 
 ### Doctor Report
 
@@ -732,7 +702,7 @@ Shape:
   "allowedMethods": [
     "daemon.events",
     "pane.input.tap",
-    "panes.list"
+    "pane.deviceList"
   ]
 }
 ```
@@ -745,12 +715,13 @@ Optional fields:
 | Field | Presence |
 |---|---|
 | `session` | Live session identity was resolved |
-| `targets` | Session authentication reached `panes.list`; may be an empty array |
+| `targets` | Session authentication reached internal `pane.deviceList`; may be an empty array |
 | `role` | Live daemon or `DEVICETERM_SESSION_ROLE` environment fallback supplied a role |
 | `allowedMethods` | Daemon capabilities query succeeded |
 
-`targets` contains `PanesListEntry` objects from `panes list --json`. It
-represents linked device panes, including Simulator and physical-device panes.
+`targets` contains daemon-direct `PanesListEntry` objects from the internal
+`pane.deviceList` check. It represents linked device panes, including
+Simulator and physical-device panes; it is not the public `pane list` shape.
 
 Each check has:
 
@@ -758,7 +729,7 @@ Each check has:
 {
   "name": "Session authenticates (cap + provenance)",
   "status": "ok",
-  "detail": "panes.list accepted"
+  "detail": "pane.deviceList accepted"
 }
 ```
 
@@ -776,7 +747,7 @@ Current check names are:
 | `xcrun resolves to shim` | Whether `xcrun` resolves through the DeviceTerm shim |
 | `Daemon socket` | Daemon socket reachability |
 | `Daemon ping` | Daemon handshake and wire version |
-| `Session live in daemon` | Session appears in `tabs.list` |
+| `Session live in daemon` | The daemon accepts the session identity |
 | `Session authenticates (cap + provenance)` | Session credentials and terminal provenance authenticate |
 
 Check names and `detail` text are best-effort diagnostics. Pin the DeviceTerm
@@ -801,8 +772,8 @@ a success object. In JSON mode, typed failures follow the error-envelope
 contract above; command-specific failure paths that have not adopted it remain
 stderr-only.
 
-Input receipts identify the resolved pane. Workspace receipts usually echo the
-caller's unresolved reference.
+Input receipts identify the resolved pane. Workspace receipts contain the
+resolved objects committed by the GUI and never echo an unresolved reference.
 
 ### Input Receipts
 
@@ -940,66 +911,98 @@ orientation observation described above.
 
 ### Workspace Receipts
 
-Workspace receipts echo the requested tab, pane, or window reference.
-`"current"` remains `"current"`.
+Workspace mutations return `WorkspaceMutationReceipt` objects built from the
+GUI state after the mutation commits:
 
-| Command | Success Shape |
+```jsonc
+{
+  "ok": true,
+  "window": { "...": "WorkspaceWindow" },
+  "tab": { "...": "WorkspaceTab" },
+  "pane": { "...": "WorkspacePane" }
+}
+```
+
+The object contains only fields relevant to the mutation:
+
+| Command | Committed fields |
 |---|---|
-| `tab open` | `{ok, window}` |
-| `tab close` | `{ok, tab, mode}` |
-| `tab rename` | `{ok, tab, name?}` |
-| `tab select` | `{ok, tab}` |
-| `tab move` | `{ok, tab, toIndex?, toWindow?}` |
-| `pane open --terminal` | `{ok, tab}` |
-| `pane close` | `{ok, pane, mode}` |
-| `device attach` | `{ok, target, kind}` |
-| `window open` | `{ok}` |
-| `window close` | `{ok, window, mode}` |
-| `window focus` | `{ok, window}` |
-| `tab send-input` | `{ok, tab, bytes, typeDelayMillis?}` |
-| `tab set-protected` | `{ok, tab, isProtected, committed}` |
+| `window open` | `window`, first `tab`, initial terminal `pane` |
+| `window focus` | `window`, selected `tab`, focused `pane` |
+| `window close` | `closed.resource == "window"`, `closed.window`, `mode` |
+| `tab open` | host `window`, new `tab`, initial terminal `pane` |
+| `tab focus` | `window`, `tab` |
+| `tab move` | destination `window`, moved `tab` |
+| `tab rename`, `tab protect`, `tab unprotect` | `tab` |
+| `tab close` | `closed.resource == "tab"`, `closed.tab`, `mode` |
+| `pane split` | host `tab`, new terminal `pane` |
+| `pane focus` | `window`, `tab`, `pane` |
+| `pane rename` | `pane` |
+| `pane close` | `closed.resource == "pane"`, `closed.pane`, `mode` |
+| `device attach` | host `tab`, attached `pane` |
+| `pane send-input` | `pane`, `bytes`, optional `typeDelayMs` |
 
-Optional destination or name keys are omitted when the corresponding option is
-absent.
+`device attach` returns a receipt only after the GUI commits a
+`WorkspacePane`. A pending or failed placeholder has no public pane ID and
+does not appear in `pane list` or `tab show`.
 
-Example tab move:
+If attachment fails, the placeholder remains visible and the CLI returns the
+daemon's typed error. For example, daemon code `-32000` becomes
+`rpc.serverError`, with `details.rpcCode` set to `-32000`. Repeat the same
+`device attach` command to retry the placeholder in its existing layout slot.
+A successful retry returns the host `tab` and committed `pane`; rendering may
+still be pending.
 
-```json
+Refs in receipts are canonical committed objects. The CLI does not echo an
+input such as `"current"` or a short ref and ask the caller to rediscover what
+it meant.
+
+Open and split receipts wait for terminal session creation. A terminal pane's
+`id` and `terminal.sessionId` are therefore available in the success
+response. They do not assert that the shell surface is attached or ready for
+input.
+
+A tab can commit before its initial terminal session fails. That outcome is a
+typed failure rather than a success receipt:
+
+```jsonc
 {
-  "ok": true,
-  "tab": "abc123",
-  "toIndex": 1,
-  "toWindow": "2"
+  "error": {
+    "code": "intent.mutationFailed",
+    "message": "terminal session creation failed",
+    "details": {
+      "committed": {
+        "ok": true,
+        "window": { "...": "WorkspaceWindow" },
+        "tab": {
+          "state": "failed"
+        }
+      }
+    }
+  }
 }
 ```
 
-Example device attachment:
+The failed tab remains visible and addressable. Branch on the error code and
+retain `error.details.committed.tab.id`.
 
-```json
+An explicit `pane close --mode` is valid only after the pane ref resolves to a
+Simulator. Supplying it for a terminal or physical-device pane fails with
+`intent.unsupportedPane`. Omitting the option closes those pane kinds normally
+and resolves a Simulator close to `detach`. Closing a tab or window may still
+take `--mode` because either can contain linked Simulators.
+
+`pane capture-text --json` is a read result rather than a mutation receipt:
+
+```jsonc
 {
-  "kind": "device",
-  "ok": true,
-  "target": "00008130-001C195E0E91802E"
+  "pane": { "...": "WorkspacePane" },
+  "text": "visible terminal contents\n"
 }
 ```
 
-The attachment receipt confirms that the GUI accepted the attachment request.
-It does not include the new `paneId` or confirm that a display stream is
-rendering. Use `deviceterm wait pane rendering` when readiness matters. The
-event stream remains available for long-running observation and low-latency
-refresh signals.
-
-`tab open` does not return the new session ID. `pane open --terminal` does not
-return the new terminal session ID, and `window open` does not return a window
-identifier.
-
-### Unsupported Workspace Verbs
-
-`pane rename` and `pane move` are present in the command catalog but are not
-implemented. They fail with `intent.internalError`.
-
-Do not decode or depend on the dormant `PaneRename` or `PaneMove` receipt
-structs. No public success shape exists for these commands.
+Human mode prints the captured text directly. The capture is the visible
+viewport only.
 
 ## Waiting for State
 
@@ -1136,12 +1139,15 @@ That substitution needs an observation this wait actually reached. A probe that
 dies in one of its own requests produces none, so the wait reports the deadline
 rather than a verdict drawn from an earlier probe.
 
-`--print center` and `tap` ask for a single coordinate target, which is a claim
-about what *didn't* match. An unswept cell can refute any verdict: it can hold
-a second control that would have made the target ambiguous, the real control
-behind a caption, or the intermediate frame that turns two disjoint candidates
-into a containment chain. So a truncated sweep is `wait.inconclusive` for
-these callers on every outcome, and no tap is dispatched.
+`--print center` and `tap` do not select from an incomplete observation, even
+when the visible matches contain one eligible target. Anything the observation
+missed could add another target, reveal the real control behind a caption, or
+change the containment result.
+
+A tree marked `ax.treeIncomplete` is retried. If no complete observation
+arrives before the deadline, the command returns `wait.inconclusive`.
+Unsupported enumeration and a truncated sweep refuse immediately. None of
+these outcomes prints a coordinate or dispatches a tap.
 
 In every case the message is the daemon's own note, and `details` carries
 `note` and `noteCode`, plus `sweepedPoints`, `step`, and `budgetMs` when a
@@ -1231,8 +1237,9 @@ cannot say whether it is enabled or obscured.
 
 `tap --label` and `tap --identifier` run this same selection over the same
 wait, so the element `--print center` names is the element `tap` hits. A
-refusal ends the command before any input is dispatched: `wait.unreachable`
-and `wait.ambiguous` send no tap, and neither does a `wait.timeout`.
+refusal ends the command before any input is dispatched. `wait.unreachable`,
+`wait.ambiguous`, `wait.inconclusive`, `wait.unsupported`, and `wait.timeout`
+send no tap.
 
 `--print center` cannot be combined with `--json`, which is a usage error.
 `--json` promises stdout is a JSON document and `--print` promises a bare
@@ -1615,165 +1622,99 @@ about whether accessibility is reachable. Retry it when the pane is quieter.
 
 ### Hold a Live Grant
 
-Seven commands require a live automation grant, checked for each request:
-`tab open`, `tab select`, `tab move`, `window open`, `window focus`,
-`tab send-input`, and `tab capture`. A caller without one receives
-`error.scope_violation`, including a caller whose environment still says its
-role is `"automation"`.
+Eight commands require a live automation grant, checked for every request:
+`tab open`, `tab focus`, `tab move`, `window open`,
+`window focus`, `pane focus`, `pane send-input`, and
+`pane capture-text`. A caller without one receives `intent.automationRequired`,
+including a caller whose environment role is still `"automation"`.
 
-Five more commands are authorized per target rather than by scope:
-`tab close`, `window close`, `tab rename`, `pane open --terminal`, and
-`pane close`. They stay session-scoped, so `daemon.capabilities` keeps
-advertising them; the GUI checks the resolved target and refuses there. A
-refusal arrives as daemon error `-32011`, the same code the scope check
-returns, with a message beginning `intent.automationRequired`.
+Owner-contained mutations remain session-scoped. `tab rename` and `pane split`
+require the caller to own a terminal in the target tab. For `pane rename` and
+`pane close`, a terminal target must be the caller's exact session; Simulator
+and physical-device targets retain tab ownership. `tab close` and `window
+close` require sole-terminal ownership because they may end other sessions. A
+live automation grant satisfies these target checks.
 
-Two requirements, and the difference matters. `tab rename`,
-`pane open --terminal`, and `pane close` need **ownership**: a terminal of
-yours in the target tab. `tab close` and `window close` need **sole-terminal
-ownership**, meaning you hold the tab's only terminal, and for a window
-every tab in it must satisfy that. A live automation grant satisfies either
-one, for those five.
+`tab protect` and `tab unprotect` require target-tab ownership or a live grant.
+A grant can protect a visible, unprotected foreign tab. It never exposes a
+foreign protected tab, so it cannot unprotect one from outside.
 
-`tab set-protected` is the exception, and it appears in neither list above.
-It needs ownership like `tab rename`, but a live grant doesn't substitute for
-it, because the owner gate ignores the grant bit.
-
-A non-owner of a tab it can resolve receives `intent.ownerRequired`, not
-`intent.automationRequired`. Sending that caller to an Automation Tab would
-point it down a path that still refuses.
-
-A tab the caller can't resolve fails earlier, as `intent.notFound`. See
-[Set Protection](#set-protection).
-
-Only the GUI issues a grant, and the CLI cannot grant authority to itself.
-The grant lifecycle is described in
-[`AUTOMATION.md`](AUTOMATION.md#open-an-automation-tab).
+Only the signature-validated GUI issues grants. There is no CLI grant or revoke
+command and no public `automation.revoke` RPC. Session removal, issuing-GUI
+disconnect, and other lifecycle transitions revoke authority internally.
 
 ### Send Input
 
 Run:
 
 ```sh
-deviceterm tab send-input --tab abc123 'make test\n' --json
+deviceterm pane send-input term123 'make test\n' --json
 ```
 
 Receipt:
 
-```json
+```jsonc
 {
-  "bytes": 10,
   "ok": true,
-  "tab": "abc123"
+  "pane": { "...": "terminal WorkspacePane" },
+  "bytes": 10
 }
 ```
 
-With paced typing:
+A paced call also includes `typeDelayMs`:
 
-```json
+```jsonc
 {
-  "bytes": 10,
   "ok": true,
-  "tab": "abc123",
-  "typeDelayMillis": 40
+  "pane": { "...": "terminal WorkspacePane" },
+  "bytes": 10,
+  "typeDelayMs": 40
 }
 ```
 
-The receipt reports UTF-8 bytes and never includes the text.
-
-A successful receipt means DeviceTerm dispatched instant input synchronously.
-For a positive `typeDelayMillis`, it means paced typing was enqueued and may
-still be running. Neither result confirms that the target shell executed the
-command.
-
-Concurrent paced calls to the same tab are typed in order. The CLI caps
-`typeDelayMillis` at 1000.
+The command requires an explicit terminal pane ref. The receipt reports UTF-8
+bytes and never includes the text. Instant input is dispatched synchronously;
+positive pacing is enqueued and may still be running when the receipt arrives.
+Neither result confirms that the target shell executed the command. The CLI
+caps `typeDelayMs` at 1000.
 
 ### Capture a Viewport
 
 Run:
 
 ```sh
-deviceterm tab capture --tab abc123 --json
+deviceterm pane capture-text term123 --json
 ```
 
 Shape:
 
-```json
+```jsonc
 {
+  "pane": { "...": "terminal WorkspacePane" },
   "text": "visible terminal contents\n"
 }
 ```
 
-The capture contains the currently visible terminal viewport. It does not
-include scrollback.
-
-The JSON string preserves the captured content. DeviceTerm adds only the
-newline that terminates the outer JSON document.
+The capture contains the terminal pane's currently visible viewport and not
+its scrollback. Human mode writes the text directly.
 
 ### Set Protection
 
-Run:
+Protect or unprotect a tab:
 
 ```sh
-deviceterm tab set-protected true --json
+deviceterm tab protect abc123 --json
+deviceterm tab unprotect abc123 --json
 ```
 
-Confirmed result:
+Each returns a workspace mutation receipt whose `tab.protected` value is the
+committed state. A definite daemon refusal, indeterminate transition, or
+superseding mutation is a command failure rather than an optimistic receipt.
 
-```json
-{
-  "committed": true,
-  "isProtected": true,
-  "ok": true,
-  "tab": "current"
-}
-```
-
-Unconfirmed result:
-
-```json
-{
-  "committed": false,
-  "isProtected": true,
-  "ok": true,
-  "tab": "current"
-}
-```
-
-`committed: true` means the daemon confirmed the requested state.
-`committed: false` means the transition remains unconfirmed and the GUI may
-still be converging.
-
-Unprotect through the same command:
-
-```sh
-deviceterm tab set-protected false --json
-```
-
-Result:
-
-```json
-{
-  "committed": true,
-  "isProtected": false,
-  "ok": true,
-  "tab": "current"
-}
-```
-
-A definite rejection is a command failure, not a receipt with
-`committed: false`.
-
-Both directions need a terminal of yours in the target tab. A caller without
-one gets `intent.ownerRequired` and exit status 1. An automation grant does
-not satisfy this, unlike the per-target checks in
-[hold a live grant](#hold-a-live-grant). A tab the caller cannot see fails
-earlier, in resolution, as `intent.notFound`, which doesn't separate a
-protected foreign tab from one that isn't there.
-
-Protection behavior, including what other callers can no longer see or do, is
-described in [`AUTOMATION.md`](AUTOMATION.md#protect-a-tab).
+Both directions require a terminal owned by the caller in the target tab or a
+live automation grant. An ungranted caller targeting a visible tab it does not
+own receives `intent.automationRequired`. A grant never widens visibility, so
+a foreign protected tab still fails earlier as `intent.notFound`.
 
 ### Run a Child With a Pane Target
 
@@ -1903,7 +1844,7 @@ belongs to the GUI's private per-pane rendering subscription.
 
 `device.booted` and `device.shutdown` include no device name, runtime, or
 model. For an owned or attached Simulator, refresh `devices list --json` or
-`panes list --json` when you need metadata. An external, unclaimed Simulator
+`pane list --json` when you need metadata. An external, unclaimed Simulator
 can emit either event while remaining absent from both lists; use
 `xcrun simctl list devices --json` as the fallback metadata source for its
 UDID.

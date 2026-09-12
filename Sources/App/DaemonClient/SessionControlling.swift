@@ -24,10 +24,11 @@ protocol SessionControlling: AnyObject {
     /// that doesn't arrive over XPC from a signature-validated peer.
     /// `initialProtected` seeds the session's protection flag atomically at
     /// create time: passed `true` for a terminal joining a tab that is
-    /// already protected (or mid-transition to protected) so the new
-    /// session is never observable as unprotected on `tabs.list`. The standard
-    /// tab-open path passes `false`. `tabId` is the GUI-minted UUID shared by
-    /// every terminal in the tab; nil asks the daemon to self-group the session.
+    /// already protected (or mid-transition to protected) so daemon session
+    /// and device projections never expose the new session as unprotected. The
+    /// standard tab-open path passes `false`. `tabId` is the GUI-minted UUID
+    /// shared by every terminal in the tab; nil asks the daemon to self-group
+    /// the session.
     func createSession(
         label: String?,
         name: String?,

@@ -8,16 +8,13 @@ import Foundation
 /// JSON-encoded on the daemon side and JSON-decoded on the GUI side
 /// once the kind is read.
 ///
-/// The CLI's `deviceterm tab close --tab <ref>` (and the other
-/// workspace verbs) hits the daemon over the existing UDS RPC. For ops
-/// the daemon can't perform on its own (anything that mutates GUI tab /
-/// pane / window state), the daemon constructs an `AppCommand` and
-/// publishes it on the dedicated `app.commands` subscription that
-/// the GUI maintains at startup. The GUI translates the command into
-/// a `RouteIntent`, dispatches via `IntentDispatcher`, and acks the
-/// result via `app.commandResult`. The daemon correlates by
-/// `commandId` and resumes the original handler's continuation so
-/// the CLI caller gets a synchronous-feeling answer.
+/// `deviceterm tab close <ref>` and the other GUI-backed workspace verbs hit
+/// the daemon over UDS RPC. The daemon constructs an `AppCommand` and publishes
+/// it on the dedicated `app.commands` subscription that the GUI maintains at
+/// startup. The GUI translates the command into a `RouteIntent`, dispatches via
+/// `IntentDispatcher`, and acknowledges the result via `app.commandResult`.
+/// The daemon correlates by `commandId` and resumes the original handler's
+/// continuation so the CLI caller gets a synchronous-feeling answer.
 ///
 /// Wire shape: a flat struct with a `kind` discriminator and a JSON
 /// `params` blob. Strong-typed per-kind params live in
@@ -38,26 +35,19 @@ public struct AppCommand: Codable, Sendable, Equatable {
     /// What the GUI should do. See `AppCommandKind`.
     public let kind: AppCommandKind
 
-    /// Caller's session id when the request came in over an
-    /// authenticated UDS connection (CLI inside a tab). `nil` for
-    /// daemon-wide callers, including an out-of-tab `windowsList --all`
-    /// request (a stock-terminal CLI that can't invoke session-scoped
-    /// verbs). The GUI builds the intent's
-    /// `IntentOrigin.external(sessionID:hasAutomationGrant:)` from this,
-    /// so `--tab current` / `--pane current` mean "the calling tab's
-    /// tab/pane" and a foreign protected tab stays opaque to the caller.
+    /// Authenticated terminal-session id used to resolve omitted and `current`
+    /// workspace references. The GUI builds
+    /// `IntentOrigin.external(sessionID:hasAutomationGrant:)` from it, so
+    /// current tab and pane references stay relative to the calling terminal.
     public let originatingSessionId: String?
 
     /// Whether the originating session held a live automation grant when
     /// the daemon accepted the request. Read from the
     /// `AutomationGrantStore` at publish time, never from caller-supplied
-    /// request data and never from a role, so a CLI caller cannot assert
-    /// it. The GUI gates
-    /// the cross-tab verbs on it: without one, a caller reaches only tabs
-    /// it owns a terminal in.
-    ///
-    /// The grant widens authority, never visibility. A foreign protected
-    /// tab stays `notFound` with or without it.
+    /// request data and never from a role, so a CLI caller cannot assert it.
+    /// A grant widens mutation, focus, and terminal-I/O authority. It does not
+    /// govern read visibility: ungranted callers may read visible foreign tabs,
+    /// while protected foreign tabs remain `notFound` with or without a grant.
     public let originAutomationGrant: Bool
 
     /// Kind-specific params, encoded as a JSON object. The GUI side

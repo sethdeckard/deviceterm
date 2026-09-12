@@ -12,7 +12,7 @@ import Foundation
 ///      `app.commands` subscription drains.
 ///   2. Hand out `commandId`s and hold a continuation per pending
 ///      command so the originating RPC handler (`tab.close`,
-///      `windows.list`, etc.) can `await` the GUI's reply.
+///      `window.list`, etc.) can `await` the GUI's reply.
 ///   3. Route `AppCommandResult` frames (from `app.commandResult`)
 ///      back to the matching continuation. Includes a wall-clock
 ///      timeout so a wedged or absent GUI doesn't leak a continuation
@@ -34,7 +34,9 @@ public actor AppCommandCoordinator {
         case error(
             code:
             String,
-            message: String
+            message: String,
+            details: Data?,
+            forwardedRPCCode: Int? = nil
             )
     }
 
@@ -144,7 +146,8 @@ public actor AppCommandCoordinator {
             record.continuation.resume(
                 returning: .error(
                 code: "intent.guiUnavailable",
-                message: "GUI subscription closed before this command completed"
+                message: "GUI subscription closed before this command completed",
+                details: nil
             )
                 )
         }
@@ -179,7 +182,8 @@ public actor AppCommandCoordinator {
                 code: "intent.guiUnavailable",
                 message: "no GUI subscription active; the DeviceTerm app "
                     + "isn't running or hasn't established its "
-                    + "back-channel yet"
+                    + "back-channel yet",
+                details: nil
             )
         }
         let commandId = UUID().uuidString
@@ -246,12 +250,18 @@ public actor AppCommandCoordinator {
                 code: "intent.internalError",
                 message: "GUI returned error without payload"
             )
-            outcome = .error(code: err.code, message: err.message)
+            outcome = .error(
+                code: err.code,
+                message: err.message,
+                details: err.details,
+                forwardedRPCCode: err.rpcCode
+            )
 
         default:
             outcome = .error(
                 code: "intent.internalError",
-                message: "unknown AppCommandResult status: \(result.status)"
+                message: "unknown AppCommandResult status: \(result.status)",
+                details: nil
             )
         }
         record.continuation.resume(returning: outcome)
@@ -265,7 +275,8 @@ public actor AppCommandCoordinator {
         record.continuation.resume(
             returning: .error(
             code: "intent.guiUnavailable",
-            message: "no GUI response within \(timeoutMs)ms"
+            message: "no GUI response within \(timeoutMs)ms",
+            details: nil
         )
             )
     }

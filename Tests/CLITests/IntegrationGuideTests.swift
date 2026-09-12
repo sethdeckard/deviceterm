@@ -114,10 +114,10 @@ func integrationGuideSurfaceMatrixPinsScopeCategories() throws {
     let matrix = try section(named: "Surface Matrix", in: contents)
     let scopedRows = [
         "| `version --json` | Version report | Local,",
-        "| `tabs list --json` | Array of tab rows | Daemon-wide |",
-        "| `panes list --json` | Array of pane rows | Session |",
-        "| `tab send-input --json` | Input receipt | Automation |",
-        "| `pane rename`, `pane move` | No success shape | Session | Unsupported; command fails |"
+        "| `tab list --json` | Array of tab workspace rows | Session |",
+        "| `pane list --json` | Array of every pane kind | Session |",
+        "| `pane send-input --json` | Workspace receipt | Automation |",
+        "| `pane capture-text --json` | `{pane, text}` | Automation |"
     ]
     for row in scopedRows {
         #expect(matrix.contains(row), "surface matrix scope row changed: \(row)")
@@ -134,22 +134,75 @@ func integrationGuideHandlesFailedVersionProbeSeparately() throws {
 }
 
 @Test
-func integrationGuideDocumentsTabGroupingContract() throws {
+func integrationGuideDocumentsWorkspaceProjectionContract() throws {
     let contents = try integrationGuide()
     let discovery = try section(named: "Discovery and State", in: contents)
     for contract in [
-        #""tabId""#,
-        "group_by(.tabId)",
-        "unique | length",
-        "visible session groups",
-        "does not distinguish non-GUI groups",
-        "no daemon sessions are visible",
-        "`--tab`",
-        "`[]`",
-        "`protocol.invalidResponse`"
+        "one row for each real GUI tab workspace",
+        "panes in layout order",
+        "Each GUI tab produces one\nrow, regardless of how many terminal splits it contains",
+        "A terminal pane's `id` is its `sessionId`",
+        "Exactly\none of `terminal`, `simulator`, or `device`",
+        "`window show <ref> --json` returns `{window, tabs}`"
     ] {
-        #expect(discovery.contains(contract), "tab grouping contract missing \(contract)")
+        #expect(discovery.contains(contract), "workspace projection contract missing \(contract)")
     }
+}
+
+@Test
+func integrationGuidePinsWorkspaceReferenceRules() throws {
+    let contents = try integrationGuide()
+    let rules = try section(named: "Contract Rules", in: contents)
+    for claim in [
+        "Names never match by prefix",
+        "Window indices are output metadata only",
+        "First six lowercase hexadecimal",
+        "Six lowercase Crockford base32",
+        "exact Simulator UDID or\nphysical device ID"
+    ] {
+        #expect(rules.contains(claim), "workspace reference contract missing: \(claim)")
+    }
+    #expect(!rules.contains("or projected index"))
+}
+
+@Test
+func integrationGuidePinsPaneMutationAuthorityAndMode() throws {
+    let contents = try integrationGuide()
+    let automation = try section(named: "Automation", in: contents)
+    #expect(automation.contains("terminal target must be the caller's exact session"))
+    #expect(automation.contains("physical-device targets retain tab ownership"))
+    #expect(automation.contains("live automation grant satisfies these target checks"))
+
+    let receipts = try section(named: "Action Receipts", in: contents)
+    #expect(receipts.contains("explicit `pane close --mode` is valid only"))
+    #expect(receipts.contains("terminal or physical-device pane fails with\n`intent.unsupportedPane`"))
+}
+
+@Test
+func integrationGuidePinsRenameGrammar() throws {
+    let contents = try integrationGuide()
+    let rules = try section(named: "Contract Rules", in: contents)
+    #expect(rules.contains("accept one positional argument for the current\nobject or two"))
+    #expect(rules.contains("Quote a name containing spaces"))
+    #expect(rules.contains("beginning with `-` is read as a flag"))
+    #expect(rules.contains("More than two positionals is a usage error"))
+}
+
+@Test
+func integrationGuidePinsWorkspaceIntentFailures() throws {
+    let contents = try integrationGuide()
+    let rules = try section(named: "Contract Rules", in: contents)
+    for code in [
+        "intent.automationRequired",
+        "intent.wouldCloseTab",
+        "intent.unsupportedPane",
+        "intent.mutationFailed"
+    ] {
+        #expect(rules.contains(code), "workspace failure contract missing \(code)")
+    }
+    let receipts = try section(named: "Action Receipts", in: contents)
+    #expect(receipts.contains("error.details.committed"))
+    #expect(receipts.contains("retain `error.details.committed.tab.id`"))
 }
 
 @Test

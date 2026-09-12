@@ -18,8 +18,8 @@ import Foundation
 /// unsubscribing it. Subscription itself stays last-wins; a relaunched
 /// GUI deliberately evicts the prior subscriber.
 ///
-/// Plus the per-verb handlers (`tab.close`, `tab.info`,
-/// `windows.list`, etc.) that build the typed params, publish to the
+/// Plus the per-verb handlers (`tab.close`, `tab.show`,
+/// `window.list`, etc.) that build the typed params, publish to the
 /// coordinator, await the GUI's reply, and either return the data
 /// payload or surface a typed error to the CLI.
 ///
@@ -120,12 +120,10 @@ public enum AppCommandMethods {
     /// publishes via the coordinator, waits, and turns the outcome
     /// into the wire response the CLI consumes.
     ///
-    /// The originating session id (the calling tab's id, so the GUI
-    /// can resolve `--tab current` / `--pane current`) rides on the
+    /// The calling terminal session's id, used by the GUI to resolve omitted
+    /// and `current` tab or pane references, rides on the
     /// task-local `SessionDispatchContext.originatingSessionId` that
     /// `RPCConnection.dispatch` binds before invoking the handler.
-    /// `nil` for daemon-wide / unauthenticated callers (e.g.
-    /// `windows.list` run from a stock terminal).
     ///
     /// `automationGrant` is the registry's store, the same one the scope
     /// check and capability advertising consult. It is read here rather
@@ -153,7 +151,8 @@ public enum AppCommandMethods {
                 kind: kind,
                 originatingSessionId: originatingSessionId,
                 params: paramsJSON,
-                originAutomationGrant: hasGrant
+                originAutomationGrant: hasGrant,
+                timeoutMs: timeout(for: kind)
             )
             switch outcome {
             case .ok:
@@ -162,7 +161,14 @@ public enum AppCommandMethods {
             case let .data(payload):
                 return payload
 
-            case let .error(code, message):
+            case let .error(code, message, details, forwardedRPCCode):
+                if let forwardedRPCCode {
+                    throw RPCMethodError(
+                        code: forwardedRPCCode,
+                        message: message,
+                        details: details
+                    )
+                }
                 // One number for "this needs a grant", whichever layer
                 // refused. The dispatcher's own scope check already
                 // answers `scopeViolationCode` for the flat verbs; a
@@ -174,8 +180,28 @@ public enum AppCommandMethods {
                 if code == IntentErrorCode.automationRequired {
                     throw RPCMethodError.scopeViolation("\(code): \(message)")
                 }
-                throw RPCMethodError(code: -32_099, message: "\(code): \(message)")
+                throw RPCMethodError(
+                    code: -32_099,
+                    message: "\(code): \(message)",
+                    details: details
+                )
             }
+        }
+    }
+
+    private static func timeout(for kind: AppCommandKind) -> Int {
+        switch kind {
+        case .windowOpen, .windowFocus, .windowClose,
+            .tabOpen, .tabFocus, .tabClose, .tabRename, .tabMove,
+            .tabProtect, .tabUnprotect,
+            .paneSplit, .paneFocus, .paneClose, .paneRename,
+            .paneSendInput, .paneAttach:
+            AppCommandDeadline.workspaceGUIReplyTimeoutMs
+
+        case .windowList, .windowShow,
+            .tabList, .tabShow,
+            .paneList, .paneShow, .paneCaptureText:
+            AppCommandCoordinator.defaultTimeoutMs
         }
     }
 }

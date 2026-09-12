@@ -310,7 +310,7 @@ public enum PhysicalDeviceMethods {
     /// `devices.list`: the aggregate live roster, booted (owned) sims +
     /// connected physical devices, each annotated with the owning
     /// session of a live pane that mirrors it. The annotation obeys the
-    /// `tabs.list` protected-tab opacity rule: a device attached only in
+    /// `tab.list` protected-tab opacity rule: a device attached only in
     /// a protected session the caller can't see reads as unattached.
     public static func devicesList(
         deviceCoordinator: DeviceCoordinator,

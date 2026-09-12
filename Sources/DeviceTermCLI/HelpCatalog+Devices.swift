@@ -33,16 +33,6 @@ extension HelpCatalog {
                   explicit-attach verb; there is no `pane attach`.
                   Example: deviceterm device attach iPhone-17-Pro
             """
-        ),
-        HelpTopic(
-            "panes",
-            .command(.devices),
-            summary: "List the device panes in your tab",
-            detail: """
-              panes list
-                  List the calling tab's device panes.
-                  Columns: <paneId>  <udid>  <state>  <family>  <type>
-            """
         )
     ]
 }

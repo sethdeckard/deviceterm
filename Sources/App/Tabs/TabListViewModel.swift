@@ -193,6 +193,39 @@ final class TabListViewModel {
 
     func tab(id: TabID) -> TabState? { tabs.first { $0.id == id } }
 
+    func renameTab(id: TabID, to name: String?) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].name = name
+    }
+
+    @discardableResult
+    func renamePane(_ slot: PaneSlot, inTab tabID: TabID, to name: String?) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return false }
+        switch slot {
+        case let .terminal(id):
+            guard let index = tabs[tabIndex].terminals.firstIndex(where: { $0.id == id }) else {
+                return false
+            }
+            tabs[tabIndex].terminals[index].name = name
+
+        case let .sim(udid):
+            guard let index = tabs[tabIndex].simPanes.firstIndex(where: { $0.udid == udid }) else {
+                return false
+            }
+            tabs[tabIndex].simPanes[index].name = name
+
+        case let .device(deviceId):
+            guard let index = tabs[tabIndex].devicePanes.firstIndex(where: { $0.deviceId == deviceId }) else {
+                return false
+            }
+            tabs[tabIndex].devicePanes[index].name = name
+
+        case .pending:
+            return false
+        }
+        return true
+    }
+
     /// Add a terminal pane to a tab. The Router has already minted the
     /// session and built the TerminalPaneState; this records it on the
     /// nav state so the reconcile in TabContentViewController picks it

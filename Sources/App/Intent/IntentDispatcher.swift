@@ -3,28 +3,23 @@
 import DaemonProtocol
 import Foundation
 
-/// The single consumer of `RouteIntent`, which arrives from the CLI
-/// back-channel and from in-process menu actions. Only CLI frames pass
-/// through `CLIIntentTranslator`; menu callers construct a `RouteIntent`
-/// themselves and dispatch it with `origin: .inProcess`.
+/// The single consumer of external `RouteIntent` values translated from the
+/// CLI back-channel. In-process AppKit actions already hold concrete GUI IDs
+/// and dispatch `Route` values directly.
 ///
 /// Responsibilities:
 ///   1. Resolve external refs to GUI IDs via `IntentResolver`.
 ///   2. Translate the resolved intent into `Route`(s) the Router can
-///      execute, OR read inline from the workspace for read-only
-///      intents (`*Info` / `windowsList`), OR call an injected
-///      `IntentActionDelegate` for actions that don't fit the Route
-///      shape (rename / move).
+///      execute, read inline from the workspace for read-only intents, or call
+///      an injected `IntentActionDelegate` for committed GUI state that does
+///      not fit the Route shape.
 ///   3. Return a typed `IntentResult` the source layer renders.
 ///
 /// Pattern notes:
-///   - Mutations return `.ok` once the Router has *accepted* the
-///     Route. The actual reconcile happens on the MainActor drain
-///     shortly after. This optimistic shape avoids instrumenting
-///     every Route with a completion handle.
-///   - Read-only intents (`tabInfo`, `paneInfo`, `windowsList`)
-///     synthesize their payload from current workspace state and
-///     return immediately. No Router involvement.
+///   - Mutations await the Router/delegate commit and return the projected
+///     objects in a `WorkspaceMutationReceipt`.
+///   - Read-only intents synthesize their payload from current workspace state
+///     and return immediately. No Router involvement.
 ///   - Errors at the resolver layer (notFound / ambiguous) flow
 ///     up as `IntentResult.error(IntentError)` so the source layer
 ///     can render without re-classifying.
@@ -61,6 +56,13 @@ final class IntentDispatcher {
             return try await handle(intent, resolver: resolver, origin: origin)
         } catch let error as IntentError {
             return .error(error)
+        } catch let error as PaneAttachFailure {
+            return .error(
+                .attachFailed(
+                    message: error.message,
+                    forwardedRPCCode: error.rpcCode
+                )
+            )
         } catch {
             return .error(.internalError(String(describing: error)))
         }
@@ -74,283 +76,31 @@ final class IntentDispatcher {
         origin: IntentOrigin
     ) async throws -> IntentResult {
         switch intent {
-        case .openWindow:
-            router.dispatch(.openWindow())
-            return .ok
-
-        case let .closeWindow(ref, mode):
-            let id = try resolver.resolveWindow(ref)
-            // An external caller may not close a window that hosts a tab
-            // it can't see: that would tear down a foreign protected tab.
-            // Fail closed, indistinguishable from an unknown window.
-            if windowHoldsForeignTab(id, origin: origin) {
-                throw IntentError.notFound(kind: "window", ref: "close")
-            }
-            // Closing a window closes every tab in it, so it needs what
-            // closing each of those tabs would need. The guard above has
-            // already made a window holding an invisible tab opaque, so
-            // everything reaching this is a tab the caller can name and
-            // a plain refusal discloses nothing new.
-            let held = workspace.window(id: id)?.tabs.tabs ?? []
-            for tab in held {
-                try requireAuthority(
-                    "window close",
-                    over: tab,
-                    requirement: .soleTerminal,
-                    origin: origin
-                )
-            }
-            router.dispatch(
-                .closeWindow(
-                    id,
-                    mode: mode,
-                    authorizedTerminals: authorizedTerminals(held, origin: origin)
-                )
-            )
-            return .ok
-
-        case let .focusWindow(ref):
-            let id = try resolver.resolveWindow(ref)
-            guard let delegate = actionDelegate else {
-                throw IntentError.internalError(
-                    "no IntentActionDelegate wired for focusWindow"
-                )
-            }
-            // No foreign-tab guard here. That guard withholds what a
-            // caller could otherwise learn, and a raise discloses
-            // nothing: resolution has already refused any window with
-            // no caller-visible tab in it. The disruption is the real
-            // cost, and the automation grant is what gates it.
-            //
-            // No `Route.selectWindow` alongside the raise, either.
-            // `windowDidBecomeKey` records what AppKit does with it,
-            // whereas a route waits on the serial drain and can land
-            // after the human has clicked elsewhere, overwriting the
-            // newer key window with this stale request.
-            delegate.raiseWindow(id)
-            return .ok
-
-        case let .windowsList(all):
-            return .data(
-                .windowsList(
-                windowsListPayload(
-                includeAll: all,
+        case .workspaceWindowList,
+            .workspaceWindowShow,
+            .workspaceWindowOpen,
+            .workspaceWindowFocus,
+            .workspaceWindowClose,
+            .workspaceTabList,
+            .workspaceTabShow,
+            .workspaceTabOpen,
+            .workspaceTabFocus,
+            .workspaceTabClose,
+            .workspaceTabRename,
+            .workspaceTabMove,
+            .workspaceTabProtect,
+            .workspacePaneList,
+            .workspacePaneShow,
+            .workspacePaneSplit,
+            .workspacePaneFocus,
+            .workspacePaneClose,
+            .workspacePaneRename,
+            .workspacePaneSendInput,
+            .workspacePaneCaptureText:
+            return try await handleWorkspace(
+                intent,
+                resolver: resolver,
                 origin: origin
-            )
-                )
-                )
-
-        case let .openTab(windowRef, role, cwd, cmd):
-            let windowID = try resolveOptionalWindow(
-                windowRef,
-                resolver: resolver
-            )
-            switch role {
-            case .agent:
-                router.dispatch(.newTab(windowID, cwd: cwd, cmd: cmd))
-
-            case .automation:
-                router.dispatch(
-                    .openAutomationTab(windowID, cwd: cwd, cmd: cmd)
-                )
-            }
-            return .ok
-
-        case let .closeTab(ref, mode):
-            let resolved = try resolver.resolveTab(ref)
-            // Closing your own single-terminal tab is `exit` by another
-            // name, so it stays free. A split tab holds other sessions
-            // and closing it ends their work, which is the same
-            // cross-session destruction as closing a foreign tab.
-            try requireAuthority(
-                "tab close",
-                over: resolved.tab,
-                requirement: .soleTerminal,
-                origin: origin
-            )
-            router.dispatch(
-                .closeTab(
-                resolved.windowID,
-                resolved.tabID,
-                mode: mode,
-                authorizedTerminals: authorizedTerminals(
-                [resolved.tab],
-                origin: origin
-            )
-            )
-                )
-            return .ok
-
-        case let .renameTab(ref, name):
-            let resolved = try resolver.resolveTab(ref)
-            try requireAuthority(
-                "tab rename",
-                over: resolved.tab,
-                requirement: .ownership,
-                origin: origin
-            )
-            guard let delegate = actionDelegate else {
-                throw IntentError.internalError(
-                    "no IntentActionDelegate wired for renameTab"
-                )
-            }
-            delegate.renameTab(
-                window: resolved.windowID,
-                tab: resolved.tabID,
-                to: name
-            )
-            return .ok
-
-        case let .selectTab(ref):
-            let resolved = try resolver.resolveTab(ref)
-            // Selects within the host window and deliberately does not
-            // raise it. `window focus` is the verb that brings a window
-            // forward; keeping the two separate lets a granted caller
-            // stage a background window's tab without taking the
-            // human's attention, and composes into the same result when
-            // it does want both. The trade is that `tab select` on a
-            // background window shows nothing until something focuses
-            // that window.
-            router.dispatch(.selectTab(resolved.windowID, resolved.tabID))
-            return .ok
-
-        case let .tabInfo(ref):
-            let resolved = try resolver.resolveTab(ref)
-            return .data(
-                .tabInfo(
-                tabInfoPayload(
-                resolved: resolved,
-                callerSessionID: origin.sessionID
-            )
-                )
-                )
-
-        case let .moveTab(ref, toIndex, toWindowRef):
-            let resolved = try resolver.resolveTab(ref)
-            // Cross-window move when a distinct destination window is
-            // named; otherwise a same-window reorder.
-            if let toWindowRef {
-                let destWindowID = try resolver.resolveWindow(toWindowRef)
-                let destCount = workspace.window(id: destWindowID)?.tabs.tabs.count ?? 0
-                if destWindowID == resolved.windowID {
-                    // `--to-window` resolved to the tab's own window: this
-                    // is a same-window reorder, which requires an explicit
-                    // `--to <index>`. Don't silently slide the tab to the
-                    // end when it's omitted.
-                    guard let toIndex else {
-                        throw IntentError.internalError(
-                            "tab move within the same window needs --to <index>"
-                        )
-                    }
-                    let raw = rawTabIndex(visibleIndex: toIndex, in: destWindowID, origin: origin)
-                    router.dispatch(.reorderTab(destWindowID, resolved.tabID, toIndex: raw))
-                    return .ok
-                }
-                guard let delegate = actionDelegate else {
-                    throw IntentError.internalError(
-                        "no IntentActionDelegate wired for moveTab"
-                    )
-                }
-                // Map the caller's visible-projection index into the raw
-                // model so a foreign-protected tab in the destination can't
-                // shift where the moved tab lands; a nil index appends.
-                let atIndex = toIndex
-                    .map { rawTabIndex(visibleIndex: $0, in: destWindowID, origin: origin) }
-                    ?? destCount
-                delegate.moveTabAcrossWindows(
-                    resolved.tabID,
-                    from: resolved.windowID,
-                    to: destWindowID,
-                    atIndex: atIndex
-                )
-                return .ok
-            }
-            guard let toIndex else {
-                throw IntentError.internalError(
-                    "tab move needs --to <index> or --to-window <ref>"
-                )
-            }
-            let raw = rawTabIndex(visibleIndex: toIndex, in: resolved.windowID, origin: origin)
-            router.dispatch(.reorderTab(resolved.windowID, resolved.tabID, toIndex: raw))
-            return .ok
-
-        case let .openPaneTerminal(tabRef, cwd, cmd):
-            // Add an additional terminal pane to the named (or
-            // current) tab. `--cwd` overrides the shell's startup
-            // CWD; `--cmd '<cmd>'` is typed into the shell as
-            // initial input. When the resolver can't find the named
-            // tab, surface notFound; with no ref + no current tab,
-            // fall back to opening a fresh window+tab (matches the
-            // "you asked to open a terminal, here's a place to do
-            // it" affordance), cwd/cmd silently drop on that
-            // fallback because openWindow has no surface for them,
-            // which is fine: the fresh window's primary tab
-            // is the intended `tab open` shape, not `pane open`.
-            if let ref = tabRef {
-                let resolved = try resolver.resolveTab(ref)
-                // With `--tab` omitted the resolver returns the caller's
-                // own tab, so only the named form can land outside it.
-                try requireAuthority(
-                    "pane open",
-                    over: resolved.tab,
-                    requirement: .ownership,
-                    origin: origin
-                )
-                router.dispatch(
-                    .openTerminalPane(tab: resolved.tabID, cwd: cwd, cmd: cmd)
-                )
-                return .ok
-            }
-            do {
-                let current = try resolver.resolveTab(.current)
-                router.dispatch(
-                    .openTerminalPane(tab: current.tabID, cwd: cwd, cmd: cmd)
-                )
-            } catch IntentError.notFound {
-                router.dispatch(.openWindow())
-            }
-            return .ok
-
-        case let .closePane(ref, mode):
-            let resolved = try resolver.resolveSimPane(ref)
-            // Gated on the host tab, and that is the whole of it. The
-            // daemon's pane-ownership check binds a session calling
-            // `pane.closeById` directly, but the Router reaches that
-            // method as the validated GUI, a principal that spans
-            // sessions by design, so nothing downstream re-checks who
-            // owns this pane: a co-tenant of the tab can close a pane
-            // it can't drive. A pane whose host tab vanished between
-            // resolution and here is a refusal, not a bypass.
-            guard let host = hostTab(of: resolved) else {
-                throw IntentError.notFound(kind: "pane", ref: "close")
-            }
-            try requireAuthority(
-                "pane close",
-                over: host,
-                requirement: .ownership,
-                origin: origin
-            )
-            router.dispatch(
-                .detachSimPane(
-                tab: resolved.tabID,
-                udid: resolved.pane.udid,
-                mode: mode
-            )
-                )
-            return .ok
-
-        case .renamePane:
-            throw IntentError.internalError(
-                "pane rename is not implemented"
-            )
-
-        case let .paneInfo(ref):
-            let resolved = try resolver.resolveSimPane(ref)
-            return .data(.paneInfo(paneInfoPayload(resolved: resolved)))
-
-        case .movePane:
-            throw IntentError.internalError(
-                "pane move is not implemented"
             )
 
         case let .paneAttach(udid):
@@ -378,10 +128,10 @@ final class IntentDispatcher {
                 .uuidString.lowercased() else {
                 throw IntentError.internalError(
                     "udid \(udid) is not a valid UUID; check the "
-                    + "value with `deviceterm device list`"
+                    + "value with `deviceterm devices list`"
                 )
             }
-            let resolved = try resolver.resolveTab(.current)
+            let resolved = try resolver.resolveTab(nil)
             // Idempotent within the same tab: repeated calls are
             // a no-op rather than stacking duplicate panes.
             if resolved.tab.simPanes.contains(
@@ -389,7 +139,21 @@ final class IntentDispatcher {
                 $0.udid.caseInsensitiveCompare(canonicalUDID) == .orderedSame
                 }
                 ) {
-                return .ok
+                guard let pane = resolved.tab.simPanes.first(where: {
+                    $0.udid.caseInsensitiveCompare(canonicalUDID) == .orderedSame
+                }) else {
+                    throw IntentError.internalError("attached Simulator pane disappeared")
+                }
+                return try workspaceAttachReceipt(
+                    paneID: pane.paneId,
+                    tabID: resolved.tabID,
+                    projection: WorkspaceProjection(
+                        workspace: workspace,
+                        resolver: resolver,
+                        origin: origin,
+                        actionDelegate: actionDelegate
+                    )
+                )
             }
             // Reject if the udid is already attached to a different
             // tab. The locked linkage design reserves cross-tab pane
@@ -428,14 +192,32 @@ final class IntentDispatcher {
             // mounting path without a pre-fetched name in hand
             // (discovery / shim-intercept / orphan re-attach all
             // populate the name from their own deviceList snapshots).
-            router.dispatch(
+            try await router.dispatchAndWaitForPaneAttach(
                 .attachSimPane(
+                    tab: resolved.tabID,
+                    udid: canonicalUDID,
+                    displayName: nil
+                ),
                 tab: resolved.tabID,
-                udid: canonicalUDID,
-                displayName: nil
+                target: .sim(udid: canonicalUDID)
             )
+            let attachedTab = workspace.windowContaining(tab: resolved.tabID)?
+                .tabs.tab(id: resolved.tabID)
+            guard let pane = attachedTab?.simPanes.first(where: {
+                $0.udid.caseInsensitiveCompare(canonicalUDID) == .orderedSame
+            }) else {
+                throw IntentError.internalError("Simulator pane attach did not commit a pane")
+            }
+            return try workspaceAttachReceipt(
+                paneID: pane.paneId,
+                tabID: resolved.tabID,
+                projection: WorkspaceProjection(
+                    workspace: workspace,
+                    resolver: resolver,
+                    origin: origin,
+                    actionDelegate: actionDelegate
                 )
-            return .ok
+            )
 
         case let .devicePaneAttach(deviceId, relinkExisting):
             // Mount a physically-connected device into the caller's
@@ -451,9 +233,18 @@ final class IntentDispatcher {
             // `deviceId` is the physical device's stable CoreDevice UDID;
             // preserve it exactly. `displayName: nil` lets the Router
             // compose from the attach response.
-            let resolved = try resolver.resolveTab(.current)
-            if resolved.tab.devicePanes.contains(where: { $0.deviceId == deviceId }) {
-                return .ok
+            let resolved = try resolver.resolveTab(nil)
+            if let pane = resolved.tab.devicePanes.first(where: { $0.deviceId == deviceId }) {
+                return try workspaceAttachReceipt(
+                    paneID: pane.paneId,
+                    tabID: resolved.tabID,
+                    projection: WorkspaceProjection(
+                        workspace: workspace,
+                        resolver: resolver,
+                        origin: origin,
+                        actionDelegate: actionDelegate
+                    )
+                )
             }
             // Only consider tabs the caller may see: a device mirrored in
             // a foreign protected tab is invisible here, so an external
@@ -475,7 +266,7 @@ final class IntentDispatcher {
                 // before the new one mounts (the device itself keeps
                 // running, `.detach` only drops the mirror, never powers
                 // it off).
-                router.dispatch(
+                await router.dispatchAndWait(
                     .detachDevicePane(
                         tab: owningTabID,
                         deviceId: deviceId,
@@ -483,263 +274,538 @@ final class IntentDispatcher {
                     )
                 )
             }
-            router.dispatch(
+            try await router.dispatchAndWaitForPaneAttach(
                 .attachDevicePane(
                     tab: resolved.tabID,
                     deviceId: deviceId,
                     displayName: nil
+                ),
+                tab: resolved.tabID,
+                target: .device(deviceId: deviceId)
+            )
+            let attachedTab = workspace.windowContaining(tab: resolved.tabID)?
+                .tabs.tab(id: resolved.tabID)
+            guard let pane = attachedTab?.devicePanes.first(where: {
+                $0.deviceId == deviceId
+            }) else {
+                throw IntentError.internalError("physical-device pane attach did not commit a pane")
+            }
+            return try workspaceAttachReceipt(
+                paneID: pane.paneId,
+                tabID: resolved.tabID,
+                projection: WorkspaceProjection(
+                    workspace: workspace,
+                    resolver: resolver,
+                    origin: origin,
+                    actionDelegate: actionDelegate
                 )
             )
-            return .ok
+        }
+    }
 
-        case let .sendInput(ref, text, typeDelayMillis):
+    // MARK: - Public workspace CLI
+
+    private func handleWorkspace(
+        _ intent: RouteIntent,
+        resolver: IntentResolver,
+        origin: IntentOrigin
+    ) async throws -> IntentResult {
+        let projection = WorkspaceProjection(
+            workspace: workspace,
+            resolver: resolver,
+            origin: origin,
+            actionDelegate: actionDelegate
+        )
+        switch intent {
+        case let .workspaceWindowList(all):
+            return .data(.workspaceWindows(try projection.windows(includeAll: all)))
+
+        case let .workspaceWindowShow(ref):
+            return .data(.workspaceWindow(try projection.window(ref)))
+
+        case .workspaceWindowOpen:
+            let before = Set(workspace.windows.map(\.id))
+            await router.dispatchAndWait(.openWindow())
+            guard let opened = workspace.windows.first(where: { !before.contains($0.id) }) else {
+                throw IntentError.internalError("window open did not commit a window")
+            }
+            let detail = try projection.window(publicRef(opened))
+            let committed = receipt(for: detail, projection: projection)
+            if let failed = opened.tabs.tabs.first(where: { $0.lifecycle == .failed }) {
+                throw IntentError.mutationFailed(
+                    message: failed.failureMessage ?? "terminal session creation failed",
+                    committed: committed
+                )
+            }
+            return .data(.workspaceMutation(committed))
+
+        case let .workspaceWindowFocus(ref):
+            let windowID = try resolver.resolveWindow(ref)
+            guard let delegate = actionDelegate,
+                let window = workspace.window(id: windowID) else {
+                throw IntentError.internalError("no live window focus target")
+            }
+            workspace.select(id: windowID)
+            delegate.raiseWindow(windowID)
+            let detail = try projection.window(publicRef(window))
+            return .data(.workspaceMutation(receipt(for: detail, projection: projection)))
+
+        case let .workspaceWindowClose(ref, mode):
+            let windowID = try resolver.resolveWindow(ref)
+            if windowHoldsForeignTab(windowID, origin: origin) {
+                throw IntentError.notFound(kind: "window", ref: ref ?? "current")
+            }
+            guard let window = workspace.window(id: windowID) else {
+                throw IntentError.notFound(kind: "window", ref: ref ?? "current")
+            }
+            let held = window.tabs.tabs
+            for tab in held {
+                try requireAuthority(
+                    "window close",
+                    over: tab,
+                    requirement: .soleTerminal,
+                    origin: origin
+                )
+            }
+            let closed = try projection.window(publicRef(window)).window
+            await router.dispatchAndWait(
+                .closeWindow(
+                    windowID,
+                    mode: paneCloseMode(mode),
+                    authorizedTerminals: authorizedTerminals(held, origin: origin)
+                )
+            )
+            guard workspace.window(id: windowID) == nil else {
+                throw IntentError.internalError("window close was not committed")
+            }
+            return .data(.workspaceMutation(.init(
+                closed: .init(resource: "window", window: closed),
+                mode: mode
+            )))
+
+        case let .workspaceTabList(window, all):
+            return .data(.workspaceTabs(try projection.tabs(window: window, all: all)))
+
+        case let .workspaceTabShow(ref):
+            return .data(.workspaceTab(try projection.tab(ref)))
+
+        case let .workspaceTabOpen(windowRef, cwd, command):
+            let windowID = try resolver.resolveWindow(windowRef)
+            guard let window = workspace.window(id: windowID) else {
+                throw IntentError.notFound(kind: "window", ref: windowRef ?? "current")
+            }
+            let before = Set(window.tabs.tabs.map(\.id))
+            await router.dispatchAndWait(.newTab(windowID, cwd: cwd, cmd: command))
+            guard let opened = workspace.window(id: windowID)?.tabs.tabs.first(
+                where: { !before.contains($0.id) }
+            ) else {
+                throw IntentError.internalError("tab open did not commit a tab")
+            }
+            let detail = try projection.tab(publicRef(opened))
+            let projectedWindow = try projection.window(publicRef(window)).window
+            let committed = WorkspaceMutationReceipt(
+                window: projectedWindow,
+                tab: detail.tab,
+                pane: detail.panes.first
+            )
+            if opened.lifecycle == .failed {
+                throw IntentError.mutationFailed(
+                    message: opened.failureMessage ?? "terminal session creation failed",
+                    committed: committed
+                )
+            }
+            return .data(.workspaceMutation(committed))
+
+        case let .workspaceTabFocus(ref):
             let resolved = try resolver.resolveTab(ref)
-            guard let delegate = actionDelegate else {
-                throw IntentError.internalError(
-                    "no IntentActionDelegate wired for sendInput"
-                )
-            }
-            do {
-                try delegate.sendInput(
-                    window: resolved.windowID,
-                    tab: resolved.tabID,
-                    text: text,
-                    typeDelayMillis: typeDelayMillis
-                )
-            } catch let error as IntentError {
-                throw error
-            } catch {
-                throw IntentError.internalError(
-                    "sendInput failed: \(error)"
-                )
-            }
-            return .ok
+            await router.dispatchAndWait(.selectTab(resolved.windowID, resolved.tabID))
+            workspace.select(id: resolved.windowID)
+            actionDelegate?.raiseWindow(resolved.windowID)
+            let detail = try projection.tab(publicRef(resolved.tab))
+            let window = try projection.window(publicWindowRef(resolved.windowID)).window
+            return .data(.workspaceMutation(.init(window: window, tab: detail.tab)))
 
-        case let .captureTab(ref):
+        case let .workspaceTabClose(ref, mode):
             let resolved = try resolver.resolveTab(ref)
-            guard let delegate = actionDelegate else {
-                throw IntentError.internalError(
-                    "no IntentActionDelegate wired for captureTab"
+            try requireAuthority(
+                "tab close",
+                over: resolved.tab,
+                requirement: .soleTerminal,
+                origin: origin
+            )
+            let closed = try projection.tab(publicRef(resolved.tab)).tab
+            await router.dispatchAndWait(
+                .closeTab(
+                    resolved.windowID,
+                    resolved.tabID,
+                    mode: paneCloseMode(mode),
+                    authorizedTerminals: authorizedTerminals([resolved.tab], origin: origin)
                 )
+            )
+            guard workspace.windowContaining(tab: resolved.tabID) == nil else {
+                throw IntentError.internalError("tab close was not committed")
             }
-            let text: String
-            do {
-                text = try delegate.captureTab(
-                    window: resolved.windowID,
-                    tab: resolved.tabID
-                )
-            } catch let error as IntentError {
-                throw error
-            } catch {
-                throw IntentError.internalError(
-                    "captureTab failed: \(error)"
-                )
-            }
-            return .data(.tabCapture(TabCapturePayload(text: text)))
+            return .data(.workspaceMutation(.init(
+                closed: .init(resource: "tab", tab: closed),
+                mode: mode
+            )))
 
-        case let .setTabProtected(ref, isProtected):
+        case let .workspaceTabRename(ref, name):
             let resolved = try resolver.resolveTab(ref)
-            // Owner gate by origin. In-process (the human at the keyboard)
-            // always passes: the resolver already refused a foreign
-            // protected tab. An external caller may flip protection only on a
-            // tab it owns a terminal in; a nil-session external caller
-            // (no authority) is refused. This is the one gate that must
-            // key on *source*, not session-presence: the human toggling
-            // the menu passes a nil session too, but is `.inProcess`.
-            switch origin {
-            case .inProcess:
-                break
+            try requireAuthority(
+                "tab rename",
+                over: resolved.tab,
+                requirement: .ownership,
+                origin: origin
+            )
+            workspace.window(id: resolved.windowID)?.tabs.renameTab(id: resolved.tabID, to: name)
+            actionDelegate?.renameTab(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                to: name
+            )
+            let tab = try projection.tab(publicRef(resolved.tab)).tab
+            return .data(.workspaceMutation(.init(tab: tab)))
 
-            case let .external(sessionID, _):
-                let isOwner = sessionID.map { sid in
-                    resolved.tab.terminals.contains { $0.sessionId == sid }
-                } ?? false
-                guard isOwner else {
-                    // Fail closed if resolution ever admits a foreign
-                    // protected tab: return notFound to keep it opaque.
-                    // The accessibility predicate prevents that path, so
-                    // every reachable non-owner refusal can name the owner
-                    // requirement.
-                    guard !resolved.tab.isEffectivelyProtected else {
-                        throw IntentError.notFound(kind: "tab", ref: "set-protected")
-                    }
-                    throw IntentError.ownerRequired(verb: "tab set-protected")
+        case let .workspaceTabMove(ref, destinationRef, index):
+            let resolved = try resolver.resolveTab(ref)
+            let destinationID = try resolver.resolveWindow(destinationRef)
+            if destinationID == resolved.windowID {
+                guard let index else {
+                    throw IntentError.internalError(
+                        "tab move within the same window needs --index <index>"
+                    )
                 }
+                let raw = rawTabIndex(
+                    visibleIndex: index,
+                    in: destinationID,
+                    origin: origin
+                )
+                await router.dispatchAndWait(
+                    .reorderTab(destinationID, resolved.tabID, toIndex: raw)
+                )
+            } else {
+                guard let delegate = actionDelegate,
+                    let destination = workspace.window(id: destinationID) else {
+                    throw IntentError.notFound(kind: "window", ref: destinationRef)
+                }
+                delegate.moveTabAcrossWindows(
+                    resolved.tabID,
+                    from: resolved.windowID,
+                    to: destinationID,
+                    atIndex: rawTabIndex(
+                        visibleIndex: index ?? destination.tabs.tabs.count,
+                        in: destinationID,
+                        origin: origin
+                    )
+                )
             }
-            // Await the transition's first decisive outcome so the caller
-            // learns the daemon's real state, not an optimistic echo: an ack
-            // is committed. Pending means the requested protection state has not
-            // yet been confirmed; definite refusal or opposite-state
-            // supersession returns failure.
+            guard let movedWindow = workspace.windowContaining(tab: resolved.tabID),
+                movedWindow.id == destinationID,
+                let moved = movedWindow.tabs.tab(id: resolved.tabID) else {
+                throw IntentError.internalError("tab move was not committed in the destination window")
+            }
+            let tab = try projection.tab(publicRef(moved)).tab
+            let window = try projection.window(publicRef(movedWindow)).window
+            return .data(.workspaceMutation(.init(window: window, tab: tab)))
+
+        case let .workspaceTabProtect(ref, isProtected):
+            let resolved = try resolver.resolveTab(ref)
+            try requireAuthority(
+                isProtected ? "tab protect" : "tab unprotect",
+                over: resolved.tab,
+                requirement: .ownership,
+                origin: origin
+            )
             let outcome = await router.applyTabProtection(
                 tab: resolved.tabID,
                 isProtected: isProtected
             )
-            switch outcome {
-            case .committed:
-                return .data(.tabSetProtected(
-                    TabSetProtectedResult(isProtected: isProtected, committed: true)
-                ))
-
-            case .pending:
-                return .data(.tabSetProtected(
-                    TabSetProtectedResult(isProtected: isProtected, committed: false)
-                ))
-
-            case .rejected:
-                return .error(.internalError(
-                    "tab set-protected was rejected (daemon refused it, "
-                    + "or a newer protection change superseded it)"
-                ))
-            }
-        }
-    }
-
-    // MARK: - Payload builders
-
-    /// `callerSessionID` is the origin's session (CLI back-channel: the
-    /// calling tab; in-process menu: nil). A `deviceterm tab info` from
-    /// inside a tab reports `isCurrent: true` for its own row.
-    private func tabInfoPayload(
-        resolved: ResolvedTab,
-        callerSessionID: String?
-    ) -> TabInfoPayload {
-        // Multi-terminal-pane: a CLI call from any terminal inside
-        // the resolved tab should report `isCurrent: true` for its
-        // own row, so match against the full terminal set rather
-        // than just the primary's session.
-        let isCurrent: Bool
-        if let sid = callerSessionID {
-            isCurrent = resolved.tab.terminals.contains(where: { $0.sessionId == sid })
-        } else {
-            isCurrent = false
-        }
-        let simPanes = resolved.tab.simPanes.map {
-            SimPanePayload(
-                paneId: $0.paneId,
-                udid: $0.udid,
-                shortId: $0.shortId,
-                displayName: $0.displayName,
-                family: $0.family
-            )
-        }
-        // `sessionId` in the tab-info payload reports the primary
-        // terminal's session: backward-compat for consumers that
-        // expected a single tab session. Per-terminal session
-        // enumeration is a future field on the payload (the wire
-        // type's Optional shape leaves room without breaking
-        // existing parsers).
-        return TabInfoPayload(
-            sessionId: resolved.tab.primaryTerminal.sessionId,
-            shortId: resolved.tab.primaryTerminal.shortId,
-            name: resolved.tab.primaryTerminal.name,
-            role: resolved.tab.role.rawValue,
-            cwd: nil,
-            label: nil,
-            isCurrent: isCurrent,
-            simPanes: simPanes
-        )
-    }
-
-    private func paneInfoPayload(resolved: ResolvedPane) -> PaneInfoPayload {
-        // Sim panes attribute to the tab's primary terminal. A
-        // future refinement will route ownership to the specific
-        // terminal session whose shell ran `xcrun simctl boot`
-        // (resolved via shim intercept).
-        let linkedSessionID = workspace
-            .window(id: resolved.windowID)?
-            .tabs.tab(id: resolved.tabID)?
-            .primaryTerminal.sessionId ?? ""
-        return PaneInfoPayload(
-            paneId: resolved.pane.paneId,
-            udid: resolved.pane.udid,
-            shortId: resolved.pane.shortId,
-            name: resolved.pane.name,
-            displayName: resolved.pane.displayName,
-            family: resolved.pane.family,
-            linkedSessionId: linkedSessionID
-        )
-    }
-
-    /// `includeAll == true` returns the visible-window projection;
-    /// `includeAll == false` scopes to the caller's window. Counts,
-    /// indices, and selected short ids are all computed over the tabs the
-    /// caller may see: a window holding only foreign-protected tabs
-    /// disappears entirely (no entry, no index, no count), and the
-    /// selected short id is never a tab the caller can't see. In-process
-    /// callers see everything.
-    ///
-    /// `--all` is not role-gated: any caller can ask for it, and the
-    /// visibility filter is what bounds the answer.
-    private func windowsListPayload(
-        includeAll: Bool,
-        origin: IntentOrigin
-    ) -> [WindowInfoPayload] {
-        let restrict = origin.restrictsToVisibleTabs
-        let caller = origin.sessionID
-        func visibleTabs(_ window: WindowState) -> [TabState] {
-            guard restrict else { return window.tabs.tabs }
-            return window.tabs.tabs.filter {
-                IntentResolver.externallyAccessible($0, callerSessionID: caller)
-            }
-        }
-        // Index is the position in the *visible* projection, so a hidden
-        // window never shifts a number an external caller can observe.
-        var entries: [(windowID: WindowID, payload: WindowInfoPayload)] = []
-        for window in workspace.windows {
-            let visible = visibleTabs(window)
-            if restrict, visible.isEmpty { continue }
-            let selectedShortId: String? = {
-                guard let sIdx = window.tabs.selectedIndex,
-                    let selected = window.tabs.tabs[safe: sIdx] else { return nil }
-                if !restrict
-                    || IntentResolver.externallyAccessible(selected, callerSessionID: caller) {
-                    return selected.primaryTerminal.shortId
-                }
-                // The selected tab is hidden from this caller: name the
-                // first visible tab rather than nil, so a hidden selection
-                // isn't observable as "nil-selected in a non-empty window."
-                return visible.first?.primaryTerminal.shortId
-            }()
-            entries.append((
-                window.id,
-                WindowInfoPayload(
-                    index: entries.count + 1,
-                    // Projected key window: mark the frontmost window as key
-                    // only when it's in the caller's visible set. For the
-                    // interactive human, their key window always contains a
-                    // tab they own, so `*` still shows; a protected-only key
-                    // window (visible to nobody but its owner) simply isn't
-                    // marked for others. This keeps the documented `*`
-                    // semantics working while never exposing which
-                    // *inaccessible* window is focused.
-                    isKey: window.id == workspace.selectedWindowID,
-                    tabCount: visible.count,
-                    selectedTabShortId: selectedShortId
+            guard outcome == .committed else {
+                throw IntentError.internalError(
+                    outcome == .pending
+                        ? "tab protection is still pending"
+                        : "tab protection was rejected"
                 )
-            ))
+            }
+            let tab = try projection.tab(publicRef(resolved.tab)).tab
+            return .data(.workspaceMutation(.init(tab: tab)))
+
+        case let .workspacePaneList(tab):
+            return .data(.workspacePanes(try projection.panes(tab: tab)))
+
+        case let .workspacePaneShow(ref):
+            return .data(.workspacePane(try projection.pane(ref)))
+
+        case let .workspacePaneSplit(ref, direction):
+            let resolved = try resolver.resolveWorkspacePane(ref)
+            guard let tab = workspace.window(id: resolved.windowID)?.tabs.tab(id: resolved.tabID) else {
+                throw IntentError.notFound(kind: "tab", ref: "pane host")
+            }
+            try requireAuthority(
+                "pane split",
+                over: tab,
+                requirement: .ownership,
+                origin: origin
+            )
+            let before = Set(tab.terminals.map(\.id))
+            await router.dispatchAndWait(
+                .openTerminalPane(
+                    tab: resolved.tabID,
+                    anchor: resolved.slot,
+                    axis: direction.isHorizontal ? .horizontal : .vertical,
+                    side: direction.isBefore ? .before : .after
+                )
+            )
+            let liveTab = workspace.windowContaining(tab: resolved.tabID)?
+                .tabs.tab(id: resolved.tabID)
+            guard let opened = liveTab?.terminals.first(
+                where: { !before.contains($0.id) }
+            ) else {
+                throw IntentError.internalError("pane split did not commit a terminal pane")
+            }
+            let pane = try projection.pane(opened.sessionId)
+            let tabReceipt = try projection.tab(publicTabRef(resolved.tabID)).tab
+            return .data(.workspaceMutation(.init(tab: tabReceipt, pane: pane)))
+
+        case let .workspacePaneFocus(ref):
+            let resolved = try resolver.resolveWorkspacePane(ref)
+            await router.dispatchAndWait(.selectTab(resolved.windowID, resolved.tabID))
+            workspace.select(id: resolved.windowID)
+            actionDelegate?.raiseWindow(resolved.windowID)
+            actionDelegate?.focusPane(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                slot: resolved.slot
+            )
+            let pane = projection.project(resolved)
+            let tab = try projection.tab(publicTabRef(resolved.tabID)).tab
+            let window = try projection.window(publicWindowRef(resolved.windowID)).window
+            return .data(.workspaceMutation(.init(window: window, tab: tab, pane: pane)))
+
+        case let .workspacePaneClose(ref, mode):
+            let resolved = try resolver.resolveWorkspacePane(ref)
+            guard let tab = workspace.window(id: resolved.windowID)?.tabs.tab(id: resolved.tabID) else {
+                throw IntentError.notFound(kind: "tab", ref: "pane host")
+            }
+            try requirePaneMutationAuthority(
+                "pane close",
+                pane: resolved,
+                hostTab: tab,
+                origin: origin
+            )
+            let closed = projection.project(resolved)
+            if mode != nil {
+                switch resolved.state {
+                case .terminal:
+                    throw IntentError.unsupportedPane(
+                        verb: "close --mode",
+                        kind: .terminal
+                    )
+
+                case .device:
+                    throw IntentError.unsupportedPane(
+                        verb: "close --mode",
+                        kind: .device
+                    )
+
+                case .simulator:
+                    break
+                }
+            }
+            let selectedMode = mode ?? .detach
+            switch resolved.state {
+            case let .terminal(terminal):
+                guard tab.terminals.count > 1 else { throw IntentError.wouldCloseTab }
+                await router.dispatchAndWait(
+                    .closeTerminalPane(
+                        tab: resolved.tabID,
+                        terminal: terminal.id,
+                        mode: paneCloseMode(selectedMode)
+                    )
+                )
+
+            case let .simulator(pane):
+                await router.dispatchAndWait(
+                    .detachSimPane(
+                        tab: resolved.tabID,
+                        udid: pane.udid,
+                        mode: paneCloseMode(selectedMode)
+                    )
+                )
+
+            case let .device(pane):
+                await router.dispatchAndWait(
+                    .detachDevicePane(
+                        tab: resolved.tabID,
+                        deviceId: pane.deviceId,
+                        mode: paneCloseMode(selectedMode)
+                    )
+                )
+            }
+            do {
+                _ = try resolver.resolveWorkspacePane(closed.id)
+                throw IntentError.internalError("pane close was not committed")
+            } catch IntentError.notFound {
+                // Expected committed state.
+            }
+            return .data(.workspaceMutation(.init(
+                closed: .init(resource: "pane", pane: closed),
+                mode: selectedMode
+            )))
+
+        case let .workspacePaneRename(ref, name):
+            let resolved = try resolver.resolveWorkspacePane(ref)
+            guard let window = workspace.window(id: resolved.windowID),
+                let tab = window.tabs.tab(id: resolved.tabID) else {
+                throw IntentError.notFound(kind: "tab", ref: "pane host")
+            }
+            try requirePaneMutationAuthority(
+                "pane rename",
+                pane: resolved,
+                hostTab: tab,
+                origin: origin
+            )
+            guard let delegate = actionDelegate else {
+                throw IntentError.internalError("no pane rename delegate")
+            }
+            let daemonPaneId: String? = switch resolved.state {
+            case .terminal:
+                nil
+
+            case let .simulator(pane):
+                pane.paneId
+
+            case let .device(pane):
+                pane.paneId
+            }
+            try await delegate.renamePane(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                slot: resolved.slot,
+                daemonPaneId: daemonPaneId,
+                to: name
+            )
+            guard window.tabs.renamePane(resolved.slot, inTab: resolved.tabID, to: name) else {
+                throw IntentError.notFound(kind: "pane", ref: resolved.id)
+            }
+            let pane = try projection.pane(resolved.id)
+            return .data(.workspaceMutation(.init(pane: pane)))
+
+        case let .workspacePaneSendInput(ref, text, delay):
+            let resolved = try resolver.resolveWorkspacePane(ref)
+            guard case let .terminal(terminal) = resolved.state else {
+                throw IntentError.unsupportedPane(
+                    verb: "send-input",
+                    kind: paneKind(resolved)
+                )
+            }
+            guard let delegate = actionDelegate else {
+                throw IntentError.internalError("no terminal input delegate")
+            }
+            try delegate.sendInput(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                terminal: terminal.id,
+                text: text,
+                typeDelayMillis: delay
+            )
+            return .data(.workspaceMutation(.init(
+                pane: projection.project(resolved),
+                bytes: Data(text.utf8).count,
+                typeDelayMs: delay
+            )))
+
+        case let .workspacePaneCaptureText(ref):
+            let resolved = try resolver.resolveWorkspacePane(ref)
+            guard case let .terminal(terminal) = resolved.state else {
+                throw IntentError.unsupportedPane(
+                    verb: "capture-text",
+                    kind: paneKind(resolved)
+                )
+            }
+            guard let delegate = actionDelegate else {
+                throw IntentError.internalError("no terminal capture delegate")
+            }
+            let text = try delegate.captureTerminal(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                terminal: terminal.id
+            )
+            return .data(.workspaceCapture(.init(
+                pane: projection.project(resolved),
+                text: text
+            )))
+
+        default:
+            throw IntentError.internalError("non-workspace intent reached workspace handler")
         }
-        if includeAll { return entries.map(\.payload) }
-        guard let caller else { return [] }
-        guard let hit = entries.first(where: { entry in
-            workspace.window(id: entry.windowID)?.tabs.tabs.contains { tab in
-                tab.terminals.contains { $0.sessionId == caller }
-            } == true
-        }) else { return [] }
-        return [hit.payload]
     }
 
     // MARK: - Helpers
 
-    /// An omitted `--window` resolves through the *origin-aware*
-    /// `.current`: in-process opens in the key window; an external caller
-    /// opens in its own window (never the human's key window), and a
-    /// nil-session external caller is `notFound` rather than a borrow.
-    private func resolveOptionalWindow(
-        _ ref: WindowRef?,
-        resolver: IntentResolver
-    ) throws -> WindowID {
-        try resolver.resolveWindow(ref ?? .current)
+    private func publicRef(_ window: WindowState) -> String {
+        window.publicID.uuidString.lowercased()
+    }
+
+    private func publicRef(_ tab: TabState) -> String {
+        tab.cohortId.uuidString.lowercased()
+    }
+
+    private func publicWindowRef(_ id: WindowID) throws -> String {
+        guard let window = workspace.window(id: id) else {
+            throw IntentError.notFound(kind: "window", ref: "current")
+        }
+        return publicRef(window)
+    }
+
+    private func publicTabRef(_ id: TabID) throws -> String {
+        guard let tab = workspace.windowContaining(tab: id)?.tabs.tab(id: id) else {
+            throw IntentError.notFound(kind: "tab", ref: "current")
+        }
+        return publicRef(tab)
+    }
+
+    private func receipt(
+        for detail: WorkspaceWindowDetail,
+        projection: WorkspaceProjection
+    ) -> WorkspaceMutationReceipt {
+        let tab = detail.tabs.first(where: \.selected) ?? detail.tabs.first
+        let pane = tab.flatMap { try? projection.tab($0.id).panes.first }
+        return WorkspaceMutationReceipt(window: detail.window, tab: tab, pane: pane)
+    }
+
+    private func workspaceAttachReceipt(
+        paneID: String,
+        tabID: TabID,
+        projection: WorkspaceProjection
+    ) throws -> IntentResult {
+        let pane = try projection.pane(paneID)
+        let tab = try projection.tab(publicTabRef(tabID)).tab
+        return .data(.workspaceMutation(.init(tab: tab, pane: pane)))
+    }
+
+    private func paneCloseMode(_ mode: WorkspaceCloseMode) -> PaneCloseMode {
+        switch mode {
+        case .detach:
+            .detach
+
+        case .shutdown:
+            .shutdown
+        }
+    }
+
+    private func paneKind(_ resolved: ResolvedWorkspacePane) -> WorkspacePaneKind {
+        switch resolved.state {
+        case .terminal:
+            .terminal
+
+        case .simulator:
+            .simulator
+
+        case .device:
+            .device
+        }
     }
 
     /// The tabs the origin may see: the same rule the resolver enforces.
@@ -811,6 +877,33 @@ final class IntentDispatcher {
         }
     }
 
+    /// Terminal panes are individual trust units: an ungranted external
+    /// caller may mutate only the pane backed by its own session. Mirrored
+    /// panes retain tab ownership here and the daemon's cohort authorization
+    /// on their pane-targeted request.
+    private func requirePaneMutationAuthority(
+        _ verb: String,
+        pane: ResolvedWorkspacePane,
+        hostTab: TabState,
+        origin: IntentOrigin
+    ) throws {
+        guard case let .terminal(terminal) = pane.state else {
+            try requireAuthority(
+                verb,
+                over: hostTab,
+                requirement: .ownership,
+                origin: origin
+            )
+            return
+        }
+        guard case let .external(sessionID, hasAutomationGrant) = origin else {
+            return
+        }
+        guard hasAutomationGrant || sessionID == terminal.sessionId else {
+            throw IntentError.automationRequired(verb: verb)
+        }
+    }
+
     /// The membership an authorization was computed over, handed to the
     /// Router so it can confirm nothing moved before the close runs.
     /// Nil when authority doesn't depend on membership: the human at the
@@ -824,12 +917,6 @@ final class IntentDispatcher {
         guard case let .external(_, hasAutomationGrant) = origin,
             !hasAutomationGrant else { return nil }
         return Set(tabs.flatMap { $0.terminals.map(\.sessionId) })
-    }
-
-    /// The tab hosting a resolved pane, for the pane verbs that gate on
-    /// their host tab's ownership.
-    private func hostTab(of pane: ResolvedPane) -> TabState? {
-        workspace.window(id: pane.windowID)?.tabs.tab(id: pane.tabID)
     }
 
     /// Whether `windowID` hosts any tab the external caller can't see.
@@ -849,6 +936,11 @@ final class IntentDispatcher {
             !IntentResolver.externallyAccessible($0, callerSessionID: sessionID)
         }
     }
+}
+
+private extension WorkspaceSplitDirection {
+    var isHorizontal: Bool { self == .left || self == .right }
+    var isBefore: Bool { self == .left || self == .up }
 }
 
 private extension Array {

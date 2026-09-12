@@ -7,7 +7,7 @@ import IOSurface
 import os
 import SurfaceTrace
 
-/// One sim pane belonging to a session, the `panes.list` row shape
+/// One sim pane belonging to a session, the `pane.deviceList` row shape
 /// and the CLI's pane-resolution unit.
 ///
 /// `shortId` + `name` are the three-layer identifier model's

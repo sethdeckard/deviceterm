@@ -87,7 +87,7 @@ Run both, and run the same two before and after.
     ```
 
     Run it from a terminal in the tab holding the device pane, or target the
-    pane with `--pane <ref>`; `deviceterm panes list` prints the refs.
+    pane with `--pane <ref>`; `deviceterm pane list` prints the refs.
 
 Do not scroll by hand. Velocity and duration vary between runs, and both change
 the frame rate the device's encoder produces, which changes every number below.

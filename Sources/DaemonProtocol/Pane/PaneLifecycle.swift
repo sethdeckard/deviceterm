@@ -4,7 +4,7 @@
 /// daemon (which owns the transitions) and the GUI client (which renders
 /// them). Lives in DaemonProtocol so both sides spell the states once;
 /// the rawValue is the wire string carried by the `state.changed` event
-/// and the `panes.list` row. It decodes strictly, so adding a case is
+/// and the `pane.deviceList` row. It decodes strictly, so adding a case is
 /// wire-incompatible and needs explicit approval for a
 /// `DaemonProtocolInfo.wireVersion` bump.
 public enum PaneLifecycle: String, Sendable, Codable, Equatable {

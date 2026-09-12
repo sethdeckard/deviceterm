@@ -159,8 +159,7 @@ struct DisplayTitlePublisherTests {
     @Test
     func republishResendsAnUnchangedTitleAfterAReconnect() async {
         // The daemon's cache is memory-only. Without this the skip-cache would
-        // suppress the push and `tabs.list` would report the session name
-        // until the next OSC event, which may never come.
+        // suppress the push until the next OSC event, which may never come.
         let sink = TitleSink()
         let publisher = makePublisher(sink)
         publisher.update(sessionId: "S1", title: "vim")

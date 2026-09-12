@@ -23,7 +23,7 @@ public struct PaneOwnership: Sendable, Equatable {
     /// attaching terminal still sees its own tab's device as attached.
     ///
     /// Carries incarnations rather than bare ids, matching authorization,
-    /// events and `panes.list`. Reducing to ids here would let a restored
+    /// events and `pane.deviceList`. Reducing to ids here would let a restored
     /// session see a previous incarnation's device as attached and read its
     /// owner annotation, even though it can neither list nor drive that pane.
     public let controllingMembers: Set<CohortMember>
@@ -31,7 +31,7 @@ public struct PaneOwnership: Sendable, Equatable {
     public let paneId: UUID
 
     /// Sim UDID or physical deviceId: the string clients correlate with
-    /// `panes.list`. Kind-qualified matching keys on `target`, not this.
+    /// `pane.deviceList`. Kind-qualified matching keys on `target`, not this.
     public var targetKey: String { target.key }
 
     public init(

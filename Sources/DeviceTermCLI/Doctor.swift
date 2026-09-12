@@ -16,7 +16,7 @@ import Foundation
 /// The check functions stay pure (return a `Check` given inputs) so
 /// the formatter + status semantics are unit-testable without spawning
 /// processes. `doctorOutcome` gathers the I/O (env reads,
-/// socket connect, daemon ping, tabs.list, panes.list, and
+/// socket connect, daemon ping, session authentication, pane.deviceList, and
 /// daemon.capabilities) and passes those inputs to these primitives.
 /// The Report's `ok` boolean is derived from
 /// `!checks.contains(where: { $0.status == .fail })`; warns don't change
@@ -231,18 +231,19 @@ public enum Doctor {
     }
 
     /// `DEVICETERM_SESSION` env is set but does the daemon agree it's
-    /// a live session? After a daemon restart with a stale shell
-    /// env, tabs.list won't contain the env's UUID and every
+    /// a live session? After a daemon restart with a stale shell env, the
+    /// authenticated daemon-direct pane roster will reject the UUID and every
     /// session-scoped call will fail. `fail` here surfaces the
     /// stale-env case before the agent runs an input command and
     /// hits `error.unauthorized`.
     ///
-    /// Pure: the runner does tabs.list and passes `foundInTabs`.
+    /// Pure: the runner attempts an authenticated session call and passes the
+    /// outcome.
     public static func sessionLivenessCheck(
         envSessionId: String,
-        foundInTabs: Bool
+        authenticated: Bool
     ) -> Check {
-        if foundInTabs {
+        if authenticated {
             return Check(
                 name: "Session live in daemon",
                 status: .ok,
@@ -252,12 +253,12 @@ public enum Doctor {
         return Check(
             name: "Session live in daemon",
             status: .fail,
-            detail: "\(envSessionId) not in tabs.list "
+            detail: "\(envSessionId) was not accepted by the daemon "
             + "(daemon may have restarted; open a fresh tab)"
             )
     }
 
-    /// `panes.list` is the first call here that requires a fully
+    /// `pane.deviceList` is the first call here that requires a fully
     /// authenticated session: the cap PLUS the caller's kernel terminal
     /// provenance (the cap alone is insufficient; it is readable by any
     /// same-uid process). A `fail` result means the connection didn't
@@ -265,7 +266,7 @@ public enum Doctor {
     /// terminal doesn't match the session's bound terminal (running outside
     /// the tab). Catching the daemon's rejection here proves the session
     /// authenticates before any input command relies on it.
-    public static func panesAuthorizationCheck(error: String?) -> Check {
+    public static func paneAuthorizationCheck(error: String?) -> Check {
         if let error {
             return Check(
                 name: "Session authenticates (cap + provenance)",
@@ -276,7 +277,7 @@ public enum Doctor {
         return Check(
             name: "Session authenticates (cap + provenance)",
             status: .ok,
-            detail: "panes.list accepted"
+            detail: "pane.deviceList accepted"
             )
     }
 

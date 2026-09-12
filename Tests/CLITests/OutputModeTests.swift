@@ -14,7 +14,7 @@ import Testing
 func outputModeDefaultsToHuman() {
     #expect(CLICommands.outputMode(for: ["deviceterm", "tap", "0.5", "0.5"]) == .human)
     #expect(CLICommands.outputMode(for: ["deviceterm"]) == .human)
-    #expect(CLICommands.outputMode(for: ["deviceterm", "tabs", "list"]) == .human)
+    #expect(CLICommands.outputMode(for: ["deviceterm", "tab", "list"]) == .human)
 }
 
 @Test
@@ -25,8 +25,8 @@ func outputModeDefaultsAXFamilyToJSON() {
 
 @Test
 func outputModeDetectsJSONFlag() {
-    #expect(CLICommands.outputMode(for: ["deviceterm", "tabs", "list", "--json"]) == .json)
-    #expect(CLICommands.outputMode(for: ["deviceterm", "--json", "tabs", "list"]) == .json)
+    #expect(CLICommands.outputMode(for: ["deviceterm", "tab", "list", "--json"]) == .json)
+    #expect(CLICommands.outputMode(for: ["deviceterm", "--json", "tab", "list"]) == .json)
     #expect(CLICommands.outputMode(for: ["deviceterm", "tap", "--json", "0.5", "0.5"]) == .json)
 }
 
@@ -116,9 +116,9 @@ func parseStripsJSONFromSwipeDispatch() {
 }
 
 @Test
-func parseStripsJSONFromTabsListDispatch() {
-    #expect(CLICommands.parse(["deviceterm", "tabs", "list", "--json"]) == .tabsList)
-    #expect(CLICommands.parse(["deviceterm", "tabs", "current", "--json"]) == .tabsCurrent)
+func parseStripsJSONFromTabReads() {
+    #expect(CLICommands.parse(["deviceterm", "tab", "list", "--json"]) == .tabList(window: nil, all: false))
+    #expect(CLICommands.parse(["deviceterm", "tab", "show", "--json"]) == .tabShow(tab: nil))
 }
 
 @Test

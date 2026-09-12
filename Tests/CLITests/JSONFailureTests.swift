@@ -14,7 +14,7 @@ func jsonFailureEncodesStableEnvelope() {
         code: .transportUnavailable,
         message: "no daemon"
     )
-    let outcome = failure.renderingFailure(for: .tabsList, output: .json)
+    let outcome = failure.renderingFailure(for: .tabList(window: nil, all: false), output: .json)
 
     #expect(
         outputString(outcome)
@@ -34,7 +34,7 @@ func jsonFailureIncludesObjectDetails() throws {
         message: "authentication failed",
         details: details
     )
-    let outcome = failure.renderingFailure(for: .tabsList, output: .json)
+    let outcome = failure.renderingFailure(for: .tabList(window: nil, all: false), output: .json)
 
     let expected = #"{"error":{"code":"session.unauthorized","details":{"rpcCode":-32001,"#
         + #""stage":"authentication"},"message":"authentication failed"}}"#
@@ -48,7 +48,7 @@ func jsonFailureOmitsMalformedDetails() {
         message: "bad response",
         details: Data("not json".utf8)
     )
-    let outcome = failure.renderingFailure(for: .tabsList, output: .json)
+    let outcome = failure.renderingFailure(for: .tabList(window: nil, all: false), output: .json)
 
     #expect(
         outputString(outcome)
@@ -88,7 +88,7 @@ func successfulAndUntypedOutcomesRemainUnchanged() {
     #expect(success.renderingFailure(for: .doctor, output: .json) == success)
 
     let legacyFailure = CommandOutcome.failure("legacy")
-    #expect(legacyFailure.renderingFailure(for: .tabsList, output: .json) == legacyFailure)
+    #expect(legacyFailure.renderingFailure(for: .tabList(window: nil, all: false), output: .json) == legacyFailure)
 }
 
 @Test
@@ -122,7 +122,7 @@ func automationRequiredIntentCodePassesThroughItsDaemonCode() {
     let outcome = errorOutcome(
         CLIError.daemon(
             code: -32_011,
-            message: "intent.automationRequired: tab.send-input requires automation authority"
+            message: "intent.automationRequired: pane.sendInput requires automation authority"
         )
     )
 
@@ -130,7 +130,7 @@ func automationRequiredIntentCodePassesThroughItsDaemonCode() {
     #expect(
         outcome.stderr
             == "daemon error -32011: intent.automationRequired: "
-            + "tab.send-input requires automation authority"
+            + "pane.sendInput requires automation authority"
     )
 }
 

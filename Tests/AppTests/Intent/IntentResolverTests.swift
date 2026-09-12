@@ -5,491 +5,240 @@ import DaemonProtocol
 import Foundation
 import Testing
 
-/// Pin the happy-path + error-path behavior of
-/// each ref kind.
-///
-/// The resolver lives at `@MainActor` (it reads the workspace's live
-/// tab/window lists) and is pure (no mutation, no side effects). Each
-/// test seeds a `WorkspaceViewModel` with synthetic state, runs one
-/// resolution, asserts either the resolved ID/struct or the typed
-/// `IntentError`.
 @MainActor
 struct IntentResolverTests {
-    // MARK: - Fixtures
-
     private struct WindowFixture {
         let id: WindowID
+        let publicID: UUID
         let tabs: [TabState]
         let selected: Bool
+        let name: String?
+
+        init(
+            id: WindowID,
+            tabs: [TabState],
+            selected: Bool,
+            publicID: UUID = UUID(),
+            name: String? = nil
+        ) {
+            self.id = id
+            self.publicID = publicID
+            self.tabs = tabs
+            self.selected = selected
+            self.name = name
+        }
     }
 
-    private func makeWorkspace(windows: [WindowFixture]) -> WorkspaceViewModel {
+    private func makeWorkspace(_ fixtures: [WindowFixture]) -> WorkspaceViewModel {
         let workspace = WorkspaceViewModel()
-        for fixture in windows {
-            let list = TabListViewModel()
-            for tab in fixture.tabs { list.append(tab) }
-            workspace.addWindow(WindowState(id: fixture.id, tabs: list))
+        for fixture in fixtures {
+            let tabs = TabListViewModel()
+            fixture.tabs.forEach(tabs.append)
+            workspace.addWindow(
+                WindowState(
+                    id: fixture.id,
+                    tabs: tabs,
+                    publicID: fixture.publicID,
+                    name: fixture.name
+                )
+            )
         }
-        if let selected = windows.first(where: \.selected)?.id {
+        if let selected = fixtures.first(where: \.selected)?.id {
             workspace.select(id: selected)
         }
         return workspace
     }
 
     private func tab(
-        id: TabID,
+        _ value: Int,
         session: String,
-        tabId: UUID = UUID(),
-        shortId: String? = nil,
+        publicID: UUID = UUID(),
         name: String? = nil,
-        panes: [SimPaneState] = []
+        terminals: [TerminalPaneState]? = nil,
+        simPanes: [SimPaneState] = []
     ) -> TabState {
         let primary = TerminalPaneState(
-            id: TerminalPaneID(value: id.value),
+            id: TerminalPaneID(value: value),
             sessionId: session,
-            capability: "cap",
-            shortId: shortId,
+            capability: "cap"
+        )
+        return TabState(
+            id: TabID(value: value),
+            terminals: terminals ?? [primary],
+            simPanes: simPanes,
+            cohortId: publicID,
             name: name
         )
-        return TabState(id: id, terminals: [primary], simPanes: panes, cohortId: tabId)
     }
-
-    private func pane(
-        paneId: String,
-        udid: String,
-        shortId: String? = nil
-    ) -> SimPaneState {
-        SimPaneState(
-            paneId: paneId,
-            udid: udid,
-            displayName: "iPhone",
-            family: "iPhone",
-            shortId: shortId
-        )
-    }
-
-    // MARK: - resolveTab
 
     @Test
-    func resolveTabCurrentUsesCallerSession() throws {
-        let tabA = tab(id: TabID(value: 1), session: "S-A")
-        let tabB = tab(id: TabID(value: 2), session: "S-B")
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [tabA, tabB],
-                selected: true
-            )
-            ]
-            )
-        let resolver = IntentResolver(
+    func currentReferencesAreOriginAware() throws {
+        let tabA = tab(1, session: "S-A")
+        let tabB = tab(2, session: "S-B")
+        let workspace = makeWorkspace([
+            .init(id: WindowID(value: 1), tabs: [tabA], selected: true),
+            .init(id: WindowID(value: 2), tabs: [tabB], selected: false)
+        ])
+
+        let inProcess = IntentResolver(workspace: workspace, origin: .inProcess)
+        let external = IntentResolver(
             workspace: workspace,
             origin: .external(sessionID: "S-B", hasAutomationGrant: false)
         )
-        let resolved = try resolver.resolveTab(.current)
-        #expect(resolved.tabID == TabID(value: 2))
+
+        #expect(try inProcess.resolveWindow(nil) == WindowID(value: 1))
+        #expect(try inProcess.resolveTab(nil).tabID == TabID(value: 1))
+        #expect(try external.resolveWindow("current") == WindowID(value: 2))
+        #expect(try external.resolveTab("current").tabID == TabID(value: 2))
     }
 
     @Test
-    func resolveTabCurrentFallsBackToKeyWindowSelection() throws {
-        let tabA = tab(id: TabID(value: 1), session: "S-A")
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
+    func currentTabMatchesEveryTerminalSession() throws {
+        let terminals = [
+            TerminalPaneState(
+                id: TerminalPaneID(value: 1),
+                sessionId: "S-primary",
+                capability: "cap"
+            ),
+            TerminalPaneState(
+                id: TerminalPaneID(value: 2),
+                sessionId: "S-sibling",
+                capability: "cap"
+            )
+        ]
+        let workspace = makeWorkspace([
+            .init(
                 id: WindowID(value: 1),
-                tabs: [tabA],
+                tabs: [tab(1, session: "S-primary", terminals: terminals)],
                 selected: true
             )
-            ]
-            )
+        ])
         let resolver = IntentResolver(
             workspace: workspace,
-            origin: .inProcess
+            origin: .external(sessionID: "S-sibling", hasAutomationGrant: false)
         )
-        let resolved = try resolver.resolveTab(.current)
-        #expect(resolved.tabID == TabID(value: 1))
+
+        #expect(try resolver.resolveTab(nil).tabID == TabID(value: 1))
+        #expect(try resolver.resolveWorkspacePane(nil).id == "S-sibling")
     }
 
     @Test
-    func resolveTabBySessionIDFindsMatch() throws {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
+    func idsShortIdsAndUniqueExactNamesResolve() throws {
+        let windowID = try #require(UUID(uuidString: "ABCDEF00-0000-0000-0000-000000000001"))
+        let tabID = try #require(UUID(uuidString: "12345600-0000-0000-0000-000000000001"))
+        let pane = SimPaneState(
+            paneId: "FEDCBA00-0000-0000-0000-000000000001",
+            udid: "SIM-ONE",
+            displayName: "iPhone",
+            family: "iPhone",
+            shortId: "fedcba",
+            name: "phone"
+        )
+        let workspace = makeWorkspace([
+            .init(
                 id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A"),
-                tab(id: TabID(value: 2), session: "S-B")
-                ],
-                selected: true
-                )
-            ]
+                tabs: [tab(1, session: "SESSION", publicID: tabID, name: "billing", simPanes: [pane])],
+                selected: true,
+                publicID: windowID,
+                name: "workspace"
             )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        let resolved = try resolver.resolveTab(.sessionId("S-B"))
-        #expect(resolved.tabID == TabID(value: 2))
-    }
-
-    @Test
-    func resolveTabBySessionIDNotFoundThrows() {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: true
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        #expect(throws: IntentError.notFound(kind: "tab", ref: "S-X")) {
-            try resolver.resolveTab(.sessionId("S-X"))
-        }
-    }
-
-    @Test
-    func resolveTabByTabIdFindsMatch() throws {
-        let tabId = UUID()
-        let workspace = makeWorkspace(
-            windows: [
-                WindowFixture(
-                    id: WindowID(value: 1),
-                    tabs: [tab(id: TabID(value: 1), session: "S-A", tabId: tabId)],
-                    selected: true
-                )
-            ]
-        )
+        ])
         let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
 
-        let resolved = try resolver.resolveTab(.sessionId(tabId.uuidString.lowercased()))
-
-        #expect(resolved.tabID == TabID(value: 1))
+        #expect(try resolver.resolveWindow("abcdef") == WindowID(value: 1))
+        #expect(try resolver.resolveWindow(windowID.uuidString).value == 1)
+        #expect(try resolver.resolveWindow("workspace").value == 1)
+        #expect(try resolver.resolveTab("123456").tabID.value == 1)
+        #expect(try resolver.resolveTab(tabID.uuidString).tabID.value == 1)
+        #expect(try resolver.resolveTab("billing").tabID.value == 1)
+        #expect(try resolver.resolveWorkspacePane("fedcba").id == pane.paneId)
+        #expect(try resolver.resolveWorkspacePane(pane.paneId).id == pane.paneId)
+        #expect(try resolver.resolveWorkspacePane("phone").id == pane.paneId)
     }
 
     @Test
-    func resolveTabByShortIDDuplicateThrowsAmbiguous() {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
+    func publicNamesResolveExactlyNeverByPrefix() throws {
+        let pane = SimPaneState(
+            paneId: UUID().uuidString,
+            udid: "SIM-ONE",
+            displayName: "iPhone",
+            family: "iPhone",
+            name: "phone"
+        )
+        let workspace = makeWorkspace([
+            .init(
+                id: WindowID(value: 1),
+                tabs: [tab(1, session: "SESSION", name: "billing", simPanes: [pane])],
+                selected: true,
+                name: "workspace"
+            )
+        ])
+        let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
+
+        #expect(try resolver.resolveWindow("workspace").value == 1)
+        #expect(try resolver.resolveTab("billing").tabID.value == 1)
+        #expect(try resolver.resolveWorkspacePane("phone").id == pane.paneId)
+        #expect(throws: IntentError.self) { try resolver.resolveWindow("work") }
+        #expect(throws: IntentError.self) { try resolver.resolveTab("bill") }
+        #expect(throws: IntentError.self) { try resolver.resolveWorkspacePane("pho") }
+    }
+
+    @Test
+    func UUIDPrefixesRemainResolvableAndAmbiguousPrefixesRefuse() throws {
+        let first = try #require(UUID(uuidString: "AAA11100-0000-0000-0000-000000000001"))
+        let second = try #require(UUID(uuidString: "AAA22200-0000-0000-0000-000000000002"))
+        let workspace = makeWorkspace([
+            .init(
                 id: WindowID(value: 1),
                 tabs: [
-                tab(id: TabID(value: 1), session: "S-A", shortId: "ab12"),
-                tab(id: TabID(value: 2), session: "S-B", shortId: "ab12")
+                    tab(1, session: "S-A", publicID: first),
+                    tab(2, session: "S-B", publicID: second)
                 ],
                 selected: true
-                )
-            ]
             )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
+        ])
+        let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
+
+        #expect(try resolver.resolveTab("aaa1110").tabID.value == 1)
         #expect(
-            throws: IntentError.ambiguous(
-            kind: "tab",
-            ref: "ab12",
-            matchCount: 2
-        )
+            throws: IntentError.ambiguous(kind: "tab", ref: "aaa", matchCount: 2)
         ) {
-            try resolver.resolveTab(.shortId("ab12"))
+            try resolver.resolveTab("aaa")
         }
     }
 
     @Test
-    func resolveTabByNameUniqueHit() throws {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
+    func collidingShortIdsRefuse() throws {
+        let first = try #require(UUID(uuidString: "ABCDEF00-0000-0000-0000-000000000001"))
+        let second = try #require(UUID(uuidString: "ABCDEF00-0000-0000-0000-000000000002"))
+        let workspace = makeWorkspace([
+            .init(
                 id: WindowID(value: 1),
                 tabs: [
-                tab(id: TabID(value: 1), session: "S-A", name: "auth"),
-                tab(id: TabID(value: 2), session: "S-B", name: "billing")
+                    tab(1, session: "S-A", publicID: first),
+                    tab(2, session: "S-B", publicID: second)
                 ],
                 selected: true
-                )
-            ]
             )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        let resolved = try resolver.resolveTab(.name("billing"))
-        #expect(resolved.tabID == TabID(value: 2))
-    }
+        ])
+        let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
 
-    @Test
-    func resolveTabBySessionMatchesAnyTerminalInTab() throws {
-        // Multi-terminal-pane: a CLI call from any terminal inside a
-        // tab should resolve `.current` to that tab. The resolver
-        // walks every terminal's sessionId when matching, not just
-        // the primary's.
-        let primary = TerminalPaneState(
-            id: TerminalPaneID(value: 100),
-            sessionId: "S-primary",
-            capability: "cap"
-        )
-        let added = TerminalPaneState(
-            id: TerminalPaneID(value: 101),
-            sessionId: "S-added",
-            capability: "cap"
-        )
-        let tab = TabState(
-            id: TabID(value: 7),
-            terminals: [primary, added],
-            simPanes: []
-        )
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(id: WindowID(value: 1), tabs: [tab], selected: true)
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .external(sessionID: "S-added", hasAutomationGrant: false)
-        )
-        let resolved = try resolver.resolveTab(.current)
-        #expect(resolved.tabID == TabID(value: 7))
-    }
-
-    // MARK: - resolveSimPane
-
-    @Test
-    func resolveSimPaneCurrentRequiresExactlyOneSimPane() throws {
-        let onlyPane = pane(paneId: "P1", udid: "U1", shortId: "sh1")
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A", panes: [onlyPane])
-                ],
-                selected: true
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
-        )
-        let resolved = try resolver.resolveSimPane(.current)
-        #expect(resolved.pane.paneId == "P1")
-    }
-
-    @Test
-    func resolveSimPaneCurrentEmptyThrowsNotFound() {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: true
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
-        )
-        #expect(throws: (any Error).self) {
-            try resolver.resolveSimPane(.current)
+        #expect(
+            throws: IntentError.ambiguous(kind: "tab", ref: "abcdef", matchCount: 2)
+        ) {
+            try resolver.resolveTab("abcdef")
         }
     }
 
     @Test
-    func resolveSimPaneByUDIDFindsAcrossWindows() throws {
-        let windowA = WindowFixture(
-            id: WindowID(value: 1),
-            tabs: [
-            tab(
-                id: TabID(value: 1),
-                session: "S-A",
-                panes: [
-                pane(paneId: "P1", udid: "U-iphone")
-                ]
-                )
-            ],
-            selected: true
-            )
-        let windowB = WindowFixture(
-            id: WindowID(value: 2),
-            tabs: [
-            tab(
-                id: TabID(value: 2),
-                session: "S-B",
-                panes: [
-                pane(paneId: "P2", udid: "U-watch")
-                ]
-                )
-            ],
-            selected: false
-            )
-        let workspace = makeWorkspace(windows: [windowA, windowB])
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        let resolved = try resolver.resolveSimPane(.udid("U-watch"))
-        #expect(resolved.windowID == WindowID(value: 2))
-        #expect(resolved.pane.paneId == "P2")
-    }
+    func windowIndexIsMetadataOnly() {
+        let workspace = makeWorkspace([
+            .init(id: WindowID(value: 1), tabs: [tab(1, session: "S-A")], selected: true)
+        ])
+        let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
 
-    // MARK: - resolveWindow
-
-    @Test
-    func resolveWindowCurrentReturnsSelected() throws {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: false
-                ),
-            WindowFixture(
-                id: WindowID(value: 2),
-                tabs: [
-                tab(id: TabID(value: 2), session: "S-B")
-                ],
-                selected: true
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        let resolved = try resolver.resolveWindow(.current)
-        #expect(resolved == WindowID(value: 2))
-    }
-
-    @Test
-    func resolveWindowByIndexIs1Based() throws {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: true
-                ),
-            WindowFixture(
-                id: WindowID(value: 2),
-                tabs: [
-                tab(id: TabID(value: 2), session: "S-B")
-                ],
-                selected: false
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        let first = try resolver.resolveWindow(.index(1))
-        let second = try resolver.resolveWindow(.index(2))
-        #expect(first == WindowID(value: 1))
-        #expect(second == WindowID(value: 2))
-    }
-
-    @Test
-    func resolveWindowKeyedAlwaysFailsToday() {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: true
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        #expect(
-            throws: IntentError.notFound(
-            kind: "window",
-            ref: "anything"
-        )
-        ) {
-            try resolver.resolveWindow(.keyed("anything"))
-        }
-    }
-
-    @Test
-    func resolveWindowByConcreteIDHonorsThisStripsWindow() throws {
-        // The strip-pinning case: `.current` would resolve to the
-        // routed-selected window (window 1 here), but a tab-strip
-        // menu in window 2 should target window 2 regardless of
-        // which window the Router last selected.
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: true
-                ),
-            WindowFixture(
-                id: WindowID(value: 2),
-                tabs: [
-                tab(id: TabID(value: 2), session: "S-B")
-                ],
-                selected: false
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        let pinned = try resolver.resolveWindow(
-            .windowID(WindowID(value: 2))
-        )
-        #expect(pinned == WindowID(value: 2))
-        let current = try resolver.resolveWindow(.current)
-        #expect(current == WindowID(value: 1))
-    }
-
-    @Test
-    func resolveWindowByConcreteIDRejectsClosedWindow() {
-        let workspace = makeWorkspace(
-            windows: [
-            WindowFixture(
-                id: WindowID(value: 1),
-                tabs: [
-                tab(id: TabID(value: 1), session: "S-A")
-                ],
-                selected: true
-                )
-            ]
-            )
-        let resolver = IntentResolver(
-            workspace: workspace,
-            origin: .inProcess
-        )
-        #expect(
-            throws: IntentError.notFound(
-            kind: "window",
-            ref: "windowID 99"
-        )
-        ) {
-            try resolver.resolveWindow(.windowID(WindowID(value: 99)))
+        #expect(throws: IntentError.notFound(kind: "window", ref: "1")) {
+            try resolver.resolveWindow("1")
         }
     }
 }

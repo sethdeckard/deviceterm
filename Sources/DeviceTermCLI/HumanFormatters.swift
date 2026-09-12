@@ -31,43 +31,6 @@ func paneRosterLines(_ panes: [PanesListEntry]) -> String {
         .joined(separator: "\n")
 }
 
-/// Render a `TabInfoPayload` as a column-aligned status block.
-func formatTabInfo(_ payload: TabInfoPayload) -> String {
-    var lines: [String] = []
-    lines.append("session: \(payload.sessionId)")
-    if let shortId = payload.shortId { lines.append("shortId: \(shortId)") }
-    if let name = payload.name { lines.append("name:    \(name)") }
-    lines.append("role:    \(payload.role)")
-    lines.append("current: \(payload.isCurrent)")
-    if let cwd = payload.cwd { lines.append("cwd:     \(cwd)") }
-    if let label = payload.label { lines.append("label:   \(label)") }
-    if payload.simPanes.isEmpty {
-        lines.append("simPanes: (none)")
-    } else {
-        lines.append("simPanes:")
-        for pane in payload.simPanes {
-            let shortId = pane.shortId ?? "-"
-            lines.append(
-                "  \(shortId)\t\(pane.family)\t\(pane.displayName)\t\(pane.udid)"
-            )
-        }
-    }
-    return lines.joined(separator: "\n")
-}
-
-/// Render a `PaneInfoPayload` as a column-aligned status block.
-func formatPaneInfo(_ payload: PaneInfoPayload) -> String {
-    var lines: [String] = []
-    lines.append("paneId:  \(payload.paneId)")
-    lines.append("udid:    \(payload.udid)")
-    if let shortId = payload.shortId { lines.append("shortId: \(shortId)") }
-    if let name = payload.name { lines.append("name:    \(name)") }
-    lines.append("display: \(payload.displayName)")
-    lines.append("family:  \(payload.family)")
-    lines.append("session: \(payload.linkedSessionId)")
-    return lines.joined(separator: "\n")
-}
-
 /// Render the `devices.list` roster as one row per device:
 /// `<id>\t<kind>\t<name>\t<model>\t<os>\t<state>\t<attachment>`. `model`
 /// and `os` are physical-device only (sims show `-`) and disambiguate
@@ -95,14 +58,98 @@ func formatDeviceRoster(_ roster: [DeviceRosterEntry]) -> String {
         .joined(separator: "\n")
 }
 
-/// Render a windows-list payload as one row per window:
-/// `<marker>  <index>  <tabCount>  <selectedTabShortId>`.
-func formatWindowsList(_ windows: [WindowInfoPayload]) -> String {
+/// Render public workspace windows as stable tab-separated rows.
+func formatWorkspaceWindows(_ windows: [WorkspaceWindow]) -> String {
     windows
-        .map { entry in
-            let marker = entry.isKey ? "*" : " "
-            let selected = entry.selectedTabShortId ?? "-"
-            return "\(marker)\t\(entry.index)\t\(entry.tabCount)\t\(selected)"
+        .map { window in
+            let marker = window.current ? "*" : " "
+            let name = window.name ?? "-"
+            let selected = window.selectedTabId ?? "-"
+            return "\(marker)\t\(window.shortId)\t\(name)\t\(window.tabCount)\t\(selected)"
         }
         .joined(separator: "\n")
+}
+
+/// Render public workspace tabs as stable tab-separated rows.
+func formatWorkspaceTabs(_ tabs: [WorkspaceTab]) -> String {
+    tabs
+        .map { tab in
+            let marker = tab.current ? "*" : " "
+            let name = tab.name ?? "-"
+            return "\(marker)\t\(tab.shortId)\t\(name)\t\(tab.title)\t\(tab.paneCount)\t\(tab.state.rawValue)"
+        }
+        .joined(separator: "\n")
+}
+
+/// Render public workspace panes as stable tab-separated rows.
+func formatWorkspacePanes(_ panes: [WorkspacePane]) -> String {
+    panes
+        .map { pane in
+            let marker = pane.current ? "*" : " "
+            let name = pane.name ?? "-"
+            return "\(marker)\t\(pane.shortId)\t\(pane.kind.rawValue)\t\(name)\t\(pane.id)"
+        }
+        .joined(separator: "\n")
+}
+
+func formatWorkspaceWindowDetail(_ detail: WorkspaceWindowDetail) -> String {
+    var lines = [
+        "window:  \(detail.window.id)",
+        "shortId: \(detail.window.shortId)",
+        "index:   \(detail.window.index)",
+        "focused: \(detail.window.focused)",
+        "tabs:"
+    ]
+    lines.append(contentsOf: formatWorkspaceTabs(detail.tabs).split(separator: "\n").map(String.init))
+    return lines.joined(separator: "\n")
+}
+
+func formatWorkspaceTabDetail(_ detail: WorkspaceTabDetail) -> String {
+    var lines = [
+        "tab:       \(detail.tab.id)",
+        "shortId:   \(detail.tab.shortId)",
+        "window:    \(detail.tab.windowId)",
+        "title:     \(detail.tab.title)",
+        "state:     \(detail.tab.state.rawValue)",
+        "protected: \(detail.tab.protected)",
+        "panes:"
+    ]
+    lines.append(contentsOf: formatWorkspacePanes(detail.panes).split(separator: "\n").map(String.init))
+    return lines.joined(separator: "\n")
+}
+
+func formatWorkspacePane(_ pane: WorkspacePane) -> String {
+    var lines = [
+        "pane:    \(pane.id)",
+        "shortId: \(pane.shortId)",
+        "kind:    \(pane.kind.rawValue)",
+        "tab:     \(pane.tabId)",
+        "focused: \(pane.focused)"
+    ]
+    if let name = pane.name { lines.append("name:    \(name)") }
+    if let terminal = pane.terminal {
+        lines.append("session: \(terminal.sessionId)")
+        if let cwd = terminal.cwd { lines.append("cwd:     \(cwd)") }
+    }
+    if let simulator = pane.simulator {
+        lines.append("udid:    \(simulator.udid)")
+        lines.append("display: \(simulator.displayName)")
+    }
+    if let device = pane.device {
+        lines.append("device:  \(device.deviceId)")
+        lines.append("display: \(device.displayName)")
+    }
+    return lines.joined(separator: "\n")
+}
+
+func formatWorkspaceMutation(_ receipt: WorkspaceMutationReceipt) -> String {
+    var fields = ["ok"]
+    if let window = receipt.window { fields.append("window=\(window.shortId)") }
+    if let tab = receipt.tab { fields.append("tab=\(tab.shortId)") }
+    if let pane = receipt.pane { fields.append("pane=\(pane.shortId)") }
+    if let closed = receipt.closed { fields.append("closed=\(closed.resource)") }
+    if let mode = receipt.mode { fields.append("mode=\(mode.rawValue)") }
+    if let bytes = receipt.bytes { fields.append("bytes=\(bytes)") }
+    if let delay = receipt.typeDelayMs { fields.append("typeDelayMs=\(delay)") }
+    return fields.joined(separator: " ")
 }

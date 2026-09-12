@@ -1288,7 +1288,7 @@ private func runWait(
             // below can consume the deadline, and a probe that dies in one
             // produces no observation to classify it with.
             last?.clear()
-            let request = try CLICommands.panesListRequest(
+            let request = try CLICommands.paneDeviceListRequest(
                 sessionId: credentials.sessionId,
                 cap: credentials.cap
             )
@@ -1382,7 +1382,7 @@ private func waitFailureOutcome(
 func unresolvedPaneMessage(ref: String?, exportedTarget: String?, attempts: Int?) -> String {
     let polled = attempts.map { " after \($0) attempts" } ?? ""
     if let ref, !ref.isEmpty {
-        return "no pane matching '\(ref)' in this tab\(polled); run `deviceterm panes list`"
+        return "no pane matching '\(ref)' in this tab\(polled); run `deviceterm pane list`"
     }
     if let exportedTarget, !exportedTarget.isEmpty {
         return "no pane for exported target \(exportedTarget) in this tab\(polled)"

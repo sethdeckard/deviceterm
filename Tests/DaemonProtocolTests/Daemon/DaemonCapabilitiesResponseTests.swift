@@ -46,7 +46,7 @@ func responseRoundTripNoSession() throws {
 func responseRoundTripAutomationRole() throws {
     let response = DaemonCapabilitiesResponse(
         role: .automation,
-        allowedMethods: ["tab.send-input", "tab.capture"],
+        allowedMethods: ["pane.sendInput", "pane.captureText"],
         wireVersion: "0.1.0",
         linkagePolicyVersion: 1
     )

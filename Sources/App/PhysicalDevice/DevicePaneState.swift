@@ -23,7 +23,7 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
     let displayName: String
     let family: String
     let shortId: String?
-    let name: String?
+    var name: String?
     let pixelWidth: Int?
     let pixelHeight: Int?
     let capabilities: PaneCapabilities?

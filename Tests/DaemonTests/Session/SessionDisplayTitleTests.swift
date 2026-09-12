@@ -56,8 +56,8 @@ func aTitleThatNormalizesToNothingClearsTheCachedOne() async throws {
 @Test
 func aWriteFromAnOlderConnectionCannotOverwriteANewerTitle() async throws {
     // Handler tasks are not FIFO, so an older push can resume after its
-    // replacement. If it landed, `tabs.list` would show the superseded
-    // label with nothing to correct it until the title next changed.
+    // replacement. If it landed, the cache would retain a superseded label
+    // with nothing to correct it until the title next changed.
     let manager = SessionManager()
     let session = try await manager.makeSessionState()
 

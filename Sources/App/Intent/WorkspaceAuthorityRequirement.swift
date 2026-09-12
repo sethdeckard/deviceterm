@@ -2,8 +2,9 @@
 
 /// What the caller must satisfy to act on a target without a grant.
 enum WorkspaceAuthorityRequirement: Equatable {
-    /// The caller owns a terminal in the target's tab. `tab rename`,
-    /// `pane open --terminal`, and `pane close` carry this.
+    /// The caller owns a terminal in the target's tab. Tab mutations, pane
+    /// split, and mirrored-pane mutations carry this. Terminal pane close and
+    /// rename use exact session ownership in the dispatcher instead.
     case ownership
 
     /// The caller owns the target tab's *only* terminal. `tab close`

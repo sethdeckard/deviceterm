@@ -26,21 +26,19 @@ enum RefCompletion {
 
     /// Open panes, as shortIds.
     static func panes() -> [String] {
-        guard let rows: [PanesListEntry] = fetch(method: .panesList, {
-            let credentials = try readSessionCredentials()
-            return try CLICommands.panesListRequest(
-                sessionId: credentials.sessionId,
-                cap: credentials.cap
-            )
+        guard let rows: [WorkspacePane] = fetch(method: .paneList, {
+            try CLICommands.paneListRequest(tab: nil)
         }) else { return [sentinel] }
-        return [sentinel] + rows.compactMap(\.shortId)
+        return [sentinel] + rows.map(\.shortId)
     }
 
     /// Open tabs, as shortIds.
     static func tabs() -> [String] {
-        guard let rows: [TabsListEntry] = fetch(method: .tabsList, { CLICommands.tabsListRequest() })
+        guard let rows: [WorkspaceTab] = fetch(method: .tabList, {
+            try CLICommands.tabListRequest(window: nil, all: false)
+        })
         else { return [sentinel] }
-        return [sentinel] + rows.compactMap(\.shortId)
+        return [sentinel] + rows.map(\.shortId)
     }
 
     /// Open windows, as the 1-based indices `--window` accepts.
@@ -51,11 +49,11 @@ enum RefCompletion {
     /// projection, so a window holding only foreign-protected tabs is
     /// omitted either way.
     static func windows() -> [String] {
-        guard let rows: [WindowInfoPayload] = fetch(
-            method: .windowsList,
-            { try CLICommands.windowsListRequest(all: true) }
+        guard let rows: [WorkspaceWindow] = fetch(
+            method: .windowList,
+            { try CLICommands.windowListRequest(all: true) }
         ) else { return [sentinel] }
-        return [sentinel] + rows.map { String($0.index) }
+        return [sentinel] + rows.map(\.shortId)
     }
 
     /// Round-trip one request under the completion deadline, or nil for

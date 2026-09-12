@@ -80,6 +80,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             self.attachment = attachment
         }
     }
+    struct SetPaneNameCall: Equatable {
+        let paneId: String
+        let name: String?
+    }
     struct SetProtectedBatchCall: Equatable {
         let sessionIds: [String]
         let isProtected: Bool
@@ -159,6 +163,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// Injected transport failure for `paneInputTouch`.
     enum InjectedFailure: Error {
         case touchSend
+        case sessionCreate
     }
 
     private(set) var bindTerminalCalls: [BindTerminalCall] = []
@@ -258,6 +263,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// distinguish the primary terminal's session from a second one
     /// minted by `openTerminalPane`.
     var sessionSequence: [SessionCreateResponse] = []
+    var createSessionError: Error?
     var deviceListResult: [DeviceListEntry] = []
     /// When set, `deviceList` throws this instead of returning. Pane-close
     /// tests use it for the unknown-result prompt path; tab and window
@@ -265,6 +271,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     var deviceListError: Error?
     private(set) var physicalDeviceListCallCount = 0
     private(set) var attachPhysicalDeviceCalls: [AttachPhysicalDeviceCall] = []
+    private(set) var setPaneNameCalls: [SetPaneNameCall] = []
     var physicalDeviceListResult: [PhysicalDeviceListEntry] = []
     /// When set, `physicalDeviceList` throws this instead of returning:
     /// drives the picker VM's load-failure path.
@@ -580,7 +587,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         role: SessionRole,
         initialProtected: Bool,
         tabId: UUID? = nil
-    ) async -> SessionCreateResponse {
+    ) async throws -> SessionCreateResponse {
         createSessionCalls.append(
             .init(
                 label: label,
@@ -591,6 +598,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             )
         )
         await awaitCreateSessionGate()
+        if let createSessionError { throw createSessionError }
         if !sessionSequence.isEmpty {
             return sessionSequence.removeFirst()
         }
@@ -969,6 +977,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         guard closePaneGateArmed else { return }
         closePanesWaiting += 1
         await withCheckedContinuation { closePaneContinuations.append($0) }
+    }
+
+    func setPaneName(paneId: String, name: String?) {
+        setPaneNameCalls.append(.init(paneId: paneId, name: name))
     }
 
     func paneInputTap(paneId: String, x: Double, y: Double) {

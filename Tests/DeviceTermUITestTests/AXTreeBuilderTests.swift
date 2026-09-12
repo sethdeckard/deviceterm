@@ -245,7 +245,11 @@ struct AXTreeBuilderTests {
     /// value that would not read is recorded and nothing more: a sim pane
     /// mounts system-vended controls that fail such a read on every dump, so
     /// treating those as fatal refuses every tree they appear in.
-    @Test(arguments: [AXAttribute.title, AXAttribute.value, AXAttribute.position])
+    @Test(arguments: [
+        AXAttribute.title,
+        AXAttribute.value,
+        AXAttribute.position
+    ])
     func aFailedNonStructuralReadIsRecordedButNotFatal(attribute: String) {
         let result = build(
             root: FakeElement(name: "root", kids: [FakeElement(name: "leaf")]),

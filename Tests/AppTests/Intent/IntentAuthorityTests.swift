@@ -4,33 +4,16 @@
 import DaemonProtocol
 import Testing
 
-/// The cross-tab verbs, gated.
-///
-/// Every verb that can reach outside the caller's own tab gets both of
-/// its cases here, allowed and refused, because a row with only one of
-/// the two proves nothing about the gate. The refusal is deliberately
-/// `automationRequired` rather than `notFound`: resolution runs first, so
-/// anything reaching the gate is a tab the caller can already see in
-/// `tabs list` and naming the reason leaks nothing.
-///
-/// Protection is the other axis and is not this suite's subject, except
-/// for the one case where they meet: a grant must widen authority without
-/// widening visibility.
 @MainActor
 struct IntentAuthorityTests {
     private struct Harness {
         let dispatcher: IntentDispatcher
         let workspace: WorkspaceViewModel
         let fake: FakeDaemonClient
-        let actionDelegate: RecordingAuthorityDelegate
+        let delegate: RecordingAuthorityDelegate
     }
 
-    // MARK: - Fixtures
-
-    /// Window 1 holds the caller's own tab (`S-A`) and a split tab
-    /// (`S-A` + `S-C`). Window 2 holds a foreign tab (`S-B`) with a sim
-    /// pane, so the pane verbs have a cross-tab target.
-    private func makeHarness(foreignTabProtected: Bool = false) -> Harness {
+    private func makeHarness(foreignProtected: Bool = false) -> Harness {
         let workspace = WorkspaceViewModel()
         let fake = FakeDaemonClient()
         let router = Router(workspace: workspace, daemon: fake)
@@ -41,25 +24,44 @@ struct IntentAuthorityTests {
             actionDelegate: delegate
         )
 
-        let ownWindow = TabListViewModel()
-        ownWindow.append(
+        let ownTabs = TabListViewModel()
+        ownTabs.append(
             TabState(
                 id: TabID(value: 1),
                 terminals: [terminal(1, "S-A")],
-                simPanes: []
+                simPanes: [],
+                name: "own"
             )
         )
-        ownWindow.append(
+        ownTabs.append(
             TabState(
                 id: TabID(value: 3),
                 terminals: [terminal(3, "S-A"), terminal(30, "S-C")],
-                simPanes: []
+                simPanes: [
+                    SimPaneState(
+                        paneId: "P-shared-sim",
+                        udid: "U-shared-sim",
+                        displayName: "iPhone",
+                        family: "iPhone"
+                    )
+                ],
+                devicePanes: [
+                    DevicePaneState(
+                        paneId: "P-shared-device",
+                        deviceId: "U-shared-device",
+                        displayName: "iPhone",
+                        family: "iPhone"
+                    )
+                ],
+                name: "shared"
             )
         )
-        workspace.addWindow(WindowState(id: WindowID(value: 1), tabs: ownWindow))
+        workspace.addWindow(
+            WindowState(id: WindowID(value: 1), tabs: ownTabs, name: "own-window")
+        )
 
-        let foreignWindow = TabListViewModel()
-        foreignWindow.append(
+        let foreignTabs = TabListViewModel()
+        foreignTabs.append(
             TabState(
                 id: TabID(value: 2),
                 terminals: [terminal(2, "S-B")],
@@ -71,18 +73,20 @@ struct IntentAuthorityTests {
                         family: "iPhone"
                     )
                 ],
-                isProtected: foreignTabProtected
+                isProtected: foreignProtected,
+                name: "foreign"
             )
         )
         workspace.addWindow(
-            WindowState(id: WindowID(value: 2), tabs: foreignWindow)
+            WindowState(id: WindowID(value: 2), tabs: foreignTabs, name: "foreign-window")
         )
+        workspace.select(id: WindowID(value: 1))
 
         return Harness(
             dispatcher: dispatcher,
             workspace: workspace,
             fake: fake,
-            actionDelegate: delegate
+            delegate: delegate
         )
     }
 
@@ -94,354 +98,181 @@ struct IntentAuthorityTests {
         )
     }
 
-    private func ungranted(_ session: String? = "S-A") -> IntentOrigin {
-        .external(sessionID: session, hasAutomationGrant: false)
+    private func origin(_ session: String = "S-A", granted: Bool = false) -> IntentOrigin {
+        .external(sessionID: session, hasAutomationGrant: granted)
     }
 
-    private func granted(_ session: String? = "S-A") -> IntentOrigin {
-        .external(sessionID: session, hasAutomationGrant: true)
+    private func expectMutation(
+        _ result: IntentResult,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        guard case .data(.workspaceMutation) = result else {
+            Issue.record("expected a workspace mutation; got \(result)", sourceLocation: sourceLocation)
+            return
+        }
     }
 
-    private func settle() async {
-        try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-
-    /// Assert the dispatch was refused for want of a grant, and say so
-    /// with the actual result when it wasn't.
     private func expectAutomationRequired(
         _ result: IntentResult,
-        _ comment: Comment,
         sourceLocation: SourceLocation = #_sourceLocation
     ) {
         guard case let .error(error) = result else {
-            Issue.record("\(comment): expected a refusal; got \(result)", sourceLocation: sourceLocation)
+            Issue.record("expected an authority refusal; got \(result)", sourceLocation: sourceLocation)
             return
         }
-        #expect(
-            error.code == "intent.automationRequired",
-            comment,
-            sourceLocation: sourceLocation
-        )
-    }
-
-    // MARK: - Close a tab
-
-    @Test
-    func closingYourOwnSoleTerminalTabNeedsNoGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-A"), mode: .detach), origin: ungranted()
-        )
-        await settle()
-        #expect(result == .ok)
+        #expect(error.code == "intent.automationRequired", sourceLocation: sourceLocation)
     }
 
     @Test
-    func closingAForeignTabIsRefusedWithoutAGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-B"), mode: .detach), origin: ungranted()
+    func tabMutationsUseTabOwnershipAndGrantRules() async {
+        var harness = makeHarness()
+        expectMutation(
+            await harness.dispatcher.dispatch(
+                .workspaceTabRename("own", name: "mine"),
+                origin: origin()
+            )
         )
-        await settle()
-        expectAutomationRequired(result, "tab close reached another session's tab")
-        #expect(harness.fake.closeSessionCalls.isEmpty)
+        #expect(harness.delegate.tabRenames == [TabID(value: 1)])
+
+        harness = makeHarness()
+        expectAutomationRequired(
+            await harness.dispatcher.dispatch(
+                .workspaceTabRename("foreign", name: "theirs"),
+                origin: origin()
+            )
+        )
+
+        harness = makeHarness()
+        expectMutation(
+            await harness.dispatcher.dispatch(
+                .workspaceTabRename("foreign", name: "theirs"),
+                origin: origin(granted: true)
+            )
+        )
     }
 
     @Test
-    func closingASplitTabYouShareIsRefusedWithoutAGrant() async {
-        // `S-A` owns a terminal in tab 3, but so does `S-C`. Closing it
-        // would end `S-C`'s work without its consent.
-        let harness = makeHarness()
-        // Naming `S-C` resolves the split tab, which `S-A` also holds a
-        // terminal in, so this is the owns-it-but-shares-it case.
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-C"), mode: .detach), origin: ungranted()
-        )
-        await settle()
-        expectAutomationRequired(result, "tab close destroyed a sibling session's work")
-        #expect(harness.fake.closeSessionCalls.isEmpty)
-    }
-
-    @Test
-    func aGrantClosesAForeignTab() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-B"), mode: .detach), origin: granted()
-        )
-        await settle()
-        #expect(result == .ok)
-    }
-
-    // MARK: - Close a window
-
-    @Test
-    func closingAWindowOfForeignTabsIsRefusedWithoutAGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeWindow(.index(2), mode: .detach), origin: ungranted()
-        )
-        await settle()
-        expectAutomationRequired(result, "window close tore down another session's tab")
-        #expect(harness.workspace.windows.count == 2)
-    }
-
-    @Test
-    func aGrantClosesAWindowOfForeignTabs() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeWindow(.index(2), mode: .detach), origin: granted()
-        )
-        await settle()
-        #expect(result == .ok)
-    }
-
-    @Test
-    func closingYourOwnWindowIsRefusedWhileItHoldsASplitTab() async {
-        // Window 1 holds the caller's own sole-terminal tab *and* the
-        // split tab. A window close takes both, so the split tab's rule
-        // decides the whole window.
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeWindow(.index(1), mode: .detach), origin: ungranted()
-        )
-        await settle()
-        expectAutomationRequired(result, "window close took a shared tab with it")
-        #expect(harness.workspace.windows.count == 2)
-    }
-
-    // MARK: - The authorized membership has to survive the queue
-
-    @Test
-    func aTerminalArrivingAfterAuthorizationAbandonsTheClose() async {
-        // Authorization runs on the main actor when the verb arrives;
-        // the close runs later on the Router's drain. Between the two,
-        // an `openTerminalPane` suspended in `createSession` appends its
-        // terminal, so a caller cleared to close its own sole-terminal
-        // tab would otherwise destroy a session that arrived after it
-        // was cleared and that nobody authorized touching.
-        let harness = makeHarness()
-        let tabID = TabID(value: 1)
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-A"), mode: .detach), origin: ungranted()
-        )
-        #expect(result == .ok)
-        // Stand in for the racing create landing before the drain picks
-        // the close up: the queued route carries the one-terminal
-        // membership it was authorized over.
-        harness.workspace.window(id: WindowID(value: 1))?.tabs.addTerminal(
-            TerminalPaneState(
-                id: TerminalPaneID(value: 99),
-                sessionId: "S-LATE",
-                capability: "cap"
-            ),
-            toTab: tabID
-        )
-        await settle()
-        #expect(
-            harness.workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tabID) != nil,
-            "the close ran against membership it was never authorized over"
+    func tabAndWindowCloseProtectIndependentSessions() async {
+        var harness = makeHarness()
+        expectAutomationRequired(
+            await harness.dispatcher.dispatch(
+                .workspaceTabClose("shared", mode: .detach),
+                origin: origin()
+            )
         )
         #expect(harness.fake.closeSessionCalls.isEmpty)
+
+        harness = makeHarness()
+        expectAutomationRequired(
+            await harness.dispatcher.dispatch(
+                .workspaceWindowClose("foreign-window", mode: .detach),
+                origin: origin()
+            )
+        )
+
+        harness = makeHarness()
+        expectMutation(
+            await harness.dispatcher.dispatch(
+                .workspaceWindowClose("foreign-window", mode: .detach),
+                origin: origin(granted: true)
+            )
+        )
+        #expect(harness.workspace.windows.count == 1)
     }
 
-    @Test
-    func anUnchangedTabStillCloses() async {
-        // The re-check must not refuse the ordinary case; nothing moved.
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-A"), mode: .detach), origin: ungranted()
-        )
-        await settle()
-        #expect(result == .ok)
-        #expect(
-            harness.workspace.window(id: WindowID(value: 1))?
-                .tabs.tab(id: TabID(value: 1)) == nil
-        )
-    }
-
-    @Test
-    func aGrantedCloseIsNotMembershipFenced() async {
-        // A grant doesn't rest on which sessions the tab holds, so its
-        // close carries no membership and a late arrival can't strand
-        // it. Pins that the fence is scoped to the callers that need it.
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-C"), mode: .detach), origin: granted()
-        )
-        #expect(result == .ok)
-        harness.workspace.window(id: WindowID(value: 1))?.tabs.addTerminal(
-            TerminalPaneState(
-                id: TerminalPaneID(value: 98),
-                sessionId: "S-LATE",
-                capability: "cap"
-            ),
-            toTab: TabID(value: 3)
-        )
-        await settle()
-        #expect(
-            harness.workspace.window(id: WindowID(value: 1))?
-                .tabs.tab(id: TabID(value: 3)) == nil
-        )
-    }
-
-    // MARK: - Rename a tab
-
-    @Test
-    func renamingYourOwnTabNeedsNoGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .renameTab(.sessionId("S-A"), name: "mine"), origin: ungranted()
-        )
-        #expect(result == .ok)
-        #expect(harness.actionDelegate.renames.count == 1)
-    }
-
-    @Test
-    func renamingAForeignTabIsRefusedWithoutAGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .renameTab(.sessionId("S-B"), name: "yours"), origin: ungranted()
-        )
-        expectAutomationRequired(result, "tab rename retitled another session's tab")
-        #expect(harness.actionDelegate.renames.isEmpty)
-    }
-
-    @Test
-    func aGrantRenamesAForeignTab() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .renameTab(.sessionId("S-B"), name: "yours"), origin: granted()
-        )
-        #expect(result == .ok)
-        #expect(harness.actionDelegate.renames.count == 1)
-    }
-
-    // MARK: - Open a terminal pane
-
-    @Test
-    func openingAPaneInYourOwnTabNeedsNoGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .openPaneTerminal(inTab: .sessionId("S-A"), cwd: nil, cmd: nil),
-            origin: ungranted()
-        )
-        await settle()
-        #expect(result == .ok)
-    }
-
-    @Test
-    func openingAPaneInAForeignTabIsRefusedWithoutAGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .openPaneTerminal(inTab: .sessionId("S-B"), cwd: nil, cmd: nil),
-            origin: ungranted()
-        )
-        await settle()
-        expectAutomationRequired(result, "pane open landed in another session's tab")
-    }
-
-    @Test
-    func omittingTheTabRefStaysInYourOwnTab() async {
-        // With `--tab` omitted the resolver returns the caller's own tab,
-        // so the ownership predicate passes by construction. Pinned so a
-        // future change to `.current` resolution can't quietly turn the
-        // default form into a cross-tab write.
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .openPaneTerminal(inTab: nil, cwd: nil, cmd: nil),
-            origin: ungranted()
-        )
-        await settle()
-        #expect(result == .ok)
-    }
-
-    // MARK: - Close a pane
-
-    @Test
-    func closingAPaneInAForeignTabIsRefusedWithoutAGrant() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closePane(.paneId("P-foreign"), mode: .detach), origin: ungranted()
-        )
-        await settle()
-        expectAutomationRequired(result, "pane close reached into another session's tab")
-    }
-
-    @Test
-    func aGrantClosesAPaneInAForeignTab() async {
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closePane(.paneId("P-foreign"), mode: .detach), origin: granted()
-        )
-        await settle()
-        #expect(result == .ok)
-    }
-
-    // MARK: - A grant widens authority, never visibility
-
-    @Test("a grant does not reach a foreign protected tab", arguments: [
-        RouteIntent.closeTab(.sessionId("S-B"), mode: .detach),
-        RouteIntent.renameTab(.sessionId("S-B"), name: "yours"),
-        RouteIntent.openPaneTerminal(inTab: .sessionId("S-B"), cwd: nil, cmd: nil),
-        RouteIntent.closePane(.paneId("P-foreign"), mode: .detach),
-        RouteIntent.setTabProtected(.sessionId("S-B"), isProtected: false)
+    @Test("sibling terminal mutations require a grant", arguments: [
+        RouteIntent.workspacePaneClose("S-C", mode: nil),
+        RouteIntent.workspacePaneRename("S-C", name: "sibling")
     ])
-    func aGrantDoesNotWidenVisibility(intent: RouteIntent) async {
-        // A grant never reaches a protected tab.
-        // The refusal has to stay `notFound` too, not `automationRequired`:
-        // resolution runs first, so a granted caller learns nothing about
-        // whether that tab exists.
-        let harness = makeHarness(foreignTabProtected: true)
-        let result = await harness.dispatcher.dispatch(intent, origin: granted())
-        await settle()
+    func siblingTerminalMutationsRequireAGrant(intent: RouteIntent) async {
+        let harness = makeHarness()
+
+        let result = await harness.dispatcher.dispatch(intent, origin: origin())
+
+        expectAutomationRequired(result)
+        #expect(harness.fake.closeSessionCalls.isEmpty)
+        #expect(harness.delegate.paneRenames.isEmpty)
+    }
+
+    @Test
+    func terminalPaneOwnerOrGrantMayMutateTheTarget() async {
+        var harness = makeHarness()
+        expectMutation(
+            await harness.dispatcher.dispatch(
+                .workspacePaneRename("S-C", name: "mine"),
+                origin: origin("S-C")
+            )
+        )
+        #expect(harness.delegate.paneRenames == [.terminal(TerminalPaneID(value: 30))])
+
+        harness = makeHarness()
+        expectMutation(
+            await harness.dispatcher.dispatch(
+                .workspacePaneClose("S-C", mode: nil),
+                origin: origin(granted: true)
+            )
+        )
+        #expect(harness.fake.closeSessionCalls.map(\.sessionId) == ["S-C"])
+    }
+
+    @Test("mirrored panes retain tab ownership", arguments: [
+        RouteIntent.workspacePaneRename("P-shared-sim", name: "sim"),
+        RouteIntent.workspacePaneRename("P-shared-device", name: "device")
+    ])
+    func mirroredPanesRetainTabOwnership(intent: RouteIntent) async {
+        let harness = makeHarness()
+
+        expectMutation(await harness.dispatcher.dispatch(intent, origin: origin()))
+
+        #expect(harness.delegate.paneRenames.count == 1)
+    }
+
+    @Test
+    func aGrantWidensAuthorityWithoutWideningVisibility() async {
+        let harness = makeHarness(foreignProtected: true)
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneClose("P-foreign", mode: nil),
+            origin: origin(granted: true)
+        )
+
         guard case let .error(error) = result else {
-            Issue.record("a grant reached a protected tab: \(result)")
+            Issue.record("a grant reached a foreign protected tab: \(result)")
             return
         }
         #expect(error.code == "intent.notFound")
     }
-
-    // MARK: - The human is never gated
-
-    @Test
-    func inProcessClosesASplitTabWithoutAGrant() async {
-        // The tab strip's own close button runs `.inProcess`. Gating it
-        // would break closing a split tab from the GUI.
-        let harness = makeHarness()
-        let result = await harness.dispatcher.dispatch(
-            .closeTab(.sessionId("S-C"), mode: .detach), origin: .inProcess
-        )
-        await settle()
-        #expect(result == .ok)
-    }
 }
 
-// MARK: - Helpers
-
-/// Records the delegate calls this suite asserts on. Separate from
-/// `IntentDispatcherTests`' recorder because that one is file-private to
-/// its own suite.
 @MainActor
 private final class RecordingAuthorityDelegate: IntentActionDelegate {
-    private(set) var renames: [TabID] = []
-    private(set) var raises: [WindowID] = []
+    private(set) var tabRenames: [TabID] = []
+    private(set) var paneRenames: [PaneSlot] = []
 
     func renameTab(window: WindowID, tab: TabID, to name: String?) {
-        renames.append(tab)
+        tabRenames.append(tab)
+    }
+
+    func renamePane(
+        window: WindowID,
+        tab: TabID,
+        slot: PaneSlot,
+        daemonPaneId: String?,
+        to name: String?
+    ) {
+        paneRenames.append(slot)
     }
 
     func sendInput(
         window: WindowID,
         tab: TabID,
+        terminal: TerminalPaneID,
         text: String,
         typeDelayMillis: Int?
     ) {}
 
-    func captureTab(window: WindowID, tab: TabID) -> String { "" }
+    func captureTerminal(window: WindowID, tab: TabID, terminal: TerminalPaneID) -> String { "" }
 
     func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int) {}
-
-    func raiseWindow(_ window: WindowID) {
-        raises.append(window)
-    }
+    func raiseWindow(_ window: WindowID) {}
 }

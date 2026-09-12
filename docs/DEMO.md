@@ -2,7 +2,7 @@
 
 > **Run the driver from an automation tab.** Open one with **Shell → Open
 > Automation Tab** (⌘⇧T). An ordinary tab cannot control another tab and
-> receives `error.scope_violation`.
+> receives `intent.automationRequired`.
 
 DeviceTerm can type a prepared sequence of commands into a terminal while you
 record it. The commands appear at a natural pace, and the off-camera driver
@@ -13,14 +13,14 @@ advances them one at a time.
 The underlying command is:
 
 ```sh
-deviceterm tab send-input --tab <ref> --type-delay <ms> -- '<command>\n'
+deviceterm pane send-input <pane-ref> --type-delay <ms> -- '<command>\n'
 ```
 
 `--type-delay` sets the delay between characters. Omit it for immediate input.
 The trailing newline runs the command.
 
 The `scripts/demo-present.sh` helper reads a file containing one command per
-line. Each keypress in the driver sends the next command to the recorded tab.
+line. Each keypress in the driver sends the next command to the recorded pane.
 Blank lines and lines beginning with `#` are skipped.
 
 ## Prepare the Recording
@@ -28,13 +28,13 @@ Blank lines and lines beginning with `#` are skipped.
 1. Open a normal tab for the recording and change to the directory where the
    demo should begin.
 
-2. Find the tab reference:
+2. Find the terminal pane reference:
 
    ```sh
-   deviceterm tabs list
+   deviceterm pane list
    ```
 
-   Use its short ID, or assign a name with `deviceterm tab rename`.
+   Use its short ID, or assign a name with `deviceterm pane rename`.
 
 3. Open an automation tab with **Shell → Open Automation Tab** (⌘⇧T).
 
@@ -50,23 +50,23 @@ Run the presenter helper from the off-camera automation tab:
 
 ```sh
 scripts/demo-present.sh scripts/demo-example.txt \
-  --target <recorded-tab-ref> \
+  --target <recorded-pane-ref> \
   --speed 45
 ```
 
-`--target` identifies the recorded tab. You may omit it when the driver and
-recorded tabs each contain one terminal session and the recorded session is the
-sole other result from `deviceterm tabs list --json`. Automatic selection
-requires `jq`.
+`--target` identifies the recorded terminal pane. You may omit it when exactly
+one other visible tab exists and that tab contains exactly one terminal pane.
+The helper discovers the tab with `tab list --all` and its pane with
+`tab show`. Automatic selection requires `jq`.
 
 `--speed` is the delay between characters in milliseconds. It defaults to `45`.
 Use `0` for immediate input. Values above `1000` are capped at `1000`.
 
-`--settle` is how long the recorded tab's visible screen must hold still before
+`--settle` is how long the recorded pane's visible screen must hold still before
 the driver offers the next step, in milliseconds. It defaults to `1500`, and a
 single wait gives up after 60,000 ms and offers the step anyway. The driver
-compares successive `deviceterm tab capture` results, so it needs no knowledge
-of what the recorded shell's prompt looks like. Raise it for a demo whose
+compares successive `deviceterm pane capture-text` results, so it needs no
+knowledge of what the recorded shell's prompt looks like. Raise it for a demo whose
 commands pause between lines of output; pass `--no-settle` to turn the wait off
 and advance whenever you like.
 
@@ -75,7 +75,7 @@ visually with the echoed input, which makes the recording look garbled. For
 demo commands that do not read stdin the input stays queued and runs correctly;
 it is the appearance that suffers. Two limits worth knowing: a foreground
 command that runs long and prints nothing is indistinguishable from an idle
-prompt, since nothing exposes a tab's foreground process, and a command that
+prompt, since nothing exposes a pane's foreground process, and a command that
 *does* read stdin will consume the injected characters itself.
 
 To record:
@@ -89,9 +89,9 @@ The driver shows the upcoming command before each keypress.
 
 ## Input Behavior and Limits
 
-Without `--type-delay`, `send-input` returns after dispatch. With a positive
+Without `--type-delay`, `pane send-input` returns after dispatch. With a positive
 delay, it returns after the input is queued, not when animated typing finishes.
-Positively paced commands sent to the same tab queue in order and do not
+Positively paced commands sent to the same pane queue in order and do not
 interleave. An unpaced command dispatches immediately and does not wait behind
 that queue.
 
@@ -111,7 +111,7 @@ separate `deviceterm device attach` command. An invocation that succeeds
 without changing state, such as `bootstatus -b` against an already-booted
 device, attaches nothing.
 
-DeviceTerm provides `tab send-input` and its `--type-delay` option. The demo
+DeviceTerm provides `pane send-input` and its `--type-delay` option. The demo
 file and presenter loop are repository helpers, not a separate recording
 format or product subsystem. Keep your customized demo files with the material
 for each recording.

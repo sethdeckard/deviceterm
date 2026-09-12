@@ -6,8 +6,8 @@
 # You run this INSIDE an Automation tab (Shell → Open Automation Tab,
 # ⌘⇧T) in a SECOND, off-camera window. It reads a demo file (one shell
 # command per line) and, each time you press a key, "types" the next
-# command into the RECORDED tab — character by character, like a human —
-# using `deviceterm tab send-input --type-delay`. The animated typing
+# command into the recorded terminal pane one character at a time using
+# `deviceterm pane send-input --type-delay`. The animated typing
 # appears in the recorded window; this driver window (and its keypresses)
 # stay out of frame.
 #
@@ -17,23 +17,23 @@
 # See --settle.
 #
 # Why a shell script and not a built-in verb: deviceterm provides the
-# primitive (`tab send-input --type-delay`); the demo *content* and the
+# primitive (`pane send-input --type-delay`); the demo *content* and the
 # presenter loop are workflow, which is the shell's job. Edit the demo
 # file, not this script, to change what the screencast shows.
 #
 # Usage:
-#   scripts/demo-present.sh <demo-file> [--target <tab-ref>] [--speed <ms>]
+#   scripts/demo-present.sh <demo-file> [--target <pane-ref>] [--speed <ms>]
 #                           [--settle <ms>] [--no-settle]
 #
 #   <demo-file>       One command per line. Blank lines and lines starting
 #                     with `#` are skipped (use `#` for presenter notes).
-#   --target <ref>    The recorded tab (shortId / name / sessionId). If
-#                     omitted, the driver auto-targets the sole other session
-#                     returned by `deviceterm tabs list --json`. Split terminal
-#                     panes produce additional sessions, so pass --target.
+#   --target <ref>    The recorded terminal pane (shortId / name / UUID). If
+#                     omitted, the driver finds the sole other visible tab and
+#                     uses its sole terminal pane. Pass --target when either
+#                     choice is ambiguous.
 #   --speed <ms>      Per-character typing delay in milliseconds
 #                     (default: 45). 0 = instant.
-#   --settle <ms>     How long the recorded tab's screen must hold still
+#   --settle <ms>     How long the recorded pane viewport must hold still
 #                     before a step is offered (default: 1500, maximum wait
 #                     60000). Raise it if a demo runs commands that pause
 #                     between output.
@@ -79,29 +79,32 @@ case "$SETTLE" in ''|*[!0-9]*) die "--settle expects a non-negative integer (mil
 command -v deviceterm >/dev/null 2>&1 \
     || die "the 'deviceterm' CLI isn't on PATH — run this inside a deviceterm tab"
 
-# Auto-target: pick the sole session that isn't this automation driver.
-# `tabs list --json` is a bare array of {sessionId, shortId, name, label};
-# we exclude our own session (the driver injects $DEVICETERM_SESSION) and,
-# if exactly one session remains, use its shortId (falling back to sessionId).
+# Auto-target: pick the sole terminal pane in the sole other visible tab.
+# Public workspace reads come from the GUI projection, so tab discovery and
+# pane discovery are intentionally separate rather than inferred from daemon
+# sessions.
 if [ -z "$TARGET" ]; then
     command -v jq >/dev/null 2>&1 \
         || die "auto-target needs 'jq'; install it or pass --target <ref>"
-    self="${DEVICETERM_SESSION:-}"
-    others="$(deviceterm tabs list --json \
-        | jq -r --arg self "$self" '[.[] | select(.sessionId != $self)]
-                                    | if length == 1
-                                      then (.[0].shortId // .[0].sessionId)
-                                      else empty end')"
-    [ -n "$others" ] \
-        || die "couldn't auto-pick a target; make the recorded session the sole other result, or pass --target <ref>"
-    TARGET="$others"
+    other_tab="$(deviceterm tab list --all --json \
+        | jq -r '[.[] | select(.current | not)]
+                 | if length == 1 then .[0].id else empty end')"
+    [ -n "$other_tab" ] \
+        || die "couldn't auto-pick a tab; leave one other visible tab, or pass --target <pane-ref>"
+    TARGET="$(deviceterm tab show "$other_tab" --json \
+        | jq -r '[.panes[] | select(.kind == "terminal")]
+                 | if length == 1
+                   then (.[0].shortId // .[0].id)
+                   else empty end')"
+    [ -n "$TARGET" ] \
+        || die "couldn't auto-pick a terminal; leave one terminal in the recorded tab, or pass --target"
 fi
 
-# Block until the recorded tab's viewport stays unchanged for the settle
+# Block until the recorded pane's viewport stays unchanged for the settle
 # interval. Unchanged pixels prove quiescence, not that a command
 # finished, which is what the known limit below is about.
 #
-# `tab capture` prints the rendered viewport, so comparing successive
+# `pane capture-text` prints the rendered viewport, so comparing successive
 # captures is a prompt-agnostic readiness check: no assumption about
 # what the recorded shell's prompt looks like. The screen must hold
 # still for the whole --settle window, not merely across one poll, so a
@@ -110,7 +113,7 @@ fi
 #
 # Known limit: a foreground command that runs long and prints *nothing*
 # is indistinguishable from an idle prompt. Nothing on the wire exposes
-# the tab's foreground process, so quiescence is the available signal.
+# the pane's foreground process, so quiescence is the available signal.
 settle_wait() {
     [ "$SETTLE" -gt 0 ] || return 0
     local needed=$(( (SETTLE + POLL_MS - 1) / POLL_MS ))
@@ -121,8 +124,8 @@ settle_wait() {
         # the error would make every failure compare equal to the last
         # one, satisfy the stability counter, and quietly turn the gate
         # into a no-op that still looked like it was protecting you.
-        if ! now="$(deviceterm tab capture --tab "$TARGET" 2>/dev/null)"; then
-            printf '\ndemo-present: tab capture failed — settle gate off for the rest of this run\n' >&2
+        if ! now="$(deviceterm pane capture-text "$TARGET" 2>/dev/null)"; then
+            printf '\ndemo-present: pane capture failed — settle gate off for the rest of this run\n' >&2
             SETTLE=0
             return 0
         fi
@@ -134,14 +137,14 @@ settle_wait() {
         fi
         last="$now"
         if [ "$waited" -ge "$SETTLE_TIMEOUT" ]; then
-            printf '\ndemo-present: tab still busy after %sms — offering the step anyway\n' \
+            printf '\ndemo-present: pane still busy after %sms — offering the step anyway\n' \
                 "$SETTLE_TIMEOUT" >&2
             break
         fi
-        # Only mention waiting once the tab is visibly busy, so the
+        # Only mention waiting once the pane viewport is visibly busy, so the
         # common case (already idle) stays quiet.
         if [ "$announced" -eq 0 ] && [ "$waited" -ge "$SETTLE" ]; then
-            printf '\ndemo-present: waiting for the recorded tab display to settle…'
+            printf '\ndemo-present: waiting for the recorded pane viewport to settle…'
             announced=1
         fi
         sleep "$POLL_SECONDS"
@@ -159,7 +162,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|\#*) continue ;; esac
     step=$((step + 1))
     # Gate BEFORE offering the step, not after sending it: when the
-    # prompt appears the recorded tab is already idle, so a keypress
+    # prompt appears the recorded pane viewport is already idle, so a keypress
     # types immediately instead of landing on a busy shell.
     settle_wait
     printf '\n[%d] → %s' "$step" "$line"
@@ -172,12 +175,12 @@ while IFS= read -r line || [ -n "$line" ]; do
     # since the stolen character comes from a line the loop skips.
     IFS= read -rsn1 _key < /dev/tty
     printf '\n'
-    # Type the command + a real newline (Enter) into the recorded tab.
+    # Type the command + a real newline (Enter) into the recorded pane.
     # `--` passes the command verbatim so embedded --flags aren't eaten;
     # the trailing newline runs it. printf builds one argv with a real LF
     # so there's no backslash-escape ambiguity in the command text.
     printf -v payload '%s\n' "$line"
-    deviceterm tab send-input --tab "$TARGET" --type-delay "$SPEED" -- "$payload"
+    deviceterm pane send-input "$TARGET" --type-delay "$SPEED" -- "$payload"
 done < "$DEMO_FILE"
 
 printf '\ndemo-present: done (%d steps).\n' "$step"

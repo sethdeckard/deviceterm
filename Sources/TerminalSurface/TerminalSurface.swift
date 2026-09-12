@@ -75,7 +75,7 @@ public protocol TerminalSurface: AnyObject {
     func sendInput(_ text: String) throws
 
     /// Capture the surface's currently-visible viewport as plain
-    /// text. Powers the automation-only `deviceterm tab capture`
+    /// text. Powers the automation-only `deviceterm pane capture-text`
     /// verb. Returns the rendered cell contents (no styling, no
     /// cursor marker) with `"\n"` separating screen rows. Throws
     /// `TerminalSurfaceError.notAttached` before `attach` has

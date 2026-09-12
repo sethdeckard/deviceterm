@@ -18,10 +18,10 @@ import Foundation
 /// the cap verifier + owner identity + the shared `terminalAnchorStore`; the
 /// provenance decision lives in the connection layer.
 ///
-/// Each session carries a stable `tabId` grouping/reference UUID plus a
-/// `shortId` and optional `name`. These fields ride through `tabs.list` and
-/// `session.create`; callers holding a list snapshot can resolve them with
-/// `TabRefResolver`.
+/// Each session carries a stable `tabId` grouping UUID plus a terminal-pane
+/// `shortId` and optional `name`. These fields ride through `session.create`
+/// and daemon-direct pane projections; the GUI publishes the canonical
+/// window/tab/pane workspace projection for public reference resolution.
 public actor SessionManager {
     /// A session id's ordered lifecycle phase, carrying its incarnation.
     private enum Phase {
@@ -42,10 +42,9 @@ public actor SessionManager {
         case reapedByRestoreBatch = "reaped-by-restore-batch"
     }
 
-    /// Strictly-increasing `createdAt` step for restored sessions, so a batch's
-    /// entry order is preserved by the `createdAt`-sorted `tabs.list`. The
-    /// one-microsecond step preserves deterministic order within the restored
-    /// batch.
+    /// Strictly-increasing `createdAt` step for restored sessions, so daemon
+    /// session snapshots preserve batch entry order. The one-microsecond step
+    /// preserves deterministic order within the restored batch.
     private static let restoreOrderStep: TimeInterval = 0.000001
 
     private var sessions: [UUID: SessionState] = [:]
@@ -376,10 +375,9 @@ public actor SessionManager {
     /// the live GUI as its owner: `isAlive` tracks the GUI, orphan adoption
     /// works, and the exact-owner XPC provenance arm authenticates it.
     ///
-    /// Entry order defines `tabs.list` ordering for the restored set:
-    /// inserted sessions are stamped with strictly-increasing `createdAt`
-    /// values from a single base instant, so batch order is preserved within
-    /// the restored set.
+    /// Entry order defines the `createdAt` order of restored daemon session
+    /// snapshots. Inserted sessions receive strictly increasing timestamps
+    /// from one base instant, preserving batch order within the restored set.
     @discardableResult
     public func restoreBatch(
         _ entries: [RestoreSessionEntry],
@@ -442,8 +440,9 @@ public actor SessionManager {
             }
         }
         // 2. SYNCHRONOUS MUTATION SEGMENT: no interior `await`, so it is atomic
-        //    against actor reentrancy and a concurrent `tabs.list`/`restoreBatch`
-        //    can never observe a torn state. The key is RESERVED first, before
+        //    against actor reentrancy, so concurrent session projections and
+        //    restore batches can never observe a torn state. The key is
+        //    RESERVED first, before
         //    any suspension, so a restore that interleaves during the async tail
         //    below observes it and bails (step 0) unless it is genuinely newer.
         lastRestorationKey = restoreKey
@@ -898,11 +897,10 @@ public actor SessionManager {
         sessions[id] = state
         // Seed protection in the SAME actor turn as `sessions[id]`, before ANY
         // `await` below. A terminal joining a protected tab must never be
-        // observable as unprotected: the store registration and the publish are
-        // all `await`s, and a `tabs.list` racing any of those suspensions
-        // (actor reentrancy) would see an unprotected row for it if
-        // protection were seeded
-        // later. Inserting before the first await closes that window.
+        // observable as unprotected through daemon session or device
+        // projections. The store registration and publish are `await`s, so
+        // seeding before the first suspension closes that actor-reentrancy
+        // window.
         if initialProtected {
             protectedSessions.insert(id)
         }
@@ -991,10 +989,10 @@ public actor SessionManager {
 
     /// Tear down a session's live state, revoke its store registrations, and
     /// publish its close. Called by `closeSession` (after a cap check). The
-    /// synchronous map removals happen before the first `await`, so a
-    /// concurrent `tabs.list` never sees a half-removed session. `restoreBatch`
-    /// does not call this; it splits the two halves so all its map mutations
-    /// stay in one await-free segment (see there).
+    /// synchronous map removals happen before the first `await`, so concurrent
+    /// session projections never see a half-removed session. `restoreBatch`
+    /// does not call this; it splits the two halves so all map mutations stay
+    /// in one await-free segment.
     private func teardownSession(_ sessionId: UUID) async {
         // Tombstone the closed id ONLY if it was restorable (GUI-created or
         // restored); only those can be resurrected by a stale, already-captured
@@ -1180,8 +1178,8 @@ public actor SessionManager {
         displayTitles[sessionId]
     }
 
-    /// Snapshot of all sessions, ordered by creation time. Used by
-    /// `tabs.list`; capabilities are *not* exposed by this method.
+    /// Snapshot of all sessions, ordered by creation time. Capabilities are not
+    /// exposed by this method.
     public func allSessions() -> [SessionState] {
         sessions.values.sorted { $0.createdAt < $1.createdAt }
     }

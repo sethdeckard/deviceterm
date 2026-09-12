@@ -78,15 +78,16 @@ func architectureGuideDocumentsEveryRPCMethod() throws {
 }
 
 @Test
-func architectureGuideDocumentsTabIdWireContract() throws {
+func architectureGuideDocumentsWorkspaceProjectionContract() throws {
     let contents = try architectureGuide()
     let rpc = try section(named: "RPC protocol", in: contents)
-    #expect(rpc.contains("{sessionId, tabId, shortId, name?, displayTitle?, label?}"))
-    #expect(rpc.contains("One entry is returned per live daemon session"))
-    #expect(rpc.contains("Distinct groups can also include non-GUI sessions"))
-    #expect(rpc.contains("immutable (`tabId`, `shortId`, or `role`) metadata"))
-    #expect(rpc.contains("An empty or shortened array\nis therefore a successful visibility projection"))
-    #expect(contents.contains("the tab's shared `tabId`"))
+    #expect(rpc.contains("GUI resolves refs against its live workspace"))
+    #expect(rpc.contains("Refs are raw optional strings, not tagged ref objects"))
+    #expect(rpc.contains("Mutation results are `WorkspaceMutationReceipt` objects"))
+    #expect(rpc.contains("One row represents one GUI tab"))
+    #expect(rpc.contains("uses that session ID as\nthe terminal pane ID"))
+    #expect(rpc.contains("receipt encoded in `error.details.committed`"))
+    #expect(rpc.contains("use `pane.deviceList` instead"))
 }
 
 @Test

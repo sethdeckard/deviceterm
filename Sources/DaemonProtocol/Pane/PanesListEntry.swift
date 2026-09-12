@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// One entry of the bare-array `panes.list` result. Mirrors
+/// One entry of the bare-array `pane.deviceList` result. Mirrors
 /// `PaneMethods.PanesListEntry` (the daemon's encoder shape). The CLI
 /// resolves a target pane through this (default = the tab's sole
 /// device pane, `--pane <ref>` to disambiguate).
