@@ -131,6 +131,14 @@ approaches ruled out.
 
 - **When / where:** 2026-08-13 · macOS 26.5.2 · Xcode 26.6 · iOS 26.5 ·
   iPhone 17 Pro (simulator).
+- **watchOS observation:** 2026-09-11 · macOS 26.5.2 · Xcode 27 beta 6
+  (27A5252f) · Apple Watch SE 3 (40mm). Callback registration succeeded, but
+  `currentDisplayOrientation` returned unknown (`uiOrientation == 0`) both
+  after registration and after landscape/portrait Purple HID events. Surface
+  binding, display size, and AX reads still succeeded in the same live run.
+  The watch presentation is fixed, so the cardinal-orientation live test is
+  family-gated. This records the tested environment; it does not require future
+  watchOS runtimes to keep returning zero.
 - **Mechanism — `SimScreen` on the display descriptor.** The live
   `com.apple.framebuffer.display` descriptor conforms to `SimScreen`
   alongside the `SimDisplayIOSurfaceRenderable` the picker already selects

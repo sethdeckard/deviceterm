@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import CoreSimulatorBridge
+import Daemon
+import DaemonProtocol
 import Foundation
 import IOSurface
 import Testing
@@ -11,6 +13,15 @@ import Testing
 private let coreSimulatorAvailable: Bool = {
     CoreSimulatorLoader.probe().ok
 }()
+
+/// Whether the track's actual booted device is a watch. Read device identity
+/// rather than the family-selection environment variable: the default track
+/// can fall back to another family when no iPhone or iPad is installed.
+private func bootedDeviceIsWatch() -> Bool {
+    let identifier = (try? SimDeviceHandle.singleBootedDevice())?
+        .deviceTypeIdentifier ?? ""
+    return DeviceFamilyClassifier.classify(identifier) == .watch
+}
 
 /// Poll `handle.currentSurface()` until it goes non-nil or the
 /// timeout expires. Returns nil on timeout. The bridge fires
@@ -64,7 +75,7 @@ func displaySizeReflectsBoundRenderable() throws {
     #expect(size.height > 0, "displaySize.height was \(size.height)")
 }
 
-@Test
+@Test(.enabled(if: !bootedDeviceIsWatch()))
 func displayOrientationSeedsAndFollowsARotation() throws {
     // The presented orientation is readable at attach and pushed on
     // change. Drives the rotation through the bridge's own HID path rather
@@ -73,7 +84,10 @@ func displayOrientationSeedsAndFollowsARotation() throws {
     // Whether the display actually follows depends on the foreground app:
     // the Home Screen doesn't rotate on iPhone. The seed must be cardinal,
     // and any delivered change must also be cardinal; the test does not
-    // require a turn the interface may refuse.
+    // require a turn the interface may refuse. A watch's presentation is
+    // fixed, and its display proxy may report uiOrientation 0. The
+    // display-binding tests still run for watches; Crown tests run when
+    // SimulatorKit exposes the optional builder.
     try #require(
         coreSimulatorAvailable,
         "CoreSimulator probe failed — the bridge can't drive this host"
