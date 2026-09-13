@@ -146,6 +146,15 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
             keyEquivalent: ""
         )
     )
+    // Expose AX inspection alongside the other ribbon actions in the
+    // context menu.
+    menu.addItem(
+        NSMenuItem(
+            title: "Toggle AX Inspector",
+            action: #selector(SimulatorPaneViewController.toggleAxInspector(_:)),
+            keyEquivalent: ""
+        )
+    )
 
     menu.addItem(.separator())
     menu.addItem(

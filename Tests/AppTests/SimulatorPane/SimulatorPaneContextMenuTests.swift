@@ -35,6 +35,7 @@ struct SimulatorPaneContextMenuTests {
             "",  // separator
             "Screenshot",
             "Record Screen",
+            "Toggle AX Inspector",
             "",  // separator
             "Open in Simulator.app",
             "Reveal in Finder",
@@ -89,6 +90,10 @@ struct SimulatorPaneContextMenuTests {
             ),
             ("Screenshot", #selector(SimulatorPaneViewController.screenshotPane(_:))),
             ("Record Screen", #selector(SimulatorPaneViewController.recordPane(_:))),
+            (
+                "Toggle AX Inspector",
+                #selector(SimulatorPaneViewController.toggleAxInspector(_:))
+            ),
             (
                 "Open in Simulator.app",
                 #selector(SimulatorPaneViewController.openInSimulatorApp(_:))
