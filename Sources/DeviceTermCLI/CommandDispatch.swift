@@ -619,8 +619,13 @@ func run(
                 }
             )
 
-        case let .paneCaptureText(pane):
-            return try handlePaneCaptureText(pane: pane, transport: transport, output: output)
+        case let .paneCaptureText(pane, ansi):
+            return try handlePaneCaptureText(
+                pane: pane,
+                ansi: ansi,
+                transport: transport,
+                output: output
+            )
 
         case let .deviceAttach(ref):
             return try handleDeviceAttach(ref: ref, transport: transport, output: output)
@@ -1020,14 +1025,18 @@ func handleDeviceAttach(
     )
 }
 
-/// `deviceterm pane capture-text`: human mode writes captured text raw;
-/// JSON mode emits the pane plus text payload.
+/// `deviceterm pane capture-text`: human mode writes the captured text
+/// directly, appending an LF when it lacks one, so `--ansi` renders in
+/// color at a terminal; JSON mode emits the pane plus text payload.
 func handlePaneCaptureText(
     pane: String,
+    ansi: Bool,
     transport: CLITransport,
     output: OutputMode
 ) throws -> CommandOutcome {
-    let data = try transport.send(try CLICommands.paneCaptureTextRequest(pane: pane))
+    let data = try transport.send(
+        try CLICommands.paneCaptureTextRequest(pane: pane, ansi: ansi)
+    )
     switch output {
     case .human:
         let payload = try JSONDecoder().decode(WorkspaceCaptureResult.self, from: data)

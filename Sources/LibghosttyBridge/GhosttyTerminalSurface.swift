@@ -397,17 +397,18 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         return TerminalIdentity(foregroundPid: Int32(pid), ttyName: tty)
     }
 
-    /// Read the currently-visible viewport as plain text. Constructs
+    /// Read the currently-visible viewport in `format`. Constructs
     /// a viewport-spanning `ghostty_selection_s` (top-left → bottom-
     /// right of the active viewport) and hands it to
-    /// `ghostty_surface_read_text`. libghostty fills the
+    /// `ghostty_surface_read_text_format`. libghostty fills the
     /// `ghostty_text_s` with a heap-owned `ptr` + `len` that we
     /// copy into a Swift `String` and immediately release via
     /// `ghostty_surface_free_text`. Returns the rendered cell
-    /// contents with `"\n"` separating rows. Throws
-    /// `.notAttached` when the surface isn't installed, or
-    /// `.captureFailed` when libghostty refuses the read.
-    public func readScreenText() throws -> String {
+    /// contents with `"\n"` separating rows; the styled format ends
+    /// rows with CRLF, which `CapturedScreenText` rewrites so both
+    /// formats agree. Throws `.notAttached` when the surface isn't
+    /// installed, or `.captureFailed` when libghostty refuses the read.
+    public func readScreenText(format: TerminalTextFormat) throws -> String {
         guard let surface else { throw TerminalSurfaceError.notAttached }
         let topLeft = ghostty_point_s(
             tag: GHOSTTY_POINT_VIEWPORT,
@@ -434,9 +435,14 @@ public final class GhosttyTerminalSurface: TerminalSurface {
             text: nil,
             text_len: 0
         )
-        guard ghostty_surface_read_text(surface, selection, &textStruct) else {
+        guard ghostty_surface_read_text_format(
+            surface,
+            selection,
+            format.ghosttyFormat,
+            &textStruct
+        ) else {
             throw TerminalSurfaceError.captureFailed(
-                detail: "ghostty_surface_read_text returned false"
+                detail: "ghostty_surface_read_text_format returned false"
             )
         }
         defer { ghostty_surface_free_text(surface, &textStruct) }
@@ -451,7 +457,8 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         let data = buffer.withMemoryRebound(to: UInt8.self) {
             Data($0)
         }
-        return String(bytes: data, encoding: .utf8) ?? ""
+        let raw = String(bytes: data, encoding: .utf8) ?? ""
+        return CapturedScreenText.normalizingRowSeparators(raw)
     }
 
     // MARK: - Clipboard (driven by the runtime's clipboard callbacks)
@@ -714,5 +721,19 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     /// appearance from the luma threshold.
     func engineDidChangeBackgroundColor(_ color: TerminalBackgroundColor) {
         delegate?.terminalSurface(self, didChangeBackgroundColor: color)
+    }
+}
+
+private extension TerminalTextFormat {
+    /// The libghostty enum this maps to. Kept private to the bridge so
+    /// the C framework stays out of the `TerminalSurface` contract.
+    var ghosttyFormat: ghostty_text_format_e {
+        switch self {
+        case .plain:
+            GHOSTTY_TEXT_FORMAT_PLAIN
+
+        case .ansi:
+            GHOSTTY_TEXT_FORMAT_VT
+        }
     }
 }

@@ -435,11 +435,11 @@ final class TabContentViewController: NSViewController {
         try terminal.sendInput(text, typeDelayMillis: typeDelayMillis)
     }
 
-    func captureTerminal(_ terminalID: TerminalPaneID) throws -> String {
+    func captureTerminal(_ terminalID: TerminalPaneID, ansi: Bool) throws -> String {
         guard let terminal = terminalVCByID[terminalID] else {
             throw IntentError.notFound(kind: "pane", ref: "terminal \(terminalID.value)")
         }
-        return try terminal.captureScreen()
+        return try terminal.captureScreen(format: ansi ? .ansi : .plain)
     }
 
     func focusPane(_ slot: PaneSlot) { splitVC.restoreFocus(to: slot) }

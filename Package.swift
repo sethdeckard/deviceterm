@@ -43,7 +43,7 @@ let package = Package(
         // no Ghostty source, no local build on the deviceterm side.
         .package(
             url: "https://github.com/sethdeckard/libghostty-spm.git",
-            exact: "0.1.1"
+            exact: "0.2.0"
         ),
         // Sparkle 2 — macOS auto-update framework (signed EdDSA appcasts).
         // Linked into the App target only; the daemon/CLI never update

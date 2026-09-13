@@ -125,6 +125,18 @@ func integrationGuideSurfaceMatrixPinsScopeCategories() throws {
 }
 
 @Test
+func integrationGuideDocumentsStyledCapture() throws {
+    let contents = try integrationGuide()
+    let section = try section(named: "Capture a Viewport", in: contents)
+
+    #expect(section.contains("--ansi"))
+    // The divergence from the plain capture is the part a consumer gets
+    // wrong, so pin that it is stated rather than only the flag name.
+    #expect(section.contains("not the plain capture with escapes inserted"))
+    #expect(section.contains("38;5;n"))
+}
+
+@Test
 func integrationGuideHandlesFailedVersionProbeSeparately() throws {
     let contents = try integrationGuide()
     let discovery = try section(named: "Discovery and State", in: contents)

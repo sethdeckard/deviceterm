@@ -520,18 +520,18 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         }
     }
 
-    /// Read the surface's currently-visible viewport as plain text.
+    /// Read the surface's currently-visible viewport in `format`.
     /// Called by the intent layer for `deviceterm pane capture-text`. Same
     /// forced-load shape as `sendInput` so a never-activated tab
     /// still presents its scrollback rather than an empty string,
     /// but throws if the surface is still unavailable after the
     /// forced load (attach failure).
-    func captureScreen() throws -> String {
+    func captureScreen(format: TerminalTextFormat) throws -> String {
         if surface == nil { _ = view }
         guard let surface else {
             throw TerminalSurfaceError.notAttached
         }
-        return try surface.readScreenText()
+        return try surface.readScreenText(format: format)
     }
 
     /// The live working directory of what this terminal is running.

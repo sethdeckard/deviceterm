@@ -222,14 +222,44 @@ func paneCaptureHumanAppendsOnlyMissingNewline() throws {
     let second = FakeTransport(response: try encoded(WorkspaceCaptureResult(pane: pane, text: "already\n")))
 
     #expect(
-        try handlePaneCaptureText(pane: "shell", transport: first, output: .human)
+        try handlePaneCaptureText(pane: "shell", ansi: false, transport: first, output: .human)
             == .stdout("one\ntwo\n")
     )
     #expect(
-        try handlePaneCaptureText(pane: "shell", transport: second, output: .human)
+        try handlePaneCaptureText(pane: "shell", ansi: false, transport: second, output: .human)
             == .stdout("already\n")
     )
     #expect(first.sent.map(\.method) == [RPCMethod.paneCaptureText.rawValue])
+}
+
+@Test
+func paneCaptureAnsiPassesTheFlagAndTheEscapesThrough() throws {
+    let styled = "\u{1b}[31mred\u{1b}[0m plain\n"
+    let fake = FakeTransport(
+        response: try encoded(WorkspaceCaptureResult(pane: testTerminalPane(), text: styled))
+    )
+
+    let outcome = try handlePaneCaptureText(
+        pane: "shell",
+        ansi: true,
+        transport: fake,
+        output: .human
+    )
+
+    // Human mode writes the bytes as they arrived, which is what makes
+    // `--ansi` render in color at a terminal.
+    #expect(outcome == .stdout(Data(styled.utf8)))
+
+    let sent = try #require(fake.sent.first)
+    guard case let .params(data) = sent.body else {
+        Issue.record("expected params body")
+        return
+    }
+    let params = try JSONDecoder().decode(
+        AppCommandParams.CapturePaneText.self,
+        from: data
+    )
+    #expect(params.ansi)
 }
 
 @Test
@@ -237,7 +267,7 @@ func paneCaptureJSONIncludesResolvedPane() throws {
     let result = WorkspaceCaptureResult(pane: testTerminalPane(), text: "contents")
     let payload = try encoded(result)
     let fake = FakeTransport(response: payload)
-    let outcome = try handlePaneCaptureText(pane: "shell", transport: fake, output: .json)
+    let outcome = try handlePaneCaptureText(pane: "shell", ansi: false, transport: fake, output: .json)
 
     var expected = payload
     expected.append(0x0A)

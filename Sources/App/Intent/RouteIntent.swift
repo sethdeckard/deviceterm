@@ -38,7 +38,7 @@ enum RouteIntent: Sendable, Equatable {
     case workspacePaneClose(String?, mode: WorkspaceCloseMode?)
     case workspacePaneRename(String?, name: String?)
     case workspacePaneSendInput(String, text: String, typeDelayMs: Int?)
-    case workspacePaneCaptureText(String)
+    case workspacePaneCaptureText(String, ansi: Bool)
 
     /// Claim an unlinked sim: the `.sim` arm of `device attach <ref>`.
     /// The udid must currently have no live linked session (external sim

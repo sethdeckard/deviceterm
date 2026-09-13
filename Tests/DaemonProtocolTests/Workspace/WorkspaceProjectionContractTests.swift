@@ -122,6 +122,22 @@ func workspaceDetailAndCaptureJSONContracts() throws {
     let captureJSON = try workspaceJSON(capture)
     #expect(captureJSON.contains(#""text":"one\ntwo""#))
     #expect(captureJSON.contains(#""pane":{"capabilities":["sendInput","captureText"]"#))
+
+    // A styled capture rides the same `text` field. ESC has no shorthand
+    // escape in JSON, so it encodes as \u001b and must survive intact:
+    // a consumer stripping SGR needs the bytes it was sent.
+    let styled = WorkspaceCaptureResult(
+        pane: contractPane,
+        text: "\u{1b}[31mred\u{1b}[0m\n"
+    )
+    let styledJSON = try workspaceJSON(styled)
+    #expect(styledJSON.contains(#""text":"\u001b[31mred\u001b[0m\n""#))
+    #expect(
+        try JSONDecoder().decode(
+            WorkspaceCaptureResult.self,
+            from: Data(styledJSON.utf8)
+        ) == styled
+    )
 }
 
 @Test

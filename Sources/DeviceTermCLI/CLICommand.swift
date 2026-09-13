@@ -245,7 +245,7 @@ public enum CLICommand: Equatable, Sendable {
     case paneClose(pane: String?, mode: WorkspaceCloseMode?)
     case paneRename(pane: String?, name: String?)
     case paneSendInput(pane: String, text: String, typeDelay: Int?)
-    case paneCaptureText(pane: String)
+    case paneCaptureText(pane: String, ansi: Bool)
     /// `deviceterm device attach <ref>`: the unified explicit-attach
     /// verb. `<ref>` resolves against the `devices.list` roster to any
     /// device: an already-booted/orphan **sim** (claimed into the

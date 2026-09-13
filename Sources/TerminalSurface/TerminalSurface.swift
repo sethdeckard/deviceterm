@@ -74,16 +74,17 @@ public protocol TerminalSurface: AnyObject {
     /// false success.
     func sendInput(_ text: String) throws
 
-    /// Capture the surface's currently-visible viewport as plain
-    /// text. Powers the automation-only `deviceterm pane capture-text`
-    /// verb. Returns the rendered cell contents (no styling, no
-    /// cursor marker) with `"\n"` separating screen rows. Throws
+    /// Capture the surface's currently-visible viewport. Powers the
+    /// automation-only `deviceterm pane capture-text` verb. Returns the
+    /// rendered cell contents with `"\n"` separating screen rows and no
+    /// cursor marker. `format` decides whether styling comes with them;
+    /// see `TerminalTextFormat` for how the two differ. Throws
     /// `TerminalSurfaceError.notAttached` before `attach` has
     /// completed, or `.captureFailed` when the engine refuses the
     /// read (rare; usually means the surface is mid-resize).
     /// Captures the visible viewport only; there is no scrollback
     /// or line-count option.
-    func readScreenText() throws -> String
+    func readScreenText(format: TerminalTextFormat) throws -> String
 
     /// Copy the current selection to the system clipboard. No-op if
     /// nothing is selected. Best-effort: implementations log on
@@ -137,4 +138,12 @@ public protocol TerminalSurface: AnyObject {
     /// The engine owns the PTY, so it is the only component that can name the
     /// foreground process.
     func terminalIdentity() -> TerminalIdentity?
+}
+
+public extension TerminalSurface {
+    /// Capture the viewport as plain text, the default for every caller
+    /// that has no reason to ask for styling.
+    func readScreenText() throws -> String {
+        try readScreenText(format: .plain)
+    }
 }

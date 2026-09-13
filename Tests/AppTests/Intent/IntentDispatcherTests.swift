@@ -273,7 +273,11 @@ struct IntentDispatcherTests {
             origin: .inProcess
         )
         let capture = await harness.dispatcher.dispatch(
-            .workspacePaneCaptureText("S-secondary"),
+            .workspacePaneCaptureText("S-secondary", ansi: false),
+            origin: .inProcess
+        )
+        let styledCapture = await harness.dispatcher.dispatch(
+            .workspacePaneCaptureText("S-secondary", ansi: true),
             origin: .inProcess
         )
 
@@ -300,12 +304,25 @@ struct IntentDispatcherTests {
         }
         #expect(result.pane.id == "S-secondary")
         #expect(result.text == "secondary output")
+        guard case .data(.workspaceCapture) = styledCapture else {
+            Issue.record("expected styled capture result; got \(styledCapture)")
+            return
+        }
+        // Both dispatches hit the same pane; only the format differs, and
+        // the flag has to reach the delegate rather than stop at the route.
         #expect(
             harness.delegate.captures == [
                 .init(
                     window: WindowID(value: 1),
                     tab: TabID(value: 1),
-                    terminal: TerminalPaneID(value: 9)
+                    terminal: TerminalPaneID(value: 9),
+                    ansi: false
+                ),
+                .init(
+                    window: WindowID(value: 1),
+                    tab: TabID(value: 1),
+                    terminal: TerminalPaneID(value: 9),
+                    ansi: true
                 )
             ]
         )
@@ -334,7 +351,7 @@ struct IntentDispatcherTests {
             origin: .inProcess
         )
         let capture = await harness.dispatcher.dispatch(
-            .workspacePaneCaptureText("P-sim"),
+            .workspacePaneCaptureText("P-sim", ansi: false),
             origin: .inProcess
         )
 
@@ -923,6 +940,7 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         let window: WindowID
         let tab: TabID
         let terminal: TerminalPaneID
+        let ansi: Bool
     }
 
     struct MoveAcross: Equatable {
@@ -1003,13 +1021,16 @@ private final class RecordingActionDelegate: IntentActionDelegate {
     func captureTerminal(
         window: WindowID,
         tab: TabID,
-        terminal: TerminalPaneID
+        terminal: TerminalPaneID,
+        ansi: Bool
     ) throws -> String {
         if let error = captureError {
             captureError = nil
             throw error
         }
-        captures.append(Capture(window: window, tab: tab, terminal: terminal))
+        captures.append(
+            Capture(window: window, tab: tab, terminal: terminal, ansi: ansi)
+        )
         return captureResult
     }
 

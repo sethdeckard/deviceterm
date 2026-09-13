@@ -382,10 +382,14 @@ never the text. A word beginning with a dash is read as a flag. Put
 .B --
 before the text to send such a word literally.
 .TP
-.B pane capture-text " " \fIpane\fR
+.B pane capture-text " " \fIpane\fR " " [\fB--ansi\fR]
 Requires a live automation grant and an explicit terminal pane. Human mode
 prints the visible viewport; JSON returns the pane and text. Scrollback is not
 included.
+.B --ansi
+keeps the pane's SGR color and style sequences; palette colors stay as palette
+indexes. Stripping those sequences and trimming trailing spaces on each row
+yields the plain capture.
 .TP
 .B with-pane " " \fIref\fR " " \fIcmd\fR " " [\fIargs\fR ...]
 Resolve a device pane, inject

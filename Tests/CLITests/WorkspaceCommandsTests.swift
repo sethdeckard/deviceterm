@@ -219,10 +219,34 @@ struct WorkspaceCommandsTests {
         )
         #expect(
             CLICommands.parse(["deviceterm", "pane", "capture-text", "term"])
-                == .paneCaptureText(pane: "term")
+                == .paneCaptureText(pane: "term", ansi: false)
         )
         Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "send-input", "term"]))
         Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "capture-text"]))
+    }
+
+    @Test
+    func paneCaptureTextAcceptsAnsiEitherSideOfThePane() {
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "capture-text", "term", "--ansi"])
+                == .paneCaptureText(pane: "term", ansi: true)
+        )
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "capture-text", "--ansi", "term"])
+                == .paneCaptureText(pane: "term", ansi: true)
+        )
+    }
+
+    @Test
+    func paneCaptureTextRejectsMalformedAnsiUsage() {
+        Self.expectUsage(CLICommands.parse(["deviceterm", "pane", "capture-text", "--ansi"]))
+        // `--ansi` is a flag, so neither a negation nor a value is offered.
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "pane", "capture-text", "term", "--no-ansi"])
+        )
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "pane", "capture-text", "term", "--ansi=true"])
+        )
     }
 
     @Test
@@ -311,6 +335,13 @@ struct WorkspaceCommandsTests {
         #expect(
             try Self.params(capture, as: AppCommandParams.CapturePaneText.self)
                 == .init(pane: "term")
+        )
+
+        let styled = try CLICommands.paneCaptureTextRequest(pane: "term", ansi: true)
+        #expect(styled.method == RPCMethod.paneCaptureText.rawValue)
+        #expect(
+            try Self.params(styled, as: AppCommandParams.CapturePaneText.self)
+                == .init(pane: "term", ansi: true)
         )
     }
 

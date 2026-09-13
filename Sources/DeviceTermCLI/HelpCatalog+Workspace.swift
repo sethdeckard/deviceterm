@@ -171,10 +171,15 @@ extension HelpCatalog {
                   beginning with - is read as a flag. Put `--` before the text
                   to send such a word literally.
 
-              pane capture-text <pane>
+              pane capture-text <pane> [--ansi]
                   Requires a live automation grant and a terminal pane. Human
                   mode prints the visible viewport as raw text; --json emits
                   `{pane, text}`. Scrollback is not included.
+
+                  --ansi keeps the pane's SGR color and style sequences.
+                  Palette colors stay as palette indexes so you apply your own
+                  theme. Strip the sequences and trim trailing spaces on each
+                  row to get the plain capture back.
             """
         ),
         HelpTopic(

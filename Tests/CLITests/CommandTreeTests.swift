@@ -240,6 +240,7 @@ let declaredInvocations: [[String]] = [
     ["pane", "rename", "term", "name"],
     ["pane", "send-input", "term", "echo"],
     ["pane", "capture-text", "term"],
+    ["pane", "capture-text", "term", "--ansi"],
     ["window", "list"],
     ["window", "show", "main"],
     ["window", "open"],

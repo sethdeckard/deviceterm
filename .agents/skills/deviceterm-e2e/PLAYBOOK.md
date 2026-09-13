@@ -1054,6 +1054,38 @@ negative arm.
   the scratch directory created for this scenario. Confirm the window/tab/pill
   baseline. Never close the Automation Tab.
 
+### 10. Styled capture *(no sim)*
+
+`pane capture-text <pane> --ansi` returns the viewport with SGR sequences. The GUI
+smoke gate already holds the plain/styled contract in-process; this scenario
+covers the same contract through the CLI, where the JSON encoding and the
+grant check also apply.
+
+- **Setup:** open a throwaway tab and retain its full tab and terminal-pane
+  IDs from the committed receipt. Use bound retries of
+  `pane capture-text <pane> --json` until the surface answers; do not infer
+  readiness from the open receipt.
+- **Fixture:** `pane send-input <pane>` a command that erases to end of line
+  with a background set, then prints styled text, for example
+  `printf 'a\e[41m\e[K\e[0m\n\e[1;31mred\e[0m plain\n'`. The erased
+  region is the case the two formats disagree on; text-only output passes
+  whether or not the contract holds. Keep at least one character on the row,
+  since a row with no text is dropped from both formats.
+- **Styled read:** `pane capture-text <pane> --ansi --json | jq -r .text`
+  contains `\x1b[`. Expect the sequences to be rebuilt from cell state, not
+  echoed back: a program writing `\e[1;31m` reads back as a reset, then each
+  attribute, with palette colors as `38;5;n`. Do not assert on the bytes the
+  program wrote.
+- **Plain read:** the same capture without `--ansi` contains no escape byte.
+- **Equivalence:** strip CSI SGR sequences from the styled text, normalize
+  `\r\n` to `\n`, right-trim each row, and require it to equal the plain
+  text right-trimmed the same way. Run both captures back to back with the
+  pane idle.
+- **Grant:** from an ungranted sibling terminal, `--ansi` fails
+  `intent.automationRequired`, the same refusal as the plain capture.
+- **Cleanup:** close exactly the throwaway tab by its full ID and confirm the
+  window/tab/pill baseline. Never close the Automation Tab.
+
 ---
 
 ## Reporting

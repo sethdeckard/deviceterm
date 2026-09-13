@@ -142,7 +142,7 @@ struct CLIIntentTranslatorTests {
         #expect(
             try CLIIntentTranslator.translate(
                 command(.paneCaptureText, AppCommandParams.CapturePaneText(pane: "shell"))
-            ) == .workspacePaneCaptureText("shell")
+            ) == .workspacePaneCaptureText("shell", ansi: false)
         )
     }
 

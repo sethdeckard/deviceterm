@@ -182,10 +182,13 @@ extension CLICommands {
         )
     }
 
-    public static func paneCaptureTextRequest(pane: String) throws -> RPCEnvelope {
+    public static func paneCaptureTextRequest(
+        pane: String,
+        ansi: Bool = false
+    ) throws -> RPCEnvelope {
         try request(
             method: .paneCaptureText,
-            body: AppCommandParams.CapturePaneText(pane: pane)
+            body: AppCommandParams.CapturePaneText(pane: pane, ansi: ansi)
         )
     }
 

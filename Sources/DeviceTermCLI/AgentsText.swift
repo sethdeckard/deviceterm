@@ -253,9 +253,12 @@ public enum AgentsText {
       Read a terminal pane (run from an automation tab):
         deviceterm pane capture-text term123 | grep error
         deviceterm pane capture-text term123 --json | jq -r .text
+        deviceterm pane capture-text term123 --ansi --json | jq -r .text
         # Returns the resolved terminal's currently-visible viewport as
         # plain text. Viewport only; no scrollback or line-count
-        # flags. Same grant-gated authority as send-input: works from
+        # flags. --ansi keeps SGR color and style escapes, for display
+        # rather than for reading: classify on the plain capture. Same
+        # grant-gated authority as send-input: works from
         # an automation tab, refused from an agent tab. The intended
         # pairing is: pane send-input '<cmd>\\n' then wait for the prompt and
         # pane capture-text to read the output.

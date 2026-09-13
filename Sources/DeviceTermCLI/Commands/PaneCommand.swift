@@ -164,15 +164,22 @@ struct PaneCommand: CLICommandConvertible {
     struct CaptureText: CLICommandConvertible {
         static let configuration = CommandConfiguration(
             commandName: "capture-text",
-            abstract: "Capture a terminal pane's visible text"
+            abstract: "Capture a terminal pane's visible text",
+            usage: "deviceterm pane capture-text <pane> [--ansi] [--json]"
         )
 
         @Argument(help: "Terminal pane reference.")
         var pane: String
 
+        @Flag(
+            name: .customLong("ansi"),
+            help: "Keep SGR color and style escape sequences in the text."
+        )
+        var ansi = false
+
         @OptionGroup var jsonFlag: JSONFlag
 
-        var cliCommand: CLICommand { .paneCaptureText(pane: pane) }
+        var cliCommand: CLICommand { .paneCaptureText(pane: pane, ansi: ansi) }
     }
 
     static let subVerbList = "deviceterm: 'pane' supports: list, show, split, focus, close, rename, "

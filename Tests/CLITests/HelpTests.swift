@@ -346,7 +346,7 @@ func helpListsEveryUserFacingVerb() {
         "pane focus [<pane>]",
         "pane close",
         "pane send-input <pane>",
-        "pane capture-text <pane>",
+        "pane capture-text <pane> [--ansi]",
         "device attach <ref>",
         "pane rename",
         "completions install"

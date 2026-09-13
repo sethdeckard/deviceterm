@@ -725,7 +725,7 @@ final class IntentDispatcher {
                 typeDelayMs: delay
             )))
 
-        case let .workspacePaneCaptureText(ref):
+        case let .workspacePaneCaptureText(ref, ansi):
             let resolved = try resolver.resolveWorkspacePane(ref)
             guard case let .terminal(terminal) = resolved.state else {
                 throw IntentError.unsupportedPane(
@@ -739,7 +739,8 @@ final class IntentDispatcher {
             let text = try delegate.captureTerminal(
                 window: resolved.windowID,
                 tab: resolved.tabID,
-                terminal: terminal.id
+                terminal: terminal.id,
+                ansi: ansi
             )
             return .data(.workspaceCapture(.init(
                 pane: projection.project(resolved, includeTerminalCWD: false),

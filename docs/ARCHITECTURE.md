@@ -2774,12 +2774,16 @@ dispatch or paced-input enqueue and never echoes `text`.
 
 #### `pane.captureText`
 
-- Params: `{pane}`
+- Params: `{pane, ansi?}`
 - Result: `WorkspaceCaptureResult {pane, text}`
 - Scope: automation tab
 
 The pane ref is required and must resolve to a terminal. The text is the
 visible viewport, not scrollback.
+
+`ansi` defaults to false and keeps the viewport's SGR color and style
+sequences when set. A caller built before the field existed omits it and
+gets the plain capture, so the addition needs no wire-version bump.
 
 #### `pane.attach`
 

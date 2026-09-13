@@ -271,7 +271,12 @@ private final class RecordingAuthorityDelegate: IntentActionDelegate {
         typeDelayMillis: Int?
     ) {}
 
-    func captureTerminal(window: WindowID, tab: TabID, terminal: TerminalPaneID) -> String { "" }
+    func captureTerminal(
+        window: WindowID,
+        tab: TabID,
+        terminal: TerminalPaneID,
+        ansi: Bool
+    ) -> String { "" }
 
     func moveTabAcrossWindows(_ tab: TabID, from: WindowID, to destination: WindowID, atIndex: Int) {}
     func raiseWindow(_ window: WindowID) {}

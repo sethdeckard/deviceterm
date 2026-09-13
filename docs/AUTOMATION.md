@@ -475,6 +475,10 @@ not included. Human output is the raw text, so a redirect saves the screen.
 The command requires an explicit terminal pane reference and a live automation
 grant. See [capture a viewport](INTEGRATION.md#capture-a-viewport).
 
+`--ansi` keeps the pane's color and style escapes for display. It is not the
+plain text with escapes inserted; see
+[capture a viewport](INTEGRATION.md#capture-a-viewport).
+
 ### Protect a Tab
 
 Protect the current tab when other sessions should not see or control it:

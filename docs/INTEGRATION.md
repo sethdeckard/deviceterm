@@ -354,7 +354,7 @@ their panes unless the caller owns that protected tab.
 | `tab protect`, `tab unprotect` with `--json` | Workspace receipt | Session and tab ownership, or automation | GUI committed the protection state | Stable-additive |
 | `pane focus --json` | Workspace receipt | Automation | GUI committed focus across window, tab, and pane | Stable-additive |
 | `pane send-input --json` | Workspace receipt | Automation | Input was dispatched or paced typing was enqueued | Stable-additive |
-| `pane capture-text --json` | `{pane, text}` | Automation | Visible terminal viewport captured | Stable-additive |
+| `pane capture-text --json` | `{pane, text}` | Automation | Visible terminal viewport captured; `--ansi` keeps SGR sequences | Stable-additive |
 | `ax tree`, `ax point` | DeviceTerm wrapper containing an Apple accessibility node | Session | Accessibility query completed | Stable-additive wrapper and `normalizedCenter`; best-effort Apple fields |
 | `ax sweep` | DeviceTerm sweep wrapper containing Apple nodes | Session | Sweep stopped, having finished the grid or spent its budget | Stable-additive wrapper and child `normalizedCenter`; best-effort Apple fields |
 | `events` | JSON Lines stream | Session | Subscription remains active until EOF or termination | Stable-additive |
@@ -1032,6 +1032,9 @@ take `--mode` because either can contain linked Simulators.
 
 Human mode prints the captured text directly. The capture is the visible
 viewport only.
+
+`--ansi` keeps the viewport's SGR color and style sequences in the same
+`text` field. ESC has no shorthand JSON escape, so it arrives as `\u001b`.
 
 ## Waiting for State
 
@@ -1726,6 +1729,41 @@ Shape:
 
 The capture contains the terminal pane's currently visible viewport and not
 its scrollback. Human mode writes the text directly.
+
+Run:
+
+```sh
+deviceterm pane capture-text term123 --ansi --json
+```
+
+Shape:
+
+```jsonc
+{
+  "pane": { "...": "terminal WorkspacePane" },
+  "text": "\u001b[0m\u001b[1m\u001b[38;5;1mred\u001b[0m plain\n"
+}
+```
+
+The sequences are rebuilt from each cell's style, not echoed back from what
+the program wrote. A run opens with a reset, then one sequence per attribute,
+and closes with a reset, so a program that wrote `\u001b[1;31m` reads back as
+`\u001b[0m\u001b[1m\u001b[38;5;1m`.
+
+Rows are `\n`-separated in both formats. Palette colors are emitted as
+palette indexes (`38;5;n`) so the consumer applies its own theme; direct RGB
+passes through as `38;2;r;g;b`.
+
+The styled capture is not the plain capture with escapes inserted. A
+trailing cell holding a background but no character arrives as a space, which
+the plain capture omits. Interior ones become spaces in both, because a later
+character on the row flushes them. Strip the escape sequences and trim trailing spaces on each
+row and the two match. Row counts always match, because row blankness is
+decided from characters alone. A row that is entirely background with no
+text is dropped from both, so a colored region survives only on a row
+holding at least one character.
+
+Use the plain capture to classify output and the styled one to display it.
 
 ### Set Protection
 

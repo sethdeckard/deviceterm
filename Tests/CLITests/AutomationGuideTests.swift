@@ -66,6 +66,7 @@ func automationGuideDocumentsLiveWorkspaceProjection() throws {
     let driving = try section(named: "Drive Other Tabs", in: contents)
     #expect(driving.contains("pane send-input \"$TARGET_PANE\""))
     #expect(driving.contains("pane capture-text \"$TARGET_PANE\""))
+    #expect(driving.contains("`--ansi` keeps the pane's color and style escapes"))
     #expect(driving.contains("explicit terminal pane reference"))
     #expect(driving.contains("live\nautomation grant"))
 }

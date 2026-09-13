@@ -35,7 +35,12 @@ protocol IntentActionDelegate: AnyObject {
     ) throws
 
     /// Capture one concrete terminal pane's visible viewport.
-    func captureTerminal(window: WindowID, tab: TabID, terminal: TerminalPaneID) throws -> String
+    func captureTerminal(
+        window: WindowID,
+        tab: TabID,
+        terminal: TerminalPaneID,
+        ansi: Bool
+    ) throws -> String
 
     /// Give a concrete pane leaf keyboard focus.
     func focusPane(window: WindowID, tab: TabID, slot: PaneSlot)

@@ -568,11 +568,15 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         )
     }
 
-    func captureTerminal(_ terminalID: TerminalPaneID, inTab tabID: TabID) throws -> String {
+    func captureTerminal(
+        _ terminalID: TerminalPaneID,
+        inTab tabID: TabID,
+        ansi: Bool
+    ) throws -> String {
         guard let tabContent = tabContentByID[tabID] else {
             throw IntentError.notFound(kind: "tab", ref: "\(tabID.value)")
         }
-        return try tabContent.captureTerminal(terminalID)
+        return try tabContent.captureTerminal(terminalID, ansi: ansi)
     }
 
     func focusPane(_ slot: PaneSlot, inTab tabID: TabID) {

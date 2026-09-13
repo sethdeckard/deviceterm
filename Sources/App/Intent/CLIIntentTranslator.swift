@@ -102,7 +102,7 @@ enum CLIIntentTranslator {
 
         case .paneCaptureText:
             let params = try decoder.decode(AppCommandParams.CapturePaneText.self, from: command.params)
-            return .workspacePaneCaptureText(params.pane)
+            return .workspacePaneCaptureText(params.pane, ansi: params.ansi)
 
         case .paneAttach:
             let params = try decoder.decode(AppCommandParams.PaneAttach.self, from: command.params)

@@ -179,9 +179,32 @@ public enum AppCommandParams {
     }
 
     public struct CapturePaneText: Codable, Sendable, Equatable {
-        public let pane: String
+        private enum CodingKeys: String, CodingKey {
+            case pane
+            case ansi
+        }
 
-        public init(pane: String) { self.pane = pane }
+        public let pane: String
+        /// Keep the pane's SGR color and style sequences in the captured
+        /// text instead of returning plain characters. Palette colors stay
+        /// as palette indexes so the consumer applies its own theme; direct
+        /// RGB passes through. Rows are `\n`-separated either way, and the
+        /// styled capture emits trailing background-only cells as spaces,
+        /// which the plain capture omits.
+        public let ansi: Bool
+
+        public init(pane: String, ansi: Bool = false) {
+            self.pane = pane
+            self.ansi = ansi
+        }
+
+        // Tolerant decode: a CLI built before this field existed omits it
+        // and decodes as the plain capture. Encode stays synthesized.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            pane = try container.decode(String.self, forKey: .pane)
+            ansi = try container.decodeIfPresent(Bool.self, forKey: .ansi) ?? false
+        }
     }
 
     /// Mount a device pane (`deviceterm device attach <ref>`). `target`

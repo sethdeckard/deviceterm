@@ -1677,12 +1677,13 @@ extension AppDelegate: IntentActionDelegate {
     func captureTerminal(
         window windowID: WindowID,
         tab tabID: TabID,
-        terminal terminalID: TerminalPaneID
+        terminal terminalID: TerminalPaneID,
+        ansi: Bool
     ) throws -> String {
         guard let strip = strip(for: windowID) else {
             throw IntentError.notFound(kind: "window", ref: "\(windowID.value)")
         }
-        return try strip.captureTerminal(terminalID, inTab: tabID)
+        return try strip.captureTerminal(terminalID, inTab: tabID, ansi: ansi)
     }
 
     func focusPane(window windowID: WindowID, tab tabID: TabID, slot: PaneSlot) {

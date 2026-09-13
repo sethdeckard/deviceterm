@@ -194,6 +194,18 @@ func everyScriptCoversEverySubVerb() {
 }
 
 @Test
+func zshAndBashScriptsOfferPaneFlags() {
+    // The generator reads flags off the ArgumentParser declarations, so a
+    // new flag needs no hand-edit here. This is the drift guard for that:
+    // it catches a flag that never reached the parser. fish is excluded
+    // because its generated script carries no flags at all.
+    for (shell, text) in everyScript where shell != .fish {
+        #expect(text.contains("--ansi"), "\(shell) script omits pane capture-text --ansi")
+        #expect(text.contains("--type-delay"), "\(shell) script omits pane send-input --type-delay")
+    }
+}
+
+@Test
 func everyScriptCompletesHelpTopics() {
     // Concepts and sub-verb command paths alike.
     for (shell, text) in everyScript {

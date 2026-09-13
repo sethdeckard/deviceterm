@@ -100,6 +100,7 @@ func manPageCoversTouchAndHardwareInputCommands() throws {
         "pane close",
         "pane send-input",
         "pane capture-text",
+        "--ansi",
         "device attach",
         "window open",
         "window close",
