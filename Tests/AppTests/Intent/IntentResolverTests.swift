@@ -231,9 +231,19 @@ struct IntentResolverTests {
     }
 
     @Test
-    func windowIndexIsMetadataOnly() {
+    func windowIndexIsMetadataOnly() throws {
+        // Pinned, because `resolveWindow` matches on a UUID prefix and "1"
+        // is a hex digit. A random publicID that happens to begin with "1"
+        // resolves the window, leaving this expectation to depend on the
+        // draw rather than on the behavior it names.
+        let publicID = try #require(UUID(uuidString: "AAA00000-0000-0000-0000-000000000001"))
         let workspace = makeWorkspace([
-            .init(id: WindowID(value: 1), tabs: [tab(1, session: "S-A")], selected: true)
+            .init(
+                id: WindowID(value: 1),
+                tabs: [tab(1, session: "S-A")],
+                selected: true,
+                publicID: publicID
+            )
         ])
         let resolver = IntentResolver(workspace: workspace, origin: .inProcess)
 
