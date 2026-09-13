@@ -25,7 +25,7 @@ Install the signed and notarized app with Homebrew:
 brew install --cask sethdeckard/tap/deviceterm
 ```
 
-Or download `deviceterm-0.7.0.dmg` from the
+Or download `deviceterm-0.8.0.dmg` from the
 [latest release](https://github.com/sethdeckard/deviceterm/releases/latest) and
 drag `DeviceTerm.app` to `/Applications`.
 
