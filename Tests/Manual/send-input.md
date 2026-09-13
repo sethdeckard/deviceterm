@@ -25,7 +25,7 @@ it.
 - Launch with `make run`.
 - **Two tabs.** A driver opened with Shell → Open Automation Tab
   (⌘⇧T), and an ordinary recorded tab. `send-input` is
-  automation-only; from a plain tab it fails `intent.automationRequired`.
+  automation-only; from a plain tab it fails `session.unauthorized`.
 - The recorded terminal pane's ref from `deviceterm pane list`, used as
   `<pane>` throughout.
 

@@ -136,9 +136,8 @@ for escalation, and constructing the raw request by hand does not work. The
 daemon refuses grant creation from anything but the validated GUI.
 
 A role string such as `"automation"` is descriptive metadata. Without a live
-grant, an automation-scoped command fails with
-`intent.automationRequired` even when `DEVICETERM_SESSION_ROLE` still says
-`automation`.
+grant, an automation-scoped command fails with `session.unauthorized` even
+when `DEVICETERM_SESSION_ROLE` still says `automation`.
 
 [Open an Automation Tab](#open-an-automation-tab) covers the grant lifecycle.
 
@@ -417,7 +416,7 @@ the session ends.
 
 The grant covers `tab open`, `tab focus`, `tab move`, `window open`,
 `window focus`, `pane focus`, `pane send-input`, and `pane capture-text`.
-An ordinary tab receives `intent.automationRequired` for those commands, and
+An ordinary tab receives `session.unauthorized` for those commands, and
 the CLI cannot grant authority to itself.
 
 The same grant satisfies ownership checks for visible targets. It does not

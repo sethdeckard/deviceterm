@@ -1056,10 +1056,10 @@ negative arm.
 
 ### 10. Styled capture *(no sim)*
 
-`pane capture-text <pane> --ansi` returns the viewport with SGR sequences. The GUI
-smoke gate already holds the plain/styled contract in-process; this scenario
-covers the same contract through the CLI, where the JSON encoding and the
-grant check also apply.
+`pane capture-text <pane> --ansi` returns the viewport with SGR sequences. No
+automated layer reaches libghostty's formatter, so this scenario is the only
+check that the styled output is real and that it reduces to the plain capture.
+It also covers the JSON encoding and the grant check.
 
 - **Setup:** open a throwaway tab and retain its full tab and terminal-pane
   IDs from the committed receipt. Use bound retries of
@@ -1082,7 +1082,9 @@ grant check also apply.
   text right-trimmed the same way. Run both captures back to back with the
   pane idle.
 - **Grant:** from an ungranted sibling terminal, `--ansi` fails
-  `intent.automationRequired`, the same refusal as the plain capture.
+  `session.unauthorized`, the same refusal as the plain capture. The daemon
+  refuses a grant-gated verb at its scope gate, before the request reaches
+  the GUI, so the code is not `intent.automationRequired`.
 - **Cleanup:** close exactly the throwaway tab by its full ID and confirm the
   window/tab/pill baseline. Never close the Automation Tab.
 

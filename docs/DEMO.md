@@ -2,7 +2,7 @@
 
 > **Run the driver from an automation tab.** Open one with **Shell → Open
 > Automation Tab** (⌘⇧T). An ordinary tab cannot control another tab and
-> receives `intent.automationRequired`.
+> receives `session.unauthorized`.
 
 DeviceTerm can type a prepared sequence of commands into a terminal while you
 record it. The commands appear at a natural pace, and the off-camera driver

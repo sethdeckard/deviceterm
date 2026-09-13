@@ -83,7 +83,7 @@ Daemon failures include their numeric RPC code when available:
 {
   "error": {
     "code": "intent.automationRequired",
-    "message": "intent.automationRequired: pane.sendInput requires automation authority",
+    "message": "intent.automationRequired: pane rename needs a live automation grant for this target; run it from an Automation Tab",
     "details": {
       "rpcCode": -32011
     }
@@ -1657,8 +1657,16 @@ about whether accessibility is reachable. Retry it when the pane is quieter.
 Eight commands require a live automation grant, checked for every request:
 `tab open`, `tab focus`, `tab move`, `window open`,
 `window focus`, `pane focus`, `pane send-input`, and
-`pane capture-text`. A caller without one receives `intent.automationRequired`,
+`pane capture-text`. A caller without one is refused at the daemon
+connection, before the request reaches the GUI, with `session.unauthorized`,
 including a caller whose environment role is still `"automation"`.
+
+Owner-scoped verbs are checked in the GUI instead. `window close`,
+`tab close`, `tab rename`, `tab protect`, `tab unprotect`, `pane split`,
+`pane close`, and `pane rename` return `intent.automationRequired` when an
+ungranted caller does not satisfy the target's ownership requirement, spelled
+out below. A caller that satisfies it proceeds without a grant. Both codes
+carry `rpcCode` -32011, so the code tells you which layer refused.
 
 Owner-contained mutations remain session-scoped. `tab rename` and `pane split`
 require the caller to own a terminal in the target tab. For `pane rename` and

@@ -203,7 +203,7 @@ public enum AgentsText {
         deviceterm tab open
         deviceterm tab open --cwd ~/projects/app --command 'claude'
         # Requires a live automation grant; an ordinary tab is
-        # refused with intent.automationRequired. Run it from a tab
+        # refused with session.unauthorized. Run it from a tab
         # opened via Shell > "Open Automation Tab". New tab appears
         # in the same window. The verb waits for the GUI to commit the
         # tab and mint its first terminal session, then returns the
@@ -241,7 +241,7 @@ public enum AgentsText {
         # live automation grant, not a role. Works from a tab
         # opened via Shell > "Open Automation Tab" (the GUI grants
         # that tab's session); from an ordinary agent tab it is
-        # refused (intent.automationRequired).
+        # refused (session.unauthorized).
         deviceterm pane send-input term123 --type-delay 45 -- 'ls\\n'
         # --type-delay <ms> animates the injection one character at a
         # time (for recording screencasts). Omit it for the instant
