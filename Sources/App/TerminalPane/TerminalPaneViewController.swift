@@ -4,6 +4,7 @@ import AppKit
 import DaemonProtocol
 import GhosttyKitResources
 import LibghosttyBridge
+import TerminalProvenance
 import TerminalSurface
 
 /// Hosts one libghostty surface in an AppKit VC.
@@ -531,6 +532,23 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
             throw TerminalSurfaceError.notAttached
         }
         return try surface.readScreenText()
+    }
+
+    /// The live working directory of what this terminal is running.
+    ///
+    /// Returns nil when fresh anchor facts or a safe working-directory
+    /// candidate cannot be read. After anchor derivation, the resolver may use
+    /// an unambiguous same-user shell when the foreground candidate becomes
+    /// unusable. Identity is read afresh so a replaced process can never leave
+    /// a cached directory.
+    func currentWorkingDirectory() -> String? {
+        guard let identity = surface?.terminalIdentity(),
+            let facts = DefaultTerminalProbe.derive(
+                foregroundPid: identity.foregroundPid,
+                ttyName: identity.ttyName
+            )
+        else { return nil }
+        return TerminalWorkingDirectory.resolve(for: facts)
     }
 
     // MARK: - TerminalSurfaceDelegate

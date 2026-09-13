@@ -384,6 +384,18 @@ func tabHelpDefinesTheWorkspace() {
 }
 
 @Test
+func workspaceHelpDocumentsTerminalWorkingDirectoryProjection() {
+    let tab = HelpCatalog.topic(named: "tab")?.detail ?? ""
+    #expect(tab.contains("terminal details may include a live"))
+    #expect(tab.contains("working-directory snapshot as `cwd`"))
+
+    let pane = HelpCatalog.topic(named: "pane")?.detail ?? ""
+    #expect(pane.contains("With a live automation grant, terminal details may include `cwd`"))
+    #expect(pane.contains("optional and may be absent during\n  process transitions"))
+    #expect(pane.contains("ungranted workspace read succeeds without\n  it"))
+}
+
+@Test
 func helpContainsAtLeastOneExamplePerVerb() {
     // These representative device-input verbs should each retain an
     // inline `deviceterm <verb>` example. Not every operand-taking verb

@@ -31,6 +31,11 @@ enum ProcInfo {
         let startMicros: UInt64
         /// Controlling terminal device, or `NODEV` for a process with none.
         let controllingTTYDev: dev_t
+        /// The controlling terminal's foreground process group id.
+        ///
+        /// This field is volatile and is never part of process identity or an
+        /// authorization decision.
+        let foregroundProcessGroup: pid_t
     }
 
     /// The BSD info block for `pid`, or nil when the process has exited (or is
@@ -66,7 +71,8 @@ enum ProcInfo {
             ppid: info.kp_eproc.e_ppid,
             euid: info.kp_eproc.e_ucred.cr_uid,
             startMicros: UInt64(start.tv_sec) * 1_000_000 + UInt64(start.tv_usec),
-            controllingTTYDev: info.kp_eproc.e_tdev
+            controllingTTYDev: info.kp_eproc.e_tdev,
+            foregroundProcessGroup: info.kp_eproc.e_tpgid
         )
     }
 

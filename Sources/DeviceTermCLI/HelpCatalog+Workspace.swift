@@ -63,7 +63,9 @@ extension HelpCatalog {
 
               tab show [<tab>]
                   Show one tab, every pane in layout order, and its recursive
-                  split tree. --json emits `{tab, panes, layout}`.
+                  split tree. --json emits `{tab, panes, layout}`. With a live
+                  automation grant, terminal details may include a live
+                  working-directory snapshot as `cwd`.
 
               tab open [--window <ref>] [--cwd <path>] [--command '<cmd>']
                   Requires a live automation grant. Open a tab in the named or
@@ -114,6 +116,12 @@ extension HelpCatalog {
               physical device ID, or unique full-ID prefix. Names match exactly,
               never by prefix. A terminal pane's ID is its session ID. Omitted
               refs mean the calling terminal pane when a command permits omission.
+
+              With a live automation grant, terminal details may include `cwd`,
+              read as a live snapshot from a verified same-user process associated
+              with the terminal. The field is optional and may be absent during
+              process transitions. An ungranted workspace read succeeds without
+              it, including when the caller owns that terminal.
 
               pane list [--tab <ref>]
                   List every terminal, Simulator, and physical-device pane in

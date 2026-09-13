@@ -401,7 +401,10 @@ final class IntentDispatcher {
             ) else {
                 throw IntentError.internalError("tab open did not commit a tab")
             }
-            let detail = try projection.tab(publicRef(opened))
+            let detail = try projection.tab(
+                publicRef(opened),
+                includeTerminalCWD: false
+            )
             let projectedWindow = try projection.window(publicRef(window)).window
             let committed = WorkspaceMutationReceipt(
                 window: projectedWindow,
@@ -421,9 +424,9 @@ final class IntentDispatcher {
             await router.dispatchAndWait(.selectTab(resolved.windowID, resolved.tabID))
             workspace.select(id: resolved.windowID)
             actionDelegate?.raiseWindow(resolved.windowID)
-            let detail = try projection.tab(publicRef(resolved.tab))
             let window = try projection.window(publicWindowRef(resolved.windowID)).window
-            return .data(.workspaceMutation(.init(window: window, tab: detail.tab)))
+            let tab = try projection.tabSummary(publicRef(resolved.tab))
+            return .data(.workspaceMutation(.init(window: window, tab: tab)))
 
         case let .workspaceTabClose(ref, mode):
             let resolved = try resolver.resolveTab(ref)
@@ -433,7 +436,7 @@ final class IntentDispatcher {
                 requirement: .soleTerminal,
                 origin: origin
             )
-            let closed = try projection.tab(publicRef(resolved.tab)).tab
+            let closed = try projection.tabSummary(publicRef(resolved.tab))
             await router.dispatchAndWait(
                 .closeTab(
                     resolved.windowID,
@@ -464,7 +467,7 @@ final class IntentDispatcher {
                 tab: resolved.tabID,
                 to: name
             )
-            let tab = try projection.tab(publicRef(resolved.tab)).tab
+            let tab = try projection.tabSummary(publicRef(resolved.tab))
             return .data(.workspaceMutation(.init(tab: tab)))
 
         case let .workspaceTabMove(ref, destinationRef, index):
@@ -505,7 +508,7 @@ final class IntentDispatcher {
                 let moved = movedWindow.tabs.tab(id: resolved.tabID) else {
                 throw IntentError.internalError("tab move was not committed in the destination window")
             }
-            let tab = try projection.tab(publicRef(moved)).tab
+            let tab = try projection.tabSummary(publicRef(moved))
             let window = try projection.window(publicRef(movedWindow)).window
             return .data(.workspaceMutation(.init(window: window, tab: tab)))
 
@@ -528,7 +531,7 @@ final class IntentDispatcher {
                         : "tab protection was rejected"
                 )
             }
-            let tab = try projection.tab(publicRef(resolved.tab)).tab
+            let tab = try projection.tabSummary(publicRef(resolved.tab))
             return .data(.workspaceMutation(.init(tab: tab)))
 
         case let .workspacePaneList(tab):
@@ -564,8 +567,11 @@ final class IntentDispatcher {
             ) else {
                 throw IntentError.internalError("pane split did not commit a terminal pane")
             }
-            let pane = try projection.pane(opened.sessionId)
-            let tabReceipt = try projection.tab(publicTabRef(resolved.tabID)).tab
+            let pane = try projection.pane(
+                opened.sessionId,
+                includeTerminalCWD: false
+            )
+            let tabReceipt = try projection.tabSummary(publicTabRef(resolved.tabID))
             return .data(.workspaceMutation(.init(tab: tabReceipt, pane: pane)))
 
         case let .workspacePaneFocus(ref):
@@ -578,8 +584,8 @@ final class IntentDispatcher {
                 tab: resolved.tabID,
                 slot: resolved.slot
             )
-            let pane = projection.project(resolved)
-            let tab = try projection.tab(publicTabRef(resolved.tabID)).tab
+            let pane = projection.project(resolved, includeTerminalCWD: false)
+            let tab = try projection.tabSummary(publicTabRef(resolved.tabID))
             let window = try projection.window(publicWindowRef(resolved.windowID)).window
             return .data(.workspaceMutation(.init(window: window, tab: tab, pane: pane)))
 
@@ -594,7 +600,7 @@ final class IntentDispatcher {
                 hostTab: tab,
                 origin: origin
             )
-            let closed = projection.project(resolved)
+            let closed = projection.project(resolved, includeTerminalCWD: false)
             if mode != nil {
                 switch resolved.state {
                 case .terminal:
@@ -689,7 +695,10 @@ final class IntentDispatcher {
             guard window.tabs.renamePane(resolved.slot, inTab: resolved.tabID, to: name) else {
                 throw IntentError.notFound(kind: "pane", ref: resolved.id)
             }
-            let pane = try projection.pane(resolved.id)
+            let pane = try projection.pane(
+                resolved.id,
+                includeTerminalCWD: false
+            )
             return .data(.workspaceMutation(.init(pane: pane)))
 
         case let .workspacePaneSendInput(ref, text, delay):
@@ -711,7 +720,7 @@ final class IntentDispatcher {
                 typeDelayMillis: delay
             )
             return .data(.workspaceMutation(.init(
-                pane: projection.project(resolved),
+                pane: projection.project(resolved, includeTerminalCWD: false),
                 bytes: Data(text.utf8).count,
                 typeDelayMs: delay
             )))
@@ -733,7 +742,7 @@ final class IntentDispatcher {
                 terminal: terminal.id
             )
             return .data(.workspaceCapture(.init(
-                pane: projection.project(resolved),
+                pane: projection.project(resolved, includeTerminalCWD: false),
                 text: text
             )))
 
@@ -771,7 +780,12 @@ final class IntentDispatcher {
         projection: WorkspaceProjection
     ) -> WorkspaceMutationReceipt {
         let tab = detail.tabs.first(where: \.selected) ?? detail.tabs.first
-        let pane = tab.flatMap { try? projection.tab($0.id).panes.first }
+        let pane = tab.flatMap {
+            try? projection.firstPane(
+                inTab: $0.id,
+                includeTerminalCWD: false
+            )
+        }
         return WorkspaceMutationReceipt(window: detail.window, tab: tab, pane: pane)
     }
 
@@ -780,8 +794,11 @@ final class IntentDispatcher {
         tabID: TabID,
         projection: WorkspaceProjection
     ) throws -> IntentResult {
-        let pane = try projection.pane(paneID)
-        let tab = try projection.tab(publicTabRef(tabID)).tab
+        let pane = try projection.pane(
+            paneID,
+            includeTerminalCWD: false
+        )
+        let tab = try projection.tabSummary(publicTabRef(tabID))
         return .data(.workspaceMutation(.init(tab: tab, pane: pane)))
     }
 

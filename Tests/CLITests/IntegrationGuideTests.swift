@@ -150,6 +150,27 @@ func integrationGuideDocumentsWorkspaceProjectionContract() throws {
 }
 
 @Test
+func integrationGuideDocumentsTerminalWorkingDirectoryProjection() throws {
+    let contents = try integrationGuide()
+    let matrix = try section(named: "Surface Matrix", in: contents)
+    #expect(matrix.contains("optional `terminal.cwd` field has a narrower rule"))
+    #expect(matrix.contains("live automation grant"))
+
+    let discovery = try section(named: "Discovery and State", in: contents)
+    for claim in [
+        "`terminal.cwd` is an optional live process snapshot",
+        "ungranted read still succeeds but omits the field",
+        "derives fresh anchor facts",
+        "verified same-user process associated with the terminal",
+        "process handoff can\nleave the field absent for one read",
+        "When fallback\nmust select among the session leader's children",
+        "never\nsubstitutes the startup directory"
+    ] {
+        #expect(discovery.contains(claim), "terminal CWD contract missing: \(claim)")
+    }
+}
+
+@Test
 func integrationGuidePinsWorkspaceReferenceRules() throws {
     let contents = try integrationGuide()
     let rules = try section(named: "Contract Rules", in: contents)

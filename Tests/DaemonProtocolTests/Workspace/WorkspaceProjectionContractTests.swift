@@ -76,6 +76,24 @@ func workspaceTerminalPaneJSONContract() throws {
 }
 
 @Test
+func workspaceTerminalPaneOmitsUnknownWorkingDirectory() throws {
+    let pane = WorkspacePane(
+        id: contractPane.id,
+        shortId: contractPane.shortId,
+        name: contractPane.name,
+        kind: .terminal,
+        tabId: contractPane.tabId,
+        current: contractPane.current,
+        focused: contractPane.focused,
+        capabilities: contractPane.capabilities,
+        terminal: .init(sessionId: contractPane.id, cwd: nil)
+    )
+    let encoded = try workspaceJSON(pane)
+    #expect(encoded.contains(#""terminal":{"sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"}"#))
+    #expect(!encoded.contains(#""cwd""#))
+}
+
+@Test
 func workspaceLayoutUsesExplicitTaggedNodes() throws {
     let layout = WorkspaceLayoutNode.split(
         axis: "horizontal",

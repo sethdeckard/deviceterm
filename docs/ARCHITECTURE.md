@@ -2550,6 +2550,22 @@ to the verb. They never echo the unresolved request. Workspace list/show
 results use `WorkspaceWindow`, `WorkspaceTab`, `WorkspacePane`,
 `WorkspaceWindowDetail`, and `WorkspaceTabDetail`.
 
+`WorkspacePane.Terminal.cwd` has a field-level authority gate separate from
+the workspace method's scope. `pane.show`, `pane.list`, and `tab.show` remain
+session-scoped, but an external projection reads terminal process metadata
+only when its authenticated session holds a live automation grant. An
+in-process GUI projection may read it directly.
+
+The gate runs before the action delegate, so an ungranted caller causes no
+process-table read. Missing live data remains absent; projection never falls
+back to `TerminalPaneState.cwd`, which is only the terminal's startup
+directory.
+
+Collection projections include CWD for every terminal.
+`WorkspaceProjection.includesTerminalCWDInCollections` holds that policy in
+one place. The 12-terminal measurement and its decision thresholds are
+recorded in `Tests/Manual/terminal-working-directory-perf.md`.
+
 #### `window.list`
 
 - Params: `{all}`
@@ -3370,6 +3386,29 @@ terminal anchor and then discards (only the POSIX session id, tty device, and
 session-leader start time are retained). The session-dir manifest (`owner.pid`
 = GUI pid; see "Per-terminal-session directory" below) remains the
 cross-restart orphan-recovery link.
+
+Working-directory reporting stays in the GUI because the GUI owns the terminal
+surface. For each projection, `TerminalPaneViewController` reads the surface's
+current foreground PID and TTY. `DefaultTerminalProbe` derives fresh
+terminal-anchor facts rather than using cached process identity. If that fresh
+probe cannot verify the current foreground process, including across a UID
+boundary, projection returns no CWD.
+
+`TerminalWorkingDirectory` first confirms that the POSIX session leader still
+has the anchor's start time. It prefers the same-user foreground process-group
+leader on the anchored TTY. After successful anchor derivation, if that process
+becomes unusable, it accepts the same-user session leader or the one
+unambiguous same-user direct child on that TTY as the shell.
+
+The resolver reads the selected process's current directory with
+`proc_pidinfo(PROC_PIDVNODEPATHINFO)`. It snapshots the process before and
+after the read, comparing PID, parent, effective UID, start time, and
+controlling TTY, then confirms the session leader again. Any disagreement
+returns no value.
+
+These reads are reporting-only. `ProcInfo+WorkingDirectory.swift` is separate
+from the process helpers used by `ProvenanceMatcher`, and no authentication or
+authorization decision consults the reported directory.
 
 ### HID
 

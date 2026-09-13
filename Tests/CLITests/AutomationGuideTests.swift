@@ -71,6 +71,17 @@ func automationGuideDocumentsLiveWorkspaceProjection() throws {
 }
 
 @Test
+func automationGuideDocumentsTerminalWorkingDirectoryReads() throws {
+    let contents = try automationGuide()
+    let discovery = try section(named: "Discover State", in: contents)
+    #expect(discovery.contains("pane show \"$PANE\" --json | jq -er '.terminal.cwd'"))
+    #expect(discovery.contains("Every command takes a fresh process snapshot"))
+    #expect(discovery.contains("requires a live automation grant"))
+    #expect(discovery.contains("successful workspace response with `cwd`\nomitted"))
+    #expect(discovery.contains("Do not fall back to a startup `--cwd` value"))
+}
+
+@Test
 func automationGuidePreservesOperationalSections() throws {
     let contents = try automationGuide()
     let headings = [
@@ -80,6 +91,7 @@ func automationGuidePreservesOperationalSections() throws {
         "### Open Tabs, Panes, and Windows",
         "### Arrange, Select, and Close Surfaces",
         "### List Tabs, Panes, Windows, and Devices",
+        "### Read Terminal Working Directories",
         "### Resolve Workspace References",
         "### Check Health With doctor",
         "### Diagnose Version Skew",

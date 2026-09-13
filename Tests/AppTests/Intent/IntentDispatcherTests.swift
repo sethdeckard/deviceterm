@@ -405,6 +405,279 @@ struct IntentDispatcherTests {
     }
 
     @Test
+    func grantedPaneProjectionReadsTheTargetTerminalWorkingDirectory() async {
+        let harness = makeHarness()
+        let terminals = [
+            TerminalPaneState(
+                id: TerminalPaneID(value: 1),
+                sessionId: "S-primary",
+                capability: "cap",
+                cwd: "/stale"
+            ),
+            TerminalPaneState(
+                id: TerminalPaneID(value: 2),
+                sessionId: "S-secondary",
+                capability: "cap",
+                cwd: "/also-stale"
+            )
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-primary",
+            terminals: terminals
+        )
+        harness.delegate.workingDirectories[TerminalPaneID(value: 2)] = "/live"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow("S-secondary"),
+            origin: .external(sessionID: "S-primary", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.cwd == "/live")
+        #expect(harness.delegate.workingDirectoryReads.map(\.terminal) == [TerminalPaneID(value: 2)])
+    }
+
+    @Test
+    func ungrantedPaneProjectionOmitsWorkingDirectoryWithoutReadingIt() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            terminals: [
+                TerminalPaneState(
+                    id: TerminalPaneID(value: 1),
+                    sessionId: "S-A",
+                    capability: "cap",
+                    cwd: "/stale"
+                )
+            ]
+        )
+        harness.delegate.workingDirectories[TerminalPaneID(value: 1)] = "/live"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.cwd == nil)
+        #expect(harness.delegate.workingDirectoryReads.isEmpty)
+    }
+
+    @Test
+    func nilSessionPaneProjectionOmitsWorkingDirectoryWithoutReadingIt() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        harness.delegate.workingDirectories[TerminalPaneID(value: 1)] = "/live"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow("S-A"),
+            origin: .external(sessionID: nil, hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.cwd == nil)
+        #expect(harness.delegate.workingDirectoryReads.isEmpty)
+    }
+
+    @Test
+    func inProcessPaneProjectionReadsWorkingDirectory() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        harness.delegate.workingDirectories[TerminalPaneID(value: 1)] = "/live"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow("S-A"),
+            origin: .inProcess
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.cwd == "/live")
+        #expect(harness.delegate.workingDirectoryReads.count == 1)
+    }
+
+    @Test
+    func missingLiveWorkingDirectoryDoesNotFallBackToStartupDirectory() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            terminals: [
+                TerminalPaneState(
+                    id: TerminalPaneID(value: 1),
+                    sessionId: "S-A",
+                    capability: "cap",
+                    cwd: "/startup"
+                )
+            ]
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.cwd == nil)
+        #expect(harness.delegate.workingDirectoryReads.count == 1)
+    }
+
+    @Test
+    func collectionProjectionsApplyOneWorkingDirectoryPolicy() async {
+        let harness = makeHarness()
+        let terminals = [
+            TerminalPaneState(
+                id: TerminalPaneID(value: 1),
+                sessionId: "S-A",
+                capability: "cap"
+            ),
+            TerminalPaneState(
+                id: TerminalPaneID(value: 2),
+                sessionId: "S-B",
+                capability: "cap"
+            )
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            terminals: terminals
+        )
+        harness.delegate.workingDirectories = [
+            TerminalPaneID(value: 1): "/one",
+            TerminalPaneID(value: 2): "/two"
+        ]
+
+        let list = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+        let show = await harness.dispatcher.dispatch(
+            .workspaceTabShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePanes(listPanes)) = list,
+            case let .data(.workspaceTab(detail)) = show
+        else {
+            Issue.record("expected collection projections")
+            return
+        }
+        if WorkspaceProjection.includesTerminalCWDInCollections {
+            #expect(listPanes.compactMap(\.terminal?.cwd) == ["/one", "/two"])
+            #expect(detail.panes.compactMap(\.terminal?.cwd) == ["/one", "/two"])
+            #expect(harness.delegate.workingDirectoryReads.count == 4)
+        } else {
+            #expect(listPanes.compactMap(\.terminal?.cwd).isEmpty)
+            #expect(detail.panes.compactMap(\.terminal?.cwd).isEmpty)
+            #expect(harness.delegate.workingDirectoryReads.isEmpty)
+        }
+    }
+
+    @Test
+    func mutationReceiptsDoNotReadTerminalWorkingDirectories() async {
+        let harness = makeHarness()
+        let terminals = [
+            TerminalPaneState(
+                id: TerminalPaneID(value: 1),
+                sessionId: "S-A",
+                capability: "cap"
+            ),
+            TerminalPaneState(
+                id: TerminalPaneID(value: 2),
+                sessionId: "S-B",
+                capability: "cap"
+            )
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            terminals: terminals
+        )
+        harness.delegate.workingDirectories = [
+            TerminalPaneID(value: 1): "/one",
+            TerminalPaneID(value: 2): "/two"
+        ]
+
+        let renameResult = await harness.dispatcher.dispatch(
+            .workspaceTabRename(nil, name: "renamed"),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceMutation(renameReceipt)) = renameResult else {
+            Issue.record("expected tab mutation; got \(renameResult)")
+            return
+        }
+        #expect(renameReceipt.tab?.name == "renamed")
+        #expect(renameReceipt.pane == nil)
+        #expect(harness.delegate.workingDirectoryReads.isEmpty)
+
+        let focusResult = await harness.dispatcher.dispatch(
+            .workspaceWindowFocus(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceMutation(focusReceipt)) = focusResult else {
+            Issue.record("expected window focus mutation; got \(focusResult)")
+            return
+        }
+        #expect(focusReceipt.pane?.terminal?.sessionId == "S-A")
+        #expect(focusReceipt.pane?.terminal?.cwd == nil)
+        #expect(harness.delegate.workingDirectoryReads.isEmpty)
+
+        harness.fake.sessionSequence = [
+            SessionCreateResponse(sessionId: "S-open", capability: "C-open")
+        ]
+        let openResult = await harness.dispatcher.dispatch(
+            .workspaceWindowOpen,
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceMutation(openReceipt)) = openResult else {
+            Issue.record("expected window open mutation; got \(openResult)")
+            return
+        }
+        #expect(openReceipt.pane?.terminal?.sessionId == "S-open")
+        #expect(openReceipt.pane?.terminal?.cwd == nil)
+        #expect(harness.delegate.workingDirectoryReads.isEmpty)
+    }
+
+    @Test
     func crossWindowMoveMapsTheVisibleIndexIntoTheRawDestinationTabs() async throws {
         let harness = makeHarness()
         appendTab(
@@ -667,11 +940,19 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         let name: String?
     }
 
+    struct WorkingDirectoryRead: Equatable {
+        let window: WindowID
+        let tab: TabID
+        let terminal: TerminalPaneID
+    }
+
     private(set) var sendInputs: [SendInput] = []
     private(set) var captures: [Capture] = []
     private(set) var moves: [MoveAcross] = []
     private(set) var raises: [WindowID] = []
     private(set) var paneRenames: [PaneRename] = []
+    private(set) var workingDirectoryReads: [WorkingDirectoryRead] = []
+    var workingDirectories: [TerminalPaneID: String] = [:]
     var sendInputError: IntentError?
     var captureResult = ""
     var captureError: IntentError?
@@ -730,6 +1011,15 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         }
         captures.append(Capture(window: window, tab: tab, terminal: terminal))
         return captureResult
+    }
+
+    func terminalWorkingDirectory(
+        window: WindowID,
+        tab: TabID,
+        terminal: TerminalPaneID
+    ) -> String? {
+        workingDirectoryReads.append(.init(window: window, tab: tab, terminal: terminal))
+        return workingDirectories[terminal]
     }
 
     func moveTabAcrossWindows(

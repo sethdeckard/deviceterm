@@ -311,6 +311,27 @@ The public projection comes from live GUI state. It is not reconstructed from
 daemon session rows. A tab whose initial terminal creation failed remains
 visible with `state` set to `failed`, an empty pane list, and no live layout.
 
+### Read Terminal Working Directories
+
+Run this from an automation tab to read the live working directory of a
+terminal pane:
+
+```sh
+deviceterm pane show "$PANE" --json | jq -er '.terminal.cwd'
+```
+
+`pane list --json` and `tab show --json` include the same field in each
+terminal row. Every command takes a fresh process snapshot, so the value
+follows `cd`, nested interactive shells, and the return to an outer shell.
+
+The field requires a live automation grant, even when the caller owns the
+terminal. An ordinary tab receives a successful workspace response with `cwd`
+omitted.
+
+A process handoff can make one read inconclusive. If the next step depends on
+the directory, let the foreground command settle and re-read with a bounded
+deadline. Do not fall back to a startup `--cwd` value, since it may be stale.
+
 ### Resolve Workspace References
 
 The CLI sends raw references to the GUI. Resolution is case-insensitive and

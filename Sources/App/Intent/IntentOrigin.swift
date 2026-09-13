@@ -55,4 +55,18 @@ enum IntentOrigin: Sendable, Equatable {
             return sessionID
         }
     }
+
+    /// Whether terminal-internal display metadata may be projected.
+    ///
+    /// A live grant without an authenticated session is not a meaningful
+    /// external origin, so that malformed shape also fails closed.
+    var readsTerminalWorkingDirectory: Bool {
+        switch self {
+        case .inProcess:
+            return true
+
+        case let .external(sessionID, hasAutomationGrant):
+            return sessionID != nil && hasAutomationGrant
+        }
+    }
 }

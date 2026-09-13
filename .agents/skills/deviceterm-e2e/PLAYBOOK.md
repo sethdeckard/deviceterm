@@ -1016,6 +1016,44 @@ one rather than running it after the fact, so a failed verb stays failed.
 - `deviceterm-uitest doctor` → `ok:true` with `screenRecording:true` and
   `accessibility:true`. If either is false, you are in a false-pass state — stop.
 
+### 9. Terminal working directory *(no sim)*
+
+`terminal.cwd` is a live, grant-gated process snapshot. Exercise it in a
+throwaway tab: changing the terminal that hosts the agent risks sending test
+input into the agent itself, and an ungranted sibling is needed for the
+negative arm.
+
+- **Setup:** create three fresh directories under one scratch directory. Open a
+  throwaway tab with the first as its startup directory and retain the full tab
+  and terminal-pane IDs from the committed receipt. Do not infer readiness from
+  that receipt: bound retries of `pane capture-text <pane> --json` until the
+  surface answers, then stop if it never attaches.
+- **Startup:** from the Automation Tab, run `pane show <pane> --json`. Require
+  `.terminal.cwd` to equal the first directory. Also require the terminal's
+  `id` and `terminal.sessionId` to equal the pane ID from the open receipt.
+- **Ordinary `cd`:** use `pane send-input <pane>` to send a quoted `cd` to the
+  second directory. Poll `pane show` with a short bound until
+  `.terminal.cwd` equals it. A prompt marker may prove the command completed,
+  but the CWD field itself is the assertion.
+- **Nested shell:** start `/bin/zsh -f` in the pane, change that nested shell to
+  the third directory, and poll until `pane show` reports the third directory.
+  This distinguishes the foreground-process source from a stale outer-shell
+  value.
+- **Exit fallback:** send `exit` to the nested shell and poll until `pane show`
+  returns to the second directory. The nested shell must be gone before this is
+  counted as the shell fallback rather than another sample of its directory.
+- **No own-session exemption:** while the throwaway terminal is at a prompt,
+  send it a command that runs `deviceterm pane show <pane> --json` and writes
+  the result to a scratch file. Read that file from the Automation Tab and
+  require the command to succeed while omitting `.terminal.cwd`. The terminal
+  owns the pane but does not hold the Automation Tab's live grant.
+- **Collections:** from the Automation Tab, require the same live `cwd` in the
+  target row from both `pane list --tab <tab> --json` and
+  `tab show <tab> --json`.
+- **Cleanup:** close exactly the throwaway tab by its full ID and remove only
+  the scratch directory created for this scenario. Confirm the window/tab/pill
+  baseline. Never close the Automation Tab.
+
 ---
 
 ## Reporting

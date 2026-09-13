@@ -6,6 +6,12 @@ import Foundation
 /// Builds the public CLI projection from live GUI-owned workspace state.
 @MainActor
 final class WorkspaceProjection {
+    /// Collection projections include terminal CWD because the measured
+    /// 12-terminal case stayed within the accepted latency budget. Keep the A/B
+    /// procedure and decision thresholds in
+    /// `Tests/Manual/terminal-working-directory-perf.md`.
+    static let includesTerminalCWDInCollections = true
+
     private let workspace: WorkspaceViewModel
     private let resolver: IntentResolver
     private let origin: IntentOrigin
@@ -65,25 +71,69 @@ final class WorkspaceProjection {
         }
     }
 
-    func tab(_ ref: String?) throws -> WorkspaceTabDetail {
+    func tab(
+        _ ref: String?,
+        includeTerminalCWD: Bool = WorkspaceProjection.includesTerminalCWDInCollections
+    ) throws -> WorkspaceTabDetail {
         let resolved = try resolver.resolveTab(ref)
         let window = try windowState(id: resolved.windowID)
         return WorkspaceTabDetail(
             tab: project(resolved.tab, in: window),
-            panes: panes(in: resolved),
+            panes: panes(in: resolved, includeTerminalCWD: includeTerminalCWD),
             layout: projectLayout(resolved.tab.paneTree, tab: resolved)
         )
     }
 
-    func panes(tab ref: String?) throws -> [WorkspacePane] {
-        panes(in: try resolver.resolveTab(ref))
+    /// Project one tab row without walking its pane details.
+    ///
+    /// Mutation receipts use this when they return a tab summary beside some
+    /// other object. In particular, it must not pay for terminal CWD reads that
+    /// no returned value can carry.
+    func tabSummary(_ ref: String?) throws -> WorkspaceTab {
+        let resolved = try resolver.resolveTab(ref)
+        let window = try windowState(id: resolved.windowID)
+        return project(resolved.tab, in: window)
     }
 
-    func pane(_ ref: String?) throws -> WorkspacePane {
-        project(try resolver.resolveWorkspacePane(ref))
+    func panes(
+        tab ref: String?,
+        includeTerminalCWD: Bool = WorkspaceProjection.includesTerminalCWDInCollections
+    ) throws -> [WorkspacePane] {
+        panes(
+            in: try resolver.resolveTab(ref),
+            includeTerminalCWD: includeTerminalCWD
+        )
     }
 
-    func project(_ resolved: ResolvedWorkspacePane) -> WorkspacePane {
+    func pane(
+        _ ref: String?,
+        includeTerminalCWD: Bool = true
+    ) throws -> WorkspacePane {
+        project(
+            try resolver.resolveWorkspacePane(ref),
+            includeTerminalCWD: includeTerminalCWD
+        )
+    }
+
+    /// Project only the first committed pane in a tab's layout order.
+    func firstPane(
+        inTab ref: String?,
+        includeTerminalCWD: Bool
+    ) throws -> WorkspacePane? {
+        let resolved = try resolver.resolveTab(ref)
+        guard resolved.tab.lifecycle == .ready else { return nil }
+        for slot in PaneTreeOps.leavesInOrder(resolved.tab.paneTree) {
+            if let pane = resolvedPane(slot, in: resolved) {
+                return project(pane, includeTerminalCWD: includeTerminalCWD)
+            }
+        }
+        return nil
+    }
+
+    func project(
+        _ resolved: ResolvedWorkspacePane,
+        includeTerminalCWD: Bool
+    ) -> WorkspacePane {
         let focused = actionDelegate?.focusedPane(
             window: resolved.windowID,
             tab: resolved.tabID
@@ -93,11 +143,15 @@ final class WorkspaceProjection {
         let tabID = tab?.cohortId.uuidString.lowercased() ?? ""
         switch resolved.state {
         case let .terminal(terminal):
-            let cwd = actionDelegate?.terminalWorkingDirectory(
-                window: resolved.windowID,
-                tab: resolved.tabID,
-                terminal: terminal.id
-            ) ?? terminal.cwd
+            let cwd: String? = if includeTerminalCWD, origin.readsTerminalWorkingDirectory {
+                actionDelegate?.terminalWorkingDirectory(
+                    window: resolved.windowID,
+                    tab: resolved.tabID,
+                    terminal: terminal.id
+                )
+            } else {
+                nil
+            }
             return WorkspacePane(
                 id: terminal.sessionId,
                 shortId: terminal.shortId ?? fallbackShortID(terminal.sessionId),
@@ -225,10 +279,15 @@ final class WorkspaceProjection {
         )
     }
 
-    private func panes(in resolved: ResolvedTab) -> [WorkspacePane] {
+    private func panes(
+        in resolved: ResolvedTab,
+        includeTerminalCWD: Bool
+    ) -> [WorkspacePane] {
         guard resolved.tab.lifecycle == .ready else { return [] }
         return PaneTreeOps.leavesInOrder(resolved.tab.paneTree).compactMap { slot in
-            resolvedPane(slot, in: resolved).map(project)
+            resolvedPane(slot, in: resolved).map {
+                project($0, includeTerminalCWD: includeTerminalCWD)
+            }
         }
     }
 

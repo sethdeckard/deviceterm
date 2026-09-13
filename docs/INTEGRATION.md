@@ -362,6 +362,10 @@ their panes unless the caller owns that protected tab.
 | `help`, `agents` | Prose | Local, with optional daemon discovery | Documentation printed | Not a JSON contract |
 | `completions install` | Prose and a written completion file | Local | Completion file installed | Not a JSON contract |
 
+`tab show`, `pane list`, and `pane show` remain session-scoped commands. The
+optional `terminal.cwd` field has a narrower rule: an external caller receives
+it only while its session holds a live automation grant.
+
 ## Discovery and State
 
 ### Version Report
@@ -544,6 +548,31 @@ Terminal pane:
   }
 }
 ```
+
+#### Terminal Working Directory
+
+`terminal.cwd` is an optional live process snapshot. It appears in terminal
+rows returned by `pane show`, `pane list`, and `tab show` only when the caller
+holds a live automation grant. Owning the terminal does not provide an
+exemption; an ungranted read still succeeds but omits the field.
+
+DeviceTerm derives fresh anchor facts from the terminal's current foreground
+identity for every projection. If that identity cannot be verified, it omits
+`cwd`. After successful derivation, it reports the working directory of a
+verified same-user process associated with the terminal. The resolver may use
+an unambiguous same-user shell if the foreground candidate becomes unusable. A
+nested interactive shell therefore reports its own directory; after it exits,
+the outer shell's directory returns.
+
+Treat the value as a snapshot. A foreground command that changes its own
+directory can temporarily replace the shell's value, and a process handoff can
+leave the field absent for one read.
+
+DeviceTerm also omits `cwd` when the surface is unavailable, process metadata
+cannot be read, or the terminal identity changes during the read. When fallback
+must select among the session leader's children, more than one qualifying child
+also causes omission. The enclosing workspace command still succeeds. It never
+substitutes the startup directory or the shell's OSC 7 title state.
 
 Simulator pane:
 

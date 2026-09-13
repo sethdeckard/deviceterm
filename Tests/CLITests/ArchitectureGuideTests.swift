@@ -91,6 +91,21 @@ func architectureGuideDocumentsWorkspaceProjectionContract() throws {
 }
 
 @Test
+func architectureGuideDocumentsTerminalWorkingDirectoryProjection() throws {
+    let contents = try architectureGuide()
+    let rpc = try section(named: "RPC protocol", in: contents)
+    #expect(rpc.contains("has a field-level authority gate"))
+    #expect(rpc.contains("gate runs before the action delegate"))
+    #expect(rpc.contains("includesTerminalCWDInCollections"))
+    #expect(rpc.contains("terminal-working-directory-perf.md"))
+
+    let dataFlows = try section(named: "Data flows", in: contents)
+    #expect(dataFlows.contains("DefaultTerminalProbe"))
+    #expect(dataFlows.contains("proc_pidinfo(PROC_PIDVNODEPATHINFO)"))
+    #expect(dataFlows.contains("no authentication or\nauthorization decision"))
+}
+
+@Test
 func architectureGuideAvoidsEmAndEnDashes() throws {
     let contents = try architectureGuide()
     #expect(!contents.contains("—"), "architecture guide contains an em dash")
