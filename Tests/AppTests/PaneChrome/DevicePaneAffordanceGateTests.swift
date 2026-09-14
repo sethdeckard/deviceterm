@@ -135,7 +135,7 @@ struct DevicePaneAffordanceGateTests {
         #expect(!viewModel.ribbonActions.contains(.record))
         #expect(!viewModel.ribbonActions.contains(.axInspector))
         #expect(!viewModel.ribbonActions.contains(.applePay))
-        // The collapsed-ribbon default is a hardware button, not the
+        // The narrowest-stop default is a hardware button, not the
         // sim-only screenshot the unknown-family default would pick.
         #expect(viewModel.lastUsedAction == .home)
     }

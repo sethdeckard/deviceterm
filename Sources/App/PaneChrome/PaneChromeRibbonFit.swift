@@ -17,10 +17,20 @@ import AppKit
 /// cannot report that the ribbon does not fit. It truncates the title out
 /// of existence instead and lets the ribbon sit on top of it. Only the
 /// title and the spacer between the two regions can give. The pane view
-/// controller uses `fitsExpanded` once, when a pane's launch layout
-/// settles, to decide whether that pane opens expanded.
+/// controller calls `widestFittingStop` twice over: once when a pane's launch
+/// layout settles, to choose the stop it opens at, and again on every later
+/// layout pass, to cap what the ribbon draws.
 enum PaneChromeRibbonFit {
     // MARK: - Shared layout constants
+
+    /// Height of the chrome row, uniform across device families.
+    ///
+    /// Shared because three surfaces have to agree on it: the SwiftUI row
+    /// draws it, the pane view controller reserves it with a constraint, and
+    /// the resize handle's hit region spans it. The handle is why the last one
+    /// matters, since a hit region shorter than the region AppKit reserves for
+    /// it leaves a band that neither the gesture nor the pane drag will take.
+    static let chromeRowHeight: CGFloat = 28
 
     /// Leading inset before the drag grip, which opens the row.
     static let leadingPadding: CGFloat = 8
@@ -54,7 +64,7 @@ enum PaneChromeRibbonFit {
     /// menu's disclosure has room.
     static let sizePresetWidth: CGFloat = 28
 
-    /// Point size of the expand / collapse chevron glyph.
+    /// Point size of the chevron glyph on the ribbon's resize handle.
     static let chevronFontSize: CGFloat = 13
 
     /// The chevron is the one ribbon control with no explicit frame, so
@@ -63,12 +73,50 @@ enum PaneChromeRibbonFit {
     /// Held as a constant rather than measured at call time so the math
     /// above stays pure and testable; `safetyMargin` covers the drift if
     /// a future SF Symbols revision reshapes the glyph.
+    ///
+    /// The resize handle widens the grabbable region by `chevronHitSlop`
+    /// through an `.overlay`, which does not change the laid-out width,
+    /// so this stays the number the row actually occupies. Widening the
+    /// glyph's own frame instead would make it lie.
     static let chevronWidth: CGFloat = 10
 
-    /// Slack folded into the fit threshold, covering the chevron
-    /// constant and SwiftUI's sub-point rounding. Deliberately biases a
-    /// near-miss toward *collapsed*: covering the device name is worse
-    /// than leaving the ribbon collapsed.
+    /// Hit and cursor slop on each side of the chevron glyph. The glyph is
+    /// `chevronWidth` across, too thin to grab reliably, so the handle's
+    /// grabbable region extends this far past each edge of it.
+    static let chevronHitSlop: CGFloat = 6
+
+    /// Pointer travel that separates a click from a drag, shared by the
+    /// ribbon's resize handle and `PaneChromeDragHostView`'s
+    /// pane-rearrange threshold so the two affordances arm at the same
+    /// distance.
+    static let dragActivationDistance: CGFloat = 4
+
+    /// The handle's horizontal span, in the ribbon capsule's own coordinates:
+    /// the chevron glyph, which starts after the capsule inset, widened by
+    /// `chevronHitSlop` at each end.
+    ///
+    /// Three surfaces resolve the handle from this one range: the SwiftUI
+    /// gesture target's width, the hover zone that picks the resize cursor, and
+    /// the AppKit hit-test override that withholds the column from the
+    /// pane-drag host. A range rather than a width because the override needs
+    /// both edges: explicit edges keep the zone it withholds aligned with the
+    /// gesture target, which sits centered on the glyph and so cannot cover a
+    /// zone measured from the capsule's leading edge.
+    static var chevronHandleZone: ClosedRange<CGFloat> {
+        let start = ribbonHorizontalPadding - chevronHitSlop
+        return start...(ribbonHorizontalPadding + chevronWidth + chevronHitSlop)
+    }
+
+    /// Width of the handle's gesture target, which is the glyph plus its slop
+    /// at each end.
+    static var chevronHandleWidth: CGFloat {
+        chevronHandleZone.upperBound - chevronHandleZone.lowerBound
+    }
+
+    /// Slack folded into every reveal threshold, covering the chevron constant
+    /// and SwiftUI's sub-point rounding. Deliberately biases a near miss toward
+    /// the next narrower stop, which is preferable to covering the device
+    /// name.
     static let safetyMargin: CGFloat = 4
 
     // MARK: - Fit math
@@ -76,39 +124,20 @@ enum PaneChromeRibbonFit {
     /// Width of the fully expanded ribbon capsule holding `actionCount`
     /// action buttons: capsule padding, the chevron, the action row plus
     /// the size-preset menu, and the trailing ⋯ overflow.
-    ///
-    /// The inner action row is `actionCount` buttons followed by the
-    /// size-preset menu, so it has `actionCount` gaps, not one fewer.
     static func expandedRibbonWidth(actionCount: Int) -> CGFloat {
-        let actions = max(0, actionCount)
-        let contentWidth = CGFloat(actions) * controlButtonWidth
-            + CGFloat(actions) * contentItemSpacing
-            + sizePresetWidth
-        return ribbonHorizontalPadding * 2
-            + chevronWidth
-            + ribbonItemSpacing * 2
-            + contentWidth
-            + controlButtonWidth
+        ribbonWidth(contentWidth: expandedContentWidth(actionCount: actionCount))
     }
 
     /// Narrowest pane that shows the expanded ribbon with the whole
-    /// device name still visible: leading inset, drag grip, gap, badge,
-    /// title, the minimum gap, then the ribbon itself.
+    /// device name still visible.
     ///
-    /// The grip shares the row rather than floating over it, so
-    /// omitting its width and trailing gap would report a fit at widths
-    /// where the title has to truncate.
+    /// Equals `minimumPaneWidth(forStop:titleWidth:)` at the widest stop,
+    /// which is the rung that reveals the whole row.
     static func minimumPaneWidthForExpandedRibbon(
         titleWidth: CGFloat,
         actionCount: Int
     ) -> CGFloat {
-        leadingPadding
-            + handleWidth
-            + handleTrailingGap
-            + badgeSize
-            + badgeTitleSpacing
-            + max(0, titleWidth)
-            + minimumTitleGap
+        titleRegionWidth(titleWidth: titleWidth)
             + expandedRibbonWidth(actionCount: actionCount)
             + safetyMargin
     }
@@ -124,6 +153,86 @@ enum PaneChromeRibbonFit {
             actionCount: actionCount
         )
     }
+
+    // MARK: - Reveal ladder
+
+    /// Highest reveal stop for a ribbon holding `actionCount` actions.
+    ///
+    /// One more than the action count, because the size-preset menu is the
+    /// row's trailing item and so occupies a rung of its own. A ribbon with
+    /// no actions at all still has two stops, which is what keeps its size
+    /// menu reachable.
+    static func widestStop(actionCount: Int) -> Int {
+        max(0, actionCount) + 1
+    }
+
+    /// Width of the ribbon's inner content viewport at reveal `stop`.
+    ///
+    /// A stop counts how many trailing items of the row `[actions…,
+    /// size-preset menu]` are revealed, so stop 1 is the menu on its own and
+    /// stop k above that adds `k - 1` actions ahead of it. Stop 0 is outside
+    /// the row entirely: it shows the hot action instead.
+    static func contentWidth(stop: Int) -> CGFloat {
+        guard stop > 0 else { return controlButtonWidth }
+        return CGFloat(stop - 1) * (controlButtonWidth + contentItemSpacing)
+            + sizePresetWidth
+    }
+
+    /// Ribbon capsule width around a content viewport this wide: capsule
+    /// padding, the chevron, the viewport, and the trailing ⋯ overflow.
+    ///
+    /// The SwiftUI layout and the AppKit hit-test override both locate
+    /// the handle from this, so the two cannot disagree about where the
+    /// ribbon starts.
+    static func ribbonWidth(contentWidth: CGFloat) -> CGFloat {
+        ribbonHorizontalPadding * 2
+            + chevronWidth
+            + ribbonItemSpacing * 2
+            + contentWidth
+            + controlButtonWidth
+    }
+
+    /// Ribbon capsule width at reveal `stop`.
+    static func ribbonWidth(stop: Int) -> CGFloat {
+        ribbonWidth(contentWidth: contentWidth(stop: stop))
+    }
+
+    /// How many of the row's actions reveal at `stop`.
+    ///
+    /// One fewer than the stop, because stop 1 is the size-preset menu on its
+    /// own and stop 0 is outside the row entirely. Drives which buttons are
+    /// on screen, and so which of them may be clicked.
+    static func revealedActionCount(stop: Int) -> Int {
+        max(0, stop - 1)
+    }
+
+    /// Narrowest pane that shows reveal `stop` with the whole device name
+    /// still visible.
+    static func minimumPaneWidth(forStop stop: Int, titleWidth: CGFloat) -> CGFloat {
+        titleRegionWidth(titleWidth: titleWidth)
+            + ribbonWidth(stop: stop)
+            + safetyMargin
+    }
+
+    /// Widest reveal stop a pane this wide shows without truncating the device
+    /// name, or stop 0 when it fits none.
+    ///
+    /// Floors there rather than reporting "nothing fits": the ribbon always
+    /// keeps one control, because a pane with no controls at all is worse than
+    /// one whose name is clipped.
+    static func widestFittingStop(
+        paneWidth: CGFloat,
+        titleWidth: CGFloat,
+        actionCount: Int
+    ) -> Int {
+        let widest = widestStop(actionCount: actionCount)
+        let fitting = (0...widest).last {
+            paneWidth >= minimumPaneWidth(forStop: $0, titleWidth: titleWidth)
+        }
+        return fitting ?? 0
+    }
+
+    // MARK: - Text measurement
 
     /// Rendered width of a chrome title at the overlay's font.
     ///
@@ -141,5 +250,36 @@ enum PaneChromeRibbonFit {
             .size(withAttributes: [.font: font])
             .width
             .rounded(.up)
+    }
+
+    // MARK: - Shared sub-expressions
+
+    /// Width of the inner content row showing `actionCount` actions plus
+    /// the size-preset menu.
+    ///
+    /// The row carries `actionCount` gaps rather than one fewer because
+    /// the size-preset menu follows the last action.
+    private static func expandedContentWidth(actionCount: Int) -> CGFloat {
+        let actions = max(0, actionCount)
+        return CGFloat(actions) * controlButtonWidth
+            + CGFloat(actions) * contentItemSpacing
+            + sizePresetWidth
+    }
+
+    /// Everything the row reserves ahead of the ribbon: leading inset,
+    /// drag grip and its gap, badge and its gap, the title, and the
+    /// smallest gap before the ribbon starts.
+    ///
+    /// The grip shares the row rather than floating over it, so omitting
+    /// its width and trailing gap would report a fit at widths where the
+    /// title has to truncate.
+    private static func titleRegionWidth(titleWidth: CGFloat) -> CGFloat {
+        leadingPadding
+            + handleWidth
+            + handleTrailingGap
+            + badgeSize
+            + badgeTitleSpacing
+            + max(0, titleWidth)
+            + minimumTitleGap
     }
 }

@@ -35,6 +35,15 @@ final class PaneChromeDragHostView<Content: View>: NSView, NSDraggingSource {
     /// the pane and the focus border would refuse to light up.
     weak var focusReceiver: NSView?
 
+    /// Region of the chrome that belongs to SwiftUI even where SwiftUI
+    /// reports nothing interactive under the pointer, forwarded to the
+    /// hosting view's hit test. The sim ribbon's gesture-driven resize handle
+    /// is the one caller; see `PaneChromeHostingView.interactiveOverride`.
+    var interactiveOverride: ((NSPoint, CGRect) -> Bool)? {
+        get { hosting.interactiveOverride }
+        set { hosting.interactiveOverride = newValue }
+    }
+
     private let hosting: PaneChromeHostingView<Content>
     private let showsGrabCursor: Bool
     private var mouseDownPoint: CGPoint?
@@ -99,7 +108,7 @@ final class PaneChromeDragHostView<Content: View>: NSView, NSDraggingSource {
         let current = convert(event.locationInWindow, from: nil)
         let deltaX = current.x - start.x
         let deltaY = current.y - start.y
-        guard hypot(deltaX, deltaY) >= 4 else { return }
+        guard hypot(deltaX, deltaY) >= PaneChromeRibbonFit.dragActivationDistance else { return }
         mouseDownPoint = nil
         beginDragSession(event: event, tabID: tabID, slot: slot)
     }

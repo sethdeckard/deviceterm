@@ -5,20 +5,28 @@ import DaemonProtocol
 import SwiftUI
 
 /// The simulator pane's SwiftUI chrome. A single
-/// 28pt row of three regions framing a collapsible ribbon:
+/// row of three regions framing a resizable ribbon:
 ///
 ///   - Leading (pinned): the drag grip, a vertical capsule marking
 ///     where to grab the pane. It opens the row to keep the marker
-///     clear of the right-anchored ribbon whenever the expanded row
-///     fits. The grip is a marker only: `PaneChromeDragHostView` owns
+///     clear of the right-anchored ribbon whenever the row has width to
+///     spare. The grip is a marker only: `PaneChromeDragHostView` owns
 ///     dragging from the strip's non-interactive regions.
 ///   - Left (pinned): status badge + truncating title.
-///   - Right (anchored): the ribbon control proper, holding a chevron toggle
-///     button (tap to expand/collapse), the ribbon contents
-///     (last-used action when collapsed, full family-aware set when
-///     expanded), and the ⋯ overflow on the trailing side. The whole
+///   - Right (anchored): the ribbon control proper, holding the chevron
+///     resize handle (tap to jump between the end stops, drag to move between
+///     reveal stops), the ribbon contents (the hot action at the narrowest
+///     stop, otherwise as much of the family-aware row as the current stop
+///     reveals), and the ⋯ overflow on the trailing side. The whole
 ///     ribbon is anchored to the right edge of the chrome with a
 ///     left-rounded / right-flat capsule.
+///
+/// The contents are a fixed-size row windowed by a trailing-aligned width
+/// frame, so a partly revealed button is clipped by the leading edge rather
+/// than removed from the row. Keeping the row's membership constant is what
+/// lets the width animate: SwiftUI interpolates a `.frame(width:)` on a
+/// stable view tree, where a `ForEach` gaining and losing members pops. The
+/// narrowest stop is the one exception, and it cross-fades.
 ///
 /// At any moment exactly one ribbon action is the "hot" button,
 /// theme-tinted with the ghostty `selection-background` color
@@ -33,6 +41,13 @@ import SwiftUI
 /// which delegate to `SimulatorPaneViewModel`'s pre-existing input
 /// surface, so there is no duplication of business logic in the chrome.
 struct PaneChromeOverlay: View {
+    /// Which cursor the ribbon has pushed. Held as a case rather than the
+    /// `NSCursor` itself so nothing non-`Sendable` sits in `@State`.
+    private enum RibbonCursor {
+        case arrow
+        case resize
+    }
+
     /// The ghostty selection-background color (fallback to system
     /// accent) for the hot-button and on-state tint. Shared across
     /// every ribbon control that needs the theme color.
@@ -48,14 +63,38 @@ struct PaneChromeOverlay: View {
     /// Grip opacity with the pointer over the chrome row.
     private static let handleHoverOpacity: Double = 0.55
 
+    /// Spring the ribbon moves between rungs with.
+    ///
+    /// Critically damped, so it arrives and stops. An under-damped spring
+    /// overshoots the rung and comes back, which at either end of the ladder
+    /// has nowhere to go and reads as the control wobbling rather than
+    /// landing.
+    private static let ribbonSettle: Animation = .spring(
+        response: 0.25,
+        dampingFraction: 1.0
+    )
+
     let viewModel: PaneChromeViewModel
     @State private var isHovering = false
+    /// Latched once a press on the chevron clears the drag threshold. What
+    /// separates a click from a drag: `onEnded` with this still down is a
+    /// click, because a drag that returned to its origin would otherwise
+    /// read as one.
+    @State private var handleDragArmed = false
+    /// Rung the live drag counts its detents from, captured when the drag arms
+    /// and held until it ends. Counting from the rendered stop instead would
+    /// re-base after every crossing, so each detent would advance the ribbon
+    /// further than the last.
+    @State private var handleDragOrigin: Int?
+    /// Which cursor this view currently has pushed, nil when none. Exactly
+    /// one push stays outstanding at a time; see `applyCursor`.
+    @State private var pushedCursor: RibbonCursor?
 
     var body: some View {
         // Spacing here comes from `PaneChromeRibbonFit`, which also
-        // predicts whether the expanded ribbon fits alongside an
-        // untruncated title. Shared constants so a tweak here can't
-        // leave that prediction stale.
+        // predicts which reveal stops fit alongside an untruncated title.
+        // Shared constants so a tweak here can't leave that prediction
+        // stale.
         HStack(spacing: 0) {
             dragGrip
             badgeAndTitle
@@ -64,10 +103,9 @@ struct PaneChromeOverlay: View {
             Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
             ribbonControl
         }
-        .frame(height: 28)
+        .frame(height: PaneChromeRibbonFit.chromeRowHeight)
         .background(GhosttyThemeColors.backgroundSwiftUI(opacity: 1.0))
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: isHovering)
     }
 
     /// The drag affordance: a vertical capsule opening the row, ahead
@@ -76,9 +114,11 @@ struct PaneChromeOverlay: View {
     /// from the strip's non-interactive regions and supplies the
     /// openHand cursor.
     ///
-    /// `layoutPriority` keeps the grip from being the thing that gives
-    /// when a user expands the ribbon on a pane too narrow for it: the
-    /// title truncates instead, which is what it is already built to do.
+    /// `layoutPriority` keeps the grip from being the thing that gives when the
+    /// row runs out of width: the title truncates instead, which is what it is
+    /// already built to do. The fit cap keeps a chosen stop from causing that,
+    /// so what is left is a pane too narrow for even stop 0 and any drift in
+    /// the measured widths.
     private var dragGrip: some View {
         Capsule()
             .fill(Color.secondary)
@@ -87,36 +127,24 @@ struct PaneChromeOverlay: View {
                 height: PaneChromeRibbonFit.handleHeight
             )
             .opacity(isHovering ? Self.handleHoverOpacity : Self.handleRestOpacity)
+            // Keep this animation on the grip: applying it to the row also
+            // animates the ribbon's width, so a hover change landing mid-drag
+            // animates the reveal a second time on top of its own spring.
+            .animation(.easeOut(duration: 0.15), value: isHovering)
             .padding(.leading, PaneChromeRibbonFit.leadingPadding)
             .layoutPriority(1)
             .help("Drag to rearrange pane")
             .allowsHitTesting(false)
     }
 
-    /// The ribbon control proper, anchored to the trailing edge of
-    /// the chrome with a left-rounded / right-flat capsule. Always
-    /// shows three elements: a chevron toggle button (tap to expand
-    /// or collapse), the last-used action (when collapsed) or the
-    /// full action set (when expanded), and the ⋯ overflow on the
-    /// trailing side.
+    /// The ribbon control proper, anchored to the trailing edge of the chrome
+    /// with a left-rounded / right-flat capsule. Always shows three elements:
+    /// the chevron resize handle, the width-revealed action row (or the hot
+    /// action at stop 0), and the ⋯ overflow on the trailing side.
     private var ribbonControl: some View {
         HStack(spacing: PaneChromeRibbonFit.ribbonItemSpacing) {
-            Button {
-                // Mark the launch-time fit decided before toggling so
-                // later layout passes preserve the user's choice.
-                viewModel.ribbonExpansionDecided = true
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                    viewModel.ribbonExpanded.toggle()
-                }
-            } label: {
-                Image(systemName: viewModel.ribbonExpanded
-                    ? "chevron.right" : "chevron.left")
-                    .font(.system(size: PaneChromeRibbonFit.chevronFontSize, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help(viewModel.ribbonExpanded ? "Collapse" : "Expand")
-            ribbonContent
+            chevronHandle
+            ribbonViewport
             chromeControlButton(
                 systemImage: "ellipsis.circle",
                 help: "Pane Actions",
@@ -135,16 +163,139 @@ struct PaneChromeOverlay: View {
             )
             .fill(.regularMaterial)
         )
-        // Push the arrow cursor over the ribbon so the openHand cursor
-        // from the AppKit drag host (which paints over the whole
-        // chrome) doesn't show while the user is reading / clicking
-        // the ribbon controls. Pop on exit returns to the openHand.
-        .onHover { hovering in
-            if hovering {
-                NSCursor.arrow.push()
-            } else {
-                NSCursor.pop()
+        // One cursor owner for the whole ribbon. The AppKit drag host paints
+        // openHand across the entire chrome, so the ribbon pushes over it:
+        // the resize cursor in the handle zone, the arrow everywhere else.
+        // Tracking the zone here rather than with a second `onHover` on the
+        // handle is deliberate, since SwiftUI does not order two exits and
+        // an unbalanced pop would reach past the host's own cursor.
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let point):
+                let overHandle = PaneChromeRibbonFit.chevronHandleZone.contains(point.x)
+                applyCursor(handleDragArmed || overHandle ? .resize : .arrow)
+
+            case .ended:
+                applyCursor(nil)
             }
+        }
+    }
+
+    /// The chevron, doubling as the ribbon's resize handle.
+    ///
+    /// The glyph draws at its own 10pt width so `PaneChromeRibbonFit`'s
+    /// measurement stays true, and an `.overlay` widens only the grabbable
+    /// region. `.overlay` cannot change the parent's size, which is the
+    /// property being relied on; framing the glyph wider would make the fit
+    /// math lie about the row.
+    ///
+    /// Not a `Button`: a `Button` and a `DragGesture` fight over the same
+    /// press, and one gesture handling both is unambiguous. The
+    /// accessibility traits below put back what dropping `Button` removes,
+    /// and the adjustable action reaches intermediate stops that a two-state
+    /// button never could.
+    private var chevronHandle: some View {
+        Image(systemName: viewModel.ribbonExpanded ? "chevron.right" : "chevron.left")
+            .font(.system(size: PaneChromeRibbonFit.chevronFontSize, weight: .medium))
+            .foregroundStyle(.secondary)
+            .overlay {
+                // Spans the row's full height on purpose. The AppKit hit-test
+                // override withholds this whole column from the pane-drag host
+                // on x alone, so a target only as tall as the glyph would
+                // leave a band near the row's edges where the drag is refused
+                // and the gesture never offered it either.
+                Color.clear
+                    .frame(
+                        width: PaneChromeRibbonFit.chevronHandleWidth,
+                        height: PaneChromeRibbonFit.chromeRowHeight
+                    )
+                    .contentShape(Rectangle())
+                    .gesture(handleDrag)
+            }
+            .help(viewModel.ribbonExpanded
+                ? "Drag to resize, click to collapse"
+                : "Drag to resize, click to expand")
+            .accessibilityElement()
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Ribbon Width")
+            .accessibilityValue("\(viewModel.ribbonRenderedStop) of \(viewModel.ribbonWidestStop)")
+            // `.isButton` announces the role but supplies no activation
+            // behavior, so a gesture-backed element needs an explicit default
+            // action or activating it does nothing.
+            .accessibilityAction {
+                withAnimation(Self.ribbonSettle) {
+                    viewModel.toggleRibbonExtremes()
+                }
+            }
+            .accessibilityAdjustableAction { direction in
+                // Steps from the *rendered* stop, not the chosen one: on a pane
+                // clamped narrow those differ, and stepping from a choice the
+                // pane cannot honor would land back where it started.
+                switch direction {
+                case .increment:
+                    adjust(to: viewModel.ribbonRenderedStop + 1)
+
+                case .decrement:
+                    adjust(to: viewModel.ribbonRenderedStop - 1)
+
+                @unknown default:
+                    break
+                }
+            }
+    }
+
+    /// The ribbon's content window: the full row, held at its ideal size and
+    /// revealed from the trailing edge by a width frame.
+    ///
+    /// Order in the modifier stack carries weight. `fixedSize` comes first so
+    /// the row takes its ideal width instead of compressing its spacing or
+    /// squeezing the size-preset menu when handed a narrower proposal.
+    /// `.frame(width:)` then reports exactly that width upward whatever the
+    /// child overflows, which is also what makes the capsule background track
+    /// the live width with no separate plumbing. `.clipped()` has to sit
+    /// outside the frame to crop what spills.
+    ///
+    /// Clipping hides the overflow without disarming it, so the buttons carry
+    /// their own hit gating rather than trusting the clip.
+    private var ribbonViewport: some View {
+        let stop = viewModel.ribbonRenderedStop
+        let atHotAction = stop == 0
+        let dragging = viewModel.ribbonDragStop != nil
+        return ZStack(alignment: .trailing) {
+            fullActionRow
+                .opacity(atHotAction ? 0 : 1)
+                .allowsHitTesting(!atHotAction && !dragging)
+            ribbonActionButton(viewModel.hotAction)
+                .opacity(atHotAction ? 1 : 0)
+                .allowsHitTesting(atHotAction && !dragging)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(
+            width: PaneChromeRibbonFit.contentWidth(stop: stop),
+            alignment: .trailing
+        )
+        .clipped()
+    }
+
+    /// Every action plus the size-preset menu, in fixed display order.
+    ///
+    /// Membership never changes with the reveal stop; only how much of the row
+    /// the viewport uncovers does. Buttons the stop has not reached decline
+    /// hits, because clipping a SwiftUI row hides the overflow without
+    /// disarming it, and a button cropped away must not answer a click.
+    private var fullActionRow: some View {
+        let actions = viewModel.ribbonActions
+        let revealed = PaneChromeRibbonFit.revealedActionCount(
+            stop: viewModel.ribbonRenderedStop
+        )
+        return HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
+            ForEach(Array(actions.enumerated()), id: \.element) { index, action in
+                // The row reveals from the trailing end, so the last actions
+                // are the ones on screen.
+                ribbonActionButton(action)
+                    .allowsHitTesting(actions.count - index <= revealed)
+            }
+            sizePresetMenu
         }
     }
 
@@ -167,38 +318,93 @@ struct PaneChromeOverlay: View {
         }
     }
 
-    /// Ribbon middle: collapsed shows only the last-used action;
-    /// expanded shows the full family-specific set + size-preset.
-    /// The chevron toggle and ⋯ overflow live in `ribbonControl`,
-    /// outside this builder, so they're always visible.
-    @ViewBuilder private var ribbonContent: some View {
-        if viewModel.ribbonExpanded {
-            HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
-                ForEach(ribbonActions, id: \.self) { action in
-                    ribbonActionButton(action)
+    /// Widest rung this drag can reach: the widest the pane currently fits, or
+    /// stop 0 as the fallback when it fits none. Dragging therefore cannot park
+    /// the ribbon over the device name, except on a pane too narrow to keep the
+    /// name whole at any stop, where stop 0 is the least bad answer.
+    private var reachableStop: Int {
+        let offered = viewModel.ribbonWidestStop
+        let cap = viewModel.ribbonWidestFittingStop ?? offered
+        return max(0, min(cap, offered))
+    }
+
+    /// Rung the drag counts detents from, which is what is on screen rather
+    /// than what was chosen: a pane clamped narrow starts from the clamped
+    /// rung.
+    ///
+    /// Held for the life of the gesture in `handleDragOrigin`, because the
+    /// rendered stop moves as the drag steps and counting from a moving origin
+    /// would compound every step.
+    private var committedStop: Int {
+        handleDragOrigin ?? viewModel.ribbonRenderedStop
+    }
+
+    /// One gesture serving both a click and a detented resize.
+    ///
+    /// `minimumDistance: 0` makes `onChanged` fire on the press itself, which
+    /// is what lets the same gesture answer for both. Below the threshold
+    /// `onChanged` leaves the model untouched; `onEnded` then treats the
+    /// release as a click.
+    private var handleDrag: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                // Arms on total travel, the same measure
+                // `PaneChromeDragHostView` uses, so a press dragged mostly
+                // downward counts as a drag rather than falling through to the
+                // click branch and toggling on release. Detents still come
+                // from horizontal travel alone, so an arming drag that never
+                // moved sideways simply holds its rung.
+                let travelled = hypot(value.translation.width, value.translation.height)
+                guard handleDragArmed
+                    || travelled >= PaneChromeRibbonFit.dragActivationDistance
+                else { return }
+                if !handleDragArmed {
+                    handleDragArmed = true
+                    handleDragOrigin = viewModel.ribbonRenderedStop
                 }
-                sizePresetMenu
+                let stop = PaneChromeRibbonDragMath.detentStop(
+                    originStop: committedStop,
+                    currentStop: viewModel.ribbonRenderedStop,
+                    translation: value.translation.width,
+                    widestStop: reachableStop
+                )
+                guard stop != viewModel.ribbonRenderedStop else { return }
+                // Animated per crossing: the width only moves at a detent, so
+                // each step is one short spring rather than a continuous
+                // re-layout.
+                withAnimation(Self.ribbonSettle) {
+                    viewModel.trackRibbonDrag(stop: stop)
+                }
             }
-        } else {
-            // Collapsed ribbon shows `hotAction`, not raw `lastUsedAction`,
-            // so an AX-inspector or recording toggle started via the ⋯
-            // menu surfaces a one-click off-switch in the collapsed view.
-            // The VM cascade ends at `lastUsedAction`, so behavior matches
-            // the previous shape when no on-state toggle is active.
-            ribbonActionButton(viewModel.hotAction)
-        }
+            .onEnded { value in
+                let wasDrag = handleDragArmed
+                let origin = committedStop
+                handleDragArmed = false
+                handleDragOrigin = nil
+                guard wasDrag else {
+                    withAnimation(Self.ribbonSettle) {
+                        viewModel.toggleRibbonExtremes()
+                    }
+                    return
+                }
+                let landed = PaneChromeRibbonDragMath.detentStop(
+                    originStop: origin,
+                    currentStop: viewModel.ribbonRenderedStop,
+                    translation: value.translation.width,
+                    widestStop: reachableStop
+                )
+                settle(
+                    at: PaneChromeRibbonDragMath.releaseStop(
+                        detentStop: landed,
+                        pointerVelocity: value.velocity.width,
+                        widestStop: reachableStop
+                    )
+                )
+            }
     }
 
-    /// Ribbon actions in left-to-right display order, computed on the
-    /// view model (filtered to the pane's supported controls there) so
-    /// the gating is unit-testable and the SwiftUI view stays a thin
-    /// renderer.
-    private var ribbonActions: [SimChromeAction] {
-        viewModel.ribbonActions
-    }
-
-    /// Size-preset dropdown. Lives in the expanded ribbon only, so the
-    /// collapsed view stays minimal at one button. Checkmark next to
+    /// Size-preset dropdown. It occupies stop 1 and stays visible at every
+    /// wider stop, since it is the row's trailing item. Checkmark next to
     /// the active selection.
     private var sizePresetMenu: some View {
         Menu {
@@ -226,6 +432,53 @@ struct PaneChromeOverlay: View {
     }
 
     // MARK: - Methods
+
+    /// Step the ribbon one rung for an accessibility adjustment, and do nothing
+    /// at all when the pane cannot honor the step.
+    ///
+    /// A plain settle would clamp an outward step at the fit cap back onto the
+    /// rung already showing, which moves nothing yet still overwrites a wider
+    /// remembered choice. Refusing the step keeps that choice, so widening the
+    /// pane still restores it.
+    private func adjust(to stop: Int) {
+        let clamped = min(max(stop, 0), reachableStop)
+        guard clamped != viewModel.ribbonRenderedStop else { return }
+        settle(at: clamped)
+    }
+
+    /// Land the ribbon on a rung with the settle animation, clamped to the
+    /// rungs this pane currently offers.
+    private func settle(at stop: Int) {
+        withAnimation(Self.ribbonSettle) {
+            viewModel.settleRibbon(at: min(max(stop, 0), reachableStop))
+        }
+    }
+
+    /// Keep exactly one cursor push outstanding: pop before pushing a
+    /// different one, pop on exit, do nothing when it has not changed.
+    ///
+    /// One owner for the whole ribbon, because SwiftUI does not order nested
+    /// hover exits: with a second push/pop pair on the handle, a pointer leaving
+    /// both in one move can unbalance the stack. An unbalanced pop does not stop
+    /// at this view either, it reaches past the drag host's openHand cursor
+    /// rect.
+    private func applyCursor(_ cursor: RibbonCursor?) {
+        guard cursor != pushedCursor else { return }
+        if pushedCursor != nil {
+            NSCursor.pop()
+        }
+        pushedCursor = cursor
+        switch cursor {
+        case .resize:
+            NSCursor.resizeLeftRight.push()
+
+        case .arrow:
+            NSCursor.arrow.push()
+
+        case nil:
+            break
+        }
+    }
 
     private func ribbonActionButton(_ action: SimChromeAction) -> some View {
         // On-state toggles (AX inspector active, recording active)
@@ -259,7 +512,7 @@ struct PaneChromeOverlay: View {
     }
 
     /// Dispatch a ribbon action through the view model and stamp it
-    /// as the new last-used so the collapsed view tracks the recent
+    /// as the new last-used so the narrowest reveal stop tracks the recent
     /// pattern. Toggles update `recordingActive` / `axInspectorEnabled`
     /// on the next render pass via the VC's `render()`, so the tint
     /// follows automatically.
