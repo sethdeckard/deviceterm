@@ -38,6 +38,20 @@ private func tab(
 }
 
 @Test
+func sendsTheDaemonsOwnSessionNameNotAPaneRename() throws {
+    // A terminal rename never reaches the daemon, so restoring the pane's
+    // current label would move the daemon's name out from under the baseline
+    // that decides whether a title is worth publishing. Renaming back to the
+    // original would then read as already known and clear the cached title.
+    var renamed = terminal(1, sessionId: "S1", shortId: "aaa111", name: "main")
+    renamed.name = "build"
+    let inventory = try #require(
+        SessionRestoreInventory.build(from: [tab(1, terminals: [renamed])])
+    )
+    #expect(inventory[0].name == "main")
+}
+
+@Test
 func emitsOneEntryPerTerminalCarryingTabRoleAndTerminalFields() throws {
     let onlyTab = tab(
         1,

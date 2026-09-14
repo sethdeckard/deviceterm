@@ -281,7 +281,11 @@ final class TabContentViewController: NSViewController {
             id: primary.id,
             oscTitle: nil,
             workingDirectory: nil,
-            sessionName: sessionName
+            sessionName: sessionName,
+            // Off the pane record, not the label: a tab whose terminal was
+            // renamed before its controller was built would otherwise seed the
+            // rename as the daemon's own name and never publish it.
+            daemonSessionName: primary.sessionName
         )
         titleSource = TabTitleSource(terminal: primary.id, device: nil)
         discoveryObserverToken = router.addOwnedSimDiscoveryObserver { [weak self] owned in
@@ -379,7 +383,8 @@ final class TabContentViewController: NSViewController {
             id: source.terminal,
             oscTitle: terminalVC?.lastOSCTitle,
             workingDirectory: terminalVC?.lastWorkingDirectory,
-            sessionName: terminal?.name
+            sessionName: terminal?.name,
+            daemonSessionName: terminal?.sessionName
         )
         // Outside the adopt call, which no-ops while the bound terminal is
         // unchanged. `pane rename` rewrites a live terminal's name, and

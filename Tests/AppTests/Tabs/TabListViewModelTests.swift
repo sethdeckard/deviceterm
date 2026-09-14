@@ -969,4 +969,32 @@ struct TabListViewModelTests {
         )
         #expect(model.tab(id: tabID)?.lastFocusedPane == .sim(udid: "U"))
     }
+
+    @Test
+    func renamingATerminalLeavesItsDaemonSessionNameAlone() {
+        // A terminal rename never reaches the daemon, so the name it was
+        // created with has to survive the rename that overwrites the label.
+        // It is what decides whether a title is worth publishing.
+        let model = TabListViewModel()
+        model.append(
+            TabState(
+                id: TabID(value: 1),
+                terminals: [
+                    TerminalPaneState(
+                    id: TerminalPaneID(value: 1),
+                    sessionId: "S1",
+                    capability: "C1",
+                    name: "main"
+                )
+                ],
+                simPanes: []
+            )
+        )
+        let renamed = model.renamePane(.terminal(TerminalPaneID(value: 1)), inTab: TabID(value: 1), to: "build")
+        #expect(renamed)
+
+        let terminal = model.tab(id: TabID(value: 1))?.primaryTerminal
+        #expect(terminal?.name == "build")
+        #expect(terminal?.sessionName == "main")
+    }
 }

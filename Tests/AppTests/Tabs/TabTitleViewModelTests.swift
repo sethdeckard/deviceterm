@@ -48,9 +48,7 @@ struct TabTitleViewModelTests {
 
     @Test
     func sessionNameAlsoFallsBackPastEmptyInputs() {
-        // Clearing creation-time session metadata falls back to the CWD
-        // basename, then "shell":
-        // the chain collapses cleanly through the optionals.
+        // Clearing the pane name falls back to the CWD basename, then "shell".
         let model = TabTitleViewModel()
         model.updateSessionName("branch")
         #expect(model.displayTitle == "branch")
@@ -71,6 +69,7 @@ struct TabTitleViewModelTests {
         model.updateWorkingDirectory(path: "/tmp/foo")
         #expect(model.publishableTitle == "foo")     // no name: the CWD says more
         model.updateSessionName("branch")
+        model.updateDaemonSessionName("branch")
         #expect(model.publishableTitle == nil)       // the label IS the name
         model.updateOSCTitle("vim foo")
         #expect(model.publishableTitle == "vim foo")
@@ -83,6 +82,35 @@ struct TabTitleViewModelTests {
     }
 
     @Test
+    func aRenamedTerminalPublishesItsNewLabel() {
+        // `pane rename` moves the label but never reaches the daemon, so the
+        // rename is exactly the case the cache has not heard about. Measuring
+        // it against the label would compare the rename to itself and suppress
+        // it forever.
+        let model = TabTitleViewModel()
+        model.updateSessionName("main")
+        model.updateDaemonSessionName("main")
+        #expect(model.publishableTitle == nil)
+
+        model.updateSessionName("build")
+        #expect(model.displayTitle == "build")
+        #expect(model.publishableTitle == "build")
+    }
+
+    @Test
+    func aLabelMatchingTheDaemonNameIsStillSuppressed() {
+        // The split must not turn every pane name into a push. A label the
+        // daemon already carries stays unpublished however it was reached.
+        let model = TabTitleViewModel()
+        model.updateSessionName("main")
+        model.updateDaemonSessionName("main")
+        model.updateSessionName("build")
+        #expect(model.publishableTitle == "build")
+        model.updateSessionName("main")
+        #expect(model.publishableTitle == nil)
+    }
+
+    @Test
     func publishableTitleComparesTheNormalizedForms() {
         // The comparison has to run on what actually crosses the wire.
         // Comparing raw text lets a title that only decorates the name with
@@ -90,6 +118,7 @@ struct TabTitleViewModelTests {
         // name downstream, republishing what the daemon already carries.
         let model = TabTitleViewModel()
         model.updateSessionName("branch")
+        model.updateDaemonSessionName("branch")
         model.updateOSCTitle("branch\u{200B}")
         #expect(model.publishableTitle == nil)
 
@@ -111,7 +140,8 @@ struct TabTitleViewModelTests {
             id: first,
             oscTitle: nil,
             workingDirectory: nil,
-            sessionName: "branch"
+            sessionName: "branch",
+            daemonSessionName: "branch"
         )
         model.updateOSCTitle("vim secret.swift")
         model.updateWorkingDirectory(path: "/tmp/first")
@@ -122,7 +152,8 @@ struct TabTitleViewModelTests {
             id: first,
             oscTitle: nil,
             workingDirectory: nil,
-            sessionName: "branch"
+            sessionName: "branch",
+            daemonSessionName: "branch"
         )
         #expect(model.publishableTitle == "vim secret.swift")
 
@@ -130,7 +161,8 @@ struct TabTitleViewModelTests {
             id: second,
             oscTitle: nil,
             workingDirectory: "/tmp/second",
-            sessionName: nil
+            sessionName: nil,
+            daemonSessionName: nil
         )
         #expect(model.displayTitle == "second")
         #expect(model.publishableTitle == "second")
@@ -145,14 +177,16 @@ struct TabTitleViewModelTests {
             id: TerminalPaneID(value: 1),
             oscTitle: nil,
             workingDirectory: nil,
-            sessionName: "branch"
+            sessionName: "branch",
+            daemonSessionName: "branch"
         )
         model.renameManually(to: "Build")
         model.adoptTitleTerminal(
             id: TerminalPaneID(value: 2),
             oscTitle: "vim other.swift",
             workingDirectory: nil,
-            sessionName: "other"
+            sessionName: "other",
+            daemonSessionName: "other"
         )
         #expect(model.displayTitle == "Build")
         #expect(model.publishableTitle == "Build")
@@ -204,21 +238,24 @@ struct TabTitleViewModelTests {
             id: TerminalPaneID(value: 1),
             oscTitle: nil,
             workingDirectory: "/tmp/first",
-            sessionName: nil
+            sessionName: nil,
+            daemonSessionName: nil
         )
         #expect(model.lastCWDPath == "/tmp/first")
         model.adoptTitleTerminal(
             id: TerminalPaneID(value: 2),
             oscTitle: nil,
             workingDirectory: "/tmp/second",
-            sessionName: nil
+            sessionName: nil,
+            daemonSessionName: nil
         )
         #expect(model.lastCWDPath == "/tmp/second")
         model.adoptTitleTerminal(
             id: TerminalPaneID(value: 3),
             oscTitle: nil,
             workingDirectory: nil,
-            sessionName: nil
+            sessionName: nil,
+            daemonSessionName: nil
         )
         #expect(model.lastCWDPath == nil)
     }
@@ -269,6 +306,7 @@ struct TabTitleViewModelTests {
         // about what that terminal session is doing.
         let model = TabTitleViewModel()
         model.updateSessionName("branch")
+        model.updateDaemonSessionName("branch")
         model.updateFocusedDeviceName("iPhone 17 Pro")
         #expect(model.displayTitle == "iPhone 17 Pro")
         #expect(model.publishableTitle == nil)
@@ -288,7 +326,8 @@ struct TabTitleViewModelTests {
             id: TerminalPaneID(value: 2),
             oscTitle: "vim other.swift",
             workingDirectory: nil,
-            sessionName: "other"
+            sessionName: "other",
+            daemonSessionName: "other"
         )
         #expect(model.displayTitle == "iPhone 17 Pro")
     }

@@ -27,10 +27,19 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
     /// the GUI model: nil when decoded from a pre-identifier-model
     /// daemon response.
     let shortId: String?
-    /// Optional session name, as supplied at `session.create` and
-    /// echoed back. Nil when none was supplied, and never rewritten
-    /// afterward: a manual tab title lives in `TabTitleViewModel`.
+    /// The pane's current name: supplied at `session.create` and echoed back,
+    /// then rewritten by `deviceterm pane rename`. This is the effective label
+    /// every reader wants; a manual *tab* title lives in `TabTitleViewModel`.
     var name: String?
+    /// The name the daemon was given at `session.create`, captured here
+    /// because `name` does not keep it. A terminal rename never reaches the
+    /// daemon (the intent layer sends no pane id for a terminal), so this is
+    /// what the daemon still holds, and it is what a publisher has to measure
+    /// a candidate title against before deciding the daemon already knows it.
+    ///
+    /// Equal to `name` until the first rename. Nothing but a rename separates
+    /// them, which is why the initializer derives this rather than taking it.
+    let sessionName: String?
     /// Startup-only working directory for the shell. Threaded through
     /// from `deviceterm tab open --cwd <path>` or a programmatic terminal
     /// split. Consumed once at `TerminalPaneViewController`
@@ -59,6 +68,7 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
         self.capability = capability
         self.shortId = shortId
         self.name = name
+        self.sessionName = name
         self.cwd = cwd
         self.command = command
     }

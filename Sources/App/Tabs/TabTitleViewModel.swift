@@ -15,8 +15,8 @@ import Observation
 ///      background terminal's activity
 ///   3. shell OSC 0/2 title: often command-aware ("vim foo.swift") and
 ///      worth surfacing in real time when the shell sends it
-///   4. session name: session-stable creation metadata, such as a worktree
-///      branch detected at session creation; a
+///   4. terminal pane name: the session name supplied at creation, such as a
+///      detected worktree branch, until a pane rename replaces it; a
 ///      meaningful default when the shell isn't emitting OSC titles
 ///   5. working-directory basename: the OSC-7 CWD, the last resort before
 ///      the generic "shell" fallback
@@ -39,17 +39,26 @@ final class TabTitleViewModel {
     /// identifier that wins over the CWD inference but yields to a real-time
     /// OSC title from the shell.
     ///
-    /// `publishableTitle` measures its candidate against this, so the baseline
-    /// follows a rename. A terminal rename stays GUI-side: the intent layer
-    /// sends no daemon pane id for a terminal, so the daemon's session name
-    /// keeps its `session.create` value however many times the pane is
-    /// renamed. The GUI never reads that value back, and `tab.list` projects
-    /// GUI state, so nothing a caller sees is wrong.
-    ///
-    /// A daemon restart closes the gap on its own. The restore inventory
-    /// re-supplies this GUI value, so a session the daemon has to re-insert
-    /// adopts the current name; one it still holds keeps the old one.
+    /// A `pane rename` rewrites it, so it is the label the user last chose
+    /// rather than creation metadata. `daemonSessionName` carries the value
+    /// the daemon was given, which is what decides whether this is worth
+    /// publishing.
     private(set) var sessionName: String?
+    /// What the daemon holds as the bound terminal's session name, mirrored
+    /// from `TerminalPaneState.sessionName`.
+    ///
+    /// `publishableTitle` measures every candidate against this rather than
+    /// against `sessionName`, so a renamed pane's label reads as new
+    /// information and gets cached. Measuring against the label instead would
+    /// compare the rename to itself and suppress it forever, leaving the
+    /// daemon on the name it was given with nothing cached beside it.
+    ///
+    /// A terminal rename never reaches the daemon: the intent layer sends no
+    /// pane id for a terminal, so the daemon keeps this value however many
+    /// times the pane is renamed. The restore inventory sends it too rather
+    /// than the pane's label, so a daemon restart cannot move the daemon's
+    /// name out from under this mirror.
+    private(set) var daemonSessionName: String?
     private(set) var lastCWDBasename: String?
     /// Full OSC-7 path, retained alongside the basename to back the titlebar
     /// proxy icon. `lastCWDBasename` is the label input; this is the directory
@@ -80,8 +89,9 @@ final class TabTitleViewModel {
     /// The cacheable part of the tab's label, as far as it says anything the
     /// daemon doesn't already know. The daemon already stores the session
     /// name, so a label that is identical to it adds nothing; the generic
-    /// "shell" fallback is also omitted. A manual title, shell OSC title, or
-    /// inferred CWD basename is cached only when it adds information.
+    /// "shell" fallback is also omitted. A manual title, shell OSC title,
+    /// renamed pane label, or inferred CWD basename is cached only when it
+    /// adds information.
     ///
     /// Not necessarily what the tab shows. `focusedDeviceName` outranks the
     /// automatic terminal tiers on screen, though not a manual title, and is
@@ -94,19 +104,18 @@ final class TabTitleViewModel {
     /// read as different here and then normalize to the name downstream,
     /// republishing what the daemon already stores.
     var publishableTitle: String? {
-        // Read unconditionally so Observation keeps tracking it: the name is
-        // both the fallback the daemon already has and the value every
-        // candidate is measured against.
-        let name = DisplayTitleNormalizer.normalize(sessionName)
+        // Read unconditionally so Observation keeps tracking it: this is the
+        // value every candidate is measured against.
+        let name = DisplayTitleNormalizer.normalize(daemonSessionName)
         let candidate: String?
         if let manualTitle {
             candidate = manualTitle
         } else if let lastOSCTitle {
             candidate = lastOSCTitle
         } else {
-            // With a name present the label IS the name; when it later
-            // clears, the CWD basename becomes publishable.
-            candidate = sessionName == nil ? lastCWDBasename : nil
+            // A renamed pane name is publishable; without one, fall back to
+            // the CWD basename.
+            candidate = sessionName ?? lastCWDBasename
         }
         guard let normalized = DisplayTitleNormalizer.normalize(candidate) else { return nil }
         return normalized == name ? nil : normalized
@@ -126,13 +135,15 @@ final class TabTitleViewModel {
         id: TerminalPaneID,
         oscTitle: String?,
         workingDirectory: String?,
-        sessionName: String?
+        sessionName: String?,
+        daemonSessionName: String?
     ) {
         guard id != titleTerminalID else { return }
         titleTerminalID = id
         updateOSCTitle(oscTitle ?? "")
         updateWorkingDirectory(path: workingDirectory ?? "")
         updateSessionName(sessionName)
+        updateDaemonSessionName(daemonSessionName)
     }
 
     /// Record the shell's latest OSC 0/2 title. An empty string clears it
@@ -171,10 +182,9 @@ final class TabTitleViewModel {
         manualTitle = trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Set the session-bound name. Nil clears it.
-    /// `TabContentViewController.init` calls this with the worktree
-    /// branch returned from `session.create`. Tab rename writes the separate
-    /// manual-title tier and leaves this creation metadata unchanged.
+    /// Set the bound terminal pane's current name. Nil clears it. A tab rename
+    /// writes the separate manual-title tier and leaves this alone.
+    ///
     /// Writes only on a change, for the same reason as
     /// `updateFocusedDeviceName`: the reconcile pass re-applies it every time
     /// anything about the tab moves.
@@ -183,5 +193,15 @@ final class TabTitleViewModel {
         let resolved = (trimmed?.isEmpty ?? true) ? nil : trimmed
         guard resolved != sessionName else { return }
         sessionName = resolved
+    }
+
+    /// Set the name the daemon holds for the bound terminal's session. Nil
+    /// clears it. Writes only on a change; the value is reseeded when the
+    /// bound terminal changes, since nothing else moves it.
+    func updateDaemonSessionName(_ name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        guard resolved != daemonSessionName else { return }
+        daemonSessionName = resolved
     }
 }

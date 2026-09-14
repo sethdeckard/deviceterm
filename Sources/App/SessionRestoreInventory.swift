@@ -56,7 +56,10 @@ enum SessionRestoreInventory {
                         capability: terminal.capability,
                         shortId: shortId,
                         role: tab.role,
-                        name: terminal.name,
+                        // The creation-time name. Sending the current pane label
+                        // would desynchronize title publication after a daemon
+                        // restart.
+                        name: terminal.sessionName,
                         isProtected: isProtected,
                         tabId: tab.cohortId.uuidString
                     )

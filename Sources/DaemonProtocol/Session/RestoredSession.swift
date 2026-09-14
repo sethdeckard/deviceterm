@@ -37,7 +37,7 @@ public struct RestoredSession: Codable, Sendable, Equatable {
     public let shortId: String
     /// The role the session was minted with (`agent` | `automation`).
     public let role: SessionRole
-    /// The optional human/agent-set tab name.
+    /// The optional session name originally supplied at `session.create`.
     public let name: String?
     /// The desired absolute protection state, derived fail-closed from the
     /// GUI's effective-hidden presentation (a mid-transition tab restores
