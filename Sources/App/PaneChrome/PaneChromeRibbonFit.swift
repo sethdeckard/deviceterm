@@ -171,7 +171,8 @@ enum PaneChromeRibbonFit {
     /// A stop counts how many trailing items of the row `[actions…,
     /// size-preset menu]` are revealed, so stop 1 is the menu on its own and
     /// stop k above that adds `k - 1` actions ahead of it. Stop 0 is outside
-    /// the row entirely: it shows the hot action instead.
+    /// the row entirely: it shows the hot action instead, or nothing at all on
+    /// a pane with no action to offer.
     static func contentWidth(stop: Int) -> CGFloat {
         guard stop > 0 else { return controlButtonWidth }
         return CGFloat(stop - 1) * (controlButtonWidth + contentItemSpacing)
@@ -217,9 +218,9 @@ enum PaneChromeRibbonFit {
     /// Widest reveal stop a pane this wide shows without truncating the device
     /// name, or stop 0 when it fits none.
     ///
-    /// Floors there rather than reporting "nothing fits": the ribbon always
-    /// keeps one control, because a pane with no controls at all is worse than
-    /// one whose name is clipped.
+    /// Floors there rather than reporting "nothing fits", because stop 0 is
+    /// the ribbon's minimum-width state and a clipped device name is better
+    /// than no answer, even where that stop's action viewport is empty.
     static func widestFittingStop(
         paneWidth: CGFloat,
         titleWidth: CGFloat,

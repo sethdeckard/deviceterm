@@ -97,9 +97,10 @@ final class PaneChromeViewModel {
     /// pane can lift it to a per-pane sticky preference).
     var selectedPreset: SimSizePreset?
 
-    /// Chosen reveal rung: stop 0 shows `hotAction` on its own, stop 1 shows
-    /// the size-preset menu, and each later stop adds one more trailing action,
-    /// up to `ribbonWidestStop`.
+    /// Chosen reveal rung: stop 0 shows `hotAction` on its own, which is
+    /// nothing on a pane that has none, stop 1 shows the size-preset menu, and
+    /// each later stop adds one more trailing action, up to
+    /// `ribbonWidestStop`.
     ///
     /// This is the choice, not the render. It outlives a pane too narrow to
     /// honor it, so widening the pane brings it back; draw from
@@ -167,30 +168,45 @@ final class PaneChromeViewModel {
         ribbonPreferredStop >= ribbonWidestStop
     }
 
-    /// Most recently invoked ribbon action. Stamped by every ribbon
-    /// button before its closure fires; surfaced as the single
-    /// button visible at the narrowest reveal stop and as the default
-    /// "hot" (theme-tinted) button when no on-state toggle wins.
+    /// Most recently invoked ribbon action. Stamped by every ribbon button
+    /// before its closure fires, and the default "hot" action when no on-state
+    /// toggle wins and this pane still supports it.
     /// Per-family default (phone/pad → home, watch → crownPress,
-    /// tv/unknown → screenshot) is set at init.
+    /// tv/unknown → screenshot) is set at init, so it can name an action the
+    /// pane does not support; `hotAction` is what resolves that.
     var lastUsedAction: SimChromeAction
 
     /// Which ribbon action is "hot", surfaced as the visible button at the
     /// narrowest reveal stop. Priority cascade:
     ///   1. AX inspector if active (always wins while toggled on)
     ///   2. Recording if active
-    ///   3. Last-used action (always defined; falls back to the
-    ///      per-family default at init)
-    /// Always returns a value, since the cascade ends at `lastUsedAction`
-    /// which is non-optional.
-    var hotAction: SimChromeAction {
+    ///   3. Last-used action, when this pane still supports it
+    ///   4. The first action this pane does support
+    ///
+    /// Nil only when neither toggle is active and `ribbonActions` is empty,
+    /// which a simulator never reports and a physical device can. The last two
+    /// arms are why: `lastUsedAction` carries a per-family default seeded at init
+    /// and can outlive the capability that justified it, so a device
+    /// answering `button: false` would otherwise surface a live Home button
+    /// that cannot do anything. Gating here rather than on the seed catches
+    /// every source of a stale value, including capabilities that change
+    /// after attach.
+    ///
+    /// The first two arms are deliberately ungated: a toggle can only be on
+    /// if the pane supported turning it on, and its off-switch has to stay
+    /// reachable.
+    var hotAction: SimChromeAction? {
         if axInspectorEnabled {
             return .axInspector
         }
         if recordingActive {
             return .record
         }
-        return lastUsedAction
+        let supported = ribbonActions
+        if supported.contains(lastUsedAction) {
+            return lastUsedAction
+        }
+        return supported.first
     }
 
     /// The ribbon's interactive actions in left-to-right display order,
@@ -316,8 +332,8 @@ final class PaneChromeViewModel {
         )
     }
 
-    /// Default `lastUsedAction` (the button shown at the narrowest reveal
-    /// stop) until the user invokes any ribbon control. A physical
+    /// Initial `lastUsedAction` until the user invokes any ribbon control. A
+    /// physical
     /// device defaults to Home, since its first ribbon control is a hardware
     /// button, not the simulator-only screenshot. Sims keep the
     /// per-family default: phone/pad → home, watch → crown press,

@@ -146,14 +146,88 @@ struct PaneChromeOverlayTests {
         #expect(viewModel.ribbonPreferredStop == 0)
     }
 
+    // MARK: - Hot action
+
+    /// A physical-device pane reporting every capability off, which is the one
+    /// kind of pane whose ribbon offers no actions at all.
+    private func capabilityStrippedDevice() -> PaneChromeViewModel {
+        PaneChromeViewModel(
+            title: "iPhone",
+            family: "phone",
+            capabilities: PaneCapabilities(
+                touch: false,
+                key: false,
+                text: false,
+                button: false,
+                rotate: false,
+                crown: false,
+                accessibility: false,
+                location: false
+            ),
+            isPhysicalDevice: true
+        )
+    }
+
+    @Test
+    func aPaneWithNoSupportedActionsHasNoHotAction() {
+        // `button: false` removes Home from the supported actions, so the
+        // per-family default seeded at init must not reach the hot slot.
+        let viewModel = capabilityStrippedDevice()
+        #expect(viewModel.ribbonActions.isEmpty)
+        #expect(viewModel.lastUsedAction == .home)
+        #expect(viewModel.hotAction == nil)
+    }
+
+    @Test
+    func theHotActionFallsBackToOneThePaneSupports() {
+        // `lastUsedAction` can outlive the capability that justified it, so a
+        // value the pane no longer supports has to give way to one it does
+        // rather than showing a control that cannot act.
+        let viewModel = phoneChrome()
+        viewModel.lastUsedAction = .applePay
+        #expect(viewModel.hotAction == .applePay)
+        viewModel.capabilities = PaneCapabilities(
+            touch: true,
+            key: true,
+            text: true,
+            button: false,
+            rotate: true,
+            crown: false,
+            accessibility: true,
+            location: true
+        )
+        #expect(viewModel.ribbonActions.contains(.applePay) == false)
+        let hot = viewModel.hotAction
+        #expect(hot != nil)
+        #expect(viewModel.ribbonActions.contains(hot ?? .home))
+    }
+
+    @Test
+    func anActiveToggleStaysHotEvenUngated() {
+        // A toggle can only be on if the pane supported turning it on, and its
+        // off-switch has to stay reachable at the narrowest stop.
+        let viewModel = capabilityStrippedDevice()
+        viewModel.axInspectorEnabled = true
+        #expect(viewModel.hotAction == .axInspector)
+        viewModel.axInspectorEnabled = false
+        viewModel.recordingActive = true
+        #expect(viewModel.hotAction == .record)
+    }
+
+    @Test
+    func aSupportedLastUsedActionStaysHot() {
+        let viewModel = phoneChrome()
+        viewModel.lastUsedAction = .rotateLeft
+        #expect(viewModel.hotAction == .rotateLeft)
+    }
+
     @Test
     func anActionlessPaneCanStillRevealItsSizeMenu() {
         // A device pane reporting neither buttons nor rotation offers no
-        // ribbon actions at all. It must still have a stop above the
-        // narrowest, because the size-preset menu lives on that rung and
-        // would otherwise be unreachable: the narrowest stop shows the hot
-        // action, which for such a pane is a Home button it cannot even
-        // press. A simulator never reaches this state, since its capture
+        // ribbon actions at all, so its stop 0 is empty. It must still have
+        // a stop above the narrowest, because the size-preset menu lives on
+        // that rung and would otherwise be unreachable. A simulator never
+        // reaches this state, since its capture
         // actions are enabled on pane kind alone.
         let viewModel = PaneChromeViewModel(
             title: "iPhone",

@@ -15,9 +15,10 @@ import SwiftUI
 ///   - Left (pinned): status badge + truncating title.
 ///   - Right (anchored): the ribbon control proper, holding the chevron
 ///     resize handle (tap to jump between the end stops, drag to move between
-///     reveal stops), the ribbon contents (the hot action at the narrowest
-///     stop, otherwise as much of the family-aware row as the current stop
-///     reveals), and the ⋯ overflow on the trailing side. The whole
+///     reveal stops), the ribbon contents (at the narrowest stop the hot
+///     action when there is one, otherwise as much of the family-aware row as
+///     the current stop reveals), and the ⋯ overflow on the trailing side. The
+///     whole
 ///     ribbon is anchored to the right edge of the chrome with a
 ///     left-rounded / right-flat capsule.
 ///
@@ -26,14 +27,22 @@ import SwiftUI
 /// than removed from the row. Keeping the row's membership constant is what
 /// lets the width animate: SwiftUI interpolates a `.frame(width:)` on a
 /// stable view tree, where a `ForEach` gaining and losing members pops. The
-/// narrowest stop is the one exception, and it cross-fades.
+/// narrowest stop is the one exception: it trades the row for the hot action,
+/// fading between the two, or fades the row out alone when there is no hot
+/// action to trade for.
 ///
-/// At any moment exactly one ribbon action is the "hot" button,
-/// theme-tinted with the ghostty `selection-background` color
-/// (fallback `controlAccentColor`) so the user sees the active focus
-/// at a glance. Stateful toggles (AX inspector, recording) become
-/// hot when active and remain hot until turned off, after which the
-/// last-used action takes over. The ⋯ overflow is never hot.
+/// At most one ribbon action is "hot" at a time, and it is the one the
+/// narrowest stop shows. Stateful toggles (AX inspector, recording) become hot
+/// while active and stay hot until turned off, whatever the pane's
+/// capabilities admit, so their off-switch stays reachable. Otherwise the
+/// last-used action takes over when the pane still supports it, and the first
+/// action it does support when it does not. With neither toggle active and no
+/// supported action, there is no hot action at all.
+///
+/// Hotness is not a tint. Only an active toggle is theme-tinted with the
+/// ghostty `selection-background` color (fallback `controlAccentColor`); every
+/// other hot button renders like the rest of the row. The ⋯ overflow is never
+/// hot.
 ///
 /// Per AGENTS.md SwiftUI/AppKit boundary: this surface is pure render
 /// state + action callbacks, so SwiftUI is correct here. The action
@@ -48,9 +57,9 @@ struct PaneChromeOverlay: View {
         case resize
     }
 
-    /// The ghostty selection-background color (fallback to system
-    /// accent) for the hot-button and on-state tint. Shared across
-    /// every ribbon control that needs the theme color.
+    /// The ghostty selection-background color (fallback to system accent) for
+    /// the on-state tint an active toggle carries. Shared across every ribbon
+    /// control that needs the theme color.
     private static var themeTint: Color {
         let fallback = NSColor.controlAccentColor
         return Color(nsColor: GhosttyThemeColors.cachedSelectionBackground() ?? fallback)
@@ -138,9 +147,9 @@ struct PaneChromeOverlay: View {
     }
 
     /// The ribbon control proper, anchored to the trailing edge of the chrome
-    /// with a left-rounded / right-flat capsule. Always shows three elements:
-    /// the chevron resize handle, the width-revealed action row (or the hot
-    /// action at stop 0), and the ⋯ overflow on the trailing side.
+    /// with a left-rounded / right-flat capsule. Always lays out three regions:
+    /// the chevron resize handle, the content viewport, and the ⋯ overflow. At
+    /// stop 0 the viewport shows `hotAction` when there is one.
     private var ribbonControl: some View {
         HStack(spacing: PaneChromeRibbonFit.ribbonItemSpacing) {
             chevronHandle
@@ -265,9 +274,14 @@ struct PaneChromeOverlay: View {
             fullActionRow
                 .opacity(atHotAction ? 0 : 1)
                 .allowsHitTesting(!atHotAction && !dragging)
-            ribbonActionButton(viewModel.hotAction)
-                .opacity(atHotAction ? 1 : 0)
-                .allowsHitTesting(atHotAction && !dragging)
+            // With no hot action, the narrowest stop leaves its action slot
+            // empty rather than drawing a control that cannot act. The
+            // size-preset menu lives one stop wider.
+            if let hot = viewModel.hotAction {
+                ribbonActionButton(hot)
+                    .opacity(atHotAction ? 1 : 0)
+                    .allowsHitTesting(atHotAction && !dragging)
+            }
         }
         .fixedSize(horizontal: true, vertical: false)
         .frame(
