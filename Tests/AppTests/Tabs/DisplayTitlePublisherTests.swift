@@ -131,14 +131,83 @@ struct DisplayTitlePublisherTests {
     }
 
     @Test
-    func republishesUnderTheNewPrimarySession() async {
-        // Closing the primary terminal of a split tab re-seats the tab's
-        // representative session; the same title has to land under the new one.
+    func republishesUnderTheNewSessionAndClearsTheOldOne() async {
+        // The label follows the focused terminal, so it moves between sessions
+        // that are all still open. Nothing else would drop the departed one's
+        // cached title, so the publisher clears it explicitly.
         let sink = TitleSink()
         let publisher = makePublisher(sink)
         publisher.update(sessionId: "S1", title: "vim")
         await drain(publisher)
         publisher.update(sessionId: "S2", title: "vim")
+        await drain(publisher)
+
+        #expect(sink.pushes.map(\.sessionId) == ["S1", "S1", "S2"])
+        #expect(sink.pushes[1].title == nil)
+        #expect(sink.pushes[2].title == "vim")
+    }
+
+    @Test
+    func returningToASessionCancelsItsQueuedClear() async {
+        // Focus bouncing back before the clear drains would otherwise wipe the
+        // label the tab is showing right now.
+        let sink = TitleSink()
+        let publisher = makePublisher(sink)
+        publisher.update(sessionId: "S1", title: "one")
+        await drain(publisher)
+        publisher.update(sessionId: "S2", title: "two")
+        publisher.update(sessionId: "S1", title: "one")
+        await drain(publisher)
+
+        #expect(sink.pushes.map(\.sessionId) == ["S1", "S2"])
+        #expect(sink.pushes.last?.title == nil)
+        #expect(publisher.isSettledForTesting)
+    }
+
+    @Test
+    func returningWhileItsClearIsInFlightRepublishesTheTitle() async {
+        // Cancelling a queued clear cannot recall a send already captured. The
+        // clear lands, so the daemon holds nothing for S1 while the tab is
+        // still labelled from it; without invalidating the skip-cache the
+        // re-push never happens and S1 stays cleared until the next title
+        // change or reconnect.
+        let sink = TitleSink()
+        let gate = Gate()
+        let publisher = DisplayTitlePublisher(
+            .init(
+                send: { sessionId, title in
+                    sink.record(sessionId, title)
+                    // Park the clear, not the first title push.
+                    if sink.pushes.count == 2 { await gate.wait() }
+                },
+                sleep: { _ in true }
+            )
+        )
+        publisher.update(sessionId: "S1", title: "vim")
+        await yieldUntil { sink.pushes.count == 1 }
+        publisher.update(sessionId: "S2", title: "vim")
+        await yieldUntil { sink.pushes.count == 2 }
+        #expect(sink.pushes[1].sessionId == "S1")
+        #expect(sink.pushes[1].title == nil)
+
+        publisher.update(sessionId: "S1", title: "vim")
+        gate.open = true
+        await drain(publisher)
+
+        #expect(sink.pushes.last?.sessionId == "S1")
+        #expect(sink.pushes.last?.title == "vim")
+    }
+
+    @Test
+    func aReconnectDropsQueuedClears() async {
+        // The replacement daemon's cache is empty, so a clear would be
+        // redundant.
+        let sink = TitleSink()
+        let publisher = makePublisher(sink)
+        publisher.update(sessionId: "S1", title: "vim")
+        await drain(publisher)
+        publisher.update(sessionId: "S2", title: "vim")
+        publisher.republish()
         await drain(publisher)
 
         #expect(sink.pushes.map(\.sessionId) == ["S1", "S2"])
@@ -224,8 +293,13 @@ struct DisplayTitlePublisherTests {
 
         publisher.update(sessionId: "S2", title: "vim")
         await drain(publisher)
-        #expect(sink.pushes.map(\.sessionId) == ["S1", "S2"])
+        // Moving off S1 queues its clear like any other hand-off. S1 is gone,
+        // so that clear earns the same refusal and is dropped in turn; the
+        // publisher keeps going and S2 still lands.
+        #expect(sink.pushes.map(\.sessionId) == ["S1", "S1", "S2"])
+        #expect(sink.pushes.last?.title == "vim")
         #expect(publisher.isStoppedForTesting == false)
+        #expect(publisher.isSettledForTesting)
     }
 
     @Test

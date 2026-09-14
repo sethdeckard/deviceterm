@@ -105,9 +105,11 @@ final class TabContentViewController: NSViewController {
     /// its phase flips (attaching ↔ failed).
     private var pendingPaneVCByID: [PendingPaneID: PendingPaneViewController] = [:]
     /// Most recent full working-directory path. Seeded at init from
-    /// the primary terminal's startup `cwd` (the explicit `deviceterm tab
+    /// the tab's first terminal's startup `cwd` (the explicit `deviceterm tab
     /// open --cwd <path>` value) so Duplicate Tab honors that even
-    /// before any OSC 7 lands; updated thereafter by each OSC 7 hop.
+    /// before any OSC 7 lands; updated thereafter by each OSC 7 hop of the
+    /// focused terminal, so a split lands in the directory of the pane the
+    /// user is working in.
     /// `TabTitleViewModel` retains the OSC-7 basename for labelling and the
     /// full path for the proxy icon; only this property carries the startup
     /// seed.
@@ -116,6 +118,11 @@ final class TabContentViewController: NSViewController {
     /// nil and no OSC 7 has fired (falls back to libghostty's GUI-cwd
     /// default).
     private(set) var latestWorkingDirectory: String?
+    /// Panes the label currently describes, re-resolved on every reconcile
+    /// pass. Held rather than recomputed at each read so the per-terminal
+    /// OSC / CWD callbacks, the daemon-cache push, and the label itself
+    /// cannot disagree about which terminal is bound within one pass.
+    private var titleSource: TabTitleSource?
 
     /// Session exposed for tab-scoped consumers such as status-item grouping
     /// and the discovery snapshot's ownership filter. These resolve to the
@@ -126,7 +133,7 @@ final class TabContentViewController: NSViewController {
     var capability: String { primaryTerminalCapability }
     var displayTitle: String { titleModel.displayTitle }
     var manualTitle: String? { titleModel.manualTitle }
-    /// Directory backing the titlebar proxy icon: the primary terminal's OSC-7
+    /// Directory backing the titlebar proxy icon: the focused terminal's OSC-7
     /// path, and nothing else.
     ///
     /// Deliberately without a startup-cwd fallback. OSC 7 is the only source
@@ -138,6 +145,18 @@ final class TabContentViewController: NSViewController {
     var proxyIconPath: String? { titleModel.lastCWDPath }
     private var primaryTerminalSessionId: String {
         tabListVM.tab(id: tabID)?.primaryTerminal.sessionId ?? ""
+    }
+    /// Which panes the label should describe right now, from the tab's two
+    /// focus memories. Nil only when the tab's state is already gone.
+    private var resolvedTitleSource: TabTitleSource? {
+        guard let tab = tabListVM.tab(id: tabID) else { return nil }
+        return TabTitleSourceDecision.source(
+            lastFocusedPane: tab.lastFocusedPane,
+            lastFocusedTerminal: tab.lastFocusedTerminal,
+            primaryTerminal: tab.primaryTerminal.id,
+            leaves: PaneTreeOps.leavesInOrder(tab.paneTree),
+            pendingTargets: tab.pendingPanes.map(\.target)
+        )
     }
     private var primaryTerminalCapability: String {
         tabListVM.tab(id: tabID)?.primaryTerminal.capability ?? ""
@@ -250,19 +269,21 @@ final class TabContentViewController: NSViewController {
             // the daemon holds.
             self?.titlePublisher.republish()
         }
-        // Bind the automatic label sources to the primary terminal, seeding
+        // Bind the automatic label sources to the tab's only terminal, seeding
         // the session-bound field so the worktree branch (from
         // session.create's `name` field) labels the tab immediately. OSC
         // titles from the shell still win when they arrive; CWD basename
         // loses to the worktree name. Binding here rather than letting the
         // first reconcile do it keeps that seed from being overwritten by
-        // the terminal's own (still empty) values.
-        titleModel.adoptPrimaryTerminal(
+        // the terminal's own (still empty) values. The first reconcile then
+        // takes over and the binding follows focus from there.
+        titleModel.adoptTitleTerminal(
             id: primary.id,
             oscTitle: nil,
             workingDirectory: nil,
             sessionName: sessionName
         )
+        titleSource = TabTitleSource(terminal: primary.id, device: nil)
         discoveryObserverToken = router.addOwnedSimDiscoveryObserver { [weak self] owned in
             self?.discoverBootedSims(in: owned)
         }
@@ -313,16 +334,24 @@ final class TabContentViewController: NSViewController {
         titleObservation = App.observe { [weak self] in self?.reportDisplayTitle() }
     }
 
-    /// Hand the publisher the tab's current label and current representative
-    /// session. Both are read on every pass, since Observation tracks only
-    /// what a pass accesses. This re-fires both when the title changes and when
-    /// closing the primary terminal of a split tab re-seats `primaryTerminal`
-    /// onto a different session. It reports the *publishable* label, not the
+    /// Hand the publisher the tab's current label and the session that
+    /// produced it. Both are read on every pass, since Observation tracks only
+    /// what a pass accesses. This re-fires when the title changes and when the
+    /// label's terminal changes, whether because focus moved or because the
+    /// bound terminal closed. It reports the *publishable* label, not the
     /// rendered one: a label that merely restates the session name or generic
     /// fallback publishes as a clear because the cache adds no information.
+    ///
+    /// Resolves the source afresh rather than reading the stored `titleSource`
+    /// so the pass touches `tabListVM`, which is what keeps Observation
+    /// tracking the tab through this closure.
     private func reportDisplayTitle() {
         let title = titleModel.publishableTitle
-        let sessionId = primaryTerminalSessionId
+        let sessionId = resolvedTitleSource
+            .flatMap { source in
+                tabListVM.tab(id: tabID)?.terminals.first { $0.id == source.terminal }
+            }?
+            .sessionId ?? ""
         titlePublisher.update(sessionId: sessionId, title: title)
     }
 
@@ -332,6 +361,60 @@ final class TabContentViewController: NSViewController {
         reconcileDevicePanes()
         reconcilePendingPanes()
         reconcileLayoutTree()
+        reconcileTitleSource()
+    }
+
+    /// Re-point the label at the pane holding focus.
+    ///
+    /// Runs last in the pass so every pane's controller and state record is in
+    /// place: the terminal being adopted has to be able to hand over its own
+    /// retained OSC title and working directory, or the label would blank out
+    /// for as long as it takes the shell to emit another one.
+    private func reconcileTitleSource() {
+        guard let tab = tabListVM.tab(id: tabID), let source = resolvedTitleSource else { return }
+        titleSource = source
+        let terminal = tab.terminals.first { $0.id == source.terminal }
+        let terminalVC = terminalVCByID[source.terminal]
+        titleModel.adoptTitleTerminal(
+            id: source.terminal,
+            oscTitle: terminalVC?.lastOSCTitle,
+            workingDirectory: terminalVC?.lastWorkingDirectory,
+            sessionName: terminal?.name
+        )
+        // Outside the adopt call, which no-ops while the bound terminal is
+        // unchanged. `pane rename` rewrites a live terminal's name, and
+        // re-applying it every pass is what makes that rename show at once
+        // rather than on the next focus cycle, which is when the reseed would
+        // otherwise pick it up. The mutator writes only on a change, so the
+        // reconcile churn costs nothing.
+        titleModel.updateSessionName(terminal?.name)
+        // Never regresses to nil: a terminal that has not emitted OSC 7 yet
+        // still knows where it started, and failing both, the directory the
+        // tab last reported beats handing Duplicate Tab nothing at all.
+        latestWorkingDirectory = terminalVC?.lastWorkingDirectory
+            ?? terminal?.cwd
+            ?? latestWorkingDirectory
+        titleModel.updateFocusedDeviceName(source.device.flatMap(deviceName(of:)))
+    }
+
+    /// A device pane's label: its user-set name when `pane rename` gave it
+    /// one, else the model name the pane chrome shows.
+    ///
+    /// Falls back to the placeholder's own label while the pane is
+    /// mid-re-attach, when the mounted record is gone and only a pending one
+    /// stands in for it.
+    private func deviceName(of target: PaneTarget) -> String? {
+        guard let tab = tabListVM.tab(id: tabID) else { return nil }
+        let pane: (any MirroredPaneState)?
+        switch target {
+        case let .sim(udid):
+            pane = tab.simPanes.first { $0.udid == udid }
+
+        case let .device(deviceId):
+            pane = tab.devicePanes.first { $0.deviceId == deviceId }
+        }
+        if let pane { return pane.name ?? pane.displayName }
+        return tab.pendingPanes.first { $0.target == target }?.displayName
     }
 
     /// Re-home this live tab VC into a different window's nav state after
@@ -607,24 +690,12 @@ final class TabContentViewController: NSViewController {
                     )
             }
         }
-        // Closing the primary terminal promotes `terminals[0]`, which re-seats
-        // the tab's representative session. Rebind the automatic label sources
-        // in the same pass so the promoted session isn't published under the
-        // departed terminal's activity string.
-        let primary = tabState.primaryTerminal
-        let primaryVC = terminalVCByID[primary.id]
-        titleModel.adoptPrimaryTerminal(
-            id: primary.id,
-            oscTitle: primaryVC?.lastOSCTitle,
-            workingDirectory: primaryVC?.lastWorkingDirectory,
-            sessionName: primary.name
-        )
     }
 
     /// Wire a terminal pane VC's delegate callbacks. Title / CWD
-    /// updates from the primary terminal feed the tab's title model;
-    /// non-primary terminals' titles are noted but don't relabel the
-    /// tab: there is no surface that shows a non-primary title.
+    /// updates from the terminal the label is bound to feed the tab's title
+    /// model; only the bound terminal relabels the tab, and the others' titles
+    /// stay on their own VCs for per-pane readers.
     /// Shell exit dispatches the terminal-close route, the
     /// closeTerminalPane handler decides between "just this terminal"
     /// and "the whole tab" based on remaining terminal count.
@@ -707,18 +778,14 @@ final class TabContentViewController: NSViewController {
             )
         }
         terminalVC.onTitleChange = { [weak self] title in
-            // Only the primary terminal's OSC/title drives the tab title.
-            // Non-primary title changes are silently ignored: the tab
-            // strip shows one title and it belongs to the primary.
-            guard let self,
-                self.tabListVM.tab(id: self.tabID)?.primaryTerminal.id == id
-            else { return }
+            // Only the bound terminal relabels the tab. The others' titles stay
+            // on their own VCs, readable per pane, and a terminal that takes
+            // focus later hands over its own retained value then.
+            guard let self, self.titleSource?.terminal == id else { return }
             self.titleModel.updateOSCTitle(title)
         }
         terminalVC.onWorkingDirectoryChange = { [weak self] path in
-            guard let self,
-                self.tabListVM.tab(id: self.tabID)?.primaryTerminal.id == id
-            else { return }
+            guard let self, self.titleSource?.terminal == id else { return }
             self.titleModel.updateWorkingDirectory(path: path)
             self.latestWorkingDirectory = path
         }

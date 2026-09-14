@@ -1161,24 +1161,46 @@ superseded indeterminate send.
 The peer's audit token is the authority; no capability rides on the wire,
 and a UDS caller is refused with `error.scope_violation`.
 
-Publishes the tab's live label (the shell's OSC 0/2 title, a manual rename, or
-whatever else won the GUI's title precedence) into the daemon's optional,
+Publishes the cacheable part of the tab's label (a manual rename, the shell's
+OSC 0/2 title, or the inferred CWD basename) into the daemon's optional,
 bounded session metadata. Public `tab.list` reads the GUI projection directly;
 this cached value remains available to daemon-internal diagnostics and
 version-skew paths.
 
+Each terminal keeps its own OSC title and working directory on its view
+controller, which is where a per-pane reader takes them. The cache is not a
+substitute: it holds one title per tab, moves it between sessions as focus
+does, and clears the session the label left.
+
+The one tier the GUI shows but never publishes is the focused device pane's
+name. A tab whose sim pane holds focus is labelled with that device, while
+the cache under its terminal's session keeps the shell's own activity
+string, so the visible label and the cached one deliberately disagree. A
+device name says nothing about what the session it would be filed under is
+doing.
+
 The GUI is the only writer by construction: it is the only process that
-sees OSC sequences. It pushes under the tab's primary terminal's session
-(a tab holds N terminals with N sessions; the other sessions carry no
-`displayTitle`), coalesced in fixed 150 ms windows. A fixed window rather
-than a resetting debounce means a continuously-retitling shell still
-flushes once per window instead of being postponed indefinitely. The GUI
-republishes each live tab's title after a reconnect, once the session
-inventory has been re-supplied, so the push lands on a session the daemon
-holds. That republish is required because the daemon cache is memory-only:
-a daemon restart or connection replacement would otherwise leave the daemon's
-cached title at the session name until the next OSC event, which may never
-come.
+sees OSC sequences. It pushes under the session of the terminal the label
+describes, which follows focus (a tab holds N terminals with N sessions;
+the others carry no `displayTitle`), coalesced in fixed 150 ms windows. A
+fixed window rather than a resetting debounce means a continuously-retitling
+shell still flushes once per window instead of being postponed
+indefinitely. The GUI republishes each live tab's title after a reconnect,
+once the session inventory has been re-supplied, so the push lands on a
+session the daemon holds. That republish is required because the daemon
+cache is memory-only: a daemon restart or connection replacement would
+otherwise leave the cached display title empty until the next publishable
+change, which may never come.
+
+Moving the label to another terminal queues the session it left for an
+explicit clear, drained before the new value is sent. Focus returning to
+that session cancels its queued clear.
+
+The clear is necessary because both sessions stay open. A tab with several
+terminals would otherwise leave a stale label on every session it ever
+passed through, since only closing a session drops its entry daemon-side.
+The reconnect republish discards queued clears rather than sending them,
+because the replacement daemon holds no titles to clear.
 
 A refusal that says the transport structurally can't accept the method
 stops that tab's publisher rather than earning a refusal for every title
@@ -3669,19 +3691,30 @@ would answer against proportions the user cannot see.
 
 **The pane a tab remembers is navigation state; live focus is not.**
 `TabState.lastFocusedPane` records the pane whose focus-gained edge fired
-last, so selecting a tab again returns to the pane the user was working in
-rather than to the tab's primary terminal. It holds a `PaneSlot`, naming
-sim and device panes as well as terminals, which is what separates it from
-`lastFocusedTerminal`: that one names terminals only and answers a
-different question, which terminal a newly booted sim should attach
-beside.
+last. Selecting a tab again returns to the pane the user was working in
+rather than to the tab's primary terminal, and a sim or device pane holding
+it labels the tab with that device's name.
 
-Nothing clears `lastFocusedPane` when the pane it names goes away.
+It holds a `PaneSlot`, naming sim and device panes as well as terminals,
+which is what separates it from `lastFocusedTerminal`. That one names
+terminals only, and answers the two questions that are specifically about
+terminals: which one a newly booted sim attaches beside, and which one's
+OSC title, working directory, and session name the tab's label reads.
+
+Nothing clears `lastFocusedPane` when the pane it names goes away. Two
+decisions resolve it at read time instead, so a stale value is inert.
 `PaneFocusRestoreDecision` resolves it against the panes that currently
 have a controller, falling back to the primary terminal and then to the
-first mounted pane in display order, so a stale value is inert. Leaving it also
-lets the memory survive the detach and re-attach that swaps a sim pane's
-record behind the same udid.
+first mounted pane in display order. `TabTitleSourceDecision` resolves it
+against nav state rather than mounted controllers, because the tab's title
+*source* has to be derivable from `TabState` alone.
+
+Leaving the value also lets the memory survive the detach and re-attach
+that swaps a sim pane's record behind the same udid. The title decision
+reads the tab's pending panes for the same reason: a pane mid-re-attach has
+traded its leaf for a placeholder, and without that rung the label would
+drop back to the terminal for the length of every re-attach and then
+return.
 
 **Reactivating a window repairs an orphaned first responder, nothing
 more.** `windowDidBecomeKey` restores the remembered pane only when the

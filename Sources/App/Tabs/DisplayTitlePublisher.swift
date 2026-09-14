@@ -8,8 +8,9 @@ import Foundation
 /// The published value is `TabTitleViewModel.publishableTitle`: the tab's
 /// label in its normalized, bounded form, and nil whenever the label would
 /// only restate the session name the daemon already holds or the GUI's generic
-/// fallback. It is cached under the tab's primary terminal session; a split
-/// tab's other sessions carry no cached title.
+/// fallback. It is cached under the session of the terminal the label
+/// describes, which follows focus; a split tab's other sessions carry no
+/// cached title, and one that loses the label has its cached title cleared.
 ///
 /// Three properties the naive "call the daemon from the observation" shape
 /// gets wrong, and why this type exists:
@@ -25,10 +26,10 @@ import Foundation
 ///     simply what the next pass sends.
 ///   - **Lifecycle.** A queued push is dropped when the tab tears down
 ///     (`cancel`), and a push rejected because its session is gone is
-///     abandoned rather than retried forever. When the primary terminal of
-///     a split tab closes, the tab's representative session changes; the
-///     caller re-reports under the new session and the old session's cached
-///     title dies with the session daemon-side.
+///     abandoned rather than retried forever. When the label's terminal
+///     changes, the caller re-reports under the new session and the old one
+///     is queued for an explicit clear; a clear for a session that has since
+///     closed is refused once and dropped.
 ///
 /// A reconnect is the one case where an UNCHANGED title must be re-sent:
 /// the daemon's cache is memory-only, so a daemon restart or connection
@@ -60,6 +61,21 @@ final class DisplayTitlePublisher {
         let title: String?
     }
 
+    /// What one send earned, leaving the bookkeeping to the caller: a clear
+    /// and the desired value want different treatment on success, and only
+    /// the caller knows which it sent.
+    private enum Delivery {
+        case delivered
+        /// The daemon refused this specific value and will keep refusing it.
+        case abandoned
+        /// Refused by a connection the client has already replaced. The value
+        /// stands; try it again on the new one without backing off.
+        case retryImmediately
+        case retryAfterBackoff
+        /// The publisher has stopped, for this connection or for good.
+        case givenUp
+    }
+
     /// `-32011` scope violation: the peer isn't the validated GUI. Two ways
     /// to be here, and both are stable for the life of the process: the
     /// `--smoke` UDS fallback, which carries no audit token at all, and an
@@ -85,6 +101,15 @@ final class DisplayTitlePublisher {
     private let deps: Dependencies
     private var desired: Push?
     private var lastSent: Push?
+    /// Sessions whose cached title is no longer this tab's to hold, drained as
+    /// explicit clears before the desired value is sent.
+    ///
+    /// The label follows the focused terminal, so a tab with several terminals
+    /// moves its cache between live sessions as the user works. Without this
+    /// the terminal the user just left would keep its last activity string
+    /// daemon-side indefinitely; unlike the close path, nothing removes the
+    /// entry, because the session is still open.
+    private var clears: Set<String> = []
     /// Bumped by `republish()`. A send in flight when a republish lands
     /// must not write `lastSent` on resumption. Doing so would clobber the
     /// forget and settle the loop with nothing pending, silently dropping
@@ -104,7 +129,7 @@ final class DisplayTitlePublisher {
     /// publisher counts as settled even with a value still pending: that
     /// value is exactly what it refuses to send until something (a
     /// republish) re-arms it.
-    var isSettledForTesting: Bool { stopped || (!running && pending == nil) }
+    var isSettledForTesting: Bool { stopped || (!running && pending == nil && clears.isEmpty) }
     /// Test seam: the publisher has given up, for this connection or for good.
     var isStoppedForTesting: Bool { stopped }
 
@@ -117,11 +142,16 @@ final class DisplayTitlePublisher {
         self.deps = deps
     }
 
-    /// Report the tab's current label under its current primary session.
+    /// Report the tab's current label under the session that produced it.
     /// Cheap and idempotent: the caller re-reports on every observation
     /// pass, and an unchanged value does nothing. An empty session id (a
     /// tab whose state has already been removed) is dropped rather than
     /// pushed as a bogus target.
+    ///
+    /// A change of session queues the previous one for an explicit clear.
+    /// Returning to a session already queued cancels its clear: the label is
+    /// that session's again, so clearing it would only undo the push that is
+    /// about to follow.
     ///
     /// Only a *permanent* stop discards the value. While a connection-scoped
     /// stop is in effect the latest title is still recorded: `start()` won't
@@ -132,6 +162,10 @@ final class DisplayTitlePublisher {
         guard !stoppedPermanently, !sessionId.isEmpty else { return }
         let push = Push(sessionId: sessionId, title: DisplayTitleNormalizer.normalize(title))
         guard push != desired else { return }
+        if let previous = desired?.sessionId, previous != sessionId {
+            clears.insert(previous)
+        }
+        clears.remove(sessionId)
         desired = push
         start()
     }
@@ -141,10 +175,14 @@ final class DisplayTitlePublisher {
     /// changed. Also re-arms a connection-scoped stop, since the replacement
     /// daemon is a different daemon and the one that refused the method is
     /// gone.
+    ///
+    /// Queued clears are dropped for the same reason the value is re-sent:
+    /// the replacement holds no titles, so sending one would be redundant.
     func republish() {
         guard !stoppedPermanently else { return }
         stoppedForConnection = false
         lastSent = nil
+        clears.removeAll()
         republishGeneration += 1
         start()
     }
@@ -160,7 +198,7 @@ final class DisplayTitlePublisher {
     }
 
     private func start() {
-        guard !running, !stopped, pending != nil else { return }
+        guard !running, !stopped, pending != nil || !clears.isEmpty else { return }
         running = true
         loop = Task { [weak self] in await self?.run() }
     }
@@ -168,44 +206,101 @@ final class DisplayTitlePublisher {
     private func run() async {
         defer { running = false }
         var backoff = deps.baseBackoffNanos
-        while !stopped, pending != nil {
+        while !stopped, pending != nil || !clears.isEmpty {
             if !(await deps.sleep(deps.coalesceWindowNanos)) { return }
             // Re-read after the window: this is what makes a burst collapse
             // into one send, and what lets a teardown during the wait win.
-            guard !stopped, let target = pending else { return }
+            guard !stopped else { return }
             // Read before the suspension: a republish landing mid-send makes
             // this send's outcome stale, so neither success nor a definite
             // rejection may record it as sent.
             let generation = republishGeneration
-            do {
-                try await deps.send(target.sessionId, target.title)
+            // Clears go first. They name sessions the tab has already moved
+            // off, so draining them ahead of the current value keeps a stale
+            // label from outliving the one that replaced it. The set is
+            // unordered, which costs nothing: each clear targets a different
+            // session, so no two depend on which drains first.
+            if let sessionId = clears.first {
+                switch await deliver(Push(sessionId: sessionId, title: nil), generation: generation) {
+                case .delivered:
+                    clears.remove(sessionId)
+                    // The daemon now holds nothing for this session, so a
+                    // `lastSent` still naming it is a lie. Focus returning to
+                    // it while this clear was in flight took its entry out of
+                    // `clears`, which cannot recall a send already captured;
+                    // without this the skip-cache would suppress the re-push
+                    // and the tab's own label would stay cleared daemon-side.
+                    if lastSent?.sessionId == sessionId { lastSent = nil }
+                    backoff = deps.baseBackoffNanos
+
+                case .abandoned:
+                    clears.remove(sessionId)
+                    backoff = deps.baseBackoffNanos
+
+                case .retryImmediately:
+                    continue
+
+                case .retryAfterBackoff:
+                    if !(await deps.sleep(backoff)) { return }
+                    backoff = min(backoff * 2, deps.maxBackoffNanos)
+
+                case .givenUp:
+                    return
+                }
+                continue
+            }
+            guard let target = pending else { return }
+            switch await deliver(target, generation: generation) {
+            case .delivered:
                 markSent(target, generation: generation)
                 backoff = deps.baseBackoffNanos
-            } catch let DaemonClientError.daemon(code, _)
-                where code == Self.permanentRefusalCode {
-                stoppedPermanently = true
-                return
-            } catch let DaemonClientError.daemon(code, _)
-                where code == Self.connectionRefusalCode {
-                // Same staleness rule as `markSent`: a republish landing
-                // mid-send means this refusal came from a connection the
-                // client has already replaced. Honoring it would disable
-                // the REPLACEMENT, which may well support the method, and
-                // strand the pending title. Retry on the new one.
-                guard generation == republishGeneration else { continue }
-                stoppedForConnection = true
-                return
-            } catch let DaemonClientError.daemon(code, _)
-                where Self.definiteRejectionCodes.contains(code) {
+
+            case .abandoned:
                 // Abandon this value: marking it sent stops the retry without
                 // blocking a later push for a different session or title.
                 markSent(target, generation: generation)
-            } catch {
+
+            case .retryImmediately:
+                continue
+
+            case .retryAfterBackoff:
                 // Transport drop or an unclassified daemon error: keep the
                 // value pending and retry with capped backoff.
                 if !(await deps.sleep(backoff)) { return }
                 backoff = min(backoff * 2, deps.maxBackoffNanos)
+
+            case .givenUp:
+                return
             }
+        }
+    }
+
+    /// Push one value and classify the outcome. Records nothing itself; a
+    /// stop is the exception, since it is publisher-wide rather than a
+    /// property of the value that earned it.
+    private func deliver(_ target: Push, generation: Int) async -> Delivery {
+        do {
+            try await deps.send(target.sessionId, target.title)
+            return .delivered
+        } catch let DaemonClientError.daemon(code, _)
+            where code == Self.permanentRefusalCode {
+            stoppedPermanently = true
+            return .givenUp
+        } catch let DaemonClientError.daemon(code, _)
+            where code == Self.connectionRefusalCode {
+            // Same staleness rule as `markSent`: a republish landing
+            // mid-send means this refusal came from a connection the
+            // client has already replaced. Honoring it would disable
+            // the REPLACEMENT, which may well support the method, and
+            // strand the pending title. Retry on the new one.
+            guard generation == republishGeneration else { return .retryImmediately }
+            stoppedForConnection = true
+            return .givenUp
+        } catch let DaemonClientError.daemon(code, _)
+            where Self.definiteRejectionCodes.contains(code) {
+            return .abandoned
+        } catch {
+            return .retryAfterBackoff
         }
     }
 

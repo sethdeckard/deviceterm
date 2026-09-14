@@ -99,15 +99,15 @@ struct TabTitleViewModelTests {
     }
 
     @Test
-    func promotingANewPrimaryTerminalDropsTheDepartedOnesLabel() {
-        // Closing the primary terminal of a split tab re-seats the tab's
-        // representative session. The automatic sources are bound to the old
-        // terminal, so without a reseed the promoted session would be
-        // published under the departed terminal's activity string.
+    func adoptingAnotherTerminalDropsTheDepartedOnesLabel() {
+        // Focus moving to another terminal of a split tab re-points the label.
+        // The automatic sources are bound to the terminal left behind, so
+        // without a reseed the newly bound session would be published under
+        // the departed terminal's activity string.
         let model = TabTitleViewModel()
         let first = TerminalPaneID(value: 1)
         let second = TerminalPaneID(value: 2)
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: first,
             oscTitle: nil,
             workingDirectory: nil,
@@ -118,7 +118,7 @@ struct TabTitleViewModelTests {
         #expect(model.publishableTitle == "vim secret.swift")
 
         // Re-adopting the same terminal changes nothing.
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: first,
             oscTitle: nil,
             workingDirectory: nil,
@@ -126,7 +126,7 @@ struct TabTitleViewModelTests {
         )
         #expect(model.publishableTitle == "vim secret.swift")
 
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: second,
             oscTitle: nil,
             workingDirectory: "/tmp/second",
@@ -137,18 +137,18 @@ struct TabTitleViewModelTests {
     }
 
     @Test
-    func promotionKeepsAManualRename() {
+    func adoptingAnotherTerminalKeepsAManualRename() {
         // The user named the TAB, not the terminal, and a manual title
         // outranks every automatic source anyway.
         let model = TabTitleViewModel()
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: TerminalPaneID(value: 1),
             oscTitle: nil,
             workingDirectory: nil,
             sessionName: "branch"
         )
         model.renameManually(to: "Build")
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: TerminalPaneID(value: 2),
             oscTitle: "vim other.swift",
             workingDirectory: nil,
@@ -195,31 +195,102 @@ struct TabTitleViewModelTests {
     }
 
     @Test
-    func promotingANewPrimaryTerminalReseedsTheCWDPath() {
-        // The proxy icon follows the primary terminal, so a promotion has to
-        // re-point it, and clear it when the promoted terminal has no cwd.
+    func adoptingAnotherTerminalReseedsTheCWDPath() {
+        // The proxy icon follows the terminal the label is bound to, so
+        // adopting another has to re-point it, and clear it when the newly
+        // bound terminal has no cwd.
         let model = TabTitleViewModel()
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: TerminalPaneID(value: 1),
             oscTitle: nil,
             workingDirectory: "/tmp/first",
             sessionName: nil
         )
         #expect(model.lastCWDPath == "/tmp/first")
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: TerminalPaneID(value: 2),
             oscTitle: nil,
             workingDirectory: "/tmp/second",
             sessionName: nil
         )
         #expect(model.lastCWDPath == "/tmp/second")
-        model.adoptPrimaryTerminal(
+        model.adoptTitleTerminal(
             id: TerminalPaneID(value: 3),
             oscTitle: nil,
             workingDirectory: nil,
             sessionName: nil
         )
         #expect(model.lastCWDPath == nil)
+    }
+
+    @Test
+    func aFocusedDeviceNameOutranksTheOSCTitle() {
+        // While a device pane holds focus it is the most specific thing the
+        // tab can say; the terminal's activity is happening in the background.
+        let model = TabTitleViewModel()
+        model.updateSessionName("branch")
+        model.updateOSCTitle("vim foo.swift")
+        model.updateFocusedDeviceName("iPhone 17 Pro")
+        #expect(model.displayTitle == "iPhone 17 Pro")
+    }
+
+    @Test
+    func aManualRenameOutranksAFocusedDeviceName() {
+        // The user named the TAB. Nothing automatic displaces that.
+        let model = TabTitleViewModel()
+        model.renameManually(to: "Build")
+        model.updateFocusedDeviceName("iPhone 17 Pro")
+        #expect(model.displayTitle == "Build")
+    }
+
+    @Test
+    func clearingTheDeviceNameRestoresTheTerminalTiers() {
+        // Focus returning to a terminal must not strand the device's name on
+        // a tab the user has moved on from.
+        let model = TabTitleViewModel()
+        model.updateOSCTitle("vim foo.swift")
+        model.updateFocusedDeviceName("iPhone 17 Pro")
+        #expect(model.displayTitle == "iPhone 17 Pro")
+        model.updateFocusedDeviceName(nil)
+        #expect(model.displayTitle == "vim foo.swift")
+    }
+
+    @Test
+    func aWhitespaceDeviceNameClearsTheTier() {
+        let model = TabTitleViewModel()
+        model.updateOSCTitle("vim foo.swift")
+        model.updateFocusedDeviceName("   ")
+        #expect(model.displayTitle == "vim foo.swift")
+    }
+
+    @Test
+    func theDeviceNameIsNotPublishedToTheDaemon() {
+        // The cache is keyed by session, and a device's name says nothing
+        // about what that terminal session is doing.
+        let model = TabTitleViewModel()
+        model.updateSessionName("branch")
+        model.updateFocusedDeviceName("iPhone 17 Pro")
+        #expect(model.displayTitle == "iPhone 17 Pro")
+        #expect(model.publishableTitle == nil)
+
+        model.updateOSCTitle("vim foo.swift")
+        #expect(model.displayTitle == "iPhone 17 Pro")
+        #expect(model.publishableTitle == "vim foo.swift")
+    }
+
+    @Test
+    func adoptingATerminalLeavesAFocusedDeviceNameIntact() {
+        // The two bindings are independent: a terminal closing underneath a
+        // focused device pane re-seats one without disturbing the other.
+        let model = TabTitleViewModel()
+        model.updateFocusedDeviceName("iPhone 17 Pro")
+        model.adoptTitleTerminal(
+            id: TerminalPaneID(value: 2),
+            oscTitle: "vim other.swift",
+            workingDirectory: nil,
+            sessionName: "other"
+        )
+        #expect(model.displayTitle == "iPhone 17 Pro")
     }
 
     @Test
