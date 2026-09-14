@@ -96,8 +96,7 @@ struct PaneChromeOverlayTests {
         #expect(viewModel.ribbonPreferredStop == widest)
         viewModel.toggleRibbonExtremes()
         #expect(viewModel.ribbonPreferredStop == 0)
-        // From an intermediate stop a tap opens rather than doing nothing,
-        // which is the case a plain boolean toggle could not express.
+        // From an intermediate stop a tap opens rather than doing nothing.
         viewModel.ribbonPreferredStop = 3
         viewModel.toggleRibbonExtremes()
         #expect(viewModel.ribbonPreferredStop == widest)

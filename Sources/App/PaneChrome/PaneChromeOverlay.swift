@@ -18,8 +18,7 @@ import SwiftUI
 ///     reveal stops), the ribbon contents (at the narrowest stop the hot
 ///     action when there is one, otherwise as much of the family-aware row as
 ///     the current stop reveals), and the ⋯ overflow on the trailing side. The
-///     whole
-///     ribbon is anchored to the right edge of the chrome with a
+///     whole ribbon is anchored to the right edge of the chrome with a
 ///     left-rounded / right-flat capsule.
 ///
 /// The contents are a fixed-size row windowed by a trailing-aligned width
@@ -95,6 +94,15 @@ struct PaneChromeOverlay: View {
     /// re-base after every crossing, so each detent would advance the ribbon
     /// further than the last.
     @State private var handleDragOrigin: Int?
+    /// Weighted travel accumulated over the live drag, in the same sign as raw
+    /// pointer translation. Speed gearing makes each delta worth its raw length
+    /// or more, so the total cannot be recovered from the gesture's own
+    /// translation and has to be summed as the deltas arrive.
+    @State private var handleDragTravel: CGFloat = 0
+    /// Raw translation at the previous gesture update, which is what turns
+    /// SwiftUI's cumulative translation into the per-event delta the gearing
+    /// needs.
+    @State private var handleDragLastTranslation: CGFloat = 0
     /// Which cursor this view currently has pushed, nil when none. Exactly
     /// one push stays outstanding at a time; see `applyCursor`.
     @State private var pushedCursor: RibbonCursor?
@@ -375,11 +383,21 @@ struct PaneChromeOverlay: View {
                 if !handleDragArmed {
                     handleDragArmed = true
                     handleDragOrigin = viewModel.ribbonRenderedStop
+                    handleDragTravel = 0
+                    // Only the activation distance is spent, not the whole
+                    // update that cleared it; see `armingTranslation`.
+                    handleDragLastTranslation = PaneChromeRibbonDragMath
+                        .armingTranslation(translation: value.translation)
                 }
+                handleDragTravel += PaneChromeRibbonDragMath.weightedDelta(
+                    rawDelta: value.translation.width - handleDragLastTranslation,
+                    pointerSpeed: abs(value.velocity.width)
+                )
+                handleDragLastTranslation = value.translation.width
                 let stop = PaneChromeRibbonDragMath.detentStop(
                     originStop: committedStop,
                     currentStop: viewModel.ribbonRenderedStop,
-                    translation: value.translation.width,
+                    weightedTranslation: handleDragTravel,
                     widestStop: reachableStop
                 )
                 guard stop != viewModel.ribbonRenderedStop else { return }
@@ -393,18 +411,29 @@ struct PaneChromeOverlay: View {
             .onEnded { value in
                 let wasDrag = handleDragArmed
                 let origin = committedStop
+                let accumulated = handleDragTravel
+                let lastTranslation = handleDragLastTranslation
                 handleDragArmed = false
                 handleDragOrigin = nil
+                handleDragTravel = 0
+                handleDragLastTranslation = 0
                 guard wasDrag else {
                     withAnimation(Self.ribbonSettle) {
                         viewModel.toggleRibbonExtremes()
                     }
                     return
                 }
+                // The release carries its own translation, and nothing promises
+                // a change callback delivered every point of it, so the final
+                // segment is folded in here. It is zero when the two agree.
+                let travel = accumulated + PaneChromeRibbonDragMath.weightedDelta(
+                    rawDelta: value.translation.width - lastTranslation,
+                    pointerSpeed: abs(value.velocity.width)
+                )
                 let landed = PaneChromeRibbonDragMath.detentStop(
                     originStop: origin,
                     currentStop: viewModel.ribbonRenderedStop,
-                    translation: value.translation.width,
+                    weightedTranslation: travel,
                     widestStop: reachableStop
                 )
                 settle(
