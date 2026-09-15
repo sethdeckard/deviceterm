@@ -53,10 +53,13 @@ protocol DeviceControlling: AnyObject {
         udid: String
     ) async throws -> PaneCreateResponse
     /// `device.attach`, returning the connection that recorded the ownership.
+    /// `name` is stamped on the admitted pane when it has none, which is how a
+    /// `pane rename` survives a re-attach; nil for every other caller.
     func attachDeviceWithGeneration(
         sessionId: String,
         capability: String,
-        udid: String
+        udid: String,
+        name: String?
     ) async throws -> (response: PaneCreateResponse, generation: Int)
     /// `device.restoreOwnership`: restore deviceterm's owned-sim claims to a
     /// helper that restarted, preserving a live session attribution where one

@@ -419,7 +419,9 @@ final class TabContentViewController: NSViewController {
             pane = tab.devicePanes.first { $0.deviceId == deviceId }
         }
         if let pane { return pane.name ?? pane.displayName }
-        return tab.pendingPanes.first { $0.target == target }?.displayName
+        return tab.pendingPanes.first { $0.target == target }
+            .map { $0.name ?? $0.displayName ?? "" }
+            .flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// Re-home this live tab VC into a different window's nav state after

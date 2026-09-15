@@ -971,6 +971,67 @@ struct TabListViewModelTests {
     }
 
     @Test
+    func aRenamedSimPaneKeepsItsNameAcrossAReattach() {
+        // Models a response that omits its name, which is what an older
+        // daemon ignoring the attach's `name` returns. The placeholder's copy
+        // is what keeps a `pane rename` from expiring the first time a helper
+        // restart or a resurrect re-mounts the pane.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        let tabID = TabID(value: 1)
+        var pane = SimPaneState(paneId: "p1", udid: "U", displayName: "iPhone", family: "phone")
+        pane.name = "Login Phone"
+        mountSim(model, pane, inTab: tabID)
+
+        let pendingId = PendingPaneID(value: 9_200)
+        model.replaceSimPaneWithPending(
+            udid: "U",
+            pending: PendingPaneState(
+                id: pendingId,
+                target: .sim(udid: "U"),
+                displayName: "iPhone",
+                family: "phone",
+                name: pane.name
+            ),
+            inTab: tabID
+        )
+        model.replacePendingWithSim(
+            id: pendingId,
+            pane: SimPaneState(paneId: "p2", udid: "U", displayName: "iPhone", family: "phone"),
+            inTab: tabID
+        )
+        #expect(model.tab(id: tabID)?.simPanes.first?.name == "Login Phone")
+    }
+
+    @Test
+    func anAttachResponseNameOutranksTheCarriedOne() {
+        // A daemon that does return a name is the authority; the placeholder's
+        // copy is a fallback for the response that carries none.
+        let model = TabListViewModel()
+        model.append(tab(1))
+        let tabID = TabID(value: 1)
+        let pane = SimPaneState(paneId: "p1", udid: "U", displayName: "iPhone", family: "phone")
+        mountSim(model, pane, inTab: tabID)
+
+        let pendingId = PendingPaneID(value: 9_300)
+        model.replaceSimPaneWithPending(
+            udid: "U",
+            pending: PendingPaneState(
+                id: pendingId,
+                target: .sim(udid: "U"),
+                displayName: "iPhone",
+                family: "phone",
+                name: "carried"
+            ),
+            inTab: tabID
+        )
+        var rebuilt = SimPaneState(paneId: "p2", udid: "U", displayName: "iPhone", family: "phone")
+        rebuilt.name = "from the daemon"
+        model.replacePendingWithSim(id: pendingId, pane: rebuilt, inTab: tabID)
+        #expect(model.tab(id: tabID)?.simPanes.first?.name == "from the daemon")
+    }
+
+    @Test
     func renamingATerminalLeavesItsDaemonSessionNameAlone() {
         // A terminal rename never reaches the daemon, so the name it was
         // created with has to survive the rename that overwrites the label.

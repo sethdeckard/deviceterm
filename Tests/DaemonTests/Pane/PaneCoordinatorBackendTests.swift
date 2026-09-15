@@ -533,11 +533,13 @@ extension PaneCoordinator {
         sessionId: UUID,
         backend: MockDeviceBackend,
         revision: UInt64? = nil,
+        name: String? = nil,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil
     ) async throws -> PaneCreateResult {
         try await createPane(
             target: .sim(udid: udid),
             sessionId: sessionId,
+            name: name,
             revision: revision,
             isOwnerSessionAlive: isOwnerSessionAlive,
             acquire: { AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone") }
@@ -627,6 +629,48 @@ func paneNameUpdateAppearsInDaemonDirectRoster() async throws {
 
     try await coordinator.setName(paneId: pane.paneId, name: nil)
     #expect(await coordinator.panesForSession(sessionId).first?.name == nil)
+}
+
+@Test
+func attachStampsACarriedNameOnAFreshRecord() async throws {
+    // A fresh re-attach stamps the GUI's carried rename on the new record, so
+    // both the response and the daemon roster carry it. The response is what
+    // the GUI rebuilds its pane state from.
+    let coordinator = PaneCoordinator()
+    let sessionId = UUID()
+    let pane = try await coordinator.createMockPane(
+        udid: "carried",
+        sessionId: sessionId,
+        backend: MockDeviceBackend(),
+        name: "Login Phone"
+    )
+    #expect(pane.name == "Login Phone")
+    #expect(await coordinator.panesForSession(sessionId).first?.name == "Login Phone")
+}
+
+@Test
+func aCarriedNameNeverOverwritesALiveOne() async throws {
+    // A same-owner re-attach reuses the record rather than minting one, and
+    // its name is the user's current choice. The carried value is a
+    // restoration for a record that lost its name, never an authority over
+    // one that still has it.
+    let coordinator = PaneCoordinator()
+    let sessionId = UUID()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(
+        udid: "live-name",
+        sessionId: sessionId,
+        backend: backend
+    )
+    _ = try await coordinator.setName(paneId: pane.paneId, name: "renamed since")
+
+    _ = try await coordinator.createMockPane(
+        udid: "live-name",
+        sessionId: sessionId,
+        backend: backend,
+        name: "stale carried"
+    )
+    #expect(await coordinator.panesForSession(sessionId).first?.name == "renamed since")
 }
 
 @Test

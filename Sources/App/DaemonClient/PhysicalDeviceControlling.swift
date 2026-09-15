@@ -18,8 +18,10 @@ protocol PhysicalDeviceControlling: AnyObject {
     /// session explicitly because its one shared connection can't pick the
     /// tab via connection-auth (the daemon honors it only on this trusted
     /// XPC path). There is no capability; `sessionId` is attribution, not a credential.
+    /// See `DeviceControlling.attachDeviceWithGeneration` for `name`.
     func attachPhysicalDevice(
         deviceId: String,
-        sessionId: String
+        sessionId: String,
+        name: String?
     ) async throws -> PaneCreateResponse
 }

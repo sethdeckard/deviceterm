@@ -1454,7 +1454,7 @@ bookkeeping.
 
 #### `device.attach`
 
-- Params: `{udid, sessionId, cap, revision?}`
+- Params: `{udid, sessionId, cap, revision?, name?}`
 - Result: as `pane.create`
 - Scope: session
 
@@ -1462,6 +1462,20 @@ Transfers ownership of an already-booted udid to `(sessionId, cap)` and
 creates a sim pane in one shot. `family`, the coarse device class, is the
 uniform source the GUI sizes from, since every attach path returns it;
 `capabilities` and `target` are as in `pane.create`.
+
+`name` restores a pane's user-set name across a re-attach. A record is
+otherwise unnamed, so a pane coming back from a helper restart would have lost
+its `deviceterm pane rename`.
+
+The daemon stamps a fresh record with it at creation, and fills an existing
+one only when its current name is nil, so a same-owner re-attach never
+overwrites the name a pane is carrying.
+
+It is honored only for the signature-validated GUI peer and ignored for UDS
+callers, the rule `physicalDevice.attach` applies to its `sessionId`. The GUI
+is the only peer that knows what a pane was renamed to, and `pane.setName`,
+the deliberate path for this field, is validated-GUI scoped for the same
+reason.
 
 This is an ownership transfer, not a boot transition, so it publishes no
 `device.booted` event.
@@ -1546,7 +1560,7 @@ protected tab hides, hence daemon-wide.
 
 #### `physicalDevice.attach`
 
-- Params: `{deviceId, sessionId?, revision?}`
+- Params: `{deviceId, sessionId?, revision?, name?}`
 - Result: as `pane.create`
 - Scope: session
 
@@ -1565,6 +1579,10 @@ displayservice) returns `invalidParams` with a "needs a newer iOS" reason;
 an absent or locked device returns a clear `invalidParams`/`serverError`.
 `family` reads `unknown` for device panes; the GUI sizes them from the
 surface stream instead.
+
+`name` restores a pane's user-set name across a re-attach, as in
+`device.attach`, and follows the same trust rule as `sessionId` above.
+Restart recovery and the resurrect watch both send it.
 
 #### `devices.list`
 

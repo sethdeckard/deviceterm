@@ -890,6 +890,7 @@ final class Router {
                 // the bare name itself. See `PendingPaneState.resolvesName`.
                 displayName: pane.displayName,
                 family: pane.family,
+                name: pane.name,
                 atIndex: index,
                 resolvesName: true
             ),
@@ -898,7 +899,12 @@ final class Router {
         spawnAttach(
             tab: tabID,
             pendingId: pendingId,
-            spec: simAttachSpec(tab: tabID, udid: pane.udid, displayName: nil)
+            spec: simAttachSpec(
+                tab: tabID,
+                udid: pane.udid,
+                displayName: nil,
+                carriedName: pane.name
+            )
         )
     }
 
@@ -914,7 +920,8 @@ final class Router {
                 id: pendingId,
                 target: pane.target,
                 displayName: pane.displayName,
-                family: pane.family
+                family: pane.family,
+                name: pane.name
             ),
             inTab: tabID
         )
@@ -928,7 +935,8 @@ final class Router {
             spec: deviceAttachSpec(
                 tab: tabID,
                 deviceId: pane.deviceId,
-                displayName: pane.displayName
+                displayName: pane.displayName,
+                carriedName: pane.name
             )
         )
     }
@@ -1946,7 +1954,8 @@ final class Router {
         tab tabID: TabID,
         udid: String,
         displayName: String?,
-        family: String? = nil
+        family: String? = nil,
+        carriedName: String? = nil
     ) -> PendingAttachSpec {
         PendingAttachSpec(
             target: .sim(udid: udid),
@@ -1957,7 +1966,8 @@ final class Router {
                 let answer = try await daemon.attachDeviceWithGeneration(
                     sessionId: primary.sessionId,
                     capability: primary.capability,
-                    udid: udid
+                    udid: udid,
+                    name: carriedName
                 )
                 // `device.attach` records ownership daemon-side, so the mirror
                 // is out of date the moment this returns.
@@ -2018,16 +2028,17 @@ final class Router {
     /// (`noteSimOwned` records a sim's boot claim for cold-start orphan
     /// recovery; device panes are never persisted).
     ///
-    /// There is no name lookup on this path, and the response's `name` is a
-    /// human-set pane name the daemon leaves nil at create, so a caller
-    /// passing nil gets a deviceId stub. The caller's name is the only real
-    /// source, which is why recovery hands the pane's own label back rather
+    /// There is no name lookup on this path. Recovery sends the pane's
+    /// user-set name as `carriedName`, and without a display name or a
+    /// response name the label falls back to a deviceId stub. The caller's
+    /// name is the real source, which is why recovery hands its own label back rather
     /// than resolving. Nothing composes a device type onto it either (a
     /// physical attach reports none), so that label round-trips unchanged.
     private func deviceAttachSpec(
         tab tabID: TabID,
         deviceId: String,
-        displayName: String?
+        displayName: String?,
+        carriedName: String? = nil
     ) -> PendingAttachSpec {
         PendingAttachSpec(
             target: .device(deviceId: deviceId),
@@ -2037,7 +2048,8 @@ final class Router {
             attach: { [daemon] primary in
                 try await daemon.attachPhysicalDevice(
                     deviceId: deviceId,
-                    sessionId: primary.sessionId
+                    sessionId: primary.sessionId,
+                    name: carriedName
                 )
             },
             resolveName: { response in
@@ -2556,10 +2568,20 @@ final class Router {
         let spec: PendingAttachSpec
         switch pending.target {
         case let .sim(udid):
-            spec = simAttachSpec(tab: tabID, udid: udid, displayName: pending.attachName)
+            spec = simAttachSpec(
+                tab: tabID,
+                udid: udid,
+                displayName: pending.attachName,
+                carriedName: pending.name
+            )
 
         case let .device(deviceId):
-            spec = deviceAttachSpec(tab: tabID, deviceId: deviceId, displayName: pending.attachName)
+            spec = deviceAttachSpec(
+                tab: tabID,
+                deviceId: deviceId,
+                displayName: pending.attachName,
+                carriedName: pending.name
+            )
         }
         // A retry can overlap the attempt that failed: the first one abandoned
         // its *wait*, not its work, so the daemon may still be finishing it.

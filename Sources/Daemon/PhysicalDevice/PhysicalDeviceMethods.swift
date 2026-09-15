@@ -21,11 +21,19 @@ public enum PhysicalDeviceMethods {
         public let sessionId: String?
         /// See `DeviceMethods.AttachParams.revision`.
         public let revision: UInt64?
+        /// See `DeviceMethods.AttachParams.name`.
+        public let name: String?
 
-        public init(deviceId: String, sessionId: String? = nil, revision: UInt64? = nil) {
+        public init(
+            deviceId: String,
+            sessionId: String? = nil,
+            revision: UInt64? = nil,
+            name: String? = nil
+        ) {
             self.deviceId = deviceId
             self.sessionId = sessionId
             self.revision = revision
+            self.name = name
         }
     }
 
@@ -126,6 +134,7 @@ public enum PhysicalDeviceMethods {
                 result = try await paneCoordinator.createPane(
                     target: .device(deviceId: params.deviceId),
                     sessionId: sessionId,
+                    name: resolveCarriedName(params.name),
                     revision: params.revision,
                     ownerIncarnation: ownerIncarnation,
                     requireConcreteIncarnation: true,
@@ -259,6 +268,25 @@ public enum PhysicalDeviceMethods {
             return explicit
         }
         return SessionDispatchContext.originatingSessionId.flatMap(UUID.init(uuidString:))
+    }
+
+    /// The name to stamp on the admitted pane, honored only for the
+    /// signature-validated GUI peer and ignored for everyone else.
+    ///
+    /// The field restores a pane's own rename across a re-attach, and the GUI
+    /// is the only peer that knows what that rename was. Left ungated, any
+    /// holder of a tab's cap could stamp a name the GUI never learns, which is
+    /// the same split brain in the other direction: `pane.setName`, the
+    /// deliberate path for this field, is `.validatedGUI` for exactly that
+    /// reason.
+    static func resolveCarriedName(
+        _ name: String?,
+        isTrustedGUIPeer: (DispatchPeerContext) -> Bool = Self.isTrustedGUIPeer
+    ) -> String? {
+        guard let context = DispatchPeerContext.current, isTrustedGUIPeer(context) else {
+            return nil
+        }
+        return name
     }
 
     /// Whether the caller is the signature-validated host GUI, the only peer

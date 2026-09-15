@@ -142,4 +142,24 @@ struct PaneUDIDCaseTests {
         }
         #expect(payload.simulator?.udid == Self.canonical)
     }
+
+    @Test
+    func recoveryCarriesARenamedPanesNameOnTheAttach() async {
+        // A helper restart re-attaches every mounted pane. The user-set name
+        // rides the attach so the daemon can stamp the replacement record,
+        // which is the only round trip that can restore it.
+        let harness = await makeHarness(target: .sim(udid: Self.canonical))
+        await attach(harness)
+        let renamed = harness.workspace.window(id: WindowID(value: 1))?
+            .tabs.renamePane(
+            .sim(udid: Self.canonical),
+            inTab: TabID(value: 1),
+            to: "Login Phone"
+        )
+        #expect(renamed == true)
+
+        harness.router.dispatch(.recoverPanes)
+        await settle()
+        #expect(harness.fake.attachDeviceCalls.last?.name == "Login Phone")
+    }
 }

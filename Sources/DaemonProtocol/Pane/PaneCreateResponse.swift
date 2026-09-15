@@ -30,9 +30,10 @@ public struct PaneCreateResponse: Codable, Sendable, Equatable {
     /// Crockford base32 short_id (6 chars, lowercased). Daemon-minted
     /// at create time; current daemons always emit it.
     public let shortId: String?
-    /// Optional human-set name. Nil at create. The `deviceterm pane
-    /// rename` command ships, but currently returns `intent.internalError`
-    /// without mutating this field.
+    /// Optional human-set name, from `deviceterm pane rename` or from an
+    /// attach carrying one. Nil at create unless the signature-validated GUI
+    /// supplied a name to restore, which it does when re-attaching a pane the
+    /// user had renamed.
     public let name: String?
     /// Human-readable device type from `SimDeviceType.name`, e.g.
     /// "Apple Watch Ultra 3 (49mm)". Optional for skew tolerance.

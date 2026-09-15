@@ -1309,7 +1309,9 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         try await attachDeviceWithGeneration(
             sessionId: sessionId,
             capability: capability,
-            udid: udid
+            udid: udid,
+            // No pane is being restored on this path, so nothing to stamp.
+            name: nil
         ).response
     }
 
@@ -1318,17 +1320,18 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     func attachDeviceWithGeneration(
         sessionId: String,
         capability: String,
-        udid: String
+        udid: String,
+        name: String?
     ) async throws -> (response: PaneCreateResponse, generation: Int) {
         attachRevision &+= 1
-        let params = try JSONSerialization.data(
-            withJSONObject: [
+        var body: [String: Any] = [
             "udid": udid,
             "sessionId": sessionId,
             "cap": capability,
             "revision": attachRevision
-            ]
-            )
+        ]
+        if let name { body["name"] = name }
+        let params = try JSONSerialization.data(withJSONObject: body)
         let answer = try await requestWithGeneration(method: .deviceAttach, params: params)
         return (try decode(PaneCreateResponse.self, answer.data), answer.generation)
     }
@@ -1363,16 +1366,17 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     /// credential.
     func attachPhysicalDevice(
         deviceId: String,
-        sessionId: String
+        sessionId: String,
+        name: String?
     ) async throws -> PaneCreateResponse {
         attachRevision &+= 1
-        let params = try JSONSerialization.data(
-            withJSONObject: [
+        var body: [String: Any] = [
             "deviceId": deviceId,
             "sessionId": sessionId,
             "revision": attachRevision
-            ]
-            )
+        ]
+        if let name { body["name"] = name }
+        let params = try JSONSerialization.data(withJSONObject: body)
         let data = try await request(method: .physicalDeviceAttach, params: params)
         return try decode(PaneCreateResponse.self, data)
     }

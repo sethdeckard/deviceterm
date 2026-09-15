@@ -31,6 +31,17 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
     /// leaf with the same metrics the real pane will take so the success
     /// swap doesn't resize. nil → `.unknown` → phone-default.
     let family: String?
+    /// The user's `pane rename` name, retained while the pane is pending and
+    /// sent with the re-attach or retry so the daemon can stamp it on the
+    /// replacement record.
+    ///
+    /// The response's name wins; this is the fallback for one that omits it,
+    /// which is what an older daemon ignoring the field returns.
+    ///
+    /// Deliberately absent from `attachName`, which is a different question:
+    /// that one is the label the attach should resolve against, and the two
+    /// have separate wire fields daemon-side.
+    let name: String?
     /// The typed-array position to take when the pane mounts, recorded from
     /// where it came from so a pane being re-attached lands back in its own
     /// slot. Set only by the in-place re-attach paths (helper recovery and
@@ -74,6 +85,7 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
         target: PaneTarget,
         displayName: String?,
         family: String? = nil,
+        name: String? = nil,
         atIndex: Int? = nil,
         resolvesName: Bool = false,
         sizePreset: SimSizePreset? = nil,
@@ -83,6 +95,7 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
         self.target = target
         self.displayName = displayName
         self.family = family
+        self.name = name
         self.atIndex = atIndex
         self.resolvesName = resolvesName
         self.sizePreset = sizePreset

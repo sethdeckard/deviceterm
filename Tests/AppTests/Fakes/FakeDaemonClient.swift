@@ -61,10 +61,16 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let sessionId: String
         let capability: String
         let udid: String
+        /// The name the attach asked the daemon to stamp, nil when none was
+        /// carried. Defaulted so tests that only care about the target keep
+        /// their existing literals.
+        var name: String?
     }
     struct AttachPhysicalDeviceCall: Equatable {
         let deviceId: String
         let sessionId: String
+        /// See `AttachDeviceCall.name`.
+        var name: String?
     }
     struct ClosePaneCall: Equatable {
         let paneId: String
@@ -894,17 +900,19 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         try await attachDeviceWithGeneration(
             sessionId: sessionId,
             capability: capability,
-            udid: udid
+            udid: udid,
+            name: nil
         ).response
     }
 
     func attachDeviceWithGeneration(
         sessionId: String,
         capability: String,
-        udid: String
+        udid: String,
+        name: String?
     ) async throws -> (response: PaneCreateResponse, generation: Int) {
         attachDeviceCalls.append(
-            .init(sessionId: sessionId, capability: capability, udid: udid)
+            .init(sessionId: sessionId, capability: capability, udid: udid, name: name)
         )
         // Captured before the barrier, as the real transport captures it with
         // the send: a reconnect while the call is in flight must not rewrite
@@ -951,9 +959,12 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
 
     func attachPhysicalDevice(
         deviceId: String,
-        sessionId: String
+        sessionId: String,
+        name: String?
     ) async throws -> PaneCreateResponse {
-        attachPhysicalDeviceCalls.append(.init(deviceId: deviceId, sessionId: sessionId))
+        attachPhysicalDeviceCalls.append(
+            .init(deviceId: deviceId, sessionId: sessionId, name: name)
+        )
         let index = attachCallCount
         attachCallCount += 1
         await awaitAttachGate()

@@ -129,3 +129,34 @@ func noExplicitSessionUsesConnectionAuth() async {
         #expect(resolved == connection)
     }
 }
+
+// `name` on an attach carries the GUI's restoration of a pane's own rename, so
+// it follows the same trust rule as `sessionId`. `pane.setName` is the
+// deliberate path for the field and is `.validatedGUI`; leaving the attach
+// ungated would let any holder of a tab's cap stamp a name over UDS that the
+// GUI never learns.
+
+@Test
+func onlyTheTrustedGUIPeerCanCarryANameOnAnAttach() async {
+    await withContext(transport: .xpc, originating: UUID()) {
+        #expect(
+            PhysicalDeviceMethods.resolveCarriedName("Login Phone", isTrustedGUIPeer: { _ in true })
+                == "Login Phone"
+        )
+    }
+}
+
+@Test
+func aUDSAttachCarryingANameLeavesThePaneUnnamed() async {
+    await withContext(transport: .uds, originating: UUID()) {
+        #expect(
+            PhysicalDeviceMethods.resolveCarriedName("Login Phone", isTrustedGUIPeer: { _ in false })
+                == nil
+        )
+    }
+    // The real gate, not the injected stub: UDS is refused whatever the
+    // resolved verdict says, because it carries no audit token to resolve.
+    await withContext(transport: .uds, originating: UUID()) {
+        #expect(PhysicalDeviceMethods.resolveCarriedName("Login Phone") == nil)
+    }
+}

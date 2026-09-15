@@ -875,6 +875,7 @@ public actor PaneCoordinator {
     public func createSim(
         sessionId: UUID,
         udid: String,
+        name: String? = nil,
         revision: UInt64? = nil,
         ownerIncarnation: UInt64? = nil,
         requireConcreteIncarnation: Bool = false,
@@ -884,6 +885,7 @@ public actor PaneCoordinator {
         return try await createPane(
             target: .sim(udid: normalized),
             sessionId: sessionId,
+            name: name,
             revision: revision,
             ownerIncarnation: ownerIncarnation,
             requireConcreteIncarnation: requireConcreteIncarnation,
@@ -975,6 +977,7 @@ public actor PaneCoordinator {
     func createPane(
         target: PaneTarget,
         sessionId: UUID,
+        name: String? = nil,
         revision: UInt64? = nil,
         ownerIncarnation: UInt64? = nil,
         requireConcreteIncarnation: Bool = false,
@@ -1171,6 +1174,10 @@ public actor PaneCoordinator {
                     existing.attachment = allocateAttachment()
                     existing.admissionRevision = revision
                 }
+                // Restores a name this record lost, in the same synchronous
+                // segment as the admission it belongs to. Never overwrites one
+                // it still carries.
+                if existing.name == nil, let name { existing.name = name }
                 return resultFor(existing)
             }
             let priorOwner = existing.sessionId
@@ -1220,6 +1227,10 @@ public actor PaneCoordinator {
                 // one requester's own series.
                 existing.attachment = allocateAttachment()
                 existing.admissionRevision = revision
+                // Restores a name this record lost, in the same
+                // synchronous segment as the admission it belongs to.
+                // Never overwrites one it still carries.
+                if existing.name == nil, let name { existing.name = name }
                 return resultFor(existing)
             }
             continue
@@ -1243,7 +1254,11 @@ public actor PaneCoordinator {
             state: .booting,
             family: acquired.family,
             shortId: shortId,
-            name: nil,
+            // Captured before display bootstrap suspends. Applying it after
+            // the record reaches `panes` could write a carried value onto a
+            // later admission that took the record over in the meantime,
+            // which is the adoption this is meant to survive.
+            name: name,
             deviceType: acquired.deviceType,
             capabilities: acquired.backend.capabilities.wire
         )

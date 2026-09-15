@@ -486,6 +486,9 @@ final class TabListViewModel {
         }
         var restored = pane
         restored.sizePreset = pane.sizePreset ?? pending.sizePreset
+        // Prefer the response's name; fall back to the placeholder's copy when
+        // it omits one, which is what an older daemon does.
+        restored.name = pane.name ?? pending.name
         if let atIndex = pending.atIndex {
             tabs[index].simPanes.insert(
                 restored,
@@ -535,6 +538,9 @@ final class TabListViewModel {
         }
         var restored = pane
         restored.sizePreset = pane.sizePreset ?? pending.sizePreset
+        // As in `replacePendingWithSim`: the response's name wins, the
+        // placeholder's is the fallback.
+        restored.name = pane.name ?? pending.name
         tabs[index].devicePanes.append(restored)
         tabs[index].paneTree = PaneTreeOps.replace(
             slot: .pending(pendingId),

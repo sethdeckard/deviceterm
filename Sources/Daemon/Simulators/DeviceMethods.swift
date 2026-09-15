@@ -82,12 +82,28 @@ public enum DeviceMethods {
         /// `PaneCoordinator.Record.admissionRevision`. Optional: a caller
         /// that sends none (the CLI) has no series to order.
         public let revision: UInt64?
+        /// Name to restore when the admitted pane has none. A fresh record
+        /// takes it at creation; an existing one keeps whatever name it still
+        /// carries.
+        ///
+        /// Honored only for the signature-validated GUI peer and ignored for
+        /// UDS callers, the same rule `physicalDevice.attach` applies to
+        /// `sessionId`. The GUI sends it to restore a `pane rename` across a
+        /// re-attach; nobody else can name a pane it did not name.
+        public let name: String?
 
-        public init(udid: String, sessionId: String, cap: String, revision: UInt64? = nil) {
+        public init(
+            udid: String,
+            sessionId: String,
+            cap: String,
+            revision: UInt64? = nil,
+            name: String? = nil
+        ) {
             self.udid = udid
             self.sessionId = sessionId
             self.cap = cap
             self.revision = revision
+            self.name = name
         }
     }
 
@@ -323,6 +339,7 @@ public enum DeviceMethods {
                 result = try await paneCoordinator.createSim(
                     sessionId: sessionId,
                     udid: params.udid,
+                    name: PhysicalDeviceMethods.resolveCarriedName(params.name),
                     revision: params.revision,
                     ownerIncarnation: ownerIncarnation,
                     requireConcreteIncarnation: true,
