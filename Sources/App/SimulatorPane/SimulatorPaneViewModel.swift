@@ -269,14 +269,16 @@ final class SimulatorPaneViewModel {
                     stream = try await client.subscribePane(paneId: id)
                 } catch {
                     if Task.isCancelled { return }
-                    // A transport failure (the connection dropped during the
-                    // subscribe or its reauth retry) is recoverable, so back off
-                    // and try again, exactly as a clean stream-end does, since
-                    // launchd re-launches the daemon on the next send. A
-                    // terminal daemon response (pane-not-found) or a
-                    // `decode`/version fault is a definitive answer no retry
-                    // changes, so it fails the pane.
-                    if case DaemonClientError.transport = error {
+                    // A connection failure (a transport error, usually the
+                    // connection dropping during the subscribe or its reauth
+                    // retry, or the handshake's bound expiring before the
+                    // helper answered) is recoverable, so back off and try
+                    // again, exactly as a clean stream-end does: launchd
+                    // re-launches a gone daemon on the next send, and a slow
+                    // one answers the retry. A terminal daemon response
+                    // (pane-not-found) or a `decode`/version fault is a
+                    // definitive answer no retry changes, so it fails the pane.
+                    if let clientError = error as? DaemonClientError, clientError.isConnectionFailure {
                         try? await Task.sleep(
                             nanoseconds: policy.delayNanoseconds(forAttempt: attempt)
                         )

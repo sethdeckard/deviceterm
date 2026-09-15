@@ -4,13 +4,18 @@
 import Foundation
 import Testing
 
-/// `DaemonClientError.isHelperUnreachable`: the classifier that decides whether a
-/// failed launch connection is worth re-registering the helper agent for. It
-/// separates failures that can occur before any reply establishes reachability,
-/// which are consistent with a launchd registration that cannot spawn, from ones
-/// that follow a reply and so prove the registration resolves.
+/// The two `DaemonClientError` classifiers.
 ///
-/// Every case is pinned in one direction or the other, so a new
+/// `isHelperUnreachable` decides whether a failed launch connection is worth
+/// re-registering the helper agent for. It separates failures that can occur
+/// before any reply establishes reachability, which are consistent with a
+/// launchd registration that cannot spawn, from ones that follow a reply and so
+/// prove the registration resolves.
+///
+/// `isConnectionFailure` identifies `transport` errors and ordinary request
+/// timeouts. Callers decide whether their operation may be retried on one.
+///
+/// Every case is pinned in one direction or the other for both, so a new
 /// `DaemonClientError` case has to be classified deliberately rather than
 /// inheriting a default.
 struct DaemonClientReachabilityTests {
@@ -46,6 +51,32 @@ struct DaemonClientReachabilityTests {
         let mismatch = DaemonClientError.versionMismatch(client: "3", daemon: "4")
         #expect(mismatch.isVersionMismatch)
         #expect(!mismatch.isHelperUnreachable)
+    }
+
+    /// No verdict reached the client: the connection dropped, or the bound on
+    /// the pane handshake (its subscribe, or the authenticate that precedes
+    /// it) expired first. A retry can still succeed.
+    @Test("connection failure: the call ended without a verdict", arguments: [
+        DaemonClientError.timedOut(method: "pane.subscribe"),
+        DaemonClientError.timedOut(method: "session.authenticate"),
+        DaemonClientError.transport("connection invalidated")
+    ])
+    func classifiesSilenceAsAConnectionFailure(error: DaemonClientError) {
+        #expect(error.isConnectionFailure)
+    }
+
+    /// Daemon replies and decode or version faults are terminal, and the
+    /// shutdown outcomes belong to shutdown recovery whether or not a reply
+    /// arrived.
+    @Test("not a connection failure", arguments: [
+        DaemonClientError.daemon(code: -32_004, message: "pane not found"),
+        DaemonClientError.versionMismatch(client: "3", daemon: "4"),
+        DaemonClientError.decode("unexpected payload"),
+        DaemonClientError.shutdownNotAcknowledged,
+        DaemonClientError.shutdownTimedOut
+    ])
+    func classifiesRepliesAsNotAConnectionFailure(error: DaemonClientError) {
+        #expect(!error.isConnectionFailure)
     }
 
     /// The timeout text names the method that went unanswered. This is the

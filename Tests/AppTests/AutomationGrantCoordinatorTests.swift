@@ -109,6 +109,20 @@ struct AutomationGrantCoordinatorTests {
     }
 
     @Test
+    func timedOutGrantRetriesLikeATransportDrop() async {
+        // The bound expired before the helper answered. That is silence, not a
+        // verdict, so the grant is reissued once the helper catches up.
+        let fake = FakeDaemonClient()
+        fake.grantAutomationFailures = [
+            DaemonClientError.timedOut(method: "automation.grant")
+        ]
+        let coord = makeCoordinator(fake)
+        coord.sessionBound(role: .automation, sessionId: UUID().uuidString)
+        await drain(coord)
+        #expect(fake.grantAutomationCalls.count == 2)
+    }
+
+    @Test
     func terminalErrorStopsRetrying() async {
         // A dead session (`invalidParams`) or a stable scope_violation is
         // terminal. Retrying can't help, so it fails closed after one attempt.

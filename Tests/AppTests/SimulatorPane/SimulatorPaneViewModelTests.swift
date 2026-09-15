@@ -740,6 +740,24 @@ struct SimulatorPaneViewModelTests {
     }
 
     @Test
+    func retriesSubscribeAfterAHandshakeTimeout() async {
+        let fake = FakeDaemonClient()
+        // The bound on the subscribe, then on the authenticate that precedes
+        // it, expires before the helper answers. A slow helper is not a gone
+        // pane, so the loop backs off and retries rather than failing it.
+        fake.subscribePaneFailures = [
+            DaemonClientError.timedOut(method: "pane.subscribe"),
+            DaemonClientError.timedOut(method: "session.authenticate")
+        ]
+        let viewModel = makeViewModel(fake, reconnectBackoffNs: 1_000_000)  // 1ms
+        viewModel.start()
+        #expect(await poll { fake.subscribePaneCalls == ["p1", "p1", "p1"] })
+        if case .failed = viewModel.state {
+            Issue.record("a handshake timeout must not fail the pane")
+        }
+    }
+
+    @Test
     func theResubscribeBackoffGrowsWhileTheConnectionStaysDown() async {
         // A daemon that never comes back would otherwise be asked twice a
         // second for as long as the pane is open, one loop per mirrored pane.

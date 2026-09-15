@@ -64,14 +64,14 @@ final class AutomationGrantCoordinator {
         self.sleep = sleep
     }
 
-    /// A grant failure worth retrying: a transport drop, or the retryable
-    /// `notReady` (-32002) the validated-GUI scope check returns when the peer's
-    /// signature couldn't be resolved this time. Everything else, a dead
-    /// session (`invalidParams`), a stable `scope_violation`, a decode error, is
-    /// terminal.
+    /// A grant failure worth retrying: a connection failure (any transport
+    /// error or an expired bound), or the retryable `notReady` (-32002) the
+    /// validated-GUI scope check returns when the peer's signature couldn't be
+    /// resolved this time. Everything else, a dead session (`invalidParams`),
+    /// a stable `scope_violation`, a decode error, is terminal.
     private static func isRetryable(_ error: Error) -> Bool {
         switch error {
-        case DaemonClientError.transport:
+        case let clientError as DaemonClientError where clientError.isConnectionFailure:
             return true
 
         case let DaemonClientError.daemon(code, _):

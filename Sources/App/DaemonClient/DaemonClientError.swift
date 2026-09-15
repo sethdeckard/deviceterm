@@ -95,4 +95,28 @@ enum DaemonClientError: Error, CustomStringConvertible {
             return false
         }
     }
+
+    /// True for any `transport` error or an ordinary request timeout: the
+    /// transport failed the call, or the bound expired before any reply. A
+    /// retry on a fresh connection, or on the same one once the helper
+    /// catches up, can succeed; whether a given operation may be retried is
+    /// the caller's call.
+    ///
+    /// A daemon error reply, a wire-version mismatch, and an undecodable
+    /// payload are answers no retry changes. The shutdown outcomes, answered
+    /// or not, stay with the shutdown path. Enumerated rather than defaulted
+    /// so a new case has to declare which side it falls on.
+    ///
+    /// Kept separate from `isHelperUnreachable`: that one governs helper
+    /// re-registration, this one governs call retries, and the two are free
+    /// to diverge.
+    var isConnectionFailure: Bool {
+        switch self {
+        case .transport, .timedOut:
+            return true
+
+        case .daemon, .versionMismatch, .decode, .shutdownNotAcknowledged, .shutdownTimedOut:
+            return false
+        }
+    }
 }
