@@ -124,7 +124,8 @@ on the first send and it idle-exits once nothing needs it, which means no GUI
 or CLI peer connected, no live mirror pane whose owning GUI is still alive, and
 no DeviceTerm-owned sim still booted. An owned sim left running therefore keeps
 the daemon up after every tab is gone, which is exactly what the status item's
-iPhone-glyph count is for.
+iPhone-glyph count is for. It also exits, cleanly, if its memory footprint
+crosses a ceiling (see "Daemon lifecycle").
 
 ## Daemon lifecycle
 
@@ -173,6 +174,18 @@ sampled activity for the window," not "continuously idle.") launchd's
 `KeepAlive` is configured to *not* relaunch
 on `SuccessfulExit`, so the daemon stays gone until the next demand-launch.
 
+**Footprint ceiling exit:** the footprint monitor samples the process's
+`phys_footprint` once a minute. At or above 2 GiB it stops sampling, writes a
+memory breakdown to the log, and calls `NSApp.terminate(nil)` through the
+same clean path as the idle exit. The ceiling exists because the kernel's own
+memory kill arrives only after the machine has been paging, by which point
+every mirror has frozen; a clean exit is one the GUI recovers from by
+reconnecting and re-attaching its panes (see "State recovery"). launchd does
+not relaunch this exit either; the GUI's next send demand-launches the
+replacement. `DEVICETERM_FOOTPRINT_CEILING_MIB` overrides the ceiling in MiB
+and `0` disables it. A workload expected to approach 2 GiB will be exited,
+so raise or disable the ceiling before running one.
+
 ### State recovery
 
 **GUI-restored, never disk-rehydrated.** The daemon
@@ -184,8 +197,9 @@ for an *unknown* session returns the retryable `-32002` (not the terminal
 `-32001`), so an in-tab CLI keeps its bounded retry instead of pruning a
 still-valid credential. There are two restart shapes:
 
-- **Daemon-only restart (the GUI stayed alive)**: a crash or idle-exit the
-  GUI outlived. On reconnect the GUI **automatically** re-supplies its
+- **Daemon-only restart (the GUI stayed alive)**: a crash, or an idle or
+  footprint-ceiling exit the GUI outlived. On reconnect the GUI
+  **automatically** re-supplies its
   complete live session inventory via `session.restoreBatch` (below) and
   re-binds each terminal (`session.bindTerminal`). Sessions come back because
   a live, signature-validated GUI asserts them, not because a file did.
@@ -702,10 +716,24 @@ briefly once a minute.
 
 The line logs at notice level, because info records don't survive `log show`
 without `--info`, and a sample nobody can retrieve afterwards is the gap this
-closes. At or above 8 GiB the wording escalates, so a reader scanning for
-trouble finds it without knowing what a normal footprint looks like. The threshold changes
-phrasing and nothing else: no reading sheds load or throttles anything, because
-the bounds that act live in the paths they bound.
+closes. At or above 1 GiB the line is prefixed `footprint high:`, so a reader
+scanning for trouble finds it without knowing what a normal footprint looks
+like, and the first such sample is followed by a memory breakdown.
+
+The breakdown is three `footprint breakdown:` lines, each cut to fit under a
+kibibyte because unified logging truncates longer arguments. `vm:` carries
+the `task_vm_info` counters (internal, external, compressed, purgeable, and
+the graphics, media, and network ledgers). `regions:` sums every mapped
+region by its VM memory tag (`MALLOC_SMALL`, `IOSURFACE`, `STACK`, and so
+on), ordered by dirty plus compressed bytes so the largest contributor comes
+first. `malloc:` lists each malloc zone's bytes in use and
+allocated. It is read in-process, because a hardened daemon can't reliably be
+inspected with `vmmap` from outside, and only at escalation and at the
+ceiling, never on the cadence.
+
+At or above 2 GiB the monitor writes the breakdown again and exits the
+daemon (see "Daemon lifecycle"). That exit is the one action a reading takes;
+the bounds that act on any single path still live in that path.
 
 The first sample lands one interval after startup, so a daemon that dies inside
 its first minute leaves no footprint line at all.
@@ -864,7 +892,8 @@ asks the user to restart. See "Crash recovery".
 No UDS caller, session credential, automation grant, or unvalidated XPC
 peer can reach it. That closes the unauthenticated confused-deputy
 surface, though it does not claim to prevent every same-uid, signal-level
-DoS. Ordinary daemon lifecycle still uses idle exit, not this method.
+DoS. Ordinary daemon lifecycle still uses the idle exit and the footprint
+ceiling, not this method.
 
 ### Sessions
 

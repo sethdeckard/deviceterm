@@ -56,4 +56,11 @@ public enum DeviceTermEnv {
     /// daemon logs each completed frame-driven window and appends it to one
     /// `<base>.<deviceId>.frames.jsonl` per mirrored device.
     public static let frameMetrics = "DEVICETERM_FRAME_METRICS"
+
+    // MARK: Daemon footprint monitor (daemon-internal tuning)
+
+    /// Physical-footprint ceiling in MiB at which the daemon exits cleanly
+    /// instead of waiting for the kernel to kill it. `0` disables the
+    /// ceiling; unset or unparsable keeps the default.
+    public static let footprintCeilingMiB = "DEVICETERM_FOOTPRINT_CEILING_MIB"
 }

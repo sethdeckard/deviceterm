@@ -20,7 +20,7 @@ import Foundation
 //   5. Start the StatusItemController and IdleMonitor.
 //   6. Run the NSApp event loop. NSApp.terminate(nil) unwinds it, from
 //      any of: a bootstrap failure, the `daemon.shutdown` RPC, the idle
-//      timeout, SIGTERM, or the menu's "Quit" item.
+//      timeout, the footprint ceiling, SIGTERM, or the menu's "Quit" item.
 
 /// When a daemon instance started, and why it exited.
 ///
@@ -415,11 +415,23 @@ final class DeviceTermDaemonDelegate: NSObject, NSApplicationDelegate {
         // Write down what the daemon is holding, once a minute, whether or not
         // anything looks wrong. The monitor samples the counts these actors
         // already maintain, so it adds no per-frame work; it does take the
-        // pane coordinator and each pane's pool briefly on every tick.
+        // pane coordinator and each pane's pool briefly on every tick. At the
+        // footprint ceiling it ends the process the same way the idle timeout
+        // does, after writing down where the memory sits; the GUI recovers a
+        // clean exit by reconnecting and re-attaching its panes.
         let footprintMonitor = DaemonFootprintMonitor(
             paneCoordinator: paneCoordinator,
             deviceCoordinator: deviceCoordinator,
-            xpcServer: xpcServer
+            xpcServer: xpcServer,
+            ceilingBytes: DaemonFootprintMonitor.ceilingBytes(),
+            terminate: { reason in
+                lifecycleLog.notice("exit: footprint ceiling, \(reason, privacy: .public)")
+                let line = "deviceterm-daemon: footprint ceiling reached (\(reason)); terminating\n"
+                FileHandle.standardError.write(Data(line.utf8))
+                await MainActor.run {
+                    NSApp.terminate(nil)
+                }
+            }
         )
         await footprintMonitor.start()
 

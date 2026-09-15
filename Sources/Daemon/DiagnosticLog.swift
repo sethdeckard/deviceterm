@@ -38,7 +38,9 @@ public enum DiagnosticLog {
     /// Session readiness, teardown, and subscription revocation.
     public static let session = Logger(subsystem: subsystem, category: "session")
 
-    /// Periodic footprint and queue-depth samples. `.notice` so abnormal
-    /// growth can be diagnosed from `log show` without `--info`.
+    /// Periodic footprint and queue-depth samples, and the memory breakdown
+    /// written when the footprint escalates and again when it reaches the
+    /// ceiling. `.notice` so abnormal growth can be diagnosed from `log show`
+    /// without `--info`.
     public static let footprint = Logger(subsystem: subsystem, category: "footprint")
 }

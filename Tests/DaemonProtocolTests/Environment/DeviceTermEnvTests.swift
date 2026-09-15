@@ -18,3 +18,11 @@ func deviceTermEnvNames() {
     #expect(DeviceTermEnv.bootClaimSock == "DEVICETERM_BOOT_CLAIM_SOCK")
     #expect(DeviceTermEnv.zdotdir == "ZDOTDIR")
 }
+
+// The daemon reads its tuning keys from launchd's environment, which an
+// operator sets by hand with `launchctl setenv`, so the spelling is part of
+// the operating contract.
+@Test
+func daemonTuningEnvNames() {
+    #expect(DeviceTermEnv.footprintCeilingMiB == "DEVICETERM_FOOTPRINT_CEILING_MIB")
+}
