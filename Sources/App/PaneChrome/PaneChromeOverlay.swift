@@ -34,9 +34,9 @@ import SwiftUI
 /// narrowest stop shows. Stateful toggles (AX inspector, recording) become hot
 /// while active and stay hot until turned off, whatever the pane's
 /// capabilities admit, so their off-switch stays reachable. Otherwise the
-/// last-used action takes over when the pane still supports it, and the first
-/// action it does support when it does not. With neither toggle active and no
-/// supported action, there is no hot action at all.
+/// last-used action takes over when the pane still supports it, and the
+/// highest-priority action it does support when it does not. With neither
+/// toggle active and no supported action, there is no hot action at all.
 ///
 /// Hotness is not a tint. Only an active toggle is theme-tinted with the
 /// ghostty `selection-background` color (fallback `controlAccentColor`); every

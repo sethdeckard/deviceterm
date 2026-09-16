@@ -181,7 +181,8 @@ final class PaneChromeViewModel {
     ///   1. AX inspector if active (always wins while toggled on)
     ///   2. Recording if active
     ///   3. Last-used action, when this pane still supports it
-    ///   4. The first action this pane does support
+    ///   4. The highest-priority action this pane does support, which is the
+    ///      trailing one: `ribbonActions` runs from lowest to highest priority
     ///
     /// Nil only when neither toggle is active and `ribbonActions` is empty,
     /// which a simulator never reports and a physical device can. The last two
@@ -206,7 +207,7 @@ final class PaneChromeViewModel {
         if supported.contains(lastUsedAction) {
             return lastUsedAction
         }
-        return supported.first
+        return supported.last
     }
 
     /// The ribbon's interactive actions in left-to-right display order,
@@ -219,28 +220,37 @@ final class PaneChromeViewModel {
     /// row, a device shows only buttons + rotation. Lives on the view
     /// model (not the SwiftUI view) so it's unit-testable and sits next
     /// to the capabilities it reads.
+    ///
+    /// **Every list runs lowest priority to highest**, so the highest-priority
+    /// action is the trailing one. The row reveals from its trailing edge, which
+    /// makes that action the first one a widening reveal stop uncovers, at stop
+    /// 2. A pair whose two halves belong together (rotate left/right, crown
+    /// up/down) keeps its natural reading order rather than being reversed with
+    /// everything else: which half of a pair a single rung uncovers first
+    /// matters far less than reading the pair backwards at every wider stop.
     var ribbonActions: [SimChromeAction] {
         let candidates: [SimChromeAction]
         if isPhysicalDevice {
-            candidates = [.rotateLeft, .rotateRight, .home, .lock, .side, .siri]
+            candidates = [.siri, .side, .lock, .home, .rotateLeft, .rotateRight]
         } else {
             switch DeviceFamily(wire: family) {
             case .phone, .pad:
-                // Priority ordering: most-used actions first (capture +
-                // orientation), state toggles next, hardware buttons last.
+                // Ordered by a judgment of how useful each control is on a sim
+                // pane, least first, which puts Home last so it is the first
+                // action a reveal uncovers.
                 candidates = [
-                    .home, .screenshot, .record, .rotateLeft, .rotateRight,
-                    .axInspector, .lock, .side, .siri, .applePay
+                    .applePay, .siri, .side, .lock, .axInspector,
+                    .rotateLeft, .rotateRight, .record, .screenshot, .home
                 ]
 
             case .watch:
                 candidates = [
-                    .crownPress, .crownUp, .crownDown,
-                    .screenshot, .record, .axInspector, .side
+                    .side, .axInspector, .record, .screenshot,
+                    .crownPress, .crownUp, .crownDown
                 ]
 
             case .tv, .unknown:
-                candidates = [.screenshot, .record, .axInspector]
+                candidates = [.axInspector, .record, .screenshot]
             }
         }
         let resolvedFamily = DeviceFamily(wire: family)
@@ -333,9 +343,8 @@ final class PaneChromeViewModel {
     }
 
     /// Initial `lastUsedAction` until the user invokes any ribbon control. A
-    /// physical
-    /// device defaults to Home, since its first ribbon control is a hardware
-    /// button, not the simulator-only screenshot. Sims keep the
+    /// physical device defaults to Home rather than to the unknown family's
+    /// screenshot, which it cannot take. Sims keep the
     /// per-family default: phone/pad → home, watch → crown press,
     /// tv/unknown → screenshot (the only universally useful sim action).
     private static func defaultAction(

@@ -214,6 +214,38 @@ struct PaneChromeOverlayTests {
     }
 
     @Test
+    func theHotActionFallbackIsTheHighestPriorityOne() {
+        // `ribbonActions` runs lowest priority to highest because the ribbon
+        // reveals from its trailing edge, so the fallback has to read the
+        // trailing action. Reading the leading one would put the lowest-priority
+        // control in the slot the narrowest stop shows.
+        let viewModel = phoneChrome()
+        viewModel.lastUsedAction = .crownPress
+        #expect(viewModel.ribbonActions.contains(.crownPress) == false)
+        #expect(viewModel.hotAction == viewModel.ribbonActions.last)
+        #expect(viewModel.hotAction == .home)
+    }
+
+    @Test
+    func theRowRevealsItsHighestPriorityActionsFirst() {
+        // What a partial reveal uncovers, stated as the property rather than as
+        // a literal row: for k > 0, stop k reveals the last k - 1 actions, the
+        // offset being the rung the size-preset menu occupies. So the trailing
+        // end of the list has to be the end worth showing first.
+        let viewModel = phoneChrome()
+        let actions = viewModel.ribbonActions
+        let atStopTwo = PaneChromeRibbonFit.revealedActionCount(stop: 2)
+        let atStopFive = PaneChromeRibbonFit.revealedActionCount(stop: 5)
+        #expect(atStopTwo == 1)
+        #expect(atStopFive == 4)
+        #expect(Array(actions.suffix(atStopTwo)) == [.home])
+        #expect(
+            Array(actions.suffix(atStopFive))
+                == [.rotateRight, .record, .screenshot, .home]
+        )
+    }
+
+    @Test
     func aSupportedLastUsedActionStaysHot() {
         let viewModel = phoneChrome()
         viewModel.lastUsedAction = .rotateLeft

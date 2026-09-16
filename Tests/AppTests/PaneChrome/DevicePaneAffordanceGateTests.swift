@@ -147,9 +147,11 @@ struct DevicePaneAffordanceGateTests {
             capabilities: .simulator,
             isPhysicalDevice: false
         )
+        // Trailing is the revealing edge, so the row runs lowest priority to
+        // highest and a partial reveal uncovers the higher-priority controls.
         #expect(viewModel.ribbonActions == [
-            .home, .screenshot, .record, .rotateLeft, .rotateRight,
-            .axInspector, .lock, .side, .siri, .applePay
+            .applePay, .siri, .side, .lock, .axInspector,
+            .rotateLeft, .rotateRight, .record, .screenshot, .home
         ])
     }
 }
