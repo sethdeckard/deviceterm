@@ -278,8 +278,11 @@ span every caller-visible window, or use `--window <ref>` to select one
 window. A split tab is still one tab row.
 
 `pane list` returns every terminal, Simulator, and physical-device leaf in the
-target tab's layout order. It defaults to the caller's tab; use
-`--tab <ref>` for another caller-visible tab.
+target tab's layout order. It defaults to the caller's tab; use `--tab <ref>`
+for another caller-visible tab, or `--all` to span every caller-visible tab in
+every window. With `--json`, each row carries `tabTitle` and `windowId`, so
+one `--all` call enumerates the workspace without a second listing to name the
+tabs.
 
 `devices list` reports DeviceTerm-owned booted Simulators and connected physical
 devices. It is the device roster, not the GUI pane layout. An externally

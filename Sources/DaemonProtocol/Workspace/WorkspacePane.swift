@@ -113,11 +113,28 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         }
     }
 
+    /// Stands in for a context field whose object could not be resolved, and
+    /// when decoding a pane that predates the field. Empty rather than absent,
+    /// because these are always-present fields: the projection already reports
+    /// an unresolvable `tabId` this way.
+    public static let unknownContext = ""
+
     public let id: String
     public let shortId: String
     public let name: String?
     public let kind: WorkspacePaneKind
     public let tabId: String
+    /// Title of the tab holding this pane, so listing panes across the
+    /// workspace needs no second call to name their tabs.
+    ///
+    /// It describes the tab, not this pane. A tab whose focused pane is a
+    /// Simulator takes that pane's name, so a terminal row's `tabTitle` can
+    /// name something other than that terminal. `terminal.title` is the pane's
+    /// own label.
+    public let tabTitle: String
+    /// Public id of the window holding this pane, so panes from a workspace-wide
+    /// listing group by window without a join against `window list`.
+    public let windowId: String
     public let current: Bool
     public let focused: Bool
     public let capabilities: [WorkspacePaneCapability]
@@ -131,6 +148,8 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         name: String?,
         kind: WorkspacePaneKind,
         tabId: String,
+        tabTitle: String,
+        windowId: String,
         current: Bool,
         focused: Bool,
         capabilities: [WorkspacePaneCapability],
@@ -143,11 +162,41 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         self.name = name
         self.kind = kind
         self.tabId = tabId
+        self.tabTitle = tabTitle
+        self.windowId = windowId
         self.current = current
         self.focused = focused
         self.capabilities = capabilities
         self.terminal = terminal
         self.simulator = simulator
         self.device = device
+    }
+
+    /// `tabTitle` and `windowId` are required and arrived without a
+    /// `wireVersion` bump, for the same reason `Terminal.title` did: the daemon
+    /// relays these bytes and never decodes them.
+    ///
+    /// The CLI decodes this type in human mode, and it is symlinked out of the
+    /// app bundle, so a Sparkle swap can pair it with an older GUI that emits
+    /// neither field. Defaulting both keeps human-mode commands and receipts
+    /// working through that window. JSON mode relays the GUI's bytes unchanged,
+    /// so a caller reading raw JSON across it sees rows without the keys.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        shortId = try container.decode(String.self, forKey: .shortId)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        kind = try container.decode(WorkspacePaneKind.self, forKey: .kind)
+        tabId = try container.decode(String.self, forKey: .tabId)
+        tabTitle = try container.decodeIfPresent(String.self, forKey: .tabTitle)
+            ?? Self.unknownContext
+        windowId = try container.decodeIfPresent(String.self, forKey: .windowId)
+            ?? Self.unknownContext
+        current = try container.decode(Bool.self, forKey: .current)
+        focused = try container.decode(Bool.self, forKey: .focused)
+        capabilities = try container.decode([WorkspacePaneCapability].self, forKey: .capabilities)
+        terminal = try container.decodeIfPresent(Terminal.self, forKey: .terminal)
+        simulator = try container.decodeIfPresent(Simulator.self, forKey: .simulator)
+        device = try container.decodeIfPresent(Device.self, forKey: .device)
     }
 }

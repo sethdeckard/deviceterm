@@ -534,8 +534,8 @@ final class IntentDispatcher {
             let tab = try projection.tabSummary(publicRef(resolved.tab))
             return .data(.workspaceMutation(.init(tab: tab)))
 
-        case let .workspacePaneList(tab):
-            return .data(.workspacePanes(try projection.panes(tab: tab)))
+        case let .workspacePaneList(tab, all):
+            return .data(.workspacePanes(try projection.panes(tab: tab, all: all)))
 
         case let .workspacePaneShow(ref):
             return .data(.workspacePane(try projection.pane(ref)))

@@ -27,7 +27,7 @@ enum RefCompletion {
     /// Open panes, as shortIds.
     static func panes() -> [String] {
         guard let rows: [WorkspacePane] = fetch(method: .paneList, {
-            try CLICommands.paneListRequest(tab: nil)
+            try CLICommands.paneListRequest(tab: nil, all: false)
         }) else { return [sentinel] }
         return [sentinel] + rows.map(\.shortId)
     }

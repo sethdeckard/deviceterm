@@ -50,6 +50,15 @@ public enum AppCommandParams {
             self.window = window
             self.all = all
         }
+
+        /// `all` defaults to false when absent, matching the command's
+        /// single-window default. `tab list` shipped carrying the key, so this
+        /// guards a hand-built request rather than any released CLI.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            window = try container.decodeIfPresent(String.self, forKey: .window)
+            all = try container.decodeIfPresent(Bool.self, forKey: .all) ?? false
+        }
     }
 
     public struct ShowTab: Codable, Sendable, Equatable {
@@ -120,8 +129,21 @@ public enum AppCommandParams {
 
     public struct ListPanes: Codable, Sendable, Equatable {
         public let tab: String?
+        public let all: Bool
 
-        public init(tab: String?) { self.tab = tab }
+        public init(tab: String?, all: Bool) {
+            self.tab = tab
+            self.all = all
+        }
+
+        /// `all` defaults to false so a CLI that predates `pane list --all`
+        /// retains its single-tab listing instead of failing to decode. Unlike
+        /// `ListTabs`, this one has a released shape that omits the key.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            tab = try container.decodeIfPresent(String.self, forKey: .tab)
+            all = try container.decodeIfPresent(Bool.self, forKey: .all) ?? false
+        }
     }
 
     public struct ShowPane: Codable, Sendable, Equatable {

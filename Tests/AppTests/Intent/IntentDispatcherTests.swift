@@ -656,7 +656,7 @@ struct IntentDispatcherTests {
         ]
 
         let result = await harness.dispatcher.dispatch(
-            .workspacePaneList(tab: nil),
+            .workspacePaneList(tab: nil, all: false),
             origin: .external(sessionID: "S-A", hasAutomationGrant: true)
         )
 
@@ -731,6 +731,111 @@ struct IntentDispatcherTests {
         #expect(detail.panes.first?.terminal?.title == "project")
     }
 
+    /// `--all` spans windows, in window then tab then layout order, and carries
+    /// each pane's tab context so a caller needs no second listing to name the
+    /// tab a pane sits in.
+    @Test
+    func paneListAllSpansWindowsWithTabContext() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 2),
+            sessionId: "S-B"
+        )
+
+        let scoped = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil, all: false),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+        let all = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil, all: true),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePanes(scopedPanes)) = scoped,
+            case let .data(.workspacePanes(allPanes)) = all
+        else {
+            Issue.record("expected workspace panes")
+            return
+        }
+        #expect(scopedPanes.map(\.terminal?.sessionId) == ["S-A"])
+        #expect(allPanes.map(\.terminal?.sessionId) == ["S-A", "S-B"])
+        #expect(allPanes.map(\.tabTitle) == ["tab-1", "tab-2"])
+        #expect(Set(allPanes.map(\.windowId)).count == 2)
+        #expect(allPanes.allSatisfy { !$0.windowId.isEmpty && !$0.tabTitle.isEmpty })
+    }
+
+    /// `--all` widens the listing, never the visibility rule: a foreign
+    /// protected tab's panes stay out of it.
+    @Test
+    func paneListAllOmitsForeignProtectedTabs() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 2),
+            sessionId: "S-B"
+        )
+        guard let tabs = harness.workspace.window(id: WindowID(value: 1))?.tabs else {
+            Issue.record("expected window tabs")
+            return
+        }
+        tabs.setProtectionState(.protected, id: TabID(value: 2))
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil, all: true),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePanes(panes)) = result else {
+            Issue.record("expected workspace panes; got \(result)")
+            return
+        }
+        #expect(panes.map(\.terminal?.sessionId) == ["S-A"])
+    }
+
+    /// The protected tab's own session still sees it under `--all`, so the
+    /// filter is per-caller rather than a blanket exclusion.
+    @Test
+    func paneListAllKeepsTheCallersOwnProtectedTab() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        guard let tabs = harness.workspace.window(id: WindowID(value: 1))?.tabs else {
+            Issue.record("expected window tabs")
+            return
+        }
+        tabs.setProtectionState(.protected, id: TabID(value: 1))
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil, all: true),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePanes(panes)) = result else {
+            Issue.record("expected workspace panes; got \(result)")
+            return
+        }
+        #expect(panes.map(\.terminal?.sessionId) == ["S-A"])
+    }
+
     @Test
     func collectionProjectionsApplyOneWorkingDirectoryPolicy() async {
         let harness = makeHarness()
@@ -759,7 +864,7 @@ struct IntentDispatcherTests {
         ]
 
         let list = await harness.dispatcher.dispatch(
-            .workspacePaneList(tab: nil),
+            .workspacePaneList(tab: nil, all: false),
             origin: .external(sessionID: "S-A", hasAutomationGrant: true)
         )
         let show = await harness.dispatcher.dispatch(

@@ -562,11 +562,11 @@ func run(
                 build: { try CLICommands.tabProtectionRequest(tab: tab, protected: false) }
             )
 
-        case let .paneList(tab):
+        case let .paneList(tab, all):
             return try sendWorkspaceData(
                 transport: transport,
                 output: output,
-                build: { try CLICommands.paneListRequest(tab: tab) },
+                build: { try CLICommands.paneListRequest(tab: tab, all: all) },
                 humanRender: formatWorkspacePanes
             )
 

@@ -340,7 +340,7 @@ func helpListsEveryUserFacingVerb() {
         "tab move",
         "tab protect",
         "tab unprotect",
-        "pane list [--tab <ref>]",
+        "pane list [--tab <ref> | --all]",
         "pane show [<pane>]",
         "pane split [<pane>]",
         "pane focus [<pane>]",

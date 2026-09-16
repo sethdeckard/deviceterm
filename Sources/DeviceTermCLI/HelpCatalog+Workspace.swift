@@ -123,9 +123,10 @@ extension HelpCatalog {
               process transitions. An ungranted workspace read succeeds without
               it, including when the caller owns that terminal.
 
-              pane list [--tab <ref>]
+              pane list [--tab <ref> | --all]
                   List every terminal, Simulator, and physical-device pane in
-                  layout order. Human rows are:
+                  layout order. --tab selects one tab; --all spans every
+                  caller-visible tab. Human rows are:
                     <marker>  <shortId>  <kind>  <name>  <id>
                   `*` marks the caller's pane. --json emits WorkspacePane objects
                   with kind-specific details and supported capabilities.

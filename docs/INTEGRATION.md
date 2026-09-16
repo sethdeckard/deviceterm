@@ -531,7 +531,12 @@ row, regardless of how many terminal splits it contains.
 
 `pane list --json` returns every terminal, Simulator, and physical-device
 pane in layout order. It defaults to the calling terminal's tab;
-`--tab <ref>` selects another visible tab.
+`--tab <ref>` selects another visible tab, and `--all` spans every
+caller-visible tab in every window. Passing both is a usage error.
+
+`--all` orders panes by window, then tab, then layout. It widens the listing
+and not the visibility rule: a protected tab the caller does not own stays out
+of it, exactly as it does from `tab list --all`.
 
 Terminal pane:
 
@@ -542,6 +547,8 @@ Terminal pane:
   "name": "test runner",
   "kind": "terminal",
   "tabId": "11111111-1111-1111-1111-111111111111",
+  "tabTitle": "vim Login.swift",
+  "windowId": "22222222-2222-2222-2222-222222222222",
   "current": true,
   "focused": true,
   "capabilities": ["sendInput", "captureText"],
@@ -655,10 +662,25 @@ A physical-device pane has `kind: "device"` and a `device` object with
 the same display, state, orientation, pixel, and backend capability fields,
 plus `deviceId` instead of `udid`.
 
+#### Pane Tab Context
+
+Every pane row carries `tabTitle` and `windowId` beside `tabId`, so listing the
+workspace needs no second call to name or group the tabs.
+
+`tabTitle` describes the tab, not the pane. A tab whose focused pane is a
+Simulator takes that pane's name, so a terminal row's `tabTitle` can name
+something other than that terminal. `terminal.title` is the pane's own label.
+
+Both are empty strings when the enclosing object cannot be resolved, which is
+how `tabId` already reports that state. Both can also be absent from raw JSON
+during an interrupted update, for the reason given under
+[Terminal Title](#terminal-title).
+
 The common fields `id`, `shortId`, `kind`, `tabId`, `current`,
 `focused`, and `capabilities` are required; `name` is optional. Exactly
 one of `terminal`, `simulator`, or `device` is present according to
-`kind`. Current workspace capabilities are `sendInput`, `captureText`,
+`kind`. `tabTitle` and `windowId` are required on every row.
+Current workspace capabilities are `sendInput`, `captureText`,
 `touch`, `key`, `text`, `button`, `rotate`, `crown`,
 `accessibility`, and `location`. Integrations should branch on the list
 rather than infer support from `kind`.

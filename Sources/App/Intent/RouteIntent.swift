@@ -31,7 +31,7 @@ enum RouteIntent: Sendable, Equatable {
     case workspaceTabMove(String?, window: String, index: Int?)
     case workspaceTabProtect(String?, protected: Bool)
 
-    case workspacePaneList(tab: String?)
+    case workspacePaneList(tab: String?, all: Bool)
     case workspacePaneShow(String?)
     case workspacePaneSplit(String?, direction: WorkspaceSplitDirection)
     case workspacePaneFocus(String?)

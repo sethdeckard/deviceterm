@@ -95,11 +95,27 @@ final class WorkspaceProjection {
         return project(resolved.tab, in: window)
     }
 
+    /// Panes in one tab, or across every caller-visible tab when `all`.
+    ///
+    /// The all-spanning walk reuses the same visibility predicate as
+    /// `tabs(window:all:)`, so a foreign protected tab stays hidden here for
+    /// the same reason it does there. Order is window, then tab, then layout.
     func panes(
         tab ref: String?,
+        all: Bool = false,
         includeTerminalCWD: Bool = WorkspaceProjection.includesTerminalCWDInCollections
     ) throws -> [WorkspacePane] {
-        panes(
+        if all {
+            return resolver.visibleWindowStates().flatMap { state in
+                state.tabs.tabs.filter(isVisible).flatMap { tab in
+                    panes(
+                        in: ResolvedTab(windowID: state.id, tabID: tab.id, tab: tab),
+                        includeTerminalCWD: includeTerminalCWD
+                    )
+                }
+            }
+        }
+        return panes(
             in: try resolver.resolveTab(ref),
             includeTerminalCWD: includeTerminalCWD
         )
@@ -138,9 +154,15 @@ final class WorkspaceProjection {
             window: resolved.windowID,
             tab: resolved.tabID
         ) == resolved.slot
-        let tab = workspace.windowContaining(tab: resolved.tabID)?
-            .tabs.tab(id: resolved.tabID)
-        let tabID = tab?.cohortId.uuidString.lowercased() ?? ""
+        let window = workspace.windowContaining(tab: resolved.tabID)
+        let tab = window?.tabs.tab(id: resolved.tabID)
+        let tabID = tab?.cohortId.uuidString.lowercased() ?? WorkspacePane.unknownContext
+        let windowPublicID = window?.publicID.uuidString.lowercased() ?? WorkspacePane.unknownContext
+        let title = if let tab, let window {
+            tabTitle(tab, in: window)
+        } else {
+            WorkspacePane.unknownContext
+        }
         switch resolved.state {
         case let .terminal(terminal):
             // One hop for the label, the tty, and the directory. Only the
@@ -159,6 +181,8 @@ final class WorkspaceProjection {
                 name: terminal.name,
                 kind: .terminal,
                 tabId: tabID,
+                tabTitle: title,
+                windowId: windowPublicID,
                 current: origin.sessionID == terminal.sessionId,
                 focused: focused,
                 capabilities: [.sendInput, .captureText],
@@ -182,6 +206,8 @@ final class WorkspaceProjection {
                 name: pane.name,
                 kind: .simulator,
                 tabId: tabID,
+                tabTitle: title,
+                windowId: windowPublicID,
                 current: currentSlot(in: resolved.tabID) == resolved.slot,
                 focused: focused,
                 capabilities: workspaceCapabilities(capabilities),
@@ -213,6 +239,8 @@ final class WorkspaceProjection {
                 name: pane.name,
                 kind: .device,
                 tabId: tabID,
+                tabTitle: title,
+                windowId: windowPublicID,
                 current: currentSlot(in: resolved.tabID) == resolved.slot,
                 focused: focused,
                 capabilities: workspaceCapabilities(capabilities),
@@ -255,7 +283,9 @@ final class WorkspaceProjection {
         )
     }
 
-    private func project(_ tab: TabState, in window: WindowState) -> WorkspaceTab {
+    /// A tab's published label. Shared with the pane projection, which carries
+    /// it on every row, so the precedence is defined once.
+    private func tabTitle(_ tab: TabState, in window: WindowState) -> String {
         let rawTitle: String
         if tab.lifecycle == .failed {
             rawTitle = tab.name ?? "Tab creation failed"
@@ -265,10 +295,14 @@ final class WorkspaceProjection {
                 ?? tab.primaryTerminal.name
                 ?? "Terminal"
         }
-        let title = DisplayTitleNormalizer.normalize(rawTitle)
+        return DisplayTitleNormalizer.normalize(rawTitle)
             ?? DisplayTitleNormalizer.normalize(tab.name)
             ?? DisplayTitleNormalizer.normalize(tab.primaryTerminal.name)
             ?? "Terminal"
+    }
+
+    private func project(_ tab: TabState, in window: WindowState) -> WorkspaceTab {
+        let title = tabTitle(tab, in: window)
         let selected = window.tabs.selectedTab?.id == tab.id
         return WorkspaceTab(
             id: tab.cohortId.uuidString.lowercased(),

@@ -203,6 +203,14 @@ func zshAndBashScriptsOfferPaneFlags() {
         #expect(text.contains("--ansi"), "\(shell) script omits pane capture-text --ansi")
         #expect(text.contains("--type-delay"), "\(shell) script omits pane send-input --type-delay")
     }
+    // `--all` is not in the loop above: `window list` and `tab list` already
+    // carry it, so a bare substring check passes whether or not `pane list`
+    // declares one. zsh emits each flag with its own help text, which is
+    // unique per verb, so that is what pins this one.
+    #expect(
+        Completions.script(for: .zsh).contains("--all[List panes in every visible tab.]"),
+        "zsh script omits pane list --all"
+    )
 }
 
 @Test

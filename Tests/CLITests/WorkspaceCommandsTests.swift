@@ -99,6 +99,13 @@ struct WorkspaceCommandsTests {
     }
 
     @Test
+    func paneListRejectsTabWithAll() {
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "pane", "list", "--tab", "auth", "--all"])
+        )
+    }
+
+    @Test
     func tabOpenParsesWindowCwdAndCommand() {
         #expect(
             CLICommands.parse([
@@ -165,10 +172,14 @@ struct WorkspaceCommandsTests {
 
     @Test
     func paneReadAndLayoutCommandsParseRawReferences() {
-        #expect(CLICommands.parse(["deviceterm", "pane", "list"]) == .paneList(tab: nil))
+        #expect(CLICommands.parse(["deviceterm", "pane", "list"]) == .paneList(tab: nil, all: false))
         #expect(
             CLICommands.parse(["deviceterm", "pane", "list", "--tab", "auth"])
-                == .paneList(tab: "auth")
+                == .paneList(tab: "auth", all: false)
+        )
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "list", "--all"])
+                == .paneList(tab: nil, all: true)
         )
         #expect(CLICommands.parse(["deviceterm", "pane", "show", "term"]) == .paneShow(pane: "term"))
         #expect(

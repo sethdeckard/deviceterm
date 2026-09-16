@@ -95,7 +95,7 @@ func tabListRequestEncodesToValidFrame() throws {
 
 @Test
 func parsePaneListResolvesToPaneList() {
-    #expect(CLICommands.parse(["deviceterm", "pane", "list"]) == .paneList(tab: nil))
+    #expect(CLICommands.parse(["deviceterm", "pane", "list"]) == .paneList(tab: nil, all: false))
 }
 
 @Test

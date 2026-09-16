@@ -70,7 +70,7 @@ enum CLIIntentTranslator {
 
         case .paneList:
             let params = try decoder.decode(AppCommandParams.ListPanes.self, from: command.params)
-            return .workspacePaneList(tab: params.tab)
+            return .workspacePaneList(tab: params.tab, all: params.all)
 
         case .paneShow:
             let params = try decoder.decode(AppCommandParams.ShowPane.self, from: command.params)

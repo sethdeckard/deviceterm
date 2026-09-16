@@ -101,8 +101,8 @@ struct CLIIntentTranslatorTests {
     @Test
     func translatesPaneReadsAndLayoutMutations() throws {
         #expect(
-            try CLIIntentTranslator.translate(command(.paneList, AppCommandParams.ListPanes(tab: "auth")))
-                == .workspacePaneList(tab: "auth")
+            try CLIIntentTranslator.translate(command(.paneList, AppCommandParams.ListPanes(tab: "auth", all: false)))
+                == .workspacePaneList(tab: "auth", all: false)
         )
         #expect(
             try CLIIntentTranslator.translate(command(.paneShow, AppCommandParams.ShowPane(pane: "shell")))

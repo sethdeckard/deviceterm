@@ -86,6 +86,16 @@ foreground candidate becomes unusable during resolution. If the ordinary result
 approaches the budget, isolate that path with captured verified facts and
 temporary test-only timing as described above.
 
+## Workspace-Wide Listing
+
+The recorded result covers one tab. `pane list --all` walks every
+caller-visible tab, so its cost scales with the terminals in the whole
+workspace rather than with the terminals in one tab.
+
+This arm has not been measured. To do it, follow the procedure below with the
+12 terminals spread across three windows instead of one tab, and build the
+`pane.list` projection with `all` set to true.
+
 ## Repeating the Measurement
 
 1. Add temporary timing around the `pane.list` and `tab.show` dispatch paths.

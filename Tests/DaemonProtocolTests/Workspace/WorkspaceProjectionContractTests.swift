@@ -41,6 +41,8 @@ private let contractPane = WorkspacePane(
     name: "shell",
     kind: .terminal,
     tabId: contractTab.id,
+    tabTitle: contractTab.title,
+    windowId: contractWindow.id,
     current: true,
     focused: true,
     capabilities: [.sendInput, .captureText],
@@ -73,8 +75,10 @@ func workspaceTerminalPaneJSONContract() throws {
     let expected = #"{"capabilities":["sendInput","captureText"],"current":true,"focused":true,"#
         + #""id":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC","kind":"terminal","name":"shell","#
         + #""shortId":"cccccc","tabId":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB","#
+        + #""tabTitle":"swift test","#
         + #""terminal":{"cwd":"\/project","sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC","#
-        + #""title":"swift test","tty":"\/dev\/ttys003"}}"#
+        + #""title":"swift test","tty":"\/dev\/ttys003"},"#
+        + #""windowId":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"}"#
     #expect(try workspaceJSON(contractPane) == expected)
 }
 
@@ -86,6 +90,8 @@ func workspaceTerminalPaneOmitsUnknownWorkingDirectory() throws {
         name: contractPane.name,
         kind: .terminal,
         tabId: contractPane.tabId,
+        tabTitle: contractPane.tabTitle,
+        windowId: contractPane.windowId,
         current: contractPane.current,
         focused: contractPane.focused,
         capabilities: contractPane.capabilities,
@@ -112,6 +118,8 @@ func workspaceTerminalPaneOmitsUnknownTTYButKeepsTitle() throws {
         name: contractPane.name,
         kind: .terminal,
         tabId: contractPane.tabId,
+        tabTitle: contractPane.tabTitle,
+        windowId: contractPane.windowId,
         current: contractPane.current,
         focused: contractPane.focused,
         capabilities: contractPane.capabilities,
@@ -144,6 +152,18 @@ func workspaceTerminalPaneDecodesWithoutATitle() throws {
     #expect(terminal.title == WorkspacePane.Terminal.defaultTitle)
     #expect(terminal.tty == nil)
     #expect(terminal.cwd == "/project")
+}
+
+/// A pane built before the tab-context fields existed still decodes, for the
+/// same skew reason `Terminal.title` defaults.
+@Test
+func workspacePaneDecodesWithoutTabContext() throws {
+    let json = #"{"capabilities":[],"current":false,"focused":false,"id":"P1","#
+        + #""kind":"terminal","shortId":"p00001","tabId":"T1"}"#
+    let pane = try JSONDecoder().decode(WorkspacePane.self, from: Data(json.utf8))
+    #expect(pane.tabId == "T1")
+    #expect(pane.tabTitle == WorkspacePane.unknownContext)
+    #expect(pane.windowId == WorkspacePane.unknownContext)
 }
 
 @Test
@@ -225,5 +245,7 @@ func workspaceMutationReceiptCarriesCommittedObjects() throws {
     #expect(closedJSON.contains(#""closed":{"pane":{"capabilities"#))
     #expect(closedJSON.contains(#""resource":"pane"#))
     #expect(closedJSON.contains(#""mode":"shutdown"#))
-    #expect(!closedJSON.contains(#""window"#))
+    // Scoped to the object form. The pane inside the receipt legitimately
+    // carries a `windowId`, which a bare `"window` substring also matches.
+    #expect(!closedJSON.contains(#""window":{"#))
 }

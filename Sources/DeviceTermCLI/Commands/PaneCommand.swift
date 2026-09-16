@@ -15,9 +15,17 @@ struct PaneCommand: CLICommandConvertible {
         @Option(name: .long, help: "Tab whose panes to list.")
         var tab: String?
 
+        @Flag(name: .long, help: "List panes in every visible tab.")
+        var all = false
+
         @OptionGroup var jsonFlag: JSONFlag
 
-        var cliCommand: CLICommand { .paneList(tab: tab) }
+        var cliCommand: CLICommand {
+            guard !(all && tab != nil) else {
+                return .usage(message: "deviceterm: pane list accepts --tab or --all, not both")
+            }
+            return .paneList(tab: tab, all: all)
+        }
     }
 
     struct Show: CLICommandConvertible {

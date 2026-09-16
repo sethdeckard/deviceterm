@@ -134,8 +134,8 @@ extension CLICommands {
         )
     }
 
-    public static func paneListRequest(tab: String?) throws -> RPCEnvelope {
-        try request(method: .paneList, body: AppCommandParams.ListPanes(tab: tab))
+    public static func paneListRequest(tab: String?, all: Bool) throws -> RPCEnvelope {
+        try request(method: .paneList, body: AppCommandParams.ListPanes(tab: tab, all: all))
     }
 
     public static func paneShowRequest(pane: String?) throws -> RPCEnvelope {
