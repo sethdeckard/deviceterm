@@ -571,6 +571,166 @@ struct IntentDispatcherTests {
         #expect(harness.delegate.workingDirectoryReads.count == 1)
     }
 
+    /// The title and tty gates are independent of the working-directory gate.
+    /// An ungranted caller is the case that proves it: it must still get a
+    /// label and a tty, and still not get a directory.
+    @Test
+    func ungrantedPaneProjectionStillCarriesTitleAndTTY() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        harness.delegate.oscTitles[TerminalPaneID(value: 1)] = "vim Login.swift"
+        harness.delegate.ttys[TerminalPaneID(value: 1)] = "/dev/ttys003"
+        harness.delegate.workingDirectories[TerminalPaneID(value: 1)] = "/live"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.title == "vim Login.swift")
+        #expect(pane.terminal?.tty == "/dev/ttys003")
+        #expect(pane.terminal?.cwd == nil)
+    }
+
+    /// A pane can be addressable before its surface attaches, so an early
+    /// projection may omit its tty.
+    @Test
+    func paneProjectionOmitsTTYBeforeTheSurfaceAttaches() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.tty == nil)
+        #expect(pane.terminal?.title == "shell")
+    }
+
+    /// One tab can contain two terminals running different programs. Its single
+    /// title cannot represent both.
+    @Test
+    func splitTabTerminalsReportTheirOwnTitles() async {
+        let harness = makeHarness()
+        let terminals = [
+            TerminalPaneState(
+                id: TerminalPaneID(value: 1),
+                sessionId: "S-A",
+                capability: "cap"
+            ),
+            TerminalPaneState(
+                id: TerminalPaneID(value: 2),
+                sessionId: "S-B",
+                capability: "cap"
+            )
+        ]
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            terminals: terminals
+        )
+        harness.delegate.oscTitles = [
+            TerminalPaneID(value: 1): "vim Login.swift",
+            TerminalPaneID(value: 2): "swift test"
+        ]
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePanes(panes)) = result else {
+            Issue.record("expected workspace panes; got \(result)")
+            return
+        }
+        #expect(panes.compactMap(\.terminal?.title) == ["vim Login.swift", "swift test"])
+    }
+
+    /// A tab with one terminal, no tab rename, and no focused device pane has
+    /// nothing to say that its terminal does not, so both labels agree.
+    @Test
+    func paneAndTabTitlesAgreeForALoneTerminal() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        harness.delegate.tabDisplayTitles[TabID(value: 1)] = "vim Login.swift"
+        harness.delegate.oscTitles[TerminalPaneID(value: 1)] = "vim Login.swift"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceTab(detail)) = result else {
+            Issue.record("expected tab detail; got \(result)")
+            return
+        }
+        #expect(detail.panes.first?.terminal?.title == detail.tab.title)
+    }
+
+    /// Where the two labels part company, and why the pane is the one worth
+    /// having. The tab selects its raw label before normalizing, so an
+    /// invisible OSC title wins that selection and then normalizes to nothing,
+    /// dropping the tab onto its own name (or `"Terminal"` when it has none)
+    /// and skipping the terminal tiers under it. The pane normalizes each tier
+    /// as it goes, so the same title is passed over and the directory basename
+    /// below it survives.
+    ///
+    /// The divergence is intentional here: aligning the labels would change GUI
+    /// tab-strip behavior, which is separate from publishing a per-pane label.
+    @Test
+    func invisibleOSCTitleSeparatesPaneAndTabTitles() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        let invisible = "\u{200B}\u{200B}"
+        harness.delegate.tabDisplayTitles[TabID(value: 1)] = invisible
+        harness.delegate.oscTitles[TerminalPaneID(value: 1)] = invisible
+        harness.delegate.oscWorkingDirectories[TerminalPaneID(value: 1)] = "/project"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspaceTabShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspaceTab(detail)) = result else {
+            Issue.record("expected tab detail; got \(result)")
+            return
+        }
+        // The harness names its tabs, so the tab lands on the name tier here.
+        #expect(detail.tab.title == "tab-1")
+        #expect(detail.panes.first?.terminal?.title == "project")
+    }
+
     @Test
     func collectionProjectionsApplyOneWorkingDirectoryPolicy() async {
         let harness = makeHarness()
@@ -964,13 +1124,38 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         let terminal: TerminalPaneID
     }
 
+    struct FactsRead: Equatable {
+        let window: WindowID
+        let tab: TabID
+        let terminal: TerminalPaneID
+        let includeWorkingDirectory: Bool
+    }
+
     private(set) var sendInputs: [SendInput] = []
     private(set) var captures: [Capture] = []
     private(set) var moves: [MoveAcross] = []
     private(set) var raises: [WindowID] = []
     private(set) var paneRenames: [PaneRename] = []
-    private(set) var workingDirectoryReads: [WorkingDirectoryRead] = []
+    /// Every facts hop, whether or not it asked for the working directory.
+    private(set) var factsReads: [FactsRead] = []
+    /// The hops that actually requested a working directory. The projection
+    /// now reads a terminal's label and tty unconditionally, so "did not read
+    /// the directory" is a property of the request rather than of the call
+    /// happening at all.
+    var workingDirectoryReads: [WorkingDirectoryRead] {
+        factsReads.filter(\.includeWorkingDirectory).map {
+            WorkingDirectoryRead(window: $0.window, tab: $0.tab, terminal: $0.terminal)
+        }
+    }
+
     var workingDirectories: [TerminalPaneID: String] = [:]
+    var oscTitles: [TerminalPaneID: String] = [:]
+    var oscWorkingDirectories: [TerminalPaneID: String] = [:]
+    var ttys: [TerminalPaneID: String] = [:]
+    /// Stands in for `TabTitleViewModel.displayTitle`, which the tab projection
+    /// reads before normalizing. Set it alongside `oscTitles` to model a tab and
+    /// its lone terminal seeing the same OSC title.
+    var tabDisplayTitles: [TabID: String] = [:]
     var sendInputError: IntentError?
     var captureResult = ""
     var captureError: IntentError?
@@ -1034,13 +1219,30 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         return captureResult
     }
 
-    func terminalWorkingDirectory(
+    func tabDisplayTitle(window: WindowID, tab: TabID) -> String? {
+        tabDisplayTitles[tab]
+    }
+
+    func terminalFacts(
         window: WindowID,
         tab: TabID,
-        terminal: TerminalPaneID
-    ) -> String? {
-        workingDirectoryReads.append(.init(window: window, tab: tab, terminal: terminal))
-        return workingDirectories[terminal]
+        terminal: TerminalPaneID,
+        includeWorkingDirectory: Bool
+    ) -> TerminalPaneFacts? {
+        factsReads.append(
+            .init(
+                window: window,
+                tab: tab,
+                terminal: terminal,
+                includeWorkingDirectory: includeWorkingDirectory
+            )
+        )
+        return TerminalPaneFacts(
+            oscTitle: oscTitles[terminal],
+            oscWorkingDirectory: oscWorkingDirectories[terminal],
+            tty: ttys[terminal],
+            cwd: includeWorkingDirectory ? workingDirectories[terminal] : nil
+        )
     }
 
     func moveTabAcrossWindows(

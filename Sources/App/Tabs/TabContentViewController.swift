@@ -534,8 +534,11 @@ final class TabContentViewController: NSViewController {
 
     func focusPane(_ slot: PaneSlot) { splitVC.restoreFocus(to: slot) }
 
-    func workingDirectory(for terminalID: TerminalPaneID) -> String? {
-        terminalVCByID[terminalID]?.currentWorkingDirectory()
+    func terminalFacts(
+        for terminalID: TerminalPaneID,
+        includeWorkingDirectory: Bool
+    ) -> TerminalPaneFacts? {
+        terminalVCByID[terminalID]?.currentFacts(includeWorkingDirectory: includeWorkingDirectory)
     }
 
     func focusedPane() -> PaneSlot? { splitVC.focusedSlot() }

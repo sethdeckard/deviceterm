@@ -586,8 +586,15 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     func displayTitle(for tabID: TabID) -> String? { tabContentByID[tabID]?.displayTitle }
 
-    func workingDirectory(for terminalID: TerminalPaneID, inTab tabID: TabID) -> String? {
-        tabContentByID[tabID]?.workingDirectory(for: terminalID)
+    func terminalFacts(
+        for terminalID: TerminalPaneID,
+        inTab tabID: TabID,
+        includeWorkingDirectory: Bool
+    ) -> TerminalPaneFacts? {
+        tabContentByID[tabID]?.terminalFacts(
+            for: terminalID,
+            includeWorkingDirectory: includeWorkingDirectory
+        )
     }
 
     func focusedPane(inTab tabID: TabID) -> PaneSlot? {

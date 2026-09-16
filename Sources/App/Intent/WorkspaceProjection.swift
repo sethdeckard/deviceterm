@@ -143,15 +143,16 @@ final class WorkspaceProjection {
         let tabID = tab?.cohortId.uuidString.lowercased() ?? ""
         switch resolved.state {
         case let .terminal(terminal):
-            let cwd: String? = if includeTerminalCWD, origin.readsTerminalWorkingDirectory {
-                actionDelegate?.terminalWorkingDirectory(
-                    window: resolved.windowID,
-                    tab: resolved.tabID,
-                    terminal: terminal.id
-                )
-            } else {
-                nil
-            }
+            // One hop for the label, the tty, and the directory. Only the
+            // directory is grant-scoped, so the gate rides in as a parameter
+            // rather than suppressing the whole read: a caller without a grant
+            // still gets a title and a tty.
+            let facts = actionDelegate?.terminalFacts(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                terminal: terminal.id,
+                includeWorkingDirectory: includeTerminalCWD && origin.readsTerminalWorkingDirectory
+            )
             return WorkspacePane(
                 id: terminal.sessionId,
                 shortId: terminal.shortId ?? fallbackShortID(terminal.sessionId),
@@ -161,7 +162,16 @@ final class WorkspaceProjection {
                 current: origin.sessionID == terminal.sessionId,
                 focused: focused,
                 capabilities: [.sendInput, .captureText],
-                terminal: .init(sessionId: terminal.sessionId, cwd: cwd)
+                terminal: .init(
+                    sessionId: terminal.sessionId,
+                    title: PaneTitleDecision.title(
+                        oscTitle: facts?.oscTitle,
+                        name: terminal.name,
+                        oscWorkingDirectory: facts?.oscWorkingDirectory
+                    ),
+                    tty: facts?.tty,
+                    cwd: facts?.cwd
+                )
             )
 
         case let .simulator(pane):

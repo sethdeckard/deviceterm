@@ -80,6 +80,8 @@ private func testTerminalPane() -> WorkspacePane {
         capabilities: [.sendInput, .captureText],
         terminal: .init(
             sessionId: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+            title: "swift test",
+            tty: "/dev/ttys003",
             cwd: "/project"
         )
     )
@@ -152,6 +154,40 @@ func workspaceShowRendersPaneDetails() throws {
 
     #expect(outcome == .stdout(formatWorkspacePane(pane) + "\n"))
     #expect(fake.sent.map(\.method) == [RPCMethod.paneShow.rawValue])
+}
+
+/// `workspaceShowRendersPaneDetails` compares the output against the formatter
+/// itself, so it pins the wiring and not the content. This pins the content:
+/// the detail view carries every terminal field the projection publishes.
+@Test
+func humanPaneDetailCarriesEveryTerminalField() {
+    let rendered = formatWorkspacePane(testTerminalPane())
+    #expect(rendered.contains("session: CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"))
+    #expect(rendered.contains("title:   swift test"))
+    #expect(rendered.contains("tty:     /dev/ttys003"))
+    #expect(rendered.contains("cwd:     /project"))
+}
+
+/// An absent optional omits its line rather than printing an empty field, and
+/// the title prints either way because it is always present.
+@Test
+func humanPaneDetailOmitsAbsentTerminalFields() {
+    let source = testTerminalPane()
+    let pane = WorkspacePane(
+        id: source.id,
+        shortId: source.shortId,
+        name: source.name,
+        kind: .terminal,
+        tabId: source.tabId,
+        current: source.current,
+        focused: source.focused,
+        capabilities: source.capabilities,
+        terminal: .init(sessionId: source.id, title: "shell", tty: nil, cwd: nil)
+    )
+    let rendered = formatWorkspacePane(pane)
+    #expect(rendered.contains("title:   shell"))
+    #expect(!rendered.contains("tty:"))
+    #expect(!rendered.contains("cwd:"))
 }
 
 @Test

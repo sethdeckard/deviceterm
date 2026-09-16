@@ -47,7 +47,18 @@ protocol IntentActionDelegate: AnyObject {
 
     /// Live presentation values owned by the AppKit controller tree.
     func tabDisplayTitle(window: WindowID, tab: TabID) -> String?
-    func terminalWorkingDirectory(window: WindowID, tab: TabID, terminal: TerminalPaneID) -> String?
+    /// One terminal's live label, tty, and working directory, read together.
+    ///
+    /// `includeWorkingDirectory` gates only `TerminalPaneFacts.cwd`, which is
+    /// the sole grant-scoped field here; the caller owns that decision and this
+    /// hop does not re-derive it. Passing false also skips the kernel read that
+    /// produces it, which is the expensive half.
+    func terminalFacts(
+        window: WindowID,
+        tab: TabID,
+        terminal: TerminalPaneID,
+        includeWorkingDirectory: Bool
+    ) -> TerminalPaneFacts?
     func focusedPane(window: WindowID, tab: TabID) -> PaneSlot?
     func paneLifecycle(window: WindowID, tab: TabID, slot: PaneSlot) -> PaneLifecycle?
     func paneOrientation(window: WindowID, tab: TabID, slot: PaneSlot) -> Orientation?
@@ -78,7 +89,12 @@ extension IntentActionDelegate {
 
     func focusPane(window: WindowID, tab: TabID, slot: PaneSlot) {}
     func tabDisplayTitle(window: WindowID, tab: TabID) -> String? { nil }
-    func terminalWorkingDirectory(window: WindowID, tab: TabID, terminal: TerminalPaneID) -> String? { nil }
+    func terminalFacts(
+        window: WindowID,
+        tab: TabID,
+        terminal: TerminalPaneID,
+        includeWorkingDirectory: Bool
+    ) -> TerminalPaneFacts? { nil }
     func focusedPane(window: WindowID, tab: TabID) -> PaneSlot? { nil }
     func paneLifecycle(window: WindowID, tab: TabID, slot: PaneSlot) -> PaneLifecycle? { nil }
     func paneOrientation(window: WindowID, tab: TabID, slot: PaneSlot) -> Orientation? { nil }

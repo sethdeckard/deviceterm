@@ -1694,12 +1694,17 @@ extension AppDelegate: IntentActionDelegate {
         strip(for: windowID)?.displayTitle(for: tabID)
     }
 
-    func terminalWorkingDirectory(
+    func terminalFacts(
         window windowID: WindowID,
         tab tabID: TabID,
-        terminal terminalID: TerminalPaneID
-    ) -> String? {
-        strip(for: windowID)?.workingDirectory(for: terminalID, inTab: tabID)
+        terminal terminalID: TerminalPaneID,
+        includeWorkingDirectory: Bool
+    ) -> TerminalPaneFacts? {
+        strip(for: windowID)?.terminalFacts(
+            for: terminalID,
+            inTab: tabID,
+            includeWorkingDirectory: includeWorkingDirectory
+        )
     }
 
     func focusedPane(window windowID: WindowID, tab tabID: TabID) -> PaneSlot? {

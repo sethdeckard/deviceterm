@@ -534,21 +534,35 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         return try surface.readScreenText(format: format)
     }
 
-    /// The live working directory of what this terminal is running.
+    /// This terminal's live label, tty, and working directory.
     ///
-    /// Returns nil when fresh anchor facts or a safe working-directory
-    /// candidate cannot be read. After anchor derivation, the resolver may use
-    /// an unambiguous same-user shell when the foreground candidate becomes
-    /// unusable. Identity is read afresh so a replaced process can never leave
-    /// a cached directory.
-    func currentWorkingDirectory() -> String? {
-        guard let identity = surface?.terminalIdentity(),
-            let facts = DefaultTerminalProbe.derive(
+    /// Identity is read once and afresh, so a replaced process can never leave
+    /// a cached directory behind and the tty always describes the surface as it
+    /// is now. A detached surface reports no identity, which zeroes `tty` and
+    /// `cwd` while leaving the retained OSC fields intact: the label survives
+    /// what the kernel facts do not.
+    ///
+    /// `cwd` is nil unless `includeWorkingDirectory`, and nil again when fresh
+    /// anchor facts or a safe candidate cannot be read. After anchor
+    /// derivation, the resolver may use an unambiguous same-user shell when the
+    /// foreground candidate becomes unusable.
+    func currentFacts(includeWorkingDirectory: Bool) -> TerminalPaneFacts {
+        let identity = surface?.terminalIdentity()
+        let cwd: String? = if includeWorkingDirectory, let identity {
+            DefaultTerminalProbe.derive(
                 foregroundPid: identity.foregroundPid,
                 ttyName: identity.ttyName
             )
-        else { return nil }
-        return TerminalWorkingDirectory.resolve(for: facts)
+            .flatMap(TerminalWorkingDirectory.resolve(for:))
+        } else {
+            nil
+        }
+        return TerminalPaneFacts(
+            oscTitle: lastOSCTitle,
+            oscWorkingDirectory: lastWorkingDirectory,
+            tty: identity?.ttyName,
+            cwd: cwd
+        )
     }
 
     // MARK: - TerminalSurfaceDelegate

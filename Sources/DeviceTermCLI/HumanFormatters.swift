@@ -129,6 +129,8 @@ func formatWorkspacePane(_ pane: WorkspacePane) -> String {
     if let name = pane.name { lines.append("name:    \(name)") }
     if let terminal = pane.terminal {
         lines.append("session: \(terminal.sessionId)")
+        lines.append("title:   \(terminal.title)")
+        if let tty = terminal.tty { lines.append("tty:     \(tty)") }
         if let cwd = terminal.cwd { lines.append("cwd:     \(cwd)") }
     }
     if let simulator = pane.simulator {

@@ -46,6 +46,8 @@ private let contractPane = WorkspacePane(
     capabilities: [.sendInput, .captureText],
     terminal: .init(
         sessionId: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+        title: "swift test",
+        tty: "/dev/ttys003",
         cwd: "/project"
     )
 )
@@ -71,7 +73,8 @@ func workspaceTerminalPaneJSONContract() throws {
     let expected = #"{"capabilities":["sendInput","captureText"],"current":true,"focused":true,"#
         + #""id":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC","kind":"terminal","name":"shell","#
         + #""shortId":"cccccc","tabId":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB","#
-        + #""terminal":{"cwd":"\/project","sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"}}"#
+        + #""terminal":{"cwd":"\/project","sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC","#
+        + #""title":"swift test","tty":"\/dev\/ttys003"}}"#
     #expect(try workspaceJSON(contractPane) == expected)
 }
 
@@ -86,11 +89,68 @@ func workspaceTerminalPaneOmitsUnknownWorkingDirectory() throws {
         current: contractPane.current,
         focused: contractPane.focused,
         capabilities: contractPane.capabilities,
-        terminal: .init(sessionId: contractPane.id, cwd: nil)
+        terminal: .init(
+            sessionId: contractPane.id,
+            title: "swift test",
+            tty: "/dev/ttys003",
+            cwd: nil
+        )
     )
     let encoded = try workspaceJSON(pane)
-    #expect(encoded.contains(#""terminal":{"sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"}"#))
+    #expect(encoded.contains(#""sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC""#))
     #expect(!encoded.contains(#""cwd""#))
+}
+
+/// A pane whose surface has not attached carries no tty, while the label it
+/// already has survives. The two travel separately on purpose: absence of
+/// `tty` is transient, and a consumer must not read it as "unsupported".
+@Test
+func workspaceTerminalPaneOmitsUnknownTTYButKeepsTitle() throws {
+    let pane = WorkspacePane(
+        id: contractPane.id,
+        shortId: contractPane.shortId,
+        name: contractPane.name,
+        kind: .terminal,
+        tabId: contractPane.tabId,
+        current: contractPane.current,
+        focused: contractPane.focused,
+        capabilities: contractPane.capabilities,
+        terminal: .init(
+            sessionId: contractPane.id,
+            title: "shell",
+            tty: nil,
+            cwd: nil
+        )
+    )
+    let encoded = try workspaceJSON(pane)
+    #expect(encoded.contains(#""title":"shell""#))
+    #expect(!encoded.contains(#""tty""#))
+    #expect(!encoded.contains(#""cwd""#))
+}
+
+/// A terminal object built before `title` existed still decodes. The wire
+/// version did not move for the field, so a CLI from a newer bundle can be
+/// handed one by a GUI from an older one after a mid-session update, and a
+/// human-mode command whose response contains a terminal pane decodes this
+/// type.
+@Test
+func workspaceTerminalPaneDecodesWithoutATitle() throws {
+    let json = #"{"sessionId":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC","cwd":"\/project"}"#
+    let terminal = try JSONDecoder().decode(
+        WorkspacePane.Terminal.self,
+        from: Data(json.utf8)
+    )
+    #expect(terminal.sessionId == "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")
+    #expect(terminal.title == WorkspacePane.Terminal.defaultTitle)
+    #expect(terminal.tty == nil)
+    #expect(terminal.cwd == "/project")
+}
+
+@Test
+func workspaceTerminalPaneRoundTripsEveryField() throws {
+    let encoded = try workspaceJSON(contractPane)
+    let decoded = try JSONDecoder().decode(WorkspacePane.self, from: Data(encoded.utf8))
+    #expect(decoded == contractPane)
 }
 
 @Test

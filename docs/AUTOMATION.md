@@ -327,6 +327,9 @@ The field requires a live automation grant, even when the caller owns the
 terminal. An ordinary tab receives a successful workspace response with `cwd`
 omitted.
 
+Only `cwd` works that way. The same terminal rows carry `title` and `tty` for
+any session, granted or not.
+
 A process handoff can make one read inconclusive. If the next step depends on
 the directory, let the foreground command settle and re-read with a bounded
 deadline. Do not fall back to a startup `--cwd` value, since it may be stale.

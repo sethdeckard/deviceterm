@@ -264,6 +264,7 @@ DeviceTerm exposes several identifier layers:
 | `name` | Optional user-assigned stable name. Matching is case-insensitive and exact; duplicates are ambiguous |
 | `WorkspaceWindow.index` | One-based display-order metadata after visibility filtering; never a reference |
 | `WorkspaceTab.title` | Normalized GUI title, capped at 256 UTF-8 bytes. It is display metadata, not an identifier |
+| `WorkspacePane.terminal.title` | Normalized per-pane label, capped the same way. Also display metadata, and distinct from its tab's |
 | `udid` in a Simulator pane | Lowercase Simulator UDID |
 | `deviceId` in a physical-device pane | CoreDevice device ID |
 | `id` in the device roster | A Simulator UDID (lowercase) or physical CoreDevice device ID |
@@ -364,7 +365,9 @@ their panes unless the caller owns that protected tab.
 
 `tab show`, `pane list`, and `pane show` remain session-scoped commands. The
 optional `terminal.cwd` field has a narrower rule: an external caller receives
-it only while its session holds a live automation grant.
+it only while its session holds a live automation grant. No other field carries
+that rule. `terminal.title` and `terminal.tty` reach every session-scoped
+caller.
 
 ## Discovery and State
 
@@ -544,10 +547,51 @@ Terminal pane:
   "capabilities": ["sendInput", "captureText"],
   "terminal": {
     "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "vim Login.swift",
+    "tty": "/dev/ttys004",
     "cwd": "/Users/example/project"
   }
 }
 ```
+
+#### Terminal Title
+
+`terminal.title` is the pane's own label. Every row a current GUI projects
+carries it. It resolves to the first of these that survives normalization: the
+OSC 0/2 title the running program set, the pane's `name`, the basename of the
+shell's OSC 7 directory, then `"shell"`. Normalization caps it at 256 UTF-8
+bytes and strips control and bidirectional-override characters, the same
+treatment `WorkspaceTab.title` gets.
+
+The field can be absent during an interrupted update. `--json` relays the GUI's
+bytes unchanged, so a CLI from a newer bundle paired with a GUI from an older
+one emits terminal rows with no `title` until DeviceTerm restarts. Compare
+`daemon` against `rpcWire` in `deviceterm version` to recognize that state, and
+read a missing `title` as version skew rather than as a normal row.
+
+Each terminal in a split tab reports its own. Use it rather than the tab's
+title to label a pane: `WorkspaceTab.title` describes the tab, and a tab whose
+focused pane is a Simulator takes that pane's name instead.
+
+`pane rename` writes `name`, which ranks below the OSC title, so a renamed pane
+running a program keeps reporting the program. The tab label treats the same
+rename the same way. Read `name` for what the user called the pane and `title`
+for what it is doing now.
+
+#### Terminal TTY
+
+`terminal.tty` is the pane's controlling terminal device as a full path, such
+as `/dev/ttys004`.
+
+An absent `tty` means terminal identity is temporarily unavailable, commonly
+before the shell spawns or after the surface detaches. It never means DeviceTerm
+cannot report one. A terminal becomes addressable as soon as `tab open` or
+`pane split` commits session creation, which is before its surface attaches, so
+an early read after creating a pane may omit it. Retry rather than treating it
+as unsupported.
+
+Any session-scoped caller receives it. Unlike `cwd`, it needs no automation
+grant.
 
 #### Terminal Working Directory
 
@@ -618,6 +662,9 @@ one of `terminal`, `simulator`, or `device` is present according to
 `touch`, `key`, `text`, `button`, `rotate`, `crown`,
 `accessibility`, and `location`. Integrations should branch on the list
 rather than infer support from `kind`.
+
+Inside `terminal`, `sessionId` and `title` are present on every row a current
+GUI projects; `tty` and `cwd` are optional.
 
 A terminal pane's `id` is its `sessionId`. That identity is available as
 soon as `tab open` or `pane split` commits session creation; it does not
