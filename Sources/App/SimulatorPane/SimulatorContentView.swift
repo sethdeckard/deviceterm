@@ -45,12 +45,17 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// tracing, so simulator panes never scan or emit rows).
     var tracePaneId: String?
     /// The wire sequence of the last frame marked for a trace scan, so a
-    /// delivered frame is traced at most once no matter how many times the
-    /// continuous draw loop repaints it (a superseded frame may go untraced).
+    /// delivered frame is traced at most once however many draws repaint it
+    /// (a geometry change redraws the same frame; a superseded frame may go
+    /// untraced).
     private var lastTracedSequence: UInt64?
     /// The expected trace id (wire sequence) for a frame not yet traced;
     /// consumed on the next draw.
     private var pendingTraceSequence: UInt64?
+    /// Draws requested since init. Introspection for tests: AppKit records
+    /// `needsDisplay` only for a window-backed view and clears it once it
+    /// has serviced the display, so the count is what a test can read.
+    private(set) var redrawRequests = 0
     /// Owns the Metal command queue, pipeline, and shader; fed the live
     /// surface + orientation + bezel geometry each `draw(in:)`.
     private let renderer: SimulatorMetalRenderer
@@ -168,9 +173,10 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         layer?.isOpaque = false
         autoResizeDrawable = true
-        preferredFramesPerSecond = 60
-        isPaused = false
-        enableSetNeedsDisplay = false
+        // Change-driven: nothing draws until something asks. Every trigger
+        // is an explicit `requestRedraw()`.
+        isPaused = true
+        enableSetNeedsDisplay = true
         delegate = self
         multitouchOverlayLayer.fillColor = NSColor(white: 1, alpha: 0.40).cgColor
         multitouchOverlayLayer.strokeColor = NSColor(white: 1, alpha: 0.90).cgColor
@@ -189,25 +195,45 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    /// Entering a window is the first chance to draw a frame that arrived
+    /// while the view was unplaced, and a tab switch re-enters the window
+    /// holding the last frame. With no frame yet this presents the clear
+    /// colour, so a booting pane never shows an undrawn drawable.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { requestRedraw() }
+    }
+
+    /// The draw reads the window's backing scale for the bezel inset, so a
+    /// move between displays repaints even at an unchanged point size.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        requestRedraw()
+    }
+
+    /// Adopt a delivered frame.
+    ///
+    /// Frames are discrete events on both pane kinds: a simulator's in-place
+    /// damage and a physical device's pool frame each arrive as their own
+    /// `surface.changed`, so drawing is change-driven and a new lease
+    /// requests one draw. Entering a window, a drawable-size or backing
+    /// change, and any orientation or display-frame change request a draw
+    /// too, so a frame that lands before the view is placed is drawn once it
+    /// is. Re-applying the lease already held (the render binding does so on
+    /// any unrelated change) costs nothing. A nil lease keeps `surfaceSize`
+    /// and requests a draw only when it clears a surface, so the clear
+    /// colour replaces the stale frame.
     func setSurface(_ lease: SurfaceLease?) {
+        let previous = currentSurface
         currentSurface = lease
         if let surface = lease?.surface {
             surfaceSize = CGSize(
                 width: IOSurfaceGetWidth(surface),
                 height: IOSurfaceGetHeight(surface)
             )
-            // Force the freshly delivered frame onscreen immediately. This view
-            // draws continuously via the MTKView display loop, but that loop isn't
-            // reliably ticking on first connect (the view often isn't in a
-            // laid-out, visible window when the first frames arrive), so a new
-            // surface would otherwise sit unshown until an unrelated event (a mouse
-            // click, a layout pass) kicked the loop. That was the "mirror frozen on
-            // connect until you interact" bug, most visible on physical-device
-            // panes whose frames are change-driven. Drawing on arrival makes frames
-            // show regardless of the loop's state; the continuous loop still covers
-            // in-place same-surface damage updates (the simulator path). Guarded on
-            // `window` so nothing is drawn before the view is placed (no drawable).
-            if window != nil { draw() }
+            if lease !== previous { requestRedraw() }
+        } else if previous != nil {
+            requestRedraw()
         }
     }
 
@@ -215,20 +241,26 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// to rotate UV sampling so the rendered content is upright; the
     /// aspect-fit math swaps texture width/height for landscape so
     /// the quad fills its pane in the correct aspect rather than
-    /// letterboxing the rotated content into a portrait box. No
-    /// effect until the next `draw(in:)` pass.
+    /// letterboxing the rotated content into a portrait box. A
+    /// changed value requests a draw.
     func setOrientation(_ orientation: Orientation) {
+        guard orientation != self.orientation else { return }
         self.orientation = orientation
+        requestRedraw()
     }
 
     /// Push the wrapper's device-frame geometry in. `inset` is the
     /// per-side bezel margin the shader's aspect-fit must reserve
     /// (in points); `screenCornerRadius` is the inner corner radius
-    /// applied via a rounded-rect mask so the rendered screen has
-    /// rounded corners that match the device's display.
+    /// the shader discards outside of so the rendered screen has
+    /// rounded corners that match the device's display. The wrapper
+    /// pushes on every layout pass, so only a changed value requests
+    /// a draw.
     func setDisplayFrame(inset: CGFloat, screenCornerRadius: CGFloat) {
+        guard inset != displayInset || screenCornerRadius != self.screenCornerRadius else { return }
         displayInset = inset
         self.screenCornerRadius = screenCornerRadius
+        requestRedraw()
     }
 
     // MARK: MTKViewDelegate
@@ -236,7 +268,11 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     func draw(in view: MTKView) {
         // Peek (don't consume) the pending trace: retire it only if the
         // renderer actually installs it (reached commit), so an early
-        // return doesn't lose the frame's trace permanently.
+        // return or a full scan pool leaves it for the next draw. The next
+        // frame supersedes it, so the last frame before an idle period can
+        // go untraced when the pool was at capacity; a sampling diagnostic
+        // tolerates that, and re-requesting a draw would spin while the
+        // pool stayed full.
         let trace = peekConsumerTrace()
         let installed = renderer.render(
             lease: currentSurface,
@@ -249,8 +285,17 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         if installed { pendingTraceSequence = nil }
     }
 
+    /// Ask AppKit for one draw on the next display cycle. Several requests
+    /// in one turn collapse into one `draw(in:)`. AppKit drops the request
+    /// while the view has no window, which `viewDidMoveToWindow` covers by
+    /// requesting again on placement.
+    private func requestRedraw() {
+        redrawRequests += 1
+        needsDisplay = true
+    }
+
     /// Apply a freshly delivered frame: arm its trace sequence **before**
-    /// setting the surface, since `setSurface` draws synchronously and the
+    /// setting the surface, since `setSurface` requests the draw and that
     /// draw must see this frame's expected id, not the previous one's.
     /// `traceSequence` is nil for sim panes.
     func applyFrame(lease: SurfaceLease?, traceSequence: UInt64?) {
@@ -282,7 +327,12 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         )
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    /// A resized drawable holds nothing until it is drawn into, so every
+    /// size change (each layout pass of a divider drag included) requests a
+    /// draw at the new size.
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        requestRedraw()
+    }
 
     // MARK: Input
 

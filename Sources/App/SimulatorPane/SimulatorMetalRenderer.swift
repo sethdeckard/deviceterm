@@ -7,11 +7,15 @@ import SurfaceTrace
 /// The Metal draw path for a simulator /
 /// device pane, split out of SimulatorContentView. It owns the command
 /// queue + pipeline state and the shader, and renders one IOSurface into
-/// an MTKView's current drawable each frame: aspect-fit inside the
+/// an MTKView's current drawable on each draw: aspect-fit inside the
 /// wrapper's bezel inset, UV counter-rotation so rotated content shows
 /// upright, and an SDF rounded-screen discard. The view keeps the live
 /// orientation / inset / surface state (its gesture code reads them too)
-/// and passes them in per frame; nothing here touches input.
+/// and passes them in per draw; nothing here touches input. The rendered
+/// image is determined by the surface, orientation, bezel geometry,
+/// drawable size, and backing scale alone, which is what lets the view
+/// draw only when one of them changes or when mounting supplies a
+/// drawable that needs presenting.
 @MainActor
 final class SimulatorMetalRenderer {
     /// Shader constants. Layout MUST match `Params` in the
