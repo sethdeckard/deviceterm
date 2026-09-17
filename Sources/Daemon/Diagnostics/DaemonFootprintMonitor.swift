@@ -99,7 +99,8 @@ public actor DaemonFootprintMonitor {
                     xpcConnections: await xpcServer.connectionCount,
                     surfaceExhaustionDrops: pools.exhaustionDrops,
                     surfaceReuseWhileInUse: pools.reuseWhileInUse,
-                    delinquentSightings: pools.delinquentObserved
+                    delinquentSightings: pools.delinquentObserved,
+                    inputSubmissions: await paneCoordinator.inputSubmissionsTotal()
                 )
             },
             breakdown: { MemoryBreakdownReader.read().lines() },

@@ -38,6 +38,57 @@ private func acquired(_ backend: any DeviceBackend) -> PaneCoordinator.AcquiredB
     PaneCoordinator.AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone")
 }
 
+/// Collects what the acquirer reports, in order. `@unchecked Sendable`:
+/// `events` is guarded by `lock`.
+private final class EventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [SimBackendAcquirer.Event] = []
+
+    var recorded: [SimBackendAcquirer.Event] { lock.withLock { events } }
+
+    func record(_ event: SimBackendAcquirer.Event) {
+        lock.withLock { events.append(event) }
+    }
+}
+
+@Test
+func eachBackendBuiltIsReportedWithAPerSimOrdinal() async throws {
+    // The ordinal counts successive backend builds for the same UDID within
+    // this acquirer, so a second one marks a re-attach or a lost create race
+    // inside one daemon. A replacement helper starts counting again at one.
+    // The acquisition number is process-wide and rides on the returned
+    // backend, so the pane that publishes on it can log the same value.
+    let recorder = EventRecorder()
+    let acquirer = SimBackendAcquirer(
+        acquireHandles: { _ in acquired(MockDeviceBackend()) },
+        report: { recorder.record($0) }
+    )
+
+    let first = try await acquirer.acquire(udid: "udid-1")
+    let second = try await acquirer.acquire(udid: "udid-1")
+    let third = try await acquirer.acquire(udid: "udid-2")
+
+    #expect(recorder.recorded == [
+        .backendBuilt(udid: "udid-1", acquisition: 1, ordinal: 1),
+        .backendBuilt(udid: "udid-1", acquisition: 2, ordinal: 2),
+        .backendBuilt(udid: "udid-2", acquisition: 3, ordinal: 1)
+    ])
+    #expect([first.acquisition, second.acquisition, third.acquisition] == [1, 2, 3])
+}
+
+@Test
+func aFailedAcquisitionReportsNothing() async throws {
+    let recorder = EventRecorder()
+    let acquirer = SimBackendAcquirer(
+        acquireHandles: { udid in throw PaneError.deviceNotFound(udid: udid) },
+        report: { recorder.record($0) }
+    )
+
+    _ = try? await acquirer.acquire(udid: "udid-1")
+
+    #expect(recorder.recorded.isEmpty)
+}
+
 @Test
 func acquireReturnsTheBackendTheBridgeBuilt() async throws {
     let backend = MockDeviceBackend()
@@ -84,13 +135,15 @@ func acquireStopsWaitingWhenTheBridgeOutlastsTheDeadline() async throws {
 func anAbandonedAttemptKeepsItsSlotUntilTheBridgeAnswers() async throws {
     let bridge = ParkedBridge()
     let backend = MockDeviceBackend()
+    let recorder = EventRecorder()
     let acquirer = SimBackendAcquirer(
         maxInFlight: 1,
         sleep: { _ in },
         acquireHandles: { _ in
             bridge.park()
             return acquired(backend)
-        }
+        },
+        report: { recorder.record($0) }
     )
 
     await #expect(throws: PaneError.backendAcquireTimedOut(udid: "udid-1")) {
@@ -104,6 +157,12 @@ func anAbandonedAttemptKeepsItsSlotUntilTheBridgeAnswers() async throws {
     #expect(try await poll(timeout: 2) { await acquirer.inFlight == 0 })
     // Nothing is left to hand it to, and no pane record will ever close it.
     #expect(try await poll(timeout: 2) { backend.shutdownCalled })
+    // A backend was built and then torn down; both are on the record, so a
+    // reader can tell a disposed client from one a pane is still driving.
+    #expect(recorder.recorded == [
+        .backendBuilt(udid: "udid-1", acquisition: 1, ordinal: 1),
+        .disposed(udid: "udid-1", acquisition: 1)
+    ])
 }
 
 @Test

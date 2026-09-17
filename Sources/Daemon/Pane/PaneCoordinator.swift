@@ -558,17 +558,35 @@ public actor PaneCoordinator {
         /// Run once, after the backend is down, when this acquisition is
         /// abandoned rather than published.
         let releaseSideResources: @Sendable () async -> Void
+        /// The acquirer's process-wide sequence number for this backend, or
+        /// nil for one built outside it. Logged when the backend is built and
+        /// again when its pane publishes, so the two lines match by value
+        /// rather than by adjacency, which concurrent attaches can reorder.
+        let acquisition: Int?
 
         init(
             backend: any DeviceBackend,
             family: String,
             deviceType: String?,
-            releaseSideResources: @escaping @Sendable () async -> Void = {}
+            releaseSideResources: @escaping @Sendable () async -> Void = {},
+            acquisition: Int? = nil
         ) {
             self.backend = backend
             self.family = family
             self.deviceType = deviceType
             self.releaseSideResources = releaseSideResources
+            self.acquisition = acquisition
+        }
+
+        /// The same acquisition, numbered.
+        func numbered(_ acquisition: Int) -> AcquiredBackend {
+            AcquiredBackend(
+                backend: backend,
+                family: family,
+                deviceType: deviceType,
+                releaseSideResources: releaseSideResources,
+                acquisition: acquisition
+            )
         }
     }
 
@@ -1447,6 +1465,25 @@ public actor PaneCoordinator {
             record.confirmedOrientation = seed
         }
         panes[paneId] = record
+        // The one line that ties a pane to the backend it publishes on. The
+        // acquisition number matches the acquirer's "backend built" line by
+        // value, and the short id is what `pane show` prints, so a reader can
+        // follow a pane back to its HID client without the pane's UUID.
+        let kind: String
+        switch target {
+        case .sim:
+            kind = "sim"
+
+        case .device:
+            kind = "device"
+        }
+        let acquisition = acquired.acquisition.map(String.init) ?? "none"
+        DiagnosticLog.attach.notice(
+            """
+            pane published: shortId=\(record.shortId, privacy: .public) \
+            kind=\(kind, privacy: .public) acquisition=\(acquisition, privacy: .public)
+            """
+        )
         record.surfacePump = Task.detached { [weak self, paneId] in
             for await published in surfaceStream {
                 guard !Task.isCancelled else { break }
@@ -1826,6 +1863,18 @@ public actor PaneCoordinator {
             total.exhaustionDrops += counters.exhaustionDrops
             total.reuseWhileInUse += counters.reuseWhileInUse
             total.delinquentObserved += counters.delinquentObserved
+        }
+        return total
+    }
+
+    /// Input sends that returned without error, summed the same way. Read by
+    /// the periodic footprint sample. The count helps investigate input with
+    /// no visible effect; it does not establish transport acceptance or
+    /// delivery.
+    func inputSubmissionsTotal() -> Int {
+        var total = 0
+        for record in Array(panes.values) + Array(retiring.values) {
+            total += record.backend?.inputSubmissionCount() ?? 0
         }
         return total
     }

@@ -55,6 +55,13 @@ struct DaemonFootprintSample: Sendable, Equatable {
     /// more delinquent holds since the previous reading; the value is not a
     /// current hold count or a duration.
     var delinquentSightings = 0
+    /// Input sends whose call returned without error, summed across every
+    /// pane. Cumulative per backend, so a pane that closes takes its count
+    /// with it. Not delivery: a simulator's HID transport reports success for
+    /// a port the guest no longer services, and a device keyboard failure is
+    /// swallowed before the relay returns. A count that climbs while the
+    /// guest shows no effect is what this is for.
+    var inputSubmissions = 0
 
     /// The single-line payload the logger emits. Formatted here rather than at
     /// the log call so a test can assert on the same string the log carries.
@@ -71,6 +78,7 @@ struct DaemonFootprintSample: Sendable, Equatable {
             + "xpcInFlight=\(xpcRequestsInFlight) xpcConns=\(xpcConnections) "
             + "surfaceDrops=\(surfaceExhaustionDrops) "
             + "surfaceReuseInUse=\(surfaceReuseWhileInUse) "
-            + "delinquentSightings=\(delinquentSightings)"
+            + "delinquentSightings=\(delinquentSightings) "
+            + "inputSends=\(inputSubmissions)"
     }
 }

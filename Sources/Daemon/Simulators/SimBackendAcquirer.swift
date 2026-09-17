@@ -36,6 +36,22 @@ actor SimBackendAcquirer {
         var continuation: CheckedContinuation<Acquired, any Error>?
     }
 
+    /// Reports each completed backend build, and the disposal of a backend
+    /// that returned after its deadline. The log is the only record of which
+    /// client a pane's input goes through: a replacement daemon builds a
+    /// fresh HID client for a sim the previous one was already driving, and
+    /// nothing on the wire says so.
+    enum Event: Equatable, Sendable {
+        /// A backend, and with it a HID client, now exists for this sim.
+        /// `acquisition` numbers every backend this acquirer built and is
+        /// what the pane that publishes on it logs; `ordinal` counts the
+        /// backends built for the same udid, so a second one marks a
+        /// re-attach or a lost race.
+        case backendBuilt(udid: String, acquisition: Int, ordinal: Int)
+        /// The backend returned after its caller gave up, and was torn down.
+        case disposed(udid: String, acquisition: Int)
+    }
+
     /// How long a caller waits before its acquisition is abandoned.
     static let defaultDeadlineNanoseconds: UInt64 = 10_000_000_000
     /// Ceiling on attempts holding a slot, abandoned ones included.
@@ -46,7 +62,13 @@ actor SimBackendAcquirer {
     private let deadlineNanoseconds: UInt64
     private let maxInFlight: Int
     private let sleep: @Sendable (UInt64) async throws -> Void
+    private let report: @Sendable (Event) -> Void
     private var attempts: [UUID: Attempt] = [:]
+    /// Backends built per udid over this process's life, never decremented.
+    private var backendsBuilt: [String: Int] = [:]
+    /// Backends built in total; the last value handed out is the newest
+    /// backend's acquisition number.
+    private var acquisitionsCompleted = 0
 
     /// Attempts currently holding a slot, abandoned ones included. Diagnostic
     /// for tests; the daemon never branches on it.
@@ -60,7 +82,8 @@ actor SimBackendAcquirer {
         },
         acquireHandles: @escaping @Sendable (String) throws -> Acquired = {
             try SimBackendAcquirer.acquireFromBridge(udid: $0)
-        }
+        },
+        report: @escaping @Sendable (Event) -> Void = { SimBackendAcquirer.log($0) }
     ) {
         self.queue = BlockingWorkQueue(
             label: "com.deviceterm.daemon.sim-backend-acquire",
@@ -70,6 +93,32 @@ actor SimBackendAcquirer {
         self.maxInFlight = max(1, maxInFlight)
         self.sleep = sleep
         self.acquireHandles = acquireHandles
+        self.report = report
+    }
+
+    /// The default reporter. The udid stays private per `DiagnosticLog`;
+    /// `acquisition` matches the pane-published record even when concurrent
+    /// attaches interleave.
+    private static func log(_ event: Event) {
+        switch event {
+        case let .backendBuilt(udid, acquisition, ordinal):
+            DiagnosticLog.attach.notice(
+                """
+                simulator backend built: acquisition=\(acquisition, privacy: .public) \
+                hid client \(ordinal, privacy: .public) for this sim in this process; \
+                udid=\(udid, privacy: .private)
+                """
+            )
+
+        case let .disposed(udid, acquisition):
+            DiagnosticLog.attach.notice(
+                """
+                simulator backend acquisition returned after its deadline; \
+                handles released; acquisition=\(acquisition, privacy: .public) \
+                udid=\(udid, privacy: .private)
+                """
+            )
+        }
     }
 
     /// Acquire the CoreSimulator bridge handles for a sim pane and wrap them in
@@ -221,11 +270,21 @@ actor SimBackendAcquirer {
             return
         }
         attempt.timeoutTask.cancel()
+        var result = result
+        var acquisition: Int?
+        if case let .success(acquired) = result {
+            acquisitionsCompleted += 1
+            let ordinal = (backendsBuilt[attempt.udid] ?? 0) + 1
+            backendsBuilt[attempt.udid] = ordinal
+            acquisition = acquisitionsCompleted
+            result = .success(acquired.numbered(acquisitionsCompleted))
+            report(.backendBuilt(udid: attempt.udid, acquisition: acquisitionsCompleted, ordinal: ordinal))
+        }
         guard let continuation = attempt.continuation else {
             Self.dispose(result)
-            DiagnosticLog.attach.notice(
-                "simulator backend acquisition returned after its deadline; handles released"
-            )
+            if let acquisition {
+                report(.disposed(udid: attempt.udid, acquisition: acquisition))
+            }
             return
         }
         continuation.resume(with: result)

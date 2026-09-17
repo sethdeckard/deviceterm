@@ -273,6 +273,21 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// invalidated it. A monotonic generation means a captured value never
     /// becomes current again (ABA-safe across a quiesce+resume).
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool
+    /// Input sends whose call returned without error over this backend's
+    /// life: touch, key, button, and crown, whether a caller issued them or a
+    /// transfer quiesce and held-contact release sent them on the caller's
+    /// behalf. Read by the daemon's periodic self-check, never on an input
+    /// path.
+    ///
+    /// Returning without error is not delivery, and on a physical device it
+    /// is not even transport acceptance for the keyboard: the virtual
+    /// keyboard swallows its send failures, so a failed key still counts.
+    /// Nothing the fence dropped is counted. Rotation is excluded because the
+    /// coordinator checks its observed orientation separately.
+    ///
+    /// A requirement rather than extension-only for the same reason as
+    /// `poolCounters()`: the coordinator holds `any DeviceBackend`.
+    func inputSubmissionCount() -> Int
 
     // MARK: Surface-lease overlay
     //
@@ -452,6 +467,8 @@ extension DeviceBackend {
     func resumeInput() {}
     func currentInputGeneration() -> UInt64 { 0 }
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { true }
+    // Default: a backend with no transport of its own sends nothing.
+    func inputSubmissionCount() -> Int { 0 }
 
     // Default: backends without a cached accessibility bridge own nothing that
     // needs queue-ordered release.

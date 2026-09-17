@@ -530,6 +530,41 @@ func transferQuiesceReleasesAHeldTouchContact() async throws {
 }
 
 @Test
+func inputSubmissionsCountEverySendTheRelayAccepted() async throws {
+    // The footprint count covers the lift the quiesce sent on the caller's
+    // behalf as well as the contact the caller issued; a release the daemon
+    // sends is still a send that returned without error. Nothing fenced
+    // counts.
+    let pixelBuffer = try #require(makePixelBuffer(width: 16, height: 16))
+    let relay = FakeRelay(support: touchOnly)
+    let device = RealDeviceBackend(
+        deviceId: "test-device",
+        feed: FakeFeed(frames: [DecodedFrame(pixelBuffer: pixelBuffer)]),
+        device: relay
+    )
+    #expect(device.inputSubmissionCount() == 0)
+    try device.startFrames(onFrame: { _ in }, onFatal: { _ in }, onDisconnect: {})
+
+    // The relay records a send before the pump counts it, so wait on the
+    // count itself rather than on the relay's log.
+    try device.tapDown(at: CGPoint(x: 0.5, y: 0.5), generation: device.currentInputGeneration())
+    try await waitUntil { device.inputSubmissionCount() == 1 }
+    #expect(await relay.performed() == ["touch.contact"])
+
+    _ = await device.quiesceInputForTransfer()
+    try await waitUntil { device.inputSubmissionCount() == 2 }
+    #expect(await relay.performed() == ["touch.contact", "touch.lift"])
+
+    // A tap stamped with the now-stale generation is dropped by the pump
+    // before any send, so it must not count.
+    try device.tapDown(at: CGPoint(x: 0.5, y: 0.5), generation: device.currentInputGeneration() - 1)
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(device.inputSubmissionCount() == 2)
+    #expect(await relay.performed() == ["touch.contact", "touch.lift"])
+    device.shutdownBackend()
+}
+
+@Test
 func transferFenceDropsInputBufferedBeforeTheGateOpens() async throws {
     // The sharper physical-fence case: input already *buffered* when quiesce
     // begins (parked behind the closed first-frame gate) must be dropped, not

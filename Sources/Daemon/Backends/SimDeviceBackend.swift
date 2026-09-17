@@ -85,6 +85,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// serial blocking queue while teardown writes it on the coordinator.
     private var backendActive = true
     private var inputGeneration: UInt64 = 1
+    /// Sends the HID client returned without error, for the footprint sample.
+    /// Not delivery: the transport reports success for a port the guest has
+    /// stopped servicing.
+    private var inputSubmissions = 0
     /// The contact currently held down, if any (see `HeldTouch`).
     private var heldTouch: HeldTouch?
     private var heldKeys: Set<UInt32> = []
@@ -181,6 +185,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         inputGate.sync { generation == inputGeneration }
     }
 
+    func inputSubmissionCount() -> Int { inputGate.sync { inputSubmissions } }
+
     func quiesceInputForTransfer() async -> Bool {
         await inputWorkQueue.run { [self] in
             quiesceInputForTransferSynchronously()
@@ -210,17 +216,21 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         var allReleased = true
         switch held {
         case let .single(point)?:
-            if (try? hid.tapUp(at: point)) != nil { inputGate.sync { heldTouch = nil } } else { allReleased = false }
+            if accepted({ try hid.tapUp(at: point) }) {
+                inputGate.sync { heldTouch = nil }
+            } else {
+                allReleased = false
+            }
 
         case let .edge(point, edge)?:
-            if (try? hid.edgeTouchUp(at: point, edge: edge)) != nil {
+            if accepted({ try hid.edgeTouchUp(at: point, edge: edge) }) {
                 inputGate.sync { heldTouch = nil }
             } else {
                 allReleased = false
             }
 
         case let .twoFinger(finger1, finger2)?:
-            if (try? hid.twoFingerUp(f1: finger1, f2: finger2)) != nil {
+            if accepted({ try hid.twoFingerUp(f1: finger1, f2: finger2) }) {
                 inputGate.sync { heldTouch = nil }
             } else {
                 allReleased = false
@@ -230,7 +240,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             break
         }
         for usage in keys {
-            if (try? hid.keyUp(keyCode: usage)) != nil { inputGate.sync { _ = heldKeys.remove(usage) } } else {
+            if accepted({ try hid.keyUp(keyCode: usage) }) { inputGate.sync { _ = heldKeys.remove(usage) } } else {
                 allReleased = false
             }
         }
@@ -242,7 +252,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // Clear on a confirmed release; else keep it uncertain and block.
         let buttons = inputGate.sync { uncertainButtons }
         for button in buttons {
-            guard (try? hid.releaseHardwareButton(button.bridgeValue)) != nil else {
+            guard accepted({ try hid.releaseHardwareButton(button.bridgeValue) }) else {
                 allReleased = false
                 continue
             }
@@ -278,13 +288,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // silently forgotten.
         switch held {
         case let .single(point):
-            guard (try? hid.tapUp(at: point)) != nil else { return false }
+            guard accepted({ try hid.tapUp(at: point) }) else { return false }
 
         case let .edge(point, edge):
-            guard (try? hid.edgeTouchUp(at: point, edge: edge)) != nil else { return false }
+            guard accepted({ try hid.edgeTouchUp(at: point, edge: edge) }) else { return false }
 
         case let .twoFinger(finger1, finger2):
-            guard (try? hid.twoFingerUp(f1: finger1, f2: finger2)) != nil else { return false }
+            guard accepted({ try hid.twoFingerUp(f1: finger1, f2: finger2) }) else { return false }
         }
         inputGate.sync { heldTouch = nil }
         return true
@@ -300,12 +310,31 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// so a generation bump cannot slip between this check and the send.
     /// `inputGate` protects the short cross-executor read without being held
     /// across SimulatorKit's completion wait.
+    ///
+    /// A send that completes without throwing increments
+    /// `inputSubmissionCount()` unless `counted` is false. Rotation opts out
+    /// because the coordinator checks its observed orientation separately.
     @discardableResult
-    private func gatedSend(_ generation: UInt64, _ body: () throws -> Void) throws -> Bool {
+    private func gatedSend(
+        _ generation: UInt64,
+        counted: Bool = true,
+        _ body: () throws -> Void
+    ) throws -> Bool {
         guard inputGate.sync(execute: { generation == inputGeneration }) else {
             return false
         }
         try body()
+        if counted { inputGate.sync { inputSubmissions += 1 } }
+        return true
+    }
+
+    /// Run an ungated release and report whether it returned without error,
+    /// counting it when it did. The quiesce and held-contact paths send
+    /// through here so the footprint count covers every such send, not only
+    /// the ones a caller issued.
+    private func accepted(_ send: () throws -> Void) -> Bool {
+        guard (try? send()) != nil else { return false }
+        inputGate.sync { inputSubmissions += 1 }
         return true
     }
 
@@ -561,7 +590,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             orientation = direction.applied(to: confirmedOrientation)
         }
         let sent = try await inputWorkQueue.run { [self] in
-            try gatedSend(generation) {
+            try gatedSend(generation, counted: false) {
                 guard let purpleClient else { throw DeviceBackendError.notActive }
                 try purpleClient.rotate(to: orientation.bridgeValue)
             }

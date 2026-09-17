@@ -709,6 +709,22 @@ backend, so a simulator pool always reports zero, and one stuck hold is counted
 again on every sweep. A rise means the watchdog observed at least one
 delinquent hold since the previous sample; it is not a current hold count.
 
+The line also carries the input sends that returned without error, summed
+across every pane. A simulator counts a send once its HID client returns
+without error. A device counts a touch, key, or button send once the relay call
+returns without error, and for the keyboard that is not even transport
+acceptance, because the virtual keyboard swallows its send failures. The
+releases the daemon sends on a caller's behalf, during an ownership transfer or
+after a failed gesture, count the same way.
+
+Nothing the transfer fence dropped is counted, and rotation is left out because
+its orientation read-back is a delivery proof of its own. A pane that closes
+takes its count with it.
+
+Returning without error is not delivery. A simulator's HID transport reports
+success for a port the guest has stopped servicing, so a count that climbs
+while the guest shows no effect is what this field is there to show.
+
 The logical depths and counters come from existing actor state; the process
 footprint is queried at sampling time. No per-frame work is added, though
 sampling does take the pane coordinator's actor, and each pane's pool actor,

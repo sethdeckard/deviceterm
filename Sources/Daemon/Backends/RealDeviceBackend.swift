@@ -250,6 +250,10 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     // (ABA guard).
     private let inputGate = DispatchQueue(label: "com.deviceterm.device.input-gate")
     private var inputGeneration: UInt64 = 1
+    /// Sends whose relay call returned without error, for the footprint
+    /// sample. Not delivery, and for the keyboard not even acceptance: the
+    /// virtual keyboard swallows its send failures before the relay returns.
+    private var inputSubmissions = 0
     /// True once the media-stream auth gate opened (first decoded frame),
     /// so the gated human-input / keyboard pumps are draining their streams.
     /// The quiesce barriers a gated pump only when this is true: an
@@ -500,6 +504,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     // a failed lift must not clear a genuinely-held contact
                     // (which quiesce would then never release).
                     if (try? await device.perform(.touch(input))) != nil {
+                        self?.noteInputSubmitted()
                         self?.noteTouchPerformed(input)
                     } else {
                         self?.noteTouchSendFailed(input)
@@ -538,7 +543,10 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     }
                     // Record only on a successful send: a failed key-up must
                     // not clear a genuinely-held key.
-                    if sent { self?.noteKeyPerformed(command) }
+                    if sent {
+                        self?.noteInputSubmitted()
+                        self?.noteKeyPerformed(command)
+                    }
 
                 case let .barrier(signal):
                     signal()
@@ -566,11 +574,15 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     let pressed = (try? await device.perform(
                         .button(ButtonInput(control: press.control, phase: .press))
                     )) != nil
-                    if pressed { self?.noteButtonHeld(press.control) }
+                    if pressed {
+                        self?.noteInputSubmitted()
+                        self?.noteButtonHeld(press.control)
+                    }
                     try? await Task.sleep(nanoseconds: press.holdNanos)
                     let released = (try? await device.perform(
                         .button(ButtonInput(control: press.control, phase: .release))
                     )) != nil
+                    if released { self?.noteInputSubmitted() }
                     if pressed, released { self?.noteButtonReleased(press.control) }
 
                 case let .barrier(signal):
@@ -1208,6 +1220,10 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         inputGate.sync { generation == inputGeneration }
     }
 
+    func inputSubmissionCount() -> Int { inputGate.sync { inputSubmissions } }
+
+    private func noteInputSubmitted() { inputGate.sync { inputSubmissions += 1 } }
+
     private func markInputGateOpened() { inputGate.sync { inputGateOpened = true } }
 
     /// Track what actually reached the device so a transfer releases
@@ -1296,6 +1312,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             // proof the contact lifted. Report it as still held.
             return false
         }
+        noteInputSubmitted()
         inputGate.sync { if heldTouch == contact { heldTouch = nil } }
         return true
     }
@@ -1344,6 +1361,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             // contact needs its matching lift, not a `.direct` one.
             let lift = TouchInput(point: contact.point, phase: .lift, kind: contact.kind)
             if (try? await device.perform(.touch(lift))) != nil {
+                noteInputSubmitted()
                 inputGate.sync { if heldTouch == contact { heldTouch = nil } }
             } else {
                 allReleased = false
@@ -1354,6 +1372,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 allReleased = false
                 continue
             }
+            noteInputSubmitted()
             inputGate.sync { _ = heldKeys.remove(usage) }
         }
         for control in snapshot.buttons {
@@ -1362,6 +1381,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 allReleased = false
                 continue
             }
+            noteInputSubmitted()
             inputGate.sync { heldButtons.removeAll { $0 == control } }
         }
         return allReleased

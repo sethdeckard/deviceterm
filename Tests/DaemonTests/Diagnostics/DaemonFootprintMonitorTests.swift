@@ -92,7 +92,8 @@ struct DaemonFootprintMonitorTests {
             xpcConnections: 9,
             surfaceExhaustionDrops: 10,
             surfaceReuseWhileInUse: 11,
-            delinquentSightings: 12
+            delinquentSightings: 12,
+            inputSubmissions: 14
         )
         await monitor(sink, sample: sample).tick()
         let line = sink.last?.line ?? ""
@@ -100,7 +101,7 @@ struct DaemonFootprintMonitorTests {
             "footprint=3MiB", "panes=2", "retiring=13", "subs=3", "paneEventsQueued=4",
             "surfaceNoticesConflated=5", "acquiresInFlight=6", "abandonedReads=7",
             "xpcInFlight=8", "xpcConns=9", "surfaceDrops=10",
-            "surfaceReuseInUse=11", "delinquentSightings=12"
+            "surfaceReuseInUse=11", "delinquentSightings=12", "inputSends=14"
         ] {
             #expect(line.contains(expected), "missing \(expected) in: \(line)")
         }

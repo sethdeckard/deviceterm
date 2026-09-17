@@ -27,6 +27,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// What this backend reports as its pool's counters. Nil is the no-pool
     /// default every backend without a `LeasedSurfacePool` inherits.
     var poolCountersResult: SurfacePoolCounters?
+    /// The configured count of input calls that returned without error.
+    var inputSubmissionCountResult = 0
     private(set) var tapDownPoints: [CGPoint] = []
     private(set) var tapUpPoints: [CGPoint] = []
     private(set) var edgeDownPoints: [CGPoint] = []
@@ -244,6 +246,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     // swiftlint:disable:next async_without_await
     func poolCounters() async -> SurfacePoolCounters? { poolCountersResult }
+
+    func inputSubmissionCount() -> Int { inputSubmissionCountResult }
 
     func pixelDimensions() -> (Int?, Int?) {
         parkedLock.withLock { pixelDimensionsCallCount += 1 }
@@ -1662,6 +1666,29 @@ func poolCountersReachTheBackendThroughTheExistential() async throws {
     let totals = await coordinator.poolCountersTotal()
     #expect(totals.exhaustionDrops == 7)
     #expect(totals.reuseWhileInUse == 3)
+}
+
+@Test
+func inputSubmissionsReachTheBackendThroughTheExistential() async throws {
+    // Same dispatch trap as the pool counters: an extension-only count would
+    // read zero for every pane, and a transport accepting input the guest
+    // never acts on would look like a pane nobody touched.
+    let coordinator = PaneCoordinator()
+    let first = MockDeviceBackend()
+    first.inputSubmissionCountResult = 5
+    let second = MockDeviceBackend()
+    second.inputSubmissionCountResult = 2
+    _ = try await coordinator.createMockPane(
+        udid: "input-submissions-1",
+        sessionId: UUID(),
+        backend: first
+    )
+    _ = try await coordinator.createMockPane(
+        udid: "input-submissions-2",
+        sessionId: UUID(),
+        backend: second
+    )
+    #expect(await coordinator.inputSubmissionsTotal() == 7)
 }
 
 @Test
