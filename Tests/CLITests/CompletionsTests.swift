@@ -202,6 +202,7 @@ func zshAndBashScriptsOfferPaneFlags() {
     for (shell, text) in everyScript where shell != .fish {
         #expect(text.contains("--ansi"), "\(shell) script omits pane capture-text --ansi")
         #expect(text.contains("--type-delay"), "\(shell) script omits pane send-input --type-delay")
+        #expect(text.contains("--raw"), "\(shell) script omits pane send-input --raw")
     }
     // `--all` is not in the loop above: `window list` and `tab list` already
     // carry it, so a bare substring check passes whether or not `pane list`

@@ -1818,6 +1818,15 @@ positive pacing is enqueued and may still be running when the receipt arrives.
 Neither result confirms that the target shell executed the command. The CLI
 caps `typeDelayMs` at 1000.
 
+Escapes are decoded by the CLI before the text reaches the daemon, and only
+the recognized sequences: an unknown escape like `\z` and a trailing backslash
+are left as written. Pass `--raw` to decode nothing, which is what a caller
+forwarding arbitrary strings wants, since a `\n` it meant literally becomes a
+newline rather than an error.
+
+`--raw` governs escape decoding only. The trailing words join with single
+spaces either way, so quote text whose spacing matters.
+
 ### Capture a Viewport
 
 Run:

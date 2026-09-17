@@ -375,10 +375,12 @@ as a flag. Put
 .B --
 before the name to use it literally.
 .TP
-.B pane send-input " " \fIpane\fR " " [\fB--type-delay\fR \fIms\fR] " " \fItext\fR
+.B pane send-input " " \fIpane\fR " " [\fB--type-delay\fR \fIms\fR] " " [\fB--raw\fR] " " \fItext\fR
 Requires a live automation grant and an explicit terminal pane. C-style
-escapes are decoded. The receipt reports the committed pane and byte count,
-never the text. A word beginning with a dash is read as a flag. Put
+escapes are decoded, or sent as written with
+.BR --raw .
+The receipt reports the committed pane and byte count, never the text. A word
+beginning with a dash is read as a flag. Put
 .B --
 before the text to send such a word literally.
 .TP

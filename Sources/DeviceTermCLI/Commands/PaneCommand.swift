@@ -135,7 +135,7 @@ struct PaneCommand: CLICommandConvertible {
         static let configuration = CommandConfiguration(
             commandName: "send-input",
             abstract: "Type text into a terminal pane",
-            usage: "deviceterm pane send-input <pane> [--type-delay <ms>] <text>"
+            usage: "deviceterm pane send-input <pane> [--type-delay <ms>] [--raw] <text>"
         )
 
         @Argument(help: "Terminal pane reference.")
@@ -144,18 +144,24 @@ struct PaneCommand: CLICommandConvertible {
         @Option(name: .customLong("type-delay"), help: "Per-character delay in milliseconds.")
         var typeDelay: Int?
 
+        @Flag(name: .long, help: "Send the text as written, without decoding C escapes.")
+        var raw = false
+
         @OptionGroup var jsonFlag: JSONFlag
 
         @Argument(
             parsing: .remaining,
             help: """
-            Text to send. C-style escapes are decoded.
+            Text to send. C-style escapes are decoded unless --raw is given.
             Put -- before dashed text. A word beginning with - is read as a flag.
             """
         )
         var words: [String] = []
 
         var cliCommand: CLICommand {
+            // --raw governs escape decoding only. Joining the remaining words
+            // with single spaces is how this verb reads its text either way,
+            // so quote anything whose spacing matters.
             let text = words.joined(separator: " ")
             guard !text.isEmpty else { return .usage(message: Self.usageRefusal) }
             guard typeDelay.map({ $0 >= 0 }) ?? true else {
@@ -163,7 +169,7 @@ struct PaneCommand: CLICommandConvertible {
             }
             return .paneSendInput(
                 pane: pane,
-                text: CLICommands.decodeEscapes(text),
+                text: raw ? text : CLICommands.decodeEscapes(text),
                 typeDelay: typeDelay.map { min($0, CLICommands.maxTypeDelayMillis) }
             )
         }

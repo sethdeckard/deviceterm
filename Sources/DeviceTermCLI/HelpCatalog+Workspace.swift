@@ -163,12 +163,15 @@ extension HelpCatalog {
               a live automation grant. Simulator and physical-device panes use
               target-tab ownership or a grant.
 
-              pane send-input <pane> [--type-delay <ms>] <text>
+              pane send-input <pane> [--type-delay <ms>] [--raw] <text>
                   Requires a live automation grant and a terminal pane. C-style
-                  escapes (\\n, \\r, \\x03, ...) are decoded. The receipt reports
-                  the pane and byte count, never the text. Put `--` before text
-                  beginning with `-`. A paced call is capped at 1000 ms per
-                  character and returns after the input is enqueued. A word
+                  escapes (\\n, \\r, \\x03, ...) are decoded; --raw sends the text
+                  exactly as written, so a literal backslash needs no doubling.
+                  Either way the trailing words join with single spaces, so
+                  quote text whose spacing matters. The receipt reports the pane
+                  and byte count, never the text. A paced call is capped at
+                  1000 ms per character and returns after the input is
+                  enqueued. A word
                   beginning with - is read as a flag. Put `--` before the text
                   to send such a word literally.
 

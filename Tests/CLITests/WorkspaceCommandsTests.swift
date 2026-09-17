@@ -441,4 +441,52 @@ struct WorkspaceCommandsTests {
         #expect(CLICommands.decodeEscapes(#"\z"#) == #"\z"#)
         #expect(CLICommands.decodeEscapes("end\\") == "end\\")
     }
+
+    // MARK: - send-input escape handling
+
+    /// Without --raw the verb keeps decoding, so the flag adds a mode rather
+    /// than changing the default.
+    @Test
+    func sendInputDecodesEscapesByDefault() {
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "send-input", "term", #"make test\n"#])
+                == .paneSendInput(pane: "term", text: "make test\n", typeDelay: nil)
+        )
+    }
+
+    /// With --raw, a literal \n reaches the pane as a backslash followed by n.
+    @Test
+    func sendInputRawSendsTheTextAsWritten() {
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "send-input", "--raw", "term", #"make test\n"#])
+                == .paneSendInput(pane: "term", text: #"make test\n"#, typeDelay: nil)
+        )
+    }
+
+    @Test
+    func sendInputRawComposesWithTypeDelay() {
+        #expect(
+            CLICommands.parse([
+                "deviceterm", "pane", "send-input", "--raw",
+                "--type-delay", "40", "term", #"a\tb"#
+            ]) == .paneSendInput(pane: "term", text: #"a\tb"#, typeDelay: 40)
+        )
+    }
+
+    /// --raw bypasses escape decoding; text arguments still join with single
+    /// spaces.
+    @Test
+    func sendInputRawStillJoinsWordsWithSpaces() {
+        #expect(
+            CLICommands.parse(["deviceterm", "pane", "send-input", "--raw", "term", "a", "b"])
+                == .paneSendInput(pane: "term", text: "a b", typeDelay: nil)
+        )
+    }
+
+    @Test
+    func sendInputRawStillRefusesEmptyText() {
+        Self.expectUsage(
+            CLICommands.parse(["deviceterm", "pane", "send-input", "--raw", "term"])
+        )
+    }
 }
