@@ -165,7 +165,8 @@ func doctorOutcome(output: OutputMode) -> CommandOutcome {
         targets: targets,
         role: doctorCaps?.role
             ?? envValue(DeviceTermEnv.sessionRole).flatMap(SessionRole.init),
-        allowedMethods: doctorCaps?.allowedMethods
+        allowedMethods: doctorCaps?.allowedMethods,
+        automationGrant: doctorCaps?.automationGrant
     )
     switch output {
     case .human:

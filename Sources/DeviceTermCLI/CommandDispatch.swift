@@ -562,6 +562,9 @@ func run(
                 build: { try CLICommands.tabProtectionRequest(tab: tab, protected: false) }
             )
 
+        case .sessionShow:
+            return try handleSessionShow(transport: transport, output: output)
+
         case let .paneList(tab, all):
             return try sendWorkspaceData(
                 transport: transport,
@@ -964,6 +967,30 @@ func sendWorkspaceMutation(
         var out = data
         out.append(0x0A)
         return .stdout(out)
+    }
+}
+
+/// `deviceterm session show`: report the caller's own identity and authority.
+///
+/// Deliberately not routed through `fetchDaemonCapabilities()`, which returns
+/// nil on any failure. That is the right shape for enriching `doctor` and the
+/// help header, where a missing role is cosmetic, and the wrong one here:
+/// swallowing a transport failure would report "no grant" for a daemon the
+/// caller never reached, and those two states call for opposite responses.
+/// Going through the transport keeps a failure typed and nonzero.
+func handleSessionShow(
+    transport: CLITransport,
+    output: OutputMode
+) throws -> CommandOutcome {
+    let data = try transport.send(CLICommands.sessionShowRequest())
+    let capabilities = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: data)
+    let report = SessionReport(capabilities: capabilities)
+    switch output {
+    case .human:
+        return .stdout(SessionReportFormat.formatHuman(report))
+
+    case .json:
+        return .stdout(try encodeJSONReceipt(report))
     }
 }
 

@@ -184,6 +184,32 @@ extension HelpCatalog {
             """
         ),
         HelpTopic(
+            "session",
+            .command(.workspace),
+            summary: "Inspect the calling session",
+            detail: """
+              A session is one terminal pane's identity. Every terminal in a
+              split tab carries its own, so `session show` answers for the
+              terminal it runs in and never for a sibling.
+
+              session show
+                  Report this session's id, its role, and whether it holds a
+                  live automation grant. Human output is a label column;
+                  --json emits `{id, role, automationGrant}`.
+
+                  automationGrant is the authority. The role is descriptive
+                  metadata and can read `automation` while the grant is
+                  absent, which is what happens when the GUI has not issued
+                  one or has revoked it.
+
+                  Reaching the daemon without a session is not an error: the
+                  report omits id and role and reports automationGrant
+                  false. A daemon it cannot reach is an
+                  error, because "you hold no grant" and "DeviceTerm is not
+                  running" need different answers from you.
+            """
+        ),
+        HelpTopic(
             "with-pane",
             .command(.workspace),
             summary: "Run a command with one pane pre-resolved",

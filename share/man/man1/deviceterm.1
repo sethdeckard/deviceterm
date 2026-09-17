@@ -421,6 +421,11 @@ echoes. Open and split receipts wait for terminal session creation, not shell
 attachment. Device controls continue to accept
 .B --pane
 refs through their daemon-direct device roster.
+.TP
+.B session show
+Report this session's id, role, and whether it holds a live automation grant.
+Needs no grant itself: an ungranted caller gets a report saying so rather than
+a refusal.
 .SS Setup and health
 .TP
 .B doctor

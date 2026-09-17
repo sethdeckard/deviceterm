@@ -454,3 +454,180 @@ func daemonIntentDetailsSurviveJSONFailureRendering() throws {
 func runRoutesAgentsToStdout() {
     #expect(run(.agents, transport: FakeTransport(), output: .human) == .stdout(AgentsText.documentation))
 }
+
+// MARK: - session show
+
+private func capabilities(
+    role: SessionRole?,
+    sessionId: String?,
+    automationGrant: Bool,
+    allowedMethods: [String] = []
+) -> DaemonCapabilitiesResponse {
+    DaemonCapabilitiesResponse(
+        role: role,
+        sessionId: sessionId,
+        automationGrant: automationGrant,
+        allowedMethods: allowedMethods,
+        wireVersion: DaemonProtocolInfo.wireVersion,
+        linkagePolicyVersion: LinkagePolicy.currentVersion
+    )
+}
+
+/// The three states a caller has to tell apart, and the whole reason the verb
+/// exists. Holding no grant and failing to reach DeviceTerm call for opposite
+/// responses, so they must never render alike.
+@Test
+func sessionShowReportsAGrantedSession() throws {
+    let fake = FakeTransport(
+        response: try encoded(
+            capabilities(role: .automation, sessionId: "S-1", automationGrant: true)
+        )
+    )
+    let outcome = try handleSessionShow(
+        transport: fake,
+        output: .json
+    )
+
+    #expect(outcome.exitCode == 0)
+    let text = try #require(String(bytes: outcome.stdout, encoding: .utf8))
+    #expect(text.contains("\"automationGrant\":true"))
+    #expect(text.contains("\"id\":\"S-1\""))
+    #expect(fake.sent.map(\.method) == [RPCMethod.daemonCapabilities.rawValue])
+}
+
+@Test
+func sessionShowReportsAnUngrantedSessionWithoutFailing() throws {
+    let fake = FakeTransport(
+        response: try encoded(
+            capabilities(role: .automation, sessionId: "S-1", automationGrant: false)
+        )
+    )
+    let outcome = try handleSessionShow(
+        transport: fake,
+        output: .json
+    )
+
+    #expect(outcome.exitCode == 0)
+    #expect(outcome.failure == nil)
+    let text = try #require(String(bytes: outcome.stdout, encoding: .utf8))
+    #expect(text.contains("\"automationGrant\":false"))
+}
+
+/// Reaching the daemon from outside a tab is a report, not a refusal.
+@Test
+func sessionShowReportsNoSessionWhenOutOfTab() throws {
+    let fake = FakeTransport(
+        response: try encoded(
+            capabilities(role: nil, sessionId: nil, automationGrant: false)
+        )
+    )
+    let outcome = try handleSessionShow(
+        transport: fake,
+        output: .json
+    )
+
+    #expect(outcome.exitCode == 0)
+    let text = try #require(String(bytes: outcome.stdout, encoding: .utf8))
+    #expect(text.contains("\"automationGrant\":false"))
+    #expect(!text.contains("\"id\""))
+    #expect(!text.contains("\"role\""))
+}
+
+/// An unreachable daemon must never render as "no grant". It fails with a
+/// typed transport code, a nonzero exit, and no `automationGrant` key at all.
+@Test
+func sessionShowFailsTypedWhenTheDaemonIsUnreachable() throws {
+    let command = CLICommand.sessionShow
+    let fake = FakeTransport(
+        error: .classified(code: .transportUnavailable, message: "no daemon")
+    )
+    let outcome = run(command, transport: fake, output: .json)
+        .renderingFailure(for: command, output: .json)
+
+    #expect(outcome.exitCode != 0)
+    #expect(outcome.failure?.code == .transportUnavailable)
+    let text = try #require(String(bytes: outcome.stdout, encoding: .utf8))
+    #expect(!text.contains("automationGrant"))
+}
+
+/// End to end against a reply from a daemon that predates the explicit flag,
+/// which a Sparkle swap can pair this CLI with. The response carries no
+/// `automationGrant` key at all, and `session show` still reports the grant,
+/// because an automation method appears in `allowedMethods` exactly when the
+/// grant is live.
+@Test("reports a flagless daemon's grant", arguments: [
+    (#"["daemon.ping","pane.sendInput"]"#, "\"automationGrant\":true"),
+    (#"["daemon.ping"]"#, "\"automationGrant\":false")
+])
+func sessionShowReadsAGrantFromAFlaglessDaemon(allowed: String, expected: String) throws {
+    // A real reply from such a daemon omits BOTH new fields, not just the flag.
+    let wire = #"{"allowedMethods":\#(allowed),"linkagePolicyVersion":1,"#
+        + #""role":"automation","wireVersion":"0.6.0"}"#
+    let outcome = try handleSessionShow(
+        transport: FakeTransport(response: Data(wire.utf8)),
+        output: .json
+    )
+
+    let text = try #require(String(bytes: outcome.stdout, encoding: .utf8))
+    #expect(text.contains(expected))
+    // The role still comes through, so the caller learns the session is real
+    // even though this daemon cannot name it.
+    #expect(text.contains(#""role":"automation""#))
+    #expect(!text.contains(#""id""#))
+}
+
+/// `DEVICETERM_SESSION` is the caller's own claim, so it never reaches the
+/// report. A caller whose cap is missing or empty never authenticates: the
+/// daemon answers with no role and no session, while the variable still reads
+/// as one. Reporting it would assert an identity nothing verified.
+@Test
+func sessionShowNeverReportsAnUnauthenticatedIdentity() throws {
+    let wire = #"{"allowedMethods":["daemon.ping"],"linkagePolicyVersion":1,"wireVersion":"0.6.0"}"#
+    let previous = ProcessInfo.processInfo.environment[DeviceTermEnv.session]
+    setenv(DeviceTermEnv.session, "S-CLAIMED", 1)
+    defer {
+        if let previous { setenv(DeviceTermEnv.session, previous, 1) } else {
+            unsetenv(DeviceTermEnv.session)
+        }
+    }
+
+    let outcome = try handleSessionShow(
+        transport: FakeTransport(response: Data(wire.utf8)),
+        output: .json
+    )
+
+    let text = try #require(String(bytes: outcome.stdout, encoding: .utf8))
+    #expect(!text.contains("S-CLAIMED"))
+    #expect(!text.contains(#""id""#))
+    #expect(!text.contains(#""role""#))
+}
+
+/// The two reasons an id can be missing are different answers, and the human
+/// column has to say which. Reporting an authenticated session as having none
+/// would contradict the role printed beneath it.
+@Test
+func sessionShowHumanSeparatesNoSessionFromNoReportedId() {
+    let unauthenticated = SessionReportFormat.formatHuman(
+        SessionReport(id: nil, role: nil, automationGrant: false)
+    )
+    let noReportedId = SessionReportFormat.formatHuman(
+        SessionReport(id: nil, role: .automation, automationGrant: true)
+    )
+
+    #expect(unauthenticated.contains("(no authenticated session)"))
+    #expect(noReportedId.contains("(not reported)"))
+}
+
+@Test
+func sessionShowHumanRendersTheGrantAsWords() {
+    #expect(
+        SessionReportFormat.formatHuman(
+            SessionReport(id: "S-1", role: .automation, automationGrant: true)
+        ) == "session       S-1\nrole          automation\nautomation    granted\n"
+    )
+    #expect(
+        SessionReportFormat.formatHuman(
+            SessionReport(id: nil, role: nil, automationGrant: false)
+        ) == "session       (no authenticated session)\nrole          (none)\nautomation    not granted\n"
+    )
+}

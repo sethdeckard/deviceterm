@@ -36,8 +36,8 @@ func commandTreeReportsEveryVerb() {
         "devices", "version", "dump-config", "events",
         "doctor", "agents", "help", "tap", "swipe", "app-switcher",
         "long-press", "pinch", "button", "key", "text", "rotate", "crown",
-        "ax", "wait", "with-pane", "tab", "pane", "device", "window",
-        "completions"
+        "ax", "wait", "with-pane", "session", "tab", "pane", "device",
+        "window", "completions"
     ]
     #expect(Set(CommandTree.all.map(\.name)) == expected)
 }

@@ -214,6 +214,39 @@ func capabilitiesAdvertisesAutomationForGrantedSessionOverUDS() async throws {
     }
 }
 
+/// The explicit flag and the advertised method list have to agree, because a
+/// client facing a daemon that predates the flag falls back to reading the
+/// list. If they could disagree, that fallback would be a guess.
+@Test
+func capabilitiesReportsTheGrantFlagAlongsideTheMethodList() async throws {
+    let grants = AutomationGrantStore()
+    let manager = SessionManager(automationGrantStore: grants)
+    let granted = try await manager.createSession(label: nil)
+    let ungranted = try await manager.createSession(label: nil)
+    await grants.grant(sessionIds: [granted.state.id], key: liveGrantKey, issuedBy: 1)
+
+    let path = tempSocketPath(prefix: "deviceterm-grantflag-uds")
+    let server = try await startServer(path: path, sessionManager: manager)
+    defer { Task { await server.stop() } }
+
+    for (session, expected) in [(granted, true), (ungranted, false)] {
+        let client = try TestClient.connectAuthenticated(to: path, as: session)
+        defer { client.close() }
+        let response = try send(.daemonCapabilities, over: client)
+        guard case let .result(bytes) = response.body else {
+            Issue.record("expected a capabilities result; got \(response.body)")
+            return
+        }
+        let decoded = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: bytes)
+        #expect(decoded.automationGrant == expected)
+        #expect(decoded.sessionId == session.state.id.uuidString)
+        #expect(
+            decoded.allowedMethods.contains(RPCMethod.paneSendInput.rawValue) == expected,
+            "the flag and the method list disagree for grant=\(expected)"
+        )
+    }
+}
+
 @Test
 func grantGivesZeroExtraPaneReachOverUDS() async throws {
     // A grant opens `pane.sendInput`/`pane.captureText`, NOT cross-session pane

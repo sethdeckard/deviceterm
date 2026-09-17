@@ -827,7 +827,7 @@ Used for the wire-version handshake.
 #### `daemon.capabilities`
 
 - Params: `{}` (body ignored)
-- Result: `{role, allowedMethods, wireVersion, linkagePolicyVersion}`
+- Result: `{role?, sessionId?, automationGrant, allowedMethods, wireVersion, linkagePolicyVersion}`
 - Scope: daemon-wide
 
 Discovery method advertising the caller's role and the methods they may
@@ -840,6 +840,21 @@ surface a victim's role or grant advertising.
 transport, never its role, so advertising matches exactly what dispatch
 enforces: a granted agent session is advertised the automation verbs, and
 an ungranted automation session is not.
+
+`sessionId` and `automationGrant` describe that same connection. The grant is
+the authority and the role beside it is not, so a session can report
+`role: "automation"` with `automationGrant: false`.
+
+A daemon predating these two fields sends neither, and a Sparkle swap can pair
+one with a newer client. The grant survives that: the client derives it from
+`allowedMethods`, where an automation method appears exactly when the grant is
+live, so `automationGrant` is optional on the wire and not optional to a
+caller.
+
+The id does not survive it, by choice. `DEVICETERM_SESSION` holds one, but that
+is the caller's own claim rather than this method's answer, and a caller whose
+cap is missing never authenticates while the variable still reads as a session.
+Against such a daemon the report omits `id` and says so.
 
 Works with or without an authenticated connection: an unauthenticated
 (out-of-tab) connection gets `role: null` plus the daemon-wide subset. It

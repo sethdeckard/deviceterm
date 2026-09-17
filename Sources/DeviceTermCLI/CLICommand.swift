@@ -238,6 +238,7 @@ public enum CLICommand: Equatable, Sendable {
     case tabMove(tab: String?, window: String, index: Int?)
     case tabProtect(tab: String?)
     case tabUnprotect(tab: String?)
+    case sessionShow
     case paneList(tab: String?, all: Bool)
     case paneShow(pane: String?)
     case paneSplit(pane: String?, direction: WorkspaceSplitDirection)

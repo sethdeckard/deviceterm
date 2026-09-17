@@ -108,6 +108,15 @@ The session's role is readable without a daemon round-trip:
 echo "$DEVICETERM_SESSION_ROLE"
 ```
 
+The role is not the grant. To ask whether this session may drive other tabs:
+
+```sh
+deviceterm session show --json | jq -er '.automationGrant'
+```
+
+It needs no grant itself, so an ungranted tab gets `false` rather than a
+refusal.
+
 ### Trust the Terminal, Not the Token
 
 The capability in `DEVICETERM_SESSION_CAP` is one authentication factor, not

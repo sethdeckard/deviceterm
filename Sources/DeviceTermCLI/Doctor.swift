@@ -69,13 +69,20 @@ public enum Doctor {
         /// otherwise. The method-availability axis (vs. the
         /// target-availability axis carried by `targets`).
         public let allowedMethods: [String]?
+        /// Whether the caller's session holds a live automation grant. Nil
+        /// when the capabilities lookup produced nothing, whether the daemon
+        /// was unreachable, refused the connection, or sent a reply that did
+        /// not decode. The role above is descriptive and can read `automation`
+        /// while this is false.
+        public let automationGrant: Bool?
 
         public init(
             checks: [Check],
             session: SessionInfo?,
             targets: [PanesListEntry]?,
             role: SessionRole? = nil,
-            allowedMethods: [String]? = nil
+            allowedMethods: [String]? = nil,
+            automationGrant: Bool? = nil
         ) {
             self.ok = !checks.contains(where: { $0.status == .fail })
             self.checks = checks
@@ -83,6 +90,7 @@ public enum Doctor {
             self.targets = targets
             self.role = role
             self.allowedMethods = allowedMethods
+            self.automationGrant = automationGrant
         }
     }
 
@@ -344,7 +352,12 @@ public enum Doctor {
                 "  allowedMethods   \(allowedMethods.count): \(preview)\(extra)"
             )
         } else {
-            lines.append("  allowedMethods   (daemon unreachable)")
+            lines.append("  allowedMethods   (capabilities unavailable)")
+        }
+        if let grant = report.automationGrant {
+            lines.append("  automationGrant  \(grant)")
+        } else {
+            lines.append("  automationGrant  (capabilities unavailable)")
         }
         lines.append("  See `deviceterm agents` \"PERMISSIONS AND LINKAGE\" for the model.")
         lines.append("")

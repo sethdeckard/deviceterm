@@ -432,15 +432,17 @@ func formatHumanRendersRoleAndAllowedMethodsWhenPopulated() {
 
 @Test
 func formatHumanShowsDaemonUnreachableFallbackForPermissions() {
-    // When role + allowedMethods are nil (daemon unreachable or
-    // out-of-tab + no session creds), the section surfaces an
-    // explicit fallback string instead of going blank, so the
-    // agent reading the report knows the data wasn't suppressed by
-    // a filter.
+    // When role + allowedMethods are nil, the section surfaces an explicit
+    // fallback string instead of going blank, so the agent reading the report
+    // knows the data wasn't suppressed by a filter. The capabilities lookup
+    // yields nothing for several reasons (unreachable daemon, refused
+    // connection, undecodable reply), so those labels name the lookup rather
+    // than guessing which one happened.
     let report = Doctor.Report(checks: [], session: nil, targets: nil)
     let output = Doctor.formatHuman(report)
     #expect(output.contains("(daemon unreachable or no session)"))
-    #expect(output.contains("(daemon unreachable)"))
+    #expect(output.contains("allowedMethods   (capabilities unavailable)"))
+    #expect(output.contains("automationGrant  (capabilities unavailable)"))
 }
 
 // MARK: - Parser

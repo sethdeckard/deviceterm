@@ -440,6 +440,8 @@ private final class LaneReplyPeer: @unchecked Sendable {
         case .daemonCapabilities:
             value = DaemonCapabilitiesResponse(
                 role: .agent,
+                sessionId: nil,
+                automationGrant: false,
                 allowedMethods: [],
                 wireVersion: DaemonProtocolInfo.wireVersion,
                 linkagePolicyVersion: LinkagePolicy.currentVersion

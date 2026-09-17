@@ -97,6 +97,8 @@ struct DaemonClientReauthTests {
                 return try JSONEncoder().encode(
                     DaemonCapabilitiesResponse(
                         role: .agent,
+                        sessionId: nil,
+                        automationGrant: false,
                         allowedMethods: [],
                         wireVersion: DaemonProtocolInfo.wireVersion,
                         linkagePolicyVersion: LinkagePolicy.currentVersion

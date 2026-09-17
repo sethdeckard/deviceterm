@@ -452,4 +452,15 @@ public enum CLICommands {
         let data = try JSONEncoder().encode(body)
         return RPCEnvelope(id: 1, type: .request, method: method.rawValue, body: .params(data))
     }
+
+    /// `daemon.capabilities` carries no body: the daemon derives authority
+    /// from the provenance-checked connection, never from the request.
+    public static func sessionShowRequest() -> RPCEnvelope {
+        RPCEnvelope(
+            id: 1,
+            type: .request,
+            method: RPCMethod.daemonCapabilities.rawValue,
+            body: .empty
+        )
+    }
 }

@@ -333,6 +333,7 @@ their panes unless the caller owns that protected tab.
 | `tab show --json` | Tab, panes, and layout | Session | Current GUI projection | Stable-additive |
 | `pane list --json` | Array of every pane kind | Session | Current GUI projection in layout order | Stable-additive |
 | `pane show --json` | One terminal, Simulator, or device pane | Session | Current GUI projection | Stable-additive |
+| `session show --json` | Session report | Daemon-wide | Report returned for the calling connection | Stable-additive |
 | `devices list --json` | Array of device roster rows | Session | Current owned-Simulator and connected-device snapshot | Stable-additive |
 | `doctor --json` | Doctor report | None required; session fields are conditional | Checks completed | Stable-additive except diagnostic prose |
 | `version --json` | Version report | Local, with optional daemon probe | Local report completed | Stable-additive |
@@ -370,6 +371,36 @@ that rule. `terminal.title` and `terminal.tty` reach every session-scoped
 caller.
 
 ## Discovery and State
+
+### Session Report
+
+Run:
+
+```sh
+deviceterm session show --json
+```
+
+Shape:
+
+```jsonc
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "role": "automation",
+  "automationGrant": true
+}
+```
+
+`automationGrant` is always present and always a boolean. It is the authority.
+`role` is descriptive metadata and can read `"automation"` while the grant is
+absent, so never branch on it.
+
+`id` and `role` are omitted for a caller outside a DeviceTerm tab. That is a
+successful report with `automationGrant: false`, not a refusal.
+
+An unreachable daemon is a different state: the command fails with
+`transport.unavailable` or `transport.timeout` and a nonzero exit, and emits no
+`automationGrant` key. Do not read a missing daemon as a missing grant; they
+call for opposite responses.
 
 ### Version Report
 
