@@ -876,8 +876,15 @@ Current check names are:
 | `xcrun resolves to shim` | Whether `xcrun` resolves through the DeviceTerm shim |
 | `Daemon socket` | Daemon socket reachability |
 | `Daemon ping` | Daemon handshake and wire version |
+| `CoreSimulator responds` | Whether `device.list` succeeds; may answer from a short-lived cached snapshot |
 | `Session live in daemon` | The daemon accepts the session identity |
 | `Session authenticates (cap + provenance)` | Session credentials and terminal provenance authenticate |
+
+`CoreSimulator responds` reports `fail` both when the daemon returns an error
+for `device.list` and when the probe could not establish the outcome. The
+`detail` distinguishes them and carries restart guidance only for the first,
+though a daemon error can reflect a request or handler failure rather than a
+CoreSimulator fault.
 
 Check names and `detail` text are best-effort diagnostics. Pin the DeviceTerm
 release if an integration must branch on a check name.
@@ -886,7 +893,8 @@ When the daemon socket is unreachable:
 
 - `ok` is false.
 - `Daemon socket` has `status: "fail"`.
-- `Daemon ping` is absent because the ping is not attempted.
+- `Daemon ping` and `CoreSimulator responds` are absent because neither call
+  is attempted.
 - `allowedMethods` is omitted.
 - `session` and `targets` are omitted.
 - `role` may still appear from the tab environment.

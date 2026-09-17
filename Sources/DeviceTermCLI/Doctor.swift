@@ -94,6 +94,30 @@ public enum Doctor {
         }
     }
 
+    /// What the CoreSimulator probe established, kept as three cases rather
+    /// than a value-or-error pair because the two failures earn different copy
+    /// and only one of them carries restart guidance.
+    ///
+    /// Restarting simulator services stops every simulator on the login, so it
+    /// is offered only where the daemon answered about the enumeration. A
+    /// dropped socket or a stale capability must not produce that suggestion.
+    public enum CoreSimulatorProbe: Sendable, Equatable {
+        /// The enumeration succeeded, returning this many devices, booted or
+        /// not. Zero is a valid success: the check asks whether CoreSimulator
+        /// answers, not whether the device set holds anything.
+        case answered(count: Int)
+        /// The daemon returned an error for `device.list`, carrying its own
+        /// message. Usually the enumeration itself, which is why this case
+        /// carries the restart guidance, though a daemon can refuse a request
+        /// for other reasons.
+        case enumerationFailed(String)
+        /// The probe could not establish the enumeration outcome: transport,
+        /// framing, or decode. A decode failure means an answer arrived and
+        /// could not be read, so this is "unknown" rather than "did not
+        /// happen".
+        case inconclusive(String)
+    }
+
     // MARK: - Layout constants (shared by formatHuman)
 
     /// Width of the `[status]` badge column in the human report
@@ -236,6 +260,50 @@ public enum Doctor {
             status: .ok,
             detail: "wireVersion=\(version) pid=\(pidStr)"
             )
+    }
+
+    /// CoreSimulator liveness, read through a bounded `device.list`.
+    ///
+    /// This is the check for the failure nothing else here can see: the daemon
+    /// answers, the socket is fine, the session authenticates, and every
+    /// simulator is still frozen because CoreSimulator itself stopped
+    /// answering. `daemon.ping` cannot show it, because the ping never touches
+    /// CoreSimulator.
+    ///
+    /// The daemon bounds the enumeration and already separates a timeout from
+    /// an enumeration error in its own message, so this relays that message
+    /// rather than classifying it again from a string. What it adds is the
+    /// restart guidance, and only to the case that answered, because
+    /// restarting simulator services stops every simulator on the login.
+    ///
+    /// Both failures are `fail` rather than `warn`, so either flips the exit
+    /// code. Neither leaves simulator readiness confirmed, which is the
+    /// question an agent reads `ok` to answer.
+    public static func coreSimulatorCheck(_ probe: CoreSimulatorProbe) -> Check {
+        switch probe {
+        case let .answered(count):
+            let suffix = count == 1 ? "" : "s"
+            return Check(
+                name: "CoreSimulator responds",
+                status: .ok,
+                detail: "device.list enumerated \(count) simulator\(suffix)"
+                )
+
+        case let .enumerationFailed(message):
+            return Check(
+                name: "CoreSimulator responds",
+                status: .fail,
+                detail: "\(message). DeviceTerm > Restart Simulator Services… "
+                + "restarts the service"
+                )
+
+        case let .inconclusive(message):
+            return Check(
+                name: "CoreSimulator responds",
+                status: .fail,
+                detail: "could not determine whether CoreSimulator responds: \(message)"
+                )
+        }
     }
 
     /// `DEVICETERM_SESSION` env is set but does the daemon agree it's

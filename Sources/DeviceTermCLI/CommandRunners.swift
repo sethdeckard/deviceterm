@@ -95,6 +95,47 @@ func doctorOutcome(output: OutputMode) -> CommandOutcome {
             )
                 )
         }
+
+        // `device.list` is daemon-wide, so this runs out of tab too, where the
+        // session checks below are skipped. It is also the only call here that
+        // reaches the enumeration, which is the point: a wedged service still
+        // answers the ping and fails this. The daemon caches its device
+        // snapshot briefly, so a probe moments after a good read can answer
+        // from that cache without touching CoreSimulator; this catches a wedge
+        // that has outlasted the cache, not every wedge.
+        //
+        // Sent unauthenticated even in a tab. `roundTrip` otherwise pre-sends
+        // the env credentials, and a stale capability or a rejected terminal
+        // provenance would then fail here rather than at the session checks
+        // below, reporting CoreSimulator as wedged and recommending a restart
+        // that stops every simulator on the login. The method needs no
+        // session, so the probe does not carry one.
+        let probe: Doctor.CoreSimulatorProbe
+        do {
+            let scope = try JSONSerialization.data(
+                withJSONObject: ["scope": DeviceListScope.all.rawValue]
+            )
+            let listResult = try roundTrip(
+                method: RPCMethod.deviceList.rawValue,
+                params: scope,
+                authenticate: false
+            )
+            let devices = try JSONDecoder().decode(
+                [DeviceListEntry].self,
+                from: listResult
+            )
+            probe = .answered(count: devices.count)
+        } catch CLIError.daemon(_, let message, _) {
+            // The daemon returned an error for device.list; relay its message.
+            // It already separates a bounded-read timeout from an enumeration
+            // error, and re-deriving that here would mean matching on prose.
+            probe = .enumerationFailed(message)
+        } catch {
+            // Transport, framing, or decode. The enumeration outcome is
+            // unknown, so this must not carry the restart guidance.
+            probe = .inconclusive("\(error)")
+        }
+        doctorChecks.append(Doctor.coreSimulatorCheck(probe))
     }
 
     // Session + linked-pane details (only meaningful inside a tab).

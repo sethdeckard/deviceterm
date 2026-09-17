@@ -1324,9 +1324,10 @@ The symptom is Simulator panes holding their last frame while the rest of
 DeviceTerm keeps working. Tabs switch and terminals type, but taps do nothing
 and the picture never changes.
 
-Confirm it from a terminal outside DeviceTerm with `xcrun simctl list
-devices`. If that hangs or fails too, the fault is CoreSimulator's rather than
-DeviceTerm's.
+Confirm it with `deviceterm doctor`. The `CoreSimulator responds` check names
+the remedy when the fault is CoreSimulator's. From a terminal outside
+DeviceTerm, `xcrun simctl list devices` hanging or failing too confirms it
+independently.
 
 **DeviceTerm ▸ Restart Simulator Services…** stops CoreSimulator first, then
 the helper. macOS starts a fresh CoreSimulator on the next request that needs
@@ -1361,7 +1362,7 @@ DeviceTerm reports a CoreSimulator it could not stop rather than claiming one.
 | A physical device appears but attachment fails | Enumeration succeeded, but a required tunnel, display, or input service did not. | Read the attachment error, unlock and trust the device, then retry. A device with unsupported services cannot be mirrored by this build. |
 | The GUI and CLI disagree after an upgrade | The live daemon wire version differs from the bundled RPC wire version, or the version probe failed. | Run `deviceterm version --json` and compare `daemon` with `rpcWire`; see [the version report](INTEGRATION.md#version-report). Quit and reopen DeviceTerm. |
 | Tabs, windows, and device panes all stop responding | The background helper stopped answering. | Wait for DeviceTerm's restart prompt, or choose **DeviceTerm ▸ Restart Helper…**; see [Restart the Background Helper](#restart-the-background-helper). |
-| Simulator panes freeze while tabs and terminals still work | CoreSimulator stopped answering. A helper restart reaches the same wedged service. | Confirm with `xcrun simctl list devices`. If that hangs too, choose **DeviceTerm ▸ Restart Simulator Services…**; see [Restart Simulator Services](#restart-simulator-services). |
+| Simulator panes freeze while tabs and terminals still work | CoreSimulator stopped answering. A helper restart reaches the same wedged service. | Run `deviceterm doctor` and follow the `CoreSimulator responds` detail. It names **DeviceTerm ▸ Restart Simulator Services…** when the fault is CoreSimulator's; see [Restart Simulator Services](#restart-simulator-services). |
 | `ax tree` is empty on watchOS | The watch accessibility bridge returned no children. | Use `ax sweep` to sample the display or `ax point` for a known coordinate. |
 | `ax tree` returns a page's chrome but nothing from the page | The child walk does not enter web views. A confirmed omission adds `noteCode` `ax.treeIncomplete`. | Use `ax sweep` to sample the display, or `ax point` for a known coordinate, whether or not the note appears. |
 | A Digital Crown command does not move a tight SwiftUI binding | Positively paced events are below the recognizer's transition in that environment. | Remove `--duration` first. For fine placement, try a single value from 1 through 8. |

@@ -100,12 +100,19 @@ let notReadyCode = -32_002
 /// `timeoutSeconds`; no phase restarts the deadline. Each retry uses a fresh
 /// connection, while hard authentication and other failures return
 /// immediately.
+/// `authenticate: false` sends the request on a bare connection even when the
+/// env carries tab credentials. Use it for a daemon-wide probe, so stale tab
+/// credentials cannot be mistaken for the probe's subject failing.
 func roundTrip(
     method: String,
     params: Data?,
-    timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds
+    timeoutSeconds: Double = AppCommandDeadline.cliRequestTimeoutSeconds,
+    authenticate: Bool = true
 ) throws -> Data {
-    try roundTrip(timeoutSeconds: timeoutSeconds) { (method, params) }
+    try roundTrip(
+        timeoutSeconds: timeoutSeconds,
+        authenticate: authenticate
+    ) { (method, params) }
 }
 
 /// Connect, perform any env-credential authentication, then build the request.
@@ -113,6 +120,7 @@ func roundTrip(
 /// deadline-sensitive payloads to recalculate against their captured deadline.
 func roundTrip(
     timeoutSeconds: Double,
+    authenticate: Bool = true,
     buildingRequest: () throws -> (method: String, params: Data?)
 ) throws -> Data {
     let maxNotReadyRetries = 10
@@ -123,7 +131,11 @@ func roundTrip(
             throw CLIError.transportTimeout("timed out waiting for daemon response")
         }
         do {
-            return try roundTripOnce(deadline: deadline, buildingRequest: buildingRequest)
+            return try roundTripOnce(
+                deadline: deadline,
+                authenticate: authenticate,
+                buildingRequest: buildingRequest
+            )
         } catch let CLIError.daemon(code, message, details) {
             guard code == notReadyCode, attempt < maxNotReadyRetries else {
                 throw CLIError.daemon(
@@ -144,6 +156,7 @@ func roundTrip(
 
 private func roundTripOnce(
     deadline: Date,
+    authenticate: Bool = true,
     buildingRequest: () throws -> (method: String, params: Data?)
 ) throws -> Data {
     let path = daemonSocketPath()
@@ -160,7 +173,8 @@ private func roundTripOnce(
     // to have authenticated; pre-sending the auth handshake keeps
     // the CLI's per-call shape unchanged. Out-of-tab callers (no
     // env) skip this and only succeed against daemon-wide methods.
-    if let session = envValue(DeviceTermEnv.session), !session.isEmpty,
+    if authenticate,
+        let session = envValue(DeviceTermEnv.session), !session.isEmpty,
         let cap = envValue(DeviceTermEnv.sessionCap), !cap.isEmpty {
         try authenticateConnection(
             fd: fd,

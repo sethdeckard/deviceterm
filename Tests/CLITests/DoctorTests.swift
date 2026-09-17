@@ -237,6 +237,77 @@ func pingCheckFailsOnError() {
     #expect(check.detail.contains("timed out"))
 }
 
+// MARK: - coreSimulatorCheck
+
+@Test(arguments: [(0, "0 simulators"), (1, "1 simulator"), (7, "7 simulators")])
+func coreSimulatorCheckOkCountsTheRoster(count: Int, expected: String) {
+    let check = Doctor.coreSimulatorCheck(.answered(count: count))
+    #expect(check.status == .ok)
+    #expect(check.detail.contains(expected))
+}
+
+/// An empty device set is a valid successful enumeration. `device.list`
+/// returns every device, booted or not, so zero means the set is empty rather
+/// than that nothing is running, and either way the check is about whether
+/// CoreSimulator answered.
+@Test
+func anEmptyDeviceSetIsStillOk() {
+    #expect(Doctor.coreSimulatorCheck(.answered(count: 0)).status == .ok)
+}
+
+/// The daemon already separates a bounded-read timeout from an enumeration
+/// error in its message, so the check relays that text rather than
+/// substituting one story for both.
+@Test(arguments: [
+    "device.list: CoreSimulator device enumeration did not finish within "
+    + "3 seconds; retry, or restart DeviceTerm if it persists",
+    "device.list: could not open the default device set"
+])
+func coreSimulatorCheckRelaysTheDaemonsOwnAccount(message: String) {
+    let check = Doctor.coreSimulatorCheck(.enumerationFailed(message))
+    #expect(check.status == .fail)
+    #expect(check.detail.contains(message))
+}
+
+/// Enumeration failures carry the restart guidance in their detail, which is
+/// what makes the check more useful than the raw error.
+@Test
+func coreSimulatorCheckNamesTheMenuItem() {
+    let check = Doctor.coreSimulatorCheck(.enumerationFailed("boom"))
+    #expect(check.detail.contains("Restart Simulator Services"))
+}
+
+/// A probe that could not establish the enumeration outcome must not carry the
+/// restart guidance. Restarting stops every simulator on the login, so
+/// offering it for a dropped socket or an unreadable answer would act on a
+/// fault nobody has evidence of.
+@Test
+func anInconclusiveProbeNeverRecommendsTheRestart() {
+    let check = Doctor.coreSimulatorCheck(.inconclusive("write failed: EPIPE"))
+    #expect(check.status == .fail)
+    #expect(check.detail.contains("write failed: EPIPE"))
+    #expect(!check.detail.contains("Restart Simulator Services"))
+}
+
+/// Both failures flip the exit code, because neither established that
+/// driving a simulator will work, which is what an agent reads `ok` to
+/// decide.
+@Test(arguments: [
+    Doctor.CoreSimulatorProbe.enumerationFailed("device.list: timed out"),
+    .inconclusive("connection reset")
+])
+func eitherFailureFlipsTheReportExitCode(probe: Doctor.CoreSimulatorProbe) {
+    let report = Doctor.Report(
+        checks: [
+            Doctor.socketCheck(path: "/tmp/sock", reachable: true),
+            Doctor.coreSimulatorCheck(probe)
+        ],
+        session: nil,
+        targets: nil
+    )
+    #expect(!report.ok)
+}
+
 // MARK: - Report ok derivation
 
 @Test

@@ -31,6 +31,22 @@ func paneNameMirrorIsValidatedGUIOnly() {
     #expect(registry.scope(of: RPCMethod.paneSetName.rawValue) == .validatedGUI)
 }
 
+/// `deviceterm doctor` probes CoreSimulator with `device.list` on a connection
+/// it deliberately leaves unauthenticated, so that a stale capability or a
+/// rejected terminal provenance cannot surface as a wedged CoreSimulator and
+/// earn the remedy for one, which stops every simulator on the login. That only
+/// holds while the method needs no session, so the scope is pinned here rather
+/// than assumed by a caller in another target.
+@Test
+func deviceListStaysDaemonWideForTheDoctorProbe() {
+    let registry = DaemonMethods.defaultRegistry(
+        sessionManager: SessionManager(),
+        deviceCoordinator: DeviceCoordinator(),
+        paneCoordinator: PaneCoordinator()
+    )
+    #expect(registry.scope(of: RPCMethod.deviceList.rawValue) == .daemonWide)
+}
+
 @Test
 func registryTagsExactlyTheAutomationSurface() {
     // Which verbs need a live automation grant is a closed set, pinned
