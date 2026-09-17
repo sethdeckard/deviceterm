@@ -1,9 +1,10 @@
 # Daemon Wedge Recovery
 
-Three checks on what the daemon does when something it depends on stops
+Four checks on what the daemon does when something it depends on stops
 answering: CoreSimulator wedges, the GUI stops consuming frames, or the machine
-sleeps with a mirror running. Each needs a live sim and a real GUI, and one
-needs a sleep cycle, so none of them is automatable.
+sleeps with a mirror running. The fourth exercises the menu item that clears
+the first. Each needs a live sim and a real GUI, and one needs a sleep cycle,
+so none of them is automatable.
 
 The unit tests cover the pieces in isolation. `SimBackendAcquirerTests` and
 `PaneDisplayBootstrapTests` exercise deadline behavior with an injected sleep
@@ -14,7 +15,7 @@ CoreSimulator refuse to answer or a real GUI stop acknowledging frames. That is
 what this procedure is for.
 
 Run it before tagging a release, and after any change to the acquire path, the
-surface pool, or the GUI's retry policies.
+surface pool, the GUI's retry policies, or the CoreSimulator restart.
 
 ## Preconditions
 
@@ -240,6 +241,23 @@ those intervals never appear. Exhausting either needs a target that keeps
 failing, which this step does not produce. The resubscribe backoff is separate
 and unbudgeted: it doubles from 500ms to an 8s ceiling and stops only when the
 pane reaches `.shutdown` or `.failed`.
+
+## 4. Restart Simulator Services
+
+Check 1 proves the wedge is survivable. This one proves the menu item clears
+it. Login-wide, like check 1, and it takes the same lock.
+
+| # | Action | Expected |
+|---|--------|----------|
+| 4.1 | `SIM_STOPPED=1; simsig STOP` | Exits 0. The rendering pane holds its last frame. |
+| 4.2 | `deviceterm devices list`, repeating past the 2s cache | Blocks or fails, which confirms the wedge is live before you try to clear it. |
+| 4.3 | **DeviceTerm ▸ Restart Simulator Services…** | The confirmation names the booted count and how many DeviceTerm owns, or says the roster could not be read. Both are correct here; which one you get depends on whether the 2s snapshot cache had expired. |
+| 4.4 | Choose **Cancel** | Nothing stops. The prompt is the only thing between the menu item and every Simulator on the login. |
+| 4.5 | Repeat 4.3, then choose **Restart CoreSimulator** | The service stops, then the helper. Set `SIM_STOPPED=` now: the stopped process was killed rather than resumed, and cleanup would otherwise send `CONT` to a pid that no longer exists. |
+| 4.6 | Watch the reconnect log stream | The GUI reconnects. Each Simulator pane reports its lost sim rather than holding the stale frame, either as the re-attach error slot with **Retry** and **Close** or as a shutdown overlay. Record which. A pane still showing a live-looking last frame is a failure, and is the state this feature exists to escape. |
+| 4.7 | `deviceterm devices list` | Answers again, against the replacement service launchd started on demand. |
+| 4.8 | Boot a sim from a tab | Boots and renders. |
+| 4.9 | With that sim still booted, run `xcrun simctl shutdown <udid>` from the external terminal | The pane retires to its shutdown state within a second or two. This is the check that the replacement helper's CoreSimulator notifier is live: a pane that keeps rendering its last frame means the helper came up holding a registration against the service that was killed, which is the defect this ordering exists to prevent. |
 
 ## Finishing
 

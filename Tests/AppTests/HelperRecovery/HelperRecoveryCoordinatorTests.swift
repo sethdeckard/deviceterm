@@ -28,6 +28,11 @@ struct HelperRecoveryCoordinatorTests {
         private(set) var reconnects = 0
         private(set) var reports: [HelperTerminationOutcome] = []
         private(set) var rearms = 0
+        private(set) var preStopReasons: [HelperRestartReason] = []
+        /// The sequence in the order it happened. The CoreSimulator restart is
+        /// only correct in one order, so which steps ran isn't enough to
+        /// assert on: it has to be when.
+        private(set) var steps: [String] = []
 
         func makeCoordinator(
             quietSeconds: TimeInterval = 120
@@ -40,10 +45,18 @@ struct HelperRecoveryCoordinatorTests {
                     },
                     terminate: { [self] expected in
                         terminations.append(expected)
+                        steps.append("terminate")
                         return outcome
                     },
-                    reconnect: { [self] in reconnects += 1 },
+                    reconnect: { [self] in
+                        reconnects += 1
+                        steps.append("reconnect")
+                    },
                     report: { [self] outcome in reports.append(outcome) },
+                    beforeHelperStopped: { [self] reason in
+                        preStopReasons.append(reason)
+                        steps.append("beforeHelperStopped")
+                    },
                     rearmDetection: { [self] in rearms += 1 },
                     now: { [self] in clock },
                     quietSeconds: quietSeconds
@@ -265,5 +278,76 @@ struct HelperRecoveryCoordinatorTests {
         await settle()
         #expect(harness.reports.isEmpty)
         #expect(harness.reconnects == 1)
+    }
+
+    /// The CoreSimulator restart is only correct in this order, and the
+    /// tempting one is wrong. The launchd job carries
+    /// `KeepAlive`/`SuccessfulExit false`, so a SIGKILLed helper is respawned
+    /// at once and registers its CoreSimulator notifier as it starts. Stopping
+    /// the service after the termination hands that replacement a dead
+    /// registration, which nothing re-registers, so the restart produces the
+    /// exact state it exists to clear.
+    @Test
+    func coreSimulatorIsStoppedBeforeTheHelperIsTerminated() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+        let tally = CoreSimulatorRestartDecision.Tally(booted: 2, owned: 1)
+        coordinator.coreSimulatorRestartRequested(tally: tally)
+        await settle()
+        #expect(harness.prompts == [.coreSimulator(tally)])
+        #expect(harness.steps == ["beforeHelperStopped", "terminate", "reconnect"])
+        #expect(harness.preStopReasons == [.coreSimulator(tally)])
+    }
+
+    /// A restart the user cancelled must not stop the service. The prompt is
+    /// the only thing standing between the menu item and every simulator on
+    /// the login, so a decline has to stop the sequence before the window
+    /// opens at all.
+    @Test
+    func aCancelledCoreSimulatorRestartStopsNothing() async {
+        let harness = Harness()
+        harness.answer = .cancel
+        let coordinator = harness.makeCoordinator()
+        coordinator.coreSimulatorRestartRequested(tally: .unknown)
+        await settle()
+        #expect(harness.steps.isEmpty)
+        #expect(harness.preStopReasons.isEmpty)
+    }
+
+    /// The acknowledged cost of stopping the service first: a termination that
+    /// then fails leaves a live helper holding handles into a service that is
+    /// already gone. The sequence stops rather than reconnecting, and `report`
+    /// is what tells the user, with the remedy the outcome earns: a refused
+    /// signal advises logging out, an unreported peer advises retrying and
+    /// then reopening deviceterm.
+    ///
+    /// Pinned because it is the one state this ordering is worse in, and a
+    /// future change that silently reconnected here would paper over it.
+    @Test(arguments: [
+        HelperTerminationOutcome.failed("refused"),
+        .unknownPeer
+    ])
+    func aFailedHelperStopHaltsWithTheServiceAlreadyStopped(
+        outcome: HelperTerminationOutcome
+    ) async {
+        let harness = Harness()
+        harness.outcome = outcome
+        let coordinator = harness.makeCoordinator()
+        coordinator.coreSimulatorRestartRequested(tally: .unknown)
+        await settle()
+        #expect(harness.steps == ["beforeHelperStopped", "terminate"])
+        #expect(harness.reports == [outcome])
+    }
+
+    /// The window is reason-scoped: an ordinary helper restart opens it too,
+    /// and whoever is wired into it has to be able to tell the two apart, or
+    /// Restart Helper… would quietly become the destructive one.
+    @Test
+    func anOrdinaryRestartOpensTheWindowWithItsOwnReason() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+        coordinator.restartRequested()
+        await settle()
+        #expect(harness.preStopReasons == [.requested])
     }
 }

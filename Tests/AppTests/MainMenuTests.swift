@@ -58,6 +58,33 @@ struct MainMenuTests {
         #expect(index < settings)
     }
 
+    /// Restart Simulator Services… is the escalation above Restart Helper…,
+    /// and the order is the point: the cheap restart has to be the one the
+    /// user reaches first, since the expensive one stops every simulator on
+    /// the login. Pinning adjacency is what stops a later reshuffle putting
+    /// the destructive item where the safe one used to be.
+    @Test
+    func appMenuOffersRestartSimulatorServicesBelowRestartHelper() throws {
+        let app = try #require(
+            makeMainMenu().items.first?.submenu,
+            "application menu missing"
+        )
+        let titles = app.items.map(\.title)
+        let restart = try #require(
+            app.items.first { $0.title == "Restart Simulator Services…" },
+            "Restart Simulator Services… missing"
+        )
+        #expect(restart.action == #selector(AppDelegate.restartSimulatorServices(_:)))
+        // Unbound: recovery is deliberate, never a chord someone can fire by
+        // accident on a menu whose action stops every simulator.
+        #expect(restart.keyEquivalent.isEmpty)
+        let helper = try #require(titles.firstIndex(of: "Restart Helper…"))
+        let index = try #require(titles.firstIndex(of: "Restart Simulator Services…"))
+        let settings = try #require(titles.firstIndex(of: "Settings…"))
+        #expect(index == helper + 1)
+        #expect(index < settings)
+    }
+
     @Test
     func shellMenuHasExpectedItemsInOrder() throws {
         let shell = try #require(shellMenu(), "Shell submenu missing")

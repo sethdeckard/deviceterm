@@ -90,6 +90,19 @@ func makeMainMenu() -> NSMenu {
         keyEquivalent: ""
     )
         )
+    // Directly below Restart Helper… and in the same group, because the two
+    // are one ladder rather than two features: this is the same restart with
+    // CoreSimulator stopped inside it, for when the helper is answering and
+    // the simulators still aren't. Cheapest rung first, so the escalation
+    // reads top to bottom, and both stay one click deep. A submenu would put
+    // a hover between the user and recovery at the moment they need it.
+    appMenu.addItem(
+        NSMenuItem(
+        title: "Restart Simulator Services…",
+        action: #selector(AppDelegate.restartSimulatorServices(_:)),
+        keyEquivalent: ""
+    )
+        )
     appMenu.addItem(.separator())
     // Settings… opens the config in a new terminal tab running $EDITOR.
     // nil target routes through the responder chain to the AppDelegate,

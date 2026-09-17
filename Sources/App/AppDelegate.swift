@@ -214,6 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             },
             reconnect: { [weak self] in await self?.daemonClient.reconnect() },
             report: { [weak self] outcome in self?.reportHelperRestartFailure(outcome) },
+            beforeHelperStopped: { [weak self] reason in
+                guard case .coreSimulator = reason else { return }
+                await self?.stopCoreSimulatorService()
+            },
             rearmDetection: { [weak self] in self?.daemonClient.rearmUnresponsiveDetection() }
         )
     )
@@ -1362,6 +1366,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         helperRecovery.restartRequested()
     }
 
+    /// App menu > Restart Simulator Services…: the rung above Restart Helper…,
+    /// for a CoreSimulator that has stopped answering rather than a helper
+    /// that has. It reaches past deviceterm, stopping every simulator on the
+    /// login, so the roster is read first and the prompt names the cost.
+    ///
+    /// The read runs before the prompt and off the menu's own call, because
+    /// the wedge this exists for is exactly what makes it slow: `device.list`
+    /// is bounded daemon-side, and a menu that stayed down for the length of
+    /// that bound would look like the freeze the user came here to fix.
+    @objc
+    func restartSimulatorServices(_ sender: Any?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.helperRecovery.coreSimulatorRestartRequested(
+                tally: await self.bootedSimTally()
+            )
+        }
+    }
+
+    /// The booted roster behind the Restart Simulator Services prompt.
+    ///
+    /// Two reads rather than one because they answer different questions. The
+    /// `.all` read counts booted sims in CoreSimulator's default device set,
+    /// which can be fewer than the restart stops: other sets go with the
+    /// service
+    /// and are invisible here, which is why the prompt warns unconditionally.
+    /// The `.owned` read counts the ones deviceterm is answerable for, booted
+    /// by it or attached to it. Ownership can't be inferred from the `.all`
+    /// read, since
+    /// an entry deviceterm owns but attributes to no session carries no
+    /// `ownedBySession` and would undercount. They run concurrently so a
+    /// wedged service costs one bound rather than two.
+    ///
+    /// Either read failing yields `.unknown` rather than a zero, because on
+    /// this path a read that doesn't answer is evidence of the wedge, not
+    /// evidence of an empty roster.
+    private func bootedSimTally() async -> CoreSimulatorRestartDecision.Tally {
+        async let all = try? daemonClient.deviceList(scope: .all)
+        async let owned = try? daemonClient.deviceList(scope: .owned)
+        guard let all = await all, let owned = await owned else {
+            return .unknown
+        }
+        let isBooted = { (entry: DeviceListEntry) in
+            entry.state == OwnedSimDecision.bootedState
+        }
+        return CoreSimulatorRestartDecision.Tally(
+            booted: all.filter(isBooted).count,
+            owned: owned.filter(isBooted).count
+        )
+    }
+
+    /// Stop CoreSimulator, in the window `HelperRecoveryCoordinator` opens
+    /// before it terminates the helper. Only a refusal is surfaced: a service
+    /// that stopped, and one that was not loaded to begin with, both leave the
+    /// next request to demand-launch a replacement, and an alert about either
+    /// would report a non-event.
+    ///
+    /// A refusal doesn't abort the sequence. The helper restart that follows is
+    /// what Restart Helper… would have done on its own, and it is still worth
+    /// having; the alert is what keeps the user from reading it as the
+    /// CoreSimulator restart they asked for.
+    private func stopCoreSimulatorService() async {
+        guard case let .failed(detail) = await CoreSimulatorRestart.stopService() else {
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Could not restart CoreSimulator"
+        alert.informativeText = "deviceterm couldn't confirm that "
+            + "CoreSimulator was stopped, so your simulators may still be "
+            + "unresponsive. The helper is being restarted anyway, which is "
+            + "what Restart Helper… does.\n\n\(detail)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     /// Ask whether to restart the helper. Runs modally, so the choice is back
     /// before this returns.
     ///
@@ -1371,10 +1451,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     ///
     /// The copy promises only what a restart actually recovers. Terminal
     /// panes are libghostty surfaces in this process and are not touched by
-    /// any of this; simulators keep running because nothing here shuts one
-    /// down; device panes reattach because the reconnect drives it. Panes
-    /// that can't reattach are named too, since that is the outcome the user
-    /// would otherwise read as the feature not working.
+    /// any of this; device panes reattach because the reconnect drives it.
+    /// Panes that can't reattach are named too, since that is the outcome the
+    /// user would otherwise read as the feature not working.
+    ///
+    /// Simulators are the one promise that differs by reason, which is why the
+    /// `.coreSimulator` arm does not share the copy above it. An ordinary
+    /// helper restart shuts nothing down and says so; the CoreSimulator
+    /// restart stops every simulator on the login, and its own copy has to
+    /// name that rather than inherit a reassurance that stopped being true.
     private func promptForHelperRestart(
         _ reason: HelperRestartReason
     ) -> HelperRestartChoice {
@@ -1398,6 +1483,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Restart Helper")
             alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn ? .restart : .cancel
+
+        case let .coreSimulator(tally):
+            // Warning rather than informational, and its own copy rather than
+            // the shared `recovery` line: this is the one restart that does
+            // stop simulators, including ones deviceterm never booted.
+            alert.messageText = CoreSimulatorRestartDecision.messageText
+            alert.informativeText = CoreSimulatorRestartDecision
+                .informativeText(tally: tally)
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: CoreSimulatorRestartDecision.confirmButtonTitle)
+            alert.addButton(withTitle: CoreSimulatorRestartDecision.cancelButtonTitle)
             return alert.runModal() == .alertFirstButtonReturn ? .restart : .cancel
         }
     }

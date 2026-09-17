@@ -34,6 +34,30 @@ final class HelperRecoveryCoordinator {
         var reconnect: @MainActor () async -> Void
         /// Surface an outcome that didn't confirm the helper was stopped.
         var report: @MainActor (HelperTerminationOutcome) -> Void
+        /// Recovery that has to happen before the helper is stopped, run once
+        /// the user has confirmed and before the termination.
+        ///
+        /// This slot exists for the CoreSimulator restart, and the ordering is
+        /// why it is a slot rather than something a caller does either side of
+        /// this type. The launchd job carries `KeepAlive`/`SuccessfulExit
+        /// false`, so a SIGKILLed helper is respawned at once, and a helper
+        /// registers its CoreSimulator notifier as it starts. Stopping the
+        /// service after the helper would hand that replacement a registration
+        /// whose other end is already gone, which it then keeps for its whole
+        /// life, since nothing re-registers one.
+        ///
+        /// Stopping the service first inverts that: when the stop succeeds,
+        /// whichever helper outlives this sequence started after the service
+        /// did, so its handles are to the replacement launchd demand-launches
+        /// rather than to a corpse. Nothing here confirms the service exited,
+        /// and a stop that fails does not abort the sequence, so the guarantee
+        /// is over the order of the attempts rather than over the outcome.
+        ///
+        /// The cost is that a termination which then fails leaves a live
+        /// helper holding dead handles. `report` surfaces that, with the
+        /// remedy the outcome earns: a refused signal advises logging out, an
+        /// unreported peer advises retrying and then reopening deviceterm.
+        var beforeHelperStopped: @MainActor (HelperRestartReason) async -> Void = { _ in }
         /// Ask the detector to diagnose this connection again. It reports a
         /// silent connection once, so every verdict this coordinator doesn't
         /// act on has to be handed back or nothing asks again.
@@ -95,6 +119,18 @@ final class HelperRecoveryCoordinator {
         begin(reason: .requested, connection: nil)
     }
 
+    /// The user asked to restart CoreSimulator. Runs the same sequence as a
+    /// requested helper restart, with the service stopped first, before the
+    /// helper is terminated; `tally` is what the prompt names as the cost.
+    ///
+    /// Like `restartRequested`, never snoozed and never fenced to a
+    /// connection: the user went looking for this, and there is no diagnosis
+    /// here that a replacement helper could make stale.
+    func coreSimulatorRestartRequested(tally: CoreSimulatorRestartDecision.Tally) {
+        guard !isPrompting else { return }
+        begin(reason: .coreSimulator(tally), connection: nil)
+    }
+
     private func begin(reason: HelperRestartReason, connection: Int?) {
         isPrompting = true
         Task { @MainActor [weak self] in
@@ -138,6 +174,11 @@ final class HelperRecoveryCoordinator {
         // replacement needs a moment to come up, so without this the very next
         // expiry would ask again seconds after the user said yes.
         quietUntil = deps.now().addingTimeInterval(deps.quietSeconds)
+        // Before the termination, not after it: launchd respawns a SIGKILLed
+        // helper immediately, and the replacement takes its CoreSimulator
+        // handles as it starts. Anything this stops has to be stopped while
+        // the only helper holding handles is the one about to be killed.
+        await deps.beforeHelperStopped(reason)
         switch await deps.terminate(connection) {
         case .terminated, .alreadyGone, .alreadyRestarted:
             // None of these needs an alert: the signal landed, there was no

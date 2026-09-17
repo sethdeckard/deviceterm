@@ -1311,6 +1311,45 @@ not reclaimed: DeviceTerm won't claim one that isn't running.
 
 DeviceTerm reports a restart it could not perform rather than claiming one.
 
+### Restart Simulator Services
+
+CoreSimulator is Apple's service behind every Simulator on your Mac.
+DeviceTerm's helper calls into it for every boot, frame, tap, and
+accessibility read.
+
+When CoreSimulator stops answering, restarting the helper doesn't help. The
+replacement reaches the same wedged service.
+
+The symptom is Simulator panes holding their last frame while the rest of
+DeviceTerm keeps working. Tabs switch and terminals type, but taps do nothing
+and the picture never changes.
+
+Confirm it from a terminal outside DeviceTerm with `xcrun simctl list
+devices`. If that hangs or fails too, the fault is CoreSimulator's rather than
+DeviceTerm's.
+
+**DeviceTerm ▸ Restart Simulator Services…** stops CoreSimulator first, then
+the helper. macOS starts a fresh CoreSimulator on the next request that needs
+one, and the helper comes back with it.
+
+This one reaches past DeviceTerm. Every booted Simulator on your login stops,
+including ones DeviceTerm never booted and ones Xcode is debugging into.
+
+The confirmation names how many Simulators are booted and how many of those
+DeviceTerm owns, before anything stops. If DeviceTerm can't read that roster
+it says so rather than showing you a zero, because a roster read that doesn't
+answer is itself a sign of the wedge.
+
+That count covers CoreSimulator's default device set. A Simulator you booted
+into another set with `simctl --set` stops too, and isn't counted.
+
+Terminal panes are untouched, including their scrollback. The Simulators are
+gone afterwards, so their panes can't re-attach; each shows the error in its
+own slot with **Retry** and **Close**, the same as any pane whose Simulator
+shut down while the helper was away.
+
+DeviceTerm reports a CoreSimulator it could not stop rather than claiming one.
+
 | Symptom | Likely Cause | Next Action |
 |---|---|---|
 | `no device pane in this tab` | Your tab shows no attached device pane. | Boot a Simulator from this tab, mirror a physical device, or attach one explicitly. |
@@ -1322,6 +1361,7 @@ DeviceTerm reports a restart it could not perform rather than claiming one.
 | A physical device appears but attachment fails | Enumeration succeeded, but a required tunnel, display, or input service did not. | Read the attachment error, unlock and trust the device, then retry. A device with unsupported services cannot be mirrored by this build. |
 | The GUI and CLI disagree after an upgrade | The live daemon wire version differs from the bundled RPC wire version, or the version probe failed. | Run `deviceterm version --json` and compare `daemon` with `rpcWire`; see [the version report](INTEGRATION.md#version-report). Quit and reopen DeviceTerm. |
 | Tabs, windows, and device panes all stop responding | The background helper stopped answering. | Wait for DeviceTerm's restart prompt, or choose **DeviceTerm ▸ Restart Helper…**; see [Restart the Background Helper](#restart-the-background-helper). |
+| Simulator panes freeze while tabs and terminals still work | CoreSimulator stopped answering. A helper restart reaches the same wedged service. | Confirm with `xcrun simctl list devices`. If that hangs too, choose **DeviceTerm ▸ Restart Simulator Services…**; see [Restart Simulator Services](#restart-simulator-services). |
 | `ax tree` is empty on watchOS | The watch accessibility bridge returned no children. | Use `ax sweep` to sample the display or `ax point` for a known coordinate. |
 | `ax tree` returns a page's chrome but nothing from the page | The child walk does not enter web views. A confirmed omission adds `noteCode` `ax.treeIncomplete`. | Use `ax sweep` to sample the display, or `ax point` for a known coordinate, whether or not the note appears. |
 | A Digital Crown command does not move a tight SwiftUI binding | Positively paced events are below the recognizer's transition in that environment. | Remove `--duration` first. For fine placement, try a single value from 1 through 8. |
