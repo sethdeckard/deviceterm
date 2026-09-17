@@ -58,7 +58,6 @@ final class SimulatorPaneViewModel {
         let gesture: UInt64
     }
 
-    private static let surfaceCoalesceIntervalNs: UInt64 = 16_000_000
     /// Default backoff before resubscribing after the daemon connection
     /// drops mid-stream. Keeps a flapping connection from busy-looping, and
     /// grows so a connection that never comes back stops being asked several
@@ -134,11 +133,6 @@ final class SimulatorPaneViewModel {
     /// preserves click order while each RPC handles bounded daemon backpressure.
     @ObservationIgnored private var pendingRotations: [RotationTarget] = []
     @ObservationIgnored private var rotationTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingSurfaceUpdate: (
-        sequence: UInt64,
-        lease: SurfaceLease?
-    )?
-    @ObservationIgnored private var surfaceApplyTask: Task<Void, Never>?
     /// The pending move, tagged with the gesture that produced it.
     ///
     /// A slot shared across gestures is worse than no slot: a `down` for the
@@ -330,20 +324,16 @@ final class SimulatorPaneViewModel {
         }
     }
 
-    /// Apply one subscription event: coalesce a surface, drive the state
-    /// machine on a lifecycle change (clearing pending surfaces on a
-    /// terminal state), or adopt the orientation the daemon reports.
+    /// Apply one subscription event: adopt a surface, drive the state
+    /// machine on a lifecycle change, or adopt the orientation the daemon
+    /// reports. Surfaces arrive already coalesced latest-only by the
+    /// transport, so each one is applied as it comes.
     private func handleSubscriptionEvent(_ event: PaneEvent) {
         switch event {
         case let .surfaceChanged(change, lease):
-            enqueueSurface(sequence: change.sequence, lease: lease)
+            applySurface(sequence: change.sequence, lease: lease)
 
         case let .stateChanged(change):
-            if change.state == .shutdown || change.state == .failed {
-                pendingSurfaceUpdate = nil
-                surfaceApplyTask?.cancel()
-                surfaceApplyTask = nil
-            }
             state = SimPaneReducer.reduce(state, .lifecycle(change.state))
 
         case let .orientationChanged(change):
@@ -401,9 +391,6 @@ final class SimulatorPaneViewModel {
         pendingRotations.removeAll()
         liveTouchHeld = false
         stopTouchKeepalive()
-        surfaceApplyTask?.cancel()
-        surfaceApplyTask = nil
-        pendingSurfaceUpdate = nil
         currentSurface = nil
         currentSequence = nil
         currentSurfaceSequence = nil
@@ -832,27 +819,6 @@ final class SimulatorPaneViewModel {
 
     // MARK: - Surface lifecycle
 
-    private func enqueueSurface(sequence: UInt64, lease: SurfaceLease?) {
-        // A superseded, un-flushed lease is dropped here and releases by
-        // ARC. For a leased frame that frees the daemon's hold on that
-        // generation without it ever reaching the view; an unleased frame
-        // just drops with no bookkeeping.
-        pendingSurfaceUpdate = (sequence, lease)
-        guard surfaceApplyTask == nil else { return }
-        surfaceApplyTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.surfaceCoalesceIntervalNs)
-            guard let self else { return }
-            self.surfaceApplyTask = nil
-            self.flushPendingSurface()
-        }
-    }
-
-    private func flushPendingSurface() {
-        guard let update = pendingSurfaceUpdate else { return }
-        pendingSurfaceUpdate = nil
-        applySurface(sequence: update.sequence, lease: update.lease)
-    }
-
     private func applySurface(sequence: UInt64, lease: SurfaceLease?) {
         currentSequence = sequence
         // Only update the rendered surface when a lease is present.
@@ -860,17 +826,14 @@ final class SimulatorPaneViewModel {
         // timed out (JSON evt arrived alone), so the GUI should keep
         // its last good frame visible, not blank the pane.
         if let lease {
-            // Do NOT skip when the surface ID matches the current one. A new
-            // `sequence` always means a new frame's pixels. Simulators update one
-            // persistent surface in place (same ID every frame); physical devices
-            // reuse a small daemon-owned surface pool whose IDs repeat every few
-            // frames. In BOTH cases a repeated ID carries fresh content. Skipping
-            // it (relying on the MTKView's continuous draw loop, which isn't
-            // reliably running on connect) is what froze the device mirror on stale
-            // content while fresh frames arrived. Re-assigning fires the render
-            // binding → setSurface → an immediate draw of the live pixels. The
-            // prior lease drops here; once its command buffers finish it
-            // releases, freeing the daemon hold when it was a leased frame.
+            // Never skip on a matching surface id: a new `sequence` is a new
+            // frame. Simulator and physical-device frames both arrive from
+            // small reusable surface pools, so a repeated id carries fresh
+            // pixels. Reassigning fires the render binding, which hands the
+            // lease to the view and requests a draw. The view model drops
+            // its prior reference here; the lease releases once the view
+            // has replaced it and every command buffer holding it completes,
+            // freeing the daemon hold when it was a leased frame.
             currentSurface = lease
             currentSurfaceSequence = sequence
             state = SimPaneReducer.reduce(state, .surfaceAttached)

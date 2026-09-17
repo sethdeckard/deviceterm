@@ -202,6 +202,40 @@ struct SimulatorPaneViewModelTests {
     }
 
     @Test
+    func aLoneFrameAppliesWithoutADelay() async throws {
+        // A frame after an idle stretch has nothing to coalesce with, so it
+        // applies on the subscription task's own turn. Yield-only polling
+        // lets that task run without adding fixed wall-clock slack. This is
+        // a scheduling guard, not a hard elapsed-time guarantee.
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.start()
+        for _ in 0 ..< 1_000 where fake.lastPaneEventContinuation == nil {
+            await Task.yield()
+        }
+        let continuation = try #require(fake.lastPaneEventContinuation)
+
+        let props: [String: Any] = [
+            kIOSurfaceWidth as String: 4,
+            kIOSurfaceHeight as String: 4,
+            kIOSurfaceBytesPerElement as String: 4,
+            kIOSurfacePixelFormat as String: 0x42_47_52_41
+        ]
+        let surface = try #require(IOSurfaceCreate(props as CFDictionary))
+        continuation.yield(
+            .surfaceChanged(
+                SurfaceChangedEvent(paneId: "p1", sequence: 1),
+                unleased(surface)
+            )
+        )
+        for _ in 0 ..< 1_000 where viewModel.currentSequence != 1 {
+            await Task.yield()
+        }
+        #expect(viewModel.currentSequence == 1)
+        #expect(viewModel.state == .rendering)
+    }
+
+    @Test
     func surfaceBurstPublishesNewestFrame() async throws {
         let fake = FakeDaemonClient()
         let viewModel = makeViewModel(fake)
