@@ -124,8 +124,8 @@ final class IntentDispatcher {
             // Malformed input (not a UUID) fails fast here with a
             // user-visible hint rather than the daemon's terser
             // `malformed UDID` error after a round-trip.
-            guard let canonicalUDID = UUID(uuidString: udid)?
-                .uuidString.lowercased() else {
+            guard let canonicalUDID = UUID(uuidString: udid)
+                .map(PublicIdentifier.string) else {
                 throw IntentError.internalError(
                     "udid \(udid) is not a valid UUID; check the "
                     + "value with `deviceterm devices list`"
@@ -755,11 +755,11 @@ final class IntentDispatcher {
     // MARK: - Helpers
 
     private func publicRef(_ window: WindowState) -> String {
-        window.publicID.uuidString.lowercased()
+        PublicIdentifier.string(window.publicID)
     }
 
     private func publicRef(_ tab: TabState) -> String {
-        tab.cohortId.uuidString.lowercased()
+        PublicIdentifier.string(tab.cohortId)
     }
 
     private func publicWindowRef(_ id: WindowID) throws -> String {

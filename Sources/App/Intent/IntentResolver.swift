@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import DaemonProtocol
 import Foundation
 
 /// Resolve raw public window, tab, and pane refs into GUI-internal IDs.
@@ -91,12 +92,12 @@ struct IntentResolver {
         let folded = raw.lowercased()
         let exactShort = windows.filter { WorkspaceShortID.make(from: $0.publicID) == folded }
         if let resolved = try uniqueWindow(exactShort, ref: raw) { return resolved }
-        let exactID = windows.filter { $0.publicID.uuidString.lowercased() == folded }
+        let exactID = windows.filter { PublicIdentifier.string($0.publicID) == folded }
         if let resolved = try uniqueWindow(exactID, ref: raw) { return resolved }
         let exactName = windows.filter { $0.name?.lowercased() == folded }
         if let resolved = try uniqueWindow(exactName, ref: raw) { return resolved }
         let prefix = windows.filter {
-            $0.publicID.uuidString.lowercased().hasPrefix(folded)
+            PublicIdentifier.string($0.publicID).hasPrefix(folded)
         }
         guard let resolved = try uniqueWindow(prefix, ref: raw) else {
             throw IntentError.notFound(kind: "window", ref: raw)
@@ -116,12 +117,12 @@ struct IntentResolver {
             WorkspaceShortID.make(from: $0.tab.cohortId) == folded
         }
         if let resolved = try uniqueTab(exactShort, ref: raw) { return resolved }
-        let exactID = candidates.filter { $0.tab.cohortId.uuidString.lowercased() == folded }
+        let exactID = candidates.filter { PublicIdentifier.string($0.tab.cohortId) == folded }
         if let resolved = try uniqueTab(exactID, ref: raw) { return resolved }
         let exactName = candidates.filter { $0.tab.name?.lowercased() == folded }
         if let resolved = try uniqueTab(exactName, ref: raw) { return resolved }
         let prefix = candidates.filter {
-            $0.tab.cohortId.uuidString.lowercased().hasPrefix(folded)
+            PublicIdentifier.string($0.tab.cohortId).hasPrefix(folded)
         }
         guard let resolved = try uniqueTab(prefix, ref: raw) else {
             throw IntentError.notFound(kind: "tab", ref: raw)

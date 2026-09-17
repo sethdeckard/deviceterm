@@ -1617,6 +1617,6 @@ public actor DeviceCoordinator {
         guard let parsed = UUID(uuidString: trimmed) else {
             throw DeviceError.malformedUDID(udid: udid)
         }
-        return parsed.uuidString.lowercased()
+        return PublicIdentifier.string(parsed)
     }
 }

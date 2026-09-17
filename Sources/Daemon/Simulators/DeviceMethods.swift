@@ -435,7 +435,7 @@ public enum DeviceMethods {
                     }
                     sessionId = parsed
                 }
-                let normalized = udid.uuidString.lowercased()
+                let normalized = PublicIdentifier.string(udid)
                 // Membership, not the value: an unattributed claim stores nil,
                 // which a plain `== nil` subscript test would read as absent
                 // and let a duplicate through.

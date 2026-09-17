@@ -156,8 +156,8 @@ final class WorkspaceProjection {
         ) == resolved.slot
         let window = workspace.windowContaining(tab: resolved.tabID)
         let tab = window?.tabs.tab(id: resolved.tabID)
-        let tabID = tab?.cohortId.uuidString.lowercased() ?? WorkspacePane.unknownContext
-        let windowPublicID = window?.publicID.uuidString.lowercased() ?? WorkspacePane.unknownContext
+        let tabID = tab.map(\.cohortId).map(PublicIdentifier.string) ?? WorkspacePane.unknownContext
+        let windowPublicID = window.map(\.publicID).map(PublicIdentifier.string) ?? WorkspacePane.unknownContext
         let title = if let tab, let window {
             tabTitle(tab, in: window)
         } else {
@@ -272,13 +272,13 @@ final class WorkspaceProjection {
             isVisible(selected) ? selected : nil
         }
         return WorkspaceWindow(
-            id: window.publicID.uuidString.lowercased(),
+            id: PublicIdentifier.string(window.publicID),
             shortId: WorkspaceShortID.make(from: window.publicID),
             name: window.name,
             index: visibleIndex,
             current: currentWindowID() == window.id,
             focused: workspace.selectedWindowID == window.id,
-            selectedTabId: selected?.cohortId.uuidString.lowercased(),
+            selectedTabId: selected.map(\.cohortId).map(PublicIdentifier.string),
             tabCount: visibleTabs.count
         )
     }
@@ -305,11 +305,11 @@ final class WorkspaceProjection {
         let title = tabTitle(tab, in: window)
         let selected = window.tabs.selectedTab?.id == tab.id
         return WorkspaceTab(
-            id: tab.cohortId.uuidString.lowercased(),
+            id: PublicIdentifier.string(tab.cohortId),
             shortId: WorkspaceShortID.make(from: tab.cohortId),
             name: tab.name,
             title: title,
-            windowId: window.publicID.uuidString.lowercased(),
+            windowId: PublicIdentifier.string(window.publicID),
             current: tab.terminals.contains { $0.sessionId == origin.sessionID },
             selected: selected,
             protected: tab.isEffectivelyProtected,

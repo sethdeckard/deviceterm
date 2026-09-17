@@ -1006,7 +1006,7 @@ final class Router {
             // than polling for a terminal session that will never appear.
             let placeholder = TerminalPaneState(
                 id: allocateTerminalPaneID(),
-                sessionId: "failed-\(cohortID.uuidString.lowercased())",
+                sessionId: "failed-\(PublicIdentifier.string(cohortID))",
                 capability: "",
                 name: name,
                 cwd: cwd,
@@ -1998,10 +1998,8 @@ final class Router {
                 var canonicalUDID = udid
                 if case let .sim(reported)? = response.target {
                     canonicalUDID = reported
-                } else if let parsed = UUID(
-                    uuidString: udid.trimmingCharacters(in: .whitespacesAndNewlines)
-                ) {
-                    canonicalUDID = parsed.uuidString.lowercased()
+                } else {
+                    canonicalUDID = PublicIdentifier.canonicalized(udid)
                 }
                 let pane = SimPaneState(
                     paneId: response.paneId,
