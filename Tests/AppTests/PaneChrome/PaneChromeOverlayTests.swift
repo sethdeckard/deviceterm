@@ -29,16 +29,16 @@ struct PaneChromeOverlayTests {
     }
 
     @Test
-    func ribbonStartsAtTheNarrowestStopAndUndecided() {
-        // A pane that never lays out (no window, zero bounds) must stay at
-        // its narrowest stop, and `ribbonStopDecided` starting false is what
-        // lets the launch-time width fit run at all.
-        let viewModel = PaneChromeViewModel()
-        #expect(viewModel.ribbonPreferredStop == 0)
-        #expect(viewModel.ribbonStopDecided == false)
+    func ribbonStartsFullyOpenAndUnchosen() {
+        // Nobody has moved the chevron, so there is no choice to honor and
+        // the ribbon opens as wide as the pane allows. A pane that never lays
+        // out has no cap either, so it reports its widest stop outright.
+        let viewModel = phoneChrome()
+        #expect(viewModel.ribbonChosenStop == nil)
         #expect(viewModel.ribbonDragStop == nil)
         #expect(viewModel.ribbonWidestFittingStop == nil)
-        #expect(viewModel.ribbonExpanded == false)
+        #expect(viewModel.ribbonRenderedStop == viewModel.ribbonWidestStop)
+        #expect(viewModel.ribbonExpanded)
     }
 
     // MARK: - Reveal stop
@@ -49,33 +49,71 @@ struct PaneChromeOverlayTests {
     }
 
     @Test
-    func ribbonExpandedDerivesFromThePreferredStop() {
+    func ribbonExpandedDerivesFromTheChosenStop() {
         let viewModel = phoneChrome()
         let widest = viewModel.ribbonWidestStop
         #expect(widest > 1)
-        viewModel.ribbonPreferredStop = widest - 1
+        viewModel.ribbonChosenStop = widest - 1
         #expect(viewModel.ribbonExpanded == false)
-        viewModel.ribbonPreferredStop = widest
+        viewModel.ribbonChosenStop = widest
+        #expect(viewModel.ribbonExpanded)
+    }
+
+    @Test
+    func anUnchosenRibbonFollowsAGrowingRow() {
+        // The absent choice tracks `ribbonWidestStop` rather than a rung
+        // captured at init, so capabilities arriving after attach widen the
+        // ribbon instead of stranding it at the old top rung.
+        let viewModel = PaneChromeViewModel(
+            title: "iPhone 17 Pro",
+            family: "phone",
+            capabilities: PaneCapabilities(
+                touch: true,
+                key: true,
+                text: true,
+                button: false,
+                rotate: false,
+                crown: false,
+                accessibility: true,
+                location: true
+            )
+        )
+        let before = viewModel.ribbonWidestStop
+        #expect(viewModel.ribbonRenderedStop == before)
+        viewModel.capabilities = .simulator
+        #expect(viewModel.ribbonWidestStop > before)
+        #expect(viewModel.ribbonRenderedStop == viewModel.ribbonWidestStop)
         #expect(viewModel.ribbonExpanded)
     }
 
     @Test
     func theFitCapClampsTheRenderedStopWithoutForgettingTheChoice() {
         let viewModel = phoneChrome()
-        viewModel.ribbonPreferredStop = viewModel.ribbonWidestStop
+        viewModel.ribbonChosenStop = viewModel.ribbonWidestStop
         viewModel.ribbonWidestFittingStop = 4
         #expect(viewModel.ribbonRenderedStop == 4)
         // The choice survives the clamp, so widening the pane restores it.
-        #expect(viewModel.ribbonPreferredStop == viewModel.ribbonWidestStop)
+        #expect(viewModel.ribbonChosenStop == viewModel.ribbonWidestStop)
         #expect(viewModel.ribbonExpanded)
         viewModel.ribbonWidestFittingStop = nil
         #expect(viewModel.ribbonRenderedStop == viewModel.ribbonWidestStop)
     }
 
     @Test
+    func theFitCapAlsoClampsAnUnchosenRibbon() {
+        // The common case at launch: a pane narrower than its full row draws
+        // what fits, with nothing for the choice to preserve.
+        let viewModel = phoneChrome()
+        viewModel.ribbonWidestFittingStop = 6
+        #expect(viewModel.ribbonRenderedStop == 6)
+        #expect(viewModel.ribbonChosenStop == nil)
+        #expect(viewModel.ribbonExpanded)
+    }
+
+    @Test
     func anAbsentFitCapLeavesTheRenderedStopAlone() {
         let viewModel = phoneChrome()
-        viewModel.ribbonPreferredStop = 3
+        viewModel.ribbonChosenStop = 3
         #expect(viewModel.ribbonWidestFittingStop == nil)
         #expect(viewModel.ribbonRenderedStop == 3)
     }
@@ -83,7 +121,7 @@ struct PaneChromeOverlayTests {
     @Test
     func theRenderedStopNeverExceedsTheActionCount() {
         let viewModel = phoneChrome()
-        viewModel.ribbonPreferredStop = 500
+        viewModel.ribbonChosenStop = 500
         viewModel.ribbonWidestFittingStop = 500
         #expect(viewModel.ribbonRenderedStop == viewModel.ribbonWidestStop)
     }
@@ -92,14 +130,16 @@ struct PaneChromeOverlayTests {
     func tappingTheChevronTogglesBetweenTheEndStops() {
         let viewModel = phoneChrome()
         let widest = viewModel.ribbonWidestStop
+        // The first tap on a fresh pane closes it: an unchosen ribbon is
+        // already at the widest end, so the other end is where a tap goes.
         viewModel.toggleRibbonExtremes()
-        #expect(viewModel.ribbonPreferredStop == widest)
+        #expect(viewModel.ribbonChosenStop == 0)
         viewModel.toggleRibbonExtremes()
-        #expect(viewModel.ribbonPreferredStop == 0)
+        #expect(viewModel.ribbonChosenStop == widest)
         // From an intermediate stop a tap opens rather than doing nothing.
-        viewModel.ribbonPreferredStop = 3
+        viewModel.ribbonChosenStop = 3
         viewModel.toggleRibbonExtremes()
-        #expect(viewModel.ribbonPreferredStop == widest)
+        #expect(viewModel.ribbonChosenStop == widest)
     }
 
     @Test
@@ -107,11 +147,10 @@ struct PaneChromeOverlayTests {
         // What the ribbon draws follows the drag, while the choice stays put
         // until release, so abandoning a drag cannot rewrite the preference.
         let viewModel = phoneChrome()
-        viewModel.ribbonPreferredStop = 2
+        viewModel.ribbonChosenStop = 2
         viewModel.trackRibbonDrag(stop: 7)
         #expect(viewModel.ribbonRenderedStop == 7)
-        #expect(viewModel.ribbonPreferredStop == 2)
-        #expect(viewModel.ribbonStopDecided == false)
+        #expect(viewModel.ribbonChosenStop == 2)
     }
 
     @Test
@@ -123,26 +162,23 @@ struct PaneChromeOverlayTests {
     }
 
     @Test
-    func settlingClearsTheLiveDragAndDecidesTheStop() {
+    func settlingClearsTheLiveDragAndRecordsTheChoice() {
         let viewModel = phoneChrome()
         viewModel.trackRibbonDrag(stop: 4)
         #expect(viewModel.ribbonDragStop == 4)
-        #expect(viewModel.ribbonStopDecided == false)
+        #expect(viewModel.ribbonChosenStop == nil)
         viewModel.settleRibbon(at: 5)
-        #expect(viewModel.ribbonPreferredStop == 5)
+        #expect(viewModel.ribbonChosenStop == 5)
         #expect(viewModel.ribbonDragStop == nil)
-        // An explicit choice has to outrank the launch fit, or the next
-        // layout pass would overwrite what the user just did.
-        #expect(viewModel.ribbonStopDecided)
     }
 
     @Test
     func settlingClampsToTheOfferedStops() {
         let viewModel = phoneChrome()
         viewModel.settleRibbon(at: 99)
-        #expect(viewModel.ribbonPreferredStop == viewModel.ribbonWidestStop)
+        #expect(viewModel.ribbonChosenStop == viewModel.ribbonWidestStop)
         viewModel.settleRibbon(at: -7)
-        #expect(viewModel.ribbonPreferredStop == 0)
+        #expect(viewModel.ribbonChosenStop == 0)
     }
 
     // MARK: - Hot action
@@ -277,9 +313,14 @@ struct PaneChromeOverlayTests {
         )
         #expect(viewModel.ribbonActions.isEmpty)
         #expect(viewModel.ribbonWidestStop == 1)
-        #expect(viewModel.ribbonExpanded == false)
+        // It opens on that rung, nobody having chosen otherwise, and it is
+        // still there after a tap has closed the ribbon and reopened it.
+        #expect(viewModel.ribbonExpanded)
+        #expect(viewModel.ribbonRenderedStop == 1)
         viewModel.toggleRibbonExtremes()
-        #expect(viewModel.ribbonPreferredStop == 1)
+        #expect(viewModel.ribbonChosenStop == 0)
+        viewModel.toggleRibbonExtremes()
+        #expect(viewModel.ribbonChosenStop == 1)
         #expect(viewModel.ribbonRenderedStop == 1)
         #expect(viewModel.ribbonExpanded)
         // That rung is exactly the size-preset menu, nothing else.

@@ -94,10 +94,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     private var axPanelBottomConstraint: NSLayoutConstraint?
     private var axPanelWidthConstraint: NSLayoutConstraint?
     private var contentMinWidthConstraint: NSLayoutConstraint?
-    /// Last measured chrome-title width, keyed on the title it was measured
-    /// from. The ribbon fit cap needs the width on every layout pass, and
-    /// measuring text is the one part of that math that touches `NSFont`.
-    private var cachedRibbonTitleWidth: (title: String, width: CGFloat)?
     /// Set by `PaneLayoutViewController` when the sim is newly attached
     /// or has just been rearranged into a new split. The render pass
     /// applies Point Accurate sizing once both pixel dimensions land
@@ -559,61 +555,19 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     override func viewDidLayout() {
         super.viewDidLayout()
         // Off-window layout passes report bounds that no user ever sees,
-        // so they can't settle the fit.
+        // so they can't cap the ribbon.
         guard view.window != nil else { return }
-        applyLaunchRibbonFit(paneWidth: view.bounds.width)
         updateRibbonFitCap(paneWidth: view.bounds.width)
     }
 
-    /// Open the ribbon at the widest stop that fits beside the full device
-    /// name, or at stop 0 when none does. Chooses the stop exactly once, on the
-    /// first layout pass that can see the width the user will actually get,
-    /// then never revisits it: later
-    /// resizes only clamp or restore the rendered stop through
-    /// `updateRibbonFitCap(paneWidth:)`, and the chosen stop is the user's from
-    /// then on.
+    /// Cap what the ribbon draws at the widest stop this pane can hold,
+    /// leaving the chosen stop alone so widening the pane restores it.
     ///
-    /// `pendingAutoFit` is what identifies that pass. A pane's width
-    /// moves twice on the way up: the split seeds synthetic ratios
-    /// against zero bounds, then the size-preset auto-fit resizes it
-    /// once the IOSurface publishes pixel dimensions. Both auto-fit
-    /// entry points (`tryAutoFitNow` and `render`) clear the flag and
-    /// call `applySizePreset` in the same synchronous step, and that
-    /// method only forces layout *after* moving the divider, so no
-    /// pass can arrive with the flag down and a stale width. The flag
-    /// is armed inside `reconcile`, before AppKit's first real layout
-    /// cycle, so a freshly attached pane is never measured early.
-    ///
-    /// Deliberately not a "wait for the width to stop changing" latch:
-    /// AppKit makes no promise about how many layout passes a settled
-    /// pane gets, and a launch that produced a single pass would leave
-    /// the decision open for a later resize to reopen.
-    ///
-    /// A pane whose auto-fit never lands (pixel dimensions never
-    /// arrive, e.g. a sim that fails to boot) remains undecided and
-    /// stays at its narrowest stop.
-    ///
-    /// Takes the width as a parameter rather than reading `view.bounds`
-    /// so tests can drive the sequence without standing up a window.
-    func applyLaunchRibbonFit(paneWidth: CGFloat) {
-        guard !chromeViewModel.ribbonStopDecided,
-            !pendingAutoFit,
-            paneWidth > 0 else { return }
-        chromeViewModel.ribbonPreferredStop = PaneChromeRibbonFit.widestFittingStop(
-            paneWidth: paneWidth,
-            titleWidth: titleWidthForRibbonFit(),
-            actionCount: chromeViewModel.ribbonActions.count
-        )
-        chromeViewModel.ribbonStopDecided = true
-    }
-
-    /// Cap what the ribbon draws at the widest stop this pane currently fits
-    /// beside the device name, or stop 0 when it fits none, leaving the chosen
-    /// stop alone so widening the pane restores it.
-    ///
-    /// The division of labor with `applyLaunchRibbonFit` is the point: the
-    /// latch there governs the *choice* and fires once, where this governs
-    /// the *render* and tracks every resize.
+    /// The division of labor with `PaneChromeViewModel.ribbonChosenStop` is
+    /// the point: that field is the user's, where this governs the *render*
+    /// and tracks every resize. A pane nobody has touched has no choice to
+    /// preserve, so the cap alone decides, and the ribbon opens as wide as
+    /// the pane allows.
     ///
     /// Runs from `viewDidLayout`, so it is called once per layout pass
     /// during a divider drag. Two consequences shape it. The write is
@@ -624,31 +578,18 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// for the mirror-image reason: reading them there would put the whole
     /// render path, frame apply and bezel included, behind every step of a
     /// chevron drag.
+    ///
+    /// Takes the width as a parameter rather than reading `view.bounds`
+    /// so tests can drive it without standing up a window.
     func updateRibbonFitCap(paneWidth: CGFloat) {
         guard paneWidth > 0 else { return }
         let cap = PaneChromeRibbonFit.widestFittingStop(
             paneWidth: paneWidth,
-            titleWidth: titleWidthForRibbonFit(),
             actionCount: chromeViewModel.ribbonActions.count
         )
         if chromeViewModel.ribbonWidestFittingStop != cap {
             chromeViewModel.ribbonWidestFittingStop = cap
         }
-    }
-
-    /// Measured width of the chrome title, memoized on the title itself.
-    ///
-    /// `PaneChromeRibbonFit.titleWidth` lays out text with `NSFont`, and the
-    /// fit cap above asks for it on every layout pass, so an unmemoized call
-    /// would measure the same unchanged string once per frame of a resize.
-    private func titleWidthForRibbonFit() -> CGFloat {
-        let title = chromeViewModel.title
-        if let cached = cachedRibbonTitleWidth, cached.title == title {
-            return cached.width
-        }
-        let width = PaneChromeRibbonFit.titleWidth(title)
-        cachedRibbonTitleWidth = (title, width)
-        return width
     }
 
     /// Pull keyboard focus to this pane. Wired into every chrome

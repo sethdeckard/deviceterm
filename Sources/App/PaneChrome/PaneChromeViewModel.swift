@@ -97,35 +97,29 @@ final class PaneChromeViewModel {
     /// pane can lift it to a per-pane sticky preference).
     var selectedPreset: SimSizePreset?
 
-    /// Chosen reveal rung: stop 0 shows `hotAction` on its own, which is
-    /// nothing on a pane that has none, stop 1 shows the size-preset menu, and
-    /// each later stop adds one more trailing action, up to
-    /// `ribbonWidestStop`.
+    /// Reveal rung the user has chosen, nil until they move the chevron.
+    ///
+    /// A stop of 0 shows `hotAction` on its own, which is nothing on a pane
+    /// that has none, stop 1 shows the size-preset menu, and each later stop
+    /// adds one more trailing action, up to `ribbonWidestStop`.
+    ///
+    /// Nil means "as wide as the pane allows": the ribbon opens fully and the
+    /// device name truncates behind it, and the user drags the chevron in to
+    /// uncover as much of the name as they want. Holding that as the absence of
+    /// a choice rather than as a seeded `ribbonWidestStop` is what keeps it
+    /// true when capabilities arriving after attach lengthen the row.
     ///
     /// This is the choice, not the render. It outlives a pane too narrow to
     /// honor it, so widening the pane brings it back; draw from
     /// `ribbonRenderedStop` instead.
-    ///
-    /// Starts at the narrowest. A pane wide enough for more opens wider,
-    /// decided once by the pane VC when the launch layout settles; a pane
-    /// that never lays out keeps this default.
-    var ribbonPreferredStop: Int = 0
-
-    /// Latch on the launch-time width fit. Once true, `ribbonPreferredStop`
-    /// belongs to whoever set it last and the launch pass stops revisiting it,
-    /// so later window resizes and divider drags preserve the chosen stop while
-    /// the rendered stop follows the live fit cap. A tap or drag sets this the
-    /// moment the user makes a choice, so a manual choice always outranks the
-    /// fit; the pane VC sets it on the first eligible post-auto-fit layout pass.
-    var ribbonStopDecided: Bool = false
+    var ribbonChosenStop: Int?
 
     /// Current fit-derived render cap, or nil before any measurement.
     ///
-    /// The pane VC refreshes it on every on-window layout pass, independently
-    /// of the one-shot launch latch, and that split is what lets a frozen
-    /// launch choice and a live narrowing coexist without either overruling the
-    /// other. It caps the render alone, never the choice, and floors at stop 0
-    /// when even the narrowest stop cannot keep the device name whole.
+    /// The pane VC refreshes it on every on-window layout pass. It caps the
+    /// render alone, never the choice, which is what lets a narrowed pane hide
+    /// trailing controls and a widened one bring them back without disturbing
+    /// what the user picked. Floors at stop 0, a width no pane minimum reaches.
     var ribbonWidestFittingStop: Int?
 
     /// Reveal stop a chevron drag has reached, nil when settled. Always a
@@ -146,26 +140,28 @@ final class PaneChromeViewModel {
     }
 
     /// Reveal stop to draw: the live drag if one is in flight, otherwise the
-    /// chosen stop, either way clamped to what the pane can currently show.
+    /// chosen stop, otherwise the widest the row offers, in every case clamped
+    /// to what the pane can currently show.
     ///
     /// Every field is bound before the clamp rather than short-circuited
     /// through `??`, because SwiftUI tracks only what a body actually reads
     /// and a skipped read stops the view re-rendering when that field moves.
     var ribbonRenderedStop: Int {
-        let preferred = ribbonPreferredStop
+        let chosen = ribbonChosenStop
         let dragging = ribbonDragStop
         let widest = ribbonWidestStop
         let cap = ribbonWidestFittingStop ?? widest
-        return max(0, min(dragging ?? preferred, cap, widest))
+        return max(0, min(dragging ?? chosen ?? widest, cap, widest))
     }
 
     /// Whether the ribbon is set to its widest stop, revealing the whole row.
     ///
     /// Reads the choice rather than the render, so a pane momentarily too
-    /// narrow still reports expanded. Read-only so callers cannot reduce the
-    /// multi-stop state to a writable Boolean.
+    /// narrow still reports expanded, as does one whose user has chosen
+    /// nothing. Read-only so callers cannot reduce the multi-stop state to a
+    /// writable Boolean.
     var ribbonExpanded: Bool {
-        ribbonPreferredStop >= ribbonWidestStop
+        (ribbonChosenStop ?? ribbonWidestStop) >= ribbonWidestStop
     }
 
     /// Most recently invoked ribbon action. Stamped by every ribbon button
@@ -373,16 +369,15 @@ final class PaneChromeViewModel {
     /// tap from an intermediate stop opens rather than doing nothing.
     func toggleRibbonExtremes() {
         let widest = ribbonWidestStop
-        settleRibbon(at: ribbonPreferredStop >= widest ? 0 : widest)
+        settleRibbon(at: (ribbonChosenStop ?? widest) >= widest ? 0 : widest)
     }
 
     /// Land the ribbon on `stop`, clearing the live drag in the same step so
     /// the render moves straight to the settled rung rather than briefly
     /// reading a stale drag position.
     func settleRibbon(at stop: Int) {
-        ribbonPreferredStop = max(0, min(stop, ribbonWidestStop))
+        ribbonChosenStop = max(0, min(stop, ribbonWidestStop))
         ribbonDragStop = nil
-        ribbonStopDecided = true
     }
 
     /// Track a chevron drag. Writes only the live stop, since the committed

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import AppKit
+import CoreGraphics
 
 /// The pane chrome's horizontal layout constants,
-/// plus the math that predicts whether the expanded ribbon can share the
-/// 28pt chrome row with an untruncated device name.
+/// plus the math that predicts how much of the ribbon the 28pt chrome row
+/// can hold.
 ///
 /// `PaneChromeOverlay` lays the row out with these same constants, so the
 /// numbers that draw the ribbon and the numbers that predict its width
@@ -14,12 +14,16 @@ import AppKit
 ///
 /// Why predict at all: the ribbon's contents are incompressible (fixed
 /// 22pt buttons, a `.fixedSize()` size-preset menu), so SwiftUI layout
-/// cannot report that the ribbon does not fit. It truncates the title out
-/// of existence instead and lets the ribbon sit on top of it. Only the
-/// title and the spacer between the two regions can give. The pane view
-/// controller calls `widestFittingStop` twice over: once when a pane's launch
-/// layout settles, to choose the stop it opens at, and again on every later
-/// layout pass, to cap what the ribbon draws.
+/// cannot report that the ribbon does not fit. Handed a row narrower than
+/// the ribbon's ideal width it overruns the chrome instead, pushing the
+/// grip and badge past the leading edge. `widestFittingStop` is what keeps
+/// the pane view controller from ever asking for a stop that wide; it runs
+/// on every layout pass to cap what the ribbon draws.
+///
+/// The device name reserves nothing here. It is the region that yields:
+/// the ribbon opens as wide as the pane allows and the name truncates
+/// behind it, with the whole string still reachable on the tooltip. Only
+/// the grip, the badge, and the gap before the ribbon are pinned.
 enum PaneChromeRibbonFit {
     // MARK: - Shared layout constants
 
@@ -115,43 +119,28 @@ enum PaneChromeRibbonFit {
 
     /// Slack folded into every reveal threshold, covering the chevron constant
     /// and SwiftUI's sub-point rounding. Deliberately biases a near miss toward
-    /// the next narrower stop, which is preferable to covering the device
-    /// name.
+    /// the next narrower stop, which is preferable to overrunning the row.
     static let safetyMargin: CGFloat = 4
 
-    // MARK: - Fit math
-
-    /// Width of the fully expanded ribbon capsule holding `actionCount`
-    /// action buttons: capsule padding, the chevron, the action row plus
-    /// the size-preset menu, and the trailing ⋯ overflow.
-    static func expandedRibbonWidth(actionCount: Int) -> CGFloat {
-        ribbonWidth(contentWidth: expandedContentWidth(actionCount: actionCount))
-    }
-
-    /// Narrowest pane that shows the expanded ribbon with the whole
-    /// device name still visible.
+    /// Everything the row reserves ahead of the ribbon whatever the device
+    /// name says: leading inset, drag grip and its gap, the badge and the gap
+    /// after it, and the smallest gap before the ribbon starts.
     ///
-    /// Equals `minimumPaneWidth(forStop:titleWidth:)` at the widest stop,
-    /// which is the rung that reveals the whole row.
-    static func minimumPaneWidthForExpandedRibbon(
-        titleWidth: CGFloat,
-        actionCount: Int
-    ) -> CGFloat {
-        titleRegionWidth(titleWidth: titleWidth)
-            + expandedRibbonWidth(actionCount: actionCount)
-            + safetyMargin
-    }
-
-    /// Whether a pane this wide can open with its ribbon expanded.
-    static func fitsExpanded(
-        paneWidth: CGFloat,
-        titleWidth: CGFloat,
-        actionCount: Int
-    ) -> Bool {
-        paneWidth >= minimumPaneWidthForExpandedRibbon(
-            titleWidth: titleWidth,
-            actionCount: actionCount
-        )
+    /// The name's own width is the one thing not in this sum, which is what
+    /// lets a long one coexist with the full row: it truncates rather than
+    /// pushing the ribbon narrower. Everything else here is fixed even when
+    /// the name renders nothing at all, `badgeTitleSpacing` included, because
+    /// an `HStack` spaces its children by position rather than by width and
+    /// the title view is in the row whether or not it has glyphs to show.
+    /// Omitting any of them would report a fit at widths where the ribbon
+    /// overruns the grip and badge.
+    static var pinnedLeadingWidth: CGFloat {
+        leadingPadding
+            + handleWidth
+            + handleTrailingGap
+            + badgeSize
+            + badgeTitleSpacing
+            + minimumTitleGap
     }
 
     // MARK: - Reveal ladder
@@ -207,80 +196,23 @@ enum PaneChromeRibbonFit {
         max(0, stop - 1)
     }
 
-    /// Narrowest pane that shows reveal `stop` with the whole device name
-    /// still visible.
-    static func minimumPaneWidth(forStop stop: Int, titleWidth: CGFloat) -> CGFloat {
-        titleRegionWidth(titleWidth: titleWidth)
-            + ribbonWidth(stop: stop)
-            + safetyMargin
+    /// Narrowest pane that can draw reveal `stop` without the ribbon
+    /// overrunning the pinned leading region.
+    static func minimumPaneWidth(forStop stop: Int) -> CGFloat {
+        pinnedLeadingWidth + ribbonWidth(stop: stop) + safetyMargin
     }
 
-    /// Widest reveal stop a pane this wide shows without truncating the device
-    /// name, or stop 0 when it fits none.
+    /// Widest reveal stop a pane this wide can draw, or stop 0 when it fits
+    /// none.
     ///
     /// Floors there rather than reporting "nothing fits", because stop 0 is
-    /// the ribbon's minimum-width state and a clipped device name is better
-    /// than no answer, even where that stop's action viewport is empty.
-    static func widestFittingStop(
-        paneWidth: CGFloat,
-        titleWidth: CGFloat,
-        actionCount: Int
-    ) -> Int {
+    /// the ribbon's minimum-width state and a pane narrower than that has no
+    /// better answer to offer. Every family's minimum pane width clears
+    /// several rungs, so the floor guards a width no layout produces rather
+    /// than a case panes routinely land in.
+    static func widestFittingStop(paneWidth: CGFloat, actionCount: Int) -> Int {
         let widest = widestStop(actionCount: actionCount)
-        let fitting = (0...widest).last {
-            paneWidth >= minimumPaneWidth(forStop: $0, titleWidth: titleWidth)
-        }
+        let fitting = (0...widest).last { paneWidth >= minimumPaneWidth(forStop: $0) }
         return fitting ?? 0
-    }
-
-    // MARK: - Text measurement
-
-    /// Rendered width of a chrome title at the overlay's font.
-    ///
-    /// The AppKit arm of the math above, kept separate because it needs
-    /// `NSFont` and so isn't pure. This is the only text measurement in
-    /// the GUI: every other label sizes itself through Auto Layout
-    /// hugging or SwiftUI's own layout, neither of which can answer
-    /// "would this fit?" ahead of a layout pass. SwiftUI's
-    /// `.font(.system(size:weight:))` resolves to the same
-    /// `NSFont.systemFont`, so the measurement matches what gets drawn.
-    static func titleWidth(_ title: String) -> CGFloat {
-        guard !title.isEmpty else { return 0 }
-        let font = NSFont.systemFont(ofSize: titleFontSize, weight: .medium)
-        return (title as NSString)
-            .size(withAttributes: [.font: font])
-            .width
-            .rounded(.up)
-    }
-
-    // MARK: - Shared sub-expressions
-
-    /// Width of the inner content row showing `actionCount` actions plus
-    /// the size-preset menu.
-    ///
-    /// The row carries `actionCount` gaps rather than one fewer because
-    /// the size-preset menu follows the last action.
-    private static func expandedContentWidth(actionCount: Int) -> CGFloat {
-        let actions = max(0, actionCount)
-        return CGFloat(actions) * controlButtonWidth
-            + CGFloat(actions) * contentItemSpacing
-            + sizePresetWidth
-    }
-
-    /// Everything the row reserves ahead of the ribbon: leading inset,
-    /// drag grip and its gap, badge and its gap, the title, and the
-    /// smallest gap before the ribbon starts.
-    ///
-    /// The grip shares the row rather than floating over it, so omitting
-    /// its width and trailing gap would report a fit at widths where the
-    /// title has to truncate.
-    private static func titleRegionWidth(titleWidth: CGFloat) -> CGFloat {
-        leadingPadding
-            + handleWidth
-            + handleTrailingGap
-            + badgeSize
-            + badgeTitleSpacing
-            + max(0, titleWidth)
-            + minimumTitleGap
     }
 }

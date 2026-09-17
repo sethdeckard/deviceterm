@@ -109,9 +109,8 @@ struct PaneChromeOverlay: View {
 
     var body: some View {
         // Spacing here comes from `PaneChromeRibbonFit`, which also
-        // predicts which reveal stops fit alongside an untruncated title.
-        // Shared constants so a tweak here can't leave that prediction
-        // stale.
+        // predicts which reveal stops this row can hold. Shared constants
+        // so a tweak here can't leave that prediction stale.
         HStack(spacing: 0) {
             dragGrip
             badgeAndTitle
@@ -133,9 +132,9 @@ struct PaneChromeOverlay: View {
     ///
     /// `layoutPriority` keeps the grip from being the thing that gives when the
     /// row runs out of width: the title truncates instead, which is what it is
-    /// already built to do. The fit cap keeps a chosen stop from causing that,
-    /// so what is left is a pane too narrow for even stop 0 and any drift in
-    /// the measured widths.
+    /// already built to do and what the ribbon expects of it at every stop. The
+    /// fit cap reserves this grip, so the row runs out only on a pane too
+    /// narrow for even stop 0.
     private var dragGrip: some View {
         Capsule()
             .fill(Color.secondary)
@@ -340,10 +339,10 @@ struct PaneChromeOverlay: View {
         }
     }
 
-    /// Widest rung this drag can reach: the widest the pane currently fits, or
-    /// stop 0 as the fallback when it fits none. Dragging therefore cannot park
-    /// the ribbon over the device name, except on a pane too narrow to keep the
-    /// name whole at any stop, where stop 0 is the least bad answer.
+    /// Widest rung this drag can reach: the pane's fit cap, or stop 0 when it
+    /// admits none. The ribbon is trailing-anchored and widens leftward, so the
+    /// cap is what keeps a drag from overrunning the grip and badge. Covering
+    /// the device name is not overrun; the name yields.
     private var reachableStop: Int {
         let offered = viewModel.ribbonWidestStop
         let cap = viewModel.ribbonWidestFittingStop ?? offered

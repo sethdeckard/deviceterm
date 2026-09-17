@@ -4,34 +4,36 @@
 import Foundation
 import Testing
 
-/// The width math behind "open this pane's
-/// chrome ribbon expanded". Three claims worth pinning:
+/// The width math behind "how much of this pane's
+/// chrome ribbon fits". Four claims worth pinning:
 ///
-///   1. A wide expanded ribbon genuinely does not fit a minimum-width
-///      pane. If this ever computes as fitting, panes at the 380pt
-///      floor open with the ribbon painted across the device name,
-///      which is the exact defect the fit check exists to prevent.
+///   1. Every family's minimum pane width draws a stop that fits. The
+///      ribbon is incompressible, so a stop the row cannot hold does not
+///      lay out narrower, it overruns the chrome and pushes the grip and
+///      badge past the leading edge. This is the property the cap exists
+///      for, and the 380pt phone floor and 220pt watch floor are where it
+///      is closest to failing.
 ///   2. Fewer actions means a lower threshold. The action count is
 ///      family- and capability-driven, so a physical device (buttons +
 ///      rotation only) has to clear a lower bar than a phone sim's
 ///      full row. A threshold that ignored the count would be wrong
 ///      for one of them.
-///   3. The threshold moves with the title. The device name is the
-///      thing being protected, so a longer name has to demand a wider
-///      pane.
+///   3. The device name costs nothing. It truncates behind the ribbon
+///      rather than pushing it narrower, which is what lets a long name
+///      coexist with the full row. The math has no way to express a title
+///      at all, and these tests are what keep it that way.
 ///   4. The threshold reserves the drag grip. It includes the grip and
-///      its gap so it does not report a fit at widths where the title
-///      would truncate.
+///      its gap so it does not report a fit at widths where the ribbon
+///      would overrun them.
 ///
 /// Plus the reveal ladder the drag settles onto:
 ///
 ///   5. The ladder's viewport widths strictly ascend. Stop 0 shows the hot
 ///      action, stop 1 replaces it with the size-preset menu, and every later
 ///      stop adds one button and one gap.
-///   6. The widest rung equals the expanded ribbon. This is the anti-drift
-///      claim: the two are separate expressions, and the ladder would be
-///      wrong everywhere if its top did not land on the width the ribbon
-///      already used.
+///   6. The widest rung uncovers every action plus the size-preset menu.
+///      This is the anti-drift claim: the ladder would be wrong everywhere
+///      if its top did not land on the whole row.
 ///   7. `widestFittingStop` climbs with pane width, is inclusive at each
 ///      threshold, and floors at stop 0 rather than refusing to answer.
 @MainActor
@@ -46,12 +48,18 @@ struct PaneChromeRibbonFitTests {
     /// width, the narrowest a phone sim pane can be dragged to when
     /// panes sit side by side.
     private let minimumSimPaneWidth: CGFloat = 380
+    /// The same floor for a watch pane, which is where the widest ribbon
+    /// overshoots the pane by the largest margin.
+    private let minimumWatchPaneWidth: CGFloat = 220
+    /// A watch sim's row: side, AX inspector, record, screenshot, and the
+    /// three Digital Crown controls.
+    private let watchActions = 7
 
     @Test
     func expandedWidthGrowsWithActionCount() {
-        let none = PaneChromeRibbonFit.expandedRibbonWidth(actionCount: 0)
-        let device = PaneChromeRibbonFit.expandedRibbonWidth(actionCount: deviceActions)
-        let phone = PaneChromeRibbonFit.expandedRibbonWidth(actionCount: phoneActions)
+        let none = widestRibbonWidth(actionCount: 0)
+        let device = widestRibbonWidth(actionCount: deviceActions)
+        let phone = widestRibbonWidth(actionCount: phoneActions)
         #expect(none < device)
         #expect(device < phone)
         // Each added action costs exactly one button plus one gap.
@@ -65,123 +73,130 @@ struct PaneChromeRibbonFitTests {
         // Defensive: a count can only come from `ribbonActions.count`,
         // but the math must not produce a nonsense narrow threshold if
         // it ever sees garbage.
-        #expect(
-            PaneChromeRibbonFit.expandedRibbonWidth(actionCount: -3)
-                == PaneChromeRibbonFit.expandedRibbonWidth(actionCount: 0)
+        #expect(widestRibbonWidth(actionCount: -3) == widestRibbonWidth(actionCount: 0))
+    }
+
+    // Narrow widths paired with the action count the family reports there.
+    // 380 and 220 are `PaneLayoutViewController.simMinThickness`'s side-by-side
+    // floors for phone/pad and watch, the narrowest a pane of each can be
+    // dragged to. 280 and 200 are the same function's stacked-layout floors,
+    // which bound height rather than width, sampled here as widths a stacked
+    // pane can still reach. Spelled out rather than read from the properties
+    // above because `arguments:` is an attribute and cannot reach them.
+    @Test(
+        "a narrow pane draws a stop that fits",
+        arguments: [
+            (380 as CGFloat, 10), (280 as CGFloat, 10),
+            (220 as CGFloat, 7), (200 as CGFloat, 7)
+        ]
+    )
+    func aNarrowPaneDrawsAStopThatFits(paneWidth: CGFloat, actionCount: Int) {
+        // A stop wider than the row can hold does not compress, it overruns
+        // the chrome, so the answer at each width has to be a stop that width
+        // genuinely fits.
+        let stop = PaneChromeRibbonFit.widestFittingStop(
+            paneWidth: paneWidth,
+            actionCount: actionCount
         )
+        #expect(PaneChromeRibbonFit.minimumPaneWidth(forStop: stop) <= paneWidth)
+        // And it must be a usable ribbon, not the stop-0 floor: every one of
+        // these widths clears several rungs, including the size-preset menu's.
+        #expect(stop >= 1)
     }
 
     @Test
-    func phoneRibbonDoesNotFitAMinimumWidthPane() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
+    func theWidestRibbonOverrunsAMinimumWidthPane() {
+        // The flip side of the claim above: these widths are narrow enough
+        // that the cap has real work to do. If this ever computes as
+        // fitting, the cap has become a no-op and the test above stops
+        // proving anything.
         #expect(
-            PaneChromeRibbonFit.fitsExpanded(
+            PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: minimumSimPaneWidth,
-                titleWidth: title,
                 actionCount: phoneActions
-            ) == false
+            ) < PaneChromeRibbonFit.widestStop(actionCount: phoneActions)
+        )
+        #expect(
+            PaneChromeRibbonFit.widestFittingStop(
+                paneWidth: minimumWatchPaneWidth,
+                actionCount: watchActions
+            ) < PaneChromeRibbonFit.widestStop(actionCount: watchActions)
         )
     }
 
     @Test
-    func phoneRibbonFitsAWidePane() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
+    func aWidePaneReachesTheWidestStop() {
         #expect(
-            PaneChromeRibbonFit.fitsExpanded(
+            PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: 900,
-                titleWidth: title,
                 actionCount: phoneActions
-            )
+            ) == PaneChromeRibbonFit.widestStop(actionCount: phoneActions)
         )
     }
 
     @Test
     func fewerActionsFitANarrowerPane() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
-        let deviceThreshold = PaneChromeRibbonFit.minimumPaneWidthForExpandedRibbon(
-            titleWidth: title,
-            actionCount: deviceActions
+        let deviceThreshold = PaneChromeRibbonFit.minimumPaneWidth(
+            forStop: PaneChromeRibbonFit.widestStop(actionCount: deviceActions)
         )
         // A pane sized exactly for the device row is too narrow for the
         // sim row, so the count is what decides, not a fixed constant.
         #expect(
-            PaneChromeRibbonFit.fitsExpanded(
+            PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: deviceThreshold,
-                titleWidth: title,
                 actionCount: deviceActions
-            )
+            ) == PaneChromeRibbonFit.widestStop(actionCount: deviceActions)
         )
         #expect(
-            PaneChromeRibbonFit.fitsExpanded(
+            PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: deviceThreshold,
-                titleWidth: title,
                 actionCount: phoneActions
-            ) == false
+            ) < PaneChromeRibbonFit.widestStop(actionCount: phoneActions)
         )
     }
 
     @Test
-    func longerTitleRaisesTheThreshold() {
-        let short = PaneChromeRibbonFit.minimumPaneWidthForExpandedRibbon(
-            titleWidth: PaneChromeRibbonFit.titleWidth("Apple TV"),
-            actionCount: phoneActions
-        )
-        let long = PaneChromeRibbonFit.minimumPaneWidthForExpandedRibbon(
-            titleWidth: PaneChromeRibbonFit.titleWidth("Apple Watch Series 11 (46mm)"),
-            actionCount: phoneActions
-        )
-        #expect(short < long)
-    }
-
-    @Test
-    func emptyTitleMeasuresZero() {
-        #expect(PaneChromeRibbonFit.titleWidth("") == 0)
-        #expect(PaneChromeRibbonFit.titleWidth("iPhone 17 Pro") > 0)
-    }
-
-    @Test
-    func thresholdIsInclusiveAndOnePointNarrowerFails() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
-        let threshold = PaneChromeRibbonFit.minimumPaneWidthForExpandedRibbon(
-            titleWidth: title,
-            actionCount: phoneActions
-        )
+    func thresholdReservesTheGripBadgeAndGap() {
+        // Claims 3 and 4 together. These six terms stay in the row even when
+        // the title renders nothing, `badgeTitleSpacing` included, since an
+        // `HStack` spaces its children by position rather than by width. The
+        // device name's own width is the one thing excluded, which is what
+        // lets a long one coexist with the full row.
         #expect(
-            PaneChromeRibbonFit.fitsExpanded(
-                paneWidth: threshold,
-                titleWidth: title,
-                actionCount: phoneActions
-            )
+            PaneChromeRibbonFit.pinnedLeadingWidth
+                == PaneChromeRibbonFit.leadingPadding
+                + PaneChromeRibbonFit.handleWidth
+                + PaneChromeRibbonFit.handleTrailingGap
+                + PaneChromeRibbonFit.badgeSize
+                + PaneChromeRibbonFit.badgeTitleSpacing
+                + PaneChromeRibbonFit.minimumTitleGap
         )
+        let stop = PaneChromeRibbonFit.widestStop(actionCount: phoneActions)
         #expect(
-            PaneChromeRibbonFit.fitsExpanded(
-                paneWidth: threshold - 1,
-                titleWidth: title,
-                actionCount: phoneActions
-            ) == false
+            PaneChromeRibbonFit.minimumPaneWidth(forStop: stop)
+                == PaneChromeRibbonFit.pinnedLeadingWidth
+                + PaneChromeRibbonFit.ribbonWidth(stop: stop)
+                + PaneChromeRibbonFit.safetyMargin
         )
     }
 
-    @Test
-    func thresholdReservesTheDragGrip() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
-        let threshold = PaneChromeRibbonFit.minimumPaneWidthForExpandedRibbon(
-            titleWidth: title,
-            actionCount: phoneActions
-        )
-        // The same sum with the grip's leading region removed. The
-        // difference must equal the grip width plus its trailing gap.
-        let withoutGrip = PaneChromeRibbonFit.leadingPadding
+    @Test("the threshold covers every fixed term the row draws", arguments: 0...11)
+    func theThresholdCoversTheRowsOwnSum(stop: Int) {
+        // Sum the row's fixed widths independently, grouped the way
+        // `PaneChromeOverlay.body` nests them and with the title at the zero
+        // width it truncates to, so a term the fit math omits shows up as a
+        // threshold narrower than the row it has to hold.
+        let grip = PaneChromeRibbonFit.leadingPadding + PaneChromeRibbonFit.handleWidth
+        let badgeAndTitle = PaneChromeRibbonFit.handleTrailingGap
             + PaneChromeRibbonFit.badgeSize
             + PaneChromeRibbonFit.badgeTitleSpacing
-            + title
-            + PaneChromeRibbonFit.minimumTitleGap
-            + PaneChromeRibbonFit.expandedRibbonWidth(actionCount: phoneActions)
-            + PaneChromeRibbonFit.safetyMargin
-        #expect(
-            threshold - withoutGrip
-                == PaneChromeRibbonFit.handleWidth + PaneChromeRibbonFit.handleTrailingGap
-        )
+        let ribbon = PaneChromeRibbonFit.ribbonHorizontalPadding * 2
+            + PaneChromeRibbonFit.chevronWidth
+            + PaneChromeRibbonFit.ribbonItemSpacing * 2
+            + PaneChromeRibbonFit.contentWidth(stop: stop)
+            + PaneChromeRibbonFit.controlButtonWidth
+        let row = grip + badgeAndTitle + PaneChromeRibbonFit.minimumTitleGap + ribbon
+        #expect(PaneChromeRibbonFit.minimumPaneWidth(forStop: stop) >= row)
     }
 
     // MARK: - Reveal ladder
@@ -231,14 +246,19 @@ struct PaneChromeRibbonFitTests {
         )
     }
 
-    @Test("the widest stop matches the expanded ribbon", arguments: 0...12)
-    func theWidestStopMatchesTodaysExpandedRibbon(actionCount: Int) {
-        // The anti-drift claim for the whole ladder: two separate expressions
-        // that must land on the same width, including the empty row.
+    @Test("the widest stop uncovers the whole row", arguments: 0...12)
+    func theWidestStopUncoversEveryAction(actionCount: Int) {
+        // The anti-drift claim for the whole ladder: its top rung has to
+        // uncover every action plus the size-preset menu, including on the
+        // empty row. Written as the row's own sum rather than as another
+        // ladder call, so the two expressions can disagree.
+        let actions = CGFloat(max(0, actionCount))
+        let step = PaneChromeRibbonFit.controlButtonWidth
+            + PaneChromeRibbonFit.contentItemSpacing
         #expect(
-            PaneChromeRibbonFit.ribbonWidth(
+            PaneChromeRibbonFit.contentWidth(
                 stop: PaneChromeRibbonFit.widestStop(actionCount: actionCount)
-            ) == PaneChromeRibbonFit.expandedRibbonWidth(actionCount: actionCount)
+            ) == actions * step + PaneChromeRibbonFit.sizePresetWidth
         )
     }
 
@@ -270,16 +290,11 @@ struct PaneChromeRibbonFitTests {
 
     @Test
     func widestFittingStopClimbsWithPaneWidth() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
         var previous = -1
         for stop in 0...PaneChromeRibbonFit.widestStop(actionCount: phoneActions) {
-            let width = PaneChromeRibbonFit.minimumPaneWidth(
-                forStop: stop,
-                titleWidth: title
-            )
+            let width = PaneChromeRibbonFit.minimumPaneWidth(forStop: stop)
             let fitting = PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: width,
-                titleWidth: title,
                 actionCount: phoneActions
             )
             #expect(fitting == stop)
@@ -290,22 +305,16 @@ struct PaneChromeRibbonFitTests {
 
     @Test("each stop's threshold is inclusive", arguments: 0...11)
     func widestFittingStopThresholdsAreInclusive(stop: Int) {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
-        let threshold = PaneChromeRibbonFit.minimumPaneWidth(
-            forStop: stop,
-            titleWidth: title
-        )
+        let threshold = PaneChromeRibbonFit.minimumPaneWidth(forStop: stop)
         #expect(
             PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: threshold,
-                titleWidth: title,
                 actionCount: phoneActions
             ) == stop
         )
         #expect(
             PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: threshold - 1,
-                titleWidth: title,
                 actionCount: phoneActions
             ) == max(0, stop - 1)
         )
@@ -316,28 +325,26 @@ struct PaneChromeRibbonFitTests {
         #expect(
             PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: 1,
-                titleWidth: PaneChromeRibbonFit.titleWidth("iPhone 17 Pro"),
                 actionCount: phoneActions
             ) == 0
         )
     }
 
     @Test
-    func widestFittingStopAgreesWithFitsExpandedAtTheTop() {
-        let title = PaneChromeRibbonFit.titleWidth("iPhone 17 Pro")
-        for paneWidth in stride(from: CGFloat(150), through: 900, by: 7) {
-            let reachesTop = PaneChromeRibbonFit.widestFittingStop(
+    func widestFittingStopNeverFallsAsThePaneWidens() {
+        // Swept between the thresholds as well as at them, so a stop that
+        // dips anywhere in the range is caught rather than only one that
+        // dips where a rung changes.
+        var previous = 0
+        for paneWidth in stride(from: CGFloat(150), through: 900, by: 1) {
+            let stop = PaneChromeRibbonFit.widestFittingStop(
                 paneWidth: paneWidth,
-                titleWidth: title,
-                actionCount: phoneActions
-            ) == PaneChromeRibbonFit.widestStop(actionCount: phoneActions)
-            let fits = PaneChromeRibbonFit.fitsExpanded(
-                paneWidth: paneWidth,
-                titleWidth: title,
                 actionCount: phoneActions
             )
-            #expect(reachesTop == fits, "disagreed at \(paneWidth)")
+            #expect(stop >= previous, "fell at \(paneWidth)")
+            previous = stop
         }
+        #expect(previous == PaneChromeRibbonFit.widestStop(actionCount: phoneActions))
     }
 
     @Test
@@ -355,20 +362,8 @@ struct PaneChromeRibbonFitTests {
         ])
         // A wide pane reaches that rung; only a cramped one falls back to the
         // hot action alone.
-        #expect(
-            PaneChromeRibbonFit.widestFittingStop(
-                paneWidth: 900,
-                titleWidth: 80,
-                actionCount: 0
-            ) == 1
-        )
-        #expect(
-            PaneChromeRibbonFit.widestFittingStop(
-                paneWidth: 1,
-                titleWidth: 80,
-                actionCount: 0
-            ) == 0
-        )
+        #expect(PaneChromeRibbonFit.widestFittingStop(paneWidth: 900, actionCount: 0) == 1)
+        #expect(PaneChromeRibbonFit.widestFittingStop(paneWidth: 1, actionCount: 0) == 0)
     }
 
     @Test
@@ -419,5 +414,13 @@ struct PaneChromeRibbonFitTests {
         #expect(PaneChromeRibbonFit.handleWidth > 0)
         #expect(PaneChromeRibbonFit.handleHeight > 0)
         #expect(PaneChromeRibbonFit.handleTrailingGap > 0)
+    }
+
+    /// Capsule width at the top of the ladder, which is the ribbon showing
+    /// every one of `actionCount` actions plus the size-preset menu.
+    private func widestRibbonWidth(actionCount: Int) -> CGFloat {
+        PaneChromeRibbonFit.ribbonWidth(
+            stop: PaneChromeRibbonFit.widestStop(actionCount: actionCount)
+        )
     }
 }

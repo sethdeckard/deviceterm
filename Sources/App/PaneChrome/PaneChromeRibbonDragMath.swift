@@ -32,8 +32,8 @@ import CoreGraphics
 /// across the gesture rather than handing this a total translation.
 ///
 /// There is no overshoot past either end. The ends are a wall, which both
-/// reads as solid and keeps the ribbon from ever eating the gap the device
-/// name is holding.
+/// reads as solid and keeps the ribbon from ever reaching a rung wider than
+/// the row can hold.
 enum PaneChromeRibbonDragMath {
     // MARK: - Feel constants
 

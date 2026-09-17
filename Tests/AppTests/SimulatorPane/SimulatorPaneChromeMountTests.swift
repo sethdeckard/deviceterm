@@ -6,7 +6,7 @@ import DaemonProtocol
 import Testing
 
 /// The SwiftUI chrome's AppKit
-/// integration gate. Five claims this pins:
+/// integration gate. Six claims this pins:
 ///
 ///   1. The VC's chrome view model is seeded with the daemon-supplied
 ///      display name at init. The chrome is the first surface a user
@@ -28,31 +28,32 @@ import Testing
 ///      the sim content view sits entirely below it. The non-overlap
 ///      check is the visual-layer assertion: chrome and sim never
 ///      share a pixel.
-///   5. The launch-time ribbon fit: a pane opens at the widest reveal stop
-///      that fits beside its untruncated device name, or at stop 0 when none
-///      fits, so a wide pane opens fully expanded and a narrow one opens
-///      partway rather than shut.
-///      Provisional widths during the launch resize decide nothing, and a
-///      single settled pass freezes the answer in both directions.
-///      `applyLaunchRibbonFit` takes a width so these drive the
-///      sequence directly, without a window and its layout passes.
-///   6. The fit cap tracks every later layout pass while the launch choice
-///      stays frozen. That split is what lets a pane dragged narrow clamp
-///      what it draws and restore the chosen stop when it widens again.
+///   5. A pane opens with its ribbon as wide as the pane can draw, and no
+///      device name narrows it. The name truncates behind the ribbon, so its
+///      length cannot restrict which stops the ribbon can reach.
+///   6. The fit cap tracks every layout pass while a chosen stop stays put.
+///      That split is what lets a pane dragged narrow clamp what it draws
+///      and restore the chosen stop when it widens again.
 ///
 /// The stop assertions are relational, against
-/// `PaneChromeRibbonFit.minimumPaneWidth(forStop:titleWidth:)`, rather than
-/// pinned integers: the thresholds move with font metrics, and the exact
+/// `PaneChromeRibbonFit.minimumPaneWidth(forStop:)`, rather than pinned
+/// integers: the thresholds move with the row's constants, and the exact
 /// arithmetic is already pinned in `PaneChromeRibbonFitTests`.
 @MainActor
 struct SimulatorPaneChromeMountTests {
-    /// Widths for the launch-fit tests, against the ~476pt threshold a
-    /// 10-action phone row titled "iPhone 17 Pro" has to clear for its
-    /// widest stop. `tooNarrow` is `simMinThickness`'s non-watch minimum
-    /// width, so it is the narrowest a phone sim pane can be dragged to and
-    /// still lands partway up the ladder rather than at the top.
+    /// Widths for the fit-cap tests, against the ~400pt a 10-action phone
+    /// row has to clear for its widest stop. `tooNarrow` is
+    /// `simMinThickness`'s non-watch minimum width, so it is the narrowest a
+    /// phone sim pane can be dragged to and still lands partway up the
+    /// ladder rather than at the top.
     private let wideEnough: CGFloat = 900
     private let tooNarrow: CGFloat = 380
+    /// A simulator name long enough to fill the chrome row on its own, used
+    /// to check that title length does not move the ribbon's fit.
+    private let longDisplayName = """
+        iPhone 17e with a very long simulator name for testing pane titles \
+        and truncation · iPhone 17e
+        """
 
     private func makeViewController(
         displayName: String = "iPhone 17 Pro"
@@ -256,116 +257,70 @@ struct SimulatorPaneChromeMountTests {
         #expect(combined == viewController.view.frame.height)
     }
 
-    // MARK: - Launch-time ribbon fit
+    // MARK: - Opening width
 
     @Test
-    func wideLaunchOpensTheRibbonExpanded() {
+    func aWidePaneOpensTheRibbonFully() {
         let viewController = makeViewController()
-        #expect(viewController.chromeViewModel.ribbonExpanded == false)
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonExpanded)
+        viewController.updateRibbonFitCap(paneWidth: wideEnough)
+        let chrome = viewController.chromeViewModel
+        #expect(chrome.ribbonRenderedStop == chrome.ribbonWidestStop)
+        #expect(chrome.ribbonExpanded)
+        // Nothing was chosen on the pane's behalf: the cap alone decided.
+        #expect(chrome.ribbonChosenStop == nil)
     }
 
     @Test
-    func narrowLaunchOpensAPartialReveal() {
-        // A narrow pane reveals as much of the row as fits beside the device
-        // name instead of shutting entirely, and stops short of the full row
-        // so the ribbon never covers the name.
+    func aNarrowPaneOpensAsWideAsItFits() {
+        // A pane too narrow for the whole row draws as much of it as the
+        // row can hold, which is several rungs up rather than shut.
         let viewController = makeViewController()
-        viewController.applyLaunchRibbonFit(paneWidth: tooNarrow)
+        viewController.updateRibbonFitCap(paneWidth: tooNarrow)
         let chrome = viewController.chromeViewModel
-        let stop = chrome.ribbonPreferredStop
+        let stop = chrome.ribbonRenderedStop
         #expect(stop > 0)
         #expect(stop < chrome.ribbonWidestStop)
-        #expect(chrome.ribbonExpanded == false)
-        // The chosen stop is the widest that fits: one rung further would
-        // not.
-        let title = PaneChromeRibbonFit.titleWidth(chrome.title)
-        #expect(
-            PaneChromeRibbonFit.minimumPaneWidth(forStop: stop, titleWidth: title)
-                <= tooNarrow
-        )
-        #expect(
-            PaneChromeRibbonFit.minimumPaneWidth(forStop: stop + 1, titleWidth: title)
-                > tooNarrow
-        )
+        // It is the widest that fits: one rung further would not.
+        #expect(PaneChromeRibbonFit.minimumPaneWidth(forStop: stop) <= tooNarrow)
+        #expect(PaneChromeRibbonFit.minimumPaneWidth(forStop: stop + 1) > tooNarrow)
     }
 
     @Test
-    func aVeryNarrowLaunchFallsBackToTheHotActionAlone() {
+    func aLongDeviceNameDoesNotNarrowTheRibbon() {
+        // A long name and a short one must produce the same fit cap and the
+        // same rendered stop at the same pane width: the name truncates
+        // behind the ribbon and costs it nothing.
+        let long = makeViewController(displayName: longDisplayName)
+        let short = makeViewController()
+        long.updateRibbonFitCap(paneWidth: wideEnough)
+        short.updateRibbonFitCap(paneWidth: wideEnough)
+        #expect(long.chromeViewModel.title == longDisplayName)
+        #expect(
+            long.chromeViewModel.ribbonWidestFittingStop
+                == short.chromeViewModel.ribbonWidestFittingStop
+        )
+        #expect(
+            long.chromeViewModel.ribbonRenderedStop
+                == long.chromeViewModel.ribbonWidestStop
+        )
+        // And again at the phone pane's minimum width.
+        long.updateRibbonFitCap(paneWidth: tooNarrow)
+        short.updateRibbonFitCap(paneWidth: tooNarrow)
+        #expect(
+            long.chromeViewModel.ribbonRenderedStop
+                == short.chromeViewModel.ribbonRenderedStop
+        )
+        #expect(long.chromeViewModel.ribbonRenderedStop > 0)
+    }
+
+    @Test
+    func aVeryNarrowPaneFallsBackToTheHotActionAlone() {
         // Below even the narrowest rung's threshold the ribbon still has to
-        // show one action, so the fit floors at stop 0 rather than refusing.
+        // show one action, so the cap floors at stop 0 rather than refusing.
         let viewController = makeViewController()
-        viewController.applyLaunchRibbonFit(paneWidth: 120)
-        #expect(viewController.chromeViewModel.ribbonPreferredStop == 0)
-        #expect(viewController.chromeViewModel.ribbonStopDecided)
-    }
-
-    @Test
-    func zeroWidthLayoutPassIsIgnored() {
-        // Panes lay out at zero bounds before the split seeds its
-        // ratios. Deciding there would latch stop 0 on a width no
-        // user ever sees, so the pass has to be skipped outright.
-        let viewController = makeViewController()
-        viewController.applyLaunchRibbonFit(paneWidth: 0)
-        #expect(viewController.chromeViewModel.ribbonStopDecided == false)
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonExpanded)
-    }
-
-    @Test
-    func pendingAutoFitSuppressesTheProvisionalWidth() {
-        // The launch sequence resizes the pane: the split seeds
-        // synthetic ratios, then the size-preset auto-fit resizes it
-        // again. Passes taken while that fit is still pending report a
-        // width the user never sees, so they must not decide anything.
-        let viewController = makeViewController()
-        viewController.pendingAutoFit = true
-        viewController.applyLaunchRibbonFit(paneWidth: tooNarrow)
-        #expect(viewController.chromeViewModel.ribbonStopDecided == false)
-        #expect(viewController.chromeViewModel.ribbonExpanded == false)
-        viewController.pendingAutoFit = false
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonExpanded)
-    }
-
-    @Test
-    func aSingleSettledPassFreezesTheDecision() {
-        // The launch answer must not depend on how many layout passes
-        // AppKit happens to run: one pass with no auto-fit pending is
-        // the whole decision. Anything looser lets a later window
-        // resize or divider drag reopen it and toggle the ribbon under
-        // the user.
-        let viewController = makeViewController()
-        viewController.applyLaunchRibbonFit(paneWidth: tooNarrow)
-        #expect(viewController.chromeViewModel.ribbonStopDecided)
-        let frozen = viewController.chromeViewModel.ribbonPreferredStop
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonPreferredStop == frozen)
-        #expect(viewController.chromeViewModel.ribbonExpanded == false)
-    }
-
-    @Test
-    func aWideLaunchAlsoFreezes() {
-        // The mirror of the above: a pane that opened expanded stays
-        // expanded when it's later dragged narrow. Frozen means
-        // frozen in both directions.
-        let viewController = makeViewController()
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonExpanded)
-        viewController.applyLaunchRibbonFit(paneWidth: tooNarrow)
-        #expect(viewController.chromeViewModel.ribbonExpanded)
-    }
-
-    @Test
-    func aUserChoiceOutranksTheFit() {
-        // What a chevron tap or drag sets. Their choice holds even if the
-        // pane is plenty wide.
-        let viewController = makeViewController()
-        viewController.chromeViewModel.ribbonStopDecided = true
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonPreferredStop == 0)
-        #expect(viewController.chromeViewModel.ribbonExpanded == false)
+        viewController.updateRibbonFitCap(paneWidth: 40)
+        #expect(viewController.chromeViewModel.ribbonWidestFittingStop == 0)
+        #expect(viewController.chromeViewModel.ribbonRenderedStop == 0)
     }
 
     @Test
@@ -393,15 +348,14 @@ struct SimulatorPaneChromeMountTests {
         // The contract that makes narrowing survivable: the cap follows the
         // pane's current width while the chosen stop stays put, so dragging
         // a pane narrow clamps what it draws and widening it again restores
-        // the choice rather than re-deciding it.
+        // the choice rather than overwriting it.
         let viewController = makeViewController()
         let chrome = viewController.chromeViewModel
-        viewController.applyLaunchRibbonFit(paneWidth: wideEnough)
-        let chosen = chrome.ribbonPreferredStop
-        #expect(chosen == chrome.ribbonWidestStop)
+        chrome.settleRibbon(at: chrome.ribbonWidestStop)
+        let chosen = chrome.ribbonWidestStop
 
         viewController.updateRibbonFitCap(paneWidth: tooNarrow)
-        #expect(chrome.ribbonPreferredStop == chosen)
+        #expect(chrome.ribbonChosenStop == chosen)
         #expect(chrome.ribbonRenderedStop < chosen)
         #expect(chrome.ribbonExpanded)
 
@@ -411,21 +365,28 @@ struct SimulatorPaneChromeMountTests {
 
     @Test
     func aZeroWidthPassLeavesTheFitCapUnset() {
-        // Same reasoning as the launch fit: a pre-layout pass reports a width
-        // no user sees, and capping on it would collapse the render to the
-        // hot-action stop for a frame.
+        // Panes lay out at zero bounds before the split seeds its ratios. A
+        // pre-layout pass reports a width no user sees, and capping on it
+        // would collapse the render to the hot-action stop for a frame.
         let viewController = makeViewController()
         viewController.updateRibbonFitCap(paneWidth: 0)
         #expect(viewController.chromeViewModel.ribbonWidestFittingStop == nil)
     }
 
     @Test
-    func theFitCapDoesNotDecideTheLaunchChoice() {
-        // The cap governs the render only. A pane whose auto-fit never lands
-        // must stay undecided, so a later resize can still settle it.
+    func theFitCapDoesNotRecordAChoice() {
+        // The cap governs the render only. A pane nobody has touched has to
+        // stay unchosen however many layout passes it takes, so a later
+        // widening opens it fully rather than restoring a stop the cap
+        // happened to write.
         let viewController = makeViewController()
+        viewController.updateRibbonFitCap(paneWidth: tooNarrow)
+        #expect(viewController.chromeViewModel.ribbonChosenStop == nil)
         viewController.updateRibbonFitCap(paneWidth: wideEnough)
-        #expect(viewController.chromeViewModel.ribbonStopDecided == false)
-        #expect(viewController.chromeViewModel.ribbonPreferredStop == 0)
+        #expect(viewController.chromeViewModel.ribbonChosenStop == nil)
+        #expect(
+            viewController.chromeViewModel.ribbonRenderedStop
+                == viewController.chromeViewModel.ribbonWidestStop
+        )
     }
 }
