@@ -68,7 +68,7 @@ func aReAttachIsAnsweredFromTheExistingPaneEvenWhenResolutionFails() async throw
 
     let response = try JSONDecoder().decode(PaneMethods.CreateResponse.self, from: data)
     #expect(
-        response.paneId == mounted.paneId.uuidString,
+        response.paneId == PublicIdentifier.string(mounted.paneId),
         "the re-attach should be answered from the record that already exists"
     )
     let live = await panes.liveOwnerships()

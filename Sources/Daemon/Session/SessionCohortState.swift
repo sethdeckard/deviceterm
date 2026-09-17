@@ -237,7 +237,7 @@ struct SessionCohortState: Sendable {
         let outcome: CohortCloseOutcome
         var successor: CohortMember?
         if let first = survivors.first {
-            outcome = .promote(successor: first.sessionId.uuidString)
+            outcome = .promote(successor: PublicIdentifier.string(first.sessionId))
             successor = first
             if leavingIds.contains(cohort.representative) {
                 cohort.representative = first.sessionId
@@ -289,7 +289,7 @@ struct SessionCohortState: Sendable {
         let outcome: CohortCloseOutcome
         var successor: CohortMember?
         if let first = cohort.members.first {
-            outcome = .promote(successor: first.sessionId.uuidString)
+            outcome = .promote(successor: PublicIdentifier.string(first.sessionId))
             successor = first
             if cohort.representative == member.sessionId {
                 cohort.representative = first.sessionId
@@ -331,7 +331,7 @@ struct SessionCohortState: Sendable {
         }
         cohorts[cohortId] = cohort
         verdicts[member] = VerdictRecord(
-            outcome: .promote(successor: first.sessionId.uuidString),
+            outcome: .promote(successor: PublicIdentifier.string(first.sessionId)),
             recordedAt: now
         )
         return .promoted(successor: first)

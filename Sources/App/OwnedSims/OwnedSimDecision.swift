@@ -14,6 +14,13 @@ import DaemonProtocol
 /// `DeviceControlling+OwnedSims` does the `device.list` around it. The
 /// ownership rules are the part worth testing, and this way they test without
 /// a daemon.
+///
+/// Callers supply canonical session ids, which GUI pane state already holds.
+/// These predicates canonicalize the roster's `ownedBySession` before
+/// comparing it against them, because that side arrives by a different route
+/// and cannot be assumed to match. A comparison that misses goes wrong in the
+/// dangerous direction: it reports a sim another tab holds as this pane's to
+/// shut down.
 enum OwnedSimDecision {
     /// CoreSimulator's state name for a running sim, as `device.list`
     /// relays it. `DeviceListEntry.state` is a wire string rather than an
@@ -33,7 +40,7 @@ enum OwnedSimDecision {
         in devices: [DeviceListEntry]
     ) -> [DeviceListEntry] {
         devices.filter {
-            $0.state == bootedState && sessions.contains($0.ownedBySession ?? "")
+            $0.state == bootedState && sessions.contains(attribution(of: $0))
         }
     }
 
@@ -44,8 +51,15 @@ enum OwnedSimDecision {
         in devices: [DeviceListEntry]
     ) -> Bool {
         devices.contains {
-            $0.state == bootedState && sessions.contains($0.ownedBySession ?? "")
+            $0.state == bootedState && sessions.contains(attribution(of: $0))
         }
+    }
+
+    /// The entry's attributed session in the canonical spelling, or an empty
+    /// string when it is attributed to nobody. An empty sentinel matches no
+    /// live session id, so an unattributed entry never counts.
+    private static func attribution(of entry: DeviceListEntry) -> String {
+        entry.ownedBySession.map(PublicIdentifier.canonicalized) ?? ""
     }
 
     /// The `.owned` entry for `udid` if it is still Booted.
@@ -92,6 +106,6 @@ enum OwnedSimDecision {
     /// would look unclaimed.
     static func isOursToStop(ownedBySession owner: String?, claimedElsewhere: Set<String>) -> Bool {
         guard let owner else { return true }
-        return !claimedElsewhere.contains(owner)
+        return !claimedElsewhere.contains(PublicIdentifier.canonicalized(owner))
     }
 }

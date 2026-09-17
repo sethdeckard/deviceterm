@@ -744,7 +744,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         // `compactMapValues`, and the daemon reads absent as false).
         // Smoke uses the degraded UDS transport, which cannot assert a
         // GUI-curated cohort id. Let the daemon self-group that session.
-        let wireTabId = Self.isSmokeMode ? nil : tabId?.uuidString
+        let wireTabId = Self.isSmokeMode ? nil : tabId.map(PublicIdentifier.string)
         let params = try JSONSerialization.data(
             withJSONObject: [
                 "label": label as Any,
@@ -916,8 +916,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         sessionId: String,
         capability: String
     ) async throws {
+        // Canonicalize before caching. `liveSessions` is pruned by
+        // `closeSession` against the pane state's canonical id, and the two
+        // reach here from different places (a `session.create` response and
+        // the stored pane), so cache one spelling. An entry that differs only
+        // in case survives its own close, and the reauth walk then keeps
+        // presenting a credential the daemon has deleted.
         let authParams = SessionAuthenticateParams(
-            sessionId: sessionId,
+            sessionId: PublicIdentifier.canonicalized(sessionId),
             cap: capability
         )
         let params = try JSONEncoder().encode(authParams)
@@ -1031,9 +1037,16 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         capability: String,
         mode: PaneCloseMode = .detach
     ) async throws {
+        // Canonicalize at the entry rather than at each caller. Everything
+        // below compares this id exactly against the cached credentials, and
+        // callers reach here from two different sources: the Router passes the
+        // stored pane's id, while `discardSession` and `reportUnconfirmedClose`
+        // pass a `session.create` response straight through. One spelling here
+        // keeps the prune and the pane-principal rotation from missing.
+        let canonical = PublicIdentifier.canonicalized(sessionId)
         let params = try JSONSerialization.data(
             withJSONObject: [
-            "sessionId": sessionId,
+            "sessionId": canonical,
             "cap": capability,
             "mode": mode.rawValue
             ]
@@ -1045,14 +1058,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             // lost. Keep the credential for control-side reconciliation, but
             // move the pane peer to another known-live session now because its
             // one-way releases cannot report a stale principal.
-            schedulePaneAuthenticationRotationAwayFrom(sessionId: sessionId)
+            schedulePaneAuthenticationRotationAwayFrom(sessionId: canonical)
             throw error
         }
         // The daemon deleted this session; drop its credential so a later
         // reconnect never replays a dead session: replaying one would fail
         // the reauth and, with it, every surviving pane's resubscribe.
-        liveSessions.removeAll { $0.sessionId == sessionId }
-        schedulePaneAuthenticationRotationAwayFrom(sessionId: sessionId)
+        liveSessions.removeAll { $0.sessionId == canonical }
+        schedulePaneAuthenticationRotationAwayFrom(sessionId: canonical)
     }
 
     /// Pane-lane recovery must not extend the control request's deadline. The

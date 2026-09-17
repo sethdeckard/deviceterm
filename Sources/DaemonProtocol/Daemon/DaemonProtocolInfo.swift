@@ -13,14 +13,22 @@
 public enum DaemonProtocolInfo {
     /// The RPC wire-version string. Must equal the daemon's
     /// `DaemonInfo.version` (`Sources/Daemon/DaemonInfo.swift`).
-    /// Wire version 0.6.0 defines singular `window.*`, `tab.*`, and `pane.*`
+    /// Wire version 0.7.0 defines singular `window.*`, `tab.*`, and `pane.*`
     /// method families. Reads return the
     /// GUI's live window/tab/pane projection, mutations return committed
     /// objects, and terminal input/capture address a pane explicitly.
     /// `tab.open` and `pane.split` await terminal session creation;
     /// terminal pane IDs are session IDs. The daemon-direct device roster is
     /// internal `pane.deviceList`; grant revocation is lifecycle-only.
+    /// Daemon-minted session and pane UUIDs are rendered lowercase.
     /// Every process speaking this version ships and updates in the same
     /// bundle.
-    public static let wireVersion = "0.6.0"
+    ///
+    /// 0.7.0 raised from 0.6.0 for the lowercase spelling. The GUI holds
+    /// daemon-minted session and pane ids as strings and compares them
+    /// exactly, for `current` resolution, tab ownership, the surface-frame
+    /// join, and the restore-inventory check. A GUI that outlived a helper
+    /// replacement would compare its old spellings against the new one and
+    /// silently fail all four, so the version gate stops the pairing instead.
+    public static let wireVersion = "0.7.0"
 }

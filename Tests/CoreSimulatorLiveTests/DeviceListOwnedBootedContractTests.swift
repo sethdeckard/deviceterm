@@ -2,6 +2,7 @@
 
 import CoreSimulatorBridge
 @testable import Daemon
+import DaemonProtocol
 import DaemonTestSupport
 import Foundation
 import Testing
@@ -97,6 +98,6 @@ func ownedBootedSimSurfacesInDeviceListWithBootedState() async throws {
         entries.first { $0.udid.lowercased() == udid.lowercased() },
         "owned list is missing the booted sim"
     )
-    #expect(entry.ownedBySession == state.id.uuidString)
+    #expect(entry.ownedBySession == PublicIdentifier.string(state.id))
     #expect(entry.state == "Booted")
 }

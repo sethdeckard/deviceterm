@@ -1088,7 +1088,12 @@ actor XPCDaemonConnection: DaemonRequestTransport {
 
     private func handleSurfacePayload(_ event: xpc_object_t, installedIngressEpoch: Int) async {
         guard let paneIdC = xpc_dictionary_get_string(event, XPCWireKey.paneId) else { return }
-        let paneId = String(cString: paneIdC)
+        // `PairKey` joins this half to the JSON half on the pane id as a
+        // string, and the JSON half comes from the pane state's canonical
+        // spelling. Canonicalize here too: a pane id that reached the two
+        // halves in different cases would resolve no pair, and the only
+        // symptom is a pane frozen on its last good frame.
+        let paneId = PublicIdentifier.canonicalized(String(cString: paneIdC))
         let sequence = UInt64(xpc_dictionary_get_uint64(event, XPCWireKey.sequence))
         guard let tokenC = xpc_dictionary_get_string(event, XPCWireKey.subscriptionToken),
             let token = UUID(uuidString: String(cString: tokenC))

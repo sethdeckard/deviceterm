@@ -1791,7 +1791,7 @@ final class Router {
         nextCohortRevision += 1
         let params = SessionSetCohortParams(
             operation: .reconcile,
-            cohortId: tab.cohortId.uuidString,
+            cohortId: PublicIdentifier.string(tab.cohortId),
             revision: revision,
             members: tab.terminals.map(\.sessionId),
             representative: tab.primaryTerminal.sessionId,
@@ -1897,7 +1897,7 @@ final class Router {
             nextCohortRevision += 1
             let params = SessionSetCohortParams(
                 operation: .beginClose,
-                cohortId: cohortId.uuidString,
+                cohortId: PublicIdentifier.string(cohortId),
                 revision: revision,
                 transitionId: transitionId,
                 leaving: leaving,
@@ -2739,9 +2739,11 @@ final class Router {
         if mode == .shutdown {
             let owned = (try? await daemon.deviceList(scope: .owned)) ?? []
             let tabSessionIds = Set(tab.terminals.map(\.sessionId))
-            for device in owned
-            where tabSessionIds.contains(device.ownedBySession ?? "")
-                && device.state == "Booted" {
+            // The close prompt's own ownership predicate, so shutdown covers
+            // the same sims it asked about. This sweep is what reaches a
+            // booted sim with no mounted pane, and a miss leaves one running
+            // after the user chose to stop it.
+            for device in OwnedSimDecision.booted(ownedBy: tabSessionIds, in: owned) {
                 do {
                     try await daemon.shutdownDevice(udid: device.udid)
                     noteSimShutdown(udid: device.udid)

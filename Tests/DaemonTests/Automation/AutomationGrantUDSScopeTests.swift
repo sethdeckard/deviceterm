@@ -239,7 +239,7 @@ func capabilitiesReportsTheGrantFlagAlongsideTheMethodList() async throws {
         }
         let decoded = try JSONDecoder().decode(DaemonCapabilitiesResponse.self, from: bytes)
         #expect(decoded.automationGrant == expected)
-        #expect(decoded.sessionId == session.state.id.uuidString)
+        #expect(decoded.sessionId == PublicIdentifier.string(session.state.id))
         #expect(
             decoded.allowedMethods.contains(RPCMethod.paneSendInput.rawValue) == expected,
             "the flag and the method list disagree for grant=\(expected)"

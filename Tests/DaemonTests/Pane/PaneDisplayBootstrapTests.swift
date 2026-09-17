@@ -308,12 +308,12 @@ func theInitialStateEventPrecedesAFrameBufferedDuringBootstrap() async throws {
     // booting after it had already started rendering.
     let first = try #require(await iterator.next())
     #expect(first.type == DaemonEventType.paneStateChanged)
-    #expect(first.paneId == result.paneId.uuidString)
+    #expect(first.paneId == PublicIdentifier.string(result.paneId))
     #expect(first.state == PaneLifecycle.booting.rawValue)
 
     let second = try #require(await iterator.next())
     #expect(second.type == DaemonEventType.paneStateChanged)
-    #expect(second.paneId == result.paneId.uuidString)
+    #expect(second.paneId == PublicIdentifier.string(result.paneId))
     #expect(second.state == PaneLifecycle.rendering.rawValue)
 }
 

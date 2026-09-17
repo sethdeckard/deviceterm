@@ -199,6 +199,22 @@ func integrationGuidePinsWorkspaceReferenceRules() throws {
 }
 
 @Test
+func integrationGuidePinsTheLowercaseIdentifierRule() throws {
+    // The rule the guide states and the spelling the code emits are two
+    // separate things. Keep the casing contract explicit for workspace and
+    // session ids, including the equality with `$DEVICETERM_SESSION`.
+    let rules = try section(named: "Contract Rules", in: try integrationGuide())
+    for claim in [
+        "DeviceTerm mints every\nidentifier in one spelling",
+        "all print lowercase",
+        "equals\n`$DEVICETERM_SESSION`",
+        "the case to\nwatch"
+    ] {
+        #expect(rules.contains(claim), "identifier casing contract missing: \(claim)")
+    }
+}
+
+@Test
 func integrationGuidePinsPaneMutationAuthorityAndMode() throws {
     let contents = try integrationGuide()
     let automation = try section(named: "Automation", in: contents)

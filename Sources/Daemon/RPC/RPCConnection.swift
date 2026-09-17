@@ -436,7 +436,7 @@ actor RPCConnection {
         //     peer's captured audit token.
         // Daemon-wide calls still see a context (with `authenticatedSession`
         // nil), so handlers always get a non-nil current.
-        let originatingSid = effectiveSession?.id.uuidString
+        let originatingSid = effectiveSession.map { PublicIdentifier.string($0.id) }
         let peerContext = DispatchPeerContext(
             transport: .uds,
             connectionId: id,
@@ -511,7 +511,7 @@ actor RPCConnection {
             peerProcess: peerProcess,
             sessionIncarnation: effectiveSession == nil ? nil : sessionIncarnation
         )
-        let originatingSid = effectiveSession?.id.uuidString
+        let originatingSid = effectiveSession.map { PublicIdentifier.string($0.id) }
         let paramsJSON = Self.normalizeParams(body)
         await SessionDispatchContext.$originatingSessionId
             .withValue(originatingSid) {

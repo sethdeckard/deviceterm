@@ -393,8 +393,8 @@ func protectionSnapshotReportsMissingSession() async throws {
     )
     #expect(snap.fenced)
     let byId = Dictionary(uniqueKeysWithValues: snap.sessions.map { ($0.sessionId, $0.state) })
-    #expect(byId[session.id.uuidString] == .unprotectedState)
-    #expect(byId[ghost.uuidString] == .missing)
+    #expect(byId[PublicIdentifier.string(session.id)] == .unprotectedState)
+    #expect(byId[PublicIdentifier.string(ghost)] == .missing)
 }
 
 @Test

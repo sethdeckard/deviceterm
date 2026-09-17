@@ -79,7 +79,7 @@ enum DeviceRoster {
                     osVersion: osVersion,
                     state: state,
                     attached: true,
-                    ownerSessionId: owner.sessionId.uuidString
+                    ownerSessionId: PublicIdentifier.string(owner.sessionId)
                 )
             }
             return DeviceRosterEntry(

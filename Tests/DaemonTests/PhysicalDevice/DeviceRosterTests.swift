@@ -41,7 +41,7 @@ func rosterAnnotatesOwnerVisibleToCaller() {
     #expect(roster[0].id == "udid-1")
     #expect(roster[0].kind == .sim)
     #expect(roster[0].attached)
-    #expect(roster[0].ownerSessionId == owner.uuidString)
+    #expect(roster[0].ownerSessionId == PublicIdentifier.string(owner))
 }
 
 @Test
@@ -79,7 +79,7 @@ func rosterMatchesSimOwnershipCaseInsensitively() {
     #expect(roster.count == 1)
     #expect(roster[0].id == upper.lowercased())
     #expect(roster[0].attached)
-    #expect(roster[0].ownerSessionId == owner.uuidString)
+    #expect(roster[0].ownerSessionId == PublicIdentifier.string(owner))
 }
 
 @Test

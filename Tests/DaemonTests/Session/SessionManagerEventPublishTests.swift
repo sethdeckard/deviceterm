@@ -25,7 +25,7 @@ func createSessionPublishesSessionCreatedEvent() async throws {
     var iterator = stream.makeAsyncIterator()
     let event = try #require(await iterator.next())
     #expect(event.type == DaemonEventType.sessionCreated)
-    #expect(event.sessionId == state.id.uuidString)
+    #expect(event.sessionId == PublicIdentifier.string(state.id))
     #expect(event.shortId == state.shortId)
     #expect(event.name == "feature-x")
 
@@ -64,7 +64,7 @@ func closeSessionPublishesSessionClosedEvent() async throws {
     var iterator = stream.makeAsyncIterator()
     let event = try #require(await iterator.next())
     #expect(event.type == DaemonEventType.sessionClosed)
-    #expect(event.sessionId == state.id.uuidString)
+    #expect(event.sessionId == PublicIdentifier.string(state.id))
 
     await broker.unsubscribe(subscriptionId)
 }

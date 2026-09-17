@@ -4,8 +4,11 @@ import DaemonProtocol
 import Foundation
 
 struct SimPaneState: MirroredPaneState, Equatable, Sendable {
-    /// Daemon pane id from device.attach. The glue creates a pane VM for
-    /// this id (the attach already happened in the Router).
+    /// Daemon pane id from device.attach, in the published lowercase
+    /// spelling. The glue creates a pane VM for this id (the attach already
+    /// happened in the Router). The initializer canonicalizes it so the
+    /// stored value matches the `paneId` the daemon puts on the surface
+    /// side-band, which the frame join compares as a string.
     let paneId: String
     /// See `MirroredPaneState.attachment`.
     let attachment: UInt64?
@@ -59,7 +62,7 @@ struct SimPaneState: MirroredPaneState, Equatable, Sendable {
         capabilities: PaneCapabilities? = nil,
         sizePreset: SimSizePreset? = nil
     ) {
-        self.paneId = paneId
+        self.paneId = PublicIdentifier.canonicalized(paneId)
         self.attachment = attachment
         self.udid = udid
         self.displayName = displayName

@@ -409,7 +409,7 @@ func liveDeviceListOwnedFiltersByOwnership() async throws {
     let entries = try JSONDecoder().decode([DeviceMethods.ListEntry].self, from: bytes)
     #expect(entries.count == 1)
     #expect(entries.first?.udid.lowercased() == pick.udid.lowercased())
-    #expect(entries.first?.ownedBySession == sessionId.uuidString)
+    #expect(entries.first?.ownedBySession == PublicIdentifier.string(sessionId))
 }
 
 @Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))

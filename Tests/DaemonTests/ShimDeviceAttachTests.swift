@@ -89,7 +89,7 @@ func deviceAttachPublishesPaneAttachForResolvedDevice() async throws {
     var iterator = stream.makeAsyncIterator()
     let command = try #require(await iterator.next())
     #expect(command.kind == .paneAttach)
-    #expect(command.originatingSessionId == state.id.uuidString)
+    #expect(command.originatingSessionId == PublicIdentifier.string(state.id))
     let attach = try JSONDecoder().decode(
         AppCommandParams.PaneAttach.self,
         from: command.params

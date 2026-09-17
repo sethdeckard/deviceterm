@@ -570,7 +570,7 @@ public actor SessionManager {
             if case let .ready(inc) = adm, inc != nil { return true }
             return false
         }
-        let restoredIds = held.map(\.id.uuidString)
+        let restoredIds = held.map { PublicIdentifier.string($0.id) }
         return SessionRestoreBatchResult(
             restoredCount: restoredIds.count,
             sessionIds: restoredIds
@@ -745,7 +745,7 @@ public actor SessionManager {
             "ready incarnation=\(incarnation, privacy: .public)"
         )
         await eventBroker?.publish(
-            .sessionCreated(sessionId: id.uuidString, shortId: state.shortId, name: state.name),
+            .sessionCreated(sessionId: PublicIdentifier.string(id), shortId: state.shortId, name: state.name),
             to: .session(id)
         )
     }
@@ -773,7 +773,7 @@ public actor SessionManager {
         // dead session in every sibling's membership.
         await cohortRevoker?(id, incarnation)
         await paneRevoker?(id)
-        await eventBroker?.finishSession(id, withFinalEvent: .sessionClosed(sessionId: id.uuidString))
+        await eventBroker?.finishSession(id, withFinalEvent: .sessionClosed(sessionId: PublicIdentifier.string(id)))
         if case .tearingDown(incarnation) = sessionPhase[id] {
             sessionPhase[id] = nil
         }
@@ -1117,10 +1117,10 @@ public actor SessionManager {
         }
         let entries = sessionIds.map { id -> SessionProtectionEntry in
             guard sessions[id] != nil else {
-                return SessionProtectionEntry(sessionId: id.uuidString, state: .missing)
+                return SessionProtectionEntry(sessionId: PublicIdentifier.string(id), state: .missing)
             }
             return SessionProtectionEntry(
-                sessionId: id.uuidString,
+                sessionId: PublicIdentifier.string(id),
                 state: protectedSessions.contains(id) ? .protectedState : .unprotectedState
             )
         }

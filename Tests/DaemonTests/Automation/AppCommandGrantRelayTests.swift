@@ -49,8 +49,10 @@ struct AppCommandGrantRelayTests {
             automationGrant: store
         )
         var thrown: RPCMethodError?
+        // Stands in for the connection layer, which is the task-local's only
+        // producer and stamps the canonical spelling.
         await SessionDispatchContext.$originatingSessionId.withValue(
-            callerSession?.uuidString
+            callerSession.map(PublicIdentifier.string)
         ) {
             do {
                 _ = try await handler(
@@ -76,7 +78,7 @@ struct AppCommandGrantRelayTests {
             reply: { .ok(commandId: $0) }
         )
         #expect(outcome.published?.originAutomationGrant == true)
-        #expect(outcome.published?.originatingSessionId == session.uuidString)
+        #expect(outcome.published?.originatingSessionId == PublicIdentifier.string(session))
     }
 
     @Test

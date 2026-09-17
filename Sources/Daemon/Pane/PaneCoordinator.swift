@@ -1556,7 +1556,7 @@ public actor PaneCoordinator {
         // the admission release below included, puts the inversion back.
         await eventBroker?.publish(
             .paneStateChanged(
-            paneId: paneId.uuidString,
+            paneId: PublicIdentifier.string(paneId),
             udid: record.target.key,
             state: record.state.rawValue
         ),
@@ -2403,7 +2403,7 @@ public actor PaneCoordinator {
         // lifecycle.
         await eventBroker?.publish(
             .paneStateChanged(
-                paneId: record.id.uuidString,
+                paneId: PublicIdentifier.string(record.id),
                 udid: record.target.key,
                 state: state.rawValue
             ),
@@ -4083,7 +4083,7 @@ public actor PaneCoordinator {
         } catch let DeviceBackendError.locationOutputMalformed(message) {
             locationLog.error(
                 """
-                pane \(paneId.uuidString, privacy: .public): location scenario output was \
+                pane \(PublicIdentifier.string(paneId), privacy: .public): location scenario output was \
                 unreadable (\(message, privacy: .public)). Reporting no trips; this is a \
                 schema mismatch, not an idle device.
                 """
@@ -4092,7 +4092,7 @@ public actor PaneCoordinator {
             // Routine: a device that isn't running enumerates nothing.
             locationLog.debug(
                 """
-                pane \(paneId.uuidString, privacy: .public): no location scenarios \
+                pane \(PublicIdentifier.string(paneId), privacy: .public): no location scenarios \
                 (\(String(describing: error), privacy: .public))
                 """
             )
@@ -4260,7 +4260,7 @@ public actor PaneCoordinator {
             SurfaceTraceSink.daemonProducer?.record(
                 SurfaceTraceRow(
                     role: "producer",
-                    paneId: paneId.uuidString,
+                    paneId: PublicIdentifier.string(paneId),
                     traceId: trace.traceId,
                     monotonicNanoseconds: trace.producedAtNanoseconds,
                     mismatchRows: nil
@@ -4283,7 +4283,7 @@ public actor PaneCoordinator {
                 paneId: paneId,
                 epoch: record.epoch,
                 event: .paneStateChanged(
-                    paneId: paneId.uuidString,
+                    paneId: PublicIdentifier.string(paneId),
                     udid: record.target.key,
                     state: PaneLifecycle.rendering.rawValue
                 ),
@@ -4542,7 +4542,7 @@ public actor PaneCoordinator {
         )
         guard transition.applied else {
             transition.bindings = malformed + planned.map {
-                SessionCohortBindingResult(paneId: $0.paneId.uuidString, bound: false)
+                SessionCohortBindingResult(paneId: PublicIdentifier.string($0.paneId), bound: false)
             }
             return transition
         }
@@ -4550,11 +4550,11 @@ public actor PaneCoordinator {
         for plan in planned {
             guard let record = panes[plan.paneId], record.attachment == plan.attachment,
                 bindable(record) else {
-                results.append(SessionCohortBindingResult(paneId: plan.paneId.uuidString, bound: false))
+                results.append(SessionCohortBindingResult(paneId: PublicIdentifier.string(plan.paneId), bound: false))
                 continue
             }
             record.cohortId = cohortId
-            results.append(SessionCohortBindingResult(paneId: plan.paneId.uuidString, bound: true))
+            results.append(SessionCohortBindingResult(paneId: PublicIdentifier.string(plan.paneId), bound: true))
         }
         transition.bindings = results
         // A removed member is still alive, so its panes change hands as a
@@ -4682,7 +4682,7 @@ public actor PaneCoordinator {
                     CohortCloseEffect(
                         sessionId: sessionId,
                         incarnation: incarnation,
-                        outcome: .promote(successor: successor.sessionId.uuidString)
+                        outcome: .promote(successor: PublicIdentifier.string(successor.sessionId))
                     )
                 )
             )

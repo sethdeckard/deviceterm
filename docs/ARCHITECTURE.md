@@ -2640,6 +2640,18 @@ not whatever the person last focused in the GUI. Window and tab short IDs are
 the first six lowercase hexadecimal characters of their UUIDs. Pane short IDs
 are daemon-minted, six-character lowercase Crockford base32 values.
 
+Public workspace and session UUIDs reach the wire through
+`PublicIdentifier.string`, which renders them lowercase. The GUI runs the
+matching `canonicalized` over the session and pane ids it stores and over the
+pane id on an incoming surface payload, which is what lets it hold a pane id as
+a string and still join it against the daemon's side-band. Two kinds of string
+stay out of that. Identifiers DeviceTerm does not own pass through byte for
+byte, because they are not UUID-shaped (physical CoreDevice ids). Correlation
+handles keep their own spelling: `commandId`, `transitionId`,
+`subscriptionToken`, and the device-mirroring `callID`, which Apple's protocol
+wants uppercase. None of them names a workspace object a caller can address,
+and none reaches published output.
+
 Read methods and `pane.captureText` use the ordinary 4 second GUI and 5
 second CLI budgets. Mutations may wait for AppKit reconciliation or terminal
 session creation and use the 17 second GUI and 18 second CLI budgets.

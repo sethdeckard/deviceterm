@@ -408,6 +408,12 @@ is display-order metadata, not a reference.
 .PP
 Window and tab short IDs are the first six lowercase hexadecimal characters
 of their UUIDs. Pane short IDs are six lowercase Crockford base32 characters.
+Every identifier DeviceTerm prints is lowercase, apart from a physical device
+ID, which keeps the spelling
+.B devicectl
+reports. A Simulator UDID prints lowercase here even though
+.B simctl
+prints the same UDID uppercase.
 Omitted refs and
 .B current
 mean the object containing the calling terminal when the command permits

@@ -517,7 +517,7 @@ public actor XPCConnection {
             validationStable: verdictStable,
             sessionIncarnation: effectiveSession == nil ? nil : sessionIncarnation
         )
-        let originatingSid = effectiveSession?.id.uuidString
+        let originatingSid = effectiveSession.map { PublicIdentifier.string($0.id) }
 
         switch resolved {
         case let .oneShot(handler):
@@ -600,7 +600,7 @@ public actor XPCConnection {
             validationStable: verdictStable,
             sessionIncarnation: effectiveSession == nil ? nil : sessionIncarnation
         )
-        let originatingSid = effectiveSession?.id.uuidString
+        let originatingSid = effectiveSession.map { PublicIdentifier.string($0.id) }
         let paramsJSON = Self.normalizeParams(body)
         await SessionDispatchContext.$originatingSessionId
             .withValue(originatingSid) {
@@ -1328,7 +1328,7 @@ public actor XPCConnection {
                     XPCTransportKey.type,
                     "surface"
                 )
-                xpc_dictionary_set_string(payload, "paneId", info.paneId.uuidString)
+                xpc_dictionary_set_string(payload, "paneId", PublicIdentifier.string(info.paneId))
                 xpc_dictionary_set_uint64(payload, "sequence", info.sequence)
                 // Correlation token (every XPC pane subscription) + device lease
                 // overlay (`leased`/`leaseEpoch`): the GUI keys its pending

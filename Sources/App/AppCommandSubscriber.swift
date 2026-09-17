@@ -172,7 +172,12 @@ final class AppCommandSubscriber {
         let result = await dispatcher.dispatch(
             intent,
             origin: .external(
-                sessionID: command.originatingSessionId,
+                // The only place a daemon-supplied session id enters the
+                // intent layer, where it is compared with `==` against the
+                // ids the pane states hold. Both sides canonicalize, so a
+                // spelling difference can never read as a different session
+                // and refuse a caller its own pane.
+                sessionID: command.originatingSessionId.map(PublicIdentifier.canonicalized),
                 hasAutomationGrant: command.originAutomationGrant
             )
         )

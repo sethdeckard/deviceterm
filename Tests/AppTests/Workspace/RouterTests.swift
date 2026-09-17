@@ -3573,6 +3573,32 @@ struct RouterTests {
     }
 
     @Test
+    func theSweepFindsASimAttributedInAnotherCasing() async {
+        // The sweep matches the roster's `ownedBySession`, which arrives on a
+        // `device.list` read, against the tab's canonical session ids. A
+        // comparison that misses on case leaves the simulator running after
+        // the user chose to stop it, and the prompt ahead of this already
+        // found it, so the miss is silent.
+        let fake = FakeDaemonClient()
+        let uppercased = "550E8400-E29B-41D4-A716-446655440000"
+        fake.sessionToReturn = SessionCreateResponse(
+            sessionId: uppercased,
+            capability: "C",
+            shortId: "abc123"
+        )
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        pollOwned(router, [ownedEntry("detached", session: uppercased)], generation: 0)
+        fake.deviceListResult = [ownedEntry("detached", session: uppercased)]
+
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .shutdown))
+        await settle()
+
+        #expect(fake.shutdownDeviceCalls == ["detached"])
+    }
+
+    @Test
     func aRestoreStopsRetryingWhenItsWindowCloses() async {
         // Silence is the only thing worth repeating, and even that is bounded:
         // a helper that starts answering long after the restart would be

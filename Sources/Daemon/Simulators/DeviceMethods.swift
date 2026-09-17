@@ -368,7 +368,7 @@ public enum DeviceMethods {
                 throw mapDeviceError(error)
             }
             let response = PaneMethods.CreateResponse(
-                paneId: result.paneId.uuidString,
+                paneId: PublicIdentifier.string(result.paneId),
                 attachment: result.attachment,
                 scale: result.scale,
                 family: result.family,
@@ -573,7 +573,7 @@ public enum DeviceMethods {
                 udid: info.udid,
                 name: info.name,
                 state: stateName(info.state),
-                ownedBySession: owner?.uuidString,
+                ownedBySession: owner.map(PublicIdentifier.string),
                 family: DeviceFamilyClassifier.classify(info.deviceTypeIdentifier).rawValue,
                 deviceType: info.deviceTypeName.isEmpty ? nil : info.deviceTypeName
             )

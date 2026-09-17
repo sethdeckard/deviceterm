@@ -147,3 +147,44 @@ func successfulRosterReadAnswersFromTheRoster() async {
     #expect(await fake.lookUpOwnedSim(udid: "EEEE-5") == .notRunning)
     #expect(fake.deviceListCalls.allSatisfy { $0.scope == .owned })
 }
+
+// The two sides of every attribution test arrive by different routes: the
+// session sets from GUI pane state, which holds the canonical spelling, and
+// `ownedBySession` from the roster read. These pin that the comparison
+// survives a difference in case, in both directions it can go wrong.
+
+private let canonicalSession = "550e8400-e29b-41d4-a716-446655440000"
+private let uppercasedSession = "550E8400-E29B-41D4-A716-446655440000"
+
+@Test
+func anUppercaseAttributionStillMatchesACanonicalSessionSet() {
+    let devices = [entry(udid: "EEEE-5", state: "Booted", session: uppercasedSession)]
+    #expect(OwnedSimDecision.anyBooted(ownedBy: [canonicalSession], in: devices))
+    #expect(OwnedSimDecision.booted(ownedBy: [canonicalSession], in: devices).count == 1)
+}
+
+@Test
+func anUppercaseAttributionIsNotThisPanesToStopWhenAnotherTabHoldsIt() {
+    // The dangerous direction. Missing the match here reports a simulator
+    // another tab is using as free to shut down, and the prompt's stored
+    // `shutdown` default would then stop it without asking.
+    #expect(
+        OwnedSimDecision.isOursToStop(
+            ownedBySession: uppercasedSession,
+            claimedElsewhere: [canonicalSession]
+        ) == false
+    )
+}
+
+@Test
+func anAttributionNoLiveTabClaimsIsStillOursToStop() {
+    // The canonicalization must not collapse into "always claimed": an owner
+    // that no live tab holds is exactly the stranded-sim case the prompt is
+    // for.
+    #expect(
+        OwnedSimDecision.isOursToStop(
+            ownedBySession: uppercasedSession,
+            claimedElsewhere: ["11111111-1111-1111-1111-111111111111"]
+        )
+    )
+}

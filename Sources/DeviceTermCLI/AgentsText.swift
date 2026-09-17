@@ -355,8 +355,9 @@ public enum AgentsText {
         real layout leaf, including terminal panes.
 
         Every workspace object carries:
-        - `id`: the canonical UUID. A terminal pane's id is its
-          daemon `sessionId`.
+        - `id`: the canonical UUID, printed lowercase.
+          A terminal pane's id is its daemon `sessionId`,
+          so it equals `$DEVICETERM_SESSION` in that shell.
         - `shortId`: six lowercase hex characters derived from a
           window or tab UUID, or a six-character lowercase Crockford
           base32 handle minted for a pane.

@@ -321,7 +321,7 @@ struct SessionCohortStateTests {
             now: 1_000
         )
         #expect(commit.applied)
-        #expect(commit.outcome == .promote(successor: uuid(11).uuidString))
+        #expect(commit.outcome == .promote(successor: PublicIdentifier.string(uuid(11))))
         #expect(commit.closed == [member(10)])
         #expect(commit.successor == member(11))
         #expect(
@@ -377,7 +377,7 @@ struct SessionCohortStateTests {
             key: key(3),
             now: 1_000
         )
-        #expect(first.outcome == .promote(successor: uuid(11).uuidString))
+        #expect(first.outcome == .promote(successor: PublicIdentifier.string(uuid(11))))
         #expect(retry.applied)
         #expect(retry.outcome == first.outcome)
         // Nothing left for the caller to re-home or emit.
@@ -413,7 +413,7 @@ struct SessionCohortStateTests {
             key: key(3),
             now: 1_000
         )
-        #expect(corrected.outcome == .promote(successor: uuid(11).uuidString))
+        #expect(corrected.outcome == .promote(successor: PublicIdentifier.string(uuid(11))))
     }
 
     @Test("a stale key rejects a close without recording anything")
@@ -463,7 +463,7 @@ struct SessionCohortStateTests {
         #expect(
             decision
                 == .decided(
-                    outcome: .promote(successor: uuid(11).uuidString),
+                    outcome: .promote(successor: PublicIdentifier.string(uuid(11))),
                     successor: member(11)
                 )
         )
@@ -699,7 +699,7 @@ struct SessionCohortStateTests {
             now: 1_000
         )
         #expect(exact.applied)
-        #expect(exact.outcome == .promote(successor: uuid(11).uuidString))
+        #expect(exact.outcome == .promote(successor: PublicIdentifier.string(uuid(11))))
     }
 
     @Test("a retired cohort's close cannot decide for relocated members")

@@ -281,7 +281,7 @@ func aRefusedGestureIsRetryableAndNamesTheVerbOnTheWire() {
     // The caller has to be able to tell "nothing went out" from "it went
     // out and failed", because only one of those is safe to repeat.
     #expect(mapped.message.contains("nothing was sent"))
-    #expect(!mapped.message.contains(paneId.uuidString))
+    #expect(!mapped.message.contains(PublicIdentifier.string(paneId)))
 }
 
 @Test

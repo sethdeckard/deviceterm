@@ -230,7 +230,7 @@ public enum PhysicalDeviceMethods {
             // device, and could race that teardown.
             return try JSONEncoder().encode(
                 PaneMethods.CreateResponse(
-                    paneId: result.paneId.uuidString,
+                    paneId: PublicIdentifier.string(result.paneId),
                     attachment: result.attachment,
                     scale: result.scale,
                     family: result.family,

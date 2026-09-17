@@ -16,7 +16,14 @@ import DaemonProtocol
 /// role at create-time.
 struct TerminalPaneState: Identifiable, Equatable, Sendable {
     let id: TerminalPaneID
-    /// Daemon-issued session UUID for this terminal's shell.
+    /// Daemon-issued session UUID for this terminal's shell, in the
+    /// published lowercase spelling.
+    ///
+    /// The initializer canonicalizes, so this is one spelling by
+    /// construction rather than by every producer agreeing. Everything
+    /// downstream reads it and compares it exactly: the pane's public `id`,
+    /// the `DEVICETERM_SESSION` env value, the scratch dir, the
+    /// inventory-sync set, and the tab-ownership check.
     let sessionId: String
     /// Daemon-issued capability token for this terminal's session.
     /// Held in memory only; never persisted to disk. The GUI uses it
@@ -64,7 +71,7 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
         command: [String]? = nil
     ) {
         self.id = id
-        self.sessionId = sessionId
+        self.sessionId = PublicIdentifier.canonicalized(sessionId)
         self.capability = capability
         self.shortId = shortId
         self.name = name

@@ -66,7 +66,7 @@ struct RouterCohortTests {
         #expect(fake.setCohortCalls.count == 1)
         let call = fake.setCohortCalls.first
         #expect(call?.operation == .reconcile)
-        #expect(call?.cohortId == tab?.cohortId.uuidString)
+        #expect(call?.cohortId == tab.map { PublicIdentifier.string($0.cohortId) })
         #expect(call?.members == ["S"])
         #expect(call?.representative == "S")
         #expect(call?.replaces == nil)
@@ -89,8 +89,8 @@ struct RouterCohortTests {
         #expect(calls.first?.cohortId == calls.last?.cohortId)
         #expect(calls.count == 2 && calls[1].revision > calls[0].revision)
         #expect(
-            workspace.windows.first?.tabs.tabs.first?.cohortId.uuidString
-                == calls.first?.cohortId
+            workspace.windows.first?.tabs.tabs.first
+                .map { PublicIdentifier.string($0.cohortId) } == calls.first?.cohortId
         )
     }
 
@@ -372,7 +372,7 @@ struct RouterCohortTests {
         await settle()
         let creationCalls = fake.setCohortCalls.count
         let cohortIds = workspace.windows
-            .flatMap { $0.tabs.tabs.map(\.cohortId.uuidString) }
+            .flatMap { $0.tabs.tabs.map { PublicIdentifier.string($0.cohortId) } }
 
         await router.reconcileAllCohorts()
 

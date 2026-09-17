@@ -691,7 +691,7 @@ struct PaneCohortAuthorityTests {
             mode: .shutdown,
             key: key(2)
         )
-        #expect(commit.outcome == .promote(successor: bob.sessionId.uuidString))
+        #expect(commit.outcome == .promote(successor: PublicIdentifier.string(bob.sessionId)))
         // The explicit close and the teardown both follow, as they do in
         // production. Neither may decide again: deciding fresh here is the
         // shape that once demoted a committed promotion to detach/shutdown.
@@ -710,7 +710,7 @@ struct PaneCohortAuthorityTests {
         }
         #expect(close.sessionId == alice.sessionId)
         #expect(close.incarnation == alice.incarnation)
-        #expect(close.outcome == .promote(successor: bob.sessionId.uuidString))
+        #expect(close.outcome == .promote(successor: PublicIdentifier.string(bob.sessionId)))
         // The re-homing is what keeps bob able to drive the pane he
         // inherited: the revocation sweep raises `ownerRevoked` on records
         // still naming the departed session.
@@ -790,7 +790,7 @@ struct PaneCohortAuthorityTests {
             Issue.record("expected a close effect, got \(box.effects)")
             return
         }
-        #expect(close.outcome == .promote(successor: bob.sessionId.uuidString))
+        #expect(close.outcome == .promote(successor: PublicIdentifier.string(bob.sessionId)))
         #expect(
             await coordinator.canSessionDrive(
                 paneId: created.paneId,

@@ -266,18 +266,24 @@ DeviceTerm exposes several identifier layers:
 | `WorkspaceTab.title` | Normalized GUI title, capped at 256 UTF-8 bytes. It is display metadata, not an identifier |
 | `WorkspacePane.terminal.title` | Normalized per-pane label, capped the same way. Also display metadata, and distinct from its tab's |
 | `udid` in a Simulator pane | Lowercase Simulator UDID |
-| `deviceId` in a physical-device pane | CoreDevice device ID |
+| `deviceId` in a physical-device pane | CoreDevice device ID, uppercase as `devicectl` reports it |
 | `id` in the device roster | A Simulator UDID (lowercase) or physical CoreDevice device ID |
 
-A Simulator UDID is a case-insensitive UUID, and case is where two outputs stop
-comparing equal. DeviceTerm prints a *resolved* one lowercase: `pane list`,
-`pane show`, `tab show`, `devices list`, input receipts, and the event stream.
-`simctl` prints the same UDID uppercase, and physical device IDs keep the
-uppercase form `devicectl` reports.
+Case is where two outputs stop comparing equal, so DeviceTerm mints every
+identifier in one spelling. Window, tab, and pane ids, session ids, short ids,
+and resolved Simulator UDIDs all print lowercase, in every JSON surface and in
+the event stream. Two ids from different DeviceTerm commands compare directly,
+and inside a terminal pane's shell that pane's `id` equals
+`$DEVICETERM_SESSION`.
 
-References resolve case-insensitively, so once a Simulator is attached, its
-uppercase UDID from `simctl list devices` works as a `--pane` argument. Case
-matters only when comparing strings from different tools.
+The one uppercase string in DeviceTerm's own output is a physical device ID,
+preserved exactly as `devicectl` reports it. Simulator UDIDs are the case to
+watch: `simctl` prints them uppercase and DeviceTerm prints the same UDID
+lowercase, so two tools name one device differently.
+
+References resolve case-insensitively, so a UDID copied uppercase out of
+`simctl list devices` still works as a `--pane` argument. Case matters only
+when you compare strings from different tools.
 
 Workspace refs are raw strings. A window or tab accepts an exact short ID,
 exact full UUID, exact unique name, or unique full-UUID prefix. A pane accepts
@@ -741,7 +747,7 @@ devices:
   "osVersion": "27.0",
   "state": "connected",
   "attached": true,
-  "ownerSessionId": "550E8400-E29B-41D4-A716-446655440000"
+  "ownerSessionId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -822,7 +828,7 @@ Shape:
     }
   ],
   "session": {
-    "sessionId": "550E8400-E29B-41D4-A716-446655440000",
+    "sessionId": "550e8400-e29b-41d4-a716-446655440000",
     "shortId": "abc123",
     "name": "auth-feature"
   },
@@ -920,7 +926,7 @@ Every input receipt begins with:
 {
   "ok": true,
   "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+  "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "shortId": "phn001"
 }
 ```
@@ -963,7 +969,7 @@ Example relative rotate receipt:
   "direction": "left",
   "observedOrientation": "landscapeLeft",
   "ok": true,
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+  "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "shortId": "phn001",
   "targetOrientation": "landscapeLeft",
   "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
@@ -1006,7 +1012,7 @@ Example tap receipt:
 ```json
 {
   "ok": true,
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+  "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "shortId": "phn001",
   "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
   "x": 0.5,
@@ -1021,7 +1027,7 @@ Example swipe receipt:
   "dispatched": "drag",
   "durationMs": 250,
   "ok": true,
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+  "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "shortId": "phn001",
   "steps": 15,
   "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
@@ -1164,7 +1170,7 @@ Successful waits produce:
   },
   "ok": true,
   "pane": {
-    "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+    "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
     "shortId": "phn001",
     "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
   }
@@ -1948,7 +1954,7 @@ unused:
 
 ```json
 {
-  "paneId": "F3A61C00-3F4B-44F0-8898-18544176A338",
+  "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "state": "rendering",
   "ts": "2026-08-08T15:30:12.123Z",
   "type": "pane.stateChanged",

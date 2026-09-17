@@ -1424,7 +1424,7 @@ public actor DeviceCoordinator {
             udid: record.evidence.udid,
             status: resolvedStatus,
             sessionId: resolvedStatus == .promoted && record.evidence.disposition == .attach
-                ? record.sessionId?.uuidString
+                ? record.sessionId.map(PublicIdentifier.string)
                 : nil
         )
     }

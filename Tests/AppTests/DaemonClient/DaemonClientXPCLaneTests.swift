@@ -427,8 +427,12 @@ private final class LaneReplyPeer: @unchecked Sendable {
         let value: any Encodable
         switch method {
         case .sessionCreate:
+            // The canonical spelling, as the daemon sends it, so these
+            // assertions stay about pane-principal repair. That the client
+            // canonicalizes whatever casing it is handed is pinned separately,
+            // in `DaemonClientReauthTests`.
             value = SessionCreateResponse(
-                sessionId: UUID().uuidString,
+                sessionId: PublicIdentifier.string(UUID()),
                 capability: "lane-test-capability",
                 shortId: "LANE01",
                 role: .agent

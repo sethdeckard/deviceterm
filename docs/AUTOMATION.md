@@ -371,7 +371,10 @@ object is ambiguous.
 
 Window and tab short ids are the first six lowercase hexadecimal characters
 of their UUIDs. Pane short ids are six lowercase Crockford base32 characters.
-A terminal pane's full pane id is its session id.
+A terminal pane's full pane id is its session id. Both print lowercase, so
+`pane show --json | jq -r .id` and `$DEVICETERM_SESSION` compare equal without
+normalizing either one. Every id DeviceTerm prints is lowercase, apart from a
+physical device ID, which keeps the spelling `devicectl` reports.
 
 The one-based `index` printed for a window is display metadata. It is never a
 window reference. A numeric-looking window short id remains unambiguous because

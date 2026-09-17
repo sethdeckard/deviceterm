@@ -227,7 +227,7 @@ public enum PaneMethods {
             }
             return try JSONEncoder().encode(
                 CreateResponse(
-                paneId: result.paneId.uuidString,
+                paneId: PublicIdentifier.string(result.paneId),
                 attachment: result.attachment,
                 scale: result.scale,
                 family: result.family,
@@ -348,7 +348,7 @@ public enum PaneMethods {
             // yield, so the conflation upstream would only move the pile-up
             // one hop along. Mapping in place leaves the channel as the only
             // handler-side event buffer, and the transport's reads drive it.
-            let paneIdString = paneId.uuidString
+            let paneIdString = PublicIdentifier.string(paneId)
             let channel = paneStream.channel
             let events = SubscriptionEventStream { [weak paneCoordinator] in
                 // Skip an event that fails to encode rather than ending the
@@ -883,7 +883,7 @@ public enum PaneMethods {
             )
             let entries = panes.map {
                 PanesListEntry(
-                    paneId: $0.paneId.uuidString,
+                    paneId: PublicIdentifier.string($0.paneId),
                     udid: $0.udid,
                     state: $0.state.rawValue,
                     family: $0.family,

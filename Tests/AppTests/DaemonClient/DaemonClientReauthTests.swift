@@ -49,6 +49,10 @@ struct DaemonClientReauthTests {
         /// When true, the next `session.authenticate` throws a transport
         /// error (the connection dropped mid-reauth).
         var failNextAuthenticateWithTransport = false
+        /// Session ids for `session.create` to issue, head first. Empty falls
+        /// back to the `sess-N` counter, which is not UUID-shaped and so is
+        /// unaffected by canonicalization.
+        var sessionIdsToIssue: [String] = []
         private var createdCount = 0
 
         func request(method: String, params: Data?) async throws -> Data {
@@ -57,11 +61,11 @@ struct DaemonClientReauthTests {
             switch method {
             case RPCMethod.sessionCreate.rawValue:
                 createdCount += 1
+                let issued = sessionIdsToIssue.isEmpty
+                    ? "sess-\(createdCount)"
+                    : sessionIdsToIssue.removeFirst()
                 return try JSONEncoder().encode(
-                    SessionCreateResponse(
-                        sessionId: "sess-\(createdCount)",
-                        capability: "cap"
-                    )
+                    SessionCreateResponse(sessionId: issued, capability: "cap")
                 )
 
             case RPCMethod.sessionAuthenticate.rawValue:
@@ -329,6 +333,62 @@ struct DaemonClientReauthTests {
         #expect(transport.authenticatedSessionIds.last == first.sessionId)
         #expect(!transport.authenticatedSessionIds.dropFirst(2)
             .contains(second.sessionId))
+    }
+
+    @Test
+    func aCloseInTheCanonicalSpellingPrunesACredentialCachedInAnother() async throws {
+        // The two routes meet here. The credential is cached from a
+        // `session.create` response, while `closeSession` is handed the pane
+        // state's canonical id. If the cache keeps a different spelling, the
+        // close prunes nothing and the next reconnect reauthenticates as a
+        // session the daemon has deleted.
+        let transport = ScriptedRequestTransport()
+        transport.sessionIdsToIssue = [
+            "550E8400-E29B-41D4-A716-446655440000",
+            "6B972894-D019-4429-ADCD-43432E7FFD5E"
+        ]
+        let client = DaemonClient(injecting: transport)
+        _ = try await client.createSession(label: nil, name: nil, role: .agent)
+        let second = try await client.createSession(label: nil, name: nil, role: .agent)
+        try await client.closeSession(
+            sessionId: PublicIdentifier.canonicalized(second.sessionId),
+            capability: second.capability
+        )
+
+        _ = try await client.deviceList(scope: .owned)
+        #expect(
+            transport.authenticatedSessionIds.last
+                == "550e8400-e29b-41d4-a716-446655440000"
+        )
+        #expect(!transport.authenticatedSessionIds.dropFirst(2)
+            .contains { PublicIdentifier.canonicalized($0) == "6b972894-d019-4429-adcd-43432e7ffd5e" })
+    }
+
+    @Test
+    func aCloseGivenTheResponseIdUntouchedAlsoPrunes() async throws {
+        // `discardSession` and `reportUnconfirmedClose` hand `closeSession` a
+        // `session.create` response untouched, so the id arrives in whatever
+        // spelling that reply used while the cached credential is canonical.
+        // The close has to prune it anyway.
+        let transport = ScriptedRequestTransport()
+        transport.sessionIdsToIssue = [
+            "550E8400-E29B-41D4-A716-446655440000",
+            "6B972894-D019-4429-ADCD-43432E7FFD5E"
+        ]
+        let client = DaemonClient(injecting: transport)
+        _ = try await client.createSession(label: nil, name: nil, role: .agent)
+        let second = try await client.createSession(label: nil, name: nil, role: .agent)
+        // Deliberately NOT canonicalized: this is the raw response id.
+        try await client.closeSession(
+            sessionId: second.sessionId,
+            capability: second.capability
+        )
+
+        _ = try await client.deviceList(scope: .owned)
+        #expect(
+            transport.authenticatedSessionIds.last
+                == "550e8400-e29b-41d4-a716-446655440000"
+        )
     }
 
     @Test

@@ -187,7 +187,7 @@ public enum SessionMethods {
             // else; the stored `state` keeps only the verifier.
             let state = created.state
             let response = CreateResponse(
-                sessionId: state.id.uuidString,
+                sessionId: PublicIdentifier.string(state.id),
                 capability: created.capability.token,
                 shortId: state.shortId,
                 name: state.name,

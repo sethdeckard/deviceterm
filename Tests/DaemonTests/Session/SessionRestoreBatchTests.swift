@@ -776,7 +776,7 @@ func nonRestorableChurnNeverTombstonesAndCannotEvictAFence() async throws {
         revision: 2
     )
     #expect(await manager.contains(sessionX) == false)
-    #expect(result.sessionIds.contains(sessionX.uuidString) == false)
+    #expect(result.sessionIds.contains(PublicIdentifier.string(sessionX)) == false)
 }
 
 @Test

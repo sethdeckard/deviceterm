@@ -61,7 +61,7 @@ enum SessionRestoreInventory {
                         // restart.
                         name: terminal.sessionName,
                         isProtected: isProtected,
-                        tabId: tab.cohortId.uuidString
+                        tabId: PublicIdentifier.string(tab.cohortId)
                     )
                 )
             }

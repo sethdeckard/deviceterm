@@ -14,7 +14,9 @@ import DaemonProtocol
 /// `PaneTarget`-keyed pane type; `MirroredPaneState` is the seam that
 /// consolidation builds on.
 struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
-    /// Daemon pane id from `physicalDevice.attach`.
+    /// Daemon pane id from `physicalDevice.attach`, in the published
+    /// lowercase spelling. Canonicalized by the initializer for the same
+    /// reason as `SimPaneState.paneId`.
     let paneId: String
     /// See `MirroredPaneState.attachment`.
     let attachment: UInt64?
@@ -46,7 +48,7 @@ struct DevicePaneState: MirroredPaneState, Equatable, Sendable {
         capabilities: PaneCapabilities? = nil,
         sizePreset: SimSizePreset? = nil
     ) {
-        self.paneId = paneId
+        self.paneId = PublicIdentifier.canonicalized(paneId)
         self.attachment = attachment
         self.deviceId = deviceId
         self.displayName = displayName

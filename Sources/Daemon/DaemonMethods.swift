@@ -133,7 +133,7 @@ public enum DaemonMethods {
             )
             let response = DaemonCapabilitiesResponse(
                 role: role,
-                sessionId: sessionId?.uuidString,
+                sessionId: sessionId.map(PublicIdentifier.string),
                 automationGrant: hasGrant,
                 allowedMethods: methodsForRole(
                     role,

@@ -141,7 +141,14 @@ final class InventorySyncCoordinator {
                 """
             )
             let echoed = await deps.sendBatch(inventory)
-            let verified = echoed.map { Set($0) == expected } ?? false
+            // Canonicalize the echo before comparing. The daemon answers from
+            // ids it parsed, so the spelling is its own rather than this
+            // batch's, and an echo that differs only in case would read as a
+            // different set. That never converges: the sync stays dirty and
+            // retries forever without rebinding terminals or recovering panes.
+            let verified = echoed.map {
+                Set($0.map(PublicIdentifier.canonicalized)) == expected
+            } ?? false
             syncLog.info(
                 """
                 restoreBatch generation=\(sendGeneration, privacy: .public) \

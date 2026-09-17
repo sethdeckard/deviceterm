@@ -237,7 +237,7 @@ public enum ShimMethods {
         )
         _ = await appCommandCoordinator.publishAndAwait(
             kind: .paneAttach,
-            originatingSessionId: sessionId.uuidString,
+            originatingSessionId: PublicIdentifier.string(sessionId),
             params: attachParams
         )
     }

@@ -54,7 +54,7 @@ func bootedClaimPromotesOwnership() async throws {
     let result = try await coordinator.reconcileBootClaim(claim(), sessionId: sessionId)
 
     #expect(result.status == .promoted)
-    #expect(result.sessionId == sessionId.uuidString)
+    #expect(result.sessionId == PublicIdentifier.string(sessionId))
     #expect(await coordinator.ownerSession(forUDID: claimedUDID) == sessionId)
 }
 
@@ -127,7 +127,7 @@ func failedBootCandidateLeavesTheAcceptedClaimActive() async throws {
         inspectCurrentState: false
     )
     #expect(firstResult.status == .promoted)
-    #expect(firstResult.sessionId == firstSession.uuidString)
+    #expect(firstResult.sessionId == PublicIdentifier.string(firstSession))
     #expect(duplicateResult.status == .failed)
     #expect(await coordinator.ownerSession(forUDID: claimedUDID) == firstSession)
 }
@@ -293,7 +293,7 @@ func closeEffectPromotesAClaimStillPending() async throws {
 
     let result = try await coordinator.reconcileBootClaim(claim(), sessionId: sessionId)
     #expect(result.status == .promoted)
-    #expect(result.sessionId == successor.uuidString)
+    #expect(result.sessionId == PublicIdentifier.string(successor))
     #expect(await coordinator.ownerSession(forUDID: claimedUDID) == successor)
 }
 
@@ -308,7 +308,7 @@ func closeEffectPromotesAClaimThatRegistersLate() async throws {
 
     let result = try await coordinator.reconcileBootClaim(claim(), sessionId: sessionId)
 
-    #expect(result.sessionId == successor.uuidString)
+    #expect(result.sessionId == PublicIdentifier.string(successor))
     #expect(await coordinator.ownerSession(forUDID: claimedUDID) == successor)
 }
 
@@ -345,7 +345,7 @@ func aLateClaimFollowsAPromotionChain() async throws {
     // The claim was issued by alice, who has since handed off twice.
     let result = try await coordinator.reconcileBootClaim(claim(), sessionId: alice)
 
-    #expect(result.sessionId == carol.uuidString)
+    #expect(result.sessionId == PublicIdentifier.string(carol))
     #expect(await coordinator.ownerSession(forUDID: claimedUDID) == carol)
 }
 
@@ -383,7 +383,7 @@ func aRestoredSessionBypassesItsOldTombstone() async throws {
         currentIncarnation: 2
     )
     #expect(restored.status == .promoted)
-    #expect(restored.sessionId == sessionId.uuidString)
+    #expect(restored.sessionId == PublicIdentifier.string(sessionId))
 
     let midClose = try await coordinator.reconcileBootClaim(
         claim(),
@@ -424,7 +424,7 @@ func aTransferEffectMovesOnlyTheNamedDevicesAndTheirClaims() async throws {
         claim(udid: otherUDID),
         sessionId: alice.sessionId
     )
-    #expect(fresh.sessionId == alice.sessionId.uuidString)
+    #expect(fresh.sessionId == PublicIdentifier.string(alice.sessionId))
 }
 
 @Test

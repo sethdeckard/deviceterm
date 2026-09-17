@@ -223,3 +223,46 @@ func aStaleReplyAfterReconnectDoesNotConsumeTheNewGenerationsFire() async {
     await harness.settle { harness.coordinator.isSettled }
     #expect(harness.reconnectFires == [["b"]])
 }
+
+@Test
+@MainActor
+func anEchoInAnotherCasingStillVerifies() async {
+    // The daemon answers from ids it parsed, so the echo carries its own
+    // spelling rather than this batch's. The sync has to accept one that
+    // differs only in case: an unverified batch stays dirty forever, and
+    // nothing downstream of it runs, so terminals never rebind and panes
+    // never recover.
+    //
+    // The echo turns exact after three sends so a regression fails on the
+    // send count instead of spinning `settle` forever.
+    let harness = Harness()
+    harness.inventory = [session("550e8400-e29b-41d4-a716-446655440000")]
+    var sends = 0
+    harness.onSend = { inv in
+        sends += 1
+        return inv.map { sends < 3 ? $0.sessionId.uppercased() : $0.sessionId }
+    }
+    harness.coordinator.markDirty()
+    await harness.settle { harness.coordinator.isSettled }
+    #expect(harness.sendCount == 1)
+}
+
+@Test
+@MainActor
+func anEchoThatIsGenuinelyADifferentSetStillFails() async {
+    // The canonicalization above must not turn the verification into a
+    // formality: a set that differs by more than spelling still has to retry.
+    let harness = Harness()
+    harness.inventory = [session("550e8400-e29b-41d4-a716-446655440000")]
+    var sends = 0
+    harness.onSend = { inv in
+        sends += 1
+        // Same size, same shape, different id: canonicalizing both sides
+        // cannot rescue it.
+        if sends < 3 { return ["11111111-1111-1111-1111-111111111111"] }
+        return inv.map(\.sessionId)
+    }
+    harness.coordinator.markDirty()
+    await harness.settle { harness.coordinator.isSettled }
+    #expect(harness.sendCount == 3)
+}
