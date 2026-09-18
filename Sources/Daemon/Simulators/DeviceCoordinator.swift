@@ -89,6 +89,13 @@ public actor DeviceCoordinator {
 
     private static let defaultDeviceSnapshotTTLNanoseconds: UInt64 = 2_000_000_000
     private static let defaultDeviceSnapshotDeadlineNanoseconds: UInt64 = 3_000_000_000
+    /// What one `deviceRead` call may spend in total, restarts included. An
+    /// invalidation landing mid-read makes the completed result stale and the
+    /// call starts another attempt; with each attempt bounded at the deadline
+    /// above, this is what keeps a run of invalidations from chaining them.
+    /// Half a deadline past one attempt, so a quick stale attempt can still be
+    /// retried while one that used most of its deadline cannot.
+    private static let defaultDeviceReadBudgetNanoseconds: UInt64 = 4_500_000_000
     /// Abandoned reads tolerated before a caller is refused without starting
     /// another. The reader's queue is serial, so at most one bridge call is
     /// ever parked and the rest are small queued closures; the cap is what
@@ -184,6 +191,13 @@ public actor DeviceCoordinator {
     private let deviceSnapshotClock: @Sendable () -> UInt64
     private let deviceSnapshotDeadlineNanoseconds: UInt64
     private let deviceSnapshotSleep: @Sendable (UInt64) async throws -> Void
+    private let deviceReadBudgetNanoseconds: UInt64
+    /// Runs boot and shutdown on a serial DispatchQueue so the synchronous
+    /// bridge call suspends this actor rather than holding it. The two
+    /// closures are the bridge calls themselves; tests substitute them.
+    private let deviceCommander: CoreSimulatorDeviceCommander
+    private let bootDevice: @Sendable (String) throws -> Void
+    private let shutdownDevice: @Sendable (String) throws -> Void
     /// Hermetic restoration tests inject the booted set directly because
     /// `CSBDeviceInfo` has no public fixture initializer. Nil in production;
     /// every production boot-state read derives from `deviceReader`.
@@ -238,6 +252,10 @@ public actor DeviceCoordinator {
         self.deviceSnapshotClock = { DispatchTime.now().uptimeNanoseconds }
         self.deviceSnapshotDeadlineNanoseconds = Self.defaultDeviceSnapshotDeadlineNanoseconds
         self.deviceSnapshotSleep = { try await Task.sleep(nanoseconds: $0) }
+        self.deviceReadBudgetNanoseconds = Self.defaultDeviceReadBudgetNanoseconds
+        self.deviceCommander = CoreSimulatorDeviceCommander()
+        self.bootDevice = Self.bootThroughBridge
+        self.shutdownDevice = Self.shutDownThroughBridge
         self.bootedUDIDsOverride = nil
     }
 
@@ -255,6 +273,10 @@ public actor DeviceCoordinator {
         self.deviceSnapshotClock = { DispatchTime.now().uptimeNanoseconds }
         self.deviceSnapshotDeadlineNanoseconds = Self.defaultDeviceSnapshotDeadlineNanoseconds
         self.deviceSnapshotSleep = { try await Task.sleep(nanoseconds: $0) }
+        self.deviceReadBudgetNanoseconds = Self.defaultDeviceReadBudgetNanoseconds
+        self.deviceCommander = CoreSimulatorDeviceCommander()
+        self.bootDevice = Self.bootThroughBridge
+        self.shutdownDevice = Self.shutDownThroughBridge
         self.bootedUDIDsOverride = readBootedUDIDs
     }
 
@@ -274,7 +296,10 @@ public actor DeviceCoordinator {
         deviceReaderQueue: DispatchQueue = DispatchQueue(
             label: "com.deviceterm.daemon.coresimulator-devices.test"
         ),
-        readDevices: @escaping @Sendable () throws -> [CSBDeviceInfo]
+        readDevices: @escaping @Sendable () throws -> [CSBDeviceInfo],
+        deviceReadBudgetNanoseconds: UInt64 = 4_500_000_000,
+        bootDevice: @escaping @Sendable (String) throws -> Void = DeviceCoordinator.bootThroughBridge,
+        shutdownDevice: @escaping @Sendable (String) throws -> Void = DeviceCoordinator.shutDownThroughBridge
     ) {
         self.eventBroker = eventBroker
         self.debounceWindow = debounceWindow
@@ -286,7 +311,45 @@ public actor DeviceCoordinator {
         self.deviceSnapshotClock = deviceSnapshotClock
         self.deviceSnapshotDeadlineNanoseconds = deviceSnapshotDeadlineNanoseconds
         self.deviceSnapshotSleep = deviceSnapshotSleep
+        self.deviceReadBudgetNanoseconds = deviceReadBudgetNanoseconds
+        self.deviceCommander = CoreSimulatorDeviceCommander(
+            queue: DispatchQueue(label: "com.deviceterm.daemon.coresimulator-commands.test")
+        )
+        self.bootDevice = bootDevice
+        self.shutdownDevice = shutdownDevice
         self.bootedUDIDsOverride = nil
+    }
+
+    /// The production boot: look the device up, then boot it, each failure
+    /// mapped to the `DeviceError` the RPC reports. Runs on the commander's
+    /// queue, never on this actor.
+    private static func bootThroughBridge(udid: String) throws {
+        let handle: SimDeviceHandle
+        do {
+            handle = try SimDeviceHandle.handle(forUDID: udid)
+        } catch {
+            throw DeviceError.notFound(udid: udid)
+        }
+        do {
+            try handle.boot()
+        } catch {
+            throw DeviceError.bootFailed(udid: udid, message: String(describing: error))
+        }
+    }
+
+    /// The production shutdown, the same shape as `bootThroughBridge`.
+    private static func shutDownThroughBridge(udid: String) throws {
+        let handle: SimDeviceHandle
+        do {
+            handle = try SimDeviceHandle.handle(forUDID: udid)
+        } catch {
+            throw DeviceError.notFound(udid: udid)
+        }
+        do {
+            try handle.shutdown()
+        } catch {
+            throw DeviceError.shutdownFailed(udid: udid, message: String(describing: error))
+        }
     }
 
     // MARK: - Listing
@@ -390,6 +453,7 @@ public actor DeviceCoordinator {
     /// the corresponding ownership mutation. Only the blocking bridge read is
     /// handed to `CoreSimulatorDeviceReader`'s serial DispatchQueue.
     private func deviceRead() async -> DeviceReadResult {
+        let startedAtNanoseconds = deviceSnapshotClock()
         while true {
             let now = deviceSnapshotClock()
             if let cachedDeviceRead,
@@ -399,10 +463,26 @@ public actor DeviceCoordinator {
             }
             cachedDeviceRead = nil
 
+            // Starting or joining an attempt is allowed only while a whole one
+            // still fits in this call's budget. The deadline bounds a single
+            // attempt; this is what bounds the call, because a stale
+            // completion or a vanished read sends the loop around again and
+            // every invalidation that lands mid-read produces one.
+            let elapsed = now >= startedAtNanoseconds ? now - startedAtNanoseconds : 0
+            guard elapsed + deviceSnapshotDeadlineNanoseconds <= deviceReadBudgetNanoseconds else {
+                DiagnosticLog.attach.notice(
+                    """
+                    CoreSimulator device enumeration has insufficient budget for \
+                    another attempt after \(elapsed / 1_000_000, privacy: .public)ms; \
+                    answering as timed out
+                    """
+                )
+                return .timedOut
+            }
+
             if inFlightDeviceRead == nil {
-                // Refuse rather than start another once too many earlier reads
-                // are still parked in the bridge. This is the only path that
-                // reports a timeout without waiting for one.
+                // Refuse another read once too many earlier reads remain
+                // outstanding in the bridge.
                 guard abandonedDeviceReads.count < Self.maxAbandonedDeviceReads else {
                     return .timedOut
                 }
@@ -614,18 +694,18 @@ public actor DeviceCoordinator {
     ///
     /// Attribution is separate: a pending claim promotes only after the
     /// notifier or shared device snapshot reports `Booted`.
-    public func boot(udid: String, activatingClaimAttemptId: String? = nil) throws {
+    public func boot(udid: String, activatingClaimAttemptId: String? = nil) async throws {
         let normalized = try requireValidUDID(udid)
         let claimAttemptId = activatingClaimAttemptId.flatMap(UUID.init(uuidString:))
-        let handle: SimDeviceHandle
+        // The bridge call runs off this actor. The claim helpers below key on
+        // the attempt's current status, so a claim that moved on while the
+        // boot was in flight is left alone rather than rewritten.
+        let bootDevice = self.bootDevice
         do {
-            handle = try SimDeviceHandle.handle(forUDID: normalized)
-        } catch {
+            try await deviceCommander.perform { try bootDevice(normalized) }
+        } catch let error as DeviceError {
             failPreparedBootClaim(claimAttemptId)
-            throw DeviceError.notFound(udid: normalized)
-        }
-        do {
-            try handle.boot()
+            throw error
         } catch {
             failPreparedBootClaim(claimAttemptId)
             throw DeviceError.bootFailed(
@@ -650,14 +730,17 @@ public actor DeviceCoordinator {
         // check must enumerate after the attempted shutdown rather than reuse a
         // pre-attempt success or failure.
         invalidateDeviceSnapshot()
-        let handle: SimDeviceHandle
+        let shutdownDevice = self.shutdownDevice
+        // The bridge call suspends this actor, and a read completing meanwhile
+        // caches a pre-shutdown snapshot under the current generation. That
+        // entry is invalidated again once the attempt settles, on every path:
+        // the converged shutdown re-checks boot state after an error and must
+        // enumerate after the attempt, not reuse what raced it.
+        defer { invalidateDeviceSnapshot() }
         do {
-            handle = try SimDeviceHandle.handle(forUDID: normalized)
-        } catch {
-            throw DeviceError.notFound(udid: normalized)
-        }
-        do {
-            try handle.shutdown()
+            try await deviceCommander.perform { try shutdownDevice(normalized) }
+        } catch let error as DeviceError {
+            throw error
         } catch {
             throw DeviceError.shutdownFailed(
                 udid: normalized,
@@ -1480,8 +1563,8 @@ public actor DeviceCoordinator {
     }
 
     /// Make a causally established claim eligible for promotion. GUI claims
-    /// reach this only in the same actor turn in which CoreSimulator accepts
-    /// their boot intent; shim and restored claims arrive already established.
+    /// reach this after the command queue reports boot acceptance; shim and
+    /// restored claims arrive already established.
     private func activateBootClaim(_ attemptId: UUID) {
         guard let record = bootClaims[attemptId], record.status == .pending else { return }
         let udid = record.evidence.udid
@@ -1505,8 +1588,8 @@ public actor DeviceCoordinator {
     }
 
     /// Module-internal seam for the failed-duplicate regression test. The
-    /// production boot path calls the UUID-shaped helper in the same actor turn
-    /// as the CoreSimulator failure.
+    /// production boot path calls the UUID-shaped helper after the command
+    /// queue reports failure.
     func failPreparedBootClaim(attemptId: String) {
         failPreparedBootClaim(UUID(uuidString: attemptId))
     }

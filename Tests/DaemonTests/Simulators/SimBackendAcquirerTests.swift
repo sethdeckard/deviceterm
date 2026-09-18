@@ -158,11 +158,52 @@ func anAbandonedAttemptKeepsItsSlotUntilTheBridgeAnswers() async throws {
     // Nothing is left to hand it to, and no pane record will ever close it.
     #expect(try await poll(timeout: 2) { backend.shutdownCalled })
     // A backend was built and then torn down; both are on the record, so a
-    // reader can tell a disposed client from one a pane is still driving.
+    // reader can tell a disposed client from one a pane is still driving. The
+    // disposal is reported after the teardown ran, so wait for it.
+    #expect(try await poll(timeout: 2) { recorder.recorded.count == 2 })
     #expect(recorder.recorded == [
         .backendBuilt(udid: "udid-1", acquisition: 1, ordinal: 1),
         .disposed(udid: "udid-1", acquisition: 1)
     ])
+}
+
+@Test
+func aParkedDisposalDoesNotHoldTheAcquirer() async throws {
+    // A late acquisition is torn down through the async shutdown. A display
+    // unregister that stalls inside CoreSimulator then suspends a task rather
+    // than blocking an executor thread with this actor held, so the next
+    // attach still goes through while the teardown is parked.
+    let bridge = ParkedBridge()
+    let late = MockDeviceBackend()
+    late.parkShutdown = true
+    // A short real deadline rather than an instant one: the second acquire
+    // has to win its race, so an unparked closure must finish inside it.
+    let acquirer = SimBackendAcquirer(
+        sleep: { _ in try await Task.sleep(for: .milliseconds(50)) },
+        acquireHandles: { udid in
+            if udid == "udid-late" {
+                bridge.park()
+                return acquired(late)
+            }
+            return acquired(MockDeviceBackend())
+        }
+    )
+
+    await #expect(throws: PaneError.backendAcquireTimedOut(udid: "udid-late")) {
+        try await acquirer.acquire(udid: "udid-late")
+    }
+    bridge.release(1)
+    #expect(try await poll(timeout: 2) { await acquirer.inFlight == 0 })
+    // The acquisition slot is free, the teardown is parked, and it has not
+    // completed.
+    #expect(try await poll(timeout: 2) { late.shutdownParked })
+    #expect(!late.shutdownCalled)
+
+    let next = try await acquirer.acquire(udid: "udid-next")
+    #expect(next.family == "phone")
+
+    late.releaseShutdown()
+    #expect(try await poll(timeout: 2) { late.shutdownCalled })
 }
 
 @Test

@@ -114,7 +114,7 @@ actor SimBackendAcquirer {
             DiagnosticLog.attach.notice(
                 """
                 simulator backend acquisition returned after its deadline; \
-                handles released; acquisition=\(acquisition, privacy: .public) \
+                torn down; acquisition=\(acquisition, privacy: .public) \
                 udid=\(udid, privacy: .private)
                 """
             )
@@ -176,9 +176,14 @@ actor SimBackendAcquirer {
 
     /// Release an acquisition nobody will be handed. Its handles are live
     /// CoreSimulator resources and no pane record exists to close them.
-    private static func dispose(_ result: Result<Acquired, any Error>) {
+    ///
+    /// Through the async teardown, never the synchronous one: a display
+    /// unregister that stalls inside CoreSimulator then suspends a task,
+    /// where the synchronous path would block an executor thread for the
+    /// whole wait while this actor stays held.
+    private static func dispose(_ result: Result<Acquired, any Error>) async {
         guard case let .success(acquired) = result else { return }
-        acquired.backend.shutdownBackend()
+        await acquired.backend.shutdownBackendAsync()
     }
 
     /// Build the backend for `udid`, waiting no longer than the deadline.
@@ -236,7 +241,7 @@ actor SimBackendAcquirer {
         Task { [weak self] in
             let result = await work.value
             guard let self else {
-                Self.dispose(result)
+                await Self.dispose(result)
                 return
             }
             await self.complete(token: token, result: result)
@@ -266,7 +271,7 @@ actor SimBackendAcquirer {
     /// when the deadline already answered them.
     private func complete(token: UUID, result: Result<Acquired, any Error>) {
         guard let attempt = attempts.removeValue(forKey: token) else {
-            Self.dispose(result)
+            Task { await Self.dispose(result) }
             return
         }
         attempt.timeoutTask.cancel()
@@ -281,9 +286,15 @@ actor SimBackendAcquirer {
             report(.backendBuilt(udid: attempt.udid, acquisition: acquisitionsCompleted, ordinal: ordinal))
         }
         guard let continuation = attempt.continuation else {
-            Self.dispose(result)
-            if let acquisition {
-                report(.disposed(udid: attempt.udid, acquisition: acquisition))
+            // Report disposal after the async teardown returns; a stalled
+            // teardown emits no disposal event.
+            let report = self.report
+            let udid = attempt.udid
+            Task {
+                await Self.dispose(result)
+                if let acquisition {
+                    report(.disposed(udid: udid, acquisition: acquisition))
+                }
             }
             return
         }

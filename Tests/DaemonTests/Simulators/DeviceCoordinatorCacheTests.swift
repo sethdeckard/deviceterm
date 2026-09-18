@@ -114,8 +114,11 @@ private func makeCoordinator(
         qos: .default
     ),
     deadline: DeviceReadDeadlineFixture? = nil,
+    budget: UInt64 = 4_500_000_000,
     beforeRead: (@Sendable () -> Void)? = nil,
-    afterRead: (@Sendable () -> Void)? = nil
+    afterRead: (@Sendable () -> Void)? = nil,
+    bootDevice: @escaping @Sendable (String) throws -> Void = { _ in },
+    shutdownDevice: @escaping @Sendable (String) throws -> Void = { _ in }
 ) -> DeviceCoordinator {
     DeviceCoordinator(
         deviceSnapshotTTLNanoseconds: snapshotTTL,
@@ -133,7 +136,10 @@ private func makeCoordinator(
             let devices = try fixture.read()
             afterRead?()
             return devices
-        }
+        },
+        deviceReadBudgetNanoseconds: budget,
+        bootDevice: bootDevice,
+        shutdownDevice: shutdownDevice
     )
 }
 
@@ -534,6 +540,131 @@ func invalidatedWaitersRetryInsteadOfReturningAnOldRead() async {
     await #expect(throws: DeviceError.listFailed(message: "fixture unavailable")) {
         try await coordinator.listAll()
     }
+    #expect(fixture.count == 2)
+}
+
+@Test
+func aStaleReadDoesNotRestartOnceTheBudgetIsSpent() async throws {
+    // An invalidation landing mid-read makes the completed result stale and
+    // the call starts another attempt. Repeated invalidations can chain
+    // bounded attempts. Refuse a restart when its full deadline no longer
+    // fits in the call's budget.
+    let fixture = DeviceReadFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        budget: 4_000_000_000,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        }
+    )
+
+    let read = Task { try await coordinator.listAll() }
+    await waitOffExecutor(for: entered)
+    await coordinator.noteExternalBoot(udid: UUID().uuidString)
+    // Two of the four seconds are gone; a fresh three-second attempt no
+    // longer fits, so the stale completion ends the call instead of
+    // restarting it.
+    fixture.advance(by: 2_000_000_000)
+    release.signal()
+
+    await #expect(throws: DeviceError.listTimedOut) { try await read.value }
+    #expect(fixture.count == 1)
+
+    // The budget is per call: the next caller starts an attempt of its own.
+    _ = try await coordinator.listAll()
+    #expect(fixture.count == 2)
+}
+
+@Test
+func aQuickStaleReadStillRestartsInsideTheBudget() async throws {
+    // The complement: a stale completion that used little of the budget is
+    // retried, so a caller that raced one invalidation still gets a current
+    // snapshot rather than a spurious timeout.
+    let fixture = DeviceReadFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        budget: 4_000_000_000,
+        beforeRead: {
+            if fixture.hasNoReads {
+                entered.signal()
+                release.wait()
+            }
+        }
+    )
+
+    let read = Task { try await coordinator.listAll() }
+    await waitOffExecutor(for: entered)
+    await coordinator.noteExternalBoot(udid: UUID().uuidString)
+    fixture.advance(by: 500_000_000)
+    release.signal()
+
+    _ = try await read.value
+    #expect(fixture.count == 2)
+}
+
+@Test
+func aParkedBootLeavesTheCoordinatorAnswering() async throws {
+    // Boot is a synchronous bridge call that waits on the same service as
+    // enumeration. Run on the actor it would hold every `device.list` and
+    // status-item poll for as long as CoreSimulator takes, past any deadline,
+    // because the waiters never reach the read path. It runs off the actor.
+    let fixture = DeviceReadFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        bootDevice: { _ in
+            entered.signal()
+            release.wait()
+        }
+    )
+
+    let boot = Task { try await coordinator.boot(udid: UUID().uuidString) }
+    await waitOffExecutor(for: entered)
+
+    // CoreSimulator is holding the boot; the actor is not held with it.
+    _ = try await coordinator.listAll()
+    #expect(fixture.count == 1)
+
+    release.signal()
+    try await boot.value
+}
+
+@Test
+func aSnapshotCachedDuringShutdownIsInvalidatedWhenItSettles() async throws {
+    // The shutdown suspends the actor while the bridge works. A read that
+    // completes meanwhile caches a pre-shutdown snapshot under the current
+    // generation, which the converged shutdown would then read as still
+    // Booted. Settling the attempt invalidates it again, so the next read
+    // enumerates.
+    let fixture = DeviceReadFixture()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let coordinator = makeCoordinator(
+        fixture: fixture,
+        shutdownDevice: { _ in
+            entered.signal()
+            release.wait()
+        }
+    )
+
+    let shutdown = Task { try await coordinator.shutdown(udid: UUID().uuidString) }
+    await waitOffExecutor(for: entered)
+    _ = try await coordinator.listAll()
+    #expect(fixture.count == 1)
+
+    release.signal()
+    try await shutdown.value
+
+    // Inside the TTL, so only the re-invalidation explains a second read.
+    _ = try await coordinator.listAll()
     #expect(fixture.count == 2)
 }
 
