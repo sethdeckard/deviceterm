@@ -16,9 +16,13 @@ public protocol TerminalSurfaceDelegate: AnyObject {
     /// OSC 7: shell working directory. Enables "new tab here".
     func terminalSurface(_ surface: any TerminalSurface, didChangeWorkingDirectory path: String)
 
-    /// The shell/child process exited. `code` is nil if it was
-    /// signalled rather than exiting normally. The host closes the
-    /// pane in response.
+    /// The shell/child process exited. The host closes the pane in
+    /// response.
+    ///
+    /// `code` is nil when the exit status is unknown, which is what the
+    /// libghostty surface always reports: its macOS launch path yields 0
+    /// however the process died, so the value would claim a clean exit it
+    /// cannot know. Treat nil as "it ended", not as a failure.
     func terminalSurface(_ surface: any TerminalSurface, didExitWithCode code: Int32?)
 
     /// Terminal bell (BEL / OSC). Host decides audible vs. visual.

@@ -234,6 +234,27 @@ private func ghosttyAction(
         }
         return true
 
+    case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
+        // The child process is gone. Answering true suppresses the
+        // "Process exited. Press any key to close the terminal." line
+        // libghostty would otherwise print into the terminal.
+        //
+        // The host closes the pane, because the engine's two exit arms
+        // reach `close()` differently. A fast exit treats the answered
+        // action as the whole response and returns without closing. A
+        // normal exit only skips the message, and then `wait-after-command`
+        // decides; libghostty forces that on for any surface given a
+        // command, which every pane here is, so it returns as well.
+        // Waiting on `close_surface_cb` would hang the pane open. Were
+        // that config to change, the engine would close too, and the
+        // surface's exit latch collapses both signals into one exit.
+        //
+        // The payload carries an exit code, but libghostty's macOS launch
+        // path reports 0 however the process died, so it says nothing and
+        // is not read. Fast and slow exits are treated alike.
+        MainActor.assumeIsolated { owner.engineDidReportChildExit() }
+        return true
+
     default:
         // Everything deviceterm doesn't implement: workspace actions it
         // answers itself (tabs, windows, splits), plus surface and engine

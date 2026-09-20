@@ -135,6 +135,11 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         config.command = UnsafePointer(commandC)
         config.working_directory = cwdC.map { UnsafePointer($0) }
         config.initial_input = initialInputC.map { UnsafePointer($0) }
+        // Inert while `command` is set: libghostty forces
+        // `wait-after-command` on for a surface given an explicit command,
+        // and the surface option only ever sets it true. Kept so the knob
+        // is visibly chosen rather than overlooked; what actually closes
+        // the pane is the host answering GHOSTTY_ACTION_SHOW_CHILD_EXITED.
         config.wait_after_command = false
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
 
@@ -683,12 +688,28 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     // main). Fires when the surface should close, including the
     // child process exiting on its own, the reliable exit signal.
     func engineDidRequestClose(processAlive: Bool) {
+        notifyExitOnce()
+    }
+
+    // Called by the runtime's action_cb for GHOSTTY_ACTION_SHOW_CHILD_EXITED
+    // (on main, during tick). Every pane here sets a command on its surface
+    // config, which forces `wait-after-command` on, so the engine returns
+    // without closing and this is the only exit signal such a pane gets.
+    func engineDidReportChildExit() {
+        notifyExitOnce()
+    }
+
+    // The first close callback or child-exit action notifies the delegate;
+    // every later signal for the same surface is ignored. It does not filter
+    // by origin: `requestClose()` reaches `close_surface_cb` as well, so a
+    // host-initiated teardown reports an exit if it is the first signal.
+    //
+    // The code stays nil ("unknown") rather than carrying the action's
+    // `exit_code`: libghostty's macOS launch path reports 0 however the
+    // process died, so the value would assert a clean exit it cannot know.
+    private func notifyExitOnce() {
         guard !didNotifyExit else { return }
         didNotifyExit = true
-        // close_surface_cb carries no exit code; nil = "unknown",
-        // which the contract documents.
-        // DEFERRED: a real exit code needs the
-        // GHOSTTY_ACTION_CHILD_EXITED action, which carries one.
         delegate?.terminalSurface(self, didExitWithCode: nil)
     }
 
