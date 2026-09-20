@@ -10,8 +10,7 @@ cask "deviceterm" do
   version "0.0.0"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
-  url "https://github.com/sethdeckard/deviceterm/releases/download/v#{version}/deviceterm-#{version}.dmg",
-      verified: "github.com/sethdeckard/deviceterm/"
+  url "https://github.com/sethdeckard/deviceterm/releases/download/v#{version}/deviceterm-#{version}.dmg"
   name "DeviceTerm"
   desc "macOS-native terminal that runs live iOS Simulators as panes"
   homepage "https://deviceterm.com"
