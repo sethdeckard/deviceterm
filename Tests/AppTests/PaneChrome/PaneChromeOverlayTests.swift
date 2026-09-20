@@ -277,7 +277,7 @@ struct PaneChromeOverlayTests {
         #expect(Array(actions.suffix(atStopTwo)) == [.home])
         #expect(
             Array(actions.suffix(atStopFive))
-                == [.rotateRight, .record, .screenshot, .home]
+                == [.record, .screenshot, .appSwitcher, .home]
         )
     }
 

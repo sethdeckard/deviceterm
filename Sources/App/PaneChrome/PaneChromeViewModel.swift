@@ -55,8 +55,8 @@ final class PaneChromeViewModel {
     /// Per-pane device-control capabilities. The chrome ribbon filters
     /// its candidate actions through `PaneControlAffordance` so a
     /// physical-device pane shows only the controls it supports
-    /// (buttons / rotate) and hides the simulator-only ones (screenshot
-    /// / record / AX / Apple Pay).
+    /// (buttons / App Switcher / rotate) and hides the simulator-only
+    /// ones (screenshot / record / AX / Apple Pay).
     var capabilities: PaneCapabilities
 
     /// Whether the pane mirrors a physically-connected device. Pairs
@@ -210,12 +210,12 @@ final class PaneChromeViewModel {
     /// already filtered to the ones this pane supports. The candidate
     /// ordering is family-based for a simulator; a physical device
     /// reports family `unknown` (which would otherwise collapse to the
-    /// sim-only screenshot/record/AX row), so it gets its own
-    /// buttons-and-rotate ordering. Either way `PaneControlAffordance`
-    /// trims the list to the pane's capabilities: a sim keeps its full
-    /// row, a device shows only buttons + rotation. Lives on the view
-    /// model (not the SwiftUI view) so it's unit-testable and sits next
-    /// to the capabilities it reads.
+    /// sim-only screenshot/record/AX row), so it gets its own ordering of
+    /// buttons, App Switcher, and rotation. Either way
+    /// `PaneControlAffordance` trims the list to the pane's capabilities: a
+    /// sim keeps its full row, a device drops the sim-only capture and AX
+    /// controls. Lives on the view model (not the SwiftUI view) so it's
+    /// unit-testable and sits next to the capabilities it reads.
     ///
     /// **Every list runs lowest priority to highest**, so the highest-priority
     /// action is the trailing one. The row reveals from its trailing edge, which
@@ -227,16 +227,17 @@ final class PaneChromeViewModel {
     var ribbonActions: [SimChromeAction] {
         let candidates: [SimChromeAction]
         if isPhysicalDevice {
-            candidates = [.siri, .side, .lock, .home, .rotateLeft, .rotateRight]
+            candidates = [.siri, .side, .lock, .appSwitcher, .home, .rotateLeft, .rotateRight]
         } else {
             switch DeviceFamily(wire: family) {
             case .phone, .pad:
                 // Ordered by a judgment of how useful each control is on a sim
                 // pane, least first, which puts Home last so it is the first
-                // action a reveal uncovers.
+                // action a reveal uncovers, and App Switcher second.
                 candidates = [
                     .applePay, .siri, .side, .lock, .axInspector,
-                    .rotateLeft, .rotateRight, .record, .screenshot, .home
+                    .rotateLeft, .rotateRight, .record, .screenshot,
+                    .appSwitcher, .home
                 ]
 
             case .watch:
@@ -266,6 +267,12 @@ final class PaneChromeViewModel {
     /// viewModel.pressButton($0)`. SwiftUI buttons in the toolbar
     /// call straight through.
     var onHardwareButton: (HardwareButton) -> Void = { _ in }
+
+    /// Open the App Switcher through the daemon's orientation-aware system
+    /// gesture, with a Home double-press fallback on backends that lack
+    /// gesture support. Separate from `onHardwareButton` because no
+    /// `HardwareButton` case names it.
+    var onAppSwitcher: () -> Void = {}
 
     /// Relative rotate-left / rotate-right. The chrome ribbon exposes
     /// both as separate buttons (rather than a single cycling control)

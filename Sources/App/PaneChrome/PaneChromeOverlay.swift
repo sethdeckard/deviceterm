@@ -564,6 +564,9 @@ struct PaneChromeOverlay: View {
         case .home:
             viewModel.onHardwareButton(.home)
 
+        case .appSwitcher:
+            viewModel.onAppSwitcher()
+
         case .lock:
             viewModel.onHardwareButton(.lock)
 
@@ -637,6 +640,9 @@ private extension SimChromeAction {
         case .home:
             return "house"
 
+        case .appSwitcher:
+            return SimChromeAction.appSwitcherSymbol
+
         case .lock:
             return "lock"
 
@@ -679,6 +685,9 @@ private extension SimChromeAction {
         switch self {
         case .home:
             return "Home"
+
+        case .appSwitcher:
+            return "App Switcher"
 
         case .lock:
             return "Lock"

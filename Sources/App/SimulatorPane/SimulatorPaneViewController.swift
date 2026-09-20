@@ -618,6 +618,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             self?.focusContentFromChromeAction()
             self?.viewModel.pressButton(button)
         }
+        chromeViewModel.onAppSwitcher = { [weak self] in
+            self?.focusContentFromChromeAction()
+            self?.viewModel.appSwitcher()
+        }
         chromeViewModel.onRotateLeft = { [weak self] in
             self?.focusContentFromChromeAction()
             self?.viewModel.rotateLeft()
@@ -1387,7 +1391,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // (Erase / Shut Down / Open in Simulator / Reveal / Apple Pay,
         // and the not-yet-wired Reboot / Screenshot / Record / Install)
         // and the controls it can't do (crown / AX), while keeping the
-        // ones it can (buttons / rotate). A sim reports the full set so
+        // ones it can (buttons / App Switcher / rotate). A sim reports
+        // the full set so
         // the gate is a no-op for it. Ungated selectors (size presets,
         // Close Pane) fall through to "enabled".
         if let action = item.action,

@@ -9,8 +9,8 @@ import Testing
 /// gate is wired end to end at the two surfaces a test can reach without
 /// a window: the focused VC's `validateUserInterfaceItem` (context /
 /// main menu) and the chrome ribbon's `ribbonActions`. A device pane
-/// disables the simulator-only actions and surfaces only buttons +
-/// rotation; a sim pane is unaffected.
+/// disables the simulator-only actions and surfaces buttons, App
+/// Switcher, and rotation; a sim pane is unaffected.
 @MainActor
 struct DevicePaneAffordanceGateTests {
     private let deviceCaps = PaneCapabilities(
@@ -120,7 +120,7 @@ struct DevicePaneAffordanceGateTests {
         }
     }
 
-    @Test("the device chrome ribbon shows only buttons + rotation")
+    @Test("the device chrome ribbon shows buttons, App Switcher, and rotation")
     func deviceRibbonIsButtonsAndRotation() {
         let viewModel = PaneChromeViewModel(
             family: DeviceFamily.unknown.rawValue,
@@ -128,9 +128,9 @@ struct DevicePaneAffordanceGateTests {
             isPhysicalDevice: true
         )
         #expect(Set(viewModel.ribbonActions) == [
-            .rotateLeft, .rotateRight, .home, .lock, .side, .siri
+            .rotateLeft, .rotateRight, .home, .appSwitcher, .lock, .side, .siri
         ])
-        // No simulator-only / no-hardware controls leak in.
+        // No simulator-only controls leak in.
         #expect(!viewModel.ribbonActions.contains(.screenshot))
         #expect(!viewModel.ribbonActions.contains(.record))
         #expect(!viewModel.ribbonActions.contains(.axInspector))
@@ -151,7 +151,8 @@ struct DevicePaneAffordanceGateTests {
         // highest and a partial reveal uncovers the higher-priority controls.
         #expect(viewModel.ribbonActions == [
             .applePay, .siri, .side, .lock, .axInspector,
-            .rotateLeft, .rotateRight, .record, .screenshot, .home
+            .rotateLeft, .rotateRight, .record, .screenshot,
+            .appSwitcher, .home
         ])
     }
 }

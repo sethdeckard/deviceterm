@@ -9,8 +9,9 @@ import Testing
 /// the three control surfaces (context menu, main menu, chrome ribbon)
 /// from drifting. A simulator reports the full capability set so every
 /// action its family supports stays enabled; a physical device is
-/// trimmed to buttons + rotation, with the simulator-only housekeeping /
-/// capture / Apple Pay / crown / AX actions disabled.
+/// trimmed to buttons, App Switcher, and rotation, with the
+/// simulator-only housekeeping / capture / Apple Pay / crown / AX
+/// actions disabled.
 @MainActor
 struct PaneControlAffordanceTests {
     /// A physical-device capability set: touch + keyboard + buttons +

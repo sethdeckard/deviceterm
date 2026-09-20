@@ -16,6 +16,7 @@ struct SimulatorPaneContextMenuTests {
         let titles = menu.items.map(\.title)
         #expect(titles == [
             "Home",
+            "App Switcher",
             "Lock",
             "Side Button",
             "Siri",
@@ -64,6 +65,10 @@ struct SimulatorPaneContextMenuTests {
     func itemsRouteToSimulatorPaneVCSelectors() {
         let expected: [(String, Selector)] = [
             ("Home", #selector(SimulatorPaneViewController.pressHardwareHome(_:))),
+            (
+                "App Switcher",
+                #selector(SimulatorPaneViewController.invokeAppSwitcher(_:))
+            ),
             ("Lock", #selector(SimulatorPaneViewController.pressHardwareLock(_:))),
             ("Side Button", #selector(SimulatorPaneViewController.pressHardwareSide(_:))),
             ("Siri", #selector(SimulatorPaneViewController.pressHardwareSiri(_:))),

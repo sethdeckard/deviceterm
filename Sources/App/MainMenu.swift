@@ -268,7 +268,10 @@ func makeMainMenu() -> NSMenu {
         action: #selector(SimulatorPaneViewController.invokeAppSwitcher(_:)),
         keyEquivalent: ""
     )
-    mAppSwitcher.image = .menuSymbol("square.grid.2x2", describedAs: "App Switcher")
+    mAppSwitcher.image = .menuSymbol(
+        SimChromeAction.appSwitcherSymbol,
+        describedAs: "App Switcher"
+    )
     deviceMenu.addItem(mAppSwitcher)
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceLock))
     let mSideButton = NSMenuItem(

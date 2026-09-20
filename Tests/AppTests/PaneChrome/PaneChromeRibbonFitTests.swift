@@ -14,9 +14,9 @@ import Testing
 ///      for, and the 380pt phone floor and 220pt watch floor are where it
 ///      is closest to failing.
 ///   2. Fewer actions means a lower threshold. The action count is
-///      family- and capability-driven, so a physical device (buttons +
-///      rotation only) has to clear a lower bar than a phone sim's
-///      full row. A threshold that ignored the count would be wrong
+///      family- and capability-driven, so a physical device (buttons,
+///      App Switcher, and rotation) has to clear a lower bar than a phone
+///      sim's full row. A threshold that ignored the count would be wrong
 ///      for one of them.
 ///   3. The device name costs nothing. It truncates behind the ribbon
 ///      rather than pushing it narrower, which is what lets a long name
@@ -38,12 +38,12 @@ import Testing
 ///      threshold, and floors at stop 0 rather than refusing to answer.
 @MainActor
 struct PaneChromeRibbonFitTests {
-    /// The full phone-sim row: home, screenshot, record, rotate left,
-    /// rotate right, AX inspector, lock, side, Siri, Apple Pay.
-    private let phoneActions = 10
-    /// A physical device's row: rotate left/right plus home, lock,
-    /// side, Siri.
-    private let deviceActions = 6
+    /// The full phone-sim row: home, App Switcher, screenshot, record,
+    /// rotate left, rotate right, AX inspector, lock, side, Siri, Apple Pay.
+    private let phoneActions = 11
+    /// A physical device's row: rotate left/right plus home, App Switcher,
+    /// lock, side, Siri.
+    private let deviceActions = 7
     /// `PaneLayoutViewController.simMinThickness`'s non-watch minimum
     /// width, the narrowest a phone sim pane can be dragged to when
     /// panes sit side by side.
@@ -86,7 +86,7 @@ struct PaneChromeRibbonFitTests {
     @Test(
         "a narrow pane draws a stop that fits",
         arguments: [
-            (380 as CGFloat, 10), (280 as CGFloat, 10),
+            (380 as CGFloat, 11), (280 as CGFloat, 11),
             (220 as CGFloat, 7), (200 as CGFloat, 7)
         ]
     )

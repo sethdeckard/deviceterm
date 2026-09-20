@@ -130,6 +130,9 @@ enum PaneControlAffordance: Equatable {
         case .home, .lock, .side, .siri:
             return .button
 
+        case .appSwitcher:
+            return .touch
+
         case .applePay:
             return .applePay
 

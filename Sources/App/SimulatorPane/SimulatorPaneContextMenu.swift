@@ -33,6 +33,18 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
     )
     iHome.image = .menuSymbol("house.fill", describedAs: "Home")
     menu.addItem(iHome)
+    // Sits with Home as the other system-navigation action, matching the
+    // Device menu's order. Not a hardware button: a synthesized edge swipe.
+    let iAppSwitcher = NSMenuItem(
+        title: "App Switcher",
+        action: #selector(SimulatorPaneViewController.invokeAppSwitcher(_:)),
+        keyEquivalent: ""
+    )
+    iAppSwitcher.image = .menuSymbol(
+        SimChromeAction.appSwitcherSymbol,
+        describedAs: "App Switcher"
+    )
+    menu.addItem(iAppSwitcher)
     let iLock = NSMenuItem(
         title: "Lock",
         action: #selector(SimulatorPaneViewController.pressHardwareLock(_:)),
