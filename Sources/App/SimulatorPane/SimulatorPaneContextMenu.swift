@@ -32,6 +32,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iHome.image = .menuSymbol("house.fill", describedAs: "Home")
+    KeybindingCatalog.applyChord(.deviceHome, to: iHome)
     menu.addItem(iHome)
     // Sits with Home as the other system-navigation action, matching the
     // Device menu's order. Not a hardware button: a synthesized edge swipe.
@@ -51,6 +52,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iLock.image = .menuSymbol("lock.iphone", describedAs: "Lock")
+    KeybindingCatalog.applyChord(.deviceLock, to: iLock)
     menu.addItem(iLock)
     let iSideButton = NSMenuItem(
         title: "Side Button",
@@ -108,6 +110,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iRotateLeft.image = .menuSymbol("rotate.left", describedAs: "Rotate Left")
+    KeybindingCatalog.applyChord(.deviceRotateLeft, to: iRotateLeft)
     menu.addItem(iRotateLeft)
     let iRotateRight = NSMenuItem(
         title: "Rotate Right",
@@ -115,6 +118,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iRotateRight.image = .menuSymbol("rotate.right", describedAs: "Rotate Right")
+    KeybindingCatalog.applyChord(.deviceRotateRight, to: iRotateRight)
     menu.addItem(iRotateRight)
     menu.addItem(makeLocationMenuItem())
 
@@ -148,6 +152,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iScreenshot.image = .menuSymbol("camera", describedAs: "Screenshot")
+    KeybindingCatalog.applyChord(.deviceScreenshot, to: iScreenshot)
     menu.addItem(iScreenshot)
     // Title-toggles to "Stop Recording" via the VC's
     // validateUserInterfaceItem when a recording is active.
@@ -157,6 +162,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iRecordScreen.image = .menuSymbol("record.circle", describedAs: "Record Screen")
+    KeybindingCatalog.applyChord(.deviceRecord, to: iRecordScreen)
     menu.addItem(iRecordScreen)
     // Expose AX inspection alongside the other ribbon actions in the
     // context menu.
@@ -166,6 +172,7 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     iToggleAXInspector.image = .menuSymbol("accessibility", describedAs: "Toggle AX Inspector")
+    KeybindingCatalog.applyChord(.toggleAxInspector, to: iToggleAXInspector)
     menu.addItem(iToggleAXInspector)
 
     menu.addItem(.separator())

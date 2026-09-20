@@ -35,20 +35,20 @@ import AppKit
 func makeTerminalPaneContextMenu() -> NSMenu {
     let menu = NSMenu()
 
-    menu.addItem(
-        NSMenuItem(
-            title: "Copy",
-            action: #selector(TerminalPaneViewController.copy(_:)),
-            keyEquivalent: ""
-        )
+    let copy = NSMenuItem(
+        title: "Copy",
+        action: #selector(TerminalPaneViewController.copy(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Paste",
-            action: #selector(TerminalPaneViewController.paste(_:)),
-            keyEquivalent: ""
-        )
+    KeybindingCatalog.applyChord(.copy, to: copy)
+    menu.addItem(copy)
+    let paste = NSMenuItem(
+        title: "Paste",
+        action: #selector(TerminalPaneViewController.paste(_:)),
+        keyEquivalent: ""
     )
+    KeybindingCatalog.applyChord(.paste, to: paste)
+    menu.addItem(paste)
 
     menu.addItem(.separator())
     // Copy and Paste carry AppKit's own icons for the standard editing
@@ -59,6 +59,7 @@ func makeTerminalPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     clear.image = .menuSymbol("eraser", describedAs: "Clear")
+    KeybindingCatalog.applyChord(.clearBuffer, to: clear)
     menu.addItem(clear)
 
     menu.addItem(.separator())
@@ -77,6 +78,7 @@ func makeTerminalPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     splitRight.image = .menuSymbol("square.split.2x1", describedAs: "Split Right")
+    KeybindingCatalog.applyChord(.splitRight, to: splitRight)
     menu.addItem(splitRight)
     let splitDown = NSMenuItem(
         title: "Split Down",
@@ -84,6 +86,7 @@ func makeTerminalPaneContextMenu() -> NSMenu {
         keyEquivalent: ""
     )
     splitDown.image = .menuSymbol("square.split.1x2", describedAs: "Split Down")
+    KeybindingCatalog.applyChord(.splitDown, to: splitDown)
     menu.addItem(splitDown)
 
     menu.addItem(.separator())

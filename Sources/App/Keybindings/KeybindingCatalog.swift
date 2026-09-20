@@ -637,4 +637,20 @@ enum KeybindingCatalog {
         }
         return item
     }
+
+    /// Applies the catalog's key equivalent and modifiers while preserving
+    /// the item's title, selector, target, and image. Keeps context-menu
+    /// shortcuts synchronized with the main menu while allowing custom
+    /// titles and symbols.
+    @discardableResult
+    static func applyChord(_ action: KeybindingAction, to item: NSMenuItem) -> NSMenuItem {
+        guard let entry = entry(for: action) else {
+            // Unreachable via the drift guard, which asserts the catalog
+            // covers every case of `KeybindingAction`.
+            return item
+        }
+        item.keyEquivalent = entry.chord.keyEquivalent
+        item.keyEquivalentModifierMask = entry.chord.modifiers.nsFlags
+        return item
+    }
 }
