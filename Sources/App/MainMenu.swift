@@ -283,7 +283,7 @@ func makeMainMenu() -> NSMenu {
         action: #selector(SimulatorPaneViewController.pressHardwareSiri(_:)),
         keyEquivalent: ""
     )
-    mSiri.image = .menuSymbol("siri", describedAs: "Siri")
+    mSiri.image = .menuSymbol("siri", describedAs: "Siri", fallback: "waveform")
     deviceMenu.addItem(mSiri)
     let mApplePay = NSMenuItem(
         title: "Apple Pay",
