@@ -31,6 +31,9 @@ public actor RPCServer {
     /// the automation surface over UDS: fail closed).
     private let automationGrantStore: AutomationGrantStore?
     private let peerIdentityResolver: PeerIdentityResolver
+    /// Test seam: called with the connection id each time a connection's read
+    /// source fires. Nil in production.
+    private let readEventObserver: (@Sendable (UInt64) -> Void)?
     /// Nil makes each connection compose a resolver over `peerIdentityResolver`;
     /// inject one when a test must vary the ancestor prefix between requests.
     private let provenanceSnapshotResolver: ProvenanceSnapshotResolver?
@@ -69,7 +72,8 @@ public actor RPCServer {
         methods: MethodRegistry,
         authValidator: AuthValidator? = nil,
         peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
-        provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil
+        provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil,
+        readEventObserver: (@Sendable (UInt64) -> Void)? = nil
     ) {
         // Provenance is read OFF the registry (`methods.provenance`), never a
         // separate parameter, so the per-request lookup reads the same store
@@ -85,6 +89,7 @@ public actor RPCServer {
         self.automationGrantStore = methods.automationGrant
         self.peerIdentityResolver = peerIdentityResolver
         self.provenanceSnapshotResolver = provenanceSnapshotResolver
+        self.readEventObserver = readEventObserver
         self.acceptQueue = DispatchQueue(label: "deviceterm.daemon.accept")
     }
 
@@ -167,6 +172,12 @@ public actor RPCServer {
                 }
                 let connectionId = nextConnectionId
                 nextConnectionId &+= 1
+                let observeRead: (@Sendable () -> Void)?
+                if let readEventObserver {
+                    observeRead = { readEventObserver(connectionId) }
+                } else {
+                    observeRead = nil
+                }
                 let connection = RPCConnection(
                     id: connectionId,
                     fd: clientFd,
@@ -177,7 +188,8 @@ public actor RPCServer {
                     restorationGate: provenance?.restorationComplete,
                     automationGrantStore: automationGrantStore,
                     peerIdentityResolver: peerIdentityResolver,
-                    provenanceSnapshotResolver: provenanceSnapshotResolver
+                    provenanceSnapshotResolver: provenanceSnapshotResolver,
+                    readEventObserver: observeRead
                 )
                 connections[connectionId] = connection
                 await connection.start()

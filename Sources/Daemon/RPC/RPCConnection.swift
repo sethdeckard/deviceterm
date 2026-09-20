@@ -54,11 +54,52 @@ public typealias SessionProvenanceLookup =
 ///     request `id` (events sent for a subscription reuse that id so
 ///     the client can correlate the stream back to its request).
 ///
-/// All state mutation runs inside the actor; the dispatch source's
-/// event handler dispatches into the actor via a `Task { await … }`
-/// so concurrent read events serialize cleanly on the actor's
-/// executor.
+/// Connection state is actor-isolated; the read-source gate serializes its
+/// state changes on `ioQueue`. The read source's event handler suspends the
+/// source and hands off to the actor, which drains the socket and resumes
+/// the source when it has read everything available. A socket that stays
+/// readable while a handler runs therefore fires the source once per drain
+/// rather than once per queue turn, and the kernel's socket buffer applies
+/// backpressure to the peer while the actor is busy handling a request:
+/// nothing is read until the actor gets to it.
 actor RPCConnection {
+    /// Holds the read source off while the actor drains, and serialises a
+    /// resume against a cancel. Every method runs on `ioQueue`; nothing else
+    /// makes it safe to share, hence `@unchecked Sendable`.
+    private final class ReadSourceGate: @unchecked Sendable {
+        private let source: DispatchSourceRead
+        private var suspended = false
+        private var cancelled = false
+
+        init(source: DispatchSourceRead) {
+            self.source = source
+        }
+
+        func suspendForDrain() {
+            guard !cancelled, !suspended else { return }
+            suspended = true
+            source.suspend()
+        }
+
+        func resumeAfterDrain() {
+            guard !cancelled, suspended else { return }
+            suspended = false
+            source.resume()
+        }
+
+        /// A suspended source never runs its cancellation handler, and that
+        /// handler is what closes the fd, so resume before cancelling.
+        func cancel() {
+            guard !cancelled else { return }
+            cancelled = true
+            if suspended {
+                suspended = false
+                source.resume()
+            }
+            source.cancel()
+        }
+    }
+
     /// Tracks an in-flight server-streamed subscription. The `task`
     /// is the drain loop reading from the producer's `events` stream
     /// and writing `.event` envelopes to the wire; cancelling it
@@ -115,12 +156,10 @@ actor RPCConnection {
     nonisolated private let ioQueue: DispatchQueue
     nonisolated private let writeQueue: BlockingWorkQueue
     private var readSource: DispatchSourceRead?
+    private var readGate: ReadSourceGate?
     private var readBuffer = Data()
-    /// Dispatch read events may enqueue several actor tasks while a response
-    /// write suspends. Only one task may drain frames; otherwise actor
-    /// reentrancy defeats socket backpressure and pipelines more work.
-    private var readPumpRunning = false
-    private var readPumpRequested = false
+    /// Test seam: called on `ioQueue` each time the read source fires.
+    nonisolated private let readEventObserver: (@Sendable () -> Void)?
     private var pendingWrites: [PendingWrite] = []
     private var pendingWriteBytes = 0
     private var writerPumpRunning = false
@@ -144,10 +183,12 @@ actor RPCConnection {
         restorationGate: RestorationGate? = nil,
         automationGrantStore: AutomationGrantStore? = nil,
         peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
-        provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil
+        provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil,
+        readEventObserver: (@Sendable () -> Void)? = nil
     ) {
         self.id = id
         self.fd = fd
+        self.readEventObserver = readEventObserver
         self.methods = methods
         self.authValidator = authValidator
         self.sessionProvenanceLookup = sessionProvenanceLookup
@@ -194,9 +235,21 @@ actor RPCConnection {
     func start() {
         guard readSource == nil, !closed else { return }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: ioQueue)
+        let gate = ReadSourceGate(source: source)
+        let observer = readEventObserver
         source.setEventHandler { [weak self] in
+            observer?()
+            // The source is level-triggered: left resumed, it fires again on
+            // every turn of this queue until the actor has read the bytes.
+            // Hold it off until the drain below has read everything
+            // available; `drainSocket` resumes it.
+            gate.suspendForDrain()
+            guard self != nil else {
+                gate.cancel()
+                return
+            }
             Task { [weak self] in
-                await self?.handleReadable()
+                await self?.drainSocket()
             }
         }
         let fdCopy = fd
@@ -212,6 +265,7 @@ actor RPCConnection {
         }
         source.resume()
         readSource = source
+        readGate = gate
     }
 
     /// Close the connection. Cancels every in-flight subscription
@@ -230,8 +284,10 @@ actor RPCConnection {
         subscriptions.removeAll()
         failPendingWrites()
         Darwin.shutdown(fd, SHUT_RDWR)
-        if let readSource {
-            readSource.cancel()
+        if let readGate {
+            // On `ioQueue`, behind any event handler that is suspending the
+            // source and ahead of the resume a running drain will post.
+            ioQueue.async { readGate.cancel() }
         } else {
             // A connection can be closed before `start()` installs its read
             // source. There is then no cancellation handler to own the close.
@@ -241,6 +297,7 @@ actor RPCConnection {
             }
         }
         readSource = nil
+        readGate = nil
         Task { [weak server, id] in
             await server?.removeConnection(id: id)
         }
@@ -248,29 +305,30 @@ actor RPCConnection {
 
     // MARK: - Read path
 
-    private func handleReadable() async {
-        guard !closed else { return }
-        if readPumpRunning {
-            readPumpRequested = true
-            return
+    /// Read everything the socket holds, dispatching frames as they complete,
+    /// then let the source fire again. Runs at most once at a time by
+    /// construction: the source is suspended from its event handler until
+    /// this posts the resume.
+    private func drainSocket() async {
+        defer {
+            if let readGate {
+                let ioQueue = ioQueue
+                ioQueue.async { readGate.resumeAfterDrain() }
+            }
         }
-        readPumpRunning = true
-        defer { readPumpRunning = false }
+        guard !closed else { return }
         do {
-            repeat {
-                readPumpRequested = false
+            while !closed {
                 guard let chunk = try UDSSocket.readAvailable(fd: fd) else {
                     // Peer closed cleanly.
                     close()
                     return
                 }
-                guard !chunk.isEmpty else { continue }
+                // Nothing left right now; the next arrival fires the source.
+                guard !chunk.isEmpty else { return }
                 readBuffer.append(chunk)
                 try await drainFrames()
-                // A response write can suspend while more socket data arrives.
-                // Loop once more even if Dispatch coalesced that readiness
-                // notification into a task that only set `readPumpRequested`.
-            } while !closed && readPumpRequested
+            }
         } catch {
             // Any I/O or framing fault closes the connection. Future
             // chunks can split "transient framing error → send error
