@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import DaemonProtocol
+import Foundation
 
 /// Every navigation intent as a pure value. All navigation
 /// flows through `Router.dispatch(_:)`: menu actions, the
@@ -65,13 +66,27 @@ enum Route: Sendable {
     /// over XPC from a signature-validated peer, and the CLI provides no
     /// verb that would emit one.
     ///
-    /// `cwd` / `cmd` semantics match `newTab`; the menu item passes
-    /// nil for both, but the shape is symmetric so an
-    /// automation-spawn intent could populate them.
+    /// `cwd` matches `newTab`. `cmd` does **not**: an automation tab's
+    /// command is held until the tab's grant applies, rather than typed
+    /// at attach the way `newTab` types it. A command that ran at attach
+    /// would race the bind-and-grant sequence, and an automation call
+    /// made before the grant lands is refused with a scope violation the
+    /// CLI does not retry (it retries only `notReady`). See
+    /// `TabState.automationCommand` and
+    /// `TabContentViewController.runAutomationCommand(grantedTo:)`.
+    ///
+    /// `cohort` lets the caller reserve the tab's cohort id before
+    /// dispatching, so it can find the tab this route created rather
+    /// than diffing the window's tab ids. A diff cannot tell this
+    /// route's tab from one a concurrently queued route appended, since
+    /// `dispatchAndWait` only waits for its own turn on the serial
+    /// drain. Nil generates one, which is what every caller that does
+    /// not need the identity back passes.
     case openAutomationTab(
         WindowID,
         cwd: String? = nil,
-        cmd: [String]? = nil
+        cmd: [String]? = nil,
+        cohort: UUID? = nil
     )
     case selectTab(WindowID, TabID)
 

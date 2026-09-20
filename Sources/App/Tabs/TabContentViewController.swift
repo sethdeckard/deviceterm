@@ -81,6 +81,9 @@ final class TabContentViewController: NSViewController {
     /// of the shell.
     private var sessionEnvsByID: [TerminalPaneID: SessionEnvironment] = [:]
     private var terminalVCByID: [TerminalPaneID: TerminalPaneViewController] = [:]
+    /// Whether the tab's configured automation command has already been
+    /// typed. Latches on first grant so a reconnect reissue cannot re-run it.
+    private var hasRunAutomationCommand = false
     /// Discovery-snapshot dedup: udids the tab has already dispatched an
     /// attach for during this boot. A later detach (sim still booted)
     /// must not re-attach on the next snapshot.
@@ -253,6 +256,12 @@ final class TabContentViewController: NSViewController {
         // and the placement decision stays here.
         self.splitVC.onSplitRequested = { [weak self] anchor, axis in
             self?.requestSplit(anchor: anchor, axis: axis)
+        }
+        // A configured automation program's command waits here, not in
+        // libghostty's `initial_input`, so it cannot run before the tab
+        // holds the authority it was configured to use.
+        self.grantCoordinator.onGranted = { [weak self] sessionId in
+            self?.runAutomationCommand(grantedTo: sessionId)
         }
         wire(terminalVC: primaryVC, id: primary.id)
         // Re-bind every live terminal after a reconnect / daemon restart: the
@@ -512,6 +521,39 @@ final class TabContentViewController: NSViewController {
     func restoreFocusIfOrphaned() {
         guard let window = view.window, window.firstResponder === window else { return }
         restoreRememberedFocus()
+    }
+
+    /// Type the tab's configured automation command into its primary
+    /// terminal, now that `sessionId` holds a live grant.
+    ///
+    /// Runs at most once for the tab's life. The grant is reissued on every
+    /// reconnect rebind, so without the latch a daemon restart would re-run
+    /// the program on top of the one already going.
+    ///
+    /// Only the primary terminal carries a command; a split's terminal is a
+    /// separate session of the same tab and gets its own grant, which is why
+    /// this checks which session was granted rather than assuming.
+    private func runAutomationCommand(grantedTo sessionId: UUID) {
+        guard !hasRunAutomationCommand,
+            let tab = tabListVM.tab(id: tabID),
+            let command = tab.automationCommand,
+            !command.isEmpty,
+            UUID(uuidString: tab.primaryTerminal.sessionId) == sessionId
+        else { return }
+        hasRunAutomationCommand = true
+        do {
+            // The same bytes `initial_input` would have typed: joined with a
+            // space, terminated by one Return.
+            try sendInput(
+                to: tab.primaryTerminal.id,
+                text: command.joined(separator: " ") + "\n",
+                typeDelayMillis: nil
+            )
+        } catch {
+            FileHandle.standardError.write(
+                Data("deviceterm: automation program did not start: \(error)\n".utf8)
+            )
+        }
     }
 
     func sendInput(

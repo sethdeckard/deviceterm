@@ -546,6 +546,45 @@ A protected tab's pill carries a lock in the tab strip, beside the automation
 bolt if the tab is also an automation tab. The lock reflects the tab's
 effective protected state.
 
+### Run Configured Programs at Launch
+
+Skip this unless you have a long-running process that needs to drive
+DeviceTerm. There is no UI for it, and it does nothing until you create the
+configuration file.
+
+DeviceTerm opens an Automation tab for each program listed in
+`~/.config/deviceterm/automation-programs` and runs it there, so a process
+that needs automation authority does not need you to open a tab for it every
+time DeviceTerm starts. [`BUILDING.md`](BUILDING.md) covers the file format.
+
+Nothing about authority changes. The GUI opens the tab and the GUI issues the
+grant on terminal bind, exactly as it does for **Shell ▸ Open Automation
+Tab**. The only new input is a file you edit by hand, which already sits at
+the trust level of a shell rc file: anything that can write it already runs
+as you.
+
+That boundary is deliberate, and the feature stays inside it. There is no URL
+scheme and no launch argument, and no socket verb opens an Automation tab or
+issues a grant. The configuration file is the only way in.
+
+A configured program gets a real automation grant, so whatever you start this
+way can send input to and capture text from other tabs. A foreign protected
+tab stays invisible to it, the way it does for any automation caller. Put
+nothing here you would not hand that authority to.
+
+Check the grant the way you would for any automation tab. From inside the
+tab, `pane.sendInput` in `deviceterm doctor --json` means it is in force.
+
+DeviceTerm types each command into the tab's shell once, after that tab's
+grant is in force, so a program that calls back into DeviceTerm immediately
+does not race its own authority. It does not watch the program afterwards:
+if the program exits, the tab stays open at a shell prompt and nothing
+restarts it.
+
+A tab whose grant never applies never runs its command. Starting a program
+that cannot do the thing it was configured to do would fail more confusingly
+than not starting it.
+
 ## Wait for Device State
 
 ### Use Wait for One-Shot Convergence

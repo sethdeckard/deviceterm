@@ -122,6 +122,67 @@ struct RouterTests {
         #expect(tabs?.last?.role == .automation)
     }
 
+    /// A caller that reserved the cohort id must be able to find the tab
+    /// this route created. Diffing the window's tab ids cannot: the
+    /// dispatch waits only for its own turn on the serial drain, so a
+    /// concurrently queued open appends into the same window.
+    @Test
+    func openAutomationTabCarriesTheReservedCohort() async {
+        let fake = FakeDaemonClient()
+        fake.sessionToReturn = SessionCreateResponse(
+            sessionId: "ORCH",
+            capability: "C",
+            role: .automation
+        )
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        let cohort = UUID()
+        router.dispatch(.openAutomationTab(WindowID(value: 1), cohort: cohort))
+        await settle()
+        let tabs = workspace.window(id: WindowID(value: 1))?.tabs.tabs
+        #expect(tabs?.filter { $0.cohortId == cohort }.count == 1)
+        #expect(tabs?.last?.cohortId == cohort)
+    }
+
+    /// An automation tab's command is held for the grant instead of being
+    /// handed to libghostty as `initial_input`. Typed at attach it would
+    /// race the bind-and-grant sequence, and an automation call made before
+    /// the grant lands is refused with a scope violation the CLI does not
+    /// retry.
+    @Test
+    func openAutomationTabDefersItsCommandUntilGranted() async {
+        let fake = FakeDaemonClient()
+        fake.sessionToReturn = SessionCreateResponse(
+            sessionId: "ORCH",
+            capability: "C",
+            role: .automation
+        )
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.openAutomationTab(WindowID(value: 1), cmd: ["run-me"]))
+        await settle()
+        let tab = workspace.window(id: WindowID(value: 1))?.tabs.tabs.last
+        #expect(tab?.automationCommand == ["run-me"])
+        #expect(tab?.primaryTerminal.command == nil)
+    }
+
+    /// An ordinary tab is unchanged: its command still rides `initial_input`
+    /// and nothing waits on a grant it will never receive.
+    @Test
+    func newTabStillTypesItsCommandAtAttach() async {
+        let fake = FakeDaemonClient()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.newTab(WindowID(value: 1), cmd: ["run-me"]))
+        await settle()
+        let tab = workspace.window(id: WindowID(value: 1))?.tabs.tabs.last
+        #expect(tab?.primaryTerminal.command == ["run-me"])
+        #expect(tab?.automationCommand == nil)
+    }
+
     @Test
     func openAutomationTabRespectsDaemonRoleResponse() async {
         // The daemon's response is the source of truth: if it sends

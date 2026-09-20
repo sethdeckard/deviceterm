@@ -29,6 +29,18 @@ final class AutomationGrantCoordinator {
     /// Injectable delay; returns `false` if cancelled during the wait. Tests
     /// pass a no-delay stub so retries run without real time.
     private let sleep: (UInt64) async -> Bool
+    /// Fired when a grant is applied, naming the session it covers. This is
+    /// the only moment the session is known to hold automation authority, so
+    /// it is what a caller waits on before doing anything that needs it.
+    ///
+    /// Fires again on a reconnect reissue, since the grant is genuinely
+    /// re-applied under the new epoch. A consumer that must act once guards
+    /// its own side.
+    ///
+    /// Assigned after construction, the way the tab strip assigns
+    /// `onTerminalExit`, because the owning view controller builds this
+    /// coordinator before `super.init` and cannot capture itself there.
+    var onGranted: @MainActor (UUID) -> Void = { _ in }
     /// In-flight retry loops, keyed by session. A per-session generation lets a
     /// superseding `sessionBound` (a reconnect rebind) cancel-and-replace the
     /// loop without the old loop's cleanup clobbering the new one. Both maps
@@ -151,7 +163,17 @@ final class AutomationGrantCoordinator {
         while !Task.isCancelled, generation[sessionId] == gen {
             do {
                 let result = try await client.grantAutomation(sessionIds: [sessionId])
-                if !result.applied {
+                // The loop's guard ran BEFORE that await. A reconnect landing
+                // while this reply was in flight supersedes this frame, and
+                // the grant the reply describes belongs to the old connection,
+                // which its teardown revokes (`revokeAll(issuedBy:)`).
+                // Announcing it would report authority that is already going
+                // away, and a consumer latching on a once-only action would
+                // spend that latch before the replacement grant lands.
+                guard !Task.isCancelled, generation[sessionId] == gen else { return }
+                if result.applied {
+                    onGranted(sessionId)
+                } else {
                     // A higher `(epoch, revision)` already decided this session's
                     // grant: a reconnected connection with a newer epoch owns
                     // the reissue. Retrying can't win against a higher epoch, so

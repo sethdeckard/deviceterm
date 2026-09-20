@@ -441,14 +441,15 @@ final class Router {
                 command: cmd
             )
 
-        case let .openAutomationTab(windowID, cwd, cmd):
+        case let .openAutomationTab(windowID, cwd, cmd, cohort):
             guard let window = workspace.window(id: windowID) else { return }
             await addTab(
                 to: window,
                 role: .automation,
                 reattach: [],
                 cwd: cwd,
-                command: cmd
+                command: cmd,
+                cohort: cohort
             )
 
         case let .selectTab(windowID, tabID):
@@ -946,10 +947,20 @@ final class Router {
         role: SessionRole,
         reattach: [OrphanRecord],
         cwd: String? = nil,
-        command: [String]? = nil
+        command: [String]? = nil,
+        cohort: UUID? = nil
     ) async {
         let name = detectWorktreeName()
-        let cohortID = UUID()
+        // A caller that reserved the cohort id can find this tab by it;
+        // everyone else gets a fresh one and never looks.
+        let cohortID = cohort ?? UUID()
+        // An automation tab holds its command until its grant applies, so
+        // it is NOT handed to the terminal as `initial_input`. Typing it at
+        // attach would race the bind-and-grant sequence, and an automation
+        // call made before the grant lands is refused with a scope
+        // violation the CLI does not retry.
+        let deferredCommand = role == .automation ? command : nil
+        let attachCommand = role == .automation ? nil : command
         let modelID = allocateTabID()
         do {
             // Pre-populate `name` from the worktree branch when the
@@ -980,7 +991,7 @@ final class Router {
                 shortId: session.shortId,
                 name: session.name,
                 cwd: cwd,
-                command: command
+                command: attachCommand
             )
             let tab = TabState(
                 id: modelID,
@@ -988,7 +999,8 @@ final class Router {
                 simPanes: [],
                 role: session.role ?? role,
                 cohortId: cohortID,
-                name: name
+                name: name,
+                automationCommand: deferredCommand
             )
             window.tabs.append(tab)
             // Install the tab's cohort eagerly, so a device pane attached
@@ -1010,7 +1022,7 @@ final class Router {
                 capability: "",
                 name: name,
                 cwd: cwd,
-                command: command
+                command: attachCommand
             )
             window.tabs.append(
                 TabState(

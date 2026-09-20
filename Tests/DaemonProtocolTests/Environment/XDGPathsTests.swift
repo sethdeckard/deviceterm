@@ -15,6 +15,10 @@ func honorsAbsoluteXDGConfigHome() {
     #expect(XDGPaths.configHome(environment: env) == "/tmp/xdgtest")
     #expect(XDGPaths.deviceTermConfig(environment: env) == "/tmp/xdgtest/deviceterm/config")
     #expect(XDGPaths.deviceTermLocations(environment: env) == "/tmp/xdgtest/deviceterm/locations")
+    #expect(
+        XDGPaths.deviceTermAutomationPrograms(environment: env)
+            == "/tmp/xdgtest/deviceterm/automation-programs"
+    )
     #expect(XDGPaths.ghosttyConfig(environment: env) == "/tmp/xdgtest/ghostty/config")
 }
 
@@ -24,6 +28,10 @@ func fallsBackWhenUnset() {
     #expect(XDGPaths.configHome(environment: [:]) == expected)
     #expect(XDGPaths.deviceTermConfig(environment: [:]) == expected + "/deviceterm/config")
     #expect(XDGPaths.deviceTermLocations(environment: [:]) == expected + "/deviceterm/locations")
+    #expect(
+        XDGPaths.deviceTermAutomationPrograms(environment: [:])
+            == expected + "/deviceterm/automation-programs"
+    )
     #expect(XDGPaths.ghosttyConfig(environment: [:]) == expected + "/ghostty/config")
 }
 

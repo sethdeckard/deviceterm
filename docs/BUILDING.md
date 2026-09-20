@@ -286,6 +286,47 @@ typed by hand. As with `config`, comments, blanks, and lines this
 version doesn't recognize survive a write byte-for-byte, so a line the
 current parser can't read is preserved rather than dropped.
 
+### Configured automation programs
+
+A third file, `~/.config/deviceterm/automation-programs` (or
+`$XDG_CONFIG_HOME/deviceterm/automation-programs`), lists programs
+DeviceTerm starts in Automation tabs at launch. It is absent by
+default, and an absent file means DeviceTerm behaves exactly as it does
+without the feature.
+
+Each entry is a block. A `program <name>` line at column zero opens
+one, and the indented lines under it are its fields:
+
+```text
+program build-bridge
+  command ~/.local/bin/build-bridge --socket ~/.cache/build-bridge.sock
+  cwd ~/work
+
+program watcher
+  command ~/bin/watch-builds
+```
+
+`command` is required. `cwd` is optional and defaults to your home
+directory; `~` expands, and a relative path resolves against the file's
+own directory, the same rule `locations` uses. A key is the first
+whitespace-delimited token and its value is the rest of the line, so a
+command keeps its own spaces and quotes and the shell is what
+interprets them. A name may contain spaces for the same reason.
+
+Three things make a block unusable: no name, no command, or a name an
+earlier block already took. Each is reported to the unified log
+(subsystem `com.deviceterm`, category `automation-programs`) and skips
+that block alone. A defect never stops DeviceTerm from starting and
+never stops the other blocks from running.
+
+Anything else this version doesn't understand is ignored rather than
+rejected, including an unrecognized field and an unrecognized line at
+column zero, so a file written for a newer DeviceTerm still runs here.
+
+Unlike `config` and `locations`, DeviceTerm never writes this file.
+There is no reload either: edit it by hand, and the change takes effect
+at the next launch.
+
 ## Shell completions + man page
 
 Shell completions install via the CLI itself: `deviceterm completions

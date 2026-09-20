@@ -49,6 +49,21 @@ public enum XDGPaths {
             .appendingPathComponent("deviceterm/locations")
     }
 
+    /// Absolute path to `<config home>/deviceterm/automation-programs`, the
+    /// hand-editable list of programs deviceterm starts in Automation tabs
+    /// at launch.
+    ///
+    /// A separate file rather than keys in `deviceTermConfig()`, because that
+    /// file is flat `key = value` over a closed set of single-valued keys and
+    /// this list is repeating and structured. deviceterm only ever reads this
+    /// one.
+    public static func deviceTermAutomationPrograms(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        (configHome(environment: environment) as NSString)
+            .appendingPathComponent("deviceterm/automation-programs")
+    }
+
     /// The XDG cache base directory: `$XDG_CACHE_HOME` when set to a
     /// non-empty absolute path, else `~/.cache`. Same validity rule as
     /// `configHome`: a relative or empty value is invalid and ignored.

@@ -1126,6 +1126,10 @@ configuration domain; see
 Saved locations use the separate `locations` file described in
 [Simulate Locations and Routes](#simulate-locations-and-routes).
 
+Programs DeviceTerm starts in Automation tabs at launch use the separate
+`automation-programs` file described in
+[Run Configured Programs at Launch](AUTOMATION.md#run-configured-programs-at-launch).
+
 ## Keyboard Shortcuts
 
 Every shortcut also appears in a menu. **Shell** creates and closes workspace

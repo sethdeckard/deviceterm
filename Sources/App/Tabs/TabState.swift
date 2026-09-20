@@ -24,6 +24,18 @@ struct TabState: Identifiable, Equatable, Sendable {
     let cohortId: UUID
     /// User-facing name. Nil restores the live automatic title.
     var name: String?
+    /// A configured automation program's command line, held until this
+    /// tab's automation grant applies and then typed into the primary
+    /// terminal once.
+    ///
+    /// Not `TerminalPaneState.command`, which libghostty types as
+    /// `initial_input` the moment the surface attaches. That happens
+    /// before the terminal has even begun binding, so a program that
+    /// made an automation call straight away would be refused with a
+    /// scope violation, and the CLI retries only `notReady`. Set for a
+    /// tab `Route.openAutomationTab` opened with a command, nil
+    /// everywhere else.
+    let automationCommand: [String]?
     /// Initial-session lifecycle exposed by the public workspace API.
     var lifecycle: WorkspaceTabLifecycle
     /// Failure reason when `lifecycle == .failed`.
@@ -143,11 +155,13 @@ struct TabState: Identifiable, Equatable, Sendable {
         cohortId: UUID = UUID(),
         name: String? = nil,
         lifecycle: WorkspaceTabLifecycle = .ready,
-        failureMessage: String? = nil
+        failureMessage: String? = nil,
+        automationCommand: [String]? = nil
     ) {
         precondition(!terminals.isEmpty, "TabState must have at least one terminal pane")
         self.id = id
         self.cohortId = cohortId
+        self.automationCommand = automationCommand
         self.name = name ?? terminals[0].name
         self.lifecycle = lifecycle
         self.failureMessage = failureMessage

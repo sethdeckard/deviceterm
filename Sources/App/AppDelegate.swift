@@ -199,6 +199,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         )
     )
 
+    /// Opens an Automation tab per program configured in
+    /// `<config home>/deviceterm/automation-programs`, once the first window
+    /// is up. Does nothing when the file is absent, which is the ordinary
+    /// state.
+    private lazy var automationPrograms = AutomationProgramCoordinator(
+        AutomationProgramCoordinator.Dependencies(
+            loadEntries: {
+                let file = AutomationProgramsFile()
+                return (file.entries, file.defects)
+            },
+            ensureWindow: { [weak self] in
+                guard let self else { return nil }
+                if let existing = self.workspace.selectedWindowID { return existing }
+                // Only reachable when every window has been closed, since
+                // launch runs this after the first window is up.
+                await self.router.dispatchAndWait(.openWindow())
+                return self.workspace.selectedWindowID
+            },
+            openAutomationTab: { [weak self] windowID, cwd, command in
+                guard let self else { return nil }
+                // Reserve the cohort id, then find the tab carrying it.
+                // `Route` is a pure value with no reply channel, and
+                // diffing the window's tab ids would not do: the dispatch
+                // waits only for its own turn on the serial drain, so a
+                // concurrently queued `tab open` can append a tab inside the
+                // same window and be picked instead.
+                let cohort = UUID()
+                await self.router.dispatchAndWait(
+                    .openAutomationTab(windowID, cwd: cwd, cmd: command, cohort: cohort)
+                )
+                return self.workspace.window(id: windowID)?
+                    .tabs.tabs.first { $0.cohortId == cohort }?.id
+            },
+            renameTab: { [weak self] windowID, tabID, name in
+                self?.workspace.window(id: windowID)?.tabs.renameTab(id: tabID, to: name)
+                self?.renameTab(window: windowID, tab: tabID, to: name)
+            }
+        )
+    )
+
     /// Decides when to propose restarting the helper, and runs the restart.
     /// Both the automatic prompt (an unanswered call whose follow-up ping went
     /// unanswered too) and the menu item land here, so the two paths can't
@@ -452,7 +492,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     runSmokeCheck()
                 } else {
                     WelcomeCoordinator.shared.presentIfNeeded { [weak self] in
-                        self?.router.dispatch(.openWindow(reattach: orphansToReattach))
+                        // Configured automation programs open their tabs in
+                        // the first window, so the open is awaited rather
+                        // than fire-and-forget. Smoke mode never gets here:
+                        // its gate asserts on a known window set.
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            await self.router.dispatchAndWait(
+                                .openWindow(reattach: orphansToReattach)
+                            )
+                            await self.automationPrograms.start()
+                        }
                     }
                 }
             } catch let surrender as StartupVersionSurrender {

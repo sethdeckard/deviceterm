@@ -150,6 +150,76 @@ struct AutomationGrantCoordinatorTests {
         #expect(fake.grantAutomationCalls.count == 1)
     }
 
+    /// The applied grant is the only moment a session is known to hold
+    /// automation authority. A configured automation program's command waits
+    /// on this rather than running at terminal attach, where it would race
+    /// the bind-and-grant sequence.
+    @Test
+    func anAppliedGrantAnnouncesItsSession() async {
+        let fake = FakeDaemonClient()
+        let coord = makeCoordinator(fake)
+        var granted: [UUID] = []
+        coord.onGranted = { granted.append($0) }
+        let sid = UUID()
+        coord.sessionBound(role: .automation, sessionId: sid.uuidString)
+        await drain(coord)
+        #expect(granted == [sid])
+    }
+
+    @Test
+    func aSupersededGrantAnnouncesNothing() async {
+        let fake = FakeDaemonClient()
+        fake.grantAutomationApplied = [false]
+        let coord = makeCoordinator(fake)
+        var granted: [UUID] = []
+        coord.onGranted = { granted.append($0) }
+        coord.sessionBound(role: .automation, sessionId: UUID().uuidString)
+        await drain(coord)
+        #expect(granted.isEmpty)
+    }
+
+    /// An agent tab is never granted, so nothing waiting on a grant can be
+    /// released by one.
+    @Test
+    func anAgentSessionAnnouncesNothing() async {
+        let fake = FakeDaemonClient()
+        let coord = makeCoordinator(fake)
+        var granted: [UUID] = []
+        coord.onGranted = { granted.append($0) }
+        coord.sessionBound(role: .agent, sessionId: UUID().uuidString)
+        await drain(coord)
+        #expect(granted.isEmpty)
+    }
+
+    /// The retry loop's guard runs before the grant request is awaited, so a
+    /// reconnect landing while the reply is in flight leaves the old frame
+    /// holding a result it must not act on: the grant it describes belongs to
+    /// the old connection, whose teardown revokes it. Announcing it would
+    /// report authority that is already going away, and a consumer latching
+    /// on a once-only action would spend that latch before the replacement
+    /// grant lands.
+    @Test
+    func aSupersededFrameAnnouncesNothingWhenItsReplyArrives() async {
+        let fake = FakeDaemonClient()
+        let coord = makeCoordinator(fake)
+        var granted: [UUID] = []
+        coord.onGranted = { granted.append($0) }
+        let sid = UUID()
+
+        // Park the first grant mid-flight, then land a reconnect rebind.
+        fake.armGrantAutomationBarrier()
+        coord.sessionBound(role: .automation, sessionId: sid.uuidString)
+        await yieldUntil { fake.grantAutomationCalls.count == 1 }
+        coord.sessionBound(role: .automation, sessionId: sid.uuidString)
+
+        // Release both: the superseded frame's reply must be discarded, and
+        // only the replacement's may announce.
+        fake.releaseGrantAutomationBarrier()
+        await drain(coord)
+        #expect(fake.grantAutomationCalls.count == 2)
+        #expect(granted == [sid])
+    }
+
     @Test
     func reconnectRebindReissuesWithDominatingRevision() async {
         // sessionBound fires on the initial bind AND every reconnect rebind, so

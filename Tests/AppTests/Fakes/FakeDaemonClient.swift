@@ -182,6 +182,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// `applied`. Empty → `applied: true`.
     var grantAutomationFailures: [Error?] = []
     var grantAutomationApplied: [Bool] = []
+    /// Parks `grantAutomation` mid-flight, so a test can land a reconnect
+    /// while a grant reply is still in transit.
+    private var grantAutomationGateArmed = false
+    private var grantAutomationContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var reconnectObservers: [ReconnectObserverToken: @MainActor () -> Void] = [:]
     /// Synthetic connection generation, incremented before reconnect
     /// observers run. The numbering is the fake's own: production's first
@@ -849,6 +853,20 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         return connectionGeneration
     }
 
+    func armGrantAutomationBarrier() { grantAutomationGateArmed = true }
+
+    func releaseGrantAutomationBarrier() {
+        grantAutomationGateArmed = false
+        let continuations = grantAutomationContinuations
+        grantAutomationContinuations.removeAll()
+        for continuation in continuations { continuation.resume() }
+    }
+
+    private func awaitGrantAutomationGate() async {
+        guard grantAutomationGateArmed else { return }
+        await withCheckedContinuation { grantAutomationContinuations.append($0) }
+    }
+
     func armReconcileBootClaimBarrier() { reconcileBootClaimGateArmed = true }
 
     func releaseReconcileBootClaimBarrier() {
@@ -1220,6 +1238,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             GrantAutomationCall(sessionIds: sessionIds, revision: grantRevisionCounter)
         )
         try await Task.sleep(nanoseconds: 0)  // mirror a real round-trip's await boundary
+        await awaitGrantAutomationGate()
         if !grantAutomationFailures.isEmpty, let failure = grantAutomationFailures.removeFirst() {
             throw failure
         }
