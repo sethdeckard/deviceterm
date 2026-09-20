@@ -531,9 +531,9 @@ is the committed state. A definite daemon refusal, indeterminate transition,
 or superseding mutation is a command failure rather than an optimistic success
 receipt. See [set protection](INTEGRATION.md#set-protection).
 
-A protected tab's pill carries a lock in the tab strip, beside the wand if the
-tab is also an automation tab. The lock reflects the tab's effective protected
-state.
+A protected tab's pill carries a lock in the tab strip, beside the automation
+bolt if the tab is also an automation tab. The lock reflects the tab's
+effective protected state.
 
 ## Wait for Device State
 

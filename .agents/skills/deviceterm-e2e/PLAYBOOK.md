@@ -380,12 +380,18 @@ arrives in an accepted tree carrying no `value` key, exactly like one reading
 0. Check that pill's own `"unreadable"` list before concluding it is
 unselected, and re-dump if `AXValue` is in it.
 
-**Pills carry markers, and your own has one.** An automation-role tab's pill
-shows a `wand.and.rays` marker that agent-role tabs don't have, and you run from
-one. A tab that is protected right now shows `lock.fill`. Both appear together
-on a protected automation tab, wand first, between the pill's ✕ and its title.
-Neither publishes a `deviceterm.tab.` identifier, so counting is unaffected, but
-a pixel comparison of the strip will show them.
+**Pills carry markers, and your own has one.** Each is a fixed-hue glyph, so
+neither tracks the system accent:
+
+- **Automation role** shows `bolt.fill`, tinted `systemTeal`, description
+  `Automation tab`.
+- **Protected right now** shows `lock.fill`, tinted `systemOrange`, description
+  `Protected tab`.
+
+Both sit between the pill's ✕ and its title, automation first, and both appear
+together on a protected automation tab. Neither publishes a `deviceterm.tab.`
+identifier, so counting is unaffected, but a pixel comparison of the strip will
+show them.
 
 **Don't cross-check a pill's `title` against a separately sampled CLI
 `tab.title`.** A shell title can change between the two reads, and the wire form

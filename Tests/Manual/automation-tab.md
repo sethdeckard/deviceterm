@@ -22,9 +22,9 @@ authority.
 | # | Action | Expected |
 |---|---|---|
 | 1.1 | Open the Shell menu. | `Open Automation Tab` is present with the ⇧⌘T shortcut. ⌘T remains New Tab. |
-| 1.2 | Choose `Open Automation Tab`. | A new tab opens with a live shell. A small accent-colored wand appears immediately to the left of its title. |
-| 1.3 | Hover over the wand. | The tooltip reads `Automation tab (opened from the menu)`. |
-| 1.4 | Open a regular tab with ⌘T. | The regular tab has no wand. |
+| 1.2 | Choose `Open Automation Tab`. | A new tab opens with a live shell. A teal bolt appears immediately to the left of its title. |
+| 1.3 | Hover over the bolt. | The tooltip reads `Automation tab: can control other tabs and send input to their terminals`. |
+| 1.4 | Open a regular tab with ⌘T. | The regular tab has no bolt. |
 
 ## 2. Automation role and live grant
 
@@ -67,14 +67,17 @@ fake client and cannot replace it.
 The marker-state decisions have unit coverage. These rows retain the visual and tooltip assertions. Complete this
 section before booting a Simulator so quit does not present a Simulator disposition prompt.
 
+Both markers use fixed hues rather than the system accent, so changing the accent in System Settings does not change
+them.
+
 | # | Action | Expected |
 |---|---|---|
-| 5.1 | Open two regular tabs. In the first, run `deviceterm tab protect`. | An accent-colored padlock appears immediately to the left of that tab's title. The other tab has no padlock. |
-| 5.2 | Hover over the padlock. | The tooltip reads `Protected tab (hidden from other sessions)`. |
+| 5.1 | Open two regular tabs. In the first, run `deviceterm tab protect`. | An orange padlock appears immediately to the left of that tab's title. The other tab has no padlock. |
+| 5.2 | Hover over the padlock. | The tooltip reads `Protected tab: hidden from other sessions and closed to automation`. |
 | 5.3 | Run `deviceterm tab unprotect`. | The receipt confirms `protected=false` and the padlock disappears after reconciliation. |
-| 5.4 | Protect an Automation Tab. | The wand appears first, followed by the padlock and then the title. |
-| 5.5 | Right-click that tab and choose `Unprotect Tab`. | The padlock disappears after confirmation and the wand keeps its position. A rejection raises an alert and leaves the padlock visible. |
-| 5.6 | With no owned Simulator booted, quit and relaunch DeviceTerm, then open two Automation Tabs. | DeviceTerm quits without a disposition prompt. After relaunch, the menu still creates Automation Tabs. Each tab has its own session and wand, and closing one does not affect the other. |
+| 5.4 | Protect an Automation Tab. | The bolt appears first, followed by the padlock and then the title. |
+| 5.5 | Right-click that tab and choose `Unprotect Tab`. | The padlock disappears after confirmation and the bolt keeps its position. A rejection raises an alert and leaves the padlock visible. |
+| 5.6 | With no owned Simulator booted, quit and relaunch DeviceTerm, then open two Automation Tabs. | DeviceTerm quits without a disposition prompt. After relaunch, the menu still creates Automation Tabs. Each tab has its own session and bolt, and closing one does not affect the other. |
 
 ## 6. Tab-scoped device panes
 

@@ -1775,12 +1775,12 @@ private extension TabStripViewController {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-        /// The image view for one marker. Both are 12pt and accent-tinted, so
-        /// they read at a glance without competing with the title.
+        /// The image view for one marker.
         ///
-        /// `wand.and.rays` is the platform's own automation vocabulary. A key
-        /// would read as "this opens something", which is backwards: an
-        /// automation grant is exactly what a protected tab refuses.
+        /// Solid glyphs stay legible at this size. Teal and orange separate the
+        /// two markers independently of the user's accent color, which a
+        /// low-chroma choice such as Graphite can otherwise flatten into the
+        /// pill. Yellow is the obvious bolt and blurs into the orange lock.
         ///
         /// Neither carries an accessibility *identifier*. Consumers collect the
         /// strip's named controls by the `deviceterm.tab.` prefix and count the
@@ -1791,27 +1791,31 @@ private extension TabStripViewController {
             let symbolName: String
             let describedAs: String
             let hoverText: String
+            let tint: NSColor
             switch marker {
             case .automation:
-                symbolName = "wand.and.rays"
+                symbolName = "bolt.fill"
                 describedAs = "Automation tab"
-                hoverText = "Automation tab (opened from the menu)"
+                hoverText = "Automation tab: can control other tabs and send input to their terminals"
+                tint = .systemTeal
 
             case .protection:
                 symbolName = "lock.fill"
                 describedAs = "Protected tab"
-                hoverText = "Protected tab (hidden from other sessions)"
+                hoverText = "Protected tab: hidden from other sessions and closed to automation"
+                tint = .systemOrange
             }
             let view = NSImageView()
             view.image = NSImage(
                 systemSymbolName: symbolName,
                 accessibilityDescription: describedAs
             )
-            view.contentTintColor = .controlAccentColor
+            view.contentTintColor = tint
             view.symbolConfiguration = NSImage.SymbolConfiguration(
-                pointSize: 12,
-                weight: .regular
+                pointSize: 13,
+                weight: .semibold
             )
+            view.imageScaling = .scaleNone
             view.setContentHuggingPriority(.required, for: .horizontal)
             view.toolTip = hoverText
             return view
