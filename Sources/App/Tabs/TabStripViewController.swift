@@ -61,6 +61,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// still shrink it). Without this, the cell sits at its intrinsic
     /// title width with no floor to widen it.
     private var soloPillTargetWidth: NSLayoutConstraint?
+    /// The per-cell width the strip is holding while a run of ✕ closes is in
+    /// progress, nil when not frozen. One value covers every cell, because
+    /// `.fillEqually` gives them all the same width to begin with.
+    private var frozenCellWidth: CGFloat?
+    private var frozenWidthConstraints: [NSLayoutConstraint] = []
+    /// Absorbs the width the closed pills released, so the survivors keep
+    /// their frozen widths inside a strip that still spans the window. With
+    /// nothing to take the slack, `.fill` would push it onto the pinned cells
+    /// and break one.
+    private let frozenTrailingSpacer = NSView()
     /// Thin translucent track that sits behind the tab cells so the
     /// user sees a visible "lane" the pills rest in. Painted with a
     /// low-alpha white tint over the window background, which gives
@@ -182,6 +192,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             self.applyChromeTint()
         }
 
+        // A run of ✕ closes holds the pill widths; the pointer leaving the
+        // strip is what ends it and lets the survivors re-flow.
+        strip.onPointerExit = { [weak self] in self?.thawCellWidths() }
         strip.orientation = .horizontal
         // 10pt spacing gives the new-tab "+" button breathing room from
         // the rightmost tab pill instead of cramming up against it.
@@ -312,6 +325,14 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             [NSPasteboard.PasteboardType(TabDragPayload.pasteboardType)]
         )
         applyChromeTint()
+    }
+
+    /// A strip that leaves its window stops getting pointer events, so the
+    /// exit that would have ended a frozen run never arrives. Release here
+    /// instead of letting the widths outlive the gesture.
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        thawCellWidths()
     }
 
     override func viewDidAppear() {
@@ -450,7 +471,89 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     @objc
     private func closeTabFromButton(_ sender: NSButton) {
         let tabID = TabID(value: sender.tag)
+        if TabWidthFreezeDecision.shouldFreeze(
+            origin: .closeButton,
+            pointerIsOverStrip: pointerIsOverStrip()
+        ) {
+            freezeCellWidths()
+        }
         requestCloseTab(id: tabID)
+    }
+
+    /// Whether the pointer is over the strip right now, asked of the window
+    /// rather than of the event: a ✕ activated through accessibility sends the
+    /// same action with the pointer wherever it happens to be.
+    private func pointerIsOverStrip() -> Bool {
+        guard let window = view.window else { return false }
+        let inWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        return strip.bounds.contains(strip.convert(inWindow, from: nil))
+    }
+
+    /// Sample the width every cell currently has, and keep it until thawed.
+    ///
+    /// Repeated calls keep the width the first one captured: the point of a
+    /// run is that nothing moves until the pointer leaves.
+    private func freezeCellWidths() {
+        guard frozenCellWidth == nil else { return }
+        guard let cell = cellsContainer.arrangedSubviews.first as? TabPillCell,
+            cell.frame.width > 0 else { return }
+        frozenCellWidth = cell.frame.width
+    }
+
+    /// Pin the rebuilt cells to the frozen width and park the spacer after
+    /// them. Runs at the end of every rebuild, because a close tears the cells
+    /// down and builds new ones that carry none of this.
+    ///
+    /// The pins sit just under `.required` so a window narrow enough that the
+    /// frozen row no longer fits breaks them instead of producing an
+    /// unsatisfiable layout. They still outrank each cell's 180pt floor.
+    private func applyFrozenCellWidths() {
+        guard let width = frozenCellWidth else { return }
+        cellsContainer.distribution = .fill
+        for case let cell as TabPillCell in cellsContainer.arrangedSubviews {
+            let pin = cell.widthAnchor.constraint(equalToConstant: width)
+            pin.priority = .required - 1
+            pin.isActive = true
+            frozenWidthConstraints.append(pin)
+        }
+        frozenTrailingSpacer.translatesAutoresizingMaskIntoConstraints = false
+        frozenTrailingSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        frozenTrailingSpacer.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
+        cellsContainer.addArrangedSubview(frozenTrailingSpacer)
+    }
+
+    /// The count-driven width policy: span the window with two or more tabs,
+    /// take the solo cap with one.
+    ///
+    /// Deferred while frozen, because closing down to a single tab applies it
+    /// mid-run otherwise. Dropping the full-width constraint moves the "+" and
+    /// the track's trailing edge, and the solo cap is required, so it outranks
+    /// the frozen pins and snaps a pill wider than 480pt narrower. Both land
+    /// under a pointer that has not moved, and the next click in a run can
+    /// then hit the "+" instead of a ✕.
+    private func applyStripWidthPolicy(tabCount: Int) {
+        stripFillTrailing?.isActive = tabCount >= 2
+        soloPillMaxWidth?.isActive = tabCount == 1
+        soloPillTargetWidth?.isActive = tabCount == 1
+    }
+
+    /// Release the widths and let the strip re-flow. Idempotent, since several
+    /// unrelated events can each be the one that ends a run.
+    private func thawCellWidths() {
+        guard frozenCellWidth != nil else { return }
+        frozenCellWidth = nil
+        NSLayoutConstraint.deactivate(frozenWidthConstraints)
+        frozenWidthConstraints.removeAll()
+        if frozenTrailingSpacer.superview != nil {
+            cellsContainer.removeArrangedSubview(frozenTrailingSpacer)
+            frozenTrailingSpacer.removeFromSuperview()
+        }
+        cellsContainer.distribution = .fillEqually
+        // The policy the freeze deferred, now against the strip as it stands.
+        applyStripWidthPolicy(tabCount: tabListVM.tabs.count)
     }
 
     /// Window → Move Tab Left / Right (⌃⇧← / ⌃⇧→): shift the selected
@@ -1127,9 +1230,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // Min 180 per cell lives at .defaultHigh so a narrow window with
         // many tabs shrinks gracefully past 180 instead of producing an
         // unsatisfiable required-constraint conflict.
-        stripFillTrailing?.isActive = tabs.count >= 2
-        soloPillMaxWidth?.isActive = tabs.count == 1
-        soloPillTargetWidth?.isActive = tabs.count == 1
+        if TabWidthFreezeDecision.shouldThawOnTabCountChange(
+            from: lastTabIDs.count,
+            to: tabs.count
+        ) {
+            thawCellWidths()
+        }
+        // Held still while frozen; `thawCellWidths` applies it on release.
+        if frozenCellWidth == nil {
+            applyStripWidthPolicy(tabCount: tabs.count)
+        }
         for (idx, tab) in tabs.enumerated() {
             let title = TabTitleButton(
                 title: displayTitle(for: tab),
@@ -1230,6 +1340,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             minWidth.isActive = true
             cellsContainer.insertArrangedSubview(cell, at: idx)
         }
+        applyFrozenCellWidths()
     }
 
     /// Push the selected tab's label and directory onto the window. Called from
@@ -1426,7 +1537,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     // callbacks here.
 
     func stripDraggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        stripDraggingUpdated(sender)
+        // Live reorder moves pills between slots, so held widths stop matching
+        // the strip they were measured against.
+        thawCellWidths()
+        return stripDraggingUpdated(sender)
     }
 
     func stripDraggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -1584,7 +1698,29 @@ private extension TabStripViewController {
         /// The outer strip leaves this nil and never registers dragged types,
         /// so only the cells lane accepts drops.
         weak var dropDelegate: TabStripViewController?
+        /// Called when the pointer leaves this stack, for the strip that wants
+        /// to know a run of ✕ closes is over. Left nil elsewhere, which also
+        /// keeps the tracking area off every stack that does not need one.
+        var onPointerExit: (() -> Void)?
         override var mouseDownCanMoveWindow: Bool { true }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            guard onPointerExit != nil else { return }
+            for area in trackingAreas { removeTrackingArea(area) }
+            addTrackingArea(
+                NSTrackingArea(
+                    rect: bounds,
+                    options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                    owner: self,
+                    userInfo: nil
+                )
+            )
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            onPointerExit?()
+        }
 
         override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
             dropDelegate?.stripDraggingEntered(sender) ?? []
