@@ -32,4 +32,24 @@ enum HelperTerminationOutcome: Sendable, Equatable {
     case alreadyRestarted
     /// `kill(2)` refused, carrying the system's reason. Nothing was signalled.
     case failed(String)
+
+    /// The value the recovery log records for this outcome.
+    var logLabel: String {
+        switch self {
+        case let .terminated(pid):
+            "terminated pid=\(pid)"
+
+        case .alreadyGone:
+            "alreadyGone"
+
+        case .unknownPeer:
+            "unknownPeer"
+
+        case .alreadyRestarted:
+            "alreadyRestarted"
+
+        case let .failed(detail):
+            "failed(\(detail))"
+        }
+    }
 }

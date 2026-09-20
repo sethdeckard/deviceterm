@@ -24,4 +24,18 @@ enum HelperRestartReason: Sendable, Equatable {
     /// destroys, and that has to be read before the helper is stopped. After
     /// it there is nothing left to ask.
     case coreSimulator(CoreSimulatorRestartDecision.Tally)
+
+    /// The value the recovery log records for this reason.
+    var logLabel: String {
+        switch self {
+        case .unresponsive:
+            "unresponsive"
+
+        case .requested:
+            "requested"
+
+        case .coreSimulator:
+            "coreSimulator"
+        }
+    }
 }

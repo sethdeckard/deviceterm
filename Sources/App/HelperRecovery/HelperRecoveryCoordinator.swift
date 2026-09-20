@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Foundation
+import os
+
+/// Where the recovery sequence records who asked for a restart and what
+/// came of it. The `xpc` category's line for the kill itself names only the
+/// pid and the generation.
+private let helperRecoveryLog = Logger(subsystem: "com.deviceterm", category: "helper-recovery")
 
 /// Getting out of a wedged helper without a
 /// terminal.
@@ -62,6 +68,12 @@ final class HelperRecoveryCoordinator {
         /// silent connection once, so every verdict this coordinator doesn't
         /// act on has to be handed back or nothing asks again.
         var rearmDetection: @MainActor () -> Void = {}
+        /// Record one line of the sequence. The reason and the user's answer
+        /// exist only here, so without these lines the log cannot say whether
+        /// a kill was the app's diagnosis or a menu choice.
+        var log: @MainActor (String) -> Void = { line in
+            helperRecoveryLog.notice("\(line, privacy: .public)")
+        }
         var now: @MainActor () -> Date = { Date() }
         /// How long the automatic prompt stays quiet after Keep Waiting or a
         /// restart attempt. Long enough that a user who decided
@@ -155,7 +167,9 @@ final class HelperRecoveryCoordinator {
             isPrompting = false
             deps.rearmDetection()
         }
-        switch deps.prompt(reason) {
+        let choice = deps.prompt(reason)
+        deps.log("helper restart prompted reason=\(reason.logLabel) choice=\(choice.logLabel)")
+        switch choice {
         case .keepWaiting:
             quietUntil = deps.now().addingTimeInterval(deps.quietSeconds)
             return
@@ -179,7 +193,9 @@ final class HelperRecoveryCoordinator {
         // handles as it starts. Anything this stops has to be stopped while
         // the only helper holding handles is the one about to be killed.
         await deps.beforeHelperStopped(reason)
-        switch await deps.terminate(connection) {
+        let outcome = await deps.terminate(connection)
+        deps.log("helper termination reason=\(reason.logLabel) outcome=\(outcome.logLabel)")
+        switch outcome {
         case .terminated, .alreadyGone, .alreadyRestarted:
             // None of these needs an alert: the signal landed, there was no
             // process to signal, or the connection it was aimed at had already

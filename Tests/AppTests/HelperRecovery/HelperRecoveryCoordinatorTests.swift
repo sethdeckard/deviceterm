@@ -29,6 +29,10 @@ struct HelperRecoveryCoordinatorTests {
         private(set) var reports: [HelperTerminationOutcome] = []
         private(set) var rearms = 0
         private(set) var preStopReasons: [HelperRestartReason] = []
+        private(set) var logs: [String] = []
+        /// How many steps had run when each line was logged, so a line's place
+        /// in the sequence is assertable without the lines becoming steps.
+        private(set) var logStepCounts: [Int] = []
         /// The sequence in the order it happened. The CoreSimulator restart is
         /// only correct in one order, so which steps ran isn't enough to
         /// assert on: it has to be when.
@@ -58,6 +62,10 @@ struct HelperRecoveryCoordinatorTests {
                         steps.append("beforeHelperStopped")
                     },
                     rearmDetection: { [self] in rearms += 1 },
+                    log: { [self] line in
+                        logs.append(line)
+                        logStepCounts.append(steps.count)
+                    },
                     now: { [self] in clock },
                     quietSeconds: quietSeconds
                 )
@@ -248,6 +256,7 @@ struct HelperRecoveryCoordinatorTests {
         await settle()
         #expect(harness.reports == [.failed("Operation not permitted")])
         #expect(harness.reconnects == 0)
+        #expect(harness.logs.last == "helper termination reason=requested outcome=failed(Operation not permitted)")
     }
 
     @Test
@@ -337,6 +346,55 @@ struct HelperRecoveryCoordinatorTests {
         await settle()
         #expect(harness.steps == ["beforeHelperStopped", "terminate"])
         #expect(harness.reports == [outcome])
+    }
+
+    /// The `xpc` line written for the kill names a pid and a generation and
+    /// cannot say who asked. These two lines are the only record of that, and
+    /// of what the user answered, so a log read after an incident can tell a
+    /// diagnosis from a menu choice.
+    @Test(arguments: [
+        (HelperRestartReason.unresponsive, "unresponsive"),
+        (.requested, "requested"),
+        (.coreSimulator(CoreSimulatorRestartDecision.Tally(booted: 2, owned: 1)), "coreSimulator")
+    ])
+    func aRestartLogsItsReasonWhenPromptedAndWhenTerminating(
+        reason: HelperRestartReason,
+        label: String
+    ) async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+        switch reason {
+        case .unresponsive:
+            coordinator.helperStoppedAnswering(connection: harness.generation)
+
+        case .requested:
+            coordinator.restartRequested()
+
+        case let .coreSimulator(tally):
+            coordinator.coreSimulatorRestartRequested(tally: tally)
+        }
+        await settle()
+        #expect(harness.logs == [
+            "helper restart prompted reason=\(label) choice=restart",
+            "helper termination reason=\(label) outcome=terminated pid=42"
+        ])
+        #expect(
+            harness.logStepCounts == [0, 2],
+            "the prompt line precedes the sequence; the termination line follows the stop and the kill"
+        )
+    }
+
+    /// A declined prompt still leaves a line, so a log full of silence after
+    /// an unanswered call reads as a user choosing to wait, not as a detector
+    /// that never fired.
+    @Test
+    func keepWaitingLogsThePromptAndNothingElse() async {
+        let harness = Harness()
+        harness.answer = .keepWaiting
+        let coordinator = harness.makeCoordinator()
+        coordinator.helperStoppedAnswering(connection: harness.generation)
+        await settle()
+        #expect(harness.logs == ["helper restart prompted reason=unresponsive choice=keepWaiting"])
     }
 
     /// The window is reason-scoped: an ordinary helper restart opens it too,

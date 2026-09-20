@@ -9,4 +9,18 @@ enum HelperRestartChoice: Sendable, Equatable {
     case keepWaiting
     /// "Cancel" on the requested prompt: nothing to snooze, nothing changes.
     case cancel
+
+    /// The value the recovery log records for this answer.
+    var logLabel: String {
+        switch self {
+        case .restart:
+            "restart"
+
+        case .keepWaiting:
+            "keepWaiting"
+
+        case .cancel:
+            "cancel"
+        }
+    }
 }
