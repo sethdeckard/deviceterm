@@ -393,6 +393,20 @@ together on a protected automation tab. Neither publishes a `deviceterm.tab.`
 identifier, so counting is unaffected, but a pixel comparison of the strip will
 show them.
 
+**Most pills also carry a shortcut badge**, a trailing `⌘1`-style label after
+the title. Like the markers it publishes no `deviceterm.tab.` identifier and no
+accessibility element at all, so it changes no count, but it does move pixels
+and it narrows the title, which truncates sooner than the pill's width alone
+suggests.
+
+Which pills carry one follows the bindings exactly, so it is **position- and
+count-dependent**: the first eight tabs show `⌘1` through `⌘8`, and the last
+tab shows `⌘9` only once there are nine or more (`⌘9` selects the end of the
+strip, not the ninth tab). On a strip of twelve, the twelfth shows `⌘9` and
+positions nine through eleven show nothing at all. Opening or closing a tab
+renumbers the rest, so sample the badge after the strip settles rather than
+before.
+
 **Don't cross-check a pill's `title` against a separately sampled CLI
 `tab.title`.** A shell title can change between the two reads, and the wire form
 is normalized and bounded. Use an explicit `tab rename` receipt when testing a

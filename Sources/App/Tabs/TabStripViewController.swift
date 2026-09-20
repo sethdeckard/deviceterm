@@ -133,12 +133,18 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         WorkspaceShortID.make(from: tab.cohortId)
     }
 
-    /// Paint a pill's title: the text, and the color that marks selection.
+    /// The color a pill's text takes at a given selection state, shared by the
+    /// title and the shortcut badge so the two dim together.
     ///
     /// Inactive tabs dim rather than the active one brightening, because
     /// `labelColor` is already the brightest semantic label color there is.
     /// Both are semantic, so they track the system appearance with no palette
     /// of our own to maintain.
+    static func titleColor(isSelected: Bool) -> NSColor {
+        isSelected ? .labelColor : .secondaryLabelColor
+    }
+
+    /// Paint a pill's title: the text, and the color that marks selection.
     ///
     /// Text and color are written together because assigning `title` discards
     /// any `attributedTitle`. Both passes that name a title call this, so
@@ -155,7 +161,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             string: text,
             attributes: [
                 .font: button.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
-                .foregroundColor: isSelected ? NSColor.labelColor : NSColor.secondaryLabelColor,
+                .foregroundColor: titleColor(isSelected: isSelected),
                 .paragraphStyle: paragraph
             ]
         )
@@ -1203,6 +1209,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             let cell = TabPillCell(frame: .zero)
             cell.install(close: close, title: title)
             applyMarkers(to: cell, tab: tab)
+            cell.setShortcut(
+                TabShortcutDecision.action(atIndex: idx, tabCount: tabs.count)
+            )
             cell.onHoverChange = { [weak self] in self?.applySeparators() }
             // The whole pill is the drag image.
             title.snapshotSource = cell
@@ -1373,6 +1382,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 isSelected: cell.isSelected
             )
             applyMarkers(to: cell, tab: tab)
+            cell.setShortcut(
+                TabShortcutDecision.action(atIndex: idx, tabCount: tabs.count)
+            )
             Self.applyAccessibilityIdentifiers(
                 pill: button, close: cell.closeButton, shortId: Self.accessibilityShortID(for: tab)
             )
@@ -1636,8 +1648,7 @@ private extension TabStripViewController {
 
                 case .leftMouseUp:
                     tracking = false
-                    let point = convert(next.locationInWindow, from: nil)
-                    if !didDrag, bounds.contains(point), let action {
+                    if !didDrag, isWithinPill(next), let action {
                         _ = sendAction(action, to: target)
                     }
 
@@ -1646,6 +1657,19 @@ private extension TabStripViewController {
                 }
             }
             mouseDownPoint = nil
+        }
+
+        /// Whether `event` ended over this tab's pill rather than only over
+        /// the button itself.
+        ///
+        /// The shortcut badge is a sibling inside the pill that routes its
+        /// hits here, so a release over it arrives with a location outside
+        /// this button's own bounds. Testing the pill keeps that a click on
+        /// the tab. `snapshotSource` is the pill (it is what the drag image
+        /// snapshots), and falls back to self before the strip wires it.
+        private func isWithinPill(_ event: NSEvent) -> Bool {
+            let pill = snapshotSource ?? self
+            return pill.bounds.contains(pill.convert(event.locationInWindow, from: nil))
         }
 
         private func beginTabDrag(with event: NSEvent) {
@@ -1745,12 +1769,10 @@ private extension TabStripViewController {
             didSet { trailingSeparator.isHidden = !showsTrailingSeparator }
         }
 
-        /// Title button accessor: always the LAST arranged subview after
-        /// `install` (close is leftmost; any markers sit between).
-        /// Used by the strip VC's TabID-keyed lookup.
-        var titleButton: NSButton? {
-            stack.arrangedSubviews.last as? NSButton
-        }
+        /// The pill's title button, stored explicitly because the shortcut
+        /// badge follows it in the stack. Every TabID-keyed lookup in the strip
+        /// reads this button's tag.
+        private(set) weak var titleButton: NSButton?
 
         private let background = NSView()
         private let stack = NSStackView()
@@ -1760,6 +1782,11 @@ private extension TabStripViewController {
         /// on every pass, and OSC title updates make those continuous.
         private var installedMarkers: [TabPillMarker] = []
         private var markerViews: [NSView] = []
+        /// The chord the badge currently renders, so `setShortcut` can return
+        /// early when nothing moved. Holds the rendered text rather than the
+        /// action, because that is what the comparison is actually about.
+        private var installedShortcut: String?
+        private var shortcutLabel: TabShortcutLabel?
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -1859,14 +1886,35 @@ private extension TabStripViewController {
             return view
         }
 
+        /// The badge label. Compression resistance is what keeps the chord
+        /// whole on a crowded strip: the title truncates instead, which it is
+        /// already built to do.
+        ///
+        /// Publishes no accessibility identifier, for the same reason the
+        /// markers do not: consumers count pills by filtering the
+        /// `deviceterm.tab.` prefix, and another named control would inflate
+        /// that count. The chord is already announced by the Window menu.
+        private static func makeShortcutLabel() -> TabShortcutLabel {
+            let label = TabShortcutLabel(labelWithString: "")
+            label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            label.setContentCompressionResistancePriority(.windowSizeStayPut, for: .horizontal)
+            label.setContentHuggingPriority(.required, for: .horizontal)
+            label.setAccessibilityElement(false)
+            return label
+        }
+
         /// Mount the pill's fixed subviews: the close ✕ leftmost so it has a
         /// stable position, the title filling the rest. Markers go on afterwards
-        /// through `setMarkers`, which inserts them between the two.
-        func install(close: NSButton, title: NSView) {
+        /// through `setMarkers`, which inserts them between the two, and the
+        /// shortcut badge through `setShortcut`, which appends after the title.
+        func install(close: NSButton, title: NSButton) {
             for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
             installedMarkers = []
             markerViews = []
+            installedShortcut = nil
+            shortcutLabel = nil
             closeButton = close
+            titleButton = title
             close.alphaValue = 0
             stack.addArrangedSubview(close)
             stack.addArrangedSubview(title)
@@ -1887,6 +1935,41 @@ private extension TabStripViewController {
                 stack.insertArrangedSubview(view, at: 1 + offset)
             }
             installedMarkers = markers
+        }
+
+        /// Reconcile the trailing shortcut badge against `action`, nil for a
+        /// tab whose position carries no chord. Idempotent like `setMarkers`,
+        /// since the same-tabs render path calls it on every pass.
+        ///
+        /// Appended after the title, so it is the pill's trailing element and
+        /// the title is what yields when the cell runs out of width.
+        func setShortcut(_ action: KeybindingAction?) {
+            let text = action.flatMap { KeybindingCatalog.entry(for: $0)?.chord.displayString }
+            guard text != installedShortcut else { return }
+            installedShortcut = text
+            guard let text else {
+                if let label = shortcutLabel {
+                    stack.removeArrangedSubview(label)
+                    label.removeFromSuperview()
+                }
+                shortcutLabel = nil
+                return
+            }
+            if shortcutLabel == nil {
+                let label = Self.makeShortcutLabel()
+                label.pointerTarget = titleButton
+                shortcutLabel = label
+                stack.addArrangedSubview(label)
+            }
+            shortcutLabel?.stringValue = text
+            refreshShortcutColor()
+        }
+
+        /// Follow the title's selected / unselected pair, so the badge dims
+        /// with the tab it belongs to rather than staying bright on an
+        /// inactive pill.
+        private func refreshShortcutColor() {
+            shortcutLabel?.textColor = TabStripViewController.titleColor(isSelected: isSelected)
         }
 
         override func updateTrackingAreas() {
@@ -1926,6 +2009,23 @@ private extension TabStripViewController {
                 alpha = 0
             }
             background.layer?.backgroundColor = NSColor.white.withAlphaComponent(alpha).cgColor
+            refreshShortcutColor()
+        }
+    }
+
+    /// The pill's shortcut badge.
+    ///
+    /// Non-interactive chrome sitting inside the tab's click target, so it
+    /// hands pointer events to the title button instead of consuming them.
+    /// Left as a plain sibling it would be a dead strip at the pill's trailing
+    /// edge where clicking, dragging, and right-clicking the tab all stop
+    /// working, since `TabPillCell` itself handles no mouse events.
+    final class TabShortcutLabel: NSTextField {
+        weak var pointerTarget: NSView?
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard super.hitTest(point) != nil else { return nil }
+            return pointerTarget ?? self
         }
     }
 
