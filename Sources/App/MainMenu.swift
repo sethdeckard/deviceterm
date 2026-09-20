@@ -51,21 +51,21 @@ func makeMainMenu() -> NSMenu {
     let appMenuItem = NSMenuItem()
     mainMenu.addItem(appMenuItem)
     let appMenu = NSMenu()
-    appMenu.addItem(
-        NSMenuItem(
+    let hAboutDeviceTerm = NSMenuItem(
         title: "About DeviceTerm",
         action: #selector(AppDelegate.openAbout(_:)),
         keyEquivalent: ""
     )
-        )
+    hAboutDeviceTerm.image = .menuSymbol("info.circle", describedAs: "About DeviceTerm")
+    appMenu.addItem(hAboutDeviceTerm)
     appMenu.addItem(.separator())
-    appMenu.addItem(
-        NSMenuItem(
+    let hCheckforUpdates = NSMenuItem(
         title: "Check for Updates…",
         action: #selector(AppDelegate.checkForUpdates(_:)),
         keyEquivalent: ""
     )
-        )
+    hCheckforUpdates.image = .menuSymbol("arrow.triangle.2.circlepath", describedAs: "Check for Updates")
+    appMenu.addItem(hCheckforUpdates)
     if UpdateSimulator.isEnabled {
         appMenu.addItem(
             NSMenuItem(
@@ -83,26 +83,26 @@ func makeMainMenu() -> NSMenu {
     // anything a window or pane owns. Permanent, rather than only offered by
     // the prompt that appears when the helper stops answering: recovery must
     // not depend on that prompt being up at the right moment.
-    appMenu.addItem(
-        NSMenuItem(
+    let hRestartHelper = NSMenuItem(
         title: "Restart Helper…",
         action: #selector(AppDelegate.restartHelper(_:)),
         keyEquivalent: ""
     )
-        )
+    hRestartHelper.image = .menuSymbol("restart.circle", describedAs: "Restart Helper")
+    appMenu.addItem(hRestartHelper)
     // Directly below Restart Helper… and in the same group, because the two
     // are one ladder rather than two features: this is the same restart with
     // CoreSimulator stopped inside it, for when the helper is answering and
     // the simulators still aren't. Cheapest rung first, so the escalation
     // reads top to bottom, and both stay one click deep. A submenu would put
     // a hover between the user and recovery at the moment they need it.
-    appMenu.addItem(
-        NSMenuItem(
+    let hRestartSimulatorServices = NSMenuItem(
         title: "Restart Simulator Services…",
         action: #selector(AppDelegate.restartSimulatorServices(_:)),
         keyEquivalent: ""
     )
-        )
+    hRestartSimulatorServices.image = .menuSymbol("wrench.and.screwdriver", describedAs: "Restart Simulator Services")
+    appMenu.addItem(hRestartSimulatorServices)
     appMenu.addItem(.separator())
     // Settings… opens the config in a new terminal tab running $EDITOR.
     // nil target routes through the responder chain to the AppDelegate,
@@ -136,13 +136,13 @@ func makeMainMenu() -> NSMenu {
     // from the clicked item's represented object; a main-menu item
     // carries none, so this names a separate entry point that resolves
     // the selected tab instead.
-    shellMenu.addItem(
-        NSMenuItem(
-            title: "Duplicate Tab",
-            action: #selector(TabStripViewController.duplicateSelectedTab(_:)),
-            keyEquivalent: ""
-        )
+    let duplicateItem = NSMenuItem(
+        title: "Duplicate Tab",
+        action: #selector(TabStripViewController.duplicateSelectedTab(_:)),
+        keyEquivalent: ""
     )
+    duplicateItem.image = .menuSymbol("plus.square.on.square", describedAs: "Duplicate Tab")
+    shellMenu.addItem(duplicateItem)
     // Split Right / Split Down create a pane the way New Tab creates a
     // tab. Mirror Physical Device… opens the picker that mounts a
     // physically-connected iPhone or iPad as a pane, so it belongs with
@@ -151,13 +151,13 @@ func makeMainMenu() -> NSMenu {
     shellMenu.addItem(.separator())
     shellMenu.addItem(KeybindingCatalog.makeMenuItem(.splitRight))
     shellMenu.addItem(KeybindingCatalog.makeMenuItem(.splitDown))
-    shellMenu.addItem(
-        NSMenuItem(
-            title: "Mirror Physical Device…",
-            action: #selector(AppDelegate.mirrorPhysicalDevice(_:)),
-            keyEquivalent: ""
-        )
+    let mirrorItem = NSMenuItem(
+        title: "Mirror Physical Device…",
+        action: #selector(AppDelegate.mirrorPhysicalDevice(_:)),
+        keyEquivalent: ""
     )
+    mirrorItem.image = .menuSymbol("iphone", describedAs: "Mirror Physical Device")
+    shellMenu.addItem(mirrorItem)
     shellMenu.addItem(.separator())
     // Close Pane sits above Close Tab because it is the narrower of the
     // two, and its title changes to "Close Tab" whenever the focused
@@ -222,13 +222,13 @@ func makeMainMenu() -> NSMenu {
     // shortcut, so muscle memory can't trip it.
     viewMenu.addItem(.separator())
     viewMenu.addItem(KeybindingCatalog.makeMenuItem(.toggleSplitDirection))
-    viewMenu.addItem(
-        NSMenuItem(
-            title: "Reset Pane Layout",
-            action: #selector(PaneLayoutViewController.resetPaneLayout(_:)),
-            keyEquivalent: ""
-        )
+    let mResetPaneLayout = NSMenuItem(
+        title: "Reset Pane Layout",
+        action: #selector(PaneLayoutViewController.resetPaneLayout(_:)),
+        keyEquivalent: ""
     )
+    mResetPaneLayout.image = .menuSymbol("rectangle.3.group", describedAs: "Reset Pane Layout")
+    viewMenu.addItem(mResetPaneLayout)
 
     // AX inspector: the chrome ribbon has a button too, and the menu item
     // exposes the same toggle under ⌥⌘A so a power user can flip it
@@ -263,53 +263,53 @@ func makeMainMenu() -> NSMenu {
     // App Switcher is a synthesized swipe-up-and-dwell rather than a
     // hardware button, but it lives with Home as the other "system
     // navigation" action.
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "App Switcher",
-            action: #selector(SimulatorPaneViewController.invokeAppSwitcher(_:)),
-            keyEquivalent: ""
-        )
+    let mAppSwitcher = NSMenuItem(
+        title: "App Switcher",
+        action: #selector(SimulatorPaneViewController.invokeAppSwitcher(_:)),
+        keyEquivalent: ""
     )
+    mAppSwitcher.image = .menuSymbol("square.grid.2x2", describedAs: "App Switcher")
+    deviceMenu.addItem(mAppSwitcher)
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceLock))
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Side Button",
-            action: #selector(SimulatorPaneViewController.pressHardwareSide(_:)),
-            keyEquivalent: ""
-        )
+    let mSideButton = NSMenuItem(
+        title: "Side Button",
+        action: #selector(SimulatorPaneViewController.pressHardwareSide(_:)),
+        keyEquivalent: ""
     )
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Siri",
-            action: #selector(SimulatorPaneViewController.pressHardwareSiri(_:)),
-            keyEquivalent: ""
-        )
+    mSideButton.image = .menuSymbol("button.horizontal.top.press", describedAs: "Side Button")
+    deviceMenu.addItem(mSideButton)
+    let mSiri = NSMenuItem(
+        title: "Siri",
+        action: #selector(SimulatorPaneViewController.pressHardwareSiri(_:)),
+        keyEquivalent: ""
     )
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Apple Pay",
-            action: #selector(SimulatorPaneViewController.pressHardwareApplePay(_:)),
-            keyEquivalent: ""
-        )
+    mSiri.image = .menuSymbol("siri", describedAs: "Siri")
+    deviceMenu.addItem(mSiri)
+    let mApplePay = NSMenuItem(
+        title: "Apple Pay",
+        action: #selector(SimulatorPaneViewController.pressHardwareApplePay(_:)),
+        keyEquivalent: ""
     )
+    mApplePay.image = .menuSymbol("creditcard", describedAs: "Apple Pay")
+    deviceMenu.addItem(mApplePay)
     deviceMenu.addItem(.separator())
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceRotateLeft))
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceRotateRight))
     deviceMenu.addItem(.separator())
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Reboot",
-            action: #selector(SimulatorPaneViewController.rebootDevice(_:)),
-            keyEquivalent: ""
-        )
+    let mReboot = NSMenuItem(
+        title: "Reboot",
+        action: #selector(SimulatorPaneViewController.rebootDevice(_:)),
+        keyEquivalent: ""
     )
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Erase All Content and Settings…",
-            action: #selector(SimulatorPaneViewController.eraseAllContent(_:)),
-            keyEquivalent: ""
-        )
+    mReboot.image = .menuSymbol("restart", describedAs: "Reboot")
+    deviceMenu.addItem(mReboot)
+    let mEraseAllContentandSettings = NSMenuItem(
+        title: "Erase All Content and Settings…",
+        action: #selector(SimulatorPaneViewController.eraseAllContent(_:)),
+        keyEquivalent: ""
     )
+    mEraseAllContentandSettings.image = .menuSymbol("trash", describedAs: "Erase All Content and Settings")
+    deviceMenu.addItem(mEraseAllContentandSettings)
     deviceMenu.addItem(.separator())
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceScreenshot))
     // The catalog carries the start-state title; the VC's (and the
@@ -324,34 +324,34 @@ func makeMainMenu() -> NSMenu {
     // four on a physical-device pane, which has no equivalent for any of
     // them.
     deviceMenu.addItem(.separator())
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Install App…",
-            action: #selector(SimulatorPaneViewController.installApp(_:)),
-            keyEquivalent: ""
-        )
+    let mInstallApp = NSMenuItem(
+        title: "Install App…",
+        action: #selector(SimulatorPaneViewController.installApp(_:)),
+        keyEquivalent: ""
     )
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Open in Simulator.app",
-            action: #selector(SimulatorPaneViewController.openInSimulatorApp(_:)),
-            keyEquivalent: ""
-        )
+    mInstallApp.image = .menuSymbol("arrow.down.app", describedAs: "Install App")
+    deviceMenu.addItem(mInstallApp)
+    let mOpeninSimulatorapp = NSMenuItem(
+        title: "Open in Simulator.app",
+        action: #selector(SimulatorPaneViewController.openInSimulatorApp(_:)),
+        keyEquivalent: ""
     )
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Reveal in Finder",
-            action: #selector(SimulatorPaneViewController.revealInFinder(_:)),
-            keyEquivalent: ""
-        )
+    mOpeninSimulatorapp.image = .menuSymbol("arrow.up.forward.app", describedAs: "Open in Simulator.app")
+    deviceMenu.addItem(mOpeninSimulatorapp)
+    let mRevealinFinder = NSMenuItem(
+        title: "Reveal in Finder",
+        action: #selector(SimulatorPaneViewController.revealInFinder(_:)),
+        keyEquivalent: ""
     )
-    deviceMenu.addItem(
-        NSMenuItem(
-            title: "Shut Down",
-            action: #selector(SimulatorPaneViewController.shutDownSim(_:)),
-            keyEquivalent: ""
-        )
+    mRevealinFinder.image = .menuSymbol("folder", describedAs: "Reveal in Finder")
+    deviceMenu.addItem(mRevealinFinder)
+    let mShutDown = NSMenuItem(
+        title: "Shut Down",
+        action: #selector(SimulatorPaneViewController.shutDownSim(_:)),
+        keyEquivalent: ""
     )
+    mShutDown.image = .menuSymbol("power", describedAs: "Shut Down")
+    deviceMenu.addItem(mShutDown)
 
     // Two submenus close the menu, gated at different levels. Location
     // carries an action on its parent item, so the affordance gate greys
@@ -368,27 +368,27 @@ func makeMainMenu() -> NSMenu {
     let hardwareMenuItem = NSMenuItem()
     hardwareMenuItem.title = "Hardware"
     let hardwareMenu = NSMenu(title: "Hardware")
-    hardwareMenu.addItem(
-        NSMenuItem(
-            title: "Crown Press",
-            action: #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
-            keyEquivalent: ""
-        )
+    let mCrownPress = NSMenuItem(
+        title: "Crown Press",
+        action: #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
+        keyEquivalent: ""
     )
-    hardwareMenu.addItem(
-        NSMenuItem(
-            title: "Crown Rotate Up",
-            action: #selector(SimulatorPaneViewController.rotateCrownUp(_:)),
-            keyEquivalent: ""
-        )
+    mCrownPress.image = .menuSymbol("digitalcrown.press", describedAs: "Crown Press")
+    hardwareMenu.addItem(mCrownPress)
+    let mCrownRotateUp = NSMenuItem(
+        title: "Crown Rotate Up",
+        action: #selector(SimulatorPaneViewController.rotateCrownUp(_:)),
+        keyEquivalent: ""
     )
-    hardwareMenu.addItem(
-        NSMenuItem(
-            title: "Crown Rotate Down",
-            action: #selector(SimulatorPaneViewController.rotateCrownDown(_:)),
-            keyEquivalent: ""
-        )
+    mCrownRotateUp.image = .menuSymbol("digitalcrown.arrow.clockwise", describedAs: "Crown Rotate Up")
+    hardwareMenu.addItem(mCrownRotateUp)
+    let mCrownRotateDown = NSMenuItem(
+        title: "Crown Rotate Down",
+        action: #selector(SimulatorPaneViewController.rotateCrownDown(_:)),
+        keyEquivalent: ""
     )
+    mCrownRotateDown.image = .menuSymbol("digitalcrown.arrow.counterclockwise", describedAs: "Crown Rotate Down")
+    hardwareMenu.addItem(mCrownRotateDown)
     hardwareMenuItem.submenu = hardwareMenu
     deviceMenu.addItem(hardwareMenuItem)
 
@@ -413,13 +413,13 @@ func makeMainMenu() -> NSMenu {
     // Rename Tab… opens the same sheet as the tab strip's right-click
     // item, on the selected tab rather than a pointed-at one. See
     // Duplicate Tab above for why that is a separate entry point.
-    windowMenu.addItem(
-        NSMenuItem(
-            title: "Rename Tab…",
-            action: #selector(TabStripViewController.renameSelectedTab(_:)),
-            keyEquivalent: ""
-        )
+    let renameItem = NSMenuItem(
+        title: "Rename Tab…",
+        action: #selector(TabStripViewController.renameSelectedTab(_:)),
+        keyEquivalent: ""
     )
+    renameItem.image = .menuSymbol("pencil", describedAs: "Rename Tab")
+    windowMenu.addItem(renameItem)
 
     // Tab navigation. The selectors reach the focused window's
     // `TabStripViewController` through the responder chain, so each acts
@@ -523,27 +523,30 @@ func makeMainMenu() -> NSMenu {
     let helpMenuItem = NSMenuItem()
     mainMenu.addItem(helpMenuItem)
     let helpMenu = NSMenu(title: "Help")
-    helpMenu.addItem(
-        NSMenuItem(
-            title: "DeviceTerm Help",
-            action: #selector(NSApplication.showHelp(_:)),
-            keyEquivalent: "?"
-        )
+    let hDeviceTermHelp = NSMenuItem(
+        title: "DeviceTerm Help",
+        action: #selector(NSApplication.showHelp(_:)),
+        keyEquivalent: "?"
     )
-    helpMenu.addItem(
-        NSMenuItem(
-            title: "All Guides on the Web",
-            action: #selector(AppDelegate.openDocumentation(_:)),
-            keyEquivalent: ""
-        )
+    hDeviceTermHelp.image = .menuSymbol("questionmark.circle", describedAs: "DeviceTerm Help")
+    helpMenu.addItem(hDeviceTermHelp)
+    let hAllGuidesontheWeb = NSMenuItem(
+        title: "All Guides on the Web",
+        action: #selector(AppDelegate.openDocumentation(_:)),
+        keyEquivalent: ""
     )
-    helpMenu.addItem(
-        NSMenuItem(
-            title: "Agent Skills on GitHub",
-            action: #selector(AppDelegate.openAgentSkills(_:)),
-            keyEquivalent: ""
-        )
+    hAllGuidesontheWeb.image = .menuSymbol("globe", describedAs: "All Guides on the Web")
+    helpMenu.addItem(hAllGuidesontheWeb)
+    let hAgentSkillsonGitHub = NSMenuItem(
+        title: "Agent Skills on GitHub",
+        action: #selector(AppDelegate.openAgentSkills(_:)),
+        keyEquivalent: ""
     )
+    hAgentSkillsonGitHub.image = .menuSymbol(
+        "chevron.left.forwardslash.chevron.right",
+        describedAs: "Agent Skills on GitHub"
+    )
+    helpMenu.addItem(hAgentSkillsonGitHub)
     helpMenu.addItem(NSMenuItem.separator())
     // Device Hub first: it's the current toolchain's app, and the one a
     // reader is most likely to be looking for. That deliberately differs
@@ -564,13 +567,13 @@ func makeMainMenu() -> NSMenu {
         )
     )
     helpMenu.addItem(NSMenuItem.separator())
-    helpMenu.addItem(
-        NSMenuItem(
-            title: "Third-Party Notices",
-            action: #selector(AppDelegate.openThirdPartyNotices(_:)),
-            keyEquivalent: ""
-        )
+    let hThirdPartyNotices = NSMenuItem(
+        title: "Third-Party Notices",
+        action: #selector(AppDelegate.openThirdPartyNotices(_:)),
+        keyEquivalent: ""
     )
+    hThirdPartyNotices.image = .menuSymbol("doc.text", describedAs: "Third-Party Notices")
+    helpMenu.addItem(hThirdPartyNotices)
     helpMenuItem.submenu = helpMenu
 
     return mainMenu

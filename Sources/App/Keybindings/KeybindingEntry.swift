@@ -29,6 +29,9 @@ struct KeybindingEntry {
     /// validator to keep a device chord from reaching a pane the user is
     /// not looking at.
     let scope: KeybindingScope
+    /// SF Symbol for the menu item's icon column, or `nil` for no icon.
+    /// Rendered through `NSImage.menuSymbol` when present.
+    let symbolName: String?
 
     init(
         action: KeybindingAction,
@@ -37,7 +40,8 @@ struct KeybindingEntry {
         selector: Selector,
         responders: [AnyClass],
         tag: Int = 0,
-        scope: KeybindingScope = .app
+        scope: KeybindingScope = .app,
+        symbolName: String? = nil
     ) {
         self.action = action
         self.chord = chord
@@ -46,5 +50,6 @@ struct KeybindingEntry {
         self.responders = responders
         self.tag = tag
         self.scope = scope
+        self.symbolName = symbolName
     }
 }

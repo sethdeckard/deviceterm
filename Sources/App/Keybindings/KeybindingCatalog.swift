@@ -61,28 +61,32 @@ enum KeybindingCatalog {
             chord: KeyChord(",", .command),
             title: "Settings…",
             selector: #selector(AppDelegate.openSettings(_:)),
-            responders: [AppDelegate.self]
+            responders: [AppDelegate.self],
+            symbolName: "gear"
         ),
         KeybindingEntry(
             action: .hideApp,
             chord: KeyChord("h", .command),
             title: "Hide DeviceTerm",
             selector: #selector(NSApplication.hide(_:)),
-            responders: [NSApplication.self]
+            responders: [NSApplication.self],
+            symbolName: "eye.slash"
         ),
         KeybindingEntry(
             action: .hideOthers,
             chord: KeyChord("h", [.option, .command]),
             title: "Hide Others",
             selector: #selector(NSApplication.hideOtherApplications(_:)),
-            responders: [NSApplication.self]
+            responders: [NSApplication.self],
+            symbolName: "rectangle.on.rectangle.slash"
         ),
         KeybindingEntry(
             action: .quit,
             chord: KeyChord("q", .command),
             title: "Quit DeviceTerm",
             selector: #selector(NSApplication.terminate(_:)),
-            responders: [NSApplication.self]
+            responders: [NSApplication.self],
+            symbolName: "power"
         ),
         // ⌘? is macOS's own binding for an app's help book. AppKit
         // resolves the book from the app plist, so nothing of ours
@@ -92,7 +96,8 @@ enum KeybindingCatalog {
             chord: KeyChord("?", .command),
             title: "DeviceTerm Help",
             selector: #selector(NSApplication.showHelp(_:)),
-            responders: [NSApplication.self]
+            responders: [NSApplication.self],
+            symbolName: "questionmark.circle"
         ),
 
         // MARK: Tabs, windows, lifecycle
@@ -102,7 +107,8 @@ enum KeybindingCatalog {
             chord: KeyChord("n", .command),
             title: "New Window",
             selector: #selector(AppDelegate.newWindow(_:)),
-            responders: [AppDelegate.self]
+            responders: [AppDelegate.self],
+            symbolName: "macwindow.badge.plus"
         ),
         // AppDelegate implements `newTab:` too, as the windowless fallback
         // for ⌘T when no window is key.
@@ -111,14 +117,16 @@ enum KeybindingCatalog {
             chord: KeyChord("t", .command),
             title: "New Tab",
             selector: #selector(TabStripViewController.newTab(_:)),
-            responders: [TabStripViewController.self, AppDelegate.self]
+            responders: [TabStripViewController.self, AppDelegate.self],
+            symbolName: "plus"
         ),
         KeybindingEntry(
             action: .openAutomationTab,
             chord: KeyChord("t", [.shift, .command]),
             title: "Open Automation Tab",
             selector: #selector(TabStripViewController.openAutomationTab(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "bolt.fill"
         ),
         // ⌘W closes the focused pane, and resolves to the whole tab when
         // the focused terminal is the tab's last one, since a tab must
@@ -134,28 +142,32 @@ enum KeybindingCatalog {
             chord: KeyChord("w", .command),
             title: "Close Pane",
             selector: #selector(PaneLayoutViewController.closeFocusedPaneOrTab(_:)),
-            responders: [PaneLayoutViewController.self, TabStripViewController.self]
+            responders: [PaneLayoutViewController.self, TabStripViewController.self],
+            symbolName: "xmark"
         ),
         KeybindingEntry(
             action: .closeTab,
             chord: KeyChord("w", [.option, .command]),
             title: "Close Tab",
             selector: #selector(TabStripViewController.closeTab(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "xmark"
         ),
         KeybindingEntry(
             action: .closeWindow,
             chord: KeyChord("w", [.shift, .command]),
             title: "Close Window",
             selector: #selector(NSWindow.performClose(_:)),
-            responders: [NSWindow.self]
+            responders: [NSWindow.self],
+            symbolName: "xmark"
         ),
         KeybindingEntry(
             action: .minimize,
             chord: KeyChord("m", .command),
             title: "Minimize",
             selector: #selector(NSWindow.performMiniaturize(_:)),
-            responders: [NSWindow.self]
+            responders: [NSWindow.self],
+            symbolName: "minus"
         ),
 
         // MARK: Editing
@@ -181,35 +193,40 @@ enum KeybindingCatalog {
             // Text fields only. A terminal has no editable region, so
             // `TerminalPaneViewController` deliberately omits `cut:` and
             // the item reads disabled with a terminal focused.
-            responders: [NSText.self]
+            responders: [NSText.self],
+            symbolName: "scissors"
         ),
         KeybindingEntry(
             action: .copy,
             chord: KeyChord("c", .command),
             title: "Copy",
             selector: #selector(NSText.copy(_:)),
-            responders: [TerminalPaneViewController.self, NSText.self]
+            responders: [TerminalPaneViewController.self, NSText.self],
+            symbolName: "doc.on.doc"
         ),
         KeybindingEntry(
             action: .paste,
             chord: KeyChord("v", .command),
             title: "Paste",
             selector: #selector(NSText.paste(_:)),
-            responders: [TerminalPaneViewController.self, NSText.self]
+            responders: [TerminalPaneViewController.self, NSText.self],
+            symbolName: "doc.on.clipboard"
         ),
         KeybindingEntry(
             action: .selectAll,
             chord: KeyChord("a", .command),
             title: "Select All",
             selector: #selector(NSText.selectAll(_:)),
-            responders: [TerminalPaneViewController.self, NSText.self]
+            responders: [TerminalPaneViewController.self, NSText.self],
+            symbolName: "square.dashed"
         ),
         KeybindingEntry(
             action: .clearBuffer,
             chord: KeyChord("k", .command),
             title: "Clear Buffer",
             selector: #selector(TerminalPaneViewController.clearTerminalScreen(_:)),
-            responders: [TerminalPaneViewController.self]
+            responders: [TerminalPaneViewController.self],
+            symbolName: "eraser"
         ),
 
         // MARK: Tab navigation
@@ -290,21 +307,24 @@ enum KeybindingCatalog {
             chord: KeyChord("9", .command),
             title: "Last Tab",
             selector: #selector(TabStripViewController.selectLastTab(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "arrow.right.to.line"
         ),
         KeybindingEntry(
             action: .selectPreviousTab,
             chord: KeyChord("[", [.shift, .command]),
             title: "Select Previous Tab",
             selector: #selector(TabStripViewController.selectPreviousTab(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "chevron.backward.2"
         ),
         KeybindingEntry(
             action: .selectNextTab,
             chord: KeyChord("]", [.shift, .command]),
             title: "Select Next Tab",
             selector: #selector(TabStripViewController.selectNextTab(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "chevron.forward.2"
         ),
 
         // MARK: Splits
@@ -321,14 +341,16 @@ enum KeybindingCatalog {
             chord: KeyChord("d", .command),
             title: "Split Right",
             selector: #selector(TerminalPaneViewController.splitTerminalRight(_:)),
-            responders: [TerminalPaneViewController.self, PaneLayoutViewController.self]
+            responders: [TerminalPaneViewController.self, PaneLayoutViewController.self],
+            symbolName: "square.split.2x1"
         ),
         KeybindingEntry(
             action: .splitDown,
             chord: KeyChord("d", [.shift, .command]),
             title: "Split Down",
             selector: #selector(TerminalPaneViewController.splitTerminalDown(_:)),
-            responders: [TerminalPaneViewController.self, PaneLayoutViewController.self]
+            responders: [TerminalPaneViewController.self, PaneLayoutViewController.self],
+            symbolName: "square.split.1x2"
         ),
 
         // MARK: Pane navigation
@@ -338,42 +360,48 @@ enum KeybindingCatalog {
             chord: KeyChord("[", .command),
             title: "Previous Pane",
             selector: #selector(PaneLayoutViewController.selectPreviousPane(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "chevron.backward"
         ),
         KeybindingEntry(
             action: .selectNextPane,
             chord: KeyChord("]", .command),
             title: "Next Pane",
             selector: #selector(PaneLayoutViewController.selectNextPane(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "chevron.forward"
         ),
         KeybindingEntry(
             action: .selectPaneAbove,
             chord: KeyChord(.arrowUp, [.option, .command]),
             title: "Select Pane Above",
             selector: #selector(PaneLayoutViewController.selectPaneAbove(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "rectangle.tophalf.inset.filled"
         ),
         KeybindingEntry(
             action: .selectPaneBelow,
             chord: KeyChord(.arrowDown, [.option, .command]),
             title: "Select Pane Below",
             selector: #selector(PaneLayoutViewController.selectPaneBelow(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "rectangle.bottomhalf.inset.filled"
         ),
         KeybindingEntry(
             action: .selectPaneLeft,
             chord: KeyChord(.arrowLeft, [.option, .command]),
             title: "Select Pane Left",
             selector: #selector(PaneLayoutViewController.selectPaneLeft(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "rectangle.leadinghalf.inset.filled"
         ),
         KeybindingEntry(
             action: .selectPaneRight,
             chord: KeyChord(.arrowRight, [.option, .command]),
             title: "Select Pane Right",
             selector: #selector(PaneLayoutViewController.selectPaneRight(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "rectangle.trailinghalf.inset.filled"
         ),
 
         // MARK: Pane and tab arrangement
@@ -383,28 +411,32 @@ enum KeybindingCatalog {
             chord: KeyChord(.arrowLeft, [.shift, .command]),
             title: "Move Pane Left",
             selector: #selector(PaneLayoutViewController.swapPaneLeft(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "arrow.left.square"
         ),
         KeybindingEntry(
             action: .movePaneRight,
             chord: KeyChord(.arrowRight, [.shift, .command]),
             title: "Move Pane Right",
             selector: #selector(PaneLayoutViewController.swapPaneRight(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "arrow.right.square"
         ),
         KeybindingEntry(
             action: .moveTabLeft,
             chord: KeyChord(.arrowLeft, [.control, .shift]),
             title: "Move Tab Left",
             selector: #selector(TabStripViewController.moveSelectedTabLeft(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "arrow.backward"
         ),
         KeybindingEntry(
             action: .moveTabRight,
             chord: KeyChord(.arrowRight, [.control, .shift]),
             title: "Move Tab Right",
             selector: #selector(TabStripViewController.moveSelectedTabRight(_:)),
-            responders: [TabStripViewController.self]
+            responders: [TabStripViewController.self],
+            symbolName: "arrow.forward"
         ),
         // ⌃⇧D keeps clear of ⇧⌘D, the Split Down chord. Toggling an
         // existing split's axis is the rarer of the two, so the common
@@ -414,7 +446,8 @@ enum KeybindingCatalog {
             chord: KeyChord("d", [.control, .shift]),
             title: "Toggle Split Direction",
             selector: #selector(PaneLayoutViewController.toggleSplitDirection(_:)),
-            responders: [PaneLayoutViewController.self]
+            responders: [PaneLayoutViewController.self],
+            symbolName: "squareshape.split.2x2"
         ),
 
         // MARK: Presentation
@@ -424,28 +457,32 @@ enum KeybindingCatalog {
             chord: KeyChord("=", .command),
             title: "Zoom In",
             selector: #selector(TerminalPaneViewController.zoomTerminalIn(_:)),
-            responders: [TerminalPaneViewController.self]
+            responders: [TerminalPaneViewController.self],
+            symbolName: "plus.magnifyingglass"
         ),
         KeybindingEntry(
             action: .zoomOut,
             chord: KeyChord("-", .command),
             title: "Zoom Out",
             selector: #selector(TerminalPaneViewController.zoomTerminalOut(_:)),
-            responders: [TerminalPaneViewController.self]
+            responders: [TerminalPaneViewController.self],
+            symbolName: "minus.magnifyingglass"
         ),
         KeybindingEntry(
             action: .resetZoom,
             chord: KeyChord("0", .command),
             title: "Reset Zoom",
             selector: #selector(TerminalPaneViewController.resetTerminalZoom(_:)),
-            responders: [TerminalPaneViewController.self]
+            responders: [TerminalPaneViewController.self],
+            symbolName: "magnifyingglass"
         ),
         KeybindingEntry(
             action: .toggleFullScreen,
             chord: KeyChord("f", [.control, .command]),
             title: "Enter Full Screen",
             selector: #selector(NSWindow.toggleFullScreen(_:)),
-            responders: [NSWindow.self]
+            responders: [NSWindow.self],
+            symbolName: "arrow.up.left.and.arrow.down.right"
         ),
         // AppKit does not route bare-Option chords through key-equivalent
         // matching, so ⌥⌘A is what makes this shortcut work while leaving
@@ -456,7 +493,8 @@ enum KeybindingCatalog {
             title: "Toggle AX Inspector",
             selector: #selector(SimulatorPaneViewController.toggleAxInspector(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "accessibility"
         ),
 
         // MARK: Device controls
@@ -473,7 +511,8 @@ enum KeybindingCatalog {
             title: "Home",
             selector: #selector(SimulatorPaneViewController.pressHardwareHome(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "house.fill"
         ),
         KeybindingEntry(
             action: .deviceLock,
@@ -481,7 +520,8 @@ enum KeybindingCatalog {
             title: "Lock",
             selector: #selector(SimulatorPaneViewController.pressHardwareLock(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "lock.iphone"
         ),
         KeybindingEntry(
             action: .deviceRotateLeft,
@@ -489,7 +529,8 @@ enum KeybindingCatalog {
             title: "Rotate Left",
             selector: #selector(SimulatorPaneViewController.rotateDeviceLeft(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "rotate.left"
         ),
         KeybindingEntry(
             action: .deviceRotateRight,
@@ -497,7 +538,8 @@ enum KeybindingCatalog {
             title: "Rotate Right",
             selector: #selector(SimulatorPaneViewController.rotateDeviceRight(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "rotate.right"
         ),
         KeybindingEntry(
             action: .deviceScreenshot,
@@ -505,7 +547,8 @@ enum KeybindingCatalog {
             title: "Screenshot",
             selector: #selector(SimulatorPaneViewController.screenshotPane(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "camera"
         ),
         // The title flips to "Stop Recording" while a recording runs.
         // The catalog carries the start-state title, which is what a
@@ -516,7 +559,8 @@ enum KeybindingCatalog {
             title: "Record Screen",
             selector: #selector(SimulatorPaneViewController.recordPane(_:)),
             responders: [SimulatorPaneViewController.self, PaneLayoutViewController.self],
-            scope: .devicePane
+            scope: .devicePane,
+            symbolName: "record.circle"
         ),
 
         // MARK: Device pane size presets
@@ -588,6 +632,9 @@ enum KeybindingCatalog {
         )
         item.keyEquivalentModifierMask = entry.chord.modifiers.nsFlags
         item.tag = entry.tag
+        if let symbolName = entry.symbolName {
+            item.image = .menuSymbol(symbolName, describedAs: entry.title)
+        }
         return item
     }
 }

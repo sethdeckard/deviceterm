@@ -26,173 +26,173 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
     // Hardware buttons, the same group as Device > Home/Lock/Side/Siri/
     // Apple Pay. Repeating here so the right-click hits the common
     // case without bouncing to the menu bar.
-    menu.addItem(
-        NSMenuItem(
-            title: "Home",
-            action: #selector(SimulatorPaneViewController.pressHardwareHome(_:)),
-            keyEquivalent: ""
-        )
+    let iHome = NSMenuItem(
+        title: "Home",
+        action: #selector(SimulatorPaneViewController.pressHardwareHome(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Lock",
-            action: #selector(SimulatorPaneViewController.pressHardwareLock(_:)),
-            keyEquivalent: ""
-        )
+    iHome.image = .menuSymbol("house.fill", describedAs: "Home")
+    menu.addItem(iHome)
+    let iLock = NSMenuItem(
+        title: "Lock",
+        action: #selector(SimulatorPaneViewController.pressHardwareLock(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Side Button",
-            action: #selector(SimulatorPaneViewController.pressHardwareSide(_:)),
-            keyEquivalent: ""
-        )
+    iLock.image = .menuSymbol("lock.iphone", describedAs: "Lock")
+    menu.addItem(iLock)
+    let iSideButton = NSMenuItem(
+        title: "Side Button",
+        action: #selector(SimulatorPaneViewController.pressHardwareSide(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Siri",
-            action: #selector(SimulatorPaneViewController.pressHardwareSiri(_:)),
-            keyEquivalent: ""
-        )
+    iSideButton.image = .menuSymbol("button.horizontal.top.press", describedAs: "Side Button")
+    menu.addItem(iSideButton)
+    let iSiri = NSMenuItem(
+        title: "Siri",
+        action: #selector(SimulatorPaneViewController.pressHardwareSiri(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Apple Pay",
-            action: #selector(SimulatorPaneViewController.pressHardwareApplePay(_:)),
-            keyEquivalent: ""
-        )
+    iSiri.image = .menuSymbol("siri", describedAs: "Siri")
+    menu.addItem(iSiri)
+    let iApplePay = NSMenuItem(
+        title: "Apple Pay",
+        action: #selector(SimulatorPaneViewController.pressHardwareApplePay(_:)),
+        keyEquivalent: ""
     )
+    iApplePay.image = .menuSymbol("creditcard", describedAs: "Apple Pay")
+    menu.addItem(iApplePay)
 
     menu.addItem(.separator())
     // Watch-only inputs. The VC's `validateUserInterfaceItem` gates
     // these on the sim being a watch, so a right-click on a phone /
     // pad / tv pane sees them disabled rather than acting on a
     // device that has no Digital Crown.
-    menu.addItem(
-        NSMenuItem(
-            title: "Crown Press",
-            action: #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
-            keyEquivalent: ""
-        )
+    let iCrownPress = NSMenuItem(
+        title: "Crown Press",
+        action: #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Crown Rotate Up",
-            action: #selector(SimulatorPaneViewController.rotateCrownUp(_:)),
-            keyEquivalent: ""
-        )
+    iCrownPress.image = .menuSymbol("digitalcrown.press", describedAs: "Crown Press")
+    menu.addItem(iCrownPress)
+    let iCrownRotateUp = NSMenuItem(
+        title: "Crown Rotate Up",
+        action: #selector(SimulatorPaneViewController.rotateCrownUp(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Crown Rotate Down",
-            action: #selector(SimulatorPaneViewController.rotateCrownDown(_:)),
-            keyEquivalent: ""
-        )
+    iCrownRotateUp.image = .menuSymbol("digitalcrown.arrow.clockwise", describedAs: "Crown Rotate Up")
+    menu.addItem(iCrownRotateUp)
+    let iCrownRotateDown = NSMenuItem(
+        title: "Crown Rotate Down",
+        action: #selector(SimulatorPaneViewController.rotateCrownDown(_:)),
+        keyEquivalent: ""
     )
+    iCrownRotateDown.image = .menuSymbol("digitalcrown.arrow.counterclockwise", describedAs: "Crown Rotate Down")
+    menu.addItem(iCrownRotateDown)
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Rotate Left",
-            action: #selector(SimulatorPaneViewController.rotateDeviceLeft(_:)),
-            keyEquivalent: ""
-        )
+    let iRotateLeft = NSMenuItem(
+        title: "Rotate Left",
+        action: #selector(SimulatorPaneViewController.rotateDeviceLeft(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Rotate Right",
-            action: #selector(SimulatorPaneViewController.rotateDeviceRight(_:)),
-            keyEquivalent: ""
-        )
+    iRotateLeft.image = .menuSymbol("rotate.left", describedAs: "Rotate Left")
+    menu.addItem(iRotateLeft)
+    let iRotateRight = NSMenuItem(
+        title: "Rotate Right",
+        action: #selector(SimulatorPaneViewController.rotateDeviceRight(_:)),
+        keyEquivalent: ""
     )
+    iRotateRight.image = .menuSymbol("rotate.right", describedAs: "Rotate Right")
+    menu.addItem(iRotateRight)
     menu.addItem(makeLocationMenuItem())
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Reboot",
-            action: #selector(SimulatorPaneViewController.rebootDevice(_:)),
-            keyEquivalent: ""
-        )
+    let iReboot = NSMenuItem(
+        title: "Reboot",
+        action: #selector(SimulatorPaneViewController.rebootDevice(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Shut Down",
-            action: #selector(SimulatorPaneViewController.shutDownSim(_:)),
-            keyEquivalent: ""
-        )
+    iReboot.image = .menuSymbol("restart", describedAs: "Reboot")
+    menu.addItem(iReboot)
+    let iShutDown = NSMenuItem(
+        title: "Shut Down",
+        action: #selector(SimulatorPaneViewController.shutDownSim(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Erase All Content and Settings…",
-            action: #selector(SimulatorPaneViewController.eraseAllContent(_:)),
-            keyEquivalent: ""
-        )
+    iShutDown.image = .menuSymbol("power", describedAs: "Shut Down")
+    menu.addItem(iShutDown)
+    let iEraseAllContentandSettings = NSMenuItem(
+        title: "Erase All Content and Settings…",
+        action: #selector(SimulatorPaneViewController.eraseAllContent(_:)),
+        keyEquivalent: ""
     )
+    iEraseAllContentandSettings.image = .menuSymbol("trash", describedAs: "Erase All Content and Settings")
+    menu.addItem(iEraseAllContentandSettings)
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Screenshot",
-            action: #selector(SimulatorPaneViewController.screenshotPane(_:)),
-            keyEquivalent: ""
-        )
+    let iScreenshot = NSMenuItem(
+        title: "Screenshot",
+        action: #selector(SimulatorPaneViewController.screenshotPane(_:)),
+        keyEquivalent: ""
     )
+    iScreenshot.image = .menuSymbol("camera", describedAs: "Screenshot")
+    menu.addItem(iScreenshot)
     // Title-toggles to "Stop Recording" via the VC's
     // validateUserInterfaceItem when a recording is active.
-    menu.addItem(
-        NSMenuItem(
-            title: "Record Screen",
-            action: #selector(SimulatorPaneViewController.recordPane(_:)),
-            keyEquivalent: ""
-        )
+    let iRecordScreen = NSMenuItem(
+        title: "Record Screen",
+        action: #selector(SimulatorPaneViewController.recordPane(_:)),
+        keyEquivalent: ""
     )
+    iRecordScreen.image = .menuSymbol("record.circle", describedAs: "Record Screen")
+    menu.addItem(iRecordScreen)
     // Expose AX inspection alongside the other ribbon actions in the
     // context menu.
-    menu.addItem(
-        NSMenuItem(
-            title: "Toggle AX Inspector",
-            action: #selector(SimulatorPaneViewController.toggleAxInspector(_:)),
-            keyEquivalent: ""
-        )
+    let iToggleAXInspector = NSMenuItem(
+        title: "Toggle AX Inspector",
+        action: #selector(SimulatorPaneViewController.toggleAxInspector(_:)),
+        keyEquivalent: ""
     )
+    iToggleAXInspector.image = .menuSymbol("accessibility", describedAs: "Toggle AX Inspector")
+    menu.addItem(iToggleAXInspector)
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Open in Simulator.app",
-            action: #selector(SimulatorPaneViewController.openInSimulatorApp(_:)),
-            keyEquivalent: ""
-        )
+    let iOpeninSimulatorapp = NSMenuItem(
+        title: "Open in Simulator.app",
+        action: #selector(SimulatorPaneViewController.openInSimulatorApp(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Reveal in Finder",
-            action: #selector(SimulatorPaneViewController.revealInFinder(_:)),
-            keyEquivalent: ""
-        )
+    iOpeninSimulatorapp.image = .menuSymbol("arrow.up.forward.app", describedAs: "Open in Simulator.app")
+    menu.addItem(iOpeninSimulatorapp)
+    let iRevealinFinder = NSMenuItem(
+        title: "Reveal in Finder",
+        action: #selector(SimulatorPaneViewController.revealInFinder(_:)),
+        keyEquivalent: ""
     )
+    iRevealinFinder.image = .menuSymbol("folder", describedAs: "Reveal in Finder")
+    menu.addItem(iRevealinFinder)
 
     menu.addItem(.separator())
     // Mirror a physical device into this tab. Nil target → responder
     // chain → AppDelegate (same action as Shell > Mirror Physical
     // Device…), so there's one picker+attach implementation; the
     // right-clicked pane's window is key, so it targets the right tab.
-    menu.addItem(
-        NSMenuItem(
-            title: "Mirror Physical Device…",
-            action: #selector(AppDelegate.mirrorPhysicalDevice(_:)),
-            keyEquivalent: ""
-        )
+    let iMirrorPhysicalDevice = NSMenuItem(
+        title: "Mirror Physical Device…",
+        action: #selector(AppDelegate.mirrorPhysicalDevice(_:)),
+        keyEquivalent: ""
     )
+    iMirrorPhysicalDevice.image = .menuSymbol("iphone", describedAs: "Mirror Physical Device")
+    menu.addItem(iMirrorPhysicalDevice)
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Close Pane",
-            action: #selector(SimulatorPaneViewController.closePane(_:)),
-            keyEquivalent: ""
-        )
+    let iClosePane = NSMenuItem(
+        title: "Close Pane",
+        action: #selector(SimulatorPaneViewController.closePane(_:)),
+        keyEquivalent: ""
     )
+    iClosePane.image = .menuSymbol("xmark", describedAs: "Close Pane")
+    menu.addItem(iClosePane)
 
     return menu
 }

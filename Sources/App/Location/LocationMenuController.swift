@@ -166,6 +166,7 @@ func makeLocationMenuItem(
         action: #selector(SimulatorPaneViewController.applySimulatedLocation(_:)),
         keyEquivalent: ""
     )
+    item.image = .menuSymbol("location", describedAs: LocationMenuController.menuTitle)
     item.submenu = LocationMenu(resolve: resolve)
     return item
 }

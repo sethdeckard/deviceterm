@@ -51,58 +51,62 @@ func makeTerminalPaneContextMenu() -> NSMenu {
     )
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Clear",
-            action: #selector(TerminalPaneViewController.clearTerminalScreen(_:)),
-            keyEquivalent: ""
-        )
+    // Copy and Paste carry AppKit's own icons for the standard editing
+    // selectors, so they are left alone; the rest are set here.
+    let clear = NSMenuItem(
+        title: "Clear",
+        action: #selector(TerminalPaneViewController.clearTerminalScreen(_:)),
+        keyEquivalent: ""
     )
+    clear.image = .menuSymbol("eraser", describedAs: "Clear")
+    menu.addItem(clear)
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Open in New Tab",
-            action: #selector(TerminalPaneViewController.openCurrentInNewTab(_:)),
-            keyEquivalent: ""
-        )
+    let openInNewTab = NSMenuItem(
+        title: "Open in New Tab",
+        action: #selector(TerminalPaneViewController.openCurrentInNewTab(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Split Right",
-            action: #selector(TerminalPaneViewController.splitTerminalRight(_:)),
-            keyEquivalent: ""
-        )
+    // Not `plus.rectangle.on.rectangle`, which reads as a duplicate and
+    // would collide with Duplicate Tab's symbol in the strip's own menu.
+    openInNewTab.image = .menuSymbol("rectangle.badge.plus", describedAs: "Open in New Tab")
+    menu.addItem(openInNewTab)
+    let splitRight = NSMenuItem(
+        title: "Split Right",
+        action: #selector(TerminalPaneViewController.splitTerminalRight(_:)),
+        keyEquivalent: ""
     )
-    menu.addItem(
-        NSMenuItem(
-            title: "Split Down",
-            action: #selector(TerminalPaneViewController.splitTerminalDown(_:)),
-            keyEquivalent: ""
-        )
+    splitRight.image = .menuSymbol("square.split.2x1", describedAs: "Split Right")
+    menu.addItem(splitRight)
+    let splitDown = NSMenuItem(
+        title: "Split Down",
+        action: #selector(TerminalPaneViewController.splitTerminalDown(_:)),
+        keyEquivalent: ""
     )
+    splitDown.image = .menuSymbol("square.split.1x2", describedAs: "Split Down")
+    menu.addItem(splitDown)
 
     menu.addItem(.separator())
     // Mirror a physical device into this tab. Nil target → responder
     // chain → AppDelegate (same action as Shell > Mirror Physical
     // Device…), so there's one picker+attach implementation; the
     // right-clicked pane's window is key, so it targets the right tab.
-    menu.addItem(
-        NSMenuItem(
-            title: "Mirror Physical Device…",
-            action: #selector(AppDelegate.mirrorPhysicalDevice(_:)),
-            keyEquivalent: ""
-        )
+    let mirror = NSMenuItem(
+        title: "Mirror Physical Device…",
+        action: #selector(AppDelegate.mirrorPhysicalDevice(_:)),
+        keyEquivalent: ""
     )
+    mirror.image = .menuSymbol("iphone", describedAs: "Mirror Physical Device")
+    menu.addItem(mirror)
 
     menu.addItem(.separator())
-    menu.addItem(
-        NSMenuItem(
-            title: "Close Pane",
-            action: #selector(TerminalPaneViewController.closeTerminalPaneViaMenu(_:)),
-            keyEquivalent: ""
-        )
+    let closePane = NSMenuItem(
+        title: "Close Pane",
+        action: #selector(TerminalPaneViewController.closeTerminalPaneViaMenu(_:)),
+        keyEquivalent: ""
     )
+    closePane.image = .menuSymbol("xmark", describedAs: "Close Pane")
+    menu.addItem(closePane)
 
     return menu
 }

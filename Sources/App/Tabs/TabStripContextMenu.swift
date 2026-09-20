@@ -48,6 +48,7 @@ func makeTabStripContextMenu(
         for: tabID,
         target: target
     )
+    rename.image = .menuSymbol("pencil", describedAs: "Rename Tab")
     menu.addItem(rename)
 
     // Title toggles between "Protect Tab" and "Unprotect Tab" based on
@@ -61,45 +62,54 @@ func makeTabStripContextMenu(
         target: target
     )
     protection.state = isEffectivelyProtected ? .on : .off
+    // `lock.fill` in both states, matching the pill's marker. The title
+    // carries the verb, so the symbol names the subject and stays tied to
+    // what the strip shows. The state checkmark sits in its own column to
+    // the left, the way AppKit's own menus pair the two.
+    protection.image = .menuSymbol("lock.fill", describedAs: "Protected tab")
     menu.addItem(protection)
 
     menu.addItem(.separator())
-    menu.addItem(
-        menuItem(
-            title: "Duplicate Tab",
-            action: #selector(TabStripViewController.duplicateTabFromMenu(_:)),
-            for: tabID,
-            target: target
-        )
+    let duplicate = menuItem(
+        title: "Duplicate Tab",
+        action: #selector(TabStripViewController.duplicateTabFromMenu(_:)),
+        for: tabID,
+        target: target
     )
+    duplicate.image = .menuSymbol("plus.square.on.square", describedAs: "Duplicate Tab")
+    menu.addItem(duplicate)
 
     menu.addItem(.separator())
-    menu.addItem(
-        menuItem(
-            title: "New Tab",
-            action: #selector(TabStripViewController.newTabFromMenu(_:)),
-            for: tabID,
-            target: target
-        )
+    let newTab = menuItem(
+        title: "New Tab",
+        action: #selector(TabStripViewController.newTabFromMenu(_:)),
+        for: tabID,
+        target: target
     )
-    menu.addItem(
-        menuItem(
-            title: "Open Automation Tab",
-            action: #selector(TabStripViewController.openAutomationTabFromMenu(_:)),
-            for: tabID,
-            target: target
-        )
+    // Plain `plus`, the same symbol the strip's own "+" button carries.
+    newTab.image = .menuSymbol("plus", describedAs: "New Tab")
+    menu.addItem(newTab)
+    let automation = menuItem(
+        title: "Open Automation Tab",
+        action: #selector(TabStripViewController.openAutomationTabFromMenu(_:)),
+        for: tabID,
+        target: target
     )
+    automation.image = .menuSymbol("bolt.fill", describedAs: "Automation tab")
+    menu.addItem(automation)
 
     menu.addItem(.separator())
-    menu.addItem(
-        menuItem(
-            title: "Close Tab",
-            action: #selector(TabStripViewController.closeTabFromMenu(_:)),
-            for: tabID,
-            target: target
-        )
+    // The three close items deliberately share one plain `xmark`. Their
+    // titles carry the difference; the repeated glyph is what marks them as
+    // one family, which is how AppKit's own tab menus render the same set.
+    let closeTab = menuItem(
+        title: "Close Tab",
+        action: #selector(TabStripViewController.closeTabFromMenu(_:)),
+        for: tabID,
+        target: target
     )
+    closeTab.image = .menuSymbol("xmark", describedAs: "Close Tab")
+    menu.addItem(closeTab)
     // "Close Other Tabs" is a no-op when this is the only tab; AppKit
     // would still dispatch it, so we disable rather than hide so the
     // item is consistently present and discoverable.
@@ -110,6 +120,7 @@ func makeTabStripContextMenu(
         target: target
     )
     closeOthers.isEnabled = !isOnlyTab
+    closeOthers.image = .menuSymbol("xmark", describedAs: "Close Other Tabs")
     menu.addItem(closeOthers)
     // "Close Tabs to the Right" needs at least one tab to the right
     // of this one, so a last-tab right-click sees it disabled.
@@ -120,6 +131,7 @@ func makeTabStripContextMenu(
         target: target
     )
     closeRight.isEnabled = !isLastTab
+    closeRight.image = .menuSymbol("xmark", describedAs: "Close Tabs to the Right")
     menu.addItem(closeRight)
 
     return menu
