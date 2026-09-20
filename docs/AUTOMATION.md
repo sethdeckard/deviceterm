@@ -427,10 +427,21 @@ version coordinates the bundled app, daemon, CLI, and shim during an update.
 
 Open the tab with **Shell ▸ Open Automation Tab** or ⇧⌘T.
 
-The GUI issues that tab's terminal session a live automation grant. The grant
-lives in daemon memory and is checked on every request that needs it. It is
-revoked when the tab closes, when the issuing GUI connection is lost, or when
-the session ends.
+The GUI issues that tab's terminal session a live automation grant once the
+terminal binds, not at the moment the tab appears. The grant lives in daemon
+memory and is checked on every request that needs it. It is revoked when the
+tab closes, when the issuing GUI connection is lost, or when the session ends.
+
+Losing it to a dropped connection is recoverable. The GUI reissues the grant
+every time the terminal rebinds, including after a daemon reconnect. Only a
+connection failure or a temporary validation outage is retried, with backoff,
+until it applies. Any other error, including a missing session or failed peer
+validation, stops the retry loop.
+
+The tab strip's bolt follows the tab's role, which is fixed for the tab's
+life, so it keeps showing while a grant is pending, lost, or permanently
+failed. Run `deviceterm doctor --json` for the live answer: `pane.sendInput`
+in `allowedMethods` means the grant is in force.
 
 The grant covers `tab open`, `tab focus`, `tab move`, `window open`,
 `window focus`, `pane focus`, `pane send-input`, and `pane capture-text`.
