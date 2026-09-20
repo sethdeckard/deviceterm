@@ -65,8 +65,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// user sees a visible "lane" the pills rest in. Painted with a
     /// low-alpha white tint over the window background, which gives
     /// predictable contrast in any colorspace (NSVisualEffectView
-    /// materials introduce a warm tint in dark mode that doesn't
-    /// match Ghostty's clean dark look).
+    /// materials introduce a warm tint in dark mode that reads as
+    /// discolored over a neutral terminal background).
     private let tabTrack = NSView()
     private var observation: ObservationToken?
     /// Cross-window / tear-off relocation seam (see `TabTransferCoordinating`).
@@ -133,6 +133,34 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         WorkspaceShortID.make(from: tab.cohortId)
     }
 
+    /// Paint a pill's title: the text, and the color that marks selection.
+    ///
+    /// Inactive tabs dim rather than the active one brightening, because
+    /// `labelColor` is already the brightest semantic label color there is.
+    /// Both are semantic, so they track the system appearance with no palette
+    /// of our own to maintain.
+    ///
+    /// Text and color are written together because assigning `title` discards
+    /// any `attributedTitle`. Both passes that name a title call this, so
+    /// neither can drop the other's color by running second.
+    ///
+    /// The paragraph style carries the button's truncation and alignment
+    /// forward: an attributed title supplies its own, so the `lineBreakMode`
+    /// set when the button was built stops reaching the text.
+    static func applyTitleStyling(to button: NSButton, text: String, isSelected: Bool) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        paragraph.alignment = button.alignment
+        button.attributedTitle = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: button.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
+                .foregroundColor: isSelected ? NSColor.labelColor : NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+
     override func loadView() {
         // Root reports mouseDownCanMoveWindow = true so the empty area
         // beside the strip (with one tab, the strip stays at intrinsic
@@ -183,7 +211,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // Tab track: a translucent capsule sitting BEHIND the cells
         // container. Three-level hierarchy painted with explicit white
         // alphas (NSVisualEffectView materials introduce a warm tint
-        // in dark mode that doesn't match Ghostty's clean look):
+        // in dark mode that reads as discolored over a neutral
+        // terminal background):
         //   - Track: ~5% white tint (faint lane)
         //   - Hover: ~10% (cell paints over track)
         //   - Selected: ~16% (clearly active)
@@ -1257,6 +1286,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             let isSelected = (tab.id == selectedID)
             button.state = isSelected ? .on : .off
             cell.isSelected = isSelected
+            Self.applyTitleStyling(
+                to: button,
+                text: displayTitle(for: tab),
+                isSelected: isSelected
+            )
         }
         applySeparators()
         if let tabContent = selectedContent as? TabContentViewController {
@@ -1333,7 +1367,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // as `applySelection`'s TabID-keyed loop.
             guard let cell = cell(forTab: tab.id),
                 let button = cell.titleButton else { continue }
-            button.title = displayTitle(for: tab)
+            Self.applyTitleStyling(
+                to: button,
+                text: displayTitle(for: tab),
+                isSelected: cell.isSelected
+            )
             applyMarkers(to: cell, tab: tab)
             Self.applyAccessibilityIdentifiers(
                 pill: button, close: cell.closeButton, shortId: Self.accessibilityShortID(for: tab)
