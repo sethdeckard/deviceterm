@@ -667,6 +667,14 @@ on.
   deviceterm tab focus "$work_id" --json >/tmp/e2e-work-focus.json || exit 1
   ```
 
+  Before splitting, open the **Shell** menu with `drive click --ax "Shell"`,
+  then take a fresh AX dump and capture. In the Shell menu's ordered items the
+  final three close actions read **Close Tab**, **Close Tab**, **Close Window**:
+  the first is the dynamic ⌘W action, and the second is the unconditional
+  ⌥⌘W action. Dismiss the menu with `drive key escape`. The ordered subtree
+  and pixels are the assertion; an AXPress receipt only says the menu-bar item
+  accepted the action.
+
 - **Mutate:** split beside the receipt's terminal anchor, then keep the new
   terminal's session ID:
 
@@ -680,6 +688,10 @@ on.
   "$work_id" --json` lists every terminal, Simulator, and physical-device leaf
   in layout order and includes both `$anchor_id` and `$split_id`. `deviceterm
   tab show "$work_id" --json` carries the same leaves plus the layout tree.
+  Open **Shell** again and require the final three close actions to read
+  **Close Pane**, **Close Tab**, **Close Window**. This proves that the dynamic
+  ⌘W label followed the focused pane count rather than retaining its one-pane
+  title. Capture the open menu, then dismiss it with Escape.
 - **Observe (this is the real assertion):** every committed pane's root view is
   an `AXGroup` whose `identifier` is `deviceterm.pane.<kind>.<key>`, such as
   `deviceterm.pane.terminal.4`, `deviceterm.pane.sim.<udid>`, or
@@ -714,18 +726,50 @@ on.
   - `deviceterm-uitest drive key cmd+d` → **Split Right**
   - `deviceterm-uitest drive key cmd+shift+d` → **Split Down**
   Each adds one pane node and focuses the new one.
-- **GUI-only directional navigation + rearrange** (these are menu key
-  equivalents; `pane focus <ref>` covers direct addressing, not these relative
-  layout operations):
-  - `drive key cmd+]` / `cmd+[` → **Next / Previous Pane**, cycling display
-    order and wrapping at both ends
-  - `drive key opt+cmd+left` / `right` / `up` / `down` → **Select Pane** in that
-    direction, by what is on screen; no wrap, so an arrow at the edge is a no-op
-  - `drive key cmd+shift+left` / `cmd+shift+right` → **Move Pane Left / Right**
-  - `drive key ctrl+shift+d` → **Toggle Split Direction** (⌃⇧D; ⇧⌘D is Split
-    Down)
-  After a focus key, re-dump and confirm the focused identifier changed; after a
-  rearrange, re-capture and confirm the layout changed as named.
+
+  For the navigation checks, use `drive key cmd+shift+d` while `$split_id` is
+  focused. Compare `pane list --tab "$work_id" --json` immediately before and
+  after and require exactly one new terminal pane, retained as `$third_id`.
+  The fresh `tab show` layout is a three-pane nested split, the AX dump has the
+  same three committed pane nodes, and the capture visibly agrees.
+- **Map CLI panes to AX panes before using relative keys.** For each of
+  `$anchor_id`, `$split_id`, and `$third_id`, run `pane focus <id> --json`,
+  require the receipt's `.pane.focused == true`, and record which
+  `deviceterm.pane.terminal.*` AX node becomes focused. This mapping is needed
+  because the public pane ID is a terminal session ID while the AX suffix is
+  the AppKit layout key; guessing that join makes every later focus assertion
+  vacuous.
+- **Cycle and wrap:** focus the first pane in `pane list` order, then issue
+  `drive key cmd+]` once per pane. A fresh AX dump after every press must visit
+  each remaining mapped pane in display order, and the final press must return
+  to the first. Repeat with `drive key cmd+[` from the first: the first press
+  wraps to the last, the later presses visit reverse display order, and the
+  final press returns to the first. A receipt from `drive key` is not the
+  assertion; the focused AX identifier is.
+- **Directional geometry:** read the three pane frames from one fresh AX dump.
+  From panes with a neighbor above, below, left, or right, issue the matching
+  `opt+cmd+up`, `down`, `left`, or `right` and require focus to land on the
+  geometrically eligible pane. Also issue each direction from an outer edge
+  where no pane is eligible and require the focused identifier to remain
+  unchanged. Re-dump after every key and reject an assertion whose target node
+  reports `AXFocused` or frame attributes as unreadable.
+- **Move left:** focus a right-hand pane, save `tab show` plus a capture, then
+  `drive key cmd+shift+left`. Require the same AX pane to remain focused, the
+  ordered `pane list`/layout to put it left of its former neighbor, and a new
+  capture to show that move. `cmd+shift+right` is the symmetric operation and
+  may be used to restore the prior order.
+- **Toggle the nested split:** focus a child of the inner split, save its parent
+  axis from `tab show`, then `drive key ctrl+shift+d`. Require the parent axis to
+  flip, all three pane IDs to remain present, the same AX pane to remain
+  focused, and the capture's geometry to change. ⌃⇧D is Toggle Split
+  Direction; ⇧⌘D is Split Down.
+- **Close a non-final pane:** save the current `pane list` display order, choose
+  a pane that is not the final leaf, and record the first surviving pane after
+  it in that order. Focus the chosen pane and `drive key cmd+w`. The closed ID
+  must leave `pane list`, its AX node must disappear, the tab must remain, and
+  focus must move to the recorded next survivor rather than whichever leaf
+  happens to be last. The close handoff follows display order; directional
+  focus is the separate geometry-based operation checked above.
 - **GUI-only close:** `drive key cmd+w` → **Close Pane**, acting on the focused
   pane, so its identifier leaves the dump while the tab stays. The item is
   titled after what it would close, and on a tab whose focused terminal is its
@@ -742,6 +786,15 @@ on.
   The tab pill remains `deviceterm.tab.$work_ax` after a terminal closes because
   its identifier is cohort-based, not derived from whichever terminal is
   primary.
+
+  After the close-handoff assertion, close one of the two surviving terminals by
+  its explicit public pane ID so the throwaway tab has exactly one pane. Focus
+  that tab, confirm the dynamic Shell sequence has returned to **Close Tab**,
+  **Close Tab**, **Close Window**, dismiss the menu, then issue
+  `drive key opt+cmd+w`. No sheet should appear, the tab's full ID and AX pill
+  must disappear, and the caller's Automation Tab must remain. This is the
+  unconditional Close Tab path; run it only after proving the selected tab is
+  `$work_id`.
 - **Clean up, on every exit path including an early one:** the throwaway tab
   usually outlives this scenario. ⌘W closes a pane while ⌥⌘W closes the tab, so
   first test whether the stable full tab ID from the open receipt is still
@@ -1107,6 +1160,160 @@ It also covers the JSON encoding and the grant check.
   the GUI, so the code is not `intent.automationRequired`.
 - **Cleanup:** close exactly the throwaway tab by its full ID and confirm the
   window/tab/pill baseline. Never close the Automation Tab.
+
+### 11. Terminal input round-trip *(no sim)*
+
+This scenario proves what a send receipt cannot: bytes reached a live
+libghostty surface, the shell consumed them, and the visible viewport reflects
+the result. Drive a throwaway terminal from the Automation Tab; never inject
+test text into the pane hosting the agent.
+
+- **Setup:** create a private scratch directory, then open one ordinary tab in
+  it and retain the committed tab and terminal-pane IDs:
+
+  ```sh
+  DT_INPUT_DIR=$(mktemp -d "${TMPDIR%/}/deviceterm-e2e-input.XXXXXX") || exit 1
+  input=$(deviceterm tab open --cwd "$DT_INPUT_DIR" --json) || exit 1
+  input_tab=$(printf '%s\n' "$input" | jq -er '.tab.id') || exit 1
+  input_pane=$(printf '%s\n' "$input" | jq -er '.pane.id') || exit 1
+  deviceterm tab focus "$input_tab" --json >/tmp/e2e-input-focus.json || exit 1
+  ```
+
+  Bound retries of `pane capture-text "$input_pane" --json` until the
+  surface answers. The open receipt commits the pane and session ID, not shell
+  readiness. Record a tab/window/AX baseline, require the target terminal's AX
+  node, and capture the visible empty prompt before injecting anything.
+- **Receipt contract:** every send below uses `--json` and must return the same
+  terminal under `.pane.id`, the UTF-8 count under `.bytes`, and the effective
+  delay under `.typeDelayMs` when one was supplied. The receipt proves dispatch
+  or enqueue only. Pair it with a shell-side file or captured output, and poll
+  the latter with a bound rather than sleeping and assuming completion.
+- **Trailing and bare newlines:** send an instant command that writes
+  `$DT_INPUT_DIR/instant` and prints a unique `INSTANT_OK_<pid>` marker, with a
+  trailing `\n`. Require the file and marker, then capture and inspect the
+  window pixels. Next send a command that would create
+  `$DT_INPUT_DIR/inert` **without** a trailing newline. Its text appears in
+  `capture-text`, but the file must remain absent. Send a bare `\n`; only then
+  may the file appear and a fresh prompt follow. This distinguishes typing from
+  execution instead of treating the echoed command as proof it ran.
+- **Paced input and a busy foreground process:** send a marker-producing
+  command at `--type-delay 45`. Capture while it is incomplete: a prefix is
+  visible, the result file is absent, and `capture-text` remains responsive.
+  Then require the complete marker and file. Start `sleep 2`, enqueue another
+  paced marker command while it owns the foreground, and require that command
+  to run after `sleep` exits. The captured viewport must contain neither
+  `^[[200~` nor `^[[201~`; either paste wrapper is a failure even when the
+  marker eventually appears.
+- **Multiple lines:** send two short commands in one payload, both instant and
+  then paced, appending `one` and `two` to a scratch file. Require the file and
+  captured markers to preserve line and execution order. Keep the output short
+  enough that the complete assertion remains in the visible viewport;
+  `capture-text` does not include scrollback.
+- **Delay edges:** `--type-delay 0` returns `.typeDelayMs == 0` and behaves as
+  the instant path. For the upper bound, send the four-character payload
+  `:>x\n` with `--type-delay 5000`. The receipt must report
+  `.typeDelayMs == 1000`; an immediate capture must still succeed while the
+  characters are arriving, and `$DT_INPUT_DIR/x` must appear within a bound
+  consistent with three one-second gaps rather than three five-second gaps.
+  Poll `capture-text` until a fresh prompt follows the echoed command before
+  continuing. The leading `:` is required: default zsh runs a redirection-only
+  `>x` through `NULLCMD=cat`, which would keep the foreground busy and consume
+  the queued-send payloads below as input instead of commands.
+- **Queued sends:** fire three `--type-delay 45` sends back-to-back without
+  waiting. Each appends a distinct letter to one scratch file and prints a
+  distinct short marker. Require the file to contain the three letters in call
+  order and the viewport to show all three markers in that order, with no
+  missing first character, duplication, interleaving, or `command not found`.
+- **Control bytes:** run `cat -v` in the target, send `a\0b\n`, and require
+  `a^@b` in `capture-text`; then send `\x03` to stop `cat`. Start `cat -t`
+  instead for the tab check (`-t` also enables non-printing notation), send
+  `x\ty\ez\n`, and require `x^Iy^[z`, then stop it with another `\x03`. A space
+  in place of any control or truncation at NUL means input fell back to a
+  paste-like path. Take a capture and screenshot while the expected notation
+  is visible.
+- **Cancellation and sibling isolation (run last):** split beside
+  `$input_pane` and retain the new sibling's pane ID from the receipt. Start a
+  long paced send to `$input_pane` whose final newline would create a unique
+  `cancelled` file. Wait until a prefix is visible, then close exactly
+  `$input_pane` by its public ID. Require the close receipt to name that pane,
+  the file to remain absent after the original typing budget, and the sibling's
+  capture to contain none of the payload. The tab, sibling pane, AX tree, and
+  pixels must remain healthy.
+- **Cleanup on success and early exit:** close exactly `$input_tab` by its full
+  ID if it still exists. Remove the known scratch files individually, then use
+  `rmdir "$DT_INPUT_DIR"`; do not recursively delete an unchecked path. Confirm
+  the tab/window/pill baseline and report any cleanup failure before reporting
+  the scenario result.
+
+### 12. Window and tab navigation *(no sim)*
+
+Run this on a quiet workspace with exactly one visible DeviceTerm window and no
+protected tabs. Everything the scenario creates is moved into one disposable
+window, so cleanup can close that window without touching an operator tab.
+
+- **Baseline:** save `window list --all --json`, `tab list --all --json`, an AX
+  dump, and a capture. Require one window. Take the original full window ID
+  from `window show --json`, and create a scratch directory for the duplicate
+  tab's CWD assertion.
+- **Open:** capture `deviceterm window open --json`; retain
+  `$test_window`, `$initial_tab`, and `$initial_pane` from the committed
+  `.window`, `.tab`, and `.pane`. Require the tab's `windowId` to equal the new
+  window ID and the pane's `tabId` to equal the new tab ID. `window list --all`
+  grows by one, the new row is focused with `tabCount == 1`, the AX dump has a
+  second `AXWindow`, and a capture shows the new window's single tab.
+- **Focus both ways:** focus the original window by full ID and require the
+  receipt's `.window.focused == true`, then poll AX/capture until the original
+  window is visibly frontmost. Focus `$test_window` and make the symmetric
+  assertions. Do not use one-based `.index` as a reference.
+- **Show and move:** `window show "$test_window" --json` must return that
+  window and its initial tab. Open one scenario-owned tab in the original
+  window, retain its full ID, then `tab move <tab> --window "$test_window"
+  --index 0 --json`. The receipt must return the moved tab with
+  `.windowId == $test_window` and the destination window; `window show
+  "$test_window" --json` and AX must put its pill at index 0. Nothing
+  pre-existing is moved.
+- **Build four disposable tabs:** open one tab in `$test_window` with the
+  scratch directory as `--cwd`; this is `$duplicate_source`. Open one more
+  filler tab in the same window. Together with the initial and moved tabs, the
+  disposable window now has exactly four tabs. Read their ordered full and
+  short IDs from `window show "$test_window" --json` and `tab list --window
+  "$test_window" --json`, cross-check `tabCount == 4` against four AX pills in
+  that window, and capture the strip. Before duplicating it, bound retries of
+  `tab show "$duplicate_source" --json` must observe its sole terminal's live
+  `cwd` equal to the scratch directory; the creation receipt alone does not
+  promise that the shell has reported its working directory.
+- **Positional selection:** with `$test_window` frontmost, issue
+  `drive key cmd+1` through `cmd+4`. After each key, poll `window show
+  "$test_window" --json` until `.window.selectedTabId` equals the corresponding
+  ordered full ID, and require that tab's AX pill `value` to be 1. `cmd+9`
+  selects the last ID. With only four tabs, `cmd+5` leaves the selected ID and
+  AX values unchanged and raises no visible alert; the harness cannot observe
+  an audible system beep, so make no claim about sound.
+- **Selection wrap:** from the last tab, `drive key cmd+shift+]` wraps to the
+  first; `drive key cmd+shift+[` wraps back to the last. Confirm both through
+  `selectedTabId` from `window show "$test_window" --json`, AX pill values, and
+  captures rather than key receipts.
+- **Chordless Rename:** focus `$duplicate_source`, make DeviceTerm frontmost,
+  and `drive click --ax "Rename Tab…"`. A fresh dump must contain an `AXSheet`
+  with **Rename Tab**, **Rename**, and **Cancel**, and a capture must show it.
+  The successful AXPress receipt alone is not evidence. Press **Cancel** and
+  require the sheet to disappear with the tab unchanged.
+- **Chordless Duplicate:** record the target window's tab IDs with `window show
+  "$test_window" --json`, then
+  `drive click --ax "Duplicate Tab"`. Poll until exactly one new full tab ID
+  appears in `$test_window`; more than one is ambiguous and is a failure. Read
+  the duplicate's sole terminal from `tab show`. Its live `terminal.cwd` must
+  equal the scratch directory. Send that terminal a command that writes
+  `deviceterm doctor --json` to a scratch file, then require the result's
+  `role` to equal the source's agent role. The count delta, inherited CWD/role,
+  new AX pill, and pixels are the postconditions that prove the menu action
+  dispatched.
+- **Close and restore:** close exactly `$test_window` with `--mode detach
+  --json`. Require `.closed.resource == "window"`, the closed full ID to match,
+  and `.mode == "detach"`. Poll until `window list --all`, AX, pixels, and tab
+  counts equal the baseline and the original Automation Tab remains. Remove
+  only the known scratch files and finish with `rmdir` on the checked scratch
+  directory.
 
 ---
 
