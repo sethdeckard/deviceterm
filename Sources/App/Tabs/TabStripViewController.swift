@@ -57,9 +57,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// solo-pill max so it doesn't stretch across the whole window.
     private var soloPillMaxWidth: NSLayoutConstraint?
     /// Active when only one tab exists. Pulls the lone pill TO the
-    /// solo-pill max (at .defaultHigh priority so a narrow window can
-    /// still shrink it). Without this, the cell sits at its intrinsic
-    /// title width with no floor to widen it.
+    /// solo-pill max. Without this, the cell sits at its intrinsic
+    /// title width with no floor to widen it. Held below the window-drag
+    /// threshold (see `TabPillLayout`) so wanting that width never becomes
+    /// the window's minimum width.
     private var soloPillTargetWidth: NSLayoutConstraint?
     /// The per-cell width the strip is holding while a run of ✕ closes is in
     /// progress, nil when not frozen. One value covers every cell, because
@@ -267,13 +268,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             lessThanOrEqualToConstant: Self.soloPillMaxConstant
         )
         soloPillMaxWidth = soloMax
-        // Equal-to-constant at .defaultHigh: wants the solo pill at
-        // its full target width; yields if a narrow window or stripFill
-        // contradicts.
+        // Equal-to-constant: wants the solo pill at its full target
+        // width; yields if a narrow window or stripFill contradicts.
         let soloTarget = cellsContainer.widthAnchor.constraint(
             equalToConstant: Self.soloPillMaxConstant
         )
-        soloTarget.priority = .defaultHigh
+        soloTarget.priority = TabPillLayout.soloPillTarget
         soloPillTargetWidth = soloTarget
 
         NSLayoutConstraint.activate(
@@ -504,15 +504,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// them. Runs at the end of every rebuild, because a close tears the cells
     /// down and builds new ones that carry none of this.
     ///
-    /// The pins sit just under `.required` so a window narrow enough that the
-    /// frozen row no longer fits breaks them instead of producing an
-    /// unsatisfiable layout. They still outrank each cell's 180pt floor.
+    /// The pins outrank each cell's 180pt floor, so the run survives a rebuild
+    /// at the width it started from, and sit below the window-drag threshold,
+    /// so narrowing the window past the frozen row ends the run's geometry
+    /// rather than the resize.
     private func applyFrozenCellWidths() {
         guard let width = frozenCellWidth else { return }
         cellsContainer.distribution = .fill
         for case let cell as TabPillCell in cellsContainer.arrangedSubviews {
             let pin = cell.widthAnchor.constraint(equalToConstant: width)
-            pin.priority = .required - 1
+            pin.priority = TabPillLayout.frozenWidthPin
             pin.isActive = true
             frozenWidthConstraints.append(pin)
         }
@@ -1227,9 +1228,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         //   1 tab  → solo cap 480, strip narrow (trailing empty)
         //   N ≥ 2  → strip spans full width, cellsContainer divides
         //            equally via .fillEqually
-        // Min 180 per cell lives at .defaultHigh so a narrow window with
-        // many tabs shrinks gracefully past 180 instead of producing an
-        // unsatisfiable required-constraint conflict.
+        // Every horizontal floor a pill carries is a floor on the window,
+        // since this strip is the window's content root, so they all sit
+        // below the window-drag threshold. `TabPillLayout` holds the band
+        // and the order they yield in.
         if TabWidthFreezeDecision.shouldThawOnTabCountChange(
             from: lastTabIDs.count,
             to: tabs.count
@@ -1278,6 +1280,15 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // Let the title stretch so the cell can fill its slot in
             // the cellsContainer.
             title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            // Truncation is a drawing behavior and leaves the button
+            // asking for its full width, so the title only actually
+            // gives way once its compression resistance is lowered too.
+            // It yields first, being the part that degrades into
+            // something still worth reading.
+            title.setContentCompressionResistancePriority(
+                TabPillLayout.titleCompression,
+                for: .horizontal
+            )
             // Single-line, tail-truncate at narrow widths so a long
             // title never pushes the close button past the cell's
             // trailing edge.
@@ -1310,6 +1321,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             close.setButtonType(.momentaryPushIn)
             close.toolTip = "Close Tab"
             close.setContentHuggingPriority(.required, for: .horizontal)
+            // Last thing in the pill to give, so a crowded strip stays
+            // clickable, but still below the window-drag threshold.
+            close.setContentCompressionResistancePriority(
+                TabPillLayout.closeButtonCompression,
+                for: .horizontal
+            )
             Self.applyAccessibilityIdentifiers(
                 pill: title, close: close, shortId: Self.accessibilityShortID(for: tab)
             )
@@ -1331,12 +1348,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // container, giving 3pt margin top/bottom. The track is
             // pinned to the same 28pt extent below.
             cell.heightAnchor.constraint(equalToConstant: 28).isActive = true
-            // Min 180 at .defaultHigh: required would cause an
-            // unsatisfiable constraint set on a narrow window with many
-            // tabs (e.g. 5 tabs × 180 = 900 > 800 minSize). Lower
-            // priority lets cells shrink past 180 instead.
-            let minWidth = cell.widthAnchor.constraint(greaterThanOrEqualToConstant: 180)
-            minWidth.priority = .defaultHigh
+            // A preference, not a floor: `.fillEqually` under a required
+            // stripFillTrailing already determines the width from the
+            // window, so this only decides what a cell asks for. It sits
+            // above the pill's content priorities, so a cell with room
+            // widens before its ✕ is squashed, and below the window-drag
+            // threshold, so wanting 180 never pins the window.
+            let minWidth = cell.widthAnchor.constraint(
+                greaterThanOrEqualToConstant: TabPillLayout.cellMinimumWidth
+            )
+            minWidth.priority = TabPillLayout.cellMinimumWidthPriority
             minWidth.isActive = true
             cellsContainer.insertArrangedSubview(cell, at: idx)
         }
@@ -1957,6 +1978,16 @@ private extension TabStripViewController {
             trailingSeparator.setAccessibilityElement(false)
             addSubview(trailingSeparator)
 
+            // NSStackView emits its edge insets and inter-view spacing at
+            // `.required`, so pinning the stack's trailing edge outright
+            // would floor every pill at a width nothing below `.required`
+            // could relieve, multiplied by the tab count. Letting this one
+            // break instead means a badly crowded pill overruns its own
+            // trailing edge by a few points, which beats pinning the window.
+            // The leading pin stays required so the stack is unambiguous.
+            let stackTrailing = stack.trailingAnchor.constraint(equalTo: trailingAnchor)
+            stackTrailing.priority = TabPillLayout.stackTrailingPin
+
             NSLayoutConstraint.activate([
                 background.topAnchor.constraint(equalTo: topAnchor),
                 background.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -1965,7 +1996,7 @@ private extension TabStripViewController {
                 stack.topAnchor.constraint(equalTo: topAnchor),
                 stack.bottomAnchor.constraint(equalTo: bottomAnchor),
                 stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-                stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+                stackTrailing,
                 trailingSeparator.centerYAnchor.constraint(equalTo: centerYAnchor),
                 trailingSeparator.trailingAnchor.constraint(equalTo: trailingAnchor),
                 trailingSeparator.widthAnchor.constraint(equalToConstant: 1),
@@ -2018,22 +2049,32 @@ private extension TabStripViewController {
             )
             view.imageScaling = .scaleNone
             view.setContentHuggingPriority(.required, for: .horizontal)
+            // Outlasts the badge, signalling automation role and protected
+            // state the title does not carry, and yields ahead of the ✕.
+            view.setContentCompressionResistancePriority(
+                TabPillLayout.markerCompression,
+                for: .horizontal
+            )
             view.toolTip = hoverText
             return view
         }
 
-        /// The badge label. Compression resistance is what keeps the chord
-        /// whole on a crowded strip: the title truncates instead, which it is
-        /// already built to do.
+        /// The badge label. The title truncates ahead of it, but the badge is
+        /// the next thing the pill sheds, and `layout()` hides it outright
+        /// before it would render as a clipped fragment of the chord. Its
+        /// chord stays discoverable in the Window menu.
         ///
         /// Publishes no accessibility identifier, for the same reason the
         /// markers do not: consumers count pills by filtering the
         /// `deviceterm.tab.` prefix, and another named control would inflate
-        /// that count. The chord is already announced by the Window menu.
+        /// that count.
         private static func makeShortcutLabel() -> TabShortcutLabel {
             let label = TabShortcutLabel(labelWithString: "")
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            label.setContentCompressionResistancePriority(.windowSizeStayPut, for: .horizontal)
+            label.setContentCompressionResistancePriority(
+                TabPillLayout.shortcutBadgeCompression,
+                for: .horizontal
+            )
             label.setContentHuggingPriority(.required, for: .horizontal)
             label.setAccessibilityElement(false)
             return label
@@ -2106,6 +2147,26 @@ private extension TabStripViewController {
         /// inactive pill.
         private func refreshShortcutColor() {
             shortcutLabel?.textColor = TabStripViewController.titleColor(isSelected: isSelected)
+        }
+
+        /// Drop the badge on a pill too narrow to render the chord whole.
+        ///
+        /// Compression alone would leave a clipped fragment on screen, which
+        /// reads as damage rather than as the pill running out of room.
+        /// Hiding an arranged subview takes it out of the stack's layout
+        /// entirely, so the title gets that space back. No feedback loop: the
+        /// cell's width comes from the strip above it, never from what the
+        /// pill is showing.
+        ///
+        /// Written only on a change, because hiding an arranged subview
+        /// invalidates the stack's layout: assigning unconditionally here
+        /// would dirty the pill on every pass.
+        override func layout() {
+            super.layout()
+            let hidesShortcut = bounds.width < TabPillLayout.shortcutVisibilityWidth
+            if let label = shortcutLabel, label.isHidden != hidesShortcut {
+                label.isHidden = hidesShortcut
+            }
         }
 
         override func updateTrackingAreas() {
