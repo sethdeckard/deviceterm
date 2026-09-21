@@ -23,6 +23,12 @@ import Foundation
 ///
 /// The cap is global rather than per-pane: it exists to bound total parked
 /// bridge work, which is a property of the machine, not of one pane.
+///
+/// A caller arriving while every slot is held waits for one, oldest first,
+/// for at most the deadline; the cap bounds concurrent bridge work, not how
+/// many panes a replacement helper can bring back at once. Only a waiter
+/// queue past `maxWaiting` is refused outright, which keeps a service that
+/// never frees a slot from queueing creates without bound.
 actor DisplayBootstrapSupervisor {
     /// One outstanding bootstrap. The entry outlives the caller's wait, which
     /// is what makes an abandoned attempt keep holding its slot.
@@ -44,21 +50,40 @@ actor DisplayBootstrapSupervisor {
         var continuation: CheckedContinuation<DisplayBootstrap, any Error>?
     }
 
-    /// How long a caller waits before its bootstrap is abandoned.
+    /// A caller parked because every slot is held. Resumed with its token
+    /// when a slot frees, or with `displayStartTimedOut` when its deadline
+    /// passes first.
+    private struct Waiter {
+        let id: UUID
+        let udid: String
+        let continuation: CheckedContinuation<UUID, any Error>
+        let timeoutTask: Task<Void, Never>
+    }
+
+    /// How long a caller waits before its bootstrap is abandoned, and how
+    /// long it waits for a slot before that.
     static let defaultDeadlineNanoseconds: UInt64 = 10_000_000_000
     /// Ceiling on attempts holding a slot, abandoned ones included.
     static let defaultMaxInFlight = 3
+    /// Waiters admitted per slot before further callers are refused.
+    static let waitersPerSlot = 4
 
     private let deadlineNanoseconds: UInt64
     private let maxInFlight: Int
+    private let maxWaiting: Int
     private let sleep: @Sendable (UInt64) async throws -> Void
     private var attempts: [UUID: Attempt] = [:]
+    /// Callers waiting for a slot, oldest first.
+    private var waiters: [Waiter] = []
 
     /// Attempts currently holding a slot, abandoned ones included. Read by the
     /// footprint sample and the daemon lifetime predicate, so an idle exit
     /// cannot fire while an admitted attempt is still acquiring, bootstrapping,
     /// or disposing.
     var inFlight: Int { attempts.count }
+
+    /// Callers currently waiting for a slot. Diagnostic for tests.
+    var waiting: Int { waiters.count }
 
     init(
         deadlineNanoseconds: UInt64 = DisplayBootstrapSupervisor.defaultDeadlineNanoseconds,
@@ -69,6 +94,7 @@ actor DisplayBootstrapSupervisor {
     ) {
         self.deadlineNanoseconds = deadlineNanoseconds
         self.maxInFlight = max(1, maxInFlight)
+        self.maxWaiting = self.maxInFlight * Self.waitersPerSlot
         self.sleep = sleep
     }
 
@@ -91,10 +117,38 @@ actor DisplayBootstrapSupervisor {
     ///
     /// The slot is held until `release` (the pane published) or a disposal
     /// finishes, whichever comes first.
-    func admit(udid: String) throws -> UUID {
-        guard attempts.count < maxInFlight else {
+    ///
+    /// When every slot is held the caller waits for one, for at most the
+    /// deadline, and gets `displayStartTimedOut` if none frees in time.
+    /// `displayStartBusy` is only for a waiter queue that is already full.
+    func admit(udid: String) async throws -> UUID {
+        if attempts.count < maxInFlight {
+            return reserve(udid: udid)
+        }
+        guard waiters.count < maxWaiting else {
             throw PaneError.displayStartBusy(udid: udid)
         }
+        let id = UUID()
+        let deadlineNanoseconds = self.deadlineNanoseconds
+        let sleep = self.sleep
+        let timeoutTask = Task { [weak self] in
+            do {
+                try await sleep(deadlineNanoseconds)
+            } catch {
+                return
+            }
+            await self?.timeOutWaiter(id: id)
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            // Same actor step as the task above was spawned in, so the timeout
+            // cannot look for this waiter before it is appended.
+            waiters.append(Waiter(id: id, udid: udid, continuation: continuation, timeoutTask: timeoutTask))
+        }
+    }
+
+    /// Take a slot for `udid` and return its token. The caller has already
+    /// established that one is free.
+    private func reserve(udid: String) -> UUID {
         let token = UUID()
         attempts[token] = Attempt(
             udid: udid,
@@ -106,10 +160,39 @@ actor DisplayBootstrapSupervisor {
         return token
     }
 
+    /// Stop a caller waiting for a slot.
+    private func timeOutWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        let deadlineMilliseconds = deadlineNanoseconds / 1_000_000
+        let held = attempts.count
+        let cap = maxInFlight
+        let stillWaiting = waiters.count
+        DiagnosticLog.attach.error(
+            """
+            display start admission timed out after \
+            \(deadlineMilliseconds, privacy: .public)ms; \
+            \(held, privacy: .public) of \(cap, privacy: .public) slots held, \
+            \(stillWaiting, privacy: .public) still waiting
+            """
+        )
+        waiter.continuation.resume(throwing: PaneError.displayStartTimedOut(udid: waiter.udid))
+    }
+
+    /// Hand a freed slot to the oldest waiter. Called wherever an attempt
+    /// leaves `attempts`.
+    private func admitNextWaiter() {
+        guard attempts.count < maxInFlight, !waiters.isEmpty else { return }
+        let waiter = waiters.removeFirst()
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: reserve(udid: waiter.udid))
+    }
+
     /// Give back a slot whose work finished without needing teardown, or that
     /// was never used. A no-op once the slot has already been settled.
     func release(token: UUID) {
         attempts.removeValue(forKey: token)
+        admitNextWaiter()
     }
 
     /// Tear down a handed-over backend under the token it was admitted on, so
@@ -122,6 +205,7 @@ actor DisplayBootstrapSupervisor {
         await Self.dispose(backend: backend)
         await onDisposed()
         attempts.removeValue(forKey: token)
+        admitNextWaiter()
     }
 
     /// Bootstrap `backend`'s display under an already-admitted token, waiting
@@ -291,5 +375,6 @@ actor DisplayBootstrapSupervisor {
         }
         await attempt.onDisposed()
         attempts.removeValue(forKey: token)
+        admitNextWaiter()
     }
 }

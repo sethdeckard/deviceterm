@@ -143,7 +143,7 @@ func aTimedOutBootstrapKeepsItsSlotUntilTheCallReturns() async throws {
 }
 
 @Test
-func repeatedParkedBootstrapsCannotExceedTheCap() async throws {
+func aCreateBehindAFullCapWaitsOutItsDeadlineWithoutStarting() async throws {
     let coordinator = bootstrapCoordinator(maxInFlight: 1, sleep: { _ in })
     let session = UUID()
     let first = MockDeviceBackend()
@@ -154,10 +154,11 @@ func repeatedParkedBootstrapsCannotExceedTheCap() async throws {
     }
     #expect(await coordinator.displayStartsInFlight() == 1)
 
-    // The abandoned attempt still holds the only slot, so the next create is
-    // refused outright rather than waiting out its own deadline.
+    // The abandoned attempt still holds the only slot, so the next create
+    // waits for it and, with the deadline firing at once, times out without
+    // ever starting a second parked bridge call.
     let second = MockDeviceBackend()
-    await #expect(throws: PaneError.displayStartBusy(udid: "udid-2")) {
+    await #expect(throws: PaneError.displayStartTimedOut(udid: "udid-2")) {
         try await coordinator.createMockPane(udid: "udid-2", sessionId: session, backend: second)
     }
     #expect(second.bootstrapCalls == 0)
@@ -727,36 +728,41 @@ func aStalledFailureTeardownStaysChargedAgainstTheCap() async throws {
     #expect(await waitUntil { failing.shutdownParked })
     #expect(await coordinator.displayStartsInFlight() == 1)
 
-    // A different target must be refused rather than adding a second stalled
-    // teardown: the cap bounds total parked bridge work, not just live starts.
+    // A different target waits behind the stalled teardown rather than adding
+    // a second one: the cap bounds total parked bridge work, not just live
+    // starts. Once the teardown frees the slot, the waiter proceeds.
     let other = MockDeviceBackend()
-    await #expect(throws: PaneError.displayStartBusy(udid: "udid-other")) {
+    let waiting = Task {
         try await coordinator.createMockPane(udid: "udid-other", sessionId: session, backend: other)
     }
+    try await Task.sleep(nanoseconds: 100_000_000)
     #expect(other.bootstrapCalls == 0)
+    #expect(await coordinator.displayStartsInFlight() == 1)
 
     failing.releaseShutdown()
+    _ = try await waiting.value
+    #expect(other.bootstrapCalls == 1)
     #expect(await waitUntil { await coordinator.displayStartsInFlight() == 0 })
 }
 
 @Test
-func aRefusedCreateNeverAcquiresABackend() async throws {
-    let coordinator = bootstrapCoordinator(maxInFlight: 1)
+func aCreateThatTimesOutWaitingNeverAcquiresABackend() async throws {
+    let coordinator = bootstrapCoordinator(maxInFlight: 1, sleep: { _ in })
     let session = UUID()
     let holder = MockDeviceBackend()
     holder.parkBootstrap = true
 
     let held = Task {
-        try await coordinator.createMockPane(udid: "udid-holder", sessionId: session, backend: holder)
+        try? await coordinator.createMockPane(udid: "udid-holder", sessionId: session, backend: holder)
     }
     #expect(await waitUntil { holder.bootstrapParked })
 
-    // The refusal has to come *before* acquisition. If admission were checked
-    // at the bootstrap call instead, this create would have built a backend
-    // that then needed tearing down, and refusals would accumulate stalled
+    // The wait happens *before* acquisition. If admission were checked at the
+    // bootstrap call instead, this create would have built a backend that then
+    // needed tearing down, and expired waits would accumulate stalled
     // teardowns of their own.
     let acquires = AcquireCounter()
-    await #expect(throws: PaneError.displayStartBusy(udid: "udid-refused")) {
+    await #expect(throws: PaneError.displayStartTimedOut(udid: "udid-refused")) {
         try await coordinator.createPane(
             target: .sim(udid: "udid-refused"),
             sessionId: session,
@@ -773,7 +779,48 @@ func aRefusedCreateNeverAcquiresABackend() async throws {
     #expect(acquires.acquisitions == 0)
 
     holder.releaseBootstrap()
-    _ = try await held.value
+    _ = await held.value
+}
+
+/// A helper replacement re-attaches every pane at once. With a cap of three
+/// and seven panes, the four that arrive behind the cap wait their turn and
+/// all seven publish; none is refused.
+@Test
+func sevenConcurrentCreatesAllPublishBehindACapOfThree() async throws {
+    let coordinator = bootstrapCoordinator(maxInFlight: 3)
+    let session = UUID()
+    let backends = (1...7).map { _ in
+        let backend = MockDeviceBackend()
+        backend.parkBootstrap = true
+        return backend
+    }
+    let creates = backends.enumerated().map { index, backend in
+        Task { () -> Bool in
+            do {
+                _ = try await coordinator.createMockPane(
+                    udid: "udid-many-\(index)",
+                    sessionId: session,
+                    backend: backend
+                )
+                return true
+            } catch {
+                return false
+            }
+        }
+    }
+    // Exactly the cap's worth start; the rest wait without a bootstrap call.
+    #expect(await waitUntil { backends.filter(\.bootstrapParked).count == 3 })
+    try await Task.sleep(nanoseconds: 100_000_000)
+    #expect(backends.map(\.bootstrapCalls).reduce(0, +) == 3)
+
+    for backend in backends { backend.releaseBootstrap() }
+    var published = 0
+    for create in creates where await create.value {
+        published += 1
+    }
+    #expect(published == 7)
+    #expect(backends.allSatisfy { $0.bootstrapCalls == 1 })
+    #expect(await waitUntil { await coordinator.displayStartsInFlight() == 0 })
 }
 
 /// Counts acquisitions across the actor hop.

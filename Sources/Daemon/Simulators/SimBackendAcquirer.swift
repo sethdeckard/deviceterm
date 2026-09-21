@@ -17,8 +17,10 @@ import os
 /// The queue is concurrent so a fresh attempt does not queue behind a parked
 /// one, and `maxInFlight` is what keeps that from growing threads without
 /// bound. A parked attempt holds its slot until CoreSimulator answers, so the
-/// count includes attempts whose caller already gave up, and a caller arriving
-/// past the cap is refused rather than adding another parked thread.
+/// count includes attempts whose caller already gave up. A caller arriving
+/// past the cap waits for a slot, oldest first, for at most the deadline,
+/// rather than adding another parked thread; only a waiter queue past
+/// `maxWaiting` is refused outright.
 ///
 /// An acquisition that lands after its deadline is torn down rather than
 /// dropped: it owns live display and HID handles that no pane record will ever
@@ -34,6 +36,16 @@ actor SimBackendAcquirer {
         let udid: String
         let timeoutTask: Task<Void, Never>
         var continuation: CheckedContinuation<Acquired, any Error>?
+    }
+
+    /// A caller parked because every slot is held. Resumed when a slot has
+    /// been reserved for it, or with `backendAcquireTimedOut` when its
+    /// deadline passes first.
+    private struct Waiter {
+        let id: UUID
+        let udid: String
+        let continuation: CheckedContinuation<Void, any Error>
+        let timeoutTask: Task<Void, Never>
     }
 
     /// Reports each completed backend build, and the disposal of a backend
@@ -52,18 +64,27 @@ actor SimBackendAcquirer {
         case disposed(udid: String, acquisition: Int)
     }
 
-    /// How long a caller waits before its acquisition is abandoned.
+    /// How long a caller waits before its acquisition is abandoned, and how
+    /// long it waits for a slot before that.
     static let defaultDeadlineNanoseconds: UInt64 = 10_000_000_000
     /// Ceiling on attempts holding a slot, abandoned ones included.
     static let defaultMaxInFlight = 3
+    /// Waiters admitted per slot before further callers are refused.
+    static let waitersPerSlot = 4
 
     private let queue: BlockingWorkQueue
     private let acquireHandles: @Sendable (String) throws -> Acquired
     private let deadlineNanoseconds: UInt64
     private let maxInFlight: Int
+    private let maxWaiting: Int
     private let sleep: @Sendable (UInt64) async throws -> Void
     private let report: @Sendable (Event) -> Void
     private var attempts: [UUID: Attempt] = [:]
+    /// Callers waiting for a slot, oldest first.
+    private var waiters: [Waiter] = []
+    /// Slots handed to waiters that have not started their attempt yet, so a
+    /// caller arriving in that gap cannot take the slot from under them.
+    private var reservedSlots = 0
     /// Backends built per udid over this process's life, never decremented.
     private var backendsBuilt: [String: Int] = [:]
     /// Backends built in total; the last value handed out is the newest
@@ -73,6 +94,9 @@ actor SimBackendAcquirer {
     /// Attempts currently holding a slot, abandoned ones included. Diagnostic
     /// for tests; the daemon never branches on it.
     var inFlight: Int { attempts.count }
+
+    /// Callers currently waiting for a slot. Diagnostic for tests.
+    var waiting: Int { waiters.count }
 
     init(
         deadlineNanoseconds: UInt64 = SimBackendAcquirer.defaultDeadlineNanoseconds,
@@ -91,6 +115,7 @@ actor SimBackendAcquirer {
         )
         self.deadlineNanoseconds = deadlineNanoseconds
         self.maxInFlight = max(1, maxInFlight)
+        self.maxWaiting = self.maxInFlight * Self.waitersPerSlot
         self.sleep = sleep
         self.acquireHandles = acquireHandles
         self.report = report
@@ -186,16 +211,19 @@ actor SimBackendAcquirer {
         await acquired.backend.shutdownBackendAsync()
     }
 
-    /// Build the backend for `udid`, waiting no longer than the deadline.
+    /// Build the backend for `udid`.
     ///
-    /// Throws `PaneError.backendAcquireBusy` when every slot is taken, and
-    /// `PaneError.backendAcquireTimedOut` when the deadline passes first. A
-    /// busy result starts no work. A timeout stops waiting but leaves the
-    /// synchronous bridge call running and holding its slot, since nothing can
-    /// cancel one. Retry after a slot frees.
+    /// When every slot is taken the caller waits for one. Slot admission and
+    /// backend acquisition each have a separate timeout of
+    /// `deadlineNanoseconds`. Throws `PaneError.backendAcquireTimedOut` when
+    /// either passes, and `PaneError.backendAcquireBusy` only when the waiter
+    /// queue is already full; a busy result starts no work. A timeout inside
+    /// the bridge call stops the caller waiting but leaves the synchronous
+    /// call running and holding its slot, since nothing can cancel one.
     func acquire(udid: String) async throws -> Acquired {
-        guard attempts.count < maxInFlight else {
-            throw PaneError.backendAcquireBusy(udid: udid)
+        if attempts.count + reservedSlots >= maxInFlight {
+            try await waitForSlot(udid: udid)
+            reservedSlots -= 1
         }
         let token = UUID()
         start(token: token, udid: udid)
@@ -210,6 +238,57 @@ actor SimBackendAcquirer {
             attempt.continuation = continuation
             attempts[token] = attempt
         }
+    }
+
+    /// Park until a slot has been reserved for this caller.
+    private func waitForSlot(udid: String) async throws {
+        guard waiters.count < maxWaiting else {
+            throw PaneError.backendAcquireBusy(udid: udid)
+        }
+        let id = UUID()
+        let deadlineNanoseconds = self.deadlineNanoseconds
+        let sleep = self.sleep
+        let timeoutTask = Task { [weak self] in
+            do {
+                try await sleep(deadlineNanoseconds)
+            } catch {
+                return
+            }
+            await self?.timeOutWaiter(id: id)
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            // Same actor step as the task above was spawned in, so the timeout
+            // cannot look for this waiter before it is appended.
+            waiters.append(Waiter(id: id, udid: udid, continuation: continuation, timeoutTask: timeoutTask))
+        }
+    }
+
+    /// Stop a caller waiting for a slot.
+    private func timeOutWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        let deadlineMilliseconds = deadlineNanoseconds / 1_000_000
+        let held = attempts.count
+        let cap = maxInFlight
+        let stillWaiting = waiters.count
+        DiagnosticLog.attach.error(
+            """
+            simulator backend admission timed out after \
+            \(deadlineMilliseconds, privacy: .public)ms; \
+            \(held, privacy: .public) of \(cap, privacy: .public) slots held, \
+            \(stillWaiting, privacy: .public) still waiting
+            """
+        )
+        waiter.continuation.resume(throwing: PaneError.backendAcquireTimedOut(udid: waiter.udid))
+    }
+
+    /// Reserve a freed slot for the oldest waiter and let it start.
+    private func admitNextWaiter() {
+        guard attempts.count + reservedSlots < maxInFlight, !waiters.isEmpty else { return }
+        let waiter = waiters.removeFirst()
+        waiter.timeoutTask.cancel()
+        reservedSlots += 1
+        waiter.continuation.resume(returning: ())
     }
 
     /// Spawn one attempt's work, its deadline, and the supervisor that accounts
@@ -274,6 +353,7 @@ actor SimBackendAcquirer {
             Task { await Self.dispose(result) }
             return
         }
+        admitNextWaiter()
         attempt.timeoutTask.cancel()
         var result = result
         var acquisition: Int?

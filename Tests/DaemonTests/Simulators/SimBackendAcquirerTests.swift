@@ -207,7 +207,7 @@ func aParkedDisposalDoesNotHoldTheAcquirer() async throws {
 }
 
 @Test
-func acquireRefusesOnceEverySlotIsHeld() async throws {
+func acquireWaitsForASlotAndTimesOutWhileEverySlotIsHeld() async throws {
     let bridge = ParkedBridge()
     let acquirer = SimBackendAcquirer(
         maxInFlight: 2,
@@ -226,13 +226,82 @@ func acquireRefusesOnceEverySlotIsHeld() async throws {
     // started, so this waits for the park rather than sampling it.
     #expect(try await poll(timeout: 2) { bridge.enteredCount == 2 })
 
-    // Refused outright rather than parking a third Dispatch thread in a
-    // service that has already failed to answer twice.
-    await #expect(throws: PaneError.backendAcquireBusy(udid: "udid-3")) {
+    // Waits for a slot rather than parking a third Dispatch thread in a
+    // service that has already failed to answer twice, and with the deadline
+    // firing at once the wait ends in a timeout with nothing started.
+    await #expect(throws: PaneError.backendAcquireTimedOut(udid: "udid-3")) {
         try await acquirer.acquire(udid: "udid-3")
     }
+    #expect(bridge.enteredCount == 2)
 
     bridge.release(2)
+}
+
+@Test
+func aWaiterProceedsWhenASlotFrees() async throws {
+    let bridge = ParkedBridge()
+    let acquirer = SimBackendAcquirer(
+        maxInFlight: 1,
+        sleep: { _ in try await Task.sleep(for: .seconds(5)) },
+        acquireHandles: { udid in
+            if udid == "udid-slow" { bridge.park() }
+            return acquired(MockDeviceBackend())
+        }
+    )
+
+    let slow = Task { try await acquirer.acquire(udid: "udid-slow") }
+    #expect(try await poll(timeout: 2) { bridge.enteredCount == 1 })
+    let fast = Task { try await acquirer.acquire(udid: "udid-fast") }
+    #expect(try await poll(timeout: 2) { await acquirer.waiting == 1 })
+    #expect(await acquirer.inFlight == 1)
+
+    // The slot frees when the parked call returns, and the waiter takes it.
+    bridge.release(1)
+    _ = try await slow.value
+    let result = try await fast.value
+    #expect(result.family == "phone")
+    #expect(await acquirer.waiting == 0)
+}
+
+@Test
+func acquireRefusesWaitersBeyondTheQueueBound() async throws {
+    let bridge = ParkedBridge()
+    let acquirer = SimBackendAcquirer(
+        maxInFlight: 1,
+        sleep: { _ in try await Task.sleep(for: .seconds(60)) },
+        acquireHandles: { udid in
+            if udid == "udid-slow" { bridge.park() }
+            return acquired(MockDeviceBackend())
+        }
+    )
+
+    let slow = Task { try await acquirer.acquire(udid: "udid-slow") }
+    #expect(try await poll(timeout: 2) { bridge.enteredCount == 1 })
+    let bound = SimBackendAcquirer.waitersPerSlot
+    let waiters = (0..<bound).map { index in
+        Task { () -> Bool in
+            do {
+                _ = try await acquirer.acquire(udid: "udid-wait-\(index)")
+                return true
+            } catch {
+                return false
+            }
+        }
+    }
+    #expect(try await poll(timeout: 2) { await acquirer.waiting == bound })
+
+    // A queue this long says the service is not freeing slots; refusing is
+    // what keeps creates from piling up behind it without bound.
+    await #expect(throws: PaneError.backendAcquireBusy(udid: "udid-over")) {
+        try await acquirer.acquire(udid: "udid-over")
+    }
+
+    bridge.release(1)
+    _ = try await slow.value
+    for waiter in waiters {
+        #expect(await waiter.value)
+    }
+    #expect(await acquirer.waiting == 0)
 }
 
 @Test
@@ -253,7 +322,9 @@ func aFreedSlotAdmitsTheNextAttempt() async throws {
     await #expect(throws: PaneError.backendAcquireTimedOut(udid: "udid-slow")) {
         try await acquirer.acquire(udid: "udid-slow")
     }
-    await #expect(throws: PaneError.backendAcquireBusy(udid: "udid-fast")) {
+    // The abandoned attempt holds the only slot, so this waits and, on the
+    // same short deadline, times out.
+    await #expect(throws: PaneError.backendAcquireTimedOut(udid: "udid-fast")) {
         try await acquirer.acquire(udid: "udid-fast")
     }
 
@@ -261,7 +332,7 @@ func aFreedSlotAdmitsTheNextAttempt() async throws {
     #expect(try await poll(timeout: 2) { await acquirer.inFlight == 0 })
 
     // The wedge cleared, so an ordinary attach works again with no
-    // intervention: the refusal was temporary, not a latch.
+    // intervention: the timeout was temporary, not a latch.
     let result = try await acquirer.acquire(udid: "udid-fast")
     #expect(result.family == "phone")
 }

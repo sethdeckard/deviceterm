@@ -177,34 +177,36 @@ public enum PaneError: Error, Equatable, Sendable {
         sessionId:
         UUID
         )
-    /// The sim's display/HID handles did not arrive inside the acquisition
-    /// deadline. The attempt is abandoned by the *caller* only: nothing can
-    /// cancel a synchronous bridge call, so it keeps running and keeps its
-    /// admission slot until it returns. Retryable, and a retry that lands
-    /// after the bridge answers again succeeds normally.
+    /// Timed out waiting for an acquisition slot or for the sim's display/HID
+    /// handles. If bridge work started, the attempt is abandoned by the
+    /// *caller* only: nothing can cancel a synchronous bridge call, so it
+    /// continues holding its slot until it returns. Retryable, and a retry
+    /// that lands after the bridge answers again succeeds normally.
     case backendAcquireTimedOut(
         udid:
         String
         )
-    /// All acquisition slots are in use, so this attach is refused before
-    /// starting bridge work. Distinct from a timeout: this caller never
-    /// waited. Retry after an in-flight attempt finishes.
+    /// Every acquisition slot is held and the queue of callers waiting for
+    /// one is already full, so this attach is refused before starting bridge
+    /// work. Distinct from a timeout: this caller never waited. Retry after
+    /// an in-flight attempt finishes.
     case backendAcquireBusy(
         udid:
         String
         )
-    /// Starting the display (frames, orientation observation, and the geometry
-    /// reads that go with them) did not finish inside its deadline. Abandoned
-    /// by the caller only, on the same terms as `backendAcquireTimedOut`: the
-    /// bridge call keeps running and keeps its slot until it returns and the
-    /// teardown that follows finishes, and whatever it eventually produces is
-    /// torn down rather than delivered.
+    /// Timed out waiting for a display-start slot or completing display
+    /// startup (frames, orientation observation, and the geometry reads that
+    /// go with them). If startup began, it is abandoned by the caller only,
+    /// on the same terms as `backendAcquireTimedOut`: its slot remains held
+    /// until the bridge call and the teardown that follows finish, and
+    /// whatever it eventually produces is torn down rather than delivered.
     case displayStartTimedOut(
         udid:
         String
         )
-    /// All display-start slots are in use, so this attach is refused before
-    /// touching the display. Distinct from a timeout: this caller never waited.
+    /// Every display-start slot is held and the queue of callers waiting for
+    /// one is already full, so this attach is refused before touching the
+    /// display. Distinct from a timeout: this caller never waited.
     case displayStartBusy(
         udid:
         String
