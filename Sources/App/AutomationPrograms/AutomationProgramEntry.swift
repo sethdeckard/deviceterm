@@ -22,4 +22,8 @@ struct AutomationProgramEntry: Equatable, Sendable {
     /// The shell's working directory, absolute. Defaults to the home
     /// directory when the block does not say.
     let cwd: String
+
+    /// Whether deviceterm re-runs the command when the program exits.
+    /// Defaults to true when the block does not say.
+    let restart: Bool
 }

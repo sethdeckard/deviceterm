@@ -33,4 +33,10 @@ struct TerminalPaneFacts: Equatable, Sendable {
     /// authority to read it, when identity cannot be verified, or when no
     /// unambiguous candidate resolves.
     let cwd: String?
+    /// The PTY's foreground process id, from the same `terminalIdentity()`
+    /// read as `tty`. Lets supervision compare the foreground process with
+    /// the terminal's own shell; it identifies neither the shell nor any
+    /// particular program. Nil before the shell has spawned and after the
+    /// surface detaches.
+    let foregroundPid: Int32?
 }

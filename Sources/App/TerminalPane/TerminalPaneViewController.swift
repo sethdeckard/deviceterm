@@ -561,7 +561,8 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
             oscTitle: lastOSCTitle,
             oscWorkingDirectory: lastWorkingDirectory,
             tty: identity?.ttyName,
-            cwd: cwd
+            cwd: cwd,
+            foregroundPid: identity?.foregroundPid
         )
     }
 

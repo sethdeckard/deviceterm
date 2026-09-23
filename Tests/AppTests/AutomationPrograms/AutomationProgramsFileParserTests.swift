@@ -33,7 +33,8 @@ func parsesFullBlock() {
     let parsed = parse([
         "program build-bridge",
         "  command ~/.local/bin/build-bridge --socket ~/.cache/bb.sock",
-        "  cwd /Users/someone/work"
+        "  cwd /Users/someone/work",
+        "  restart false"
     ])
     #expect(parsed.defects.isEmpty)
     #expect(
@@ -41,7 +42,8 @@ func parsesFullBlock() {
             AutomationProgramEntry(
                 name: "build-bridge",
                 command: ["~/.local/bin/build-bridge --socket ~/.cache/bb.sock"],
-                cwd: "/Users/someone/work"
+                cwd: "/Users/someone/work",
+                restart: false
             )
         ]
     )
@@ -60,10 +62,32 @@ func parsesInFileOrder() {
     #expect(parsed.entries.map(\.name) == ["first", "second", "third"])
 }
 
-@Test("an absent cwd is the home directory")
+@Test("an absent cwd is the home directory and an absent restart is true")
 func appliesDefaults() {
     let parsed = parse(["program watcher", "  command ~/bin/watch"])
     #expect(parsed.entries.first?.cwd == NSHomeDirectory())
+    #expect(parsed.entries.first?.restart == true)
+}
+
+@Test("restart reads case-insensitively", arguments: [("TRUE", true), ("False", false)])
+func readsRestartCaseInsensitively(value: String, expected: Bool) {
+    let parsed = parse(["program p", "  command run", "  restart \(value)"])
+    #expect(parsed.entries.first?.restart == expected)
+}
+
+/// An unreadable value is ignored rather than guessed at, the same way an
+/// unrecognized field is, so a file written for a newer deviceterm still runs.
+@Test("an unreadable restart value is ignored", arguments: ["yes", "1", "on", ""])
+func ignoresUnreadableRestart(value: String) {
+    let parsed = parse(["program p", "  command run", "  restart \(value)"])
+    #expect(parsed.defects.isEmpty)
+    #expect(parsed.entries.first?.restart == true)
+}
+
+@Test("an unreadable restart does not clear a value already read")
+func unreadableRestartKeepsEarlierValue() {
+    let parsed = parse(["program p", "  command run", "  restart false", "  restart maybe"])
+    #expect(parsed.entries.first?.restart == false)
 }
 
 @Test("a command keeps its own spacing, quoting, and tilde verbatim")

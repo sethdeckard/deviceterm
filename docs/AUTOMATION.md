@@ -577,9 +577,45 @@ tab, `pane.sendInput` in `deviceterm doctor --json` means it is in force.
 
 DeviceTerm types each command into the tab's shell once, after that tab's
 grant is in force, so a program that calls back into DeviceTerm immediately
-does not race its own authority. It does not watch the program afterwards:
-if the program exits, the tab stays open at a shell prompt and nothing
-restarts it.
+does not race its own authority.
+
+After that it watches, once a second, by asking what the tab's terminal is
+running. When nothing is, DeviceTerm re-runs the command in the same tab,
+waiting a second before the first attempt and doubling up to a minute. Set
+`restart false` on an entry meant to run once.
+
+A program has five seconds from the moment its command is typed to appear in
+the terminal's foreground. After that, absence counts as a run that ended,
+which is what lets a program that exits instantly be retried rather than
+waited on forever.
+
+After ten runs in a row that each ended within a minute, DeviceTerm stops
+trying and says so once. Programs that fail in the same poll share one
+notice, shown in the window holding the last of them in file order. A run
+that never appeared at all counts as one of those. A run lasting longer than a minute
+clears the count, so a long-lived program that crashes occasionally keeps its
+full budget.
+
+Your program must stay in the terminal's foreground. One that daemonizes
+itself, or calls `setsid`, looks dead to DeviceTerm: it will be re-run, and
+will eventually reach the failure cap. This is a requirement of supervision
+rather than of trust. Detaching does not by itself cost a program its
+authority, because provenance follows the live parent chain and keeps
+authorizing a detached descendant while that chain still reaches the bound
+terminal.
+
+Closing the tab stops supervision for that program, and so does closing its
+window, running `deviceterm tab close`, or typing `exit` in the tab. Nothing
+reopens a tab you closed; relaunch DeviceTerm to start the program again.
+
+A restart is only sent to a terminal whose foreground process is its own
+shell, so an editor you opened during a backoff is left alone. DeviceTerm
+cannot tell a shell at a prompt from a shell busy with something of its own,
+and the check and the keystrokes are not one atomic step, so this narrows the
+window rather than closing it. When it cannot tell what a terminal is running
+at all, which happens for a foreground process it cannot read across a user
+boundary such as one under `sudo`, it does nothing that pass: no restart, and
+no exit counted either.
 
 A tab whose grant never applies never runs its command. Starting a program
 that cannot do the thing it was configured to do would fail more confusingly

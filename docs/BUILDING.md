@@ -301,6 +301,7 @@ one, and the indented lines under it are its fields:
 program build-bridge
   command ~/.local/bin/build-bridge --socket ~/.cache/build-bridge.sock
   cwd ~/work
+  restart true
 
 program watcher
   command ~/bin/watch-builds
@@ -312,6 +313,11 @@ own directory, the same rule `locations` uses. A key is the first
 whitespace-delimited token and its value is the rest of the line, so a
 command keeps its own spaces and quotes and the shell is what
 interprets them. A name may contain spaces for the same reason.
+
+`restart` is optional and defaults to true. Set it to `false` for a
+program meant to run once and exit. A value DeviceTerm cannot read is
+ignored: the last readable value in the block applies, or true if the
+block gave none.
 
 Three things make a block unusable: no name, no command, or a name an
 earlier block already took. Each is reported to the unified log

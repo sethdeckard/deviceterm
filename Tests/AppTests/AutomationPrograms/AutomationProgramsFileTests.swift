@@ -30,6 +30,7 @@ func readsBlocksInFileOrder() throws {
         # automation programs
         program build-bridge
           command ~/.local/bin/build-bridge
+          restart false
 
         program watcher
           command ~/bin/watch-builds
@@ -39,6 +40,7 @@ func readsBlocksInFileOrder() throws {
     let file = AutomationProgramsFile(path: path)
     #expect(file.defects.isEmpty)
     #expect(file.entries.map(\.name) == ["build-bridge", "watcher"])
+    #expect(file.entries.map(\.restart) == [false, true])
 }
 
 /// A trailing newline is the normal shape of a hand-edited file and must

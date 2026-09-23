@@ -108,18 +108,7 @@ public enum TerminalWorkingDirectory {
     }
 
     private static func shellPid(leader: pid_t, tty: dev_t, readerEUID: uid_t) -> pid_t? {
-        if let leaderInfo = ProcInfo.snapshot(of: leader),
-            leaderInfo.euid == readerEUID,
-            leaderInfo.controllingTTYDev == tty {
-            return leader
-        }
-        let candidates = ProcInfo.childPids(of: leader).compactMap(ProcInfo.snapshot(of:))
-        return selectShell(
-            among: candidates,
-            leader: leader,
-            tty: tty,
-            readerEUID: readerEUID
-        )
+        TerminalShellIdentity.resolve(leader: leader, tty: tty, readerEUID: readerEUID)
     }
 }
 #endif

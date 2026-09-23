@@ -707,6 +707,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         )
     }
 
+    /// When the tab attempted the first send of its configured automation
+    /// command, or nil before any attempt. Read by supervision, which must
+    /// not mistake a tab still waiting for its grant for a program that died.
+    func automationCommandSentAt(inTab tabID: TabID) -> UInt64? {
+        tabContentByID[tabID]?.automationCommandSentAt
+    }
+
     func captureTerminal(
         _ terminalID: TerminalPaneID,
         inTab tabID: TabID,

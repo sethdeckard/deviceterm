@@ -8,6 +8,7 @@ import Foundation
 ///     program build-bridge
 ///       command ~/.local/bin/build-bridge --socket ~/.cache/build-bridge.sock
 ///       cwd ~/work
+///       restart true
 ///
 ///     program watcher
 ///       command ~/bin/watch-builds
@@ -28,8 +29,9 @@ import Foundation
 /// and skips that block alone.
 ///
 /// **Everything else this version does not understand is ignored, never an
-/// error.** An unrecognized field, an unrecognized line at column zero, and
-/// an indented line before any block all leave no trace. That is what lets a
+/// error.** An unrecognized field, an unrecognized line at column zero, an
+/// indented line before any block, and a `restart` value that is neither
+/// `true` nor `false` all leave no trace. That is what lets a
 /// file written for a newer deviceterm still run here, and it is the same
 /// rule `LocationsFileParser` follows for the sibling locations file.
 enum AutomationProgramsFileParser {
@@ -42,6 +44,7 @@ enum AutomationProgramsFileParser {
         let line: Int
         var command: String?
         var cwd: String?
+        var restart: Bool?
     }
 
     /// The column-zero keyword that opens a block.
@@ -105,6 +108,11 @@ enum AutomationProgramsFileParser {
                 case "cwd":
                     open?.cwd = value.isEmpty ? nil : value
 
+                case "restart":
+                    // An unreadable value is ignored rather than guessed at,
+                    // and leaves any value already read in place.
+                    if let flag = boolean(value) { open?.restart = flag }
+
                 default:
                     continue
                 }
@@ -128,7 +136,8 @@ enum AutomationProgramsFileParser {
 
     /// A finished block as an entry, or nil when it carries no command.
     ///
-    /// The default lands here: an absent `cwd` is the home directory.
+    /// Defaults land here: an absent `cwd` is the home directory and an
+    /// absent `restart` is `true`.
     private static func entry(
         from block: Block,
         relativeTo directory: String
@@ -141,7 +150,8 @@ enum AutomationProgramsFileParser {
         return AutomationProgramEntry(
             name: block.name,
             command: [command],
-            cwd: cwd ?? NSHomeDirectory()
+            cwd: cwd ?? NSHomeDirectory(),
+            restart: block.restart ?? true
         )
     }
 
@@ -152,5 +162,22 @@ enum AutomationProgramsFileParser {
             String(trimmed[..<end]),
             trimmed[end...].trimmingCharacters(in: .whitespacesAndNewlines)
         )
+    }
+
+    /// `true` or `false`, case-insensitively, or nil for anything else.
+    ///
+    /// Read without a locale, and without accepting `yes` / `1` / `on`: a
+    /// config file has one meaning regardless of who opens it.
+    private static func boolean(_ text: String) -> Bool? {
+        switch text.lowercased() {
+        case "true":
+            return true
+
+        case "false":
+            return false
+
+        default:
+            return nil
+        }
     }
 }

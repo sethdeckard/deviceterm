@@ -1346,7 +1346,8 @@ private final class RecordingActionDelegate: IntentActionDelegate {
             oscTitle: oscTitles[terminal],
             oscWorkingDirectory: oscWorkingDirectories[terminal],
             tty: ttys[terminal],
-            cwd: includeWorkingDirectory ? workingDirectories[terminal] : nil
+            cwd: includeWorkingDirectory ? workingDirectories[terminal] : nil,
+            foregroundPid: nil
         )
     }
 

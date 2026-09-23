@@ -84,6 +84,13 @@ final class TabContentViewController: NSViewController {
     /// Whether the tab's configured automation command has already been
     /// typed. Latches on first grant so a reconnect reissue cannot re-run it.
     private var hasRunAutomationCommand = false
+    /// When the first send was attempted, on `DispatchTime`'s clock, or nil
+    /// before any attempt. Set even if the send throws, because a failed
+    /// send is still the moment the program stopped being merely pending.
+    /// Supervision reads this rather than assuming the command ran when the
+    /// tab opened: it waits for the grant, so the gap is real and treating
+    /// it as a dead program would burn the restart budget.
+    private(set) var automationCommandSentAt: UInt64?
     /// Discovery-snapshot dedup: udids the tab has already dispatched an
     /// attach for during this boot. A later detach (sim still booted)
     /// must not re-attach on the next snapshot.
@@ -541,6 +548,7 @@ final class TabContentViewController: NSViewController {
             UUID(uuidString: tab.primaryTerminal.sessionId) == sessionId
         else { return }
         hasRunAutomationCommand = true
+        automationCommandSentAt = DispatchTime.now().uptimeNanoseconds
         do {
             // The same bytes `initial_input` would have typed: joined with a
             // space, terminated by one Return.

@@ -235,9 +235,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             renameTab: { [weak self] windowID, tabID, name in
                 self?.workspace.window(id: windowID)?.tabs.renameTab(id: tabID, to: name)
                 self?.renameTab(window: windowID, tab: tabID, to: name)
+            },
+            primaryTerminal: { [weak self] tabID in
+                self?.workspace.windowContaining(tab: tabID)?
+                    .tabs.tab(id: tabID)?.primaryTerminal.id
+            },
+            locateTerminal: { [weak self] tabID, terminalID in
+                // By terminal, not by tab: a tab can outlive the pane its
+                // program ran in, and a restart must never land in a sibling.
+                guard let self,
+                    let window = self.workspace.windowContaining(tab: tabID),
+                    let tab = window.tabs.tab(id: tabID),
+                    tab.terminals.contains(where: { $0.id == terminalID })
+                else { return nil }
+                return window.id
+            },
+            commandSentAt: { [weak self] tabID in
+                guard let self,
+                    let window = self.workspace.windowContaining(tab: tabID)
+                else { return nil }
+                return self.strip(for: window.id)?.automationCommandSentAt(inTab: tabID)
+            },
+            sendInput: { [weak self] windowID, tabID, terminalID, text in
+                try? self?.sendInput(
+                    window: windowID,
+                    tab: tabID,
+                    terminal: terminalID,
+                    text: text,
+                    typeDelayMillis: nil
+                )
+            },
+            probe: AutomationProgramProbe(terminalIdentity: { [weak self] tabID in
+                guard let self,
+                    let window = self.workspace.windowContaining(tab: tabID),
+                    let tab = window.tabs.tab(id: tabID),
+                    let facts = self.terminalFacts(
+                        window: window.id,
+                        tab: tabID,
+                        terminal: tab.primaryTerminal.id,
+                        includeWorkingDirectory: false
+                    ),
+                    let pid = facts.foregroundPid,
+                    let tty = facts.tty
+                else { return nil }
+                return (foregroundPid: pid, ttyName: tty)
+            }),
+            presentFailureNotice: { [weak self] windowID, names in
+                self?.presentAutomationFailureNotice(window: windowID, names: names)
+            },
+            sleep: { nanos in
+                do { try await Task.sleep(nanoseconds: nanos); return true } catch { return false }
             }
         )
     )
+
+    /// The failure notice's state, and the titlebar accessory showing it.
+    /// One per app: several programs giving up are listed in one notice
+    /// rather than stacking.
+    private let automationNoticeViewModel = AutomationProgramNoticeViewModel()
+    private var automationNoticeAccessory: NSTitlebarAccessoryViewController?
+    private weak var automationNoticeWindow: NSWindow?
+    private var automationNoticeObservation: ObservationToken?
 
     /// Decides when to propose restarting the helper, and runs the restart.
     /// Both the automatic prompt (an unanswered call whose follow-up ping went
@@ -1063,6 +1121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Stop the back-channel drain before tearing down the
             // daemon connection so a stray inbound AppCommand doesn't
             // race the dying window controllers.
+            automationPrograms.stop()
             appCommandSubscriber.stop()
             await router.shutdown()
             // Local teardown happens here, NOT through reconcileWindows():
@@ -1839,6 +1898,45 @@ extension AppDelegate: IntentActionDelegate {
 
     func tabDisplayTitle(window windowID: WindowID, tab tabID: TabID) -> String? {
         strip(for: windowID)?.displayTitle(for: tabID)
+    }
+
+    /// Show the automation-program failure notice on `window`, naming
+    /// everything supervision has given up on so far.
+    ///
+    /// Attached to the window holding the failed program rather than to
+    /// whichever window happens to be key, because that is where the tab the
+    /// user needs to look at lives. It follows no window afterwards: if that
+    /// window closes, the tab went with it and the entry is already stopped.
+    private func presentAutomationFailureNotice(window windowID: WindowID, names: [String]) {
+        automationNoticeViewModel.report(names)
+        guard let nsWindow = windowControllerByID[windowID]?.window else { return }
+        if automationNoticeWindow !== nsWindow { removeAutomationNoticeAccessory() }
+        guard automationNoticeAccessory == nil else { return }
+        let accessory = AutomationProgramNoticeAccessory.make(
+            viewModel: automationNoticeViewModel
+        )
+        nsWindow.addTitlebarAccessoryViewController(accessory)
+        automationNoticeAccessory = accessory
+        automationNoticeWindow = nsWindow
+        // Dismissing empties the view model, which renders nothing but would
+        // leave the accessory holding titlebar space; drop it instead.
+        automationNoticeObservation = App.observe { [weak self] in
+            guard let self, !self.automationNoticeViewModel.isVisible else { return }
+            self.removeAutomationNoticeAccessory()
+        }
+    }
+
+    private func removeAutomationNoticeAccessory() {
+        // Removing from the window's accessory list also detaches the
+        // controller from its parent; a removeFromParent() first would empty
+        // the list and invalidate the index.
+        if let accessory = automationNoticeAccessory,
+            let window = automationNoticeWindow,
+            let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {
+            window.removeTitlebarAccessoryViewController(at: index)
+        }
+        automationNoticeAccessory = nil
+        automationNoticeWindow = nil
     }
 
     func terminalFacts(
