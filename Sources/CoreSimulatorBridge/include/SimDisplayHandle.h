@@ -27,12 +27,11 @@
 // content is the discriminator the picker uses when more than one
 // candidate is sized, and it records which panel it selected.
 //
-// That tie-break is a heuristic, and the selection it produces stays fixed
-// until the subscription is stopped and started again. Folding alone does
-// not trigger reselection: callbacks are registered against the chosen
-// renderable only, so a panel that lights up later goes unnoticed.
-// Following a fold needs a consumer that watches every candidate and
-// rebinds; until that exists, a pane on the wrong panel stays there.
+// That tie-break is a heuristic, and nothing re-runs it on its own. The
+// handle never polls: callbacks are registered against the chosen renderable
+// only, so a panel that lights up later goes unnoticed until a caller asks.
+// `rebindToLitPanel` is that ask, and a caller that wants a pane to follow a
+// fold has to drive it.
 
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
@@ -149,11 +148,11 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// display yet (treat that as "ask again after the first callback").
 @property (nonatomic, readonly) CGSize displaySize;
 
-/// Identity of the selected panel, captured when the renderable is
-/// resolved. On a single-display device this names its only screen; on a
-/// foldable it says which panel is being mirrored, so a consumer can report
-/// or re-resolve it. These properties do not report fold events or changes
-/// to the active panel: they are read once, at selection.
+/// Identity of the selected panel, captured whenever the renderable is
+/// resolved: at initial selection, and again when `rebindToLitPanel` moves to
+/// another panel or restores the previous one. On a single-display device
+/// this names its only screen; on a foldable it says which panel is being
+/// mirrored.
 ///
 /// `boundScreenID` is the small integer `simctl io --display` accepts and is
 /// `0` when the proxy vends no `SimScreenProperties`. `boundScreenUniqueId`
@@ -161,6 +160,57 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// best-effort: a proxy without properties still binds and streams.
 @property (nonatomic, readonly) unsigned int boundScreenID;
 @property (nonatomic, readonly, nullable) NSString *boundScreenUniqueId;
+
+/// Whether the device vended more than one sized display candidate when the
+/// renderable was resolved, which is what a foldable's two panels look like
+/// from here. False before `start(callback:)` and on every single-display
+/// device, where it lets a caller skip the fold-following machinery.
+@property (nonatomic, readonly) BOOL hasMultiplePanels;
+
+/// Re-resolve the lit panel and move the subscription onto it if it changed.
+/// Returns YES only when the bound panel actually moved.
+///
+/// **Deliberately conservative.** It rebinds only when the bound panel
+/// samples as black *and* exactly one other candidate samples as lit, so an
+/// ambiguous reading leaves the binding alone. Sampling is the same content
+/// heuristic the picker uses, with its same blind spot: a lit panel drawing
+/// black reads as dark. Identity comes from `boundScreenUniqueId`, so a proxy
+/// that vends no `SimScreenProperties` can never be told apart from its
+/// siblings and always returns NO.
+///
+/// **A fold is not instantaneous and this is not a fold event.** The panels
+/// swap over a few hundred milliseconds, and in between neither is lit, so a
+/// single call right after a fold usually returns NO. A caller that wants to
+/// follow a fold polls until this returns YES or it gives up.
+///
+/// On success the surface and (if observing) screen-callback registrations
+/// move to the new renderable, and `boundScreenID` / `boundScreenUniqueId`
+/// are re-read. If the new panel already holds a surface, the surface
+/// callback fires synchronously with it, so the consumer isn't left on the
+/// old panel's last frame; if it holds none yet, the next delivery is the
+/// first. `displaySize` reports the new panel's dimensions from here on. A
+/// delivery still in flight from the old panel is dropped rather than
+/// forwarded, so it cannot put a dark frame back after the swap.
+///
+/// **Nothing half-moved.** If either registration fails on the new panel the
+/// binding goes back to the old one and this returns NO. Moving without
+/// screen callbacks would leave the handle unable to notice any later fold,
+/// which is worse than a blank pane a repeat call can still fix. Re-applying
+/// the old panel's registrations is best effort: those results are not
+/// checked, so a rollback can leave the handle bound to a panel it is no
+/// longer registered on.
+///
+/// **Also a repair.** Observation requested through
+/// `startOrientation(callback:queue:)` stays requested even if a registration
+/// later fails, and each call retries it on the bound panel before doing
+/// anything else. That gives a caller who keeps asking a fresh attempt each
+/// time rather than a guarantee, and it is what makes a YES mean observation
+/// was in place when this returned.
+///
+/// Returns NO when the handle isn't started, when the device has one panel,
+/// on any reading that isn't an unambiguous swap, and when the move could not
+/// be completed.
+- (BOOL)rebindToLitPanel;
 
 /// Begin observing the display's presented orientation. Requires a prior
 /// successful `start(callback:)`: both ride the same display proxy, which

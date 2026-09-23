@@ -632,6 +632,42 @@ func nilBootstrapDimensionsNeverTriggerASecondBackendRead() async throws {
 }
 
 @Test
+func aFrameAtANewSizeReplacesTheBootstrapDimensions() async throws {
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let backend = MockDeviceBackend()
+    backend.pixelDimensionsResult = (4, 6)
+
+    let created = try await coordinator.createMockPane(
+        udid: "udid-resize",
+        sessionId: session,
+        backend: backend
+    )
+    #expect(created.pixelWidth == 4)
+    #expect(created.pixelHeight == 6)
+
+    // A display that rebinds to a differently sized panel keeps the same
+    // subscription and just starts delivering the new size. Geometry from a
+    // committed frame is what has to carry that, because nothing re-runs the
+    // bootstrap and the pane would otherwise size itself from the old panel
+    // for the rest of the session.
+    let onFrame = try #require(backend.onSurface)
+    onFrame(try bootstrapTestSurface(width: 8, height: 10))
+    #expect(await waitUntil {
+        await coordinator.panesForSession(session)
+            .first { $0.paneId == created.paneId }?.state == .rendering
+    })
+
+    let again = try await coordinator.createMockPane(
+        udid: "udid-resize",
+        sessionId: session,
+        backend: backend
+    )
+    #expect(again.pixelWidth == 8)
+    #expect(again.pixelHeight == 10)
+}
+
+@Test
 func abandoningAClaimWakesCallersAlreadyParkedOnIt() async throws {
     let gate = DeadlineGate(fireCount: 1)
     let coordinator = bootstrapCoordinator(sleep: { _ in

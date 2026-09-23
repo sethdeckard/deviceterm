@@ -274,7 +274,22 @@ on the cover, and launching Settings produced 83 on the inner and 0 on the
 cover. **An idle device delivers nothing on either panel**, which is why
 content is needed for the first bind and traffic cannot do it alone.
 
+**A fold announces itself through `propertiesChangedCallback`, on both
+panels.** Screen callbacks registered on each panel independently both fired
+within 8 ms of each other at every fold, the panel going dark included, and
+`uiOrientation` moved 1→3 unfolding and 3→1 folding. That delivery is the only
+event a fold produces: there is no fold or panel-power notification, and frame
+callbacks stay silent because the device is idle.
+
+**The panels swap slowly, and in between neither is lit.** Measured from the
+`propertiesChanged` delivery: the old panel sampled black after 50 ms and 69 ms,
+and the new one sampled lit after 246 ms and 507 ms. So a single content sample
+taken when the event arrives reports no change, and a consumer following a fold
+has to keep asking across that window rather than reading once.
+
 - **How confirmed:** host-side probes against a booted Duo (iOS 27.1 /
   24A94401) driving the hinge between postures, sampling `SimScreenProperties`
   through the same ROCK proxies the bridge uses, locking each candidate's
-  IOSurface to sample it, and counting callback deliveries over timed windows.
+  IOSurface to sample it, counting callback deliveries over timed windows, and
+  timestamping screen callbacks registered on both panels at once across a
+  0° → 130° → 0° round trip.

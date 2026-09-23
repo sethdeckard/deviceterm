@@ -142,6 +142,51 @@ func foldableBindsTheLitPanel() throws {
 }
 
 @Test
+func panelCountMatchesTheBootedDevice() throws {
+    // What arms the fold-following search. A one-panel device must report one,
+    // or every rotation on an ordinary phone starts a search for a swap that
+    // cannot happen.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let handle = try SimDisplayHandle.handle(forUDID: booted.udid)
+    try handle.start { _ in }
+    defer { handle.stop() }
+    _ = waitForSurface(handle)
+
+    #expect(handle.hasMultiplePanels == bootedDeviceIsFoldable())
+}
+
+@Test
+func rebindingAnUnchangedPostureKeepsTheBoundPanel() throws {
+    // The posture is settled, so the bound panel is the lit one and asking to
+    // move off it reports no change. This is what makes the search safe to run
+    // on every screen-properties delivery: it only ever acts on a panel that
+    // has actually gone dark.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let handle = try SimDisplayHandle.handle(forUDID: booted.udid)
+    try handle.start { _ in }
+    defer { handle.stop() }
+    _ = waitForSurface(handle)
+
+    let panel = handle.boundScreenUniqueId
+    #expect(!handle.rebindToLitPanel())
+    #expect(handle.boundScreenUniqueId == panel)
+}
+
+@Test
 func displaySizeReflectsBoundRenderable() throws {
     try #require(
         coreSimulatorAvailable,

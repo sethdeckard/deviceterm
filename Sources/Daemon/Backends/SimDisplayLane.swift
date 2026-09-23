@@ -23,6 +23,16 @@ import Foundation
 /// to it happens on `queue`. The `Locked` helpers assume they are already on
 /// that queue, so none of them may hop back onto it and deadlock.
 final class SimDisplayLane: @unchecked Sendable {
+    /// How long to keep asking the bridge whether the lit panel moved, and how
+    /// often. A fold takes the old panel dark before the new one lights, so
+    /// the first ask lands in a gap where neither is lit and reports nothing;
+    /// the measured gap is a few hundred milliseconds. The window is generous
+    /// against that and costs nothing in the common case, because a swap that
+    /// resolves ends the search immediately and a device with one panel never
+    /// starts one.
+    private static let panelSwapAttempts = 30
+    private static let panelSwapIntervalNanoseconds: UInt64 = 100_000_000
+
     private let queue = DispatchQueue(label: "com.deviceterm.sim.display-lane")
     /// Delivery queue for the bridge's orientation callbacks. Separate from the
     /// lane so an observation callback never lands on the lane's own queue.
@@ -39,6 +49,9 @@ final class SimDisplayLane: @unchecked Sendable {
     private var frameTask: Task<Void, Never>?
     /// Hands surfaces from the bridge's callback queue to the copy pump.
     private var surfaceContinuation: AsyncStream<RetainedSurface>.Continuation?
+    /// The in-flight search for a panel swap, if a screen-properties change
+    /// started one. Owned by `queue`, like the handle it drives.
+    private var panelSwapTask: Task<Void, Never>?
 
     private let pool: LeasedSurfacePool
     private let recoveryThreshold: Int
@@ -116,7 +129,16 @@ final class SimDisplayLane: @unchecked Sendable {
         queue.sync { startOrientationLocked(onChange: onChange) }
     }
 
-    func stopOrientation() { queue.sync { handle?.stopOrientation() } }
+    func stopOrientation() {
+        queue.sync {
+            // Cancels whichever search is stored now. A callback already
+            // running can still arm another one after this returns, and
+            // shutdown is what cancels that.
+            panelSwapTask?.cancel()
+            panelSwapTask = nil
+            handle?.stopOrientation()
+        }
+    }
 
     func currentOrientation() -> Orientation? { queue.sync { currentOrientationLocked() } }
 
@@ -231,9 +253,16 @@ final class SimDisplayLane: @unchecked Sendable {
         guard let handle else { return false }
         do {
             try handle.startOrientation(
-                callback: { raw in
-                    guard let orientation = Orientation(displayValue: raw) else { return }
-                    onChange(orientation)
+                callback: { [weak self] raw in
+                    if let orientation = Orientation(displayValue: raw) {
+                        onChange(orientation)
+                    }
+                    // A screen-properties change reaches here whenever it
+                    // reads as a cardinal orientation, whether or not the
+                    // orientation moved. That is what makes it the signal a
+                    // fold produces: folding changes properties on both
+                    // panels, and the rotation it reports is incidental.
+                    self?.searchForPanelSwap()
                 },
                 queue: orientationQueue
             )
@@ -243,6 +272,46 @@ final class SimDisplayLane: @unchecked Sendable {
             // last known orientation. Frames are unaffected, so the pane
             // remains usable.
             return false
+        }
+    }
+
+    // MARK: - Following a fold
+
+    /// Start looking for the lit panel to move to another display candidate,
+    /// which is what a fold does on a two-panel device.
+    ///
+    /// Only the bridge can tell whether the panel moved, and it answers a
+    /// question rather than raising an event, so following a fold means asking
+    /// repeatedly across the window where the panels swap. A device with one
+    /// panel never asks. A search already running is replaced, since the later
+    /// properties change describes the more recent posture.
+    ///
+    /// The rebind itself is invisible to the frame plumbing: the bridge keeps
+    /// the same callback and moves its registrations, so the pump, the stream,
+    /// and the run token all stay as they are, and the new panel's first frame
+    /// arrives through the path the old one was using.
+    private func searchForPanelSwap() {
+        queue.async { [self] in
+            guard let handle, handle.hasMultiplePanels else { return }
+            panelSwapTask?.cancel()
+            panelSwapTask = Task { [weak self] in
+                guard let self else { return }
+                for _ in 0..<Self.panelSwapAttempts {
+                    if Task.isCancelled { return }
+                    if await self.rebindToLitPanel() { return }
+                    try? await Task.sleep(nanoseconds: Self.panelSwapIntervalNanoseconds)
+                }
+            }
+        }
+    }
+
+    /// Ask the bridge to move onto the lit panel, on the lane's own queue.
+    /// True when the bound panel actually changed.
+    private func rebindToLitPanel() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(returning: handle?.rebindToLitPanel() ?? false)
+            }
         }
     }
 
@@ -262,6 +331,8 @@ final class SimDisplayLane: @unchecked Sendable {
     /// release so the kernel can reclaim it.
     private func shutdownLocked() {
         invalidateFrameRun()
+        panelSwapTask?.cancel()
+        panelSwapTask = nil
         // Unregisters orientation observation too: the coordinator fences its
         // pump locally and leaves this bridge call to teardown, which runs off
         // the caller's executor.

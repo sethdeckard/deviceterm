@@ -202,6 +202,10 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
 @property (nonatomic, strong, nullable) NSUUID *screenCallbackUUID;
 @property (nonatomic, assign, readwrite) unsigned int boundScreenID;
 @property (nonatomic, copy, readwrite, nullable) NSString *boundScreenUniqueId;
+@property (nonatomic, assign, readwrite) BOOL hasMultiplePanels;
+/// Delivery queue for the screen callbacks, held so a rebind can re-register
+/// them on the new panel without the caller registering again.
+@property (nonatomic, strong, nullable) dispatch_queue_t screenCallbackQueue;
 
 // Atomic, unlike the rest of these. CoreSimulator's delivery queues read all
 // three while `stop` clears them from the owning thread, and a `nonatomic`
@@ -213,9 +217,52 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
 @property (atomic, strong, nullable) id<SimDisplayIOSurfaceRenderable> renderable;
 @property (atomic, copy, nullable) CSBDisplaySurfaceCallback callback;
 @property (atomic, copy, nullable) CSBDisplayOrientationCallback orientationCallback;
+
+/// Which registration a surface delivery belongs to. Bumped on every
+/// registration and captured by the blocks it installs, so a delivery from a
+/// panel the handle has since moved off is dropped instead of forwarded.
+/// Unregistering does not fence anything by itself: CoreSimulator can already
+/// have a delivery in flight, and the surface it carries is the *old* panel's,
+/// so without this a late arrival would push a dark frame over the one the
+/// rebind just delivered.
+///
+/// Only ever read and written under `deliveryGate`.
+@property (nonatomic, assign) uint64_t registrationGeneration;
+
+/// Serialises surface delivery against rebinding.
+///
+/// Comparing the generation and invoking the callback have to be one step. A
+/// bare atomic read leaves a window where an old panel's delivery passes the
+/// check, stalls while the rebind publishes the new panel's first frame, then
+/// resumes and hands over its stale surface anyway, leaving the pane dark
+/// until the guest next draws. Holding this across the invocation closes it:
+/// the rebind's generation bump and its initial delivery run here too, so a
+/// late delivery is either wholly before the bump or rejected by it.
+///
+/// **Lock order.** This is the only lock a delivery takes. The daemon's
+/// callback just hands the surface to a stream and returns; the fence that
+/// drops a frame from a retired run runs later, in the pump that reads that
+/// stream, so it is never held against this one. Nothing under this gate
+/// waits on the lane queue that drives `rebindToLitPanel` either, which is
+/// what keeps the two from deadlocking.
+///
+/// `stop` deliberately stays outside it. Teardown retires the consumer's
+/// frame run *before* stopping the handle, so a delivery that races teardown
+/// is dropped by that fence rather than published, and ordering it here would
+/// buy nothing.
+@property (nonatomic, strong) dispatch_queue_t deliveryGate;
 @end
 
 @implementation SimDisplayHandle
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _deliveryGate = dispatch_queue_create("com.deviceterm.csb.display-delivery",
+                                              DISPATCH_QUEUE_SERIAL);
+    }
+    return self;
+}
 
 #pragma mark Lookup
 
@@ -276,20 +323,17 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
 
 #pragma mark Picker (reverse-engineered truth, preserve)
 
-/// Multi-renderable picker. CoreSimulator exposes multiple proxies that
-/// conform to `SimDisplayIOSurfaceRenderable` per device. Four cases the
-/// picker has to handle:
+/// Every proxy that could be a display. CoreSimulator exposes several that
+/// conform to `SimDisplayIOSurfaceRenderable` per device, and two things
+/// about how they present have to be handled here:
 ///
 ///   - Conformance can be carried by either the port or its
 ///     `port.descriptor`; enumerate both.
 ///   - Conformance can be claimed via the protocol *or* by responding to
 ///     either callback selector shape; check both.
-///   - Prefer candidates with non-zero `displaySize`. If none has a size
-///     (shouldn't happen on a booted device, but defensive), fall back to
-///     the first conformer.
-///   - When several have a size, sample their content to choose a panel;
-///     otherwise fall back to enumeration order.
-- (nullable id<SimDisplayIOSurfaceRenderable>)_findRenderableWithError:(NSError **)error {
+///
+/// Choosing between what this returns is `_findRenderableWithError:`.
+- (nullable NSArray<id<SimDisplayIOSurfaceRenderable>> *)_candidatesWithError:(NSError **)error {
     SimDevice *device = self.device;
     id ioObj = device.io;
     if (!ioObj) {
@@ -346,10 +390,12 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
         }
         return nil;
     }
+    return candidates;
+}
 
-    // Prefer a renderable with non-zero displaySize, which is the one
-    // actually bound to a screen. Fall back to the first conformer if
-    // none has a size yet (early boot transient).
+/// The candidates that report a non-zero `displaySize`, which is what being
+/// bound to a screen looks like. A foldable vends one per panel.
+static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *candidates) {
     NSMutableArray<id<SimDisplayIOSurfaceRenderable>> *sized = [NSMutableArray array];
     for (id<SimDisplayIOSurfaceRenderable> candidate in candidates) {
         CGSize size = CGSizeZero;
@@ -363,6 +409,24 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
             [sized addObject:candidate];
         }
     }
+    return sized;
+}
+
+/// Pick the renderable to mirror, out of everything the device vends.
+///
+///   - Prefer candidates with non-zero `displaySize`. If none has a size
+///     (shouldn't happen on a booted device, but defensive), fall back to
+///     the first conformer.
+///   - When several have a size, sample their content to choose a panel;
+///     otherwise fall back to enumeration order.
+- (nullable id<SimDisplayIOSurfaceRenderable>)_findRenderableWithError:(NSError **)error {
+    NSArray<id<SimDisplayIOSurfaceRenderable>> *candidates = [self _candidatesWithError:error];
+    if (!candidates) return nil;
+
+    // Prefer a renderable with non-zero displaySize. Fall back to the first
+    // conformer if none has a size yet (early boot transient).
+    NSArray<id<SimDisplayIOSurfaceRenderable>> *sized = CSBSizedCandidates(candidates);
+    self.hasMultiplePanels = sized.count > 1;
 
     // At most one sized candidate: choose it, or fall back to the first
     // conformer. A foldable vends one per panel, both sized, and
@@ -376,9 +440,9 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
 
     // Attaching during boot can beat the guest drawing its first frame, and
     // a no-content read then means "too early", not "this panel is dark".
-    // Selection is not revisited while the subscription runs, so a wrong
-    // answer here costs a blank pane until it is stopped and started again.
-    // Worth a bounded wait to avoid.
+    // Nothing revisits this on its own, so a wrong answer here costs a blank
+    // pane until a caller drives `rebindToLitPanel`. Worth a bounded wait to
+    // avoid.
     id<SimDisplayIOSurfaceRenderable> lit = nil;
     for (NSUInteger attempt = 0; attempt < kCSBLitPanelAttempts && !lit; attempt++) {
         if (attempt > 0) {
@@ -394,13 +458,8 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     // No candidate reported sampled content in that window, so take the
     // first sized candidate. Zero samples do not prove the whole surface is
     // black; missing or unreadable surfaces also take this fallback.
-    //
-    // **This selection does not self-correct.** Callbacks are registered
-    // against the chosen renderable only, so a panel that lights up later
-    // goes unnoticed. Recovering needs a consumer that watches every
-    // candidate, which does not exist yet; until it does, a pane that lands
-    // here stays on this panel until the subscription is stopped and
-    // started again.
+    // `rebindToLitPanel` is what corrects a guess that lands here, once some
+    // panel is drawing.
     id<SimDisplayIOSurfaceRenderable> chosen = lit ?: sized.firstObject;
     [self _recordBoundPanelFor:chosen];
     return chosen;
@@ -426,25 +485,121 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     }
 }
 
-#pragma mark Start / stop
-
-- (BOOL)startWithCallback:(CSBDisplaySurfaceCallback)callback
-                    error:(NSError **)error {
-    self.callback = callback;
-    if (self.running) {
-        // Replace the callback in place; CoreSimulator registration stays.
-        return YES;
+/// A candidate's stable panel identity, or nil when it vends no
+/// `SimScreenProperties`. Two candidates with no identity cannot be told
+/// apart, which is why an empty answer disqualifies one from a rebind.
+static NSString *CSBUniqueIdForCandidate(id candidate) {
+    id<CSBSimScreenProperties> props = CSBPropertiesForCandidate(candidate);
+    if (!props) return nil;
+    @try {
+        return props.uniqueId;
+    } @catch (NSException *e) {
+        return nil;
     }
+}
 
-    NSError *inner = nil;
-    id<SimDisplayIOSurfaceRenderable> renderable = [self _findRenderableWithError:&inner];
-    if (!renderable) {
-        if (error) *error = inner;
+- (BOOL)rebindToLitPanel {
+    if (!self.running) return NO;
+    // An earlier attempt can have left observation wanted but unregistered,
+    // on this panel or the one it rolled back from. Retry it before looking
+    // for a swap, so each call is also an attempt to get it back.
+    if (self.screenCallbackQueue && !self.screenCallbackUUID) {
+        [self _registerScreenCallbacksWithError:NULL];
+    }
+    id<SimDisplayIOSurfaceRenderable> current = self.renderable;
+    NSString *boundId = self.boundScreenUniqueId;
+    if (!current || boundId.length == 0) return NO;
+    // Leaving a panel that still has content would fight the picker rather
+    // than follow the fold, and during a fold there is a window where the old
+    // panel has gone dark before the new one lights. Both read as "not yet".
+    if (CSBCandidateLuminanceOf(current) != CSBCandidateLuminanceBlack) return NO;
+
+    NSArray<id<SimDisplayIOSurfaceRenderable>> *sized =
+        CSBSizedCandidates([self _candidatesWithError:NULL]);
+    if (sized.count <= 1) return NO;
+
+    id<SimDisplayIOSurfaceRenderable> lit = nil;
+    for (id<SimDisplayIOSurfaceRenderable> candidate in sized) {
+        NSString *candidateId = CSBUniqueIdForCandidate(candidate);
+        if (candidateId.length == 0 || [candidateId isEqualToString:boundId]) continue;
+        if (CSBCandidateLuminanceOf(candidate) != CSBCandidateLuminanceLit) continue;
+        // More than one lit panel is not a posture this device has, so treat
+        // it as a reading to discard rather than a choice to make.
+        if (lit) return NO;
+        lit = candidate;
+    }
+    if (!lit) return NO;
+
+    // Whether the caller *wants* observation, which is not the same as having
+    // it: `screenCallbackUUID` goes nil on a registration that failed, and
+    // reading intent from it would let the next attempt quietly decide
+    // observation was never wanted and report success without it.
+    BOOL wantsScreenCallbacks = (self.screenCallbackQueue != nil);
+    // Order matters: `_screen` reads `renderable`, so the screen callbacks
+    // have to come off the old panel before the binding moves.
+    [self _unregisterSurfaceCallbacksOn:current];
+    [self _unregisterScreenCallbacks];
+
+    self.renderable = lit;
+    [self _recordBoundPanelFor:lit];
+    BOOL bound = [self _registerSurfaceCallbacksOn:lit];
+    // Orientation observation has to move with the binding. Screen callbacks
+    // are the only thing that makes a later fold noticeable, so a handle that
+    // kept the new panel without them would show the right picture now and
+    // never follow another fold.
+    if (bound && wantsScreenCallbacks) {
+        bound = [self _registerScreenCallbacksWithError:NULL];
+        if (!bound) [self _unregisterSurfaceCallbacksOn:lit];
+    }
+    if (!bound) {
+        // Put it back on the panel that was working. That panel is dark, so
+        // the pane stays blank, but the caller is polling and its remaining
+        // attempts check again for a swap. Re-applying the old panel's
+        // registrations is best effort, and only missing screen observation
+        // is retried later. Staying on the new panel half-registered would
+        // instead leave the pane correct and stuck.
+        self.renderable = current;
+        [self _recordBoundPanelFor:current];
+        [self _registerSurfaceCallbacksOn:current];
+        if (wantsScreenCallbacks) [self _registerScreenCallbacksWithError:NULL];
         return NO;
     }
-    self.renderable = renderable;
 
+    // An idle guest can go seconds without drawing, so hand over the newly
+    // bound surface now rather than leaving the consumer on the old panel's
+    // last frame. Under the gate, so a delivery the bump above rejected can
+    // never land after this one. +1 retained; balance it once consumed.
+    IOSurfaceRef ref = [self currentSurface];
+    if (ref) {
+        dispatch_sync(self.deliveryGate, ^{
+            CSBDisplaySurfaceCallback cb = self.callback;
+            if (cb) cb(ref);
+        });
+        CFRelease(ref);
+    }
+    return YES;
+}
+
+#pragma mark Start / stop
+
+/// Register the surface and damage callbacks on `renderable` under this
+/// handle's callback UUID. Returns NO when the proxy answers neither
+/// `registerCallbackWithUUID:` IOSurface shape. The damage-rectangles
+/// registration is attempted independently of that answer, so it can be left
+/// in place even when this returns NO.
+///
+/// Both blocks reach the live callback through the handle rather than
+/// capturing it, so they stay correct across a `start` that replaces the
+/// callback and a rebind that moves them to another panel.
+- (BOOL)_registerSurfaceCallbacksOn:(id<SimDisplayIOSurfaceRenderable>)renderable {
     __weak SimDisplayHandle *weakSelf = self;
+    // Fences every block installed here against a later registration. Taken
+    // under the gate so a delivery cannot straddle the bump.
+    __block uint64_t generation = 0;
+    dispatch_sync(self.deliveryGate, ^{
+        generation = self.registrationGeneration + 1;
+        self.registrationGeneration = generation;
+    });
 
     // Surface-change callback. CoreSimulator delivers either an
     // xpc_object (Xcode 8 era) or an IOSurface object (Xcode 9+); both
@@ -457,8 +612,16 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
         SimDisplayHandle *strong = weakSelf;
         if (!strong) return;
         IOSurfaceRef ref = surface ? (__bridge IOSurfaceRef)surface : NULL;
-        CSBDisplaySurfaceCallback cb = strong.callback;
-        if (cb && ref) cb(ref);
+        if (!ref) return;
+        // This one carries the surface rather than reading it back, so a
+        // delivery that outlived its registration would hand over a panel the
+        // handle no longer mirrors. Checking and forwarding under the gate is
+        // what makes the rejection stick.
+        dispatch_sync(strong.deliveryGate, ^{
+            if (strong.registrationGeneration != generation) return;
+            CSBDisplaySurfaceCallback cb = strong.callback;
+            if (cb) cb(ref);
+        });
     };
 
     // Damage-rectangles callback: registering it is the load-bearing
@@ -474,8 +637,11 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
         if (!strong) return;
         IOSurfaceRef ref = [strong currentSurface];
         if (!ref) return;
-        CSBDisplaySurfaceCallback cb = strong.callback;
-        if (cb) cb(ref);
+        dispatch_sync(strong.deliveryGate, ^{
+            if (strong.registrationGeneration != generation) return;
+            CSBDisplaySurfaceCallback cb = strong.callback;
+            if (cb) cb(ref);
+        });
         CFRelease(ref);
     };
 
@@ -495,7 +661,43 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
         [renderableUntyped registerCallbackWithUUID:self.callbackUUID
                             damageRectanglesCallback:damageCallback];
     }
-    if (!registered) {
+    return registered;
+}
+
+/// Drop this handle's surface and damage registrations from `renderable`.
+/// Repeated start/stop and rebind cycles otherwise leak block registrations
+/// into CoreSimulator that live until the proxy goes away.
+- (void)_unregisterSurfaceCallbacksOn:(nullable id<SimDisplayIOSurfaceRenderable>)renderable {
+    if (!renderable) return;
+    if ([renderable respondsToSelector:@selector(unregisterIOSurfacesChangeCallbackWithUUID:)]) {
+        [renderable unregisterIOSurfacesChangeCallbackWithUUID:self.callbackUUID];
+    }
+    if ([renderable respondsToSelector:@selector(unregisterIOSurfaceChangeCallbackWithUUID:)]) {
+        [renderable unregisterIOSurfaceChangeCallbackWithUUID:self.callbackUUID];
+    }
+    id renderableUntyped = renderable;
+    if ([renderableUntyped respondsToSelector:@selector(unregisterDamageRectanglesCallbackWithUUID:)]) {
+        [renderableUntyped unregisterDamageRectanglesCallbackWithUUID:self.callbackUUID];
+    }
+}
+
+- (BOOL)startWithCallback:(CSBDisplaySurfaceCallback)callback
+                    error:(NSError **)error {
+    self.callback = callback;
+    if (self.running) {
+        // Replace the callback in place; CoreSimulator registration stays.
+        return YES;
+    }
+
+    NSError *inner = nil;
+    id<SimDisplayIOSurfaceRenderable> renderable = [self _findRenderableWithError:&inner];
+    if (!renderable) {
+        if (error) *error = inner;
+        return NO;
+    }
+    self.renderable = renderable;
+
+    if (![self _registerSurfaceCallbacksOn:renderable]) {
         if (error) {
             *error = [NSError errorWithDomain:kCSBErrorDomain
                                          code:CSBDisplayHandleErrorCallbackRegister
@@ -621,6 +823,34 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     }
 
     self.orientationCallback = callback;
+    self.screenCallbackQueue = queue;
+    if (![self _registerScreenCallbacksWithError:error]) {
+        self.orientationCallback = nil;
+        self.screenCallbackQueue = nil;
+        return NO;
+    }
+    return YES;
+}
+
+/// Register screen callbacks on the currently bound screen, under a fresh
+/// UUID stored in `screenCallbackUUID`. Returns NO when the proxy vends no
+/// screen or the registration throws.
+///
+/// Separate from `startOrientationWithCallback:queue:` so a rebind can move
+/// the registration to the new panel without the caller registering again.
+- (BOOL)_registerScreenCallbacksWithError:(NSError **)error {
+    id<CSBSimScreen> screen = [self _screen];
+    dispatch_queue_t queue = self.screenCallbackQueue;
+    if (!screen || !queue) {
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain
+                                         code:CSBDisplayHandleErrorNoOrientation
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Display proxy vends no orientation source",
+            }];
+        }
+        return NO;
+    }
     NSUUID *uuid = [NSUUID UUID];
 
     __weak SimDisplayHandle *weakSelf = self;
@@ -668,7 +898,6 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
                                                   id _Nullable maskedSurface) {}
                       propertiesChangedCallback:propertiesChanged];
     } @catch (NSException *e) {
-        self.orientationCallback = nil;
         if (error) {
             *error = [NSError errorWithDomain:kCSBErrorDomain
                                          code:CSBDisplayHandleErrorNoOrientation
@@ -683,8 +912,10 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     return YES;
 }
 
-- (void)stopOrientation {
-    self.orientationCallback = nil;
+/// Drop the screen-callback registration from the currently bound screen,
+/// leaving `orientationCallback` and `screenCallbackQueue` in place so a
+/// rebind can register again. Idempotent.
+- (void)_unregisterScreenCallbacks {
     NSUUID *uuid = self.screenCallbackUUID;
     if (!uuid) return;
     self.screenCallbackUUID = nil;
@@ -694,6 +925,12 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     } @catch (NSException *e) {}
 }
 
+- (void)stopOrientation {
+    self.orientationCallback = nil;
+    [self _unregisterScreenCallbacks];
+    self.screenCallbackQueue = nil;
+}
+
 #pragma mark Stop
 
 - (void)stop {
@@ -701,21 +938,7 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     [self stopOrientation];
     if (!self.running) return;
     self.running = NO;
-    id<SimDisplayIOSurfaceRenderable> renderable = self.renderable;
-    if ([renderable respondsToSelector:@selector(unregisterIOSurfacesChangeCallbackWithUUID:)]) {
-        [renderable unregisterIOSurfacesChangeCallbackWithUUID:self.callbackUUID];
-    }
-    if ([renderable respondsToSelector:@selector(unregisterIOSurfaceChangeCallbackWithUUID:)]) {
-        [renderable unregisterIOSurfaceChangeCallbackWithUUID:self.callbackUUID];
-    }
-    // The damage callback was registered alongside the IOSurface ones,
-    // so unregister it too. Repeated start/stop cycles otherwise leak block
-    // registrations into CoreSimulator that live until the proxy goes
-    // away.
-    id renderableUntyped = renderable;
-    if ([renderableUntyped respondsToSelector:@selector(unregisterDamageRectanglesCallbackWithUUID:)]) {
-        [renderableUntyped unregisterDamageRectanglesCallbackWithUUID:self.callbackUUID];
-    }
+    [self _unregisterSurfaceCallbacksOn:self.renderable];
     self.renderable = nil;
 }
 

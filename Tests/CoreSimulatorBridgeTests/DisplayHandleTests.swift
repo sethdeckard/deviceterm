@@ -41,6 +41,27 @@ func handleReportsNoBoundPanelBeforeStart() throws {
     #expect(handle.boundScreenUniqueId == nil)
 }
 
+@Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))
+func handleReportsOnePanelBeforeStart() throws {
+    // The panel count comes from resolving the renderable, so an unstarted
+    // handle claims no second panel and its consumer skips the fold-following
+    // work entirely.
+    let devices = try SimDeviceHandle.allDevices()
+    guard let first = devices.first else { return }
+    let handle = try SimDisplayHandle.handle(forUDID: first.udid)
+    #expect(!handle.hasMultiplePanels)
+}
+
+@Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))
+func rebindingBeforeStartReportsNoChange() throws {
+    // Nothing is bound yet, so there is no panel to move off. Refusing here is
+    // what lets a caller poll without checking the handle's state first.
+    let devices = try SimDeviceHandle.allDevices()
+    guard let first = devices.first else { return }
+    let handle = try SimDisplayHandle.handle(forUDID: first.udid)
+    #expect(!handle.rebindToLitPanel())
+}
+
 // MARK: - Degraded host
 
 @Test(.disabled(if: coreSimulatorAvailable, "only meaningful on hosts where the probe doesn't pass"))
