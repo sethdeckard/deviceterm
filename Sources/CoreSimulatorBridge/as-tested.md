@@ -82,7 +82,9 @@ in the active Xcode before its machine-wide fallbacks.
 | protocol method    | `-<SimScreen> screenProperties`                                      | `SimDisplayHandle`    | Bounded one-shot read; seeds a pane's display orientation and is re-read inside every change callback. |
 | protocol method    | `-<SimScreen> registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:` | `SimDisplayHandle` | Push channel for orientation. **All three blocks must be non-nil**: CoreSimulator invokes them unconditionally, so a nil frame callback dereferences NULL and takes the simulator down. |
 | protocol method    | `-<SimScreen> unregisterScreenCallbacksWithUUID:`                    | `SimDisplayHandle`    | Teardown counterpart; called on `stopOrientation` and `stop`.  |
-| protocol method    | `-<SimScreenProperties> uiOrientation`                               | `SimDisplayHandle`    | The presented orientation, as a `UIInterfaceOrientation`. Mapped to device-orientation vocabulary in the bridge, **swapping the landscape pair** (see the orientation findings below). |
+| protocol method    | `-<SimScreenProperties> uiOrientation`                               | `SimDisplayHandle`    | The presented orientation, as a `UIInterfaceOrientation`. Mapped to device-orientation vocabulary in the bridge, **swapping the landscape pair** (see the orientation findings below). On a foldable it tracks the *device*, not the panel: both panels report the same value. |
+| protocol method    | `-<SimScreenProperties> screenID`                                    | `SimDisplayHandle`    | Small integer panel id, the same one `simctl io --display` accepts. Recorded as `boundScreenID` so a pane can name the panel it mirrors. |
+| protocol method    | `-<SimScreenProperties> uniqueId`                                    | `SimDisplayHandle`    | Stable per-panel identifier, unchanged across a fold. Recorded as `boundScreenUniqueId`. |
 | framework          | `SimulatorKit.framework`                                             | `SimHIDClient`        | Hosts `SimDeviceLegacyHIDClient` and the Indigo wire-format helpers. `CoreSimulatorLoader.loadSimulatorKit()` tries the active Xcode's `Contents/Developer` and `Contents/SharedFrameworks` layouts first, then machine-wide and default-Xcode fallbacks. |
 | class              | `SimulatorKit.SimDeviceLegacyHIDClient`                              | `SimHIDClient`        | Swift-bridged subclass instantiated by the bridge; carries the `initWithDevice:error:` and `sendWithMessage:…` selectors inherited from `SimDeviceLegacyClient`. |
 | instance selector  | `-[SimulatorKit.SimDeviceLegacyHIDClient initWithDevice:error:]`     | `SimHIDClient`        | Construct a HID client bound to a specific `SimDevice`.        |
@@ -227,3 +229,52 @@ constants survive review/rebase independent of any commit body.
   <udid> screenshot`): the app grid scrolled with rotation, crown-press
   returned Home, Side opened Control Center. Sends route through
   `SimHIDClient`'s existing `_sendBuiltMessage:` (disconnect-recovery) path.
+
+## Two-panel foldables (iPhone Duo)
+
+`com.apple.CoreSimulator.SimDeviceType.iPhone-Duo` (iPhone19,4, iOS 27.1+) is
+the first simulator that vends **two sized display descriptors** on one
+device, one per panel:
+
+| Panel | `screenID` | `deviceName` | Pixels | `chromeIdentifier` |
+|---|---|---|---|---|
+| Cover | 1 | `primary` | 1398×2034 | `…chrome.phone15` |
+| Inner | 3 | `primary-1` | 2007×2853 | `…chrome.phone14` |
+
+**Exactly one panel is lit at a time.** `screenID` and `uniqueId` identify
+each panel; none of the measured state properties identify which one is lit.
+Measured on a booted Duo at hinge 0°, 45°, 130° and 180°:
+
+| Field | Cover | Inner | Separates lit from dark? |
+|---|---|---|---|
+| `powerState` | 1 | 1 | no |
+| `displayClass` | 0 | 0 | no |
+| `uiOrientation` | 1→3 | 1→3 | no — moves on both together |
+| `backlight.state` | 2 | −101 | no — static per panel, unchanged by a fold |
+| `backlight.brightnessFactor` | 1.0 | 1.0 | no |
+| `seed` | advances | advances | no — a global counter |
+| `regionOfInterest` | 0×0 | 0×0 | no |
+
+Both keep a full-size IOSurface in every posture, so a bound-surface test does
+not separate them either.
+
+**What does separate them is content.** All sampled colour channels on the
+dark panel were zero in both measured postures — ~4,400 pixels on a coarse
+grid, maximum channel sum 0 — while the lit panel's maximum was 765. The
+picker uses non-zero sampled colour channels as a heuristic for visible
+content, as the tiebreaker for the initial selection only. Neither the
+measurement nor the check establishes that every byte of the surface is
+zero.
+
+**Frame traffic is the authority once streaming.** The dark panel delivers
+zero `damageRectanglesCallback` deliveries under real UI activity, verified in
+both directions: with the cover lit, a forced redraw produced 3 on the cover
+and 0 on the inner; with the inner lit, the same produced 3 on the inner and 0
+on the cover, and launching Settings produced 83 on the inner and 0 on the
+cover. **An idle device delivers nothing on either panel**, which is why
+content is needed for the first bind and traffic cannot do it alone.
+
+- **How confirmed:** host-side probes against a booted Duo (iOS 27.1 /
+  24A94401) driving the hinge between postures, sampling `SimScreenProperties`
+  through the same ROCK proxies the bridge uses, locking each candidate's
+  IOSurface to sample it, and counting callback deliveries over timed windows.

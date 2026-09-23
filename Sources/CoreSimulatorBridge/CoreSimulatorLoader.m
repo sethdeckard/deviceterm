@@ -483,9 +483,14 @@ static NSString *const kAXPFrameworkPath =
             @"registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:",
             @"unregisterScreenCallbacksWithUUID:",
         ],
-        // The property the orientation is actually read from.
+        // The property the orientation is actually read from, plus the two
+        // the picker names a panel by. `screenID` and `uniqueId` identify
+        // each panel of a foldable, so losing them costs the ability to say
+        // which panel a pane is mirroring.
         @"SimScreenProperties": @[
             @"uiOrientation",
+            @"screenID",
+            @"uniqueId",
         ],
         // SimAccessibility: AXP calls back through these on every
         // translation request. Skip any and the first call crashes.

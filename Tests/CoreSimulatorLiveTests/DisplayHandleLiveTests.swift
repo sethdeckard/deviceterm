@@ -56,6 +56,91 @@ func startAgainstBootedDeviceBindsSurface() throws {
     #expect(ref != nil, "no surface bound within timeout")
 }
 
+/// Whether the booted device vends more than one panel. Keyed off the
+/// device-type identifier rather than a candidate count, which the handle
+/// deliberately doesn't expose.
+private func bootedDeviceIsFoldable() -> Bool {
+    let identifier = (try? SimDeviceHandle.singleBootedDevice())?
+        .deviceTypeIdentifier.lowercased() ?? ""
+    return identifier.contains("duo")
+}
+
+/// Whether a surface reports visible content on a coarse grid. Mirrors the
+/// bridge's own tiebreaker so the test measures what the picker measures.
+/// Returns false when the surface cannot be sampled as well as when it is
+/// black.
+private func surfaceHasContent(_ surface: IOSurfaceRef) -> Bool {
+    let width = IOSurfaceGetWidth(surface)
+    let height = IOSurfaceGetHeight(surface)
+    guard width > 0, height > 0 else { return false }
+    guard IOSurfaceLock(surface, .readOnly, nil) == kIOReturnSuccess else { return false }
+    defer { IOSurfaceUnlock(surface, .readOnly, nil) }
+    let base = IOSurfaceGetBaseAddress(surface)
+    let bytesPerRow = IOSurfaceGetBytesPerRow(surface)
+    guard bytesPerRow >= width * 4 else { return false }
+    let pixels = base.assumingMemoryBound(to: UInt8.self)
+    let stepX = max(1, width / 64)
+    let stepY = max(1, height / 64)
+    for y in stride(from: 0, to: height, by: stepY) {
+        for x in stride(from: 0, to: width, by: stepX) {
+            let offset = y * bytesPerRow + x * 4
+            if pixels[offset] != 0 || pixels[offset + 1] != 0 || pixels[offset + 2] != 0 {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+@Test
+func boundPanelIdentityIsReportedAfterStart() throws {
+    // Every device has at least one screen, so a bound handle can always
+    // name the panel it mirrors. On a foldable these are what tell the two
+    // display descriptors apart.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let handle = try SimDisplayHandle.handle(forUDID: booted.udid)
+    try handle.start { _ in }
+    defer { handle.stop() }
+    _ = waitForSurface(handle)
+
+    #expect(handle.boundScreenID > 0, "bound panel reported no screen id")
+    let uniqueId = try #require(handle.boundScreenUniqueId, "bound panel reported no uniqueId")
+    #expect(!uniqueId.isEmpty)
+}
+
+@Test(.enabled(if: bootedDeviceIsFoldable()))
+func foldableBindsTheLitPanel() throws {
+    // A foldable vends one sized descriptor per panel and powers exactly one
+    // of them. Binding by enumeration order can land on the dark one, which
+    // renders a black pane; the picker breaks the tie on content instead.
+    // Asserting the bound surface has content is the same check, one layer up.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let handle = try SimDisplayHandle.handle(forUDID: booted.udid)
+    try handle.start { _ in }
+    defer { handle.stop() }
+
+    let surface = try #require(waitForSurface(handle), "no surface bound within timeout")
+    let panel = handle.boundScreenID
+    #expect(
+        surfaceHasContent(surface),
+        "no content on bound panel \(panel): unreadable, black, or inactive"
+    )
+}
+
 @Test
 func displaySizeReflectsBoundRenderable() throws {
     try #require(

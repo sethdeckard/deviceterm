@@ -49,6 +49,14 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
 // but no port or descriptor vends it, and no proxy answers `displayAngle`.
 @protocol CSBSimScreenProperties <NSObject>
 @property (nonatomic, readonly) unsigned int uiOrientation;
+/// Panel identity. `screenID` is the small integer `simctl io --display`
+/// accepts; `uniqueId` is stable for a panel across a fold. A foldable
+/// vends one display descriptor per panel, and these are what tell them
+/// apart. The measured `displayClass`, `powerState` and `uiOrientation`
+/// values do not: they are equal on both panels, and `uiOrientation`
+/// tracks the device rather than the panel.
+@property (nonatomic, readonly) unsigned int screenID;
+@property (nonatomic, readonly, nullable) NSString *uniqueId;
 @end
 
 @protocol CSBSimScreen <SimScreen>
@@ -97,12 +105,103 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
     }
 }
 
+/// The `SimScreenProperties` a display candidate vends, or nil. Mirrors
+/// `_screen`'s `respondsToSelector:` test: ROCK proxies answer for
+/// selectors they forward even when the protocol isn't in their
+/// impersonated list.
+static id<CSBSimScreenProperties> CSBPropertiesForCandidate(id candidate) {
+    if (!candidate) return nil;
+    @try {
+        if ([candidate respondsToSelector:@selector(screenProperties)]) {
+            return (id<CSBSimScreenProperties>)[(id<CSBSimScreen>)candidate screenProperties];
+        }
+    } @catch (NSException *e) {}
+    return nil;
+}
+
+/// Whether a candidate's framebuffer has visible content, sampled on a
+/// coarse grid.
+///
+/// A foldable powers one panel at a time, and the properties that would
+/// name the lit one read the same on both. Content is what differs: every
+/// sampled colour channel on the dark panel was zero in both measured
+/// postures, and non-zero on the lit one.
+///
+/// This is a heuristic and a tiebreaker for the initial selection only. A
+/// lit panel drawing black reads as dark here. `Unknown` means the surface
+/// is missing or cannot be sampled, including invalid dimensions, a failed
+/// lock, a missing base address, or insufficient row stride. It leaves the
+/// caller on its existing ordering rather than guessing.
+typedef NS_ENUM(NSInteger, CSBCandidateLuminance) {
+    CSBCandidateLuminanceUnknown = 0,
+    CSBCandidateLuminanceBlack,
+    CSBCandidateLuminanceLit,
+};
+
+/// Up to ten sampling passes, sleeping 20ms between them while no candidate
+/// reports content: 180ms of waiting at worst, since the first pass doesn't
+/// sleep. Only spent on a multi-panel device where no candidate reports
+/// content yet, which covers a guest that hasn't drawn its first frame.
+static const NSUInteger kCSBLitPanelAttempts = 10;
+static const NSTimeInterval kCSBLitPanelRetryInterval = 0.02;
+
+static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
+    id surfaceObj = nil;
+    @try {
+        if ([candidate respondsToSelector:@selector(framebufferSurface)]) {
+            surfaceObj = [(id<SimDisplayIOSurfaceRenderable>)candidate framebufferSurface];
+        }
+    } @catch (NSException *e) {}
+    if (!surfaceObj) {
+        @try {
+            if ([candidate respondsToSelector:@selector(ioSurface)]) {
+                surfaceObj = [(id<SimDisplayIOSurfaceRenderable>)candidate ioSurface];
+            }
+        } @catch (NSException *e) {}
+    }
+    if (!surfaceObj) return CSBCandidateLuminanceUnknown;
+
+    IOSurfaceRef surface = (__bridge IOSurfaceRef)surfaceObj;
+    size_t width = IOSurfaceGetWidth(surface);
+    size_t height = IOSurfaceGetHeight(surface);
+    if (width == 0 || height == 0) return CSBCandidateLuminanceUnknown;
+
+    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) {
+        return CSBCandidateLuminanceUnknown;
+    }
+    uint8_t *base = IOSurfaceGetBaseAddress(surface);
+    size_t bytesPerRow = IOSurfaceGetBytesPerRow(surface);
+    CSBCandidateLuminance result = CSBCandidateLuminanceBlack;
+    if (!base || bytesPerRow < width * 4) {
+        result = CSBCandidateLuminanceUnknown;
+    } else {
+        // Treat any non-zero sampled colour channel as evidence of content.
+        // A coarse grid bounds the sampling work: stepping rather than
+        // scanning keeps this cheap on a 2007x2853 surface.
+        size_t stepX = MAX((size_t)1, width / 64);
+        size_t stepY = MAX((size_t)1, height / 64);
+        for (size_t y = 0; y < height && result == CSBCandidateLuminanceBlack; y += stepY) {
+            for (size_t x = 0; x < width; x += stepX) {
+                const uint8_t *pixel = base + y * bytesPerRow + x * 4;
+                if (pixel[0] || pixel[1] || pixel[2]) {
+                    result = CSBCandidateLuminanceLit;
+                    break;
+                }
+            }
+        }
+    }
+    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
+    return result;
+}
+
 @interface SimDisplayHandle ()
 @property (nonatomic, copy, readwrite) NSString *udid;
 @property (nonatomic, strong, nullable) SimDevice *device;
 @property (nonatomic, strong, nullable) NSUUID *callbackUUID;
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, strong, nullable) NSUUID *screenCallbackUUID;
+@property (nonatomic, assign, readwrite) unsigned int boundScreenID;
+@property (nonatomic, copy, readwrite, nullable) NSString *boundScreenUniqueId;
 
 // Atomic, unlike the rest of these. CoreSimulator's delivery queues read all
 // three while `stop` clears them from the owning thread, and a `nonatomic`
@@ -178,16 +277,18 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
 #pragma mark Picker (reverse-engineered truth, preserve)
 
 /// Multi-renderable picker. CoreSimulator exposes multiple proxies that
-/// conform to `SimDisplayIOSurfaceRenderable` per device, but only one
-/// is bound to a real display. Three cases the picker has to handle:
+/// conform to `SimDisplayIOSurfaceRenderable` per device. Four cases the
+/// picker has to handle:
 ///
 ///   - Conformance can be carried by either the port or its
 ///     `port.descriptor`; enumerate both.
 ///   - Conformance can be claimed via the protocol *or* by responding to
 ///     either callback selector shape; check both.
-///   - The "real" renderable is the one whose `displaySize` is non-zero;
-///     prefer it. If none has a non-zero size (shouldn't happen on a
-///     booted device, but defensive), fall back to the first conformer.
+///   - Prefer candidates with non-zero `displaySize`. If none has a size
+///     (shouldn't happen on a booted device, but defensive), fall back to
+///     the first conformer.
+///   - When several have a size, sample their content to choose a panel;
+///     otherwise fall back to enumeration order.
 - (nullable id<SimDisplayIOSurfaceRenderable>)_findRenderableWithError:(NSError **)error {
     SimDevice *device = self.device;
     id ioObj = device.io;
@@ -249,7 +350,7 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
     // Prefer a renderable with non-zero displaySize, which is the one
     // actually bound to a screen. Fall back to the first conformer if
     // none has a size yet (early boot transient).
-    id<SimDisplayIOSurfaceRenderable> chosen = nil;
+    NSMutableArray<id<SimDisplayIOSurfaceRenderable>> *sized = [NSMutableArray array];
     for (id<SimDisplayIOSurfaceRenderable> candidate in candidates) {
         CGSize size = CGSizeZero;
         @try {
@@ -259,11 +360,70 @@ static CSBDisplayOrientation CSBOrientationFromScreen(id<CSBSimScreen> screen) {
             }
         } @catch (NSException *e) {}
         if (size.width > 0 && size.height > 0) {
-            chosen = candidate;
-            break;
+            [sized addObject:candidate];
         }
     }
-    return chosen ?: candidates.firstObject;
+
+    // At most one sized candidate: choose it, or fall back to the first
+    // conformer. A foldable vends one per panel, both sized, and
+    // enumeration order does not say which is lit, so several sized
+    // candidates fall through to the content tiebreaker below.
+    if (sized.count <= 1) {
+        id<SimDisplayIOSurfaceRenderable> chosen = sized.firstObject ?: candidates.firstObject;
+        [self _recordBoundPanelFor:chosen];
+        return chosen;
+    }
+
+    // Attaching during boot can beat the guest drawing its first frame, and
+    // a no-content read then means "too early", not "this panel is dark".
+    // Selection is not revisited while the subscription runs, so a wrong
+    // answer here costs a blank pane until it is stopped and started again.
+    // Worth a bounded wait to avoid.
+    id<SimDisplayIOSurfaceRenderable> lit = nil;
+    for (NSUInteger attempt = 0; attempt < kCSBLitPanelAttempts && !lit; attempt++) {
+        if (attempt > 0) {
+            [NSThread sleepForTimeInterval:kCSBLitPanelRetryInterval];
+        }
+        for (id<SimDisplayIOSurfaceRenderable> candidate in sized) {
+            if (CSBCandidateLuminanceOf(candidate) == CSBCandidateLuminanceLit) {
+                lit = candidate;
+                break;
+            }
+        }
+    }
+    // No candidate reported sampled content in that window, so take the
+    // first sized candidate. Zero samples do not prove the whole surface is
+    // black; missing or unreadable surfaces also take this fallback.
+    //
+    // **This selection does not self-correct.** Callbacks are registered
+    // against the chosen renderable only, so a panel that lights up later
+    // goes unnoticed. Recovering needs a consumer that watches every
+    // candidate, which does not exist yet; until it does, a pane that lands
+    // here stays on this panel until the subscription is stopped and
+    // started again.
+    id<SimDisplayIOSurfaceRenderable> chosen = lit ?: sized.firstObject;
+    [self _recordBoundPanelFor:chosen];
+    return chosen;
+}
+
+/// Capture the identity of the panel the picker settled on, so a consumer
+/// can name it, re-resolve it, or notice it changed. Best-effort: a proxy
+/// that vends no `SimScreenProperties` leaves the fields at their
+/// "unknown" values rather than failing the bind.
+- (void)_recordBoundPanelFor:(nullable id)candidate {
+    id<CSBSimScreenProperties> props = CSBPropertiesForCandidate(candidate);
+    if (!props) {
+        self.boundScreenID = 0;
+        self.boundScreenUniqueId = nil;
+        return;
+    }
+    @try {
+        self.boundScreenID = props.screenID;
+        self.boundScreenUniqueId = props.uniqueId;
+    } @catch (NSException *e) {
+        self.boundScreenID = 0;
+        self.boundScreenUniqueId = nil;
+    }
 }
 
 #pragma mark Start / stop

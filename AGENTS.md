@@ -359,12 +359,27 @@ after changing `CoreSimulatorBridge` or other private-API code: it is
 missing unnoticed. The shared RPC harness lives in the `DaemonTestSupport`
 library target (used by both `DaemonTests` and `CoreSimulatorLiveTests`).
 
-By default the track boots an **iPhone**; `DEVICETERM_LIVE_DEVICE_FAMILY=watch
-make test-live` boots a **watch** instead. This is device *selection*, not
-run-gating: the track always runs. Tests that are device-family-specific
-(the watchOS Digital Crown) are `.enabled(if:)`-gated on the booted
-device's family, so they run on the matching track and skip (not fail) on
-the other; the script prints which track it's on and how to flip.
+By default the track prefers an **iPhone**, then an **iPad**, then another
+available simulator, excluding devices whose listed name contains `Duo`;
+`DEVICETERM_LIVE_DEVICE_FAMILY=watch make test-live` boots a **watch**
+instead. This is device *selection*, not run-gating: the track always runs.
+Tests that are device-family-specific (the watchOS Digital Crown) are
+`.enabled(if:)`-gated on the booted device's family, so they run on the
+matching track and skip (not fail) on the other; the script prints which
+track it's on and how to flip.
+
+The default pick **excludes foldables deliberately**. `iPhone` matches
+`iPhone Duo`, and the picker takes the last match, so install order alone
+decided whether the default run measured a one-panel or two-panel device.
+`DEVICETERM_LIVE_DEVICE_UDID=<udid> make test-live` pins the track to one
+device, which is how the Duo's `.enabled(if:)`-gated two-panel tests run
+under the clean-slate boot and the sim lock.
+
+A Duo run is **flakier than a one-panel phone**: the AX-verified swipe test
+has failed on it and passed on it from the same clean-slate boot, and fails
+reliably against a warm Duo that has been folded back and forth. It passes on
+a one-panel phone. The cause is not established — treat a foldable failure
+there as unproven until someone measures it, not as a known defect.
 
 `make test-device-live` requires a connected, unlocked, trusted iPhone or iPad
 with a working CoreDevice tunnel. It fails when no device is available and

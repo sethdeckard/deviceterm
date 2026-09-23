@@ -51,19 +51,37 @@ available=$(xcrun simctl list devices available)
 # exit 1, which would abort the (unguarded) first assignment before the
 # fallbacks run. Treat "no match" as an empty result, not a failure.
 pick_device() { printf '%s\n' "${available}" | grep -i "$1" | grep -ioE "${uuid_re}" | tail -1 || true; }
+# Exclude Duo devices from automatic selection so the default track
+# exercises a single-panel device. 'iPhone' matches 'iPhone Duo', and
+# `tail -1` would otherwise pick one based on install order. Set
+# DEVICETERM_LIVE_DEVICE_UDID to select a Duo explicitly.
+pick_non_foldable() {
+    printf '%s\n' "${available}" | grep -i "$1" | grep -iv 'Duo' \
+        | grep -ioE "${uuid_re}" | tail -1 || true
+}
+# DEVICETERM_LIVE_DEVICE_UDID overrides family selection while retaining the
+# simulator lock and clean-slate boot.
+#
 # DEVICETERM_LIVE_DEVICE_FAMILY=watch flips the preference to a watchOS sim
 # (for the Digital Crown / watch-pane work); default is unchanged. Watch
 # first-boot is slow — raise DEVICETERM_LIVE_BOOT_TIMEOUT if it times out.
-if [ "${DEVICETERM_LIVE_DEVICE_FAMILY:-}" = "watch" ]; then
+if [ -n "${DEVICETERM_LIVE_DEVICE_UDID:-}" ]; then
+    udid="${DEVICETERM_LIVE_DEVICE_UDID}"
+    if ! printf '%s\n' "${available}" | grep -qi "${udid}"; then
+        echo "test-live: DEVICETERM_LIVE_DEVICE_UDID=${udid} is not an available simulator" >&2
+        exit 1
+    fi
+elif [ "${DEVICETERM_LIVE_DEVICE_FAMILY:-}" = "watch" ]; then
     udid=$(pick_device 'Apple Watch')
     if [ -z "${udid}" ]; then
         echo "test-live: DEVICETERM_LIVE_DEVICE_FAMILY=watch, but no watch sim is available" >&2
         exit 1
     fi
 else
-    udid=$(pick_device 'iPhone')
-    [ -n "${udid}" ] || udid=$(pick_device 'iPad')
-    [ -n "${udid}" ] || udid=$(printf '%s\n' "${available}" | grep -ioE "${uuid_re}" | tail -1 || true)
+    udid=$(pick_non_foldable 'iPhone')
+    [ -n "${udid}" ] || udid=$(pick_non_foldable 'iPad')
+    [ -n "${udid}" ] || udid=$(printf '%s\n' "${available}" | grep -iv 'Duo' \
+        | grep -ioE "${uuid_re}" | tail -1 || true)
 fi
 if [ -z "${udid}" ]; then
     echo "test-live: no available simulator to boot — install a runtime first" >&2
@@ -73,11 +91,16 @@ fi
 # Tell the runner which family-gated tests will run vs. skip, and how to
 # flip to the other track — otherwise the watchOS Digital Crown tests skip
 # silently on the default run and nobody knows they exist.
-if [ "${DEVICETERM_LIVE_DEVICE_FAMILY:-}" = "watch" ]; then
+if [ -n "${DEVICETERM_LIVE_DEVICE_UDID:-}" ]; then
+    echo "test-live: pinned to ${udid} — family-gated tests run or skip per that device."
+elif [ "${DEVICETERM_LIVE_DEVICE_FAMILY:-}" = "watch" ]; then
     echo "test-live: watch track — running the watchOS Digital Crown tests."
 else
     echo "test-live: default track — watchOS Digital Crown tests will skip;" \
          "run 'DEVICETERM_LIVE_DEVICE_FAMILY=watch make test-live' to run them."
+    echo "test-live: foldables are excluded from the default pick;" \
+         "run 'DEVICETERM_LIVE_DEVICE_UDID=<duo-udid> make test-live'" \
+         "for the two-panel tests."
 fi
 
 cleanup() {

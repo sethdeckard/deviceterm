@@ -30,6 +30,17 @@ func handleForKnownUDIDPreservesUDID() throws {
     #expect(handle.udid == first.udid)
 }
 
+@Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))
+func handleReportsNoBoundPanelBeforeStart() throws {
+    // Panel identity stays at its unknown values, 0 and nil, until `start`
+    // resolves a renderable.
+    let devices = try SimDeviceHandle.allDevices()
+    guard let first = devices.first else { return }
+    let handle = try SimDisplayHandle.handle(forUDID: first.udid)
+    #expect(handle.boundScreenID == 0)
+    #expect(handle.boundScreenUniqueId == nil)
+}
+
 // MARK: - Degraded host
 
 @Test(.disabled(if: coreSimulatorAvailable, "only meaningful on hosts where the probe doesn't pass"))

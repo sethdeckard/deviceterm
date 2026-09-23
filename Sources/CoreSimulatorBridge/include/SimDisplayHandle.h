@@ -14,13 +14,25 @@
 //
 // On the multi-renderable picker:
 // CoreSimulator exposes multiple proxies that conform to
-// `SimDisplayIOSurfaceRenderable` on a single device, but only one is
-// actually bound to a real display. The picker enumerates every
-// candidate (including each port's `descriptor`) and prefers the one
-// with non-zero `displaySize`. There is no documented way to ask
-// CoreSimulator which proxy is live; this was found empirically, at
-// the cost of a multi-day debugging session. Rewriting it from first
-// principles risks repeating that.
+// `SimDisplayIOSurfaceRenderable` on a single device, and there is no
+// documented way to ask which is live. Enumerate both ports and
+// descriptors, checking protocol conformance and callback selectors;
+// proxy implementations expose these differently. Keep the candidates
+// with non-zero `displaySize`.
+//
+// A foldable (iPhone Duo) vends one display descriptor per panel, both
+// sized, and powers one at a time. `displayClass`, `powerState` and
+// `uiOrientation` read the same on both, so they cannot say which is lit;
+// `screenID` and `uniqueId` identify a panel but not its state. Sampled
+// content is the discriminator the picker uses when more than one
+// candidate is sized, and it records which panel it selected.
+//
+// That tie-break is a heuristic, and the selection it produces stays fixed
+// until the subscription is stopped and started again. Folding alone does
+// not trigger reselection: callbacks are registered against the chosen
+// renderable only, so a panel that lights up later goes unnoticed.
+// Following a fold needs a consumer that watches every candidate and
+// rebinds; until that exists, a pane on the wrong panel stays there.
 
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
@@ -136,6 +148,19 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// proxy, in pixels. Returns `CGSizeZero` if the proxy isn't bound to a
 /// display yet (treat that as "ask again after the first callback").
 @property (nonatomic, readonly) CGSize displaySize;
+
+/// Identity of the selected panel, captured when the renderable is
+/// resolved. On a single-display device this names its only screen; on a
+/// foldable it says which panel is being mirrored, so a consumer can report
+/// or re-resolve it. These properties do not report fold events or changes
+/// to the active panel: they are read once, at selection.
+///
+/// `boundScreenID` is the small integer `simctl io --display` accepts and is
+/// `0` when the proxy vends no `SimScreenProperties`. `boundScreenUniqueId`
+/// is stable for a panel across folds, and nil in the same case. Both are
+/// best-effort: a proxy without properties still binds and streams.
+@property (nonatomic, readonly) unsigned int boundScreenID;
+@property (nonatomic, readonly, nullable) NSString *boundScreenUniqueId;
 
 /// Begin observing the display's presented orientation. Requires a prior
 /// successful `start(callback:)`: both ride the same display proxy, which
