@@ -339,6 +339,82 @@ enum CloseDecisions {
         return decision
     }
 
+    /// Confirm closing a tab that runs a configured automation program.
+    ///
+    /// Deliberately not suppressible. The multi-pane confirm offers "don't
+    /// ask again" because the thing it guards is losing a few panes; this
+    /// guards stopping a long-running program the user configured to be
+    /// there, and a stored answer from an unrelated crowded tab is not
+    /// consent to that.
+    static func programTabClose(
+        names: [String],
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
+    ) async -> Bool {
+        await askProgramConfirmation(
+            messageText: "Close this tab?",
+            names: names,
+            window: window,
+            whileTargetLives: isAlive
+        )
+    }
+
+    /// Bulk variant: one confirmation for the whole batch, so Cancel aborts
+    /// every close, matching `bulkMultiPaneTabClose`.
+    static func bulkProgramTabClose(
+        names: [String],
+        tabCount: Int,
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
+    ) async -> Bool {
+        await askProgramConfirmation(
+            messageText: "Close \(tabCount) \(tabCount == 1 ? "tab" : "tabs")?",
+            names: names,
+            window: window,
+            whileTargetLives: isAlive
+        )
+    }
+
+    /// Confirm stopping supervised programs when their window closes.
+    static func programWindowClose(
+        names: [String],
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness? = nil
+    ) async -> Bool {
+        await askProgramConfirmation(
+            messageText: "Close this window?",
+            names: names,
+            window: window,
+            whileTargetLives: isAlive
+        )
+    }
+
+    /// Name what stops, and say it does not come back on its own.
+    ///
+    /// Supervision is what stops, not necessarily a running process: an
+    /// entry waiting out a backoff has nothing running and still stops
+    /// coming back.
+    private static func askProgramConfirmation(
+        messageText: String,
+        names: [String],
+        window: NSWindow?,
+        whileTargetLives isAlive: CloseTargetLiveness?
+    ) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = messageText
+        alert.informativeText =
+            "Closing stops supervision for \(ProgramNamePhrase.list(names)) "
+            + "until you relaunch DeviceTerm."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close")
+        alert.addButton(withTitle: "Cancel")
+        return await runAlert(
+            alert,
+            in: window,
+            whileTargetLives: isAlive
+        ) == .alertFirstButtonReturn
+    }
+
     /// The multi-pane confirm shared by the single-tab, bulk-tab, and
     /// window closes. Suppression short-circuits to proceed; Cancel
     /// records nothing, matching `askBootedSimDisposition`.

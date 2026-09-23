@@ -15,6 +15,14 @@ import DaemonProtocol
 /// dispatches with that stored mode, so "don't ask about sims" keeps
 /// meaning what the user picked.
 ///
+/// A configured automation program adds a third question, ordered between
+/// them. It outranks the multi-pane confirm because that one is
+/// suppressible and this one must not be. It does NOT outrank the sim
+/// prompt: that prompt has a Cancel too, so it already asks the question,
+/// and stacking a second sheet on one gesture is what this type exists to
+/// prevent. The cost is that the sim prompt does not name the program,
+/// which is the trade the multi-pane confirm already makes.
+///
 /// Pure so the arm selection is unit-testable; the multi-pane confirm's
 /// own suppression lookup stays in `CloseDecisions`, mirroring how
 /// `askBootedSimDisposition` short-circuits internally.
@@ -25,7 +33,8 @@ enum TabCloseGateDecision {
     static func gate(
         simsAffected: Bool,
         pinnedSimDecision: TabCloseDecision?,
-        multiPane: Bool
+        multiPane: Bool,
+        programsAffected: Bool = false
     ) -> TabCloseGate {
         if simsAffected, pinnedSimDecision == nil {
             return .simDisposition
@@ -35,6 +44,9 @@ enum TabCloseGateDecision {
         // reachable behavior.
         let mode: PaneCloseMode =
             simsAffected && pinnedSimDecision == .shutdown ? .shutdown : .detach
+        if programsAffected {
+            return .programConfirm(mode: mode)
+        }
         return multiPane ? .multiPaneConfirm(mode: mode) : .close(mode: mode)
     }
 }

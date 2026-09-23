@@ -604,9 +604,20 @@ authority, because provenance follows the live parent chain and keeps
 authorizing a detached descendant while that chain still reaches the bound
 terminal.
 
-Closing the tab stops supervision for that program, and so does closing its
-window, running `deviceterm tab close`, or typing `exit` in the tab. Nothing
-reopens a tab you closed; relaunch DeviceTerm to start the program again.
+Closing a tab through the GUI asks for confirmation while its program is
+still supervised, naming what stops. Confirming stops supervision, and so
+does closing its window. `deviceterm tab close` stops supervision without
+asking, and so does typing `exit` in the tab, because that is the program's
+own shell ending rather than a close gesture. Nothing reopens a tab you
+closed; relaunch DeviceTerm to start the program again.
+
+That confirmation cannot be turned off. The multi-pane close confirmation
+has a "don't ask again", and a stored answer from some crowded tab is not
+agreement to stop a daemon you configured. One prompt still covers one
+gesture though: when closing affects booted Simulators DeviceTerm owns and
+no stored Simulator choice applies, the Simulator prompt replaces the
+program confirmation, and its Cancel is the confirmation, so it does not
+name the program.
 
 A restart is only sent to a terminal whose foreground process is its own
 shell, so an editor you opened during a backoff is left alone. DeviceTerm

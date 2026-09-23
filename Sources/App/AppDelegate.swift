@@ -1230,11 +1230,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     config: config
                 )
                 : nil
+            // Every program the window holds, named in one prompt.
+            let programs = self.workspace.window(id: windowID)?.tabs.tabs
+                .flatMap { self.automationPrograms.supervisedNames(inTab: $0.id) } ?? []
             let mode: PaneCloseMode
             switch TabCloseGateDecision.gate(
                 simsAffected: affected,
                 pinnedSimDecision: pinned,
-                multiPane: multiPaneTabCount > 0
+                multiPane: multiPaneTabCount > 0,
+                programsAffected: !programs.isEmpty
             ) {
             case .simDisposition:
                 let decision = await CloseDecisions.windowClose(
@@ -1256,6 +1260,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 case .cancel:
                     return
                 }
+
+            case let .programConfirm(gateMode):
+                guard await CloseDecisions.programWindowClose(
+                    names: programs,
+                    window: sender,
+                    whileTargetLives: { [weak self] in
+                        self?.workspace.window(id: windowID) != nil
+                    }
+                ) else { return }
+                mode = gateMode
 
             case let .multiPaneConfirm(gateMode):
                 guard await CloseDecisions.multiPaneWindowClose(
@@ -1781,6 +1795,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 router: router
             )
             tabController.tabTransfer = self
+            tabController.hostsAutomationProgram = { [weak self] tabID in
+                self?.automationPrograms.supervisedNames(inTab: tabID) ?? []
+            }
             let windowCtl = WindowController(content: tabController)
             windowCtl.window?.delegate = self
             windowControllerByID[windowState.id] = windowCtl
@@ -2054,6 +2071,9 @@ extension AppDelegate: TabTransferCoordinating {
             adopting: [(tab, tabContent)]
         )
         strip.tabTransfer = self
+        strip.hostsAutomationProgram = { [weak self] tabID in
+            self?.automationPrograms.supervisedNames(inTab: tabID) ?? []
+        }
         let windowCtl = WindowController(content: strip)
         windowCtl.window?.delegate = self
         windowCtl.position(topLeftNear: screenPoint)

@@ -133,6 +133,24 @@ final class AutomationProgramCoordinator {
         beginSupervising()
     }
 
+    /// Names of the programs this tab runs that supervision is still
+    /// keeping alive, in file order.
+    ///
+    /// Empty for a program already stopped or given up on: closing that tab
+    /// takes nothing with it, so there is nothing to confirm.
+    func supervisedNames(inTab tab: TabID) -> [String] {
+        entries.compactMap { entry in
+            guard let runtime = runtimes[entry.name], runtime.tabId == tab else { return nil }
+            switch runtime.state {
+            case .starting, .running, .restarting:
+                return entry.name
+
+            case .stopped, .failed:
+                return nil
+            }
+        }
+    }
+
     /// Stop opening tabs and stop supervising.
     ///
     /// Both halves matter at quit: cancelling the tick loop alone would let a

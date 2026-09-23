@@ -431,6 +431,52 @@ func stopDuringLaunchOpensNoFurtherTabs() async {
     #expect(harness.sent.isEmpty)
 }
 
+// MARK: - What the close prompt asks about
+
+/// The close prompt only appears for a program that closing would actually
+/// stop, so this is what decides whether it appears at all.
+@Test("a live program's tab reports its name")
+@MainActor
+func reportsNamesForALiveProgram() async {
+    let harness = Harness(ticks: 4)
+    harness.staysRunning = true
+    harness.entries = [entry("clock")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await settle()
+    let tab = try? #require(coordinator.runtimesForTesting["clock"]?.tabId)
+    #expect(coordinator.supervisedNames(inTab: tab ?? TabID(value: 0)) == ["clock"])
+}
+
+/// Closing a tab whose program already stopped takes nothing with it, so
+/// there is nothing to confirm.
+@Test("a stopped program's tab reports nothing")
+@MainActor
+func reportsNothingForAStoppedProgram() async {
+    let harness = Harness(ticks: 8)
+    harness.staysRunning = true
+    harness.entries = [entry("clock")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    let tab = coordinator.runtimesForTesting["clock"]?.tabId
+    harness.tabExists = false
+    await settle()
+    #expect(coordinator.runtimesForTesting["clock"]?.state == .stopped)
+    #expect(coordinator.supervisedNames(inTab: tab ?? TabID(value: 0)).isEmpty)
+}
+
+@Test("an unrelated tab reports nothing")
+@MainActor
+func reportsNothingForAnUnrelatedTab() async {
+    let harness = Harness(ticks: 4)
+    harness.staysRunning = true
+    harness.entries = [entry("clock")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await settle()
+    #expect(coordinator.supervisedNames(inTab: TabID(value: 999)).isEmpty)
+}
+
 @Test("stop ends supervision")
 @MainActor
 func stopEndsSupervision() async {

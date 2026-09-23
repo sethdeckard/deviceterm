@@ -29,6 +29,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     private let paneResurrect: PaneResurrect
     private let router: Router
 
+    /// Names of the configured automation programs a tab runs that
+    /// supervision is still keeping alive. Injected because supervision is
+    /// the app's, not the strip's, and the strip only needs the names.
+    var hostsAutomationProgram: (@MainActor (TabID) -> [String])?
     private var tabContentByID: [TabID: TabContentViewController] = [:]
     /// Lightweight content for a tab whose initial daemon session failed to
     /// mint. It keeps the committed tab visible and closable without ever
@@ -807,10 +811,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 windowID: capturedWindowID,
                 hasOtherTabsInWindow: self.tabListVM.tabs.count > 1
             )
+            let programs = self.hostsAutomationProgram?(tabID) ?? []
             switch TabCloseGateDecision.gate(
                 simsAffected: affected,
                 pinnedSimDecision: pinned,
-                multiPane: paneCount > 1
+                multiPane: paneCount > 1,
+                programsAffected: !programs.isEmpty
             ) {
             case .simDisposition:
                 // `tabClose` re-runs the lookup that just returned nil;
@@ -839,6 +845,21 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
                 case .cancel:
                     return
+                }
+
+            case let .programConfirm(mode):
+                if await CloseDecisions.programTabClose(
+                    names: programs,
+                    window: self.view.window,
+                    whileTargetLives: { [weak self] in
+                        self?.tabListVM.tab(id: tabID) != nil
+                    }
+                ) {
+                    // The sheet frees the main actor, so re-read the tab
+                    // before acting on an answer about it, exactly as the
+                    // other prompting arms do.
+                    guard self.tabListVM.tab(id: tabID) != nil else { return }
+                    self.router.dispatch(.closeTab(self.windowID, tabID, mode: mode))
                 }
 
             case let .multiPaneConfirm(mode):
@@ -911,11 +932,15 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 windowID: capturedWindowID,
                 hasOtherTabsInWindow: true
             )
+            // Every program across the batch, so one prompt names all of
+            // them rather than one per tab.
+            let programs = targets.flatMap { self.hostsAutomationProgram?($0.id) ?? [] }
             let mode: PaneCloseMode
             switch TabCloseGateDecision.gate(
                 simsAffected: affected,
                 pinnedSimDecision: pinned,
-                multiPane: multiPaneTabCount > 0
+                multiPane: multiPaneTabCount > 0,
+                programsAffected: !programs.isEmpty
             ) {
             case .simDisposition:
                 let decision = await CloseDecisions.bulkTabClose(
@@ -938,6 +963,17 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 case .cancel:
                     return
                 }
+
+            case let .programConfirm(gateMode):
+                guard await CloseDecisions.bulkProgramTabClose(
+                    names: programs,
+                    tabCount: sessionIDs.count,
+                    window: self.view.window,
+                    whileTargetLives: { [weak self] in
+                        self?.anyTabLives(of: ids) ?? false
+                    }
+                ) else { return }
+                mode = gateMode
 
             case let .multiPaneConfirm(gateMode):
                 guard await CloseDecisions.bulkMultiPaneTabClose(

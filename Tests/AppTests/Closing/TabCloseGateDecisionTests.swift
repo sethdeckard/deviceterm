@@ -47,3 +47,47 @@ func gatesTabClose(
         ) == expected
     )
 }
+
+// A configured automation program adds a third question. It outranks the
+// multi-pane confirm, which is suppressible, and yields to the sim prompt,
+// whose Cancel already asks the question.
+
+@Test("tab-close gate arm selection with a program at stake", arguments: [
+    // Nothing else at stake: the program confirm replaces a plain close.
+    (false, nil, false, TabCloseGate.programConfirm(mode: .detach)),
+    // It outranks the multi-pane confirm, because that one can be
+    // suppressed and stopping a configured program must not be.
+    (false, nil, true, TabCloseGate.programConfirm(mode: .detach)),
+    // The sim prompt still wins: one gesture, one sheet.
+    (true, nil, false, TabCloseGate.simDisposition),
+    (true, nil, true, TabCloseGate.simDisposition),
+    // A stored sim answer rides through as the program confirm's mode,
+    // exactly as it does for the multi-pane confirm.
+    (true, TabCloseDecision.shutdown, false, TabCloseGate.programConfirm(mode: .shutdown)),
+    (true, TabCloseDecision.detach, true, TabCloseGate.programConfirm(mode: .detach))
+])
+func gatesTabCloseWithAProgram(
+    simsAffected: Bool,
+    pinned: TabCloseDecision?,
+    multiPane: Bool,
+    expected: TabCloseGate
+) {
+    #expect(
+        TabCloseGateDecision.gate(
+            simsAffected: simsAffected,
+            pinnedSimDecision: pinned,
+            multiPane: multiPane,
+            programsAffected: true
+        ) == expected
+    )
+}
+
+/// Omitting `programsAffected` selects by the Simulator and multi-pane
+/// rules alone.
+@Test("no program at stake leaves the gate unchanged")
+func gateIsUnchangedWithoutAProgram() {
+    #expect(
+        TabCloseGateDecision.gate(simsAffected: false, pinnedSimDecision: nil, multiPane: true)
+            == .multiPaneConfirm(mode: .detach)
+    )
+}
