@@ -142,7 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private lazy var intentDispatcher = IntentDispatcher(
         workspace: workspace,
         router: router,
-        actionDelegate: self
+        actionDelegate: self,
+        automationPrograms: automationPrograms
     )
     /// Drains the daemon's `app.commands` back-channel and dispatches
     /// each received intent. Started after the daemon connection is
@@ -239,6 +240,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             primaryTerminal: { [weak self] tabID in
                 self?.workspace.windowContaining(tab: tabID)?
                     .tabs.tab(id: tabID)?.primaryTerminal.id
+            },
+            publicRefs: { [weak self] tabID, terminalID in
+                guard let self,
+                    let window = self.workspace.windowContaining(tab: tabID),
+                    let tab = window.tabs.tab(id: tabID),
+                    let terminal = tab.terminals.first(where: { $0.id == terminalID })
+                else { return nil }
+                // A terminal pane's public id is its session id, matching the
+                // workspace projection the other read verbs answer with.
+                return (PublicIdentifier.string(tab.cohortId), terminal.sessionId)
             },
             locateTerminal: { [weak self] tabID, terminalID in
                 // By terminal, not by tab: a tab can outlive the pane its

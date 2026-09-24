@@ -47,7 +47,8 @@ struct PaneUDIDCaseTests {
         let dispatcher = IntentDispatcher(
             workspace: workspace,
             router: router,
-            actionDelegate: nil
+            actionDelegate: nil,
+            automationPrograms: FakeAutomationPrograms()
         )
         router.dispatch(.openWindow())
         await settle()

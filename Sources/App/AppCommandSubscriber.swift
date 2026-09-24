@@ -202,6 +202,9 @@ final class AppCommandSubscriber {
             case let .workspaceTabs(value):
                 payload = (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
 
+            case let .automationPrograms(value):
+                payload = (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
+
             case let .workspaceTab(value):
                 payload = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
 

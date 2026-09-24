@@ -28,15 +28,20 @@ final class IntentDispatcher {
     private let workspace: WorkspaceViewModel
     private let router: Router
     private weak var actionDelegate: IntentActionDelegate?
+    /// Supervision, as the two automation verbs see it. The narrowest role
+    /// they use, so the dispatcher's tests need no coordinator.
+    private let automationPrograms: any AutomationProgramReading
 
     init(
         workspace: WorkspaceViewModel,
         router: Router,
-        actionDelegate: IntentActionDelegate?
+        actionDelegate: IntentActionDelegate?,
+        automationPrograms: any AutomationProgramReading
     ) {
         self.workspace = workspace
         self.router = router
         self.actionDelegate = actionDelegate
+        self.automationPrograms = automationPrograms
     }
 
     /// Dispatch a single intent. `origin` is **required**: it decides
@@ -76,7 +81,9 @@ final class IntentDispatcher {
         origin: IntentOrigin
     ) async throws -> IntentResult {
         switch intent {
-        case .workspaceWindowList,
+        case .automationProgramStatus,
+            .automationProgramRestart,
+            .workspaceWindowList,
             .workspaceWindowShow,
             .workspaceWindowOpen,
             .workspaceWindowFocus,
@@ -382,6 +389,12 @@ final class IntentDispatcher {
                 closed: .init(resource: "window", window: closed),
                 mode: mode
             )))
+
+        case .automationProgramStatus:
+            return .data(.automationPrograms(automationPrograms.status()))
+
+        case let .automationProgramRestart(name):
+            return .data(.automationPrograms(try await automationPrograms.restart(name: name)))
 
         case let .workspaceTabList(window, all):
             return .data(.workspaceTabs(try projection.tabs(window: window, all: all)))

@@ -194,6 +194,12 @@ public enum CLICommand: Equatable, Sendable {
     /// source layer (default or file). Warns on unrecognized keys
     /// in the file.
     case dumpConfig
+    /// `deviceterm automation status`: every configured automation
+    /// program and what supervision has done with it.
+    case automationStatus
+    /// `deviceterm automation restart [--name NAME]`: re-run configured
+    /// programs, clearing any failure. Takes no command or path, by design.
+    case automationRestart(name: String?)
     /// `deviceterm completions install <zsh|bash|fish>`: generates
     /// the per-shell completion script and writes it to the
     /// conventional autoload path (`Completions.defaultInstallPath`).

@@ -2917,6 +2917,30 @@ transport failure or timeout reports `-32000`.
 
 ### Automation
 
+#### `automation.status`
+
+- Params: `{}`
+- Result: `[{name, state, pid, tabId, paneId, restarts, lastSeenRunning, lastError}]`
+- Scope: session
+
+Reports the configured automation programs the GUI supervises. Reads GUI-held
+state over the `app.commands` back-channel and names no tab, so it needs no
+automation grant.
+
+#### `automation.restart`
+
+- Params: `{name}`
+- Result: same shape as `automation.status`
+- Scope: session
+
+Re-runs one configured program or all of them, clearing any failure. Takes no
+command, path, or tab reference: the configuration file is the only place a
+program's command can be named, and keeping that true is what stops this
+method from becoming a way to run something arbitrary in a granted tab.
+
+Acts on the entry set the GUI loaded at launch. A `name` matching no entry is
+`intent.notFound`.
+
 #### `automation.grant`
 
 - Params: `{sessionIds, revision}`

@@ -39,6 +39,7 @@ struct DeviceTerm: ParsableCommand {
             WaitCommand.self,
             WithPaneCommand.self,
             SessionCommand.self,
+            AutomationCommand.self,
             TabCommand.self,
             PaneCommand.self,
             DeviceCommand.self,

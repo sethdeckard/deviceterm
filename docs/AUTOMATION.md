@@ -628,6 +628,33 @@ at all, which happens for a foreground process it cannot read across a user
 boundary such as one under `sudo`, it does nothing that pass: no restart, and
 no exit counted either.
 
+Two verbs read and drive this from any DeviceTerm session, granted or not.
+They name no tab and take no command, so they need no automation grant.
+
+```sh
+deviceterm automation status --json
+deviceterm automation restart --name build-bridge
+```
+
+`status` reports every configured program in file order, including ones that
+never started and ones DeviceTerm gave up on. Each carries `name`, `state`,
+`pid`, `tabId`, `paneId`, `restarts`, `lastSeenRunning` and `lastError`.
+
+There is no exit code. A configured command runs inside its terminal's
+shell, so DeviceTerm never reaps it and never receives its exit status. It
+observes what the terminal's foreground process is instead, which is why
+`lastSeenRunning` is reported in its place.
+
+`restart` re-runs one program or all of them and clears any failure. It
+reuses the original terminal pane when that still exists, and opens a fresh
+Automation tab when it does not, which is the only way back for an entry
+whose pane you closed. It acts on the entry set loaded at launch, so editing
+the configuration file needs a relaunch.
+
+Out of scope: command signature pinning, per-program grant scopes,
+enrollment dialogs, settings UI, and headless automation sessions with no
+pane.
+
 A tab whose grant never applies never runs its command. Starting a program
 that cannot do the thing it was configured to do would fail more confusingly
 than not starting it.

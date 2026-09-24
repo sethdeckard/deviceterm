@@ -565,6 +565,22 @@ func run(
         case .sessionShow:
             return try handleSessionShow(transport: transport, output: output)
 
+        case .automationStatus:
+            return try sendWorkspaceData(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.automationStatusRequest() },
+                humanRender: formatAutomationPrograms
+            )
+
+        case let .automationRestart(name):
+            return try sendWorkspaceData(
+                transport: transport,
+                output: output,
+                build: { try CLICommands.automationRestartRequest(name: name) },
+                humanRender: formatAutomationPrograms
+            )
+
         case let .paneList(tab, all):
             return try sendWorkspaceData(
                 transport: transport,

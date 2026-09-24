@@ -21,7 +21,8 @@ struct IntentAuthorityTests {
         let dispatcher = IntentDispatcher(
             workspace: workspace,
             router: router,
-            actionDelegate: delegate
+            actionDelegate: delegate,
+            automationPrograms: FakeAutomationPrograms()
         )
 
         let ownTabs = TabListViewModel()

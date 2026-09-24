@@ -28,6 +28,17 @@ enum CLIIntentTranslator {
             let params = try decoder.decode(AppCommandParams.CloseWindow.self, from: command.params)
             return .workspaceWindowClose(params.window, mode: params.mode)
 
+        case .automationStatus:
+            _ = try decoder.decode(AppCommandParams.ListAutomationPrograms.self, from: command.params)
+            return .automationProgramStatus
+
+        case .automationRestart:
+            let params = try decoder.decode(
+                AppCommandParams.RestartAutomationProgram.self,
+                from: command.params
+            )
+            return .automationProgramRestart(name: params.name)
+
         case .tabList:
             let params = try decoder.decode(AppCommandParams.ListTabs.self, from: command.params)
             return .workspaceTabList(window: params.window, all: params.all)

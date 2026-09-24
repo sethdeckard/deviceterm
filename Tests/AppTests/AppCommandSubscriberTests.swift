@@ -96,7 +96,8 @@ struct AppCommandSubscriberTests {
         return IntentDispatcher(
             workspace: workspace,
             router: router,
-            actionDelegate: nil
+            actionDelegate: nil,
+            automationPrograms: FakeAutomationPrograms()
         )
     }
 

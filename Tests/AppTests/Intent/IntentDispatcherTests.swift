@@ -20,7 +20,8 @@ struct IntentDispatcherTests {
         let dispatcher = IntentDispatcher(
             workspace: workspace,
             router: Router(workspace: workspace, daemon: fake),
-            actionDelegate: delegate
+            actionDelegate: delegate,
+            automationPrograms: FakeAutomationPrograms()
         )
         return Harness(
             dispatcher: dispatcher,

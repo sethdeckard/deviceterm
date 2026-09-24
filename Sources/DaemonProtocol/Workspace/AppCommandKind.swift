@@ -32,4 +32,7 @@ public enum AppCommandKind: String, Codable, Sendable, CaseIterable {
     /// Internal attach publication used by the shim and device attach path.
     /// It is not exposed as a `pane` CLI subcommand.
     case paneAttach = "pane.attach"
+
+    case automationStatus = "automation.status"
+    case automationRestart = "automation.restart"
 }

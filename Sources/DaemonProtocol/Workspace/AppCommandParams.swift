@@ -26,6 +26,19 @@ public enum AppCommandParams {
         public init() {}
     }
 
+    public struct ListAutomationPrograms: Codable, Sendable, Equatable {
+        public init() {}
+    }
+
+    public struct RestartAutomationProgram: Codable, Sendable, Equatable {
+        /// One entry by name, or nil for every configured program.
+        public let name: String?
+
+        public init(name: String?) {
+            self.name = name
+        }
+    }
+
     public struct FocusWindow: Codable, Sendable, Equatable {
         public let window: String?
 

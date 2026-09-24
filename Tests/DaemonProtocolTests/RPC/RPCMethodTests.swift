@@ -11,8 +11,8 @@ import Testing
 // see both modules.
 
 @Test
-func rpcMethodCaseCountIs74() {
-    #expect(RPCMethod.allCases.count == 74)
+func rpcMethodCaseCountIs76() {
+    #expect(RPCMethod.allCases.count == 76)
 }
 
 @Test
@@ -97,7 +97,9 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.paneSendInput, "pane.sendInput"),
     (RPCMethod.paneCaptureText, "pane.captureText"),
     (RPCMethod.paneAttach, "pane.attach"),
-    (RPCMethod.automationGrant, "automation.grant")
+    (RPCMethod.automationGrant, "automation.grant"),
+    (RPCMethod.automationStatus, "automation.status"),
+    (RPCMethod.automationRestart, "automation.restart")
     ]
     )
 func rpcMethodRawValue(method: RPCMethod, wire: String) {

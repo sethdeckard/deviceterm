@@ -465,6 +465,20 @@ public enum DaemonMethods {
                     automationGrant: automationGrantStore
                 )
             ),
+            RPCMethod.automationStatus.rawValue: .session(
+                AppCommandMethods.publishVerb(
+                    kind: .automationStatus,
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
+                )
+            ),
+            RPCMethod.automationRestart.rawValue: .session(
+                AppCommandMethods.publishVerb(
+                    kind: .automationRestart,
+                    coordinator: appCommandCoordinator,
+                    automationGrant: automationGrantStore
+                )
+            ),
             RPCMethod.tabList.rawValue: .session(
                 AppCommandMethods.publishVerb(
                     kind: .tabList,

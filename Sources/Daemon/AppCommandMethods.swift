@@ -195,12 +195,16 @@ public enum AppCommandMethods {
             .tabOpen, .tabFocus, .tabClose, .tabRename, .tabMove,
             .tabProtect, .tabUnprotect,
             .paneSplit, .paneFocus, .paneClose, .paneRename,
-            .paneSendInput, .paneAttach:
+            .paneSendInput, .paneAttach,
+            // Restart opens or retypes into a tab, so it waits on the same
+            // budget as the other surface mutations.
+            .automationRestart:
             AppCommandDeadline.workspaceGUIReplyTimeoutMs
 
         case .windowList, .windowShow,
             .tabList, .tabShow,
-            .paneList, .paneShow, .paneCaptureText:
+            .paneList, .paneShow, .paneCaptureText,
+            .automationStatus:
             AppCommandCoordinator.defaultTimeoutMs
         }
     }

@@ -340,6 +340,8 @@ their panes unless the caller owns that protected tab.
 | `pane list --json` | Array of every pane kind | Session | Current GUI projection in layout order | Stable-additive |
 | `pane show --json` | One terminal, Simulator, or device pane | Session | Current GUI projection | Stable-additive |
 | `session show --json` | Session report | Daemon-wide | Report returned for the calling connection | Stable-additive |
+| `automation status --json` | Array of automation program rows | Session | Current supervision state | Stable-additive |
+| `automation restart --json` | Array of automation program rows | Session | Current supervision state after processing the request; command delivery and startup may still be pending | Stable-additive |
 | `devices list --json` | Array of device roster rows | Session | Current owned-Simulator and connected-device snapshot | Stable-additive |
 | `doctor --json` | Doctor report | None required; session fields are conditional | Checks completed | Stable-additive except diagnostic prose |
 | `version --json` | Version report | Local, with optional daemon probe | Local report completed | Stable-additive |

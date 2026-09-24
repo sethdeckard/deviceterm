@@ -336,4 +336,11 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// grant, checked per request (never a persisted role) so a forged
     /// manifest role grants nothing. UDS can never reach this method.
     case automationGrant = "automation.grant"
+    /// Report every configured automation program. Read-only, and
+    /// `.session` rather than `.automationTab`: it names no tab and
+    /// mutates nothing, so it needs no grant.
+    case automationStatus = "automation.status"
+    /// Re-run configured automation programs, clearing any failure. Takes
+    /// a name at most; never a command, a path, or a tab reference.
+    case automationRestart = "automation.restart"
 }

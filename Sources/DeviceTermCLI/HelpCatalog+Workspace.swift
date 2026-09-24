@@ -187,6 +187,40 @@ extension HelpCatalog {
             """
         ),
         HelpTopic(
+            "automation",
+            .command(.workspace),
+            summary: "Inspect and restart configured automation programs",
+            detail: """
+              Programs listed in the automation-programs configuration file
+              open an Automation tab each at launch and are kept running.
+              Both verbs read that list; neither can name a program the file
+              does not, and neither takes a command, a path, or a tab.
+
+              automation status
+                  Report every configured program in file order, including
+                  ones that never started and ones supervision gave up on.
+                  Human output is one line per program led by its state;
+                  --json emits `{name, state, pid, tabId, paneId, restarts,
+                  lastSeenRunning, lastError}` objects.
+
+                  state is one of starting, running, restarting, stopped or
+                  failed. There is no exit code: a configured command runs
+                  inside its terminal's shell, so deviceterm never reaps it
+                  and never sees its exit status. lastSeenRunning reports
+                  the last foreground observation instead.
+
+              automation restart [--name NAME]
+                  Re-run every configured program, or one of them, clearing
+                  any failure first. It reuses the program's original
+                  terminal pane when that still exists, and opens a fresh
+                  Automation tab when it does not. Answers the same shape
+                  as status.
+
+                  The entry set is the one loaded at launch. Editing the
+                  configuration file has no effect until deviceterm restarts.
+            """
+        ),
+        HelpTopic(
             "session",
             .command(.workspace),
             summary: "Inspect the calling session",

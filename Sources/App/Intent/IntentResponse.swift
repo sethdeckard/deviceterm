@@ -16,4 +16,5 @@ enum IntentResponse: Sendable, Equatable {
     case workspacePane(WorkspacePane)
     case workspaceMutation(WorkspaceMutationReceipt)
     case workspaceCapture(WorkspaceCaptureResult)
+    case automationPrograms([AutomationProgramStatus])
 }

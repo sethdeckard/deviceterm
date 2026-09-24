@@ -2,13 +2,17 @@
 
 /// Where supervision has got to with one configured program.
 ///
+/// A shared wire enum rather than a GUI-only type, because
+/// `automation status` reports it and a raw string at the CLI boundary
+/// would be a second spelling of the same closed set.
+///
 /// `starting` and `running` are distinguished because the probe cannot tell
 /// "has not begun yet" from "has exited" on its own, and the gap between a
 /// tab opening and its program appearing is entirely normal: the command
 /// waits for the tab's grant, and the shell has its own startup to do.
 /// Counting that gap as an exit would spend the whole restart budget before
 /// the program ever ran.
-enum AutomationProgramState: Equatable, Sendable {
+public enum AutomationProgramState: String, Codable, Equatable, Sendable, CaseIterable {
     /// The tab is open and the program has not been seen running yet, either
     /// because it has not started or because it is between restarts.
     case starting

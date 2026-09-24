@@ -434,6 +434,14 @@ refs through their daemon-direct device roster.
 Report this session's id, role, and whether it holds a live automation grant.
 Needs no grant itself: an ungranted caller gets a report saying so rather than
 a refusal.
+.TP
+.B automation status
+List every configured automation program, its state, and when it was last seen
+running. Includes programs that never started and ones supervision gave up on.
+.TP
+.B automation restart [--name NAME]
+Re-run configured automation programs, clearing any failure. Acts on the entry
+set loaded at launch; editing the configuration file needs a relaunch.
 .SS Setup and health
 .TP
 .B doctor
@@ -528,6 +536,9 @@ Optional device-pane target consumed by pane-targeted commands. Set by
 User overrides. See
 .B deviceterm dump-config
 for recognized keys.
+.TP
+.I ~/.config/deviceterm/automation-programs
+Programs deviceterm starts in Automation tabs at launch. Absent by default.
 .TP
 .I ~/Library/Caches/deviceterm/sessions/<sessionId>/
 Per-session scratch directory: shim

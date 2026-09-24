@@ -60,7 +60,8 @@ struct IntentProtectionTests {
         let dispatcher = IntentDispatcher(
             workspace: workspace,
             router: Router(workspace: workspace, daemon: fake),
-            actionDelegate: nil
+            actionDelegate: nil,
+            automationPrograms: FakeAutomationPrograms()
         )
         return Harness(dispatcher: dispatcher, workspace: workspace, fake: fake)
     }

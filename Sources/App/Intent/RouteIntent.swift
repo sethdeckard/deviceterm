@@ -23,6 +23,11 @@ enum RouteIntent: Sendable, Equatable {
     case workspaceWindowClose(String?, mode: WorkspaceCloseMode)
 
     case workspaceTabList(window: String?, all: Bool)
+    /// Report every configured automation program. Reads GUI-held
+    /// supervision state; touches no tab and needs no grant.
+    case automationProgramStatus
+    /// Re-run one configured automation program, or all of them.
+    case automationProgramRestart(name: String?)
     case workspaceTabShow(String?)
     case workspaceTabOpen(window: String?, cwd: String?, command: [String]?)
     case workspaceTabFocus(String?)

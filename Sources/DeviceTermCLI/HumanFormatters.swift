@@ -155,3 +155,22 @@ func formatWorkspaceMutation(_ receipt: WorkspaceMutationReceipt) -> String {
     if let delay = receipt.typeDelayMs { fields.append("typeDelayMs=\(delay)") }
     return fields.joined(separator: " ")
 }
+
+/// One line per configured automation program, in file order.
+///
+/// `state` leads because it is the answer to why someone ran this. The
+/// trailing reason appears only when supervision has something to say, so
+/// a healthy program renders as one short line.
+func formatAutomationPrograms(_ programs: [AutomationProgramStatus]) -> String {
+    guard !programs.isEmpty else { return "no automation programs configured" }
+    return programs.map { program in
+        var fields = ["\(program.state.rawValue)", program.name]
+        if let pid = program.pid { fields.append("pid=\(pid)") }
+        if program.restarts > 0 { fields.append("restarts=\(program.restarts)") }
+        if let tab = program.tabId { fields.append("tab=\(tab)") }
+        if let seen = program.lastSeenRunning { fields.append("lastSeenRunning=\(seen)") }
+        if let error = program.lastError { fields.append("(\(error))") }
+        return fields.joined(separator: " ")
+    }
+    .joined(separator: "\n")
+}

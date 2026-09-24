@@ -112,6 +112,10 @@ private final class Harness {
             openAutomationTab: { [self] window, cwd, command in
                 opened.append(OpenedTab(window: window, cwd: cwd, command: command))
                 onOpen?()
+                // Opening a tab suspends in production, so suspend here too:
+                // without it nothing can interleave with the launch pass and
+                // the tests that need to cannot reproduce anything.
+                await Task.yield()
                 guard openSucceeds else { return nil }
                 nextTab += 1
                 return TabID(value: nextTab)
@@ -120,6 +124,9 @@ private final class Harness {
                 renamed.append(RenamedTab(window: window, tab: tab, name: name))
             },
             primaryTerminal: { _ in TerminalPaneID(value: 1) },
+            publicRefs: { [self] _, _ in
+                tabExists ? (tab: "T1", pane: "P1") : nil
+            },
             locateTerminal: { [self] _, _ in tabExists ? window : nil },
             // Production records the LAUNCH send only and never updates it,
             // so the harness must not either. Keeping it fixed is what lets
@@ -475,6 +482,268 @@ func reportsNothingForAnUnrelatedTab() async {
     await coordinator.start()
     await settle()
     #expect(coordinator.supervisedNames(inTab: TabID(value: 999)).isEmpty)
+}
+
+// MARK: - What the CLI verbs see
+
+@Test("status reports every configured program in file order")
+@MainActor
+func statusReportsEveryProgram() async {
+    let harness = Harness(ticks: 4)
+    harness.staysRunning = true
+    harness.entries = [entry("first"), entry("second")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await settle()
+    let status = coordinator.status()
+    #expect(status.map(\.name) == ["first", "second"])
+    #expect(status.allSatisfy { $0.state == .running })
+    #expect(status.first?.pid == programPid)
+    #expect(status.first?.tabId == "T1")
+}
+
+/// An entry that never opened a tab still appears. Someone running this is
+/// usually asking about exactly those.
+@Test("status reports a program that never started")
+@MainActor
+func statusReportsAProgramThatNeverStarted() async {
+    let harness = Harness(ticks: 2)
+    harness.openSucceeds = false
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    #expect(coordinator.status().map(\.name) == ["p"])
+    #expect(coordinator.status().first?.tabId == nil)
+}
+
+/// An idle terminal takes the command directly: the tab it already has,
+/// never a second one. A busy terminal is interrupted instead, which is
+/// covered separately.
+@Test("restart re-runs an idle program in the tab it already has")
+@MainActor
+func restartReusesTheLiveTab() async {
+    let harness = Harness(ticks: 4)
+    harness.commandSentAt = 1
+    harness.entries = [entry("p", command: "run-me")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    _ = try? await coordinator.restart(name: "p")
+    #expect(harness.sent == ["run-me\n"])
+    #expect(harness.opened.count == 1)
+}
+
+/// Restarting an entry still queued in the launch pass must not open a
+/// duplicate tab.
+@Test("restart during the launch pass opens no duplicate tab")
+@MainActor
+func restartDuringLaunchOpensNoDuplicate() async {
+    let harness = Harness(ticks: 4)
+    harness.entries = [entry("first"), entry("second")]
+    let coordinator = harness.coordinator()
+    // Fire a restart for the entry still queued, from inside the first open.
+    harness.onOpen = { [weak coordinator] in
+        Task { @MainActor in _ = try? await coordinator?.restart(name: "second") }
+    }
+    await coordinator.start()
+    await settle()
+    #expect(harness.opened.count == 2)
+    #expect(harness.renamed.map(\.name) == ["first", "second"])
+}
+
+/// `status` answers "when was this last alive". A program that ran for a
+/// while and then stopped starting still has an answer, so the reading it
+/// comes from must outlive the attempt that produced it.
+@Test("a program keeps when it was last alive across a restart")
+@MainActor
+func programKeepsItsLastAliveTimeAcrossARestart() async {
+    let harness = Harness(ticks: 4)
+    harness.commandSentAt = 1
+    harness.staysRunning = true
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await settle()
+    #expect(coordinator.status().first?.lastSeenRunning != nil)
+    // A restart clears the current attempt's reading. The historical one
+    // has to survive it, or a program that later cannot start reports that
+    // it was never alive.
+    harness.staysRunning = false
+    _ = try? await coordinator.restart(name: "p")
+    #expect(coordinator.runtimesForTesting["p"]?.lastSeenRunningAtNanos == 0)
+    #expect(coordinator.status().first?.lastSeenRunning != nil)
+}
+
+/// A terminal whose grant has not landed yet is idle for a reason: its
+/// first run is still owed to the grant path. Sending here would start the
+/// program without the authority it was configured to hold, and the tab
+/// would send it a second time when the grant arrived.
+@Test("restart before the first grant sends nothing")
+@MainActor
+func restartBeforeTheFirstGrantSendsNothing() async {
+    let harness = Harness(ticks: 2)
+    harness.entries = [entry("p", command: "run-me")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    // commandSentAt stays nil: the tab has not typed its first run.
+    _ = try? await coordinator.restart(name: "p")
+    #expect(harness.sent.isEmpty)
+    #expect(coordinator.runtimesForTesting["p"]?.pendingRestart == false)
+}
+
+/// A request answered directly must not also be left owed, or the next
+/// idle observation sends a second command, even for `restart false`.
+@Test("a fulfilled restart leaves nothing owed")
+@MainActor
+func aFulfilledRestartLeavesNothingOwed() async {
+    let harness = Harness(ticks: 8)
+    harness.commandSentAt = 1
+    harness.entries = [entry("p", command: "run-me", restart: false)]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    // First restart while busy: owed. Second while idle: answered directly.
+    harness.staysRunning = true
+    _ = try? await coordinator.restart(name: "p")
+    harness.staysRunning = false
+    _ = try? await coordinator.restart(name: "p")
+    await settle()
+    #expect(coordinator.runtimesForTesting["p"]?.pendingRestart == false)
+    // The interrupt and one command, with no second command owed behind it.
+    #expect(harness.sent == ["\u{03}", "run-me\n"])
+}
+
+/// The manual path has the same duty as the backoff: never type into a
+/// terminal that is busy. The command would land in the running program's
+/// stdin, or in an editor someone opened in that pane.
+@Test("restart interrupts a running program instead of typing at it")
+@MainActor
+func restartInterruptsARunningProgram() async {
+    let harness = Harness(ticks: 2)
+    harness.commandSentAt = 1
+    harness.staysRunning = true
+    harness.entries = [entry("p", command: "run-me")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    _ = try? await coordinator.restart(name: "p")
+    #expect(harness.sent == ["\u{03}"])
+    #expect(coordinator.runtimesForTesting["p"]?.pendingRestart == true)
+}
+
+/// The owed restart survives until the terminal is idle, and is honoured
+/// even for an entry that opted out of automatic restarts: asking by hand
+/// is a different instruction.
+@Test("an owed restart runs once the terminal goes idle")
+@MainActor
+func owedRestartRunsWhenIdle() async {
+    let harness = Harness(ticks: 6)
+    harness.commandSentAt = 1
+    harness.staysRunning = true
+    harness.entries = [entry("p", command: "run-me", restart: false)]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    _ = try? await coordinator.restart(name: "p")
+    harness.staysRunning = false
+    await settle()
+    #expect(harness.sent == ["\u{03}", "run-me\n"])
+    #expect(coordinator.runtimesForTesting["p"]?.pendingRestart == false)
+}
+
+/// An unreadable terminal is not typed into either, and the request is
+/// held rather than dropped.
+@Test("restart holds the request when the terminal is unreadable")
+@MainActor
+func restartHoldsWhenUnreadable() async {
+    let harness = Harness(ticks: 2)
+    harness.commandSentAt = 1
+    harness.staysRunning = true
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    harness.terminalReadable = false
+    _ = try? await coordinator.restart(name: "p")
+    #expect(harness.sent.isEmpty)
+    #expect(coordinator.runtimesForTesting["p"]?.pendingRestart == true)
+}
+
+/// Once every entry is stopped or failed the loop ends. Its handle has to
+/// go with it, or a later restart re-sends the command with nothing
+/// watching and the entry sits at `starting` forever.
+@Test("restart supervises again after the loop has ended")
+@MainActor
+func restartResumesAnEndedLoop() async {
+    let harness = Harness(ticks: 5_000)
+    harness.exitsImmediately = true
+    harness.commandSentAt = 1
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await settle()
+    #expect(coordinator.runtimesForTesting["p"]?.state == .failed)
+    let sentBeforeRestart = harness.sent.count
+    _ = try? await coordinator.restart(name: "p")
+    await settle()
+    // Supervision ran again: the program kept exiting, so more commands went
+    // out after the restart rather than the entry sitting at `starting`.
+    #expect(harness.sent.count > sentBeforeRestart + 1)
+}
+
+/// The one path back for an entry whose terminal pane is gone, which
+/// supervision itself deliberately never reopens.
+@Test("restart opens a fresh tab when the old one is gone")
+@MainActor
+func restartReopensAClosedTab() async {
+    let harness = Harness(ticks: 4)
+    harness.staysRunning = true
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    // The pane stays gone: a closed terminal does not come back, which is
+    // exactly why restart has to open a new tab rather than type into it.
+    harness.tabExists = false
+    await settle()
+    _ = try? await coordinator.restart(name: "p")
+    #expect(harness.opened.count == 2)
+    #expect(coordinator.runtimesForTesting["p"]?.state == .starting)
+}
+
+@Test("restart clears a give-up")
+@MainActor
+func restartClearsAFailure() async {
+    let harness = Harness(ticks: 5_000)
+    harness.exitsImmediately = true
+    harness.commandSentAt = 1
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await settle()
+    #expect(coordinator.runtimesForTesting["p"]?.state == .failed)
+    _ = try? await coordinator.restart(name: "p")
+    #expect(coordinator.runtimesForTesting["p"]?.state != .failed)
+    #expect(coordinator.status().first?.lastError == nil)
+}
+
+/// The one thing this verb can be told that it cannot act on.
+@Test("restart refuses a name no entry has")
+@MainActor
+func restartRefusesAnUnknownName() async {
+    let harness = Harness(ticks: 2)
+    harness.entries = [entry("p")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    await #expect(throws: (any Error).self) {
+        _ = try await coordinator.restart(name: "nope")
+    }
+}
+
+@Test("restart with no name re-runs every program")
+@MainActor
+func restartWithoutANameCoversEverything() async {
+    let harness = Harness(ticks: 4)
+    harness.commandSentAt = 1
+    harness.entries = [entry("first"), entry("second")]
+    let coordinator = harness.coordinator()
+    await coordinator.start()
+    _ = try? await coordinator.restart(name: nil)
+    #expect(harness.sent.count == 2)
 }
 
 @Test("stop ends supervision")
