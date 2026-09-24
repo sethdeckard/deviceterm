@@ -637,13 +637,25 @@ deviceterm automation restart --name build-bridge
 ```
 
 `status` reports every configured program in file order, including ones that
-never started and ones DeviceTerm gave up on. Each carries `name`, `state`,
-`pid`, `tabId`, `paneId`, `restarts`, `lastSeenRunning` and `lastError`.
+never started and ones DeviceTerm gave up on. Each object carries `name`,
+`state` and `restarts`. The rest, `pid`, `tabId`, `paneId`, `lastSeenRunning`
+and `lastError`, are omitted when there is nothing to report: a program still
+starting has no `pid`, and one with nothing wrong has no `lastError`. Test for
+the key rather than comparing against `null`; see
+[optional fields](INTEGRATION.md#handle-objects-and-optional-fields-defensively).
 
 There is no exit code. A configured command runs inside its terminal's
 shell, so DeviceTerm never reaps it and never receives its exit status. It
 observes what the terminal's foreground process is instead, which is why
 `lastSeenRunning` is reported in its place.
+
+`lastSeenRunning` advances only when an observation succeeds, which while a
+program is up happens about once a second, so the value stays close to now.
+Reading it does not refresh it, and it is not a freshness guarantee: a slow
+pass pushes it back, and a terminal DeviceTerm cannot read leaves it where it
+was while the program stays `running`. What the field is for is a program
+that has stopped, where it freezes at the last sighting and stays there
+through the backoff and after DeviceTerm gives up.
 
 `restart` re-runs one program or all of them and clears any failure. It
 reuses the original terminal pane when that still exists, and opens a fresh

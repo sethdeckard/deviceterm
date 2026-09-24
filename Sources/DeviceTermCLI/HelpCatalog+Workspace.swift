@@ -201,13 +201,17 @@ extension HelpCatalog {
                   ones that never started and ones supervision gave up on.
                   Human output is one line per program led by its state;
                   --json emits `{name, state, pid, tabId, paneId, restarts,
-                  lastSeenRunning, lastError}` objects.
+                  lastSeenRunning, lastError}` objects. Only name, state
+                  and restarts are always present; the others are omitted
+                  when there is nothing to report.
 
                   state is one of starting, running, restarting, stopped or
                   failed. There is no exit code: a configured command runs
                   inside its terminal's shell, so deviceterm never reaps it
                   and never sees its exit status. lastSeenRunning reports
-                  the last foreground observation instead.
+                  the last successful foreground observation instead.
+                  Supervision polls about once a second; a delayed or
+                  unreadable observation leaves the value older.
 
               automation restart [--name NAME]
                   Re-run every configured program, or one of them, clearing
