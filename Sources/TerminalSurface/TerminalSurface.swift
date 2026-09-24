@@ -46,9 +46,14 @@ public protocol TerminalSurface: AnyObject {
     /// `.surfaceCreationFailed` if the engine can't create a surface.
     func attach(command: TerminalCommand) throws
 
-    /// Ask the engine to tear the surface down gracefully (flush, kill
-    /// the child, release GPU resources). The host should expect a
-    /// subsequent `terminalSurfaceDidExit` and then drop the surface.
+    /// Suppress any further exit notification for this surface and ask the
+    /// engine to close it. Releasing the surface is what completes teardown
+    /// and frees the engine's resources; this call on its own does not.
+    ///
+    /// No exit callback follows. The host asked for this close, so it is not
+    /// told the pane closed, and `terminalSurface(_:didExitWithCode:)` is left
+    /// to report the closes it did not ask for: a child exiting, or an engine
+    /// close request arriving before this call.
     func requestClose()
 
     /// Explicit cell-grid resize. Pixel sizing follows the view's

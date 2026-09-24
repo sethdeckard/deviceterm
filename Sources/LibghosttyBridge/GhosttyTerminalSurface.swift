@@ -49,6 +49,8 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     private let loadUserConfig: Bool
     private let surfaceView = GhosttySurfaceView(frame: .zero)
     private var surface: ghostty_surface_t?
+    /// Whether an exit notification has already been delivered, or suppressed
+    /// by a host-initiated close. Either way, no further one is sent.
     private var didNotifyExit = false
 
     public var view: NSView { surfaceView }
@@ -204,6 +206,14 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     }
 
     public func requestClose() {
+        // The host is closing this pane, so it does not need telling that the
+        // pane closed. Claiming the latch covers every signal the engine can
+        // still send: `close_surface_cb` answering this request, and a
+        // child-exit action if one arrives before the surface is released.
+        //
+        // Ahead of the surface check, because the claim is about the host's
+        // intent rather than about whether there is an engine to hear it.
+        didNotifyExit = true
         guard let surface else { return }
         ghostty_surface_request_close(surface)
     }
@@ -687,6 +697,12 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     // Called by the runtime's close_surface_cb (already hopped to
     // main). Fires when the surface should close, including the
     // child process exiting on its own, the reliable exit signal.
+    //
+    // Named `processAlive` by the C API, but libghostty passes
+    // `needsConfirmQuit()`: a confirmation decision drawn from read-only mode,
+    // whether the child has exited, `confirm-close-surface`, and prompt
+    // detection. Not process liveness, deliberately unused, and host-close
+    // suppression ignores it either way.
     func engineDidRequestClose(processAlive: Bool) {
         notifyExitOnce()
     }
@@ -700,9 +716,10 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     }
 
     // The first close callback or child-exit action notifies the delegate;
-    // every later signal for the same surface is ignored. It does not filter
-    // by origin: `requestClose()` reaches `close_surface_cb` as well, so a
-    // host-initiated teardown reports an exit if it is the first signal.
+    // every later signal for the same surface is ignored, and a host close
+    // claims the latch up front so it reports nothing at all. Without that a
+    // teardown would arrive as a shell exit, because `requestClose()` reaches
+    // `close_surface_cb` by the same path a dying shell does.
     //
     // The code stays nil ("unknown") rather than carrying the action's
     // `exit_code`: libghostty's macOS launch path reports 0 however the

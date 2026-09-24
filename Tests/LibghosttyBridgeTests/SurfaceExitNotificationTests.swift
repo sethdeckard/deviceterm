@@ -14,6 +14,10 @@ import Testing
 /// `wait-after-command` is false. Whichever arrives first has to be the one
 /// and only exit the delegate sees.
 ///
+/// A host close is the exception: `requestClose()` claims the latch itself, so
+/// neither signal that follows reports anything. The host is already closing
+/// the pane, and a report would have it close a second time.
+///
 /// Constructing the surface without attaching is what makes this testable: no
 /// runtime, no GPU, no `NSApp`. Everything past `attach()` still belongs to the
 /// harness binary.
@@ -112,5 +116,52 @@ struct SurfaceExitNotificationTests {
         #expect(secondRecorder.exitCount == 0)
         second.engineDidReportChildExit()
         #expect(secondRecorder.exitCount == 1)
+    }
+
+    // MARK: - A host close reports nothing
+
+    /// Parameterised over the argument deliberately. It carries
+    /// `needsConfirmQuit()`, a confirmation decision rather than process
+    /// liveness, so a fix that leaned on it would suppress and report by the
+    /// wrong rule. Host-close suppression must ignore both values.
+    @Test(arguments: [true, false])
+    func aHostCloseFollowedByTheCallbackReportsNothing(processAlive: Bool) {
+        let (surface, recorder) = makeSurface()
+        surface.requestClose()
+        surface.engineDidRequestClose(processAlive: processAlive)
+        #expect(recorder.exitCount == 0)
+    }
+
+    /// A child-exit action arriving after a host close must stay silent too.
+    @Test
+    func aHostCloseFollowedByTheChildExitActionReportsNothing() {
+        let (surface, recorder) = makeSurface()
+        surface.requestClose()
+        surface.engineDidReportChildExit()
+        #expect(recorder.exitCount == 0)
+    }
+
+    /// The failure mode of claiming the latch is over-suppression, which would
+    /// leave a genuinely dead pane on screen. A shell that exits on its own
+    /// still reports, exactly once.
+    @Test
+    func aShellExitWithNoHostCloseStillReports() {
+        let (surface, recorder) = makeSurface()
+        surface.engineDidReportChildExit()
+        #expect(recorder.exitCount == 1)
+        #expect(recorder.codes == [nil])
+    }
+
+    /// Closing one surface must not suppress another surface's exit
+    /// notification: the claim is per surface.
+    @Test
+    func aHostCloseLeavesOtherSurfacesReporting() {
+        let (closing, closingRecorder) = makeSurface()
+        let (sibling, siblingRecorder) = makeSurface()
+        closing.requestClose()
+        closing.engineDidRequestClose(processAlive: false)
+        sibling.engineDidReportChildExit()
+        #expect(closingRecorder.exitCount == 0)
+        #expect(siblingRecorder.exitCount == 1)
     }
 }
