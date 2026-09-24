@@ -97,7 +97,8 @@ func leafVerbPageListsItsFlags(verb: String) {
     ("pane", ["list", "show", "split", "focus", "close", "rename", "send-input", "capture-text"]),
     ("devices", ["list"]),
     ("device", ["attach"]),
-    ("window", ["list", "show", "open", "focus", "close"])
+    ("window", ["list", "show", "open", "focus", "close"]),
+    ("automation", ["status", "restart"])
 ])
 func parentVerbPageNamesSubVerbs(verb: String, subVerbs: [String]) {
     let page = String(data: helpOutcome(topic: verb).stdout, encoding: .utf8) ?? ""
@@ -201,6 +202,8 @@ func helpSpellingsAgree(path: [String]) {
 /// parser: both are intercepted ahead of it, and their tails are theirs
 /// to read.
 let declaredInvocations: [[String]] = [
+    ["automation", "status"],
+    ["automation", "restart"],
     ["text", "hello"],
     ["devices", "list"],
     ["doctor"],
