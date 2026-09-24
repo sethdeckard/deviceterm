@@ -287,9 +287,41 @@ and the new one sampled lit after 246 ms and 507 ms. So a single content sample
 taken when the event arrives reports no change, and a consumer following a fold
 has to keep asking across that window rather than reading once.
 
+**Accessibility hit-testing addresses a panel, and display `0` is the cover
+panel rather than whichever one is lit.** Taking one settled tree and
+hit-testing the centres of eight of its own elements, varying only the
+`displayId` passed to `objectAtPoint:displayId:bridgeDelegateToken:`:
+
+| Posture | via display `0` | via the lit panel's `screenID` |
+|---|---|---|
+| Folded (cover lit, screen 1) | 8 of 8 | 8 of 8 |
+| Unfolded (inner lit, screen 3) | **0 of 8** | 4 of 8 |
+
+So a pane mirroring the inner panel finds nothing under any point unless it
+names that panel. The 4 that still miss when unfolded have frames beyond the
+width the tree reports as its interface size, so they miss on either display:
+that is a coordinate-space problem, not a display-addressing one, and it is
+not fixed here. `frontmostTree` takes no display and tracks the lit panel on
+its own.
+
+**Touch input addresses no display and needs no equivalent.** Indigo offers a
+screen-based contact target (`screenID | 0x40000000`) beside the fixed
+digitizer target, and the fixed target delivers to a folded Duo: five runs out
+of five, judged against a tree whose frames had stopped changing between two
+reads. Contacts carry a normalized ratio and no display, and nothing measured
+here shows them reaching the wrong panel.
+
+**A delivery check is only as good as the tree it is judged against.** Settings
+keeps animating for seconds after launch, so a tree read too early differs from
+the next read on its own, and both a "nothing changed" and a "something
+changed" verdict against it are worthless. Wait for two reads to agree before
+attributing any change to input.
+
 - **How confirmed:** host-side probes against a booted Duo (iOS 27.1 /
   24A94401) driving the hinge between postures, sampling `SimScreenProperties`
   through the same ROCK proxies the bridge uses, locking each candidate's
   IOSurface to sample it, counting callback deliveries over timed windows, and
   timestamping screen callbacks registered on both panels at once across a
-  0° → 130° → 0° round trip.
+  0° → 130° → 0° round trip. The input and hit-test runs held the sim lock,
+  because another checkout's `make test-live` shuts the fleet down and will
+  otherwise pull the device out from under a measurement.

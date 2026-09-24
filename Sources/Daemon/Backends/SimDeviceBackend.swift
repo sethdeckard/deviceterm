@@ -46,6 +46,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the bridge module.)
     private var axClient: SimAccessibility?
     private var axAcquisitionFailed = false
+    /// The panel the display is mirroring, `0` until one is resolved. Held
+    /// under `inputGate`: the display lane writes it, and every accessibility
+    /// call reads it before touching the client.
+    private var boundScreenID: UInt32 = 0
     /// Lazily acquired on the first location call, with the same
     /// permanent-failure latch as the AX client.
     private var locationClient: SimLocation?
@@ -364,11 +368,33 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         onDisconnect: @escaping @Sendable () -> Void,
         onOrientation: @escaping @Sendable (Orientation) -> Void
     ) async throws -> DisplayBootstrap {
-        try await display.bootstrap(
+        // Accessibility hit-testing addresses a display, so it follows the
+        // panel the display settles on. Registered before the bootstrap
+        // because the bootstrap is what publishes the first binding.
+        display.observePanelChanges { [weak self] screenID in
+            self?.noteBoundPanel(screenID)
+        }
+        return try await display.bootstrap(
             onFrame: onFrame,
             onFatal: onFatal,
             onOrientation: onOrientation
         )
+    }
+
+    /// Record which panel the display is mirroring. Called from the display
+    /// lane, for the first binding and every fold that moves it.
+    ///
+    /// Deliberately writes nothing but the stored id. The accessibility
+    /// client belongs to the pane's accessibility queue, and reaching across
+    /// to it from here would both race that queue's own acquisition and
+    /// touch the client from a second domain; `requireAX` applies the value
+    /// instead, where the client is owned.
+    ///
+    /// Input needs no equivalent: contacts carry a normalized ratio and reach
+    /// the mirrored panel through Indigo's fixed digitizer target on a
+    /// foldable as well as a single-panel device.
+    private func noteBoundPanel(_ screenID: UInt32) {
+        inputGate.sync { boundScreenID = screenID }
     }
 
     func stopFrames() { display.stopFrames() }
@@ -613,6 +639,16 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// bridge work is disabled, and `.accessibilityUnavailable` (without
     /// retrying) once acquisition has permanently failed.
     private func requireAX() throws -> SimAccessibility {
+        let client = try acquireAX()
+        // Applied per call rather than when the panel moves. This queue owns
+        // the client, so it is the only place allowed to write to it, and a
+        // fold can land between two accessibility calls. Cheap: a stored
+        // property, not a bridge round trip.
+        client.displayID = inputGate.sync { boundScreenID }
+        return client
+    }
+
+    private func acquireAX() throws -> SimAccessibility {
         if let axClient { return axClient }
         guard inputGate.sync(execute: { backendActive }) else {
             throw DeviceBackendError.notActive

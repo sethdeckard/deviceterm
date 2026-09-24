@@ -75,6 +75,17 @@ typedef NS_ENUM(NSInteger, SimAccessibilityErrorCode) {
 
 @property (nonatomic, copy, readonly) NSString *udid;
 
+/// The display `elementAtPoint:` hit-tests against. Defaults to `0`.
+///
+/// `0` is not "whichever display is active": on the tested two-panel device
+/// it addresses the cover panel specifically, so a pane mirroring the other
+/// panel hit-tests a display it is not showing and finds nothing there.
+/// `as-tested.md` carries the measurements.
+///
+/// Set it to the panel the pane is mirroring, and set it again when a fold
+/// moves that panel. `frontmostTree()` takes no display and is unaffected.
+@property (nonatomic, assign) unsigned int displayID;
+
 /// The frontmost iOS app's accessibility tree, serialized recursively
 /// into a Foundation dictionary. Keys: `role`, `label`, `identifier`,
 /// `subrole`, `value`, `frame` (`{x,y,w,h}` dict), `children` (array

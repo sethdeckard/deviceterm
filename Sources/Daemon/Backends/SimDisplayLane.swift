@@ -52,6 +52,9 @@ final class SimDisplayLane: @unchecked Sendable {
     /// The in-flight search for a panel swap, if a screen-properties change
     /// started one. Owned by `queue`, like the handle it drives.
     private var panelSwapTask: Task<Void, Never>?
+    /// Told which panel the display is mirroring, whenever that changes.
+    /// Owned by `queue`.
+    private var onPanelChange: (@Sendable (UInt32) -> Void)?
 
     private let pool: LeasedSurfacePool
     private let recoveryThreshold: Int
@@ -82,6 +85,11 @@ final class SimDisplayLane: @unchecked Sendable {
     ) async throws -> DisplayBootstrap {
         try await runOnQueue { [self] in
             try startFramesLocked(onFrame: onFrame, onFatal: onFatal)
+            // The panel is resolved by the line above, so publish it here,
+            // on this queue. A caller that read it afterwards and applied it
+            // itself would be doing two unordered steps, and a fold landing
+            // between them would be overwritten by the older snapshot.
+            onPanelChange?(handle?.boundScreenID ?? 0)
             let observing = startOrientationLocked(onChange: onOrientation)
             let dimensions = pixelDimensionsLocked()
             return DisplayBootstrap(
@@ -122,6 +130,20 @@ final class SimDisplayLane: @unchecked Sendable {
     }
 
     func pixelDimensions() -> (Int?, Int?) { queue.sync { pixelDimensionsLocked() } }
+
+    // MARK: - Bound panel
+
+    /// Observe which panel the display is mirroring, which accessibility
+    /// needs because hit-testing addresses a display rather than whichever
+    /// one is lit.
+    ///
+    /// `handler` runs on the lane queue for the binding the bootstrap
+    /// resolves and again whenever a fold moves it, so the observer sees
+    /// them in the order they happened and never has to read the panel back
+    /// itself. Register before `bootstrap`, or the first one is missed.
+    func observePanelChanges(_ handler: @escaping @Sendable (UInt32) -> Void) {
+        queue.sync { onPanelChange = handler }
+    }
 
     // MARK: - Display orientation
 
@@ -307,10 +329,19 @@ final class SimDisplayLane: @unchecked Sendable {
 
     /// Ask the bridge to move onto the lit panel, on the lane's own queue.
     /// True when the bound panel actually changed.
+    ///
+    /// The observer is told from here rather than by the caller, so the new
+    /// panel is reported under the same queue hop that moved the binding and
+    /// cannot be read back stale.
     private func rebindToLitPanel() async -> Bool {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
-                continuation.resume(returning: handle?.rebindToLitPanel() ?? false)
+                guard let handle, handle.rebindToLitPanel() else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                onPanelChange?(handle.boundScreenID)
+                continuation.resume(returning: true)
             }
         }
     }
@@ -339,6 +370,9 @@ final class SimDisplayLane: @unchecked Sendable {
         handle?.stopOrientation()
         handle?.stop()
         handle = nil
+        // Held by the lane and closing over the backend, so it goes with the
+        // handle rather than outliving the thing it reports about.
+        onPanelChange = nil
         releaseFrameRunLocked()
     }
 

@@ -31,6 +31,15 @@ func accessibilityClientForKnownUDIDPreservesUDID() throws {
     #expect(client.udid == first.udid)
 }
 
+@Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))
+func accessibilityHitTestsTheDefaultDisplayUntilToldOtherwise() throws {
+    // A caller that names no panel hit-tests display 0.
+    let devices = try SimDeviceHandle.allDevices()
+    guard let first = devices.first else { return }
+    let client = try SimAccessibility.client(forUDID: first.udid)
+    #expect(client.displayID == 0)
+}
+
 // MARK: - Degraded host
 
 @Test(.disabled(if: coreSimulatorAvailable, "only meaningful on hosts where the probe doesn't pass"))

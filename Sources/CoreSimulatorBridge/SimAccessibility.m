@@ -307,7 +307,7 @@ typedef NS_ENUM(NSInteger, CSBAccessibilityError) {
 
 - (nullable NSDictionary<NSString *, id> *)elementAtPoint:(CGPoint)point error:(NSError **)error {
     AXPTranslationObject *translation = [self.translator objectAtPoint:point
-                                                              displayId:0
+                                                              displayId:self.displayID
                                                     bridgeDelegateToken:self.token];
     if (!translation) {
         if (error) {

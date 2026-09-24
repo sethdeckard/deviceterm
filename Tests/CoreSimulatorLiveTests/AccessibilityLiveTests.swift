@@ -187,3 +187,99 @@ func twoClientsCoexistWithoutClobberingEachOther() throws {
     #expect(treeA["role"] is String)
     #expect(treeB["role"] is String)
 }
+
+/// Every positive-size frame in the tree, containers included, as candidate
+/// hit-test locations. Taking them from the tree rather than naming a fixed
+/// point keeps the probe on coordinates the tree itself reports.
+private func framedNodes(_ node: [String: Any], into out: inout [(String, CGRect)]) {
+    let role = node["role"] as? String ?? "?"
+    let label = node["label"] as? String ?? node["identifier"] as? String ?? ""
+    if let frame = node["frame"] as? [String: Any],
+        let originX = frame["x"] as? Double, let originY = frame["y"] as? Double,
+        let width = frame["w"] as? Double, let height = frame["h"] as? Double,
+        width > 0, height > 0 {
+        out.append((
+            "\(role)|\(label)",
+            CGRect(x: originX, y: originY, width: width, height: height)
+        ))
+    }
+    for child in node["children"] as? [[String: Any]] ?? [] { framedNodes(child, into: &out) }
+}
+
+/// Try up to 15 pairs of reads a second apart for two whose role, label and
+/// frame signatures match, and return the second of that pair. Frames caught
+/// mid-animation name a place the element has since left, so a hit-test
+/// against them misses for reasons that have nothing to do with the display
+/// being asked. Returns nil if no pair matches, including when the reads
+/// themselves fail.
+private func settledTree(_ accessibility: SimAccessibility) -> [String: Any]? {
+    func signature(_ tree: [String: Any]) -> String {
+        var rows: [(String, CGRect)] = []
+        framedNodes(tree, into: &rows)
+        return rows.map { "\($0.0)|\($0.1)" }.joined(separator: "\n")
+    }
+    for _ in 0..<15 {
+        guard let first = try? accessibility.frontmostTree() else { continue }
+        Thread.sleep(forTimeInterval: 1.0)
+        guard let second = try? accessibility.frontmostTree() else { continue }
+        if signature(first) == signature(second) { return second }
+    }
+    return nil
+}
+
+@Test
+func hitTestingFindsTheElementsOfTheMirroredPanel() throws {
+    // `elementAtPoint` asks a display, and the default display is not
+    // "whichever one is showing": on a two-panel device it is the cover
+    // panel specifically. A pane mirroring the other panel then hit-tests a
+    // display it is not showing and finds nothing, while the tree it read
+    // those coordinates from came from the panel that *is* showing.
+    //
+    // Both reads are taken against one settled tree so the only thing that
+    // differs between them is the display being asked.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    try waitForAXServer(udid: booted.udid)
+
+    let display = try SimDisplayHandle.handle(forUDID: booted.udid)
+    try display.start { _ in }
+    defer { display.stop() }
+    Thread.sleep(forTimeInterval: 0.5)
+    let panel = display.boundScreenID
+
+    let accessibility = try SimAccessibility.client(forUDID: booted.udid)
+    let tree = try #require(
+        settledTree(accessibility),
+        "no two accessibility reads agreed within 15 attempts, so no hit-test could be judged"
+    )
+    var frames: [(String, CGRect)] = []
+    framedNodes(tree, into: &frames)
+    let probes = Array(frames.prefix(8))
+    try #require(!probes.isEmpty, "no element with a frame in the frontmost tree")
+
+    func hitCount() -> Int {
+        probes.filter {
+            (try? accessibility.elementAtPoint(CGPoint(x: $0.1.midX, y: $0.1.midY))) != nil
+        }
+        .count
+    }
+    accessibility.displayID = 0
+    let viaDefault = hitCount()
+    accessibility.displayID = panel
+    let viaPanel = hitCount()
+
+    // Not "finds all of them": on an unfolded foldable some frames sit
+    // outside the interface size the tree reports, and those miss whichever
+    // display is asked. That is a separate defect in the coordinate space,
+    // not in the display being addressed, so this asserts only what
+    // addressing the right panel is responsible for. On a single-display
+    // device the two reads agree and the comparison is a no-op.
+    #expect(viaPanel >= viaDefault, "panel \(panel) found \(viaPanel), the default display found \(viaDefault)")
+    #expect(viaPanel > 0, "panel \(panel) found none of \(probes.count) elements taken from its own tree")
+}
