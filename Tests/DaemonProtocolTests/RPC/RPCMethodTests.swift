@@ -11,8 +11,8 @@ import Testing
 // see both modules.
 
 @Test
-func rpcMethodCaseCountIs76() {
-    #expect(RPCMethod.allCases.count == 76)
+func rpcMethodCaseCountIs77() {
+    #expect(RPCMethod.allCases.count == 77)
 }
 
 @Test

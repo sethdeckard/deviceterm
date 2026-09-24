@@ -12,17 +12,23 @@
 /// longPress/pinch/multitouch; `key`/`text` are the keyboard verbs;
 /// `button` is the hardware buttons; `rotate` is device orientation;
 /// `crown` is the watch Digital Crown; `accessibility` is the `pane.ax.*`
-/// tree/element/sweep family; `location` is simulated GPS position.
+/// tree/element/sweep family; `location` is simulated GPS position; `fold` is
+/// the hinge of a two-panel device.
 ///
 /// The daemon always emits a full set, but the *carrying* wire fields on
 /// `PaneCreateResponse` / `PanesListEntry` are optional so a peer that
 /// omits the block still decodes; a missing block means "unknown", and
 /// clients fall back to `missingBlockFallback`.
 ///
-/// When the added `location` key is absent it decodes as `false` (see
-/// `init(from:)`), so no capability is assumed on a peer's behalf.
+/// When an added key such as `location` or `fold` is absent it decodes as
+/// `false` (see `init(from:)`), so no capability is assumed on a peer's
+/// behalf.
 public struct PaneCapabilities: Codable, Sendable, Equatable {
     /// Everything a CoreSimulator pane supports.
+    ///
+    /// `fold` is not here: it is the one flag that varies between simulators
+    /// rather than between pane kinds, so the daemon sets it per device from
+    /// the panel count.
     public static let simulator = PaneCapabilities(
         touch: true,
         key: true,
@@ -31,7 +37,8 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         rotate: true,
         crown: true,
         accessibility: true,
-        location: true
+        location: true,
+        fold: false
     )
 
     /// What a client assumes when the wire omits the capability block
@@ -47,7 +54,8 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         rotate: true,
         crown: true,
         accessibility: true,
-        location: false
+        location: false,
+        fold: false
     )
 
     public var touch: Bool
@@ -58,6 +66,7 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
     public var crown: Bool
     public var accessibility: Bool
     public var location: Bool
+    public var fold: Bool
 
     public init(
         touch: Bool,
@@ -67,7 +76,8 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         rotate: Bool,
         crown: Bool,
         accessibility: Bool,
-        location: Bool
+        location: Bool,
+        fold: Bool = false
     ) {
         self.touch = touch
         self.key = key
@@ -77,10 +87,11 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         self.crown = crown
         self.accessibility = accessibility
         self.location = location
+        self.fold = fold
     }
 
-    /// `location` decodes as absent ⇒ `false`; the other fields are
-    /// required.
+    /// `location` and `fold` decode as absent ⇒ `false`; the other fields
+    /// are required.
     ///
     /// Synthesized decoding would require `location` and reject the
     /// enclosing response when it is absent, because the failure lands on
@@ -98,5 +109,6 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         crown = try container.decode(Bool.self, forKey: .crown)
         accessibility = try container.decode(Bool.self, forKey: .accessibility)
         location = try container.decodeIfPresent(Bool.self, forKey: .location) ?? false
+        fold = try container.decodeIfPresent(Bool.self, forKey: .fold) ?? false
     }
 }

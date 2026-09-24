@@ -12,4 +12,5 @@ public enum WorkspacePaneCapability: String, Codable, Sendable, Equatable, CaseI
     case crown
     case accessibility
     case location
+    case fold
 }

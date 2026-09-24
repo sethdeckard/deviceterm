@@ -81,6 +81,7 @@ in the active Xcode before its machine-wide fallbacks.
 | protocol           | `SimScreenProperties`                                                | `SimDisplayHandle`    | Snapshot vended by `screenProperties`; carries `uiOrientation`. |
 | protocol method    | `-<SimScreen> screenProperties`                                      | `SimDisplayHandle`    | Bounded one-shot read; seeds a pane's display orientation and is re-read inside every change callback. |
 | protocol method    | `-<SimScreen> registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:` | `SimDisplayHandle` | Push channel for orientation. **All three blocks must be non-nil**: CoreSimulator invokes them unconditionally, so a nil frame callback dereferences NULL and takes the simulator down. |
+| method             | `-[SimDevice spawnAsyncWithPath:options:terminationQueue:terminationHandler:completionQueue:completionHandler:]` | `SimFoldControl`      | Runs the guest-side hinge program. The async form, not `spawnWithPath:`: the vendored header types that one's termination handler as taking no arguments, while this one declares the real `void (^)(int)` the exit status arrives in. `stdout`/`stderr` in `options` are **file descriptors**; a path string is read as a descriptor and aborts the process. |
 | protocol method    | `-<SimScreen> unregisterScreenCallbacksWithUUID:`                    | `SimDisplayHandle`    | Teardown counterpart; called on `stopOrientation` and `stop`.  |
 | protocol method    | `-<SimScreenProperties> uiOrientation`                               | `SimDisplayHandle`    | The presented orientation, as a `UIInterfaceOrientation`. Mapped to device-orientation vocabulary in the bridge, **swapping the landscape pair** (see the orientation findings below). On a foldable it tracks the *device*, not the panel: both panels report the same value. |
 | protocol method    | `-<SimScreenProperties> screenID`                                    | `SimDisplayHandle`    | Small integer panel id, the same one `simctl io --display` accepts. Recorded as `boundScreenID` so a pane can name the panel it mirrors. |
@@ -303,6 +304,15 @@ width the tree reports as its interface size, so they miss on either display:
 that is a coordinate-space problem, not a display-addressing one, and it is
 not fixed here. `frontmostTree` takes no display and tracks the lit panel on
 its own.
+
+**The lit panel is path-dependent, not a function of the angle.** Opening
+switched to the inner panel between 100° and 105°. Closing did not mirror it:
+`0 → 100 → 105 → 60 → 30` stayed on the inner panel, reproduced twice with 8s
+settling and confirmed at 30° by `simctl io screenshot` per display, which
+showed the cover panel black. Going straight from 100 → 60, or 120 → 45, does
+switch, in about a second. So a test that asserts "below 90° means the cover
+panel" is flaky depending on the route taken to get there. Bind by content,
+never by angle; the picker already does.
 
 **Touch input addresses no display and needs no equivalent.** Indigo offers a
 screen-based contact target (`screenID | 0x40000000`) beside the fixed

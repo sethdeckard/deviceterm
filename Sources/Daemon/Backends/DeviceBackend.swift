@@ -190,6 +190,15 @@ protocol DeviceBackend: AnyObject, Sendable {
     ) async throws -> BackendRotationOutcome
     func rotateCrown(delta: Double, generation: UInt64) async throws
 
+    /// Put a foldable device's hinge at `degrees`.
+    ///
+    /// Only a backend whose device has a hinge implements this; the default
+    /// refuses, so a backend that never advertises `fold` cannot accidentally
+    /// accept one. `generation` fences the request against an ownership
+    /// transfer the same way every other device-directed call does: a request
+    /// admitted before a transfer must not reach the adopted device.
+    func fold(toDegrees degrees: Double, generation: UInt64) async throws
+
     // MARK: Accessibility (lazy acquisition lives in the backend)
 
     /// The frontmost app's AX tree as the bridge's raw dict. Throws
@@ -371,6 +380,14 @@ extension DeviceBackend {
     // realization of the App Switcher.
     var supportsSystemEdgeGesture: Bool { false }
 
+    // swiftlint:disable async_without_await
+    /// Default: no hinge. Only the CoreSimulator backend overrides this, and
+    /// only for a device that vends a second panel.
+    func fold(toDegrees degrees: Double, generation: UInt64) async throws {
+        throw DeviceBackendError.unsupportedFold
+    }
+    // swiftlint:enable async_without_await
+
     // Default: only the CoreSimulator backend overrides these. Other
     // backends (physical device, stub) reject edge gestures.
     // swiftlint:disable async_without_await
@@ -514,7 +531,8 @@ extension DeviceBackendCapabilities {
             rotate: rotate,
             crown: crown,
             accessibility: accessibility,
-            location: location
+            location: location,
+            fold: fold
         )
     }
 }

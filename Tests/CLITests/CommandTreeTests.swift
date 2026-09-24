@@ -36,6 +36,7 @@ func commandTreeReportsEveryVerb() {
         "devices", "version", "dump-config", "events",
         "doctor", "agents", "help", "tap", "swipe", "app-switcher",
         "long-press", "pinch", "button", "key", "text", "rotate", "crown",
+        "fold",
         "ax", "wait", "with-pane", "session",
         "automation", "tab", "pane", "device",
         "window", "completions"

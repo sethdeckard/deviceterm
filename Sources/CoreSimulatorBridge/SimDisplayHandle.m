@@ -194,6 +194,25 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     return result;
 }
 
+/// The candidates that report a non-zero `displaySize`, which is what being
+/// bound to a screen looks like. A foldable vends one per panel.
+static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *candidates) {
+    NSMutableArray<id<SimDisplayIOSurfaceRenderable>> *sized = [NSMutableArray array];
+    for (id<SimDisplayIOSurfaceRenderable> candidate in candidates) {
+        CGSize size = CGSizeZero;
+        @try {
+            id untyped = candidate;
+            if ([untyped respondsToSelector:@selector(displaySize)]) {
+                size = [untyped displaySize];
+            }
+        } @catch (NSException *e) {}
+        if (size.width > 0 && size.height > 0) {
+            [sized addObject:candidate];
+        }
+    }
+    return sized;
+}
+
 @interface SimDisplayHandle ()
 @property (nonatomic, copy, readwrite) NSString *udid;
 @property (nonatomic, strong, nullable) SimDevice *device;
@@ -321,6 +340,15 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
     [self stop];
 }
 
++ (BOOL)deviceHasMultiplePanels:(NSString *)udid {
+    SimDisplayHandle *handle = [self handleForUDID:udid error:NULL];
+    if (!handle) return NO;
+    NSArray<id<SimDisplayIOSurfaceRenderable>> *candidates =
+        [handle _candidatesWithError:NULL];
+    if (!candidates) return NO;
+    return CSBSizedCandidates(candidates).count > 1;
+}
+
 #pragma mark Picker (reverse-engineered truth, preserve)
 
 /// Every proxy that could be a display. CoreSimulator exposes several that
@@ -391,25 +419,6 @@ static CSBCandidateLuminance CSBCandidateLuminanceOf(id candidate) {
         return nil;
     }
     return candidates;
-}
-
-/// The candidates that report a non-zero `displaySize`, which is what being
-/// bound to a screen looks like. A foldable vends one per panel.
-static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *candidates) {
-    NSMutableArray<id<SimDisplayIOSurfaceRenderable>> *sized = [NSMutableArray array];
-    for (id<SimDisplayIOSurfaceRenderable> candidate in candidates) {
-        CGSize size = CGSizeZero;
-        @try {
-            id untyped = candidate;
-            if ([untyped respondsToSelector:@selector(displaySize)]) {
-                size = [untyped displaySize];
-            }
-        } @catch (NSException *e) {}
-        if (size.width > 0 && size.height > 0) {
-            [sized addObject:candidate];
-        }
-    }
-    return sized;
 }
 
 /// Pick the renderable to mirror, out of everything the device vends.

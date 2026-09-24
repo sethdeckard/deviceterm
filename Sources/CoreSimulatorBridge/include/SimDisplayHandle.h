@@ -167,6 +167,20 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// device, where it lets a caller skip the fold-following machinery.
 @property (nonatomic, readonly) BOOL hasMultiplePanels;
 
+/// Whether a booted device vends more than one sized display candidate,
+/// answered without binding one.
+///
+/// Same question `hasMultiplePanels` answers for a started handle, for a
+/// caller that needs it before there is one: a pane reports what its device
+/// can do at create time, which is earlier than the display bootstrap. Costs
+/// one enumeration of the device's IO ports.
+///
+/// Returns NO for a device that is not booted, has no ports yet, or vends a
+/// single panel, so a caller cannot distinguish "one panel" from "cannot
+/// tell" and should treat both as no hinge.
++ (BOOL)deviceHasMultiplePanels:(NSString *)udid
+    NS_SWIFT_NAME(deviceHasMultiplePanels(udid:));
+
 /// Re-resolve the lit panel and move the subscription onto it if it changed.
 /// Returns YES only when the bound panel actually moved.
 ///

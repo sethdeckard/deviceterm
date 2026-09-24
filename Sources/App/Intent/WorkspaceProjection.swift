@@ -424,6 +424,7 @@ final class WorkspaceProjection {
         if source.crown { result.append(.crown) }
         if source.accessibility { result.append(.accessibility) }
         if source.location { result.append(.location) }
+        if source.fold { result.append(.fold) }
         return result
     }
 }

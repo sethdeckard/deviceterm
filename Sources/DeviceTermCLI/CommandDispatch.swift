@@ -344,6 +344,23 @@ func run(
                 output: output
             )
 
+        case let .fold(pane, degrees):
+            return try sendResolved(
+                ref: pane,
+                output: output,
+                transport: transport,
+                humanFields: { _ in [("degrees", String(degrees))] },
+                jsonReceipt: { resolved in
+                    Receipt.Fold(
+                        udid: resolved.udid,
+                        paneId: resolved.paneId,
+                        shortId: resolved.shortId,
+                        degrees: degrees
+                    )
+                },
+                build: { try CLICommands.foldRequest(paneId: $0, degrees: degrees) }
+            )
+
         case let .crown(pane, delta, velocity, durationMs):
             return try sendResolved(
                 ref: pane,

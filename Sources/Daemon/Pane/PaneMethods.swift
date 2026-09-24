@@ -817,6 +817,31 @@ public enum PaneMethods {
         }
     }
 
+    /// `pane.input.fold({paneId, degrees}) → {ok}`. Puts a foldable device's
+    /// hinge at an absolute angle. A pane whose device has no hinge refuses
+    /// with `unsupportedOperation`; the angle is validated here so an
+    /// out-of-range request never reaches the guest.
+    public static func fold(paneCoordinator: PaneCoordinator) -> MethodRegistry.Handler {
+        { paramsJSON in
+            let params = try JSONDecoder().decode(FoldParams.self, from: paramsJSON)
+            let paneId = try requirePaneId(params.paneId)
+            guard FoldPosture.degreeRange.contains(params.degrees) else {
+                throw RPCMethodError.invalidParams(
+                    "degrees must be between \(FoldPosture.degreeRange.lowerBound) "
+                        + "and \(FoldPosture.degreeRange.upperBound)"
+                )
+            }
+            let principal = try requirePrincipal()
+            return try await paneAck {
+                try await paneCoordinator.fold(
+                    paneId: paneId,
+                    as: principal,
+                    degrees: params.degrees
+                )
+            }
+        }
+    }
+
     /// `pane.deviceList({sessionId, cap}) → [{paneId, udid, state}]`. This is the
     /// session-scoped discovery the CLI resolves a paneId *through*, so it
     /// validates the payload credentials and confirms the target is the

@@ -17,6 +17,13 @@ struct DeviceBackendCapabilities: Sendable, Equatable {
     /// per-verb restriction on sims. Family-based gating (e.g. hiding
     /// Crown on a phone) is a GUI concern, not a daemon one, so every
     /// flag is `true`.
+    ///
+    /// `fold` is the exception, and it is not family-based: it depends on
+    /// whether the individual device has a second panel. The backend reads
+    /// that from the device's sized display candidates, before the display
+    /// bootstrap binds one, because a pane reports what it can do at create
+    /// time. So it starts false and the backend raises it for the devices
+    /// that have one.
     static let simulator = DeviceBackendCapabilities(
         touch: true,
         key: true,
@@ -25,7 +32,8 @@ struct DeviceBackendCapabilities: Sendable, Equatable {
         rotate: true,
         crown: true,
         accessibility: true,
-        location: true
+        location: true,
+        fold: false
     )
 
     /// The **maximal** physical-device capability set: relay-backed input
@@ -44,7 +52,8 @@ struct DeviceBackendCapabilities: Sendable, Equatable {
         rotate: true,
         crown: false,
         accessibility: false,
-        location: true
+        location: true,
+        fold: false
     )
 
     var touch: Bool
@@ -55,6 +64,10 @@ struct DeviceBackendCapabilities: Sendable, Equatable {
     var crown: Bool
     var accessibility: Bool
     var location: Bool
+    /// Whether the device has a hinge this daemon can drive. Set from how
+    /// many sized display candidates the device vends, not from its family: a
+    /// foldable and a slab report the same family.
+    var fold: Bool = false
 
     /// The same set with `location` cleared.
     ///

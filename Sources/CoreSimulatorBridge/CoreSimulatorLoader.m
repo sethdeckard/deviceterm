@@ -378,6 +378,10 @@ static NSString *const kAXPFrameworkPath =
             @"deviceTypeIdentifier",
             @"bootWithOptions:error:",
             @"shutdownWithError:",
+            // SimFoldControl: runs the guest-side hinge program. The async
+            // form specifically, because the termination handler is where the
+            // exit status comes from and only this one declares its shape.
+            @"spawnAsyncWithPath:options:terminationQueue:terminationHandler:completionQueue:completionHandler:",
             // SimDisplayHandle: io accessor (returns the io client).
             @"io",
             // SimPurpleHID: Mach service lookup in the sim's bootstrap

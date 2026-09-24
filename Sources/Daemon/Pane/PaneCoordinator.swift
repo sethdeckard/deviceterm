@@ -3758,6 +3758,36 @@ public actor PaneCoordinator {
         )
     }
 
+    /// Put a foldable pane's hinge at `degrees`.
+    ///
+    /// Gated on the pane's own `fold` capability, which the backend sets from
+    /// the device's panel count, so a pane with one panel refuses here rather
+    /// than spawning anything.
+    func fold(paneId: UUID, as principal: PaneAccessPrincipal, degrees: Double) async throws {
+        // Capture the backend before any await, so a concurrent close cannot
+        // take it away mid-fold. Same reason as the input verbs above.
+        let input = try inputBackend(
+            paneId: paneId,
+            as: principal,
+            supporting: \.fold,
+            operation: .fold
+        )
+        do {
+            try await input.backend.fold(toDegrees: degrees, generation: input.generation)
+        } catch let error as DeviceBackendError {
+            throw PaneError.mapBackendError(error, paneId: paneId, operation: .fold)
+        } catch {
+            // A compile failure or a bridge NSError is neither of the above
+            // and would otherwise reach the client as an unclassified
+            // `serverError`, losing which verb failed and what went wrong.
+            throw PaneError.bridgeFailed(
+                paneId: paneId,
+                operation: .fold,
+                message: BridgeMessage.unwrap(error)
+            )
+        }
+    }
+
     // MARK: - Accessibility
     //
     // As with input, backend resolution is the actor's only stateful step,

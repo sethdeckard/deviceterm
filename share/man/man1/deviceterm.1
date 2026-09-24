@@ -117,6 +117,21 @@ reports targetOrientation and observedOrientation. An orientation-locked
 Simulator fails after the four-second confirmation deadline instead of
 returning a dispatch receipt.
 .TP
+.B fold " " \fIclosed\fR|\fIbook\fR|\fIopen\fR|\fI0-180\fR
+Set the hinge angle of a foldable device.
+.I closed
+is shut,
+.I open
+is flat, and
+.I book
+is part-way open with the inner panel lit. A bare number is an absolute angle
+in degrees. Which panel the guest lights depends on how the hinge got where it
+is, not only where it is: opening past roughly 100 degrees moves it to the
+inner panel, closing does not always move it back at the same angle, and a
+device driven through several positions can stay on the inner panel well below
+that. Read the pane rather than inferring the panel from the angle. Only a
+two-panel device accepts this.
+.TP
 .B crown " " \fIdelta\fR " " [\fB--velocity\fR \fIv\fR] " " [\fB--duration\fR \fIms\fR]
 Rotate the watchOS Digital Crown. Signed
 .IR delta ;

@@ -234,13 +234,18 @@ public enum PaneError: Error, Equatable, Sendable {
         case let .accessibilityUnavailable(message):
             return .bridgeFailed(paneId: paneId, operation: .axAcquire, message: message)
 
-        case .unsupportedEdgeGesture, .unsupportedLocation:
+        case .unsupportedEdgeGesture, .unsupportedLocation, .unsupportedFold:
             return .unsupportedOperation(paneId: paneId, operation: operation)
 
         case let .locationUnavailable(message):
             // Acquisition specifically, so the label is fixed, the same
             // treatment `accessibilityUnavailable` gets.
             return .bridgeFailed(paneId: paneId, operation: .locationAcquire, message: message)
+
+        case let .foldCommandFailed(message):
+            // Reports the verb the caller invoked: the failure is in running
+            // the fold, not in acquiring anything.
+            return .bridgeFailed(paneId: paneId, operation: operation, message: message)
 
         case let .locationCommandFailed(message):
             // A command that failed while running, so it reports the verb

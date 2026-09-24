@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import ArgumentParser
+import DaemonProtocol
 import Foundation
 
 /// Shell-completion scripts for the CLI surface.
@@ -64,6 +65,10 @@ public enum Completions {
         "siri",
         "digital-crown"
     ]
+
+    /// Named postures only. The verb also takes a bare angle, which no
+    /// completion list can enumerate.
+    public static let foldValues: [String] = FoldPosture.allCases.map(\.rawValue)
 
     /// Both vocabularies `rotate` takes on its one positional: the four
     /// absolute orientations, then the two relative directions.

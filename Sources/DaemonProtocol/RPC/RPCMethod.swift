@@ -214,6 +214,7 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// framebuffer orientation. It sends a physical-device direction directly
     /// and uses the relay-reported landing as the target. Exactly one of the two.
     case paneInputRotate = "pane.input.rotate"
+    case paneInputFold = "pane.input.fold"
     case paneInputPinch = "pane.input.pinch"
     /// `pane.input.multitouch`: live two-finger streaming
     /// (`down`/`move`/`up`), the interactive counterpart to the

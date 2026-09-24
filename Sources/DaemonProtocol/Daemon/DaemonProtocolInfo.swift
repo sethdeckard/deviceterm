@@ -30,5 +30,5 @@ public enum DaemonProtocolInfo {
     /// join, and the restore-inventory check. A GUI that outlived a helper
     /// replacement would compare its old spellings against the new one and
     /// silently fail all four, so the version gate stops the pairing instead.
-    public static let wireVersion = "0.7.0"
+    public static let wireVersion = "0.8.0"
 }

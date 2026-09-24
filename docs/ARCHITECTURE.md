@@ -2121,6 +2121,22 @@ framebuffer-orientation source.
 orientation. A physical device turned by hand remains invisible until a
 DeviceTerm rotation returns a new orientation.
 
+
+#### `pane.input.fold`
+
+- Params: `{paneId, degrees}`
+- Result: `{ok}`
+- Scope: session
+
+`degrees` is the absolute hinge angle, `0` shut and `180` flat. A value
+outside that range is `invalidParams`. Named postures are a CLI convenience
+resolved before the request, so the wire carries only degrees.
+
+A pane whose device has one panel refuses with `unsupportedOperation`. The
+daemon reports which panes accept a fold through the `fold` pane capability,
+set from the device's panel count rather than its family, because a foldable
+and a slab report the same family.
+
 #### `pane.input.pinch`
 
 - Params: `{paneId, fromF1X, fromF1Y, fromF2X, fromF2Y, toF1X, toF1Y, toF2X, toF2Y, durationMs?}`

@@ -25,6 +25,13 @@ enum DeviceBackendError: Error {
     /// Location simulation isn't implemented by this backend kind (the
     /// stub, and any conformer that takes the protocol defaults).
     case unsupportedLocation
+    /// The device has no hinge to drive: every backend that takes the
+    /// protocol default, and a simulator that vends a single panel.
+    case unsupportedFold
+    /// The hinge program could not be built or did not run cleanly. Carries
+    /// what went wrong, since the causes differ in what the operator can do:
+    /// a toolchain that cannot build it, or a guest that refused it.
+    case foldCommandFailed(message: String)
     /// Lazy location acquisition permanently failed for this backend.
     /// Carries the first failure's message so a retry classifies the
     /// same way the original did, as `accessibilityUnavailable` does.

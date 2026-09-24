@@ -141,6 +141,18 @@ extension CLICommands {
         return nil
     }
 
+    /// A posture name or a bare angle, resolved to degrees. Nil when the
+    /// token is neither, or names an angle outside the hinge's range.
+    ///
+    /// Names are matched before numbers so a posture can never be read as a
+    /// partially-parsed figure.
+    static func parseFoldPosture(_ raw: String) -> Double? {
+        if let posture = FoldPosture.named(raw) { return posture.degrees }
+        guard let degrees = Double(raw),
+            FoldPosture.degreeRange.contains(degrees) else { return nil }
+        return degrees
+    }
+
     // MARK: - Input & listing request builders
 
     /// Daemon-direct device-pane roster used to resolve device-control verbs.
@@ -273,6 +285,16 @@ extension CLICommands {
             target: target
         )
             )
+    }
+
+    public static func foldRequest(
+        paneId: String,
+        degrees: Double
+    ) throws -> RPCEnvelope {
+        try request(
+            method: .paneInputFold,
+            body: FoldParams(paneId: paneId, degrees: degrees)
+        )
     }
 
     public static func crownRequest(

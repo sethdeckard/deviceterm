@@ -156,6 +156,17 @@ public enum Receipt {
         public let observedOrientation: String
     }
 
+    public struct Fold: Encodable, Sendable {
+        public let ok = true
+        public let udid: String
+        public let paneId: String
+        public let shortId: String?
+        /// The angle actually sent. A named posture is resolved before the
+        /// request, so the receipt reports degrees whichever form was typed
+        /// and an agent can read back exactly what the device was given.
+        public let degrees: Double
+    }
+
     public struct Crown: Encodable, Sendable {
         public let ok = true
         public let udid: String

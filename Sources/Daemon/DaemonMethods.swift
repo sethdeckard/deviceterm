@@ -378,6 +378,8 @@ public enum DaemonMethods {
                 .session(PaneMethods.button(paneCoordinator: paneCoordinator)),
             RPCMethod.paneInputRotate.rawValue:
                 .session(PaneMethods.rotate(paneCoordinator: paneCoordinator)),
+            RPCMethod.paneInputFold.rawValue:
+                .session(PaneMethods.fold(paneCoordinator: paneCoordinator)),
             RPCMethod.paneInputPinch.rawValue:
                 .session(PaneMethods.pinch(paneCoordinator: paneCoordinator)),
             RPCMethod.paneInputMultitouch.rawValue:

@@ -349,6 +349,7 @@ their panes unless the caller owns that protected tab.
 | `tap`, `swipe`, `app-switcher`, `long-press`, `pinch` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `button`, `key`, `text`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed | Stable-additive |
+| `fold` with `--json` | Input receipt | Session | Daemon completed the fold dispatch call | Stable-additive |
 | `wait pane <state>` with `--json` | Wait receipt | Session | Named pane state observed before the deadline | Stable-additive |
 | `wait ax` with `--json` | Wait receipt | Session | The requested accessibility condition, present or absent, observed before the deadline | Stable-additive |
 | `wait orientation <orientation>` with `--json` | Wait receipt | Session | Confirmed orientation and stable surface observed before the deadline | Stable-additive |

@@ -98,6 +98,11 @@ public enum CLICommand: Equatable, Sendable {
         String?,
         target: RotationTarget
         )
+    case fold(
+        pane:
+        String?,
+        degrees: Double
+        )
     case crown(
         pane:
         String?,

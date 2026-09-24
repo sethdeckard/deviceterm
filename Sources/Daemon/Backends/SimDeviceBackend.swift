@@ -63,7 +63,11 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// remaining lifetime.
     private var cachedLocationScenarios: [String]?
 
-    let capabilities = DeviceBackendCapabilities.simulator
+    /// Everything a sim supports, plus `fold` when this particular device
+    /// has a second panel. Read at pane create, which is before the display
+    /// bootstrap, so the panel count is asked of the device directly rather
+    /// than taken from the bound display.
+    let capabilities: DeviceBackendCapabilities
     // The simulator's synthetic HID carries the `IndigoHIDEdge` tag, so an
     // edge swipe reaches SpringBoard's system-gesture recognizer directly.
     let supportsSystemEdgeGesture = true
@@ -103,6 +107,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// confirmation and blocking the transfer until then.
     private var uncertainButtons: [HardwareButton] = []
 
+    /// Builds and caches the guest-side hinge program. Held per backend
+    /// rather than shared, which costs nothing: the build is keyed on the
+    /// source and toolchain, so a second backend finds the first one's
+    /// binary already on disk.
+    private let foldHelper: FoldHelperBuilder
+
     init(
         udid: String,
         displayHandle: SimDisplayHandle,
@@ -112,6 +122,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.udid = udid
         self.hidClient = hidClient
         self.purpleClient = purpleClient
+        var capabilities = DeviceBackendCapabilities.simulator
+        capabilities.fold = SimDisplayHandle.deviceHasMultiplePanels(udid: udid)
+        self.capabilities = capabilities
+        self.foldHelper = FoldHelperBuilder()
         let slotCount = ProcessInfo.processInfo.environment[DeviceTermEnv.surfacePoolSlots]
             .flatMap(Int.init) ?? Self.defaultPoolSlots
         let pool = LeasedSurfacePool(slotCount: slotCount)
@@ -428,6 +442,43 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func orphan(token: UUID) async {
         await pool.orphan(token)
+    }
+
+    // MARK: Fold
+
+    /// Drive the hinge by running the guest-side helper on the device.
+    ///
+    /// The helper has to run inside the simulator, so this is a spawn rather
+    /// than a bridge call: the event reaches the hinge from a process that
+    /// links the guest's IOKit. Building it is cached, so only the first fold
+    /// after a source or toolchain change pays for a compile.
+    ///
+    /// Runs on `inputWorkQueue` with the rest of this backend's device work,
+    /// so a fold cannot interleave with a gesture mid-flight, and re-checks
+    /// `generation` once it gets there: the build can take a second on a cold
+    /// cache, which is long enough for the pane to change hands in between.
+    func fold(toDegrees degrees: Double, generation: UInt64) async throws {
+        guard capabilities.fold else { throw DeviceBackendError.unsupportedFold }
+        let udid = self.udid
+        let helper = self.foldHelper
+        try await inputWorkQueue.run { [self] in
+            guard inputGate.sync(execute: { generation == inputGeneration }) else {
+                throw DeviceBackendError.notActive
+            }
+            let binary = try helper.helperBinary()
+            var exitStatus: Int32 = -1
+            try SimFoldControl.run(
+                binaryAtPath: binary,
+                onDevice: udid,
+                arguments: [String(degrees)],
+                exitStatus: &exitStatus
+            )
+            guard exitStatus == 0 else {
+                throw DeviceBackendError.foldCommandFailed(
+                    message: "the hinge helper exited \(exitStatus)"
+                )
+            }
+        }
     }
 
     func pixelDimensions() -> (Int?, Int?) { display.pixelDimensions() }

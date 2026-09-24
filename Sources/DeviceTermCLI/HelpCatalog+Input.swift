@@ -170,6 +170,34 @@ extension HelpCatalog {
             """
         ),
         HelpTopic(
+            "fold",
+            .command(.hardware),
+            summary: "Set the hinge angle of a foldable device",
+            detail: """
+              fold <closed|book|open>
+                  Put the hinge at a named position. `closed` is shut, `open` is
+                  flat, and `book` is part-way open, far enough that the inner
+                  panel is the one lit.
+                  Example: deviceterm fold open
+
+              fold <0-180>
+                  Put the hinge at an angle in degrees.
+
+                  Which panel the guest lights is its own decision, and it
+                  depends on how the hinge got where it is, not only where it
+                  is. Opening past roughly 100 degrees moves it to the inner
+                  panel; closing does not always move it back at the same
+                  angle, and a device driven through several positions can
+                  stay on the inner panel well below that. Read the pane,
+                  don't infer the panel from the angle.
+                  Example: deviceterm fold 45
+
+              Only a device with two panels accepts this; anything else refuses
+              with `unsupportedOperation`. When a fold lights a different panel,
+              the pane follows it and its pixel dimensions change with it.
+            """
+        ),
+        HelpTopic(
             "crown",
             .command(.hardware),
             summary: "Rotate the watchOS Digital Crown",

@@ -34,6 +34,7 @@ public enum PaneOperation: Sendable, Equatable {
     case text
     case rotate
     case crown
+    case fold
     case axTree
     case axPoint
     case axSweep
@@ -95,6 +96,9 @@ public enum PaneOperation: Sendable, Equatable {
 
         case .crown:
             return "crown"
+
+        case .fold:
+            return "fold"
 
         case .axTree:
             return "ax.tree"

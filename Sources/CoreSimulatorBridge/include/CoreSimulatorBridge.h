@@ -14,3 +14,4 @@
 #import "SimPurpleHID.h"
 #import "SimAccessibility.h"
 #import "SimLocation.h"
+#import "SimFoldControl.h"

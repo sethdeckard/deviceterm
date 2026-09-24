@@ -32,8 +32,9 @@ func panesListEntryJSONContract() throws {
         surface: .init(sequence: 42, width: 1_200, height: 800)
     )
     let expected = #"{"capabilities":{"accessibility":true,"button":true,"#
-        + #""crown":true,"key":true,"location":true,"rotate":true,"text":true,"#
-        + #""touch":true},"family":"phone","name":"Primary","orientation":"landscapeLeft","#
+        + #""crown":true,"fold":false,"key":true,"location":true,"rotate":true,"#
+        + #""text":true,"touch":true},"family":"phone","name":"Primary","#
+        + #""orientation":"landscapeLeft","#
         + #""orientationConfirmationSupported":true,"#
         + #""paneId":"PANE","#
         + #""shortId":"phn001","state":"rendering","surface":{"height":800,"sequence":42,"#

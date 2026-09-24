@@ -34,6 +34,7 @@ struct DeviceTerm: ParsableCommand {
             KeyCommand.self,
             TextCommand.self,
             RotateCommand.self,
+            FoldCommand.self,
             CrownCommand.self,
             AxCommand.self,
             WaitCommand.self,
