@@ -519,3 +519,27 @@ func targetedDeliverySurfaceReachesOneSubscription() async throws {
     #expect(probeA.value == 1)
     #expect(probeB.value == 0)
 }
+
+@Test
+func eventOnlyXPCSubscriptionRegistersNoSurfaceDeliveryOrLease() async throws {
+    let registry = PaneSubscriptionRegistry()
+    let coordinator = PaneCoordinator(subscriptionRegistry: registry)
+    let backend = LeasingMockBackend()
+    let pane = try await coordinator.createPane(
+        target: .sim(udid: "event-only"),
+        sessionId: UUID(),
+        acquire: { PaneCoordinator.AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone") }
+    )
+    let context = SubscriptionContext(
+        subscriptionToken: UUID(),
+        connectionId: 7,
+        lifecycle: SubscriptionLifecycle(),
+        surfaceDelivery: { _ in Issue.record("event-only subscriber received a surface") }
+    )
+    let observer = try await coordinator.subscribe(
+        paneId: pane.paneId, as: .guiPeer, context: context, frames: false
+    )
+    #expect(backend.registeredTokens.isEmpty)
+    #expect(await registry.hasEntry(paneId: pane.paneId, connectionId: 7) == false)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: observer.subscriptionId)
+}

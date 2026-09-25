@@ -1122,16 +1122,48 @@ func handleWaitSurfaceQuiescent(
     // `--settle` reaches the deadline instead of killing the process.
     let converted = UInt64(clamping: settleMs).multipliedReportingOverflow(by: 1_000_000)
     let settleNanoseconds = converted.overflow ? UInt64.max : converted.partialValue
+    let credentials = try creds ?? readSessionCredentials()
+    var observation: (any CLISurfaceObservation)?
+    var initialSequence: UInt64?
     var held: WaitEngine.SurfaceHold?
+    defer { observation?.close() }
     return try handleWait(
         pane: pane,
         condition: "surface.quiescent",
         timeoutMs: timeoutMs,
         transport: transport,
         output: output,
-        creds: creds,
+        creds: credentials,
         runtime: runtime
     ) { entry, context in
+        if observation == nil {
+            // A simulator subscription requests a new frame even when the
+            // source is idle. Ignore its cached replay while resume is pending.
+            switch entry.target {
+            case .device:
+                break
+
+            default:
+                initialSequence = entry.surface?.sequence
+            }
+            do {
+                observation = try transport.observeSurface(
+                    paneId: entry.paneId,
+                    credentials: credentials,
+                    timeoutSeconds: min(
+                        try context.remainingSeconds(), AppCommandDeadline.cliRequestTimeoutSeconds
+                    )
+                )
+            } catch let CLIError.classified(code, _) where code == .transportTimeout && context.isExpired {
+                throw WaitEngine.Failure.deadline
+            }
+        }
+        guard let observedSequence = try observation?.latestSequence(),
+            initialSequence.map({ observedSequence > $0 }) ?? true,
+            observedSequence == entry.surface?.sequence else {
+            held = nil
+            return .pending
+        }
         // No surface means nothing has been drawn, which is not the same as
         // being still. Waiting for a first frame is `wait pane rendering`.
         guard let surface = entry.surface else {

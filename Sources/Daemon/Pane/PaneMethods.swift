@@ -117,6 +117,7 @@ public enum PaneMethods {
 
     public struct SubscribeParams: Codable, Sendable {
         public let paneId: String
+        public var frames: Bool?
     }
 
     public struct SurfaceChangedEvent: Codable, Sendable, Equatable {
@@ -336,7 +337,8 @@ public enum PaneMethods {
                 (subscriptionId, paneStream) = try await paneCoordinator.subscribe(
                     paneId: paneId,
                     as: principal,
-                    context: context
+                    context: context,
+                    frames: params.frames ?? true
                 )
             } catch let error as PaneError {
                 throw mapPaneError(error)

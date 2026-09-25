@@ -26,11 +26,6 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         case twoFinger(CGPoint, CGPoint)
     }
 
-    /// Consecutive failed acquires before one controlled pool recovery. The
-    /// device path's figure, for the same reason: long enough that an ordinary
-    /// stall rides through, short enough that a pool which stays unusable is
-    /// caught in about two seconds at 60 Hz.
-    private static let exhaustionRecoveryThreshold = 120
     private static let defaultPoolSlots = 6
 
     /// The CoreSimulator UDID: needed for the lazy AX-client lookup.
@@ -132,67 +127,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.pool = pool
         self.display = SimDisplayLane(
             handle: displayHandle,
-            pool: pool,
-            recoveryThreshold: Self.exhaustionRecoveryThreshold
+            pool: pool
         )
-    }
-
-    /// Copy each surface from `surfaces` into a pooled slot and publish it.
-    ///
-    /// Separate from `startFrames` so the exhaustion policy is reachable
-    /// without a live CoreSimulator display: the loop needs the stream and the
-    /// pool, and nothing from the bridge.
-    ///
-    /// Unreleased subscription holds are one expected cause of sustained
-    /// exhaustion; `acquire` also returns nil when an epoch rotation exceeds
-    /// the quarantine budget or a slot allocation fails. The pump attempts one
-    /// controlled recovery and fails the pane through `fail` on a second bout,
-    /// whatever the cause. Failing is the point: it bounds what a pool that
-    /// stopped yielding slots can cost the daemon, and the pane recovers by
-    /// re-attaching.
-    static func pumpFrames(
-        surfaces: AsyncStream<RetainedSurface>,
-        pool: LeasedSurfacePool,
-        recoveryThreshold: Int,
-        publish: @Sendable (PublishedSurface) -> Void,
-        fail: @Sendable (String) -> Void
-    ) async {
-        var consecutiveDrops = 0
-        for await source in surfaces {
-            let dims = source.withRef { (IOSurfaceGetWidth($0), IOSurfaceGetHeight($0)) }
-            guard let published = await pool.acquire(width: dims.0, height: dims.1) else {
-                consecutiveDrops += 1
-                if consecutiveDrops >= recoveryThreshold {
-                    consecutiveDrops = 0
-                    switch await pool.recoverFromExhaustion() {
-                    case .recovered:
-                        DiagnosticLog.attach.notice(
-                            """
-                            surface pool unavailable; recovery will retry on \
-                            the next frame
-                            """
-                        )
-
-                    case .exhausted:
-                        fail("surface pool stayed unavailable after "
-                            + "recovery; the mirror can't continue")
-                        return
-                    }
-                }
-                continue
-            }
-            consecutiveDrops = 0
-            // CoreSimulator owns the source and keeps writing to it, so the
-            // published frame is a copy into the pool slot rather than the live
-            // alias. That is what the lease accounts for, and it also keeps the
-            // consumer from reading a surface while it is being written.
-            published.surface.withRef { destination in
-                source.withRef { origin in
-                    _ = SurfaceCopy.copy(from: origin, to: destination)
-                }
-            }
-            publish(published)
-        }
     }
 
     // MARK: Ownership-transfer input fence
@@ -412,6 +348,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func stopFrames() { display.stopFrames() }
+
+    func setFrameDemand(_ demanded: Bool) { display.setFrameDemand(demanded) }
 
     // MARK: Lease forwarders (to the pool)
 

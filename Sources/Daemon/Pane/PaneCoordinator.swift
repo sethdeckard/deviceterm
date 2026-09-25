@@ -66,6 +66,7 @@ public actor PaneCoordinator {
         /// struct is copied out of the dictionary to send, and the queue has
         /// to be the same one the consumer drains.
         let channel: ConflatingEventChannel
+        var frames = false
         let principal: PaneAccessPrincipal
         let subscriptionToken: UUID?
         let connectionId: UInt64?
@@ -189,6 +190,7 @@ public actor PaneCoordinator {
         /// taken before they were enqueued.
         let orientationGate = DispatchQueue(label: "com.deviceterm.daemon.pane-orientation")
         var subscribers: [UUID: Subscriber] = [:]
+        var frameDemand = true
         var state: PaneLifecycle
         /// Set while an ownership transfer (adoption) is quiescing this
         /// record across its `await`s. The `authorize` gate consults it:
@@ -1570,6 +1572,7 @@ public actor PaneCoordinator {
             admissionToken = nil
             await displayBootstrapSupervisor.release(token: committed)
         }
+        reconcileFrameDemand(record)
         return resultFor(record)
     }
 
@@ -1598,7 +1601,8 @@ public actor PaneCoordinator {
     func subscribe(
         paneId: UUID,
         as principal: PaneAccessPrincipal,
-        context: SubscriptionContext? = nil
+        context: SubscriptionContext? = nil,
+        frames: Bool = true
     ) async throws -> (subscriptionId: UUID, stream: PaneEventStream) {
         // Ownership gate (`gatesInput: false`, because this is presentation, not
         // input, so a validated GUI keeps rendering across a transfer; a
@@ -1623,7 +1627,7 @@ public actor PaneCoordinator {
         record.subscribers[subscriptionId] = Subscriber(
             channel: channel,
             principal: principal,
-            subscriptionToken: context?.subscriptionToken,
+            subscriptionToken: frames ? context?.subscriptionToken : nil,
             connectionId: context?.connectionId,
             lifecycle: context?.lifecycle
         )
@@ -1641,7 +1645,7 @@ public actor PaneCoordinator {
         // pane-agnostic delivery capability on `context`; register that token
         // only against the authorized pane so a rejected foreign subscription
         // creates no side-band slot. UDS (nil context) supplies no surface lane.
-        if let context {
+        if frames, let context {
             await subscriptionRegistry?.registerSurfaceDelivery(
                 paneId: paneId,
                 connectionId: context.connectionId,
@@ -1671,7 +1675,7 @@ public actor PaneCoordinator {
         // every frame from a backend whose pool the target didn't predict. A
         // backend without a pool inherits the protocol's no-op forwarders,
         // which is what makes registering unconditionally safe.
-        if let context, let backend = record.backend {
+        if frames, let context, let backend = record.backend {
             await backend.registerLeaseToken(
                 context.subscriptionToken,
                 connectionId: context.connectionId
@@ -1724,7 +1728,7 @@ public actor PaneCoordinator {
         // begins delivering, then replay the current state. Activation
         // *after* the terminal/transfer checks means no frame can ship into
         // a subscription that was about to be torn down.
-        if let context {
+        if frames, let context {
             await subscriptionRegistry?.activate(subscriptionId: context.subscriptionToken)
         }
         channel.send(.stateChanged(paneId: paneId, state: record.state))
@@ -1740,7 +1744,7 @@ public actor PaneCoordinator {
             .orientationChanged(paneId: paneId, orientation: record.presentationOrientation)
         )
 
-        if record.lastSequence > 0, let published = record.currentSurface {
+        if frames, record.lastSequence > 0, let published = record.currentSurface {
             channel.send(
                 .surfaceChanged(
                 paneId: paneId,
@@ -1773,6 +1777,13 @@ public actor PaneCoordinator {
             await revokeSubscriber(record: record, subscriptionId: subscriptionId)
             throw PaneError.notFound(paneId: paneId)
         }
+        if !Task.isCancelled, record.subscribers[subscriptionId] != nil {
+            record.subscribers[subscriptionId]?.frames = frames
+            reconcileFrameDemand(record, refresh: frames)
+        } else {
+            await revokeSubscriber(record: record, subscriptionId: subscriptionId)
+            throw CancellationError()
+        }
         return (subscriptionId, stream)
     }
 
@@ -1800,7 +1811,16 @@ public actor PaneCoordinator {
         guard let record = panes[paneId] else { return }
         if let subscriber = record.subscribers.removeValue(forKey: subscriptionId) {
             subscriber.channel.finish()
+            reconcileFrameDemand(record)
         }
+    }
+
+    private func reconcileFrameDemand(_ record: Record, refresh: Bool = false) {
+        let demanded = (record.state == .booting && record.lastSequence == 0)
+            || record.subscribers.values.contains(where: \.frames)
+        guard demanded != record.frameDemand || (refresh && demanded) else { return }
+        record.frameDemand = demanded
+        record.backend?.setFrameDemand(demanded)
     }
 
     /// One pull from a subscriber's channel, parking until something arrives.
@@ -1920,6 +1940,7 @@ public actor PaneCoordinator {
     private func revokeSubscriber(record: Record, subscriptionId: UUID) async {
         guard let subscriber = record.subscribers.removeValue(forKey: subscriptionId) else { return }
         subscriber.channel.finish()
+        reconcileFrameDemand(record)
         if let token = subscriber.subscriptionToken {
             await subscriptionRegistry?.unregister(subscriptionId: token)
         }
@@ -4322,11 +4343,14 @@ public actor PaneCoordinator {
         } else {
             statePublication = nil
         }
+        // Bootstrap demand lasts through this first committed frame, even
+        // when the GUI is hidden and its subscription carries events only.
+        reconcileFrameDemand(record)
         // JSON evt path: into the per-record subscribers' channels, where a
         // frame notice folds into the pending one if the reader is behind.
         // The same send is what `PaneMethods.subscribe` encodes into the
         // wire-level `surface.changed` payload: JSON only.
-        for (_, subscriber) in record.subscribers {
+        for (_, subscriber) in record.subscribers where subscriber.frames {
             subscriber.channel.send(.surfaceChanged(paneId: paneId, sequence: sequence))
         }
         // The ordered pump handles the cross-actor side-band path after this

@@ -8,5 +8,5 @@ import Foundation
 /// -32001 retry) without a socket; production routes through the concrete
 /// transport enum.
 protocol DaemonSubscribeTransport: Sendable {
-    func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent>
+    func subscribePane(paneId: String, frames: Bool) async throws -> AsyncStream<PaneEvent>
 }

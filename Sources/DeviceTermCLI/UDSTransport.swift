@@ -6,6 +6,16 @@ import Foundation
 /// Production transport: one Unix-domain-socket round-trip per call via
 /// `roundTrip`, including the env-cred auto-auth handshake.
 struct UDSTransport: CLITransport {
+    func observeSurface(
+        paneId: String,
+        credentials: (sessionId: String, cap: String),
+        timeoutSeconds: Double
+    ) throws -> any CLISurfaceObservation {
+        try UDSSurfaceObservation.connect(
+            paneId: paneId, credentials: credentials, timeoutSeconds: timeoutSeconds
+        )
+    }
+
     func send(_ envelope: RPCEnvelope, timeoutSeconds: Double) throws -> Data {
         try send(timeoutSeconds: timeoutSeconds) { envelope }
     }

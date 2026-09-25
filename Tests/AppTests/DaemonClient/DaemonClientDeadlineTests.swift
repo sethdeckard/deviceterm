@@ -133,7 +133,7 @@ struct DaemonClientDeadlineTests {
             self.delay = delay
         }
 
-        func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+        func subscribePane(paneId: String, frames: Bool = true) async throws -> AsyncStream<PaneEvent> {
             try await Task.sleep(nanoseconds: delay)
             return AsyncStream { $0.finish() }
         }

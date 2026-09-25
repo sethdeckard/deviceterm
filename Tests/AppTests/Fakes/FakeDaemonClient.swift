@@ -223,6 +223,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// call; later calls take everything.
     var restoreOwnershipUnresolved = 0
     private(set) var closePaneCalls: [ClosePaneCall] = []
+    private(set) var subscribeFrameRequests: [Bool] = []
     private(set) var subscribePaneCalls: [String] = []
     /// Errors to throw from `subscribePane`, consumed one per call from the
     /// front. A `nil` entry (or an empty queue) yields a normal stream. Lets
@@ -1162,8 +1163,9 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
 
     // MARK: - PaneSubscribing
 
-    func subscribePane(paneId: String) throws -> AsyncStream<PaneEvent> {
+    func subscribePane(paneId: String, frames: Bool = true) throws -> AsyncStream<PaneEvent> {
         subscribePaneCalls.append(paneId)
+        subscribeFrameRequests.append(frames)
         if !subscribePaneFailures.isEmpty, let error = subscribePaneFailures.removeFirst() {
             throw error
         }

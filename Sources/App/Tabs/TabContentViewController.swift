@@ -96,6 +96,7 @@ final class TabContentViewController: NSViewController {
     /// must not re-attach on the next snapshot.
     private var handledUDIDs: Set<String> = []
     private var isTornDown = false
+    private var wantsSimulatorFrames = false
     private var discoveryObserverToken: OwnedSimDiscoveryObserverToken?
     private var observation: ObservationToken?
     /// Separate from `observation` on purpose: the reconcile closure never
@@ -913,6 +914,11 @@ final class TabContentViewController: NSViewController {
 
     // MARK: - Sim-pane reconcile
 
+    func setSimulatorFrameDemand(_ demanded: Bool) {
+        wantsSimulatorFrames = demanded
+        for pane in simPaneVCByUDID.values { pane.setFrameDemand(demanded) }
+    }
+
     /// Reflect TabState.simPanes into the per-VC dict: create a
     /// SimulatorPaneViewController for each new SimPaneState, drop
     /// the VC for any removed one. The Router already did the
@@ -960,6 +966,7 @@ final class TabContentViewController: NSViewController {
         // into place per nav-state order.
         for simPane in tabState.simPanes where !current.contains(simPane.udid) {
             let paneVC = SimulatorPaneViewController(simPane: simPane, daemonClient: daemonClient)
+            paneVC.setFrameDemand(wantsSimulatorFrames)
             simPaneActions.wire(paneVC: paneVC, simPane: simPane)
             wire(sizePresetReporting: paneVC, target: simPane.target)
             wire(focusReporting: paneVC, slot: .sim(udid: simPane.udid))

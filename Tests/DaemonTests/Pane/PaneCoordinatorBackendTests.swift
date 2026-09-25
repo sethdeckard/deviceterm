@@ -79,6 +79,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// deliver a frame or a fatal while it is still parked.
     private(set) var onFatalHandler: (@Sendable (String) -> Void)?
     private(set) var onOrientationHandler: (@Sendable (Orientation) -> Void)?
+    private(set) var frameDemandChanges: [Bool] = []
     private(set) var startFramesCalled = false
     private(set) var shutdownCalled = false
     private(set) var shutdownCalls = 0
@@ -243,6 +244,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func stopFrames() {}
+    func setFrameDemand(_ demanded: Bool) { frameDemandChanges.append(demanded) }
 
     // swiftlint:disable:next async_without_await
     func poolCounters() async -> SurfacePoolCounters? { poolCountersResult }

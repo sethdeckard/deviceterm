@@ -7,6 +7,8 @@ import Testing
 @testable import DeviceTermCLI
 
 private final class WaitScriptTransport: CLITransport {
+    let observation = WaitSurfaceObservation()
+    private(set) var observationCount = 0
     var responses: [Result<Data, CLIError>]
     private(set) var sent: [RPCEnvelope] = []
     private(set) var timeouts: [Double] = []
@@ -24,7 +26,20 @@ private final class WaitScriptTransport: CLITransport {
         guard !responses.isEmpty else {
             throw CLIError.invalidResponse("wait test exhausted its scripted responses")
         }
-        return try responses.removeFirst().get()
+        let data = try responses.removeFirst().get()
+        if envelope.method == RPCMethod.paneDeviceList.rawValue {
+            observation.sequence = try JSONDecoder().decode([PanesListEntry].self, from: data).first?.surface?.sequence
+        }
+        return data
+    }
+
+    func observeSurface(
+        paneId: String, credentials: (sessionId: String, cap: String), timeoutSeconds: Double
+    ) -> any CLISurfaceObservation {
+        observationCount += 1
+        #expect(credentials.sessionId == waitCreds.sessionId)
+        #expect(timeoutSeconds > 0)
+        return observation
     }
 
     func send(
@@ -34,6 +49,19 @@ private final class WaitScriptTransport: CLITransport {
         beforeBuildingEnvelope?()
         return try send(try buildingEnvelope(), timeoutSeconds: timeoutSeconds)
     }
+}
+
+private final class WaitSurfaceObservation: CLISurfaceObservation {
+    var sequence: UInt64?
+    var closed = false
+    var failure: CLIError?
+
+    func latestSequence() throws -> UInt64? {
+        if let failure { throw failure }
+        return sequence
+    }
+
+    func close() { closed = true }
 }
 
 private final class WaitTestClock: @unchecked Sendable {
@@ -1993,9 +2021,9 @@ private func quiescenceOutcome(
 ) throws -> CommandOutcome {
     let clock = WaitTestClock()
     let transport = WaitScriptTransport(
-        try surfaces.map { .success(try waitData([waitPane(surface: $0)])) }
+        try ([nil] + surfaces).map { .success(try waitData([waitPane(surface: $0)])) }
     )
-    return try handleWaitSurfaceQuiescent(
+    let outcome = try handleWaitSurfaceQuiescent(
         pane: nil,
         settleMs: settleMs,
         timeoutMs: timeoutMs,
@@ -2004,6 +2032,9 @@ private func quiescenceOutcome(
         creds: waitCreds,
         runtime: clock.runtime
     )
+    #expect(transport.observationCount == 1)
+    #expect(transport.observation.closed)
+    return outcome
 }
 
 @Test
@@ -2568,4 +2599,47 @@ func anAbsurdSettleWindowTimesOutRatherThanTrapping() throws {
 
     #expect(outcome.failure?.code == .waitTimeout)
     #expect(outcome.exitCode == 124)
+}
+
+@Test
+func cachedHiddenSurfaceCannotSatisfyQuiescenceBeforeResume() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport(try Array(repeating: surface(9), count: 12).map {
+        .success(try waitData([waitPane(surface: $0)]))
+    })
+    let outcome = try handleWaitSurfaceQuiescent(
+        pane: nil,
+        settleMs: 0,
+        timeoutMs: 1_000,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+    #expect(outcome.failure?.code == .waitTimeout)
+    #expect(transport.observationCount == 1)
+    #expect(transport.observation.closed)
+}
+
+@Test
+func surfaceSubscriptionFailureClosesDemandAndCannotSatisfyWait() throws {
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([.success(try waitData([waitPane(surface: surface(1))]))])
+    transport.observation.failure = .transportInterrupted("lost subscription")
+    do {
+        _ = try handleWaitSurfaceQuiescent(
+            pane: nil,
+            settleMs: 0,
+            timeoutMs: 1_000,
+            transport: transport,
+            output: .json,
+            creds: waitCreds,
+            runtime: clock.runtime
+        )
+        Issue.record("expected the surface subscription error to propagate")
+    } catch let CLIError.classified(code, message) {
+        #expect(code == .transportInterrupted)
+        #expect(message == "lost subscription")
+    }
+    #expect(transport.observation.closed)
 }

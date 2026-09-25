@@ -247,6 +247,8 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
 ///
 /// Only ever read and written under `deliveryGate`.
 @property (nonatomic, assign) uint64_t registrationGeneration;
+@property (nonatomic, copy, nullable) CSBDisplaySurfaceCallback invalidationCallback;
+@property (nonatomic, assign) BOOL framesPaused;
 
 /// Serialises surface delivery against rebinding.
 ///
@@ -551,7 +553,7 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
 
     self.renderable = lit;
     [self _recordBoundPanelFor:lit];
-    BOOL bound = [self _registerSurfaceCallbacksOn:lit];
+    BOOL bound = self.framesPaused || [self _registerSurfaceCallbacksOn:lit];
     // Orientation observation has to move with the binding. Screen callbacks
     // are the only thing that makes a later fold noticeable, so a handle that
     // kept the new panel without them would show the right picture now and
@@ -569,15 +571,20 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
         // instead leave the pane correct and stuck.
         self.renderable = current;
         [self _recordBoundPanelFor:current];
-        [self _registerSurfaceCallbacksOn:current];
+        if (!self.framesPaused) [self _registerSurfaceCallbacksOn:current];
         if (wantsScreenCallbacks) [self _registerScreenCallbacksWithError:NULL];
         return NO;
     }
 
-    // An idle guest can go seconds without drawing, so hand over the newly
-    // bound surface now rather than leaving the consumer on the old panel's
-    // last frame. Under the gate, so a delivery the bump above rejected can
-    // never land after this one. +1 retained; balance it once consumed.
+    // When frames are active, seed the new panel even if the guest is idle.
+    // Invalidation consumers receive NULL; surface consumers receive the bound
+    // surface under the delivery gate.
+    if (self.framesPaused) return YES;
+    if (self.invalidationCallback) {
+        self.invalidationCallback(NULL);
+        return YES;
+    }
+    // +1 retained; balance it once consumed.
     IOSurfaceRef ref = [self currentSurface];
     if (ref) {
         dispatch_sync(self.deliveryGate, ^{
@@ -628,23 +635,31 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
         // what makes the rejection stick.
         dispatch_sync(strong.deliveryGate, ^{
             if (strong.registrationGeneration != generation) return;
-            CSBDisplaySurfaceCallback cb = strong.callback;
-            if (cb) cb(ref);
+            if (strong.invalidationCallback) {
+                strong.invalidationCallback(ref);
+            } else {
+                CSBDisplaySurfaceCallback cb = strong.callback;
+                if (cb) cb(ref);
+            }
         });
     };
 
-    // Damage-rectangles callback: registering it is the load-bearing
-    // side effect: on iOS 26.4 the proxy doesn't allocate its IOSurface
-    // until *some* damage callback exists. When it fires we
-    // opportunistically re-pull the current surface to catch the first
-    // frame even if the dedicated IOSurface callbacks haven't fired yet.
-    // `currentSurface` returns a +1 retained ref; balance the +1 with
-    // a CFRelease after the callback returns (the callback's own
-    // RetainedSurface wrapper bumps the count again for its lifetime).
+    // Keep the registration: some runtimes allocate the framebuffer only
+    // while a damage consumer exists. Paced consumers receive a cheap dirty
+    // signal; their next read resolves the newest surface off this queue.
     void (^damageCallback)(NSArray *) = ^(NSArray *_unused) {
         SimDisplayHandle *strong = weakSelf;
         if (!strong) return;
-        IOSurfaceRef ref = [strong currentSurface];
+        __block BOOL needsRead = NO;
+        dispatch_sync(strong.deliveryGate, ^{
+            if (strong.registrationGeneration != generation) return;
+            if (strong.invalidationCallback) strong.invalidationCallback(NULL);
+            else needsRead = strong.callback != nil;
+        });
+        if (!needsRead) return;
+        // Legacy callers still receive a surface. Use the captured proxy so
+        // a concurrent stop cannot change the object being read.
+        IOSurfaceRef ref = [strong _currentSurfaceFrom:renderable];
         if (!ref) return;
         dispatch_sync(strong.deliveryGate, ^{
             if (strong.registrationGeneration != generation) return;
@@ -714,14 +729,19 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
                 NSLocalizedDescriptionKey: @"Renderable lacks any registerCallbackWithUUID: shape",
             }];
         }
+        [self _unregisterSurfaceCallbacksOn:renderable];
         self.renderable = nil;
         return NO;
     }
 
     self.running = YES;
 
-    // Fire synchronously with whatever surface is already bound, so
-    // consumers don't have to wait for the first change event.
+    // Seed synchronously with NULL for invalidation consumers, or the bound
+    // surface for surface consumers.
+    if (self.invalidationCallback) {
+        self.invalidationCallback(NULL);
+        return YES;
+    }
     // `currentSurface` returns +1 retained; balance with CFRelease
     // after the callback has consumed it (the callback's
     // RetainedSurface wrapper bumps the count again for its
@@ -735,6 +755,34 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
     return YES;
 }
 
+- (BOOL)startInvalidationsWithCallback:(CSBDisplaySurfaceCallback)callback error:(NSError **)error {
+    dispatch_sync(self.deliveryGate, ^{ self.invalidationCallback = callback; });
+    if (self.running && self.framesPaused) {
+        if (![self _registerSurfaceCallbacksOn:self.renderable]) {
+            [self _unregisterSurfaceCallbacksOn:self.renderable];
+            if (error) *error = [NSError errorWithDomain:kCSBErrorDomain
+                                                  code:CSBDisplayHandleErrorCallbackRegister
+                                              userInfo:nil];
+            return NO;
+        }
+        self.framesPaused = NO;
+        callback(NULL);
+        return YES;
+    }
+    return [self startWithCallback:^(IOSurfaceRef surface) {} error:error];
+}
+
+- (void)pauseFrames {
+    dispatch_sync(self.deliveryGate, ^{
+        self.registrationGeneration += 1;
+        self.invalidationCallback = nil;
+        self.callback = nil;
+    });
+    if (!self.running || self.framesPaused) return;
+    self.framesPaused = YES;
+    [self _unregisterSurfaceCallbacksOn:self.renderable];
+}
+
 /// The renderable's current IOSurface, or NULL. Returns a **+1 retained**
 /// ref: the source object CoreSimulator hands back is typically
 /// autoreleased, so a bare `(__bridge IOSurfaceRef)` would dangle the
@@ -744,7 +792,11 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
 /// after the `CFRetain` returns so ARC can't drain the autoreleased
 /// reference mid-call.
 - (nullable IOSurfaceRef)currentSurface {
-    id<SimDisplayIOSurfaceRenderable> renderable = self.renderable;
+    return [self _currentSurfaceFrom:self.renderable];
+}
+
+- (nullable IOSurfaceRef)_currentSurfaceFrom:(id<SimDisplayIOSurfaceRenderable>)renderable
+    CF_RETURNS_RETAINED {
     if (!renderable) return NULL;
     id surface = nil;
     @try {
@@ -943,11 +995,11 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
 #pragma mark Stop
 
 - (void)stop {
-    self.callback = nil;
+    [self pauseFrames];
     [self stopOrientation];
     if (!self.running) return;
     self.running = NO;
-    [self _unregisterSurfaceCallbacksOn:self.renderable];
+    self.framesPaused = NO;
     self.renderable = nil;
 }
 

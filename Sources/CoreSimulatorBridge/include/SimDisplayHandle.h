@@ -44,9 +44,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// `CFRetain`/`IOSurfaceIncrementUseCount` if it intends to outlive
 /// the callback (the daemon does so via `RetainedSurface`).
 ///
-/// The parameter is nullable for future-proofing, but the bridge never
-/// invokes the block with NULL: every delivery path checks for a bound
-/// surface first and skips the callback when there isn't one.
+/// `start(callback:)` delivers only bound surfaces.
+/// `startInvalidations(callback:)` also delivers NULL for damage or a seed
+/// request, so a paced caller can defer the remote surface read.
 ///
 /// The block fires on whatever queue CoreSimulator's display proxy
 /// delivers from (not the main queue). Consumers that need a specific
@@ -127,6 +127,15 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 - (BOOL)startWithCallback:(CSBDisplaySurfaceCallback)callback
                     error:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(start(callback:));
+
+/// Surface callbacks carry a surface; damage callbacks carry NULL without a
+/// remote read. Resolve NULL on the owning lane when a consumer needs a frame.
+- (BOOL)startInvalidationsWithCallback:(CSBDisplaySurfaceCallback)callback
+                               error:(NSError * _Nullable * _Nullable)error
+    NS_SWIFT_NAME(startInvalidations(callback:));
+
+/// Suspend frame callbacks, retaining panel identity and orientation observation.
+- (void)pauseFrames;
 
 /// Read the renderable's current surface. Returns NULL if no surface
 /// is bound yet. Useful as a fallback for the rare stuck-state where

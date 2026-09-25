@@ -48,7 +48,11 @@ final class SimDisplayLane: @unchecked Sendable {
     private var handle: SimDisplayHandle?
     private var frameTask: Task<Void, Never>?
     /// Hands surfaces from the bridge's callback queue to the copy pump.
-    private var surfaceContinuation: AsyncStream<RetainedSurface>.Continuation?
+    private var frameSignal: SimFrameSignal?
+    private var frameCallbacks: (
+        publish: @Sendable (PublishedSurface) -> Void,
+        fail: @Sendable (String) -> Void
+    )?
     /// The in-flight search for a panel swap, if a screen-properties change
     /// started one. Owned by `queue`, like the handle it drives.
     private var panelSwapTask: Task<Void, Never>?
@@ -57,12 +61,10 @@ final class SimDisplayLane: @unchecked Sendable {
     private var onPanelChange: (@Sendable (UInt32) -> Void)?
 
     private let pool: LeasedSurfacePool
-    private let recoveryThreshold: Int
 
-    init(handle: SimDisplayHandle, pool: LeasedSurfacePool, recoveryThreshold: Int) {
+    init(handle: SimDisplayHandle, pool: LeasedSurfacePool) {
         self.handle = handle
         self.pool = pool
-        self.recoveryThreshold = recoveryThreshold
     }
 
     // MARK: - Bootstrap
@@ -126,6 +128,43 @@ final class SimDisplayLane: @unchecked Sendable {
             invalidateFrameRun()
             handle?.stop()
             releaseFrameRunLocked()
+        }
+    }
+
+    /// Enqueued synchronously by the coordinator, preserving demand order
+    /// without blocking its actor on a CoreSimulator call.
+    func setFrameDemand(_ demanded: Bool) {
+        if !demanded { invalidateFrameRun() }
+        queue.async { [self] in
+            guard let handle, let callbacks = frameCallbacks else { return }
+            if demanded {
+                if frameTask != nil {
+                    frameSignal?.notify()
+                    return
+                }
+                do {
+                    try startFramesLocked(onFrame: callbacks.publish, onFatal: callbacks.fail)
+                } catch {
+                    callbacks.fail("could not resume simulator display: \(error)")
+                }
+            } else {
+                invalidateFrameRun()
+                handle.pauseFrames()
+                releaseFrameRunLocked()
+            }
+        }
+    }
+
+    private func readFrame(token: UInt64) async -> RetainedSurface? {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                guard frameGate.sync(execute: { token == frameToken }),
+                    let surface = handle?.currentSurface() else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: RetainedSurface(surface))
+            }
         }
     }
 
@@ -216,7 +255,7 @@ final class SimDisplayLane: @unchecked Sendable {
     ) throws {
         guard let handle else { throw DeviceBackendError.notActive }
         let pool = self.pool
-        let recoveryThreshold = self.recoveryThreshold
+        frameCallbacks = (onFrame, onFatal)
         // Install a fresh run token; teardown bumps it to fence late callbacks.
         // Checked and invoked together under `frameGate`, so teardown and a
         // publish are mutually ordered with no window between them.
@@ -233,32 +272,23 @@ final class SimDisplayLane: @unchecked Sendable {
             guard let self else { return }
             gate.sync { if token == self.frameToken { onFatal(reason) } }
         }
-        // The callback fires on the bridge's own queue and must not block it,
-        // so it only hands the surface over. Latest-only: the pump copies at
-        // whatever rate the pool allows, and an older frame waiting behind a
-        // newer one has no value on a mirror.
-        let (surfaces, continuation) = AsyncStream.makeStream(
-            of: RetainedSurface.self,
-            bufferingPolicy: .bufferingNewest(1)
-        )
-        surfaceContinuation?.finish()
-        surfaceContinuation = continuation
-        frameTask = Task {
-            await SimDeviceBackend.pumpFrames(
-                surfaces: surfaces,
+        releaseFrameRunLocked()
+        let signal = SimFrameSignal()
+        frameSignal = signal
+        frameTask = Task { [weak self] in
+            await SimFramePump(
+                signal: signal,
                 pool: pool,
-                recoveryThreshold: recoveryThreshold,
+                read: { [weak self] in await self?.readFrame(token: token) },
                 publish: publish,
                 fail: fail
-            )
+            ).run()
         }
-        // Wrap on the bridge's queue so the retain/use-count pairing happens
-        // before the autoreleased source ref escapes.
         do {
-            try handle.start { surfaceRef in
-                guard let surfaceRef else { return }
-                continuation.yield(RetainedSurface(surfaceRef))
+            try handle.startInvalidations { surface in
+                signal.notify(surface.map(RetainedSurface.init))
             }
+            signal.notify()
         } catch {
             // The continuation and pump task are already installed above, so a
             // throw here would leave them running against a stream nothing
@@ -308,10 +338,8 @@ final class SimDisplayLane: @unchecked Sendable {
     /// panel never asks. A search already running is replaced, since the later
     /// properties change describes the more recent posture.
     ///
-    /// The rebind itself is invisible to the frame plumbing: the bridge keeps
-    /// the same callback and moves its registrations, so the pump, the stream,
-    /// and the run token all stay as they are, and the new panel's first frame
-    /// arrives through the path the old one was using.
+    /// After rebinding, an active frame run is replaced with a fresh signal,
+    /// pump, and token.
     private func searchForPanelSwap() {
         queue.async { [self] in
             guard let handle, handle.hasMultiplePanels else { return }
@@ -339,6 +367,14 @@ final class SimDisplayLane: @unchecked Sendable {
                 guard let handle, handle.rebindToLitPanel() else {
                     continuation.resume(returning: false)
                     return
+                }
+                if frameTask != nil, let callbacks = frameCallbacks {
+                    invalidateFrameRun()
+                    do {
+                        try startFramesLocked(onFrame: callbacks.publish, onFatal: callbacks.fail)
+                    } catch {
+                        callbacks.fail("could not resume rebound simulator display: \(error)")
+                    }
                 }
                 onPanelChange?(handle.boundScreenID)
                 continuation.resume(returning: true)
@@ -370,6 +406,7 @@ final class SimDisplayLane: @unchecked Sendable {
         handle?.stopOrientation()
         handle?.stop()
         handle = nil
+        frameCallbacks = nil
         // Held by the lane and closing over the backend, so it goes with the
         // handle rather than outliving the thing it reports about.
         onPanelChange = nil
@@ -377,8 +414,8 @@ final class SimDisplayLane: @unchecked Sendable {
     }
 
     private func releaseFrameRunLocked() {
-        surfaceContinuation?.finish()
-        surfaceContinuation = nil
+        frameSignal?.finish()
+        frameSignal = nil
         frameTask?.cancel()
         frameTask = nil
     }

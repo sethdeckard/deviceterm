@@ -1430,11 +1430,12 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     /// The UDS smoke-mode fallback can't carry the surface payload
     /// (no IOSurface XPC marshalling on UDS) so its
     /// `surfaceChanged` events always carry a `nil` lease.
-    func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+    func subscribePane(paneId: String, frames: Bool = true) async throws -> AsyncStream<PaneEvent> {
         var notReadyAttempts = 0
         while true {
+            try Task.checkCancellation()
             do {
-                return try await subscribePaneOnce(paneId: paneId)
+                return try await subscribePaneOnce(paneId: paneId, frames: frames)
             } catch let DaemonClientError.daemon(code, _)
                 where code == Self.notReadyConnectionCode
                 && notReadyAttempts < Self.maxNotReadyRetries {
@@ -1442,14 +1443,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                 // the mirror (see `request`). The reconnect re-bind lands the
                 // anchor; a transient validation blip recovers.
                 notReadyAttempts += 1
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                try await Task.sleep(nanoseconds: 100_000_000)
             }
         }
     }
 
-    private func subscribePaneOnce(paneId: String) async throws -> AsyncStream<PaneEvent> {
+    private func subscribePaneOnce(paneId: String, frames: Bool = true) async throws -> AsyncStream<PaneEvent> {
         do {
-            return try await rawSubscribePane(paneId: paneId)
+            return try await rawSubscribePane(paneId: paneId, frames: frames)
         } catch let DaemonClientError.daemon(code, message)
             where code == Self.unauthorizedConnectionCode {
             // A reconnect (daemon respawn / XPC interruption) leaves the
@@ -1464,31 +1465,32 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             guard try await reauthenticateAfterReconnect() else {
                 throw DaemonClientError.daemon(code: code, message: message)
             }
-            return try await rawSubscribePane(paneId: paneId)
+            return try await rawSubscribePane(paneId: paneId, frames: frames)
         }
     }
 
     /// The handshake is bounded like a one-shot request. Only the handshake
     /// is: the stream it returns is long-lived by design and carries no
     /// deadline.
-    private func rawSubscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
-        let params = try JSONSerialization.data(withJSONObject: ["paneId": paneId])
+    private func rawSubscribePane(paneId: String, frames: Bool = true) async throws -> AsyncStream<PaneEvent> {
+        let params = try JSONSerialization.data(withJSONObject: ["paneId": paneId, "frames": frames])
         if injectedSubscribeTransport == nil, case .xpc = transport {
             // Authentication is its own RPC. Time and classify it separately
             // so a stall before subscribe is not reported as pane.subscribe.
             try await authenticatePaneConnection()
         }
         return try await bounded(.paneSubscribe, lane: .pane) { [self] in
-            try await rawSubscribePaneOnTransport(paneId: paneId, params: params)
+            try await rawSubscribePaneOnTransport(paneId: paneId, frames: frames, params: params)
         }
     }
 
     private func rawSubscribePaneOnTransport(
         paneId: String,
+        frames: Bool,
         params: Data
     ) async throws -> AsyncStream<PaneEvent> {
         if let injectedSubscribeTransport {
-            return try await injectedSubscribeTransport.subscribePane(paneId: paneId)
+            return try await injectedSubscribeTransport.subscribePane(paneId: paneId, frames: frames)
         }
         switch transport {
         case .xpc:

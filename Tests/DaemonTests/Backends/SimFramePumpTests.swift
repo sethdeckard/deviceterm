@@ -5,165 +5,142 @@ import Foundation
 import IOSurface
 import Testing
 
-// `SimDeviceBackend` takes concrete bridge handles, so the frame pump is
-// driven here directly. That reaches the part a live sim cannot exercise on
-// demand: what happens when the consumer stops acknowledging frames and the
-// pool runs out of slots.
-
-/// Collects what the pump published, and optionally keeps every frame so the
-/// pool stays exhausted the way an unacking consumer would leave it.
-///
-/// `@unchecked Sendable`: every access goes through `lock`.
-private final class PublishSink: @unchecked Sendable {
-    private let lock = NSLock()
+/// Virtual time and a source that can change while the pump waits.
+/// All mutable state is serialized by `queue`.
+private final class PumpHarness: @unchecked Sendable {
+    let signal = SimFrameSignal()
+    let pool: LeasedSurfacePool
+    private let queue = DispatchQueue(label: "test.sim-pump")
+    private var instant = ContinuousClock.now
+    private var attempts: [ContinuousClock.Instant] = []
     private var frames: [PublishedSurface] = []
-    private var failures: [String] = []
-    private var published = 0
+    private var failure: String?
+    private var sleeps = 0
+    private var source: RetainedSurface
     private let retaining: Bool
+    private let readLimit: Int
+    var replaceDuringSleep: RetainedSurface?
 
-    /// Every frame the pump handed over, whether or not it is still retained.
-    var count: Int { lock.withLock { published } }
-    var failure: String? { lock.withLock { failures.first } }
-    var leases: [LeaseMetadata] { lock.withLock { frames.compactMap(\.lease) } }
-    var surfaceIDs: [IOSurfaceID] {
-        lock.withLock { frames.map { frame in frame.surface.withRef { IOSurfaceGetID($0) } } }
+    var readTimes: [ContinuousClock.Instant] { queue.sync { attempts } }
+    var sleepCount: Int { queue.sync { sleeps } }
+    var failureMessage: String? { queue.sync { failure } }
+    var published: [PublishedSurface] { queue.sync { frames } }
+    var sourceID: IOSurfaceID { queue.sync { source.withRef { IOSurfaceGetID($0) } } }
+
+    init(retaining: Bool = false, readLimit: Int = 1) throws {
+        self.retaining = retaining
+        self.readLimit = readLimit
+        pool = LeasedSurfacePool(slotCount: 3)
+        source = RetainedSurface(try #require(SurfaceCopy.makeSurface(width: 32, height: 32)))
     }
 
-    init(retaining: Bool) { self.retaining = retaining }
-
-    func publish(_ frame: PublishedSurface) {
-        lock.withLock {
-            published += 1
-            frames.append(frame)
-            // A draining consumer drops each frame once it has it, which
-            // releases the slot's hold. Retaining is what an unacking one does.
-            if !retaining, frames.count > 1 { frames.removeFirst() }
-        }
+    func run() async {
+        signal.notify()
+        await SimFramePump(
+            signal: signal,
+            pool: pool,
+            timing: .init(
+                now: { self.queue.sync { self.instant } },
+                sleep: { deadline in
+                    self.queue.sync {
+                        self.sleeps += 1
+                        self.instant = deadline
+                        if let replacement = self.replaceDuringSleep { self.source = replacement }
+                    }
+                    // Multiple callbacks during the wait still mean one read.
+                    for _ in 0..<1_000 { self.signal.notify() }
+                }
+            ),
+            read: {
+                self.queue.sync {
+                    self.attempts.append(self.instant)
+                    if self.attempts.count >= self.readLimit {
+                        self.signal.finish()
+                    } else {
+                        self.signal.notify()
+                    }
+                    return self.source
+                }
+            },
+            publish: { frame in
+                self.queue.sync {
+                    if !self.retaining { self.frames.removeAll() }
+                    self.frames.append(frame)
+                }
+            },
+            fail: { reason in self.queue.sync { self.failure = reason } }
+        ).run()
     }
-
-    func fail(_ reason: String) {
-        lock.withLock { failures.append(reason) }
-    }
-}
-
-private func makeSourceStream(
-    frames: Int,
-    width: Int = 32,
-    height: Int = 32
-) -> AsyncStream<RetainedSurface> {
-    let (stream, continuation) = AsyncStream.makeStream(of: RetainedSurface.self)
-    for _ in 0..<frames {
-        guard let surface = SurfaceCopy.makeSurface(width: width, height: height) else { continue }
-        continuation.yield(RetainedSurface(surface))
-    }
-    continuation.finish()
-    return stream
 }
 
 @Test
 func aPumpedSimFrameCarriesALeaseAndCopiesOffTheSource() async throws {
-    let pool = LeasedSurfacePool(slotCount: 6)
-    let sink = PublishSink(retaining: true)
-    let source = try #require(SurfaceCopy.makeSurface(width: 32, height: 32))
-    let sourceID = IOSurfaceGetID(source)
-    let (stream, continuation) = AsyncStream.makeStream(of: RetainedSurface.self)
-    continuation.yield(RetainedSurface(source))
-    continuation.finish()
+    let harness = try PumpHarness()
+    await harness.run()
+    let frame = try #require(harness.published.first)
+    #expect(frame.lease != nil)
+    #expect(frame.surface.withRef { IOSurfaceGetID($0) } != harness.sourceID)
+    #expect(harness.sleepCount == 0)
+    #expect(harness.failureMessage == nil)
+}
 
-    await SimDeviceBackend.pumpFrames(
-        surfaces: stream,
-        pool: pool,
-        recoveryThreshold: 120,
-        publish: sink.publish,
-        fail: sink.fail
+@Test
+func simulatorCopiesArePacedAndReadTheNewestSurface() async throws {
+    let harness = try PumpHarness(readLimit: 2)
+    harness.replaceDuringSleep = RetainedSurface(
+        try #require(SurfaceCopy.makeSurface(width: 64, height: 64))
     )
-
-    #expect(sink.count == 1)
-    // The lease is what puts a sim frame on the acknowledged delivery path.
-    #expect(sink.leases.count == 1)
-    // Published from a pool slot, not the surface CoreSimulator keeps writing.
-    #expect(sink.surfaceIDs.first != sourceID)
-    #expect(sink.failure == nil)
+    await harness.run()
+    #expect(harness.readTimes.count == 2)
+    #expect(harness.readTimes[1] - harness.readTimes[0] == .nanoseconds(16_666_667))
+    #expect(harness.sleepCount == 1)
+    let frame = try #require(harness.published.last)
+    #expect(frame.surface.withRef { IOSurfaceGetWidth($0) } == 64)
 }
 
 @Test
 func anUnackedSimStreamRecoversOnceThenFailsThePane() async throws {
-    // A consumer that stops acking holds every slot. The pump drops rather
-    // than blocking, attempts one controlled recovery, and fails the pane on
-    // the second bout instead of growing the daemon without bound.
-    let pool = LeasedSurfacePool(slotCount: 3)
-    let sink = PublishSink(retaining: true)
-
-    await SimDeviceBackend.pumpFrames(
-        surfaces: makeSourceStream(frames: 40),
-        pool: pool,
-        recoveryThreshold: 2,
-        publish: sink.publish,
-        fail: sink.fail
-    )
-
-    let failure = try #require(sink.failure)
-    #expect(failure.contains("surface pool stayed unavailable"))
-    // It published what the pool could give before giving up, rather than
-    // failing on the first drop.
-    #expect(sink.count >= 1)
-}
-
-/// Frames delivered one at a time. Before sending the next, wait until the
-/// pump has published the preceding one and the pool reports a free slot.
-///
-/// `Task.yield()` alone is not enough: it offers the scheduler a chance to run
-/// the release hop without requiring it, so the producer can outrun the pool
-/// and the pump's drop count becomes a property of the scheduler rather than
-/// of the code. Neither condition here names a particular frame's release, and
-/// a free slot may be one the pump never took, but together they are enough
-/// for the next acquire to find a slot.
-private func makePacedStream(
-    frames: Int,
-    pool: LeasedSurfacePool,
-    sink: PublishSink
-) -> AsyncStream<RetainedSurface> {
-    AsyncStream { continuation in
-        let task = Task {
-            var sent = 0
-            for _ in 0..<frames {
-                guard let surface = SurfaceCopy.makeSurface(width: 32, height: 32) else { continue }
-                continuation.yield(RetainedSurface(surface))
-                sent += 1
-                // Bounded, so a pump that stops consuming or a slot that never
-                // comes back fails this test instead of hanging it.
-                var spins = 0
-                while spins < 100_000 {
-                    if sink.count >= sent, await pool.freeSlotCount() > 0 { break }
-                    await Task.yield()
-                    spins += 1
-                }
-            }
-            continuation.finish()
-        }
-        continuation.onTermination = { _ in task.cancel() }
-    }
+    let harness = try PumpHarness(retaining: true, readLimit: 400)
+    await harness.run()
+    #expect(harness.failureMessage?.contains("surface pool stayed unavailable") == true)
+    #expect(harness.published.count >= 1)
+    #expect(harness.readTimes.count < 400)
+    let times = harness.readTimes
+    #expect(try #require(times.last) - #require(times.first) >= .seconds(4))
 }
 
 @Test
-func aDrainingConsumerKeepsTheSimStreamPublishing() async {
-    // The same pool and the same threshold as the unacked case, isolating the
-    // one difference that decides the outcome: this consumer releases each
-    // frame.
-    let pool = LeasedSurfacePool(slotCount: 3)
-    let sink = PublishSink(retaining: false)
+func simulatorSignalsCoalesceAndRetiredSignalsCannotWake() {
+    let signal = SimFrameSignal()
+    for _ in 0..<10_000 { signal.notify() }
+    #expect(signal.consume() != nil)
+    #expect(signal.consume() == nil)
+    signal.notify()
+    signal.finish()
+    signal.notify()
+    #expect(signal.consume() == nil)
+}
 
-    await SimDeviceBackend.pumpFrames(
-        surfaces: makePacedStream(frames: 40, pool: pool, sink: sink),
-        pool: pool,
-        recoveryThreshold: 2,
-        publish: sink.publish,
-        fail: sink.fail
-    )
+@Test
+func simulatorPumpCancellationDoesNotReadOrCopy() async {
+    let signal = SimFrameSignal()
+    let task = Task {
+        await SimFramePump(
+            signal: signal,
+            pool: LeasedSurfacePool(slotCount: 3),
+            read: { Issue.record("cancelled pump read a surface"); return nil },
+            publish: { _ in Issue.record("cancelled pump published") },
+            fail: { _ in Issue.record("cancelled pump failed") }
+        ).run()
+    }
+    task.cancel()
+    await task.value
+}
 
-    // The count catches any dropped frame; a failure means a recovery attempt
-    // came back exhausted. Slot selection and reuse belong to
-    // `leastRecentlyFreedReuse`.
-    #expect(sink.count == 40)
-    #expect(sink.failure == nil)
+@Test
+func aDrainingConsumerKeepsTheSimStreamPublishing() async throws {
+    let harness = try PumpHarness(readLimit: 40)
+    await harness.run()
+    #expect(harness.readTimes.count == 40)
+    #expect(harness.failureMessage == nil)
 }

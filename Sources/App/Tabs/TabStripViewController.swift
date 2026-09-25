@@ -312,6 +312,15 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        for name in [
+            NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+            NSApplication.didHideNotification, NSApplication.didUnhideNotification
+        ] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(frameDemandChanged(_:)), name: name, object: nil
+            )
+        }
         // Seed adopted (torn-off) tab VCs before observation arms, so the
         // first synchronous render finds them already present and doesn't
         // build a fresh content VC (which would spawn a new shell).
@@ -336,11 +345,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// instead of letting the widths outlive the gesture.
     override func viewDidDisappear() {
         super.viewDidDisappear()
+        for tab in tabContentByID.values { tab.setSimulatorFrameDemand(false) }
         thawCellWidths()
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        reconcileFrameDemand()
         // observe() arms synchronously, so the first render() ran from
         // viewDidLoad with no window attached and its title / proxy-icon writes
         // went nowhere. Reapply now that the strip is in a window: an adopted
@@ -1448,7 +1459,24 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         return controller
     }
 
+    @objc
+    private func frameDemandChanged(_ notification: Notification) {
+        reconcileFrameDemand()
+    }
+
+    private func reconcileFrameDemand() {
+        let visible = SimulatorFrameDemandDecision.isWindowEligible(
+            visible: view.window?.isVisible ?? false,
+            minimized: view.window?.isMiniaturized ?? false,
+            applicationHidden: NSApp.isHidden
+        )
+        for (id, tab) in tabContentByID {
+            tab.setSimulatorFrameDemand(visible && id == tabListVM.selectedTab?.id)
+        }
+    }
+
     private func applySelection(for tabs: [TabState]) {
+        reconcileFrameDemand()
         guard let index = tabListVM.selectedIndex,
             tabs.indices.contains(index) else { return }
         let selected = tabs[index]

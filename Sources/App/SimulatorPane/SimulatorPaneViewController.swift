@@ -757,6 +757,12 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         viewModel.crown(delta: delta)
     }
 
+    func setFrameDemand(_ demanded: Bool) {
+        guard !isPhysicalDevice else { return }
+        viewModel.setFrameDemand(demanded)
+        if !demanded { contentView?.applyFrame(lease: nil, traceSequence: nil) }
+    }
+
     // MARK: - Render
 
     /// Re-runs whenever the VM's observed state changes. Reads every

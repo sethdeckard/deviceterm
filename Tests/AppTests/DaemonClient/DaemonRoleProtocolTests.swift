@@ -98,7 +98,7 @@ struct DaemonRoleProtocolTests {
     @Test
     func subscribePaneStreamIsCallerFed() async throws {
         let fake = FakeDaemonClient()
-        let stream = try fake.subscribePane(paneId: "p9")
+        let stream = try await fake.subscribePane(paneId: "p9")
         #expect(fake.subscribePaneCalls == ["p9"])
         let event = PaneEvent.stateChanged(
             StateChangedEvent(paneId: "p9", state: .shutdown)

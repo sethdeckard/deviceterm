@@ -91,6 +91,9 @@ protocol DeviceBackend: AnyObject, Sendable {
     func shutdownBackendAsync() async
     /// Stop streaming and release the display subscription. Idempotent.
     func stopFrames()
+    /// Adjust frame demand without stopping input or orientation observation.
+    /// The default keeps physical-device capture unchanged.
+    func setFrameDemand(_ demanded: Bool)
     /// Native pixel dimensions, or `(nil, nil)` if not yet known
     /// (pre-first-frame, or post-shutdown).
     func pixelDimensions() -> (Int?, Int?)
@@ -391,6 +394,8 @@ extension DeviceBackend {
     // Default: only the CoreSimulator backend overrides these. Other
     // backends (physical device, stub) reject edge gestures.
     // swiftlint:disable async_without_await
+    func setFrameDemand(_ demanded: Bool) {}
+
     /// Sequential default: starts frames before orientation observation, so a
     /// synchronous first-frame callback arrives before observation is
     /// installed. Overrides can batch display work off the caller's executor;

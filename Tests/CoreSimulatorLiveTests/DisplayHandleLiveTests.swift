@@ -305,3 +305,33 @@ func stopIsIdempotent() throws {
     // After stop, the renderable is cleared and currentSurface() reads nil.
     #expect(handle.currentSurface() == nil)
 }
+
+@Test
+func pausingFramesKeepsTheDisplayBoundAndResumeSeedsAFrame() throws {
+    let booted = try #require(try? SimDeviceHandle.singleBootedDevice())
+    let handle = try SimDisplayHandle.handle(forUDID: booted.udid)
+    let deliveries = DisplayInvalidationCount()
+    try handle.startInvalidations { _ in deliveries.bump() }
+    defer { handle.stop() }
+    _ = try #require(waitForSurface(handle))
+    let panel = handle.boundScreenUniqueId
+    let orientation = handle.currentDisplayOrientation
+    handle.pauseFrames()
+    let pausedCount = deliveries.count
+    Thread.sleep(forTimeInterval: 0.1)
+    #expect(deliveries.count == pausedCount)
+    #expect(handle.boundScreenUniqueId == panel)
+    #expect(handle.currentDisplayOrientation == orientation)
+    #expect(handle.currentSurface() != nil)
+    try handle.startInvalidations { _ in deliveries.bump() }
+    #expect(deliveries.count > pausedCount)
+    #expect(handle.boundScreenUniqueId == panel)
+}
+
+/// Bridge callbacks access the counter only on this serial queue.
+private final class DisplayInvalidationCount: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "test.display-invalidation")
+    private var value = 0
+    var count: Int { queue.sync { value } }
+    func bump() { queue.sync { value += 1 } }
+}

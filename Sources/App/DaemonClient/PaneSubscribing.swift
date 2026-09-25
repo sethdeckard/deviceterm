@@ -10,5 +10,11 @@
 protocol PaneSubscribing: AnyObject {
     /// `pane.subscribe`. The returned stream finishes when the daemon
     /// ends the subscription (typically via `pane.close`).
-    func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent>
+    func subscribePane(paneId: String, frames: Bool) async throws -> AsyncStream<PaneEvent>
+}
+
+extension PaneSubscribing {
+    func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+        try await subscribePane(paneId: paneId, frames: true)
+    }
 }

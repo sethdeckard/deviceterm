@@ -165,7 +165,7 @@ struct DaemonClientReauthTests {
         private(set) var attempts = 0
         var failNext = true
 
-        func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+        func subscribePane(paneId: String, frames: Bool = true) async throws -> AsyncStream<PaneEvent> {
             await Task.yield()
             attempts += 1
             if failNext {

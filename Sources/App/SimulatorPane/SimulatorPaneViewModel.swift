@@ -193,6 +193,11 @@ final class SimulatorPaneViewModel {
     /// Backoff schedule for resubscribe attempts after the connection drops.
     @ObservationIgnored private let reconnectPolicy: RetryPolicy
 
+    @ObservationIgnored private var wantsFrames = true
+    @ObservationIgnored private var subscriptionGeneration: UInt64 = 0
+    @ObservationIgnored private var subscriptionStarted = false
+    @ObservationIgnored private var closed = false
+
     init(
         paneId: String,
         daemonClient: any PaneControlling & PaneSubscribing,
@@ -225,17 +230,32 @@ final class SimulatorPaneViewModel {
         liveContinuation.finish()
     }
 
-    /// Start consuming the pane's event stream. Call once (from the
-    /// VC's viewDidLoad). The subscription startup is keyed to VC
-    /// creation, not view appearance, since a re-start would strand the
-    /// prior task beyond `close()`'s reach. The daemon's subscribe
-    /// handler synthesizes an initial `surface.changed` + payload
-    /// pair when the pane is already rendering, so the first frame
-    /// arrives over this same stream.
+    /// Start input pumps and the event subscription once the view is loaded.
     func start() {
+        guard !closed else { return }
         startKeyInputPump()
         startTouchPumps()
-        guard subscriptionTask == nil else { return }
+        guard !subscriptionStarted else { return }
+        subscriptionStarted = true
+        replaceSubscription()
+    }
+
+    func setFrameDemand(_ demanded: Bool) {
+        guard !closed, demanded != wantsFrames else { return }
+        wantsFrames = demanded
+        if !demanded {
+            currentSurface = nil
+            currentSurfaceSequence = nil
+        }
+        if subscriptionStarted { replaceSubscription() }
+    }
+
+    private func replaceSubscription() {
+        let previous = subscriptionTask
+        previous?.cancel()
+        subscriptionGeneration += 1
+        let generation = subscriptionGeneration
+        let frames = wantsFrames
         let id = paneId
         let client = daemonClient
         // Captured locally so the retry sleep never touches `self`. The
@@ -244,6 +264,8 @@ final class SimulatorPaneViewModel {
         // promoted, so the backoff needs no reference of its own.
         let policy = reconnectPolicy
         subscriptionTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard !Task.isCancelled, self?.subscriptionGeneration == generation else { return }
             var attempt = 0
             // Resubscribe across daemon connection drops so a mirror doesn't
             // freeze forever on a transient XPC interruption. Each pass
@@ -260,7 +282,7 @@ final class SimulatorPaneViewModel {
                     // `client` + `id` are captured directly, so subscribing
                     // never touches `self`; the task holds only a weak
                     // reference across this await.
-                    stream = try await client.subscribePane(paneId: id)
+                    stream = try await client.subscribePane(paneId: id, frames: frames)
                 } catch {
                     if Task.isCancelled { return }
                     // A connection failure (a transport error, usually the
@@ -292,7 +314,7 @@ final class SimulatorPaneViewModel {
                     // Promote `self` only while handling one event; the
                     // strong binding falls out of scope before the next
                     // `for await` suspension.
-                    guard let self else { return }
+                    guard let self, self.subscriptionGeneration == generation else { return }
                     // A delivered event is the proof this subscription works,
                     // so the next drop starts its backoff over rather than
                     // inheriting the wait that got us here.
@@ -384,6 +406,8 @@ final class SimulatorPaneViewModel {
     /// acked before the GUI exits; otherwise the daemon retains the pane
     /// record (and its IOSurface stream). Idempotent.
     func close(mode: PaneCloseMode = .detach) async {
+        closed = true
+        subscriptionGeneration += 1
         subscriptionTask?.cancel()
         subscriptionTask = nil
         rotationTask?.cancel()

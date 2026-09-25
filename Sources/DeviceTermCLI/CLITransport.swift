@@ -11,6 +11,12 @@ import Foundation
 /// `UDSTransport` is the production implementation; it wraps the existing
 /// `roundTrip(method:params:)` path (auto-auth handshake included).
 protocol CLITransport {
+    func observeSurface(
+        paneId: String,
+        credentials: (sessionId: String, cap: String),
+        timeoutSeconds: Double
+    ) throws -> any CLISurfaceObservation
+
     /// Send a built request envelope and return the daemon's response
     /// body bytes. Throws a classified `CLIError` or `CLIError.daemon` on
     /// failure, matching the free `send(_:)`'s contract.
@@ -26,6 +32,14 @@ protocol CLITransport {
 }
 
 extension CLITransport {
+    func observeSurface(
+        paneId: String,
+        credentials: (sessionId: String, cap: String),
+        timeoutSeconds: Double
+    ) throws -> any CLISurfaceObservation {
+        throw CLIError.classified(code: .internalError, message: "transport does not support surface observation")
+    }
+
     /// Default 5-second response timeout, matching the free `send(_:)`.
     func send(_ envelope: RPCEnvelope) throws -> Data {
         try send(envelope, timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds)

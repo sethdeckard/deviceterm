@@ -123,7 +123,7 @@ struct DaemonClientUnresponsiveTests {
             isSilent = silent
         }
 
-        func subscribePane(paneId: String) async throws -> AsyncStream<PaneEvent> {
+        func subscribePane(paneId: String, frames: Bool = true) async throws -> AsyncStream<PaneEvent> {
             if isSilent {
                 try await Task.sleep(nanoseconds: 10_000_000_000)
             }
