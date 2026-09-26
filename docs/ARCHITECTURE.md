@@ -1450,6 +1450,19 @@ monotonic deadline. Each RPC receives the smaller of the remaining overall
 time and its normal command-specific ceiling. After first resolution, the CLI
 pins the wait to the resolved pane ID.
 
+Roster reads don't request capture. A simulator with no frame consumers can
+report the same cached surface while the guest continues animating.
+
+`wait surface quiescent` holds an authenticated UDS `pane.subscribe` with
+`frames: true` for the duration of the wait. For a simulator, it requires a
+sequence newer than the cached sequence seen before subscribing. The
+subscription's latest sequence must match the roster before the settle
+interval can count.
+
+Success requires unchanged sequence and dimensions across at least two probes
+spanning the settle interval. The CLI closes the subscription on every exit;
+losing the stream fails the wait.
+
 #### `device.list`
 
 - Params: `{scope: "owned"|"all"}`
@@ -2484,28 +2497,35 @@ pane instead of faulting, because the GUI builds its menu from this.
 
 #### `pane.subscribe`
 
-- Params: `{paneId}`
+- Params: `{paneId, frames?}`
 - Result: `{ok, subscriptionToken?}`, then a stream of pane events
 - Scope: session
 
-The stream carries three event methods, each correlated to the
-subscription's request-envelope id:
+`frames` defaults to `true`. Setting it to `false` subscribes to lifecycle and
+orientation events without requesting capture, replaying a surface, or
+registering a surface delivery lane or pool lease token.
+
+Events are correlated to the subscription's request-envelope id:
 
 - `state.changed`: `{paneId, state}`, with `state` one of `booting`,
   `rendering`, `shutdown`, or `failed`.
-- `surface.changed`: `{paneId, sequence}`, paired with a side-band
-  surface payload for the same `(paneId, sequence)`.
+- `surface.changed`: `{paneId, sequence}`, sent only when `frames` is true.
+  XPC pairs it with a side-band surface payload for the same
+  `(paneId, sequence)`; UDS carries the JSON event only.
 - `orientation.changed`: `{paneId, orientation}`, carrying the pane's
   confirmed presentation orientation. A Simulator publishes its observed
   display orientation. A physical device publishes any valid orientation
   returned by a DeviceTerm rotation, including a non-target result. Replayed
-  once at subscribe, so a subscriber arriving after it last changed starts
-  correct, and sent again whenever it changes. A pane that has neither been
-  read nor rotated replays `portrait`.
+  once at subscribe and sent again whenever it changes. A pane that has neither
+  been read nor rotated replays `portrait`.
 
-The initial ack returns a `subscriptionToken` on every XPC subscription:
-the correlation key for the connection's side-band lane and, for a
-device pane, the pool lease token. UDS mints none.
+A frame subscriber receives the current surface when one exists. Each new
+simulator frame subscriber also requests a fresh capture, even if another
+subscriber already keeps capture active.
+
+The initial ack returns a `subscriptionToken` on every XPC subscription,
+including `frames: false`. A frame subscription registers that token for
+side-band delivery and pool leases. UDS mints none.
 
 #### `pane.surfaceRelease`
 
@@ -2513,10 +2533,10 @@ device pane, the pool lease token. UDS mints none.
 - Result: none (one-way notification, no `id`)
 - Scope: session
 
-The GUI's cumulative low-water-mark ack for a device pane's leased
-surface pool: "I hold no generation below `lowestHeld`; free the
-committed ones below it." `lowestHeld` is the minimum of the held set,
-or one past the highest received when empty.
+The GUI's cumulative low-water-mark ack for a pane's leased surface pool:
+“I hold no generation below `lowestHeld`; free the committed ones below it.”
+`lowestHeld` is the minimum of the held set, or one past the highest received
+when empty.
 
 Authority is the peer connection, not the payload: the daemon reads the
 source connection id from its dispatch context, and the pool rejects any
@@ -3379,8 +3399,8 @@ sessions into a GUI tab cohort but is not itself authority.
 
 Sim panes piggyback on the existing session:
 `device.attach(udid, sessionId, cap)` transfers ownership of the booted sim
-and creates the pane, then `pane.subscribe(paneId)` starts the
-`state.changed` and `surface.changed` event stream.
+and creates the pane. The GUI subscribes to lifecycle and orientation events,
+requesting frames while the pane is visible.
 
 ## Tab semantics (and CLI scoping)
 
@@ -3414,6 +3434,42 @@ and creates the pane, then `pane.subscribe(paneId)` starts the
 - **No layout persistence.** Each launch starts with one new tab.
 
 ## Data flows
+
+### Simulator capture demand
+
+`PaneCoordinator` keeps simulator capture active while any subscriber requests
+frames. A booting pane also keeps capture active until its first committed
+frame, so attaching in a hidden tab can still reach `rendering`. Lifecycle and
+orientation subscribers don't count as frame consumers.
+
+When the last frame consumer leaves, capture pauses after that first frame.
+The display lane cancels its frame run and unregisters surface and damage
+callbacks; input, orientation observation, and panel following remain active.
+Resuming creates a fresh signal, pump, and run token, then requests an initial
+frame.
+
+The GUI requests simulator frames for the selected tab in each visible,
+non-minimized window while the application isn't hidden. A window needn't be
+key. Hidden panes switch to event-only subscriptions and release the view
+model's and content view's surface leases; in-flight GPU work retains its
+leases until completion.
+
+CLI frame subscriptions count independently of GUI visibility. A surface wait
+in an unfocused tab therefore keeps capture active. Physical-device capture
+doesn't use this demand policy.
+
+`SimFrameSignal` keeps the latest surface or invalidation and coalesces wakeups.
+`SimFramePump` spaces capture attempts at least 16,666,667 ns apart,
+approximately 60 Hz, and schedules no periodic work without a pending update.
+A new run seeds its first attempt without the pacing delay.
+
+Damage callbacks send an invalidation instead of reading the remote surface.
+The paced pump resolves that invalidation through the display lane; a callback
+that supplies a surface retains it directly. Damage registration remains
+active while capturing because it also supports framebuffer allocation.
+
+Rebinding a panel replaces an active frame run with a fresh signal, pump, and
+token. Rebinding while capture is paused leaves it paused.
 
 ### Surface lifecycle across the daemon/GUI boundary
 
@@ -3451,8 +3507,8 @@ grows inside the daemon for as long as the consumer stays away.
 - **epoch**: a per-pool `UInt64` bumped on resize and on controlled
   recovery. Old- and new-epoch leases coexist during churn, so holds,
   watermarks, and acks are keyed by `(epoch, token)`.
-- **token**: the `subscriptionToken` minted per XPC pane subscription. It also
-  keys the pool's per-subscription lease state.
+- **token**: the `subscriptionToken` minted per XPC pane subscription. Frame
+  subscriptions also register it with the pool's per-subscription lease state.
 - **holder**: a slot's holders are a set (`.daemonCurrent` |
   `.subscription(token)`), at most once each. A slot returns to the free list
   when its holder set empties.
@@ -3515,6 +3571,11 @@ owner releases it, which can outlive `currentSurface` through in-flight
 delivery work. Orphaned holds can persist until backend teardown. Recovery is
 bounded to a single fresh epoch: a second bout fails the pane rather than
 growing memory.
+
+The simulator pump requests recovery when failed slot acquisitions span at
+least two seconds without a successful acquisition. Success resets that
+interval. The check runs on capture attempts, so an idle simulator has no
+recovery timer; the pool's single-recovery limit still applies.
 
 **Kill switch.** `DEVICETERM_SURFACE_LEASES=0` disables per-frame leasing: the
 daemon sends `leased:false` and takes no per-subscription holds; the GUI still
