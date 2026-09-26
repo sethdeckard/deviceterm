@@ -28,10 +28,11 @@ enum SurfaceCopy {
         return IOSurfaceCreate(properties as CFDictionary)
     }
 
-    /// Lock both surfaces and copy row-by-row (source and destination may
-    /// have different row strides), so the owned copy is a faithful
-    /// snapshot. Returns the bytes moved, which includes whatever row
-    /// alignment padding the narrower stride carries.
+    /// Lock both surfaces and copy their shared rows. Matching strides use
+    /// one contiguous copy when both allocations cover the full span;
+    /// otherwise, copy row-by-row to tolerate different strides. Alignment
+    /// padding is copied harmlessly in either path. Returns the bytes moved,
+    /// including whatever padding the narrower stride carries.
     @discardableResult
     static func copy(from source: IOSurfaceRef, to destination: IOSurfaceRef) -> Int {
         IOSurfaceLock(source, .readOnly, nil)
@@ -46,6 +47,16 @@ enum SurfaceCopy {
         let destinationStride = IOSurfaceGetBytesPerRow(destination)
         let rowBytes = min(sourceStride, destinationStride)
         let rows = min(IOSurfaceGetHeight(source), IOSurfaceGetHeight(destination))
+        if let byteCount = contiguousByteCount(
+            sourceStride: sourceStride,
+            destinationStride: destinationStride,
+            rows: rows,
+            sourceAllocationSize: IOSurfaceGetAllocSize(source),
+            destinationAllocationSize: IOSurfaceGetAllocSize(destination)
+        ) {
+            memcpy(destinationBase, sourceBase, byteCount)
+            return byteCount
+        }
         for row in 0..<rows {
             memcpy(
                 destinationBase + row * destinationStride,
@@ -54,6 +65,23 @@ enum SurfaceCopy {
             )
         }
         return rowBytes * rows
+    }
+
+    /// The contiguous span for equal strides, provided it fits both allocations.
+    /// Checking the full span includes the last row's alignment padding.
+    static func contiguousByteCount(
+        sourceStride: Int,
+        destinationStride: Int,
+        rows: Int,
+        sourceAllocationSize: Int,
+        destinationAllocationSize: Int
+    ) -> Int? {
+        guard sourceStride == destinationStride, sourceStride > 0, rows > 0 else { return nil }
+        let (byteCount, overflow) = sourceStride.multipliedReportingOverflow(by: rows)
+        guard !overflow, byteCount <= sourceAllocationSize, byteCount <= destinationAllocationSize else {
+            return nil
+        }
+        return byteCount
     }
 
     /// Copy the top-left `contentWidth × contentHeight` rect of `source`
