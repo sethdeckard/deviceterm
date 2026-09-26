@@ -25,20 +25,22 @@ private func exit(
 
 // MARK: - Backoff
 
+private let backoffScheduleArguments: [(Int, UInt64)] = [
+    (0, 1 * second),
+    (1, 2 * second),
+    (2, 4 * second),
+    (3, 8 * second),
+    (4, 16 * second),
+    (5, 32 * second),
+    (6, 60 * second),
+    (7, 60 * second),
+    (8, 60 * second)
+]
+
 /// One second doubling to a minute, then holding there.
 @Test(
     "the backoff doubles from a second and saturates at a minute",
-    arguments: [
-        (0, 1 * second),
-        (1, 2 * second),
-        (2, 4 * second),
-        (3, 8 * second),
-        (4, 16 * second),
-        (5, 32 * second),
-        (6, 60 * second),
-        (7, 60 * second),
-        (8, 60 * second)
-    ]
+    arguments: backoffScheduleArguments
 )
 func backoffSchedule(priorExits: Int, expected: UInt64) {
     guard case let .restart(delay, _) = exit(after: priorExits) else {
