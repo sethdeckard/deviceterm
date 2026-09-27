@@ -475,10 +475,24 @@ rotation. Drag upward from the bottom edge to send the system edge gesture.
 On a watchOS pane, scroll over the display or drag on the bezel to turn the
 Digital Crown.
 
-On a Simulator pane, the **Device** menu offers buttons, rotation, reboot,
-shutdown, erase, screenshots, screen recording, app installation, location
-simulation, and Simulator.app or Finder access. On a physical-device pane the
-menu enables only the operations the device's services support; see
+On a foldable Simulator pane, a fold bar sits under the pane's title row:
+Fold Closed, Fold to Book, Unfold, and a slider for any angle between them.
+The same three positions sit in **Device ▸ Hardware** and in the pane's
+right-click menu.
+
+The bar appears on its own the first time a pane reports that it folds. The
+fold button in the title row hides it again, which gives the picture back
+the height.
+
+The slider shows the angle you have selected and sends it when you let go.
+It never reads the hinge's own position, so folding from Device Hub or from
+`deviceterm fold` in another tab leaves the slider where it was.
+
+On a Simulator pane, the **Device** menu offers buttons, rotation, the hinge
+on a foldable, reboot, shutdown, erase, screenshots, screen recording, app
+installation, location simulation, and Simulator.app or Finder access. On a
+physical-device pane the menu enables only the operations the device's
+services support; see
 [Know the Physical-Device Limits](#know-the-physical-device-limits).
 
 Device menu actions select the focused device pane; if a terminal is focused,

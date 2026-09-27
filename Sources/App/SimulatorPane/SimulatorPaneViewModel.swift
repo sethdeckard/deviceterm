@@ -841,6 +841,25 @@ final class SimulatorPaneViewModel {
         }
     }
 
+    /// Set a foldable device's hinge angle, `0` shut and `180` flat.
+    ///
+    /// Nothing is written optimistically. The lit panel follows the hinge on
+    /// the device's own schedule and is path-dependent rather than a function
+    /// of the angle, so the pane re-binds when the daemon reports the swap
+    /// instead of when the request goes out.
+    func fold(toDegrees degrees: Double) {
+        guard capabilities.fold else { return }
+        let id = paneId
+        let client = daemonClient
+        let clamped = min(
+            FoldPosture.degreeRange.upperBound,
+            max(FoldPosture.degreeRange.lowerBound, degrees)
+        )
+        Task { @MainActor in
+            try? await client.paneInputFold(paneId: id, degrees: clamped)
+        }
+    }
+
     // MARK: - Surface lifecycle
 
     private func applySurface(sequence: UInt64, lease: SurfaceLease?) {

@@ -111,17 +111,33 @@ struct PaneChromeOverlay: View {
         // Spacing here comes from `PaneChromeRibbonFit`, which also
         // predicts which reveal stops this row can hold. Shared constants
         // so a tweak here can't leave that prediction stale.
-        HStack(spacing: 0) {
-            dragGrip
-            badgeAndTitle
-                .allowsHitTesting(false)
-                .padding(.leading, PaneChromeRibbonFit.handleTrailingGap)
-            Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
-            ribbonControl
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                dragGrip
+                badgeAndTitle
+                    .allowsHitTesting(false)
+                    .padding(.leading, PaneChromeRibbonFit.handleTrailingGap)
+                Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
+                ribbonControl
+            }
+            .frame(height: PaneChromeRibbonFit.chromeRowHeight)
+            // A second row rather than something over the pane. The hinge is
+            // continuous, so the control needs a slider, and a slider needs
+            // width the ribbon does not have.
+            if showsFoldBar {
+                foldBar
+                    .frame(height: PaneChromeRibbonFit.foldBarHeight)
+            }
         }
-        .frame(height: PaneChromeRibbonFit.chromeRowHeight)
         .background(GhosttyThemeColors.backgroundSwiftUI(opacity: 1.0))
         .onHover { isHovering = $0 }
+    }
+
+    /// Whether the fold bar is on screen: this pane folds, and the user has
+    /// not hidden it. Read off the capability rather than the ribbon, so
+    /// narrowing the row cannot take the control away.
+    private var showsFoldBar: Bool {
+        viewModel.capabilities.fold && viewModel.foldControlVisible
     }
 
     /// The drag affordance: a vertical capsule opening the row, ahead
@@ -278,7 +294,7 @@ struct PaneChromeOverlay: View {
         let atHotAction = stop == 0
         let dragging = viewModel.ribbonDragStop != nil
         return ZStack(alignment: .trailing) {
-            fullActionRow
+            fullActionRow()
                 .opacity(atHotAction ? 0 : 1)
                 .allowsHitTesting(!atHotAction && !dragging)
             // With no hot action, the narrowest stop leaves its action slot
@@ -296,28 +312,6 @@ struct PaneChromeOverlay: View {
             alignment: .trailing
         )
         .clipped()
-    }
-
-    /// Every action plus the size-preset menu, in fixed display order.
-    ///
-    /// Membership never changes with the reveal stop; only how much of the row
-    /// the viewport uncovers does. Buttons the stop has not reached decline
-    /// hits, because clipping a SwiftUI row hides the overflow without
-    /// disarming it, and a button cropped away must not answer a click.
-    private var fullActionRow: some View {
-        let actions = viewModel.ribbonActions
-        let revealed = PaneChromeRibbonFit.revealedActionCount(
-            stop: viewModel.ribbonRenderedStop
-        )
-        return HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
-            ForEach(Array(actions.enumerated()), id: \.element) { index, action in
-                // The row reveals from the trailing end, so the last actions
-                // are the ones on screen.
-                ribbonActionButton(action)
-                    .allowsHitTesting(actions.count - index <= revealed)
-            }
-            sizePresetMenu
-        }
     }
 
     // MARK: - Subviews (computed)
@@ -473,7 +467,72 @@ struct PaneChromeOverlay: View {
         )
     }
 
+    /// The fold bar: the three named postures, then the hinge itself.
+    ///
+    /// The slider sends on release, never while dragging. Each fold spawns a
+    /// guest helper the daemon waits on, serialized behind the pane's input
+    /// queue, so a drag that sent per tick would enqueue a few hundred of
+    /// them and the hinge would still be catching up long after the pointer
+    /// stopped.
+    private var foldBar: some View {
+        HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
+            ForEach(FoldPosture.allCases, id: \.self) { posture in
+                chromeControlButton(
+                    systemImage: posture.chromeSymbol,
+                    help: posture.chromeTitle,
+                    tint: nil,
+                    action: { viewModel.onFold(posture.degrees) }
+                )
+                .accessibilityIdentifier("fold.posture.\(posture.rawValue)")
+            }
+            Slider(
+                value: Binding(
+                    get: { viewModel.foldDegrees },
+                    set: { viewModel.foldDegrees = $0 }
+                ),
+                in: FoldPosture.degreeRange,
+                onEditingChanged: { editing in
+                    guard !editing else { return }
+                    viewModel.onFold(viewModel.foldDegrees)
+                }
+            )
+            .controlSize(.small)
+            .accessibilityIdentifier("fold.angle")
+            // The selected angle, which is all this can honestly show: no
+            // RPC reports the hinge back. Fixed width and tabular digits so
+            // the slider does not resize as the number changes.
+            Text("\(Int(viewModel.foldDegrees.rounded()))°")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
+                .accessibilityIdentifier("fold.angle.readout")
+        }
+        .padding(.horizontal, PaneChromeRibbonFit.leadingPadding)
+    }
+
     // MARK: - Methods
+
+    /// Every action plus the size-preset menu, in fixed display order.
+    ///
+    /// Membership never changes with the reveal stop; only how much of the row
+    /// the viewport uncovers does. Buttons the stop has not reached decline
+    /// hits, because clipping a SwiftUI row hides the overflow without
+    /// disarming it, and a button cropped away must not answer a click.
+    private func fullActionRow() -> some View {
+        let actions = viewModel.ribbonActions
+        return HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
+            ForEach(actions, id: \.self) { action in
+                // The row reveals from the trailing end, so the last actions
+                // are the ones on screen. A button the clip removed declines
+                // clicks.
+                let revealed = viewModel.isRibbonActionRevealed(action)
+                ribbonActionButton(action)
+                    .allowsHitTesting(revealed)
+            }
+            sizePresetMenu
+        }
+    }
 
     /// Step the ribbon one rung for an accessibility adjustment, and do nothing
     /// at all when the pane cannot honor the step.
@@ -533,6 +592,9 @@ struct PaneChromeOverlay: View {
                 return Self.themeTint
 
             case .record where viewModel.recordingActive:
+                return Self.themeTint
+
+            case .fold where viewModel.foldControlVisible:
                 return Self.themeTint
 
             default:
@@ -602,6 +664,11 @@ struct PaneChromeOverlay: View {
 
         case .crownDown:
             viewModel.onCrownDown()
+
+        case .fold:
+            // Toggles the fold bar, which gives the posture buttons and the
+            // continuous slider a row of their own.
+            viewModel.onFoldBarToggle()
         }
     }
 
@@ -678,6 +745,12 @@ private extension SimChromeAction {
 
         case .crownDown:
             return "arrow.down"
+
+        // A book, because that is the shape of the hinge and the name of
+        // the middle posture. SF Symbols has no foldable-phone glyph:
+        // `iphone.fold` does not resolve.
+        case .fold:
+            return "book"
         }
     }
 
@@ -724,6 +797,9 @@ private extension SimChromeAction {
 
         case .crownDown:
             return "Crown Rotate Down"
+
+        case .fold:
+            return "Fold"
         }
     }
 }

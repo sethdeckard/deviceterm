@@ -57,7 +57,9 @@ final class PaneChromeViewModel {
     /// physical-device pane shows only the controls it supports
     /// (buttons / App Switcher / rotate) and hides the simulator-only
     /// ones (screenshot / record / AX / Apple Pay).
-    var capabilities: PaneCapabilities
+    var capabilities: PaneCapabilities {
+        didSet { revealFoldControlOnce() }
+    }
 
     /// Whether the pane mirrors a physically-connected device. Pairs
     /// with `capabilities` in the affordance gate (the housekeeping /
@@ -74,6 +76,27 @@ final class PaneChromeViewModel {
     /// installs a mouse-move tracking area and the chrome shows
     /// the AX label under the cursor in a status line. Default off.
     var axInspectorEnabled: Bool
+
+    /// Whether the fold bar is on screen. The ribbon's fold button
+    /// toggles it, and it opens by itself the first time a pane reports it
+    /// can fold, because a foldable is the one device whose posture the user
+    /// almost certainly wants to set straight after boot.
+    var foldControlVisible: Bool
+
+    /// The angle the fold bar's slider is showing.
+    ///
+    /// **The selected angle, not a reading.** Dragging writes it continuously
+    /// and release is what sends it, so mid-drag it leads the device. No RPC
+    /// reports the hinge either, so it cannot know an angle set from Device
+    /// Hub, from `deviceterm fold` in another tab, or by the boot itself. It starts shut because that is
+    /// where a Duo boots, which is an observation about one device rather
+    /// than a contract any foldable owes.
+    var foldDegrees: Double
+
+    /// Latch behind `foldControlVisible`'s one automatic open. Capabilities
+    /// arrive after attach and are rewritten on every refresh, so without
+    /// this a refresh would reopen a bar the user had just hidden.
+    private var foldControlAutoRevealed = false
 
     /// Latest AX element label / role under the cursor when the AX
     /// inspector is enabled. Nil while disabled, between hits, or
@@ -227,7 +250,10 @@ final class PaneChromeViewModel {
     var ribbonActions: [SimChromeAction] {
         let candidates: [SimChromeAction]
         if isPhysicalDevice {
-            candidates = [.siri, .side, .lock, .appSwitcher, .home, .rotateLeft, .rotateRight]
+            candidates = [
+                .siri, .side, .lock, .appSwitcher, .home,
+                .rotateLeft, .rotateRight, .fold
+            ]
         } else {
             switch DeviceFamily(wire: family) {
             case .phone, .pad:
@@ -237,7 +263,7 @@ final class PaneChromeViewModel {
                 candidates = [
                     .applePay, .siri, .side, .lock, .axInspector,
                     .rotateLeft, .rotateRight, .record, .screenshot,
-                    .appSwitcher, .home
+                    .fold, .appSwitcher, .home
                 ]
 
             case .watch:
@@ -292,6 +318,20 @@ final class PaneChromeViewModel {
     var onCrownUp: () -> Void = {}
     var onCrownDown: () -> Void = {}
 
+    /// Show or hide the fold bar.
+    ///
+    /// A closure rather than a write from the view, because every other
+    /// ribbon control takes pane focus before it acts and this one has no
+    /// reason to be the exception: clicking it with a sibling terminal
+    /// focused would otherwise leave the keyboard pointed at the terminal.
+    var onFoldBarToggle: () -> Void = {}
+
+    /// Drive a foldable's hinge, in degrees. Degrees rather than a posture
+    /// because the fold bar's slider is continuous; its three posture buttons
+    /// resolve their own names through `FoldPosture.degrees`, so no caller
+    /// invents what a name means.
+    var onFold: (Double) -> Void = { _ in }
+
     /// Screenshot the focused sim's display (shells to `simctl io
     /// screenshot`).
     var onScreenshot: () -> Void = {}
@@ -335,6 +375,8 @@ final class PaneChromeViewModel {
         self.isPhysicalDevice = isPhysicalDevice
         self.recordingActive = false
         self.axInspectorEnabled = false
+        self.foldControlVisible = false
+        self.foldDegrees = FoldPosture.closed.degrees
         self.axInspectorLabel = nil
         self.devicePixelWidth = devicePixelWidth
         self.devicePixelHeight = devicePixelHeight
@@ -343,6 +385,9 @@ final class PaneChromeViewModel {
             forFamily: family,
             isPhysicalDevice: isPhysicalDevice
         )
+        // A pane built already knowing it folds still gets the one automatic
+        // open; `didSet` does not fire for an assignment inside `init`.
+        revealFoldControlOnce()
     }
 
     /// Initial `lastUsedAction` until the user invokes any ribbon control. A
@@ -369,7 +414,32 @@ final class PaneChromeViewModel {
         }
     }
 
+    /// Whether `action` is uncovered at the ribbon's current reveal stop.
+    ///
+    /// The row reveals from its trailing edge, so an action is on screen when
+    /// its distance from the end is within the revealed count. Clipping a
+    /// SwiftUI row hides the overflow without removing it, so a clipped
+    /// button would still answer a click unless something declines it. That
+    /// is what this is for.
+    ///
+    /// The narrowest stop is outside the row and reports nothing revealed.
+    /// The hot action is drawn separately there and is not covered here.
+    func isRibbonActionRevealed(_ action: SimChromeAction) -> Bool {
+        let actions = ribbonActions
+        guard let index = actions.firstIndex(of: action) else { return false }
+        return actions.count - index
+            <= PaneChromeRibbonFit.revealedActionCount(stop: ribbonRenderedStop)
+    }
+
     // MARK: - Ribbon intents
+
+    /// Show the fold bar the first time this pane reports it can fold,
+    /// and never again. Called from `init` and from every capability write.
+    func revealFoldControlOnce() {
+        guard capabilities.fold, !foldControlAutoRevealed else { return }
+        foldControlAutoRevealed = true
+        foldControlVisible = true
+    }
 
     /// Jump between the ribbon's end stops: the widest unless already there,
     /// otherwise the narrowest. What a chevron tap does, generalized so a

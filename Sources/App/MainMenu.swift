@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import AppKit
+import DaemonProtocol
 
 /// The programmatic main menu.
 ///
@@ -392,6 +393,40 @@ func makeMainMenu() -> NSMenu {
     )
     mCrownRotateDown.image = .menuSymbol("digitalcrown.arrow.counterclockwise", describedAs: "Crown Rotate Down")
     hardwareMenu.addItem(mCrownRotateDown)
+    // Hinge postures, on a foldable only. Validated per item like the crown
+    // rows above, so a pane that cannot fold shows them disabled rather than
+    // offering a control that would be refused.
+    hardwareMenu.addItem(.separator())
+    let mFoldClosed = NSMenuItem(
+        title: FoldPosture.closed.chromeTitle,
+        action: #selector(SimulatorPaneViewController.foldDeviceClosed(_:)),
+        keyEquivalent: ""
+    )
+    mFoldClosed.image = .menuSymbol(
+        FoldPosture.closed.chromeSymbol,
+        describedAs: FoldPosture.closed.chromeTitle
+    )
+    hardwareMenu.addItem(mFoldClosed)
+    let mFoldBook = NSMenuItem(
+        title: FoldPosture.book.chromeTitle,
+        action: #selector(SimulatorPaneViewController.foldDeviceBook(_:)),
+        keyEquivalent: ""
+    )
+    mFoldBook.image = .menuSymbol(
+        FoldPosture.book.chromeSymbol,
+        describedAs: FoldPosture.book.chromeTitle
+    )
+    hardwareMenu.addItem(mFoldBook)
+    let mFoldOpen = NSMenuItem(
+        title: FoldPosture.open.chromeTitle,
+        action: #selector(SimulatorPaneViewController.foldDeviceOpen(_:)),
+        keyEquivalent: ""
+    )
+    mFoldOpen.image = .menuSymbol(
+        FoldPosture.open.chromeSymbol,
+        describedAs: FoldPosture.open.chromeTitle
+    )
+    hardwareMenu.addItem(mFoldOpen)
     hardwareMenuItem.submenu = hardwareMenu
     deviceMenu.addItem(hardwareMenuItem)
 

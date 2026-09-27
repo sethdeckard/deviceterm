@@ -2,6 +2,7 @@
 
 @testable import App
 import AppKit
+import DaemonProtocol
 import Testing
 
 /// Structural assertions on the sim pane right-click menu. Same
@@ -37,6 +38,9 @@ struct SimulatorPaneContextMenuTests {
             "Crown Press",
             "Crown Rotate Up",
             "Crown Rotate Down",
+            FoldPosture.closed.chromeTitle,
+            FoldPosture.book.chromeTitle,
+            FoldPosture.open.chromeTitle,
             "",  // separator
             "Rotate Left",
             "Rotate Right",

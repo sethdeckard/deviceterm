@@ -88,6 +88,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     let locationViewModel: PaneLocationViewModel
     private var axPanelHost: NSHostingView<SimulatorPaneAXInspector>?
     private var contentTrailingToWrapperEdge: NSLayoutConstraint?
+    /// The chrome strip's height. Held because the fold bar makes it a second
+    /// row: the constant moves when a foldable pane shows or hides it.
+    private var chromeHeightToWrapper: NSLayoutConstraint?
+    private var foldBarObservation: ObservationToken?
     private var contentTrailingToAxPanel: NSLayoutConstraint?
     private var axPanelTrailingConstraint: NSLayoutConstraint?
     private var axPanelTopConstraint: NSLayoutConstraint?
@@ -349,18 +353,20 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-    /// Chrome height: uniform across every device family. The chrome is a
-    /// single-row resizable ribbon (`PaneChromeOverlay`), so no family
-    /// reserves an extra row for hardware buttons; those live further up the
-    /// ribbon's reveal ladder and in the ⋯ menu. The function stays
-    /// parameterized on family so a family that needs mandatory
-    /// always-visible chrome can opt into a two-row layout.
+    /// Chrome height: the resizable ribbon row, plus the fold bar when a
+    /// foldable pane is showing one.
     ///
-    /// The number itself comes from `PaneChromeRibbonFit`, which the SwiftUI
-    /// row and the ribbon's resize handle also read, so the constraint
-    /// reserving the strip cannot drift from the strip that gets drawn.
-    static func chromeHeight(forFamily family: String) -> CGFloat {
+    /// Uniform across device families otherwise. Hardware buttons never earn
+    /// a row of their own; they live further up the ribbon's reveal ladder
+    /// and in the ⋯ menu. The hinge is the exception because it is
+    /// continuous, and a slider does not fit a 22pt slot.
+    ///
+    /// The numbers come from `PaneChromeRibbonFit`, which the SwiftUI rows
+    /// and the ribbon's resize handle also read, so the strip reserved cannot
+    /// drift from the strip drawn.
+    static func chromeHeight(forFamily family: String, foldBarVisible: Bool = false) -> CGFloat {
         PaneChromeRibbonFit.chromeRowHeight
+            + (foldBarVisible ? PaneChromeRibbonFit.foldBarHeight : 0)
     }
 
     override func loadView() {
@@ -448,6 +454,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             )
             let ribbonLeadingEdge = bounds.width
                 - PaneChromeRibbonFit.ribbonWidth(contentWidth: content)
+            // The host is flipped, so the ribbon row is the top
+            // `chromeRowHeight` of it. Without this bound the handle's column
+            // would keep claiming hits all the way down the fold bar, and the
+            // slider sitting in that column would never see a drag.
+            guard point.y <= PaneChromeRibbonFit.chromeRowHeight else { return false }
             let zone = PaneChromeRibbonFit.chevronHandleZone
             return point.x >= ribbonLeadingEdge + zone.lowerBound
                 && point.x <= ribbonLeadingEdge + zone.upperBound
@@ -492,10 +503,13 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // a drag starts so the user drags a translucent miniature of
         // the whole pane.
         chromeHost.snapshotSource = wrapper
-        // Uniform 28pt row for every family (see
-        // `chromeHeight(forFamily:)`). The host's intrinsic content
-        // size matches because SwiftUI sizes to its actual content.
-        let chromeHeight: CGFloat = Self.chromeHeight(forFamily: viewModel.family)
+        // Starts at the title-row height; `syncChromeHeight()` adds the fold
+        // bar's height when a foldable pane shows one. The host's intrinsic
+        // content size matches because SwiftUI sizes to its actual content.
+        let chromeHeightConstraint = chromeHost.heightAnchor.constraint(
+            equalToConstant: Self.chromeHeight(forFamily: viewModel.family)
+        )
+        chromeHeightToWrapper = chromeHeightConstraint
         let contentTrailing = content.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
         contentTrailingToWrapperEdge = contentTrailing
         NSLayoutConstraint.activate(
@@ -503,7 +517,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             chromeHost.topAnchor.constraint(equalTo: wrapper.topAnchor),
             chromeHost.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
             chromeHost.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
-            chromeHost.heightAnchor.constraint(equalToConstant: chromeHeight),
+            chromeHeightConstraint,
             content.topAnchor.constraint(equalTo: chromeHost.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
             contentTrailing,
@@ -532,6 +546,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         chromeViewModel.selectedPreset = restoredPreset
         // `App.`-qualified: NSObject's KVO `observe` shadows the global.
         observation = App.observe { [weak self] in self?.render() }
+        // A second binding, because the fold bar is chrome state rather than
+        // device state: `render()` tracks the pane view model and would not
+        // re-run when the chrome's own fold flags move.
+        foldBarObservation = App.observe { [weak self] in self?.syncChromeHeight() }
         viewModel.start()
         // Begin loading the location snapshot for a later menu open. It
         // completes asynchronously, so an immediate open can still draw
@@ -649,6 +667,16 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         chromeViewModel.onCrownDown = { [weak self] in
             self?.focusContentFromChromeAction()
             self?.viewModel.crown(delta: +1)
+        }
+        chromeViewModel.onFoldBarToggle = { [weak self] in
+            guard let self else { return }
+            self.focusContentFromChromeAction()
+            self.chromeViewModel.foldControlVisible.toggle()
+        }
+        chromeViewModel.onFold = { [weak self] degrees in
+            guard let self else { return }
+            self.focusContentFromChromeAction()
+            self.requestFold(toDegrees: degrees)
         }
         chromeViewModel.onScreenshot = { [weak self] in
             self?.focusContentFromChromeAction()
@@ -960,6 +988,70 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         viewModel.crown(delta: +1)
     }
 
+    /// The chrome height this pane needs right now.
+    func currentChromeHeight() -> CGFloat {
+        Self.chromeHeight(
+            forFamily: viewModel.family,
+            foldBarVisible: chromeViewModel.capabilities.fold && chromeViewModel.foldControlVisible
+        )
+    }
+
+    /// Resize the chrome strip to whatever rows it is drawing now.
+    ///
+    /// The SwiftUI chrome sizes itself to its content, but the constraint
+    /// reserving the strip does not, so showing the fold bar without this
+    /// leaves the second row drawn over the top of the device picture.
+    func syncChromeHeight() {
+        let height = currentChromeHeight()
+        guard let constraint = chromeHeightToWrapper, constraint.constant != height else { return }
+        constraint.constant = height
+        // The strip and the picture divide one pane, so a row appearing takes
+        // its height from the picture. A preset pinning that picture to real
+        // points or pixels stops being true the moment it does, and the
+        // divider does not move on its own, so replay the preset against the
+        // height just set. Re-entry is bounded: the replay writes the same
+        // preset back, and the guard above makes the second pass a no-op.
+        if let preset = chromeViewModel.selectedPreset {
+            applySizePreset(preset)
+        }
+    }
+
+    /// Drive the hinge, and record the angle for the chrome's slider.
+    ///
+    /// Every fold surface goes through here: the fold bar's postures and
+    /// slider, the Device menu, and the pane's context menu. Nothing reports
+    /// the hinge back, so this echo is the only thing the slider can show,
+    /// and a surface that skipped it would leave the slider contradicting a
+    /// fold the user had just made from somewhere else in the same app.
+    func requestFold(toDegrees degrees: Double) {
+        chromeViewModel.foldDegrees = degrees
+        viewModel.fold(toDegrees: degrees)
+    }
+
+    /// Fold a foldable device shut, showing its cover panel.
+    ///
+    /// The three fold items name postures rather than angles because the
+    /// hinge is continuous and a menu cannot express that; `FoldPosture`
+    /// owns what each name resolves to, so the ribbon, the Device menu and
+    /// the context menu cannot drift on it.
+    @objc
+    func foldDeviceClosed(_ sender: Any?) {
+        requestFold(toDegrees: FoldPosture.closed.degrees)
+    }
+
+    /// Open a foldable device far enough to use the inner panel while the
+    /// hinge is still bent.
+    @objc
+    func foldDeviceBook(_ sender: Any?) {
+        requestFold(toDegrees: FoldPosture.book.degrees)
+    }
+
+    /// Open a foldable device flat.
+    @objc
+    func foldDeviceOpen(_ sender: Any?) {
+        requestFold(toDegrees: FoldPosture.open.degrees)
+    }
+
     @objc
     func rotateDeviceLeft(_ sender: Any?) {
         viewModel.rotateLeft()
@@ -1225,7 +1317,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
                     forSimPane: self,
                     device: device,
                     orientation: viewModel.currentOrientation,
-                    chromeHeight: Self.chromeHeight(forFamily: viewModel.family)
+                    chromeHeight: currentChromeHeight()
                 )
                 return
             }

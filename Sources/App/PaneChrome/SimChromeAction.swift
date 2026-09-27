@@ -24,6 +24,7 @@ enum SimChromeAction: Sendable, Equatable, Hashable {
     case crownPress
     case crownUp
     case crownDown
+    case fold
 
     /// SF Symbol for the App Switcher, resolved against the running macOS.
     ///

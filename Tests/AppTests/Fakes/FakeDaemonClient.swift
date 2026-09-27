@@ -108,6 +108,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let paneId: String
         let button: HardwareButton
     }
+    struct FoldCall: Equatable {
+        let paneId: String
+        let degrees: Double
+    }
     struct RotateCall: Equatable {
         let paneId: String
         /// What the VM asked for. A relative request stays relative all
@@ -246,6 +250,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// front. A `nil` entry (or an empty queue) succeeds.
     var setDisplayTitleFailures: [Error?] = []
     private(set) var crownCalls: [CrownCall] = []
+    private(set) var foldCalls: [FoldCall] = []
     private(set) var buttonCalls: [ButtonCall] = []
     private(set) var rotateCalls: [RotateCall] = []
     /// When true, each recorded rotate waits until the test releases it.
@@ -1148,6 +1153,11 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     func releaseNextRotateCall() {
         guard !rotateContinuations.isEmpty else { return }
         rotateContinuations.removeFirst().resume()
+    }
+
+    func paneInputFold(paneId: String, degrees: Double) {
+        paneInputCalls.append((.paneInputFold, paneId))
+        foldCalls.append(FoldCall(paneId: paneId, degrees: degrees))
     }
 
     func paneInputCrown(paneId: String, delta: Double, durationMs: Int) {

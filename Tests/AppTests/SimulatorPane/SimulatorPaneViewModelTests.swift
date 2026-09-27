@@ -13,6 +13,18 @@ import Testing
 /// + clears the surface.
 @MainActor
 struct SimulatorPaneViewModelTests {
+    private static let foldableCapabilities = PaneCapabilities(
+        touch: true,
+        key: true,
+        text: true,
+        button: true,
+        rotate: true,
+        crown: false,
+        accessibility: true,
+        location: true,
+        fold: true
+    )
+
     /// Let the subscription Task / input Tasks run.
     private func settle() async {
         try? await Task.sleep(nanoseconds: 30_000_000)  // 30ms
@@ -593,6 +605,39 @@ struct SimulatorPaneViewModelTests {
         viewModel.pressButton(button)
         await settle()
         #expect(fake.buttonCalls == [.init(paneId: "p1", button: button)])
+    }
+
+    @Test("a foldable pane sends the hinge angle it was given")
+    func foldForwardsToDaemon() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: FoldPosture.book.degrees)
+        await settle()
+        #expect(fake.foldCalls == [.init(paneId: "p1", degrees: 120)])
+    }
+
+    @Test("a pane that cannot fold sends nothing")
+    func foldIsDroppedWithoutTheCapability() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: .simulator)
+        viewModel.fold(toDegrees: FoldPosture.open.degrees)
+        await settle()
+        #expect(fake.foldCalls.isEmpty)
+    }
+
+    @Test("an out-of-range angle is clamped rather than refused", arguments: [
+        (-40.0, 0.0),
+        (500.0, 180.0)
+    ])
+    func foldClampsToTheHingeRange(requested: Double, sent: Double) async {
+        // A slider cannot produce these, but the same intent is reachable
+        // from a caller that computed an angle, and the daemon refuses an
+        // out-of-range request outright. Clamping keeps the nearest posture.
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: requested)
+        await settle()
+        #expect(fake.foldCalls.map(\.degrees) == [sent])
     }
 
     @Test(

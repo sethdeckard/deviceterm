@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import AppKit
+import DaemonProtocol
 
 /// The right-click menu for a sim pane.
 /// Mirrors Apple's Simulator.app pattern of putting hardware controls
@@ -102,6 +103,40 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
     )
     iCrownRotateDown.image = .menuSymbol("digitalcrown.arrow.counterclockwise", describedAs: "Crown Rotate Down")
     menu.addItem(iCrownRotateDown)
+
+    // Hinge postures, kept with the crown rows because both are the same
+    // kind of item: hardware only some families have, validated per item so
+    // a pane without it shows them disabled.
+    let iFoldClosed = NSMenuItem(
+        title: FoldPosture.closed.chromeTitle,
+        action: #selector(SimulatorPaneViewController.foldDeviceClosed(_:)),
+        keyEquivalent: ""
+    )
+    iFoldClosed.image = .menuSymbol(
+        FoldPosture.closed.chromeSymbol,
+        describedAs: FoldPosture.closed.chromeTitle
+    )
+    menu.addItem(iFoldClosed)
+    let iFoldBook = NSMenuItem(
+        title: FoldPosture.book.chromeTitle,
+        action: #selector(SimulatorPaneViewController.foldDeviceBook(_:)),
+        keyEquivalent: ""
+    )
+    iFoldBook.image = .menuSymbol(
+        FoldPosture.book.chromeSymbol,
+        describedAs: FoldPosture.book.chromeTitle
+    )
+    menu.addItem(iFoldBook)
+    let iFoldOpen = NSMenuItem(
+        title: FoldPosture.open.chromeTitle,
+        action: #selector(SimulatorPaneViewController.foldDeviceOpen(_:)),
+        keyEquivalent: ""
+    )
+    iFoldOpen.image = .menuSymbol(
+        FoldPosture.open.chromeSymbol,
+        describedAs: FoldPosture.open.chromeTitle
+    )
+    menu.addItem(iFoldOpen)
 
     menu.addItem(.separator())
     let iRotateLeft = NSMenuItem(

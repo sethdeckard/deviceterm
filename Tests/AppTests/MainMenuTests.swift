@@ -2,6 +2,7 @@
 
 @testable import App
 import AppKit
+import DaemonProtocol
 import Testing
 
 /// Structural assertions on the programmatic main menu.
@@ -261,17 +262,23 @@ struct MainMenuTests {
     }
 
     @Test
-    func deviceMenuHasHardwareSubmenuWithCrownItems() throws {
+    func deviceMenuHasHardwareSubmenuWithCrownAndFoldItems() throws {
         let device = try #require(deviceMenu(), "Device submenu missing")
         let hardware = try #require(
             device.items.first(where: { $0.submenu?.title == "Hardware" })?.submenu,
             "Hardware submenu missing"
         )
         let titles = hardware.items.map(\.title)
+        // The separator is the empty title: crown and fold are both
+        // family-specific hardware, and no pane offers them both.
         #expect(titles == [
             "Crown Press",
             "Crown Rotate Up",
-            "Crown Rotate Down"
+            "Crown Rotate Down",
+            "",
+            FoldPosture.closed.chromeTitle,
+            FoldPosture.book.chromeTitle,
+            FoldPosture.open.chromeTitle
         ])
     }
 

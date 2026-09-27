@@ -66,4 +66,10 @@ extension PaneLayoutViewController {
     func rotateCrownUp(_ sender: Any?) { targetedSimPane()?.rotateCrownUp(sender) }
     @objc
     func rotateCrownDown(_ sender: Any?) { targetedSimPane()?.rotateCrownDown(sender) }
+    @objc
+    func foldDeviceClosed(_ sender: Any?) { targetedSimPane()?.foldDeviceClosed(sender) }
+    @objc
+    func foldDeviceBook(_ sender: Any?) { targetedSimPane()?.foldDeviceBook(sender) }
+    @objc
+    func foldDeviceOpen(_ sender: Any?) { targetedSimPane()?.foldDeviceOpen(sender) }
 }

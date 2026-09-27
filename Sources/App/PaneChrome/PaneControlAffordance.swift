@@ -41,6 +41,12 @@ enum PaneControlAffordance: Equatable {
     /// reports crown:false, so the family check covers a daemon that
     /// predates the family gate.
     case crown
+    /// Hinge postures on a foldable: `capabilities.fold` alone. Unlike
+    /// `.crown`, no family check joins it. A foldable is legitimately
+    /// `.phone`, so a family gate would have to name the panel count, which
+    /// is what the capability already reports: the daemon sets it from the
+    /// device having two integrated panels.
+    case fold
     /// Screenshot / Record, simulator-only. There is no device
     /// path; grabbing or recording the in-process mirror is not
     /// implemented.
@@ -74,6 +80,11 @@ enum PaneControlAffordance: Equatable {
         #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
         #selector(SimulatorPaneViewController.rotateCrownUp(_:)),
         #selector(SimulatorPaneViewController.rotateCrownDown(_:))
+    ]
+    private static let foldSelectors: Set<Selector> = [
+        #selector(SimulatorPaneViewController.foldDeviceClosed(_:)),
+        #selector(SimulatorPaneViewController.foldDeviceBook(_:)),
+        #selector(SimulatorPaneViewController.foldDeviceOpen(_:))
     ]
     /// Every submenu path: picking a row, walking a saved `.gpx`,
     /// taking the Mac's own position, and opening the sheet that types
@@ -113,6 +124,7 @@ enum PaneControlAffordance: Equatable {
         }
         if rotateSelectors.contains(action) { return .rotate }
         if crownSelectors.contains(action) { return .crown }
+        if foldSelectors.contains(action) { return .fold }
         if captureSelectors.contains(action) { return .capture }
         if action == #selector(SimulatorPaneViewController.toggleAxInspector(_:)) {
             return .accessibility
@@ -141,6 +153,9 @@ enum PaneControlAffordance: Equatable {
 
         case .crownPress, .crownUp, .crownDown:
             return .crown
+
+        case .fold:
+            return .fold
 
         case .screenshot, .record:
             return .capture
@@ -190,6 +205,9 @@ enum PaneControlAffordance: Equatable {
 
         case .crown:
             return capabilities.crown && family == .watch
+
+        case .fold:
+            return capabilities.fold
 
         case .capture:
             return !isPhysicalDevice

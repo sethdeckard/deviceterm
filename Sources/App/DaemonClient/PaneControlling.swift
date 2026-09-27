@@ -110,4 +110,10 @@ protocol PaneControlling: AnyObject {
     /// at once; a positive value sub-steps it over the duration so a
     /// long scroll feels like a continuous turn instead of one jump.
     func paneInputCrown(paneId: String, delta: Double, durationMs: Int) async throws
+    /// `pane.input.fold`: set a foldable device's hinge angle, `0` shut and
+    /// `180` flat. Degrees rather than a posture name because the hinge is
+    /// continuous; a caller naming a position resolves it through
+    /// `FoldPosture.degrees` first, so no two callers can drift on what a
+    /// name means.
+    func paneInputFold(paneId: String, degrees: Double) async throws
 }

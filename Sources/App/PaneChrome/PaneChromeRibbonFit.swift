@@ -36,6 +36,15 @@ enum PaneChromeRibbonFit {
     /// it leaves a band that neither the gesture nor the pane drag will take.
     static let chromeRowHeight: CGFloat = 28
 
+    /// Height of the fold bar, the second chrome row a foldable pane shows
+    /// under the first.
+    ///
+    /// Taller than `chromeRowHeight` because it carries a slider, whose thumb
+    /// needs more room than a 22pt button. Read by the SwiftUI row that draws
+    /// it and by the constraint the pane view controller sizes its chrome
+    /// with, so the strip drawn and the strip reserved are one number.
+    static let foldBarHeight: CGFloat = 32
+
     /// Leading inset before the drag grip, which opens the row.
     static let leadingPadding: CGFloat = 8
     /// Thickness of the drag grip capsule.

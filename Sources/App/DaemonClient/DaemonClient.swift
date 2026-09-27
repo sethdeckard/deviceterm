@@ -1814,6 +1814,17 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         )
     }
 
+    /// Set a foldable device's hinge angle, `0` shut and `180` flat.
+    ///
+    /// The daemon builds the guest-side helper when no cached binary matches
+    /// its source and selected developer directory, so a call that has to
+    /// build takes about a second where the rest take a fraction of it. The
+    /// cache outlives the session. Nothing here waits on the panel swap that
+    /// may follow: the pane re-binds on its own when the lit panel changes.
+    func paneInputFold(paneId: String, degrees: Double) async throws {
+        try await paneInput(.paneInputFold, body: FoldParams(paneId: paneId, degrees: degrees))
+    }
+
     private func paneInput(_ method: RPCMethod, body: some Encodable) async throws {
         let params = try JSONEncoder().encode(body)
         _ = try await request(method: method, params: params)
