@@ -25,15 +25,17 @@ private func entry(
     _ name: String,
     command: String = "run",
     cwd: String = "/tmp",
-    restart: Bool = true
+    restart: Bool = true,
+    pinned: Bool = true
 ) -> AutomationProgramEntry {
-    AutomationProgramEntry(name: name, command: [command], cwd: cwd, restart: restart)
+    AutomationProgramEntry(name: name, command: [command], cwd: cwd, restart: restart, pinned: pinned)
 }
 
 private struct OpenedTab: Equatable {
     let window: WindowID
     let cwd: String
     let command: [String]
+    let pinned: Bool
 }
 
 private struct RenamedTab: Equatable {
@@ -109,8 +111,8 @@ private final class Harness {
                 ensureWindowCalls += 1
                 return window
             },
-            openAutomationTab: { [self] window, cwd, command in
-                opened.append(OpenedTab(window: window, cwd: cwd, command: command))
+            openAutomationTab: { [self] window, cwd, command, pinned in
+                opened.append(OpenedTab(window: window, cwd: cwd, command: command, pinned: pinned))
                 onOpen?()
                 // Opening a tab suspends in production, so suspend here too:
                 // without it nothing can interleave with the launch pass and
@@ -216,6 +218,18 @@ func opensATabPerProgram() async {
     await harness.coordinator().start()
     #expect(harness.opened.map(\.cwd) == ["/a", "/b"])
     #expect(harness.opened.map(\.command) == [["run-a"], ["run-b"]])
+}
+
+@Test("each tab opens pinned or not as its program says")
+@MainActor
+func opensEachTabPinnedAsConfigured() async {
+    let harness = Harness()
+    harness.entries = [
+        entry("pinned", pinned: true),
+        entry("unpinned", pinned: false)
+    ]
+    await harness.coordinator().start()
+    #expect(harness.opened.map(\.pinned) == [true, false])
 }
 
 /// Tabs open in the order the file lists them, which is the part deviceterm

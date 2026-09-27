@@ -441,7 +441,7 @@ final class Router {
                 command: cmd
             )
 
-        case let .openAutomationTab(windowID, cwd, cmd, cohort):
+        case let .openAutomationTab(windowID, cwd, cmd, cohort, pinned):
             guard let window = workspace.window(id: windowID) else { return }
             await addTab(
                 to: window,
@@ -449,7 +449,8 @@ final class Router {
                 reattach: [],
                 cwd: cwd,
                 command: cmd,
-                cohort: cohort
+                cohort: cohort,
+                pinned: pinned
             )
 
         case let .selectTab(windowID, tabID):
@@ -951,7 +952,8 @@ final class Router {
         reattach: [OrphanRecord],
         cwd: String? = nil,
         command: [String]? = nil,
-        cohort: UUID? = nil
+        cohort: UUID? = nil,
+        pinned: Bool = false
     ) async {
         let name = detectWorktreeName()
         // A caller that reserved the cohort id can find this tab by it;
@@ -1003,7 +1005,8 @@ final class Router {
                 role: session.role ?? role,
                 cohortId: cohortID,
                 name: name,
-                automationCommand: deferredCommand
+                automationCommand: deferredCommand,
+                isPinned: pinned
             )
             window.tabs.append(tab)
             // Install the tab's cohort eagerly, so a device pane attached
@@ -1036,7 +1039,8 @@ final class Router {
                     cohortId: cohortID,
                     name: name,
                     lifecycle: .failed,
-                    failureMessage: "terminal session creation failed: \(error)"
+                    failureMessage: "terminal session creation failed: \(error)",
+                    isPinned: pinned
                 )
             )
         }

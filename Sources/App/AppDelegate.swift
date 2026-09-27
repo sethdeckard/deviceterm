@@ -218,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 await self.router.dispatchAndWait(.openWindow())
                 return self.workspace.selectedWindowID
             },
-            openAutomationTab: { [weak self] windowID, cwd, command in
+            openAutomationTab: { [weak self] windowID, cwd, command, pinned in
                 guard let self else { return nil }
                 // Reserve the cohort id, then find the tab carrying it.
                 // `Route` is a pure value with no reply channel, and
@@ -228,7 +228,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 // same window and be picked instead.
                 let cohort = UUID()
                 await self.router.dispatchAndWait(
-                    .openAutomationTab(windowID, cwd: cwd, cmd: command, cohort: cohort)
+                    .openAutomationTab(
+                        windowID,
+                        cwd: cwd,
+                        cmd: command,
+                        cohort: cohort,
+                        pinned: pinned
+                    )
                 )
                 return self.workspace.window(id: windowID)?
                     .tabs.tabs.first { $0.cohortId == cohort }?.id

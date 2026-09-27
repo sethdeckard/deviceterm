@@ -257,6 +257,24 @@ struct RouterTests {
         #expect(tabs?.pinnedCount == 0)
     }
 
+    /// A configured program's tab opens at the end of the pinned run, ahead
+    /// of the unpinned tabs, without a separate move.
+    @Test
+    func pinnedAutomationTabOpensIntoThePinnedRun() async {
+        let fake = FakeDaemonClient()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        router.dispatch(.newTab(WindowID(value: 1)))
+        router.dispatch(.openAutomationTab(WindowID(value: 1), pinned: true))
+        router.dispatch(.openAutomationTab(WindowID(value: 1), pinned: true))
+        router.dispatch(.openAutomationTab(WindowID(value: 1)))
+        await settle()
+        let tabs = workspace.window(id: WindowID(value: 1))?.tabs
+        #expect(tabs?.tabs.map(\.id.value) == [3, 4, 1, 2, 5])
+        #expect(tabs?.tabs.map(\.isPinned) == [true, true, false, false, false])
+        #expect(tabs?.selectedTab?.id == TabID(value: 5))
+    }
+
     @Test
     func queuedRelativeSelectionsEachAdvanceOneTab() async {
         let fake = FakeDaemonClient()

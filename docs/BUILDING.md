@@ -305,6 +305,7 @@ program build-bridge
 
 program watcher
   command ~/bin/watch-builds
+  pinned false
 ```
 
 `command` is required. `cwd` is optional and defaults to your home
@@ -318,6 +319,16 @@ interprets them. A name may contain spaces for the same reason.
 program meant to run once and exit. A value DeviceTerm cannot read is
 ignored: the last readable value in the block applies, or true if the
 block gave none.
+
+`pinned` is optional and defaults to true, so the program's tab opens
+pinned: a compact icon at the front of the tab strip. Set it to `false`
+to open an ordinary tab. A value DeviceTerm cannot read is ignored the
+same way as `restart`.
+
+Pinning or unpinning a program's tab from its right-click menu lasts as
+long as the tab does. A program re-runs in its existing tab, so the
+change holds, but a tab that `deviceterm automation restart` reopens
+after you closed it follows `pinned` again.
 
 Three things make a block unusable: no name, no command, or a name an
 earlier block already took. Each is reported to the unified log

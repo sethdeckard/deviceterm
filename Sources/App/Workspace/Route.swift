@@ -82,11 +82,16 @@ enum Route: Sendable {
     /// `dispatchAndWait` only waits for its own turn on the serial
     /// drain. Nil generates one, which is what every caller that does
     /// not need the identity back passes.
+    ///
+    /// `pinned` opens the tab straight into the pinned run, so it never
+    /// shows as an ordinary tab first. A configured automation program
+    /// passes it; the menu and Duplicate Tab leave it false.
     case openAutomationTab(
         WindowID,
         cwd: String? = nil,
         cmd: [String]? = nil,
-        cohort: UUID? = nil
+        cohort: UUID? = nil,
+        pinned: Bool = false
     )
     case selectTab(WindowID, TabID)
 

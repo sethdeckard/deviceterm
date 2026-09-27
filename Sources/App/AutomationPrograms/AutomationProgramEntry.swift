@@ -26,4 +26,8 @@ struct AutomationProgramEntry: Equatable, Sendable {
     /// Whether deviceterm re-runs the command when the program exits.
     /// Defaults to true when the block does not say.
     let restart: Bool
+
+    /// Whether the program's tab opens pinned. Defaults to true when the
+    /// block does not say.
+    let pinned: Bool
 }

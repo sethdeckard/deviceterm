@@ -9,6 +9,7 @@ import Foundation
 ///       command ~/.local/bin/build-bridge --socket ~/.cache/build-bridge.sock
 ///       cwd ~/work
 ///       restart true
+///       pinned false
 ///
 ///     program watcher
 ///       command ~/bin/watch-builds
@@ -30,8 +31,8 @@ import Foundation
 ///
 /// **Everything else this version does not understand is ignored, never an
 /// error.** An unrecognized field, an unrecognized line at column zero, an
-/// indented line before any block, and a `restart` value that is neither
-/// `true` nor `false` all leave no trace. That is what lets a
+/// indented line before any block, and a `restart` or `pinned` value that is
+/// neither `true` nor `false` all leave no trace. That is what lets a
 /// file written for a newer deviceterm still run here, and it is the same
 /// rule `LocationsFileParser` follows for the sibling locations file.
 enum AutomationProgramsFileParser {
@@ -45,6 +46,7 @@ enum AutomationProgramsFileParser {
         var command: String?
         var cwd: String?
         var restart: Bool?
+        var pinned: Bool?
     }
 
     /// The column-zero keyword that opens a block.
@@ -113,6 +115,9 @@ enum AutomationProgramsFileParser {
                     // and leaves any value already read in place.
                     if let flag = boolean(value) { open?.restart = flag }
 
+                case "pinned":
+                    if let flag = boolean(value) { open?.pinned = flag }
+
                 default:
                     continue
                 }
@@ -136,8 +141,8 @@ enum AutomationProgramsFileParser {
 
     /// A finished block as an entry, or nil when it carries no command.
     ///
-    /// Defaults land here: an absent `cwd` is the home directory and an
-    /// absent `restart` is `true`.
+    /// Defaults land here: an absent `cwd` is the home directory, and an
+    /// absent `restart` or `pinned` is `true`.
     private static func entry(
         from block: Block,
         relativeTo directory: String
@@ -151,7 +156,8 @@ enum AutomationProgramsFileParser {
             name: block.name,
             command: [command],
             cwd: cwd ?? NSHomeDirectory(),
-            restart: block.restart ?? true
+            restart: block.restart ?? true,
+            pinned: block.pinned ?? true
         )
     }
 

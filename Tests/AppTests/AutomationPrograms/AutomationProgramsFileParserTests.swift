@@ -34,7 +34,8 @@ func parsesFullBlock() {
         "program build-bridge",
         "  command ~/.local/bin/build-bridge --socket ~/.cache/bb.sock",
         "  cwd /Users/someone/work",
-        "  restart false"
+        "  restart false",
+        "  pinned false"
     ])
     #expect(parsed.defects.isEmpty)
     #expect(
@@ -43,7 +44,8 @@ func parsesFullBlock() {
                 name: "build-bridge",
                 command: ["~/.local/bin/build-bridge --socket ~/.cache/bb.sock"],
                 cwd: "/Users/someone/work",
-                restart: false
+                restart: false,
+                pinned: false
             )
         ]
     )
@@ -62,11 +64,12 @@ func parsesInFileOrder() {
     #expect(parsed.entries.map(\.name) == ["first", "second", "third"])
 }
 
-@Test("an absent cwd is the home directory and an absent restart is true")
+@Test("an absent cwd is the home directory and an absent restart or pinned is true")
 func appliesDefaults() {
     let parsed = parse(["program watcher", "  command ~/bin/watch"])
     #expect(parsed.entries.first?.cwd == NSHomeDirectory())
     #expect(parsed.entries.first?.restart == true)
+    #expect(parsed.entries.first?.pinned == true)
 }
 
 @Test("restart reads case-insensitively", arguments: [("TRUE", true), ("False", false)])
@@ -88,6 +91,34 @@ func ignoresUnreadableRestart(value: String) {
 func unreadableRestartKeepsEarlierValue() {
     let parsed = parse(["program p", "  command run", "  restart false", "  restart maybe"])
     #expect(parsed.entries.first?.restart == false)
+}
+
+@Test("pinned reads case-insensitively", arguments: [("TRUE", true), ("False", false)])
+func readsPinnedCaseInsensitively(value: String, expected: Bool) {
+    let parsed = parse(["program p", "  command run", "  pinned \(value)"])
+    #expect(parsed.entries.first?.pinned == expected)
+}
+
+/// Read the same way as `restart`: an unreadable value leaves the tab pinned
+/// rather than failing the block.
+@Test("an unreadable pinned value is ignored", arguments: ["yes", "0", "off", ""])
+func ignoresUnreadablePinned(value: String) {
+    let parsed = parse(["program p", "  command run", "  pinned \(value)"])
+    #expect(parsed.defects.isEmpty)
+    #expect(parsed.entries.first?.pinned == true)
+}
+
+@Test("an unreadable pinned does not clear a value already read")
+func unreadablePinnedKeepsEarlierValue() {
+    let parsed = parse(["program p", "  command run", "  pinned false", "  pinned maybe"])
+    #expect(parsed.entries.first?.pinned == false)
+}
+
+@Test("pinned and restart are independent")
+func pinnedDoesNotTouchRestart() {
+    let parsed = parse(["program p", "  command run", "  pinned false"])
+    #expect(parsed.entries.first?.pinned == false)
+    #expect(parsed.entries.first?.restart == true)
 }
 
 @Test("a command keeps its own spacing, quoting, and tilde verbatim")

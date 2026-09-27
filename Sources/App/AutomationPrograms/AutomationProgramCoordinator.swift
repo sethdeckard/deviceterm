@@ -34,9 +34,10 @@ final class AutomationProgramCoordinator: AutomationProgramReading {
         /// The window to open tabs in, creating one if the workspace has
         /// none. Nil when no window could be had.
         var ensureWindow: @MainActor () async -> WindowID?
-        /// Open an Automation tab running `command` in `cwd`, and answer
-        /// which tab it turned out to be. Nil when the open failed.
-        var openAutomationTab: @MainActor (WindowID, String, [String]) async -> TabID?
+        /// Open an Automation tab running `command` in `cwd`, pinned when
+        /// the last argument says so, and answer which tab it turned out to
+        /// be. Nil when the open failed.
+        var openAutomationTab: @MainActor (WindowID, String, [String], Bool) async -> TabID?
         /// Title the tab with the program's name.
         var renameTab: @MainActor (WindowID, TabID, String) -> Void
         /// The terminal pane a freshly opened tab runs its command in.
@@ -342,7 +343,12 @@ final class AutomationProgramCoordinator: AutomationProgramReading {
         // Getting a window suspends too, so re-check before opening: a quit
         // that landed during that wait must not still produce a tab.
         guard !isStopped else { return nil }
-        guard let tabID = await deps.openAutomationTab(windowID, entry.cwd, entry.command) else {
+        guard let tabID = await deps.openAutomationTab(
+            windowID,
+            entry.cwd,
+            entry.command,
+            entry.pinned
+        ) else {
             log.error(
                 """
                 automation-programs: could not open a tab for \
