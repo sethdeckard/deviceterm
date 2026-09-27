@@ -129,13 +129,20 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         target: self,
         action: #selector(rebootClicked(_:))
     )
+    private lazy var closeButton = NSButton(
+        title: "Close Pane",
+        target: self,
+        action: #selector(closePaneClicked(_:))
+    )
+    /// Shown on a simulator pane's failed overlay to request a fresh
+    /// attach.
+    private lazy var retryButton = NSButton(
+        title: "Retry",
+        target: self,
+        action: #selector(retryClicked(_:))
+    )
     private lazy var shutdownButtons: NSStackView = {
-        let closeButton = NSButton(
-            title: "Close Pane",
-            target: self,
-            action: #selector(closePaneClicked(_:))
-        )
-        let stack = NSStackView(views: [closeButton, rebootButton])
+        let stack = NSStackView(views: [closeButton, rebootButton, retryButton])
         stack.orientation = .horizontal
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -153,6 +160,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Fires when the user clicks "Reboot" on the shutdown overlay. The
     /// owner re-boots the device and the auto-resurrect poll re-attaches.
     var onReboot: (() -> Void)?
+    /// Fires when the user clicks "Retry" on a sim pane's failed overlay.
+    /// The owner re-attaches the pane in place with a fresh automatic
+    /// resurrect budget. Unwired for a device pane, whose failed overlay
+    /// offers no button.
+    var onRetry: (() -> Void)?
     /// Fires from the Device > Reboot menu item while the sim is still
     /// rendering. The owner shuts the sim down and boots it again,
     /// preserving ownership. Distinct from `onReboot` (which only
@@ -846,13 +858,20 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             overlay.stringValue = isPhysicalDevice
                 ? "\(displayName) stopped mirroring. Reconnecting…"
                 : "Simulator shut down."
+            closeButton.isHidden = false
             rebootButton.isHidden = isPhysicalDevice
+            retryButton.isHidden = true
             shutdownButtons.isHidden = false
 
         case let .failed(message):
             overlay.isHidden = false
             overlay.stringValue = "Failed: \(message)"
-            shutdownButtons.isHidden = true
+            // Retry lets the user request another attach after automatic
+            // recovery exhausts its budget.
+            closeButton.isHidden = true
+            rebootButton.isHidden = true
+            retryButton.isHidden = isPhysicalDevice
+            shutdownButtons.isHidden = isPhysicalDevice
         }
         // Scrim follows the overlay: dim the (possibly frozen) frame
         // whenever a message is shown, leave it clear while rendering.
@@ -867,6 +886,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     @objc
     private func rebootClicked(_ sender: Any?) {
         onReboot?()
+    }
+
+    @objc
+    private func retryClicked(_ sender: Any?) {
+        onRetry?()
     }
 
     // MARK: - Device menu @objc selectors

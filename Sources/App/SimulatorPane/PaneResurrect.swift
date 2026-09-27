@@ -145,10 +145,11 @@ final class PaneResurrect {
     /// Re-arm automatic resurrect for `target`: forget what it spent and put
     /// its suspended watch back, restarting the poll.
     ///
-    /// Called when the user reboots from the shutdown overlay. An explicit ask
-    /// earns a full budget whatever the automatic attempts spent. Restoring
-    /// the watch has to happen here because the pane is already `.shutdown`,
-    /// so the transition that would otherwise register one has fired already.
+    /// Called when the user asks from the overlay, Reboot on a shut-down pane
+    /// or Retry on a failed one. An explicit ask earns a full budget whatever
+    /// the automatic attempts spent. Restoring the watch has to happen here
+    /// because the pane is already `.shutdown` or `.failed`, so the
+    /// transition that would otherwise register one has fired already.
     func rearm(target: PaneTarget) {
         let key = Self.watchKey(target)
         history.removeValue(forKey: key)
@@ -176,8 +177,8 @@ final class PaneResurrect {
     /// A target that has come back is resurrected unless its own recent
     /// history says to wait or to stop: inside the cooldown it is left for a
     /// later tick, and a sim past its budget is suspended, leaving the user
-    /// with the overlay's Reboot. The poll itself ends once the last watch
-    /// goes, whether it fired, was suspended, or was unwatched.
+    /// with the overlay's Reboot or Retry. The poll itself ends once the last
+    /// watch goes, whether it fired, was suspended, or was unwatched.
     ///
     /// Public for tests; called by `pollTask` on the bounded cadence.
     func tick() async {

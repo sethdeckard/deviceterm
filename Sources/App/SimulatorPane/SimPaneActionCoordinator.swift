@@ -326,6 +326,18 @@ final class SimPaneActionCoordinator {
                 )
             }
         }
+        paneVC.onRetry = { [weak self] in
+            guard let self else { return }
+            // An explicit ask earns a fresh budget, as Reboot does on the
+            // shutdown overlay, and re-attaches now rather than on the next
+            // poll, so a sim that is no longer booted fails the attach
+            // visibly instead of leaving the overlay waiting. The watch goes
+            // first so a poll cannot re-attach the pane a second time behind
+            // this one.
+            self.paneResurrect.rearm(target: .sim(udid: udid))
+            self.paneResurrect.unwatch(target: .sim(udid: udid))
+            self.dispatchResurrect(udid: udid)
+        }
         paneVC.onLiveReboot = { [weak self, weak paneVC] in
             guard let self, let paneVC else { return }
             let (sessionId, capability) = self.credentials
@@ -553,7 +565,10 @@ final class SimPaneActionCoordinator {
         paneVC.onStateChange = { [weak self, weak paneVC] state in
             guard let self else { return }
             switch state {
-            case .shutdown:
+            case .shutdown, .failed:
+                // Watch shut-down and failed panes for a Booted simulator.
+                // Repeated automatic attaches are bounded by the resurrect
+                // budget; Retry resets that budget.
                 self.paneResurrect.watch(
                     target: .sim(udid: udid),
                     displayName: displayName

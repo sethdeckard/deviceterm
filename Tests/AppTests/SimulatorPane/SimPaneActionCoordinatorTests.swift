@@ -17,6 +17,21 @@ private let bootUDID = "11111111-1111-1111-1111-111111111111"
 /// that claim across an unanswered RPC or daemon replacement.
 @MainActor
 struct SimPaneActionCoordinatorTests {
+    /// A sim pane's view controller wired to a coordinator, with the
+    /// `PaneResurrect` that coordinator arms. The wiring holds the
+    /// coordinator weakly, so a test keeps this whole value alive.
+    private struct WiredPane {
+        let coordinator: SimPaneActionCoordinator
+        let paneVC: SimulatorPaneViewController
+        let resurrect: PaneResurrect
+    }
+
+    /// The uptime the resurrect watch reads, so a test can wait out a
+    /// cooldown without sleeping through it.
+    private final class TestClock {
+        var nanoseconds: UInt64 = 0
+    }
+
     private func makeCoordinator(
         _ fake: FakeDaemonClient
     ) -> (SimPaneActionCoordinator, Router) {
@@ -81,6 +96,46 @@ struct SimPaneActionCoordinatorTests {
             state: "Booted",
             ownedBySession: session
         )
+    }
+
+    /// A mounted sim pane for `udid`, wired. The resurrect poll interval is
+    /// far past the test so `tick()` runs only when called.
+    private func makeWiredPane(
+        _ fake: FakeDaemonClient,
+        udid: String,
+        clock: TestClock = TestClock()
+    ) async -> WiredPane {
+        let workspace = WorkspaceViewModel()
+        let router = Router(workspace: workspace, daemon: fake)
+        router.dispatch(.openWindow())
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let tabID = TabID(value: 1)
+        router.dispatch(.attachSimPane(tab: tabID, udid: udid, displayName: "iPhone"))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let mounted = workspace.window(id: WindowID(value: 1))?.tabs.tab(id: tabID)?.simPanes
+        let pane = mounted?.first(where: { $0.udid == udid })
+            ?? SimPaneState(paneId: "P1", udid: udid, displayName: "iPhone", family: "phone")
+        let resurrect = PaneResurrect(
+            daemonClient: fake,
+            pollIntervalNanoseconds: 3_600_000_000_000,
+            now: { clock.nanoseconds }
+        )
+        let coordinator = SimPaneActionCoordinator(
+            tabID: tabID,
+            router: router,
+            daemonClient: fake,
+            paneResurrect: resurrect,
+            tabListVM: workspace.window(id: WindowID(value: 1))?.tabs ?? TabListViewModel(),
+            windowID: WindowID(value: 1)
+        )
+        let paneVC = SimulatorPaneViewController(
+            simPane: pane,
+            daemonClient: fake,
+            advisory: .silent(),
+            deviceHubAdvisory: .silent()
+        )
+        coordinator.wire(paneVC: paneVC, simPane: pane)
+        return WiredPane(coordinator: coordinator, paneVC: paneVC, resurrect: resurrect)
     }
 
     @Test
@@ -434,5 +489,123 @@ struct SimPaneActionCoordinatorTests {
 
         #expect(fake.reconcileBootClaimCalls.count == 1)
         #expect(await restoredClaims(router, fake) == [bootUDID])
+    }
+
+    @Test
+    func aDaemonFailedPaneIsReattachedOnceItsSimIsBooted() async {
+        // The resurrect watch recovers the failed pane automatically while
+        // its simulator remains Booted.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        fake.deviceListResult = [booted("U", session: "S")]
+        let wired = await makeWiredPane(fake, udid: "U")
+
+        wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+        await wired.resurrect.tick()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(fake.closePaneCalls == [.init(paneId: "P1", mode: .detach)])
+        #expect(fake.attachDeviceCalls.map(\.udid) == ["U", "U"])
+        withExtendedLifetime(wired) {}
+    }
+
+    @Test
+    func aDaemonFailedPaneWhoseSimIsNotBootedWaits() async {
+        // The watch is armed but `device.list` does not report the sim
+        // Booted, so nothing is re-attached yet.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        fake.deviceListResult = []
+        let wired = await makeWiredPane(fake, udid: "U")
+
+        wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+        await wired.resurrect.tick()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(fake.closePaneCalls.isEmpty)
+        #expect(fake.attachDeviceCalls.map(\.udid) == ["U"])
+        withExtendedLifetime(wired) {}
+    }
+
+    @Test
+    func aPaneThatRendersAgainClearsItsResurrectWatch() async {
+        // A pane that fails and then renders (a subscription that came back
+        // on its own) must not be torn down and re-attached under the user.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        fake.deviceListResult = [booted("U", session: "S")]
+        let wired = await makeWiredPane(fake, udid: "U")
+
+        wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+        wired.paneVC.onStateChange?(.rendering)
+        await wired.resurrect.tick()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(fake.closePaneCalls.isEmpty)
+        #expect(fake.attachDeviceCalls.map(\.udid) == ["U"])
+        withExtendedLifetime(wired) {}
+    }
+
+    @Test
+    func aPaneThatKeepsFailingIsHandedBackWithRetry() async {
+        // Every automatic re-attach fails again, so the watch spends its
+        // budget and suspends. The failed overlay has no Reboot to rearm it,
+        // so Retry has to: it forgets the budget and re-attaches at once,
+        // and the pane failing after that starts a fresh budget.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        fake.deviceListResult = [booted("U", session: "S")]
+        let clock = TestClock()
+        let wired = await makeWiredPane(fake, udid: "U", clock: clock)
+
+        for _ in 0 ..< PaneResurrect.maximumAutomaticResurrects {
+            // Past the longest cooldown, inside the history lifetime.
+            clock.nanoseconds += 60_000_000_000
+            wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+            await wired.resurrect.tick()
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(fake.closePaneCalls.count == PaneResurrect.maximumAutomaticResurrects)
+
+        clock.nanoseconds += 60_000_000_000
+        wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+        await wired.resurrect.tick()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(fake.closePaneCalls.count == PaneResurrect.maximumAutomaticResurrects)
+
+        wired.paneVC.onRetry?()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(fake.closePaneCalls.count == PaneResurrect.maximumAutomaticResurrects + 1)
+
+        wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+        await wired.resurrect.tick()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(fake.closePaneCalls.count == PaneResurrect.maximumAutomaticResurrects + 2)
+        #expect(fake.closePaneCalls.allSatisfy { $0.mode == .detach })
+        withExtendedLifetime(wired) {}
+    }
+
+    @Test
+    func retryReattachesOnceEvenWhileTheWatchIsArmed() async {
+        // The sim is not reported Booted, so the watch is armed and waiting.
+        // Retry re-attaches now, and the watch it drops must not re-attach
+        // the pane again when the sim does show up.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        fake.deviceListResult = []
+        let wired = await makeWiredPane(fake, udid: "U")
+
+        wired.paneVC.onStateChange?(.failed("daemon reported pane failure"))
+        await wired.resurrect.tick()
+        wired.paneVC.onRetry?()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(fake.closePaneCalls == [.init(paneId: "P1", mode: .detach)])
+
+        fake.deviceListResult = [booted("U", session: "S")]
+        await wired.resurrect.tick()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(fake.closePaneCalls.count == 1)
+        #expect(fake.attachDeviceCalls.map(\.udid) == ["U", "U"])
+        withExtendedLifetime(wired) {}
     }
 }
