@@ -539,3 +539,129 @@ func recoveryDoesNotReuseHeldSurfaces() async throws {
     // The orphaned epoch is still retained (its holds pinned), not pruned.
     #expect(await pool.quarantinedEpochCount() == 1)
 }
+
+// MARK: - Idle reclaim
+
+/// Poll until the active epoch has exactly `count` slots allocated (a
+/// daemon-current release reaches the pool asynchronously).
+private func waitForAllocated(_ pool: LeasedSurfacePool, exactly count: Int) async -> Int {
+    for _ in 0..<200 {
+        let allocated = await pool.allocatedSlotCount()
+        if allocated == count { return allocated }
+        try? await Task.sleep(nanoseconds: 500_000)
+    }
+    return await pool.allocatedSlotCount()
+}
+
+@Test("going idle frees unheld slots and keeps held ones")
+func idleFreesUnheldSlots() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    let held = try await acquireOne(pool)
+    var released: [PublishedSurface]? = [try await acquireOne(pool), try await acquireOne(pool)]
+    _ = released
+    released = nil
+    _ = await waitForFreeSlots(pool, atLeast: 2)
+    #expect(await pool.allocatedSlotCount() == 3)
+
+    await pool.setIdle(true, serial: 1)
+    #expect(await pool.allocatedSlotCount() == 1)
+    #expect(await pool.snapshotCounters().slotsAllocated == 1)
+    _ = held
+}
+
+@Test("a hold released while idle frees its slot")
+func idleReleaseShrinksThePool() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    var held: PublishedSurface? = try await acquireOne(pool)
+    await pool.setIdle(true, serial: 1)
+    #expect(await pool.allocatedSlotCount() == 1)
+    _ = held
+    held = nil
+    #expect(await waitForAllocated(pool, exactly: 0) == 0)
+}
+
+@Test("a subscription hold acked while idle frees its slot")
+func idleWatermarkShrinksThePool() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    var published: PublishedSurface? = try await acquireOne(pool)
+    let lease = try #require(published?.lease)
+    let grant = try #require(await lease.acquireHold(token))
+    #expect(await grant.commit())
+    published = nil
+    await pool.setIdle(true, serial: 1)
+    // Wait for the daemon-current release, so only the subscription hold
+    // keeps the slot.
+    for _ in 0..<200 {
+        if await pool.holders(epoch: lease.epoch, generation: lease.generation) == [.subscription(token)] {
+            break
+        }
+        try? await Task.sleep(nanoseconds: 500_000)
+    }
+    #expect(await pool.holders(epoch: lease.epoch, generation: lease.generation) == [.subscription(token)])
+    #expect(await pool.allocatedSlotCount() == 1)
+    await pool.applyWatermark(
+        token: token,
+        epoch: lease.epoch,
+        lowestHeld: lease.generation + 1,
+        connectionId: 1
+    )
+    #expect(await pool.allocatedSlotCount() == 0)
+}
+
+@Test("leaving idle grows the pool back and restores reuse")
+func leavingIdleRestoresReuse() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    await pool.setIdle(true, serial: 1)
+    await pool.setIdle(false, serial: 2)
+    for _ in 0..<3 {
+        var published: PublishedSurface? = try await acquireOne(pool)
+        _ = published
+        published = nil
+        _ = await waitForFreeSlots(pool, atLeast: 1)
+    }
+    #expect(await pool.allocatedSlotCount() == 1)
+}
+
+@Test("a demand change older than one already applied is ignored")
+func staleIdleChangeIsIgnored() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    // Resume (serial 3) lands before the pause it followed (serial 2).
+    await pool.setIdle(false, serial: 3)
+    await pool.setIdle(true, serial: 2)
+    var published: PublishedSurface? = try await acquireOne(pool)
+    _ = published
+    published = nil
+    #expect(await waitForFreeSlots(pool, atLeast: 1) == 1)
+    #expect(await pool.allocatedSlotCount() == 1)
+}
+
+@Test("a capture in flight when the pause lands does not end idle")
+func acquireWhileIdleStaysIdle() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    await pool.setIdle(true, serial: 1)
+    var published: PublishedSurface? = try await acquireOne(pool)
+    #expect(await pool.allocatedSlotCount() == 1)
+    _ = published
+    published = nil
+    #expect(await waitForAllocated(pool, exactly: 0) == 0)
+}
+
+@Test("going idle frees unheld slots in a retired epoch that still has holds")
+func idleFreesUnheldRetiredSlots() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    let held = try await acquireOne(pool)
+    var released: PublishedSurface? = try await acquireOne(pool)
+    _ = released
+    released = nil
+    _ = await waitForFreeSlots(pool, atLeast: 1)
+    // Retire the epoch with one slot held and one free.
+    #expect(await pool.retireAll())
+    #expect(await pool.snapshotCounters().slotsAllocated == 2)
+
+    await pool.setIdle(true, serial: 1)
+    #expect(await pool.quarantinedEpochCount() == 1)
+    #expect(await pool.snapshotCounters().slotsAllocated == 1)
+    _ = held
+}

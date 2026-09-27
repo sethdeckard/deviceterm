@@ -27,10 +27,14 @@ private final class PumpHarness: @unchecked Sendable {
     var published: [PublishedSurface] { queue.sync { frames } }
     var sourceID: IOSurfaceID { queue.sync { source.withRef { IOSurfaceGetID($0) } } }
 
-    init(retaining: Bool = false, readLimit: Int = 1) throws {
+    init(
+        retaining: Bool = false,
+        readLimit: Int = 1,
+        pool: LeasedSurfacePool = LeasedSurfacePool(slotCount: 3)
+    ) throws {
         self.retaining = retaining
         self.readLimit = readLimit
-        pool = LeasedSurfacePool(slotCount: 3)
+        self.pool = pool
         source = RetainedSurface(try #require(SurfaceCopy.makeSurface(width: 32, height: 32)))
     }
 
@@ -107,6 +111,34 @@ func anUnackedSimStreamRecoversOnceThenFailsThePane() async throws {
     #expect(harness.readTimes.count < 400)
     let times = harness.readTimes
     #expect(try #require(times.last) - #require(times.first) >= .seconds(4))
+}
+
+@Test
+func aPausedSimPoolKeepsOnlyItsCurrentFrameAndResumes() async throws {
+    // The lane runs a fresh pump per resume against the same pool.
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let before = try PumpHarness(readLimit: 3, pool: pool)
+    await before.run()
+    #expect(before.published.count == 1)
+
+    await pool.setIdle(true, serial: 1)
+    // The harness still holds its last frame, as the pane's current surface.
+    // Earlier frames' releases reach the pool asynchronously and are freed as
+    // they land.
+    var allocated = await pool.allocatedSlotCount()
+    for _ in 0..<200 where allocated != 1 {
+        try? await Task.sleep(nanoseconds: 500_000)
+        allocated = await pool.allocatedSlotCount()
+    }
+    #expect(allocated == 1)
+
+    await pool.setIdle(false, serial: 2)
+    let after = try PumpHarness(readLimit: 2, pool: pool)
+    await after.run()
+    #expect(after.published.count == 1)
+    #expect(after.failureMessage == nil)
+    #expect(await pool.snapshotCounters().exhaustionDrops == 0)
+    _ = before
 }
 
 @Test

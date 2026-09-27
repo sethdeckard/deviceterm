@@ -59,6 +59,9 @@ final class SimDisplayLane: @unchecked Sendable {
     /// Told which panel the display is mirroring, whenever that changes.
     /// Owned by `queue`.
     private var onPanelChange: (@Sendable (UInt32) -> Void)?
+    /// Stamps each frame-demand change for the pool's idle state, which is
+    /// set from a task per change. Owned by `queue`.
+    private var demandSerial: UInt64 = 0
 
     private let pool: LeasedSurfacePool
 
@@ -133,10 +136,19 @@ final class SimDisplayLane: @unchecked Sendable {
 
     /// Enqueued synchronously by the coordinator, preserving demand order
     /// without blocking its actor on a CoreSimulator call.
+    ///
+    /// Losing demand also idles the pool, which frees its slots as their holds
+    /// release; regaining it lets the pool grow back. Each change carries a
+    /// serial taken here, on the queue, which prevents a late demand change
+    /// from overriding a newer one.
     func setFrameDemand(_ demanded: Bool) {
         if !demanded { invalidateFrameRun() }
         queue.async { [self] in
             guard let handle, let callbacks = frameCallbacks else { return }
+            demandSerial += 1
+            let serial = demandSerial
+            let pool = self.pool
+            Task { await pool.setIdle(!demanded, serial: serial) }
             if demanded {
                 if frameTask != nil {
                     frameSignal?.notify()

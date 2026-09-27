@@ -3456,6 +3456,17 @@ callbacks; input, orientation observation, and panel following remain active.
 Resuming creates a fresh signal, pump, and run token, then requests an initial
 frame.
 
+Pausing also idles the pane's surface pool. Unheld slots are freed at once,
+and each held one as its last hold releases, including GUI leases acked after
+the pause. The current frame keeps its slot, so once outstanding leases are
+acked a paused pane holds one slot. Resubscribing replays that frame without
+waiting for a new capture.
+
+Resuming lets the pool grow back on demand. Each demand change carries a serial
+taken on the lane's queue, and the pool ignores any change older than one it
+has applied, so a late pause can't override the resume that followed it. A
+capture already in flight when the pause lands doesn't end it either.
+
 The GUI requests simulator frames for the selected tab in each visible,
 non-minimized window while the application isn't hidden. A window needn't be
 key. Hidden panes switch to event-only subscriptions and release the view
@@ -3529,8 +3540,9 @@ grows inside the daemon for as long as the consumer stays away.
 fresh generation. An epoch starts with no slots and allocates one only when it
 can't safely reuse a free one, up to the `DEVICETERM_SURFACE_POOL_SLOTS`
 ceiling (clamped to 3...8, default 6). Slots stay allocated until their epoch
-is discarded, so an epoch holds the most it has needed at once, and retained
-retired epochs add to that.
+is discarded or their simulator pane pauses (see Simulator capture demand), so
+a capturing epoch holds the most it has needed at once, and retained retired
+epochs add to that.
 
 Reuse takes the least-recently-freed free slot whose IOSurface no longer
 reports itself in use. The pool grows rather than rewrite a surface a

@@ -25,8 +25,8 @@ import IOSurface
 ///
 /// Slots are allocated on demand, up to the configured per-epoch ceiling: an
 /// epoch starts empty and grows only when no free slot can be reused safely.
-/// A slot stays allocated until its epoch is discarded, and retained retired
-/// epochs count toward the footprint too.
+/// A slot stays allocated until its epoch is discarded or the pool goes idle,
+/// and retained retired epochs count toward the footprint too.
 ///
 /// This type is `actor`-isolated; every mutation is serialized. Subscription
 /// holds exist only for registered tokens, so a pane with no subscribers
@@ -104,6 +104,12 @@ actor LeasedSurfacePool {
     private var freeSeqCounter: UInt64 = 0
     /// The most slots any active epoch has had allocated at once.
     private var highWater = 0
+    /// Set while nothing is capturing into this pool. An idle pool frees each
+    /// slot as its last hold releases instead of keeping it for reuse.
+    private var isIdle = false
+    /// The newest `setIdle` serial applied, so a demand change that arrives
+    /// late never overrides a newer one.
+    private var idleSerial: UInt64 = 0
 
     private var active: EpochPool?
     private var quarantined: [EpochPool] = []
@@ -359,6 +365,28 @@ actor LeasedSurfacePool {
         return true
     }
 
+    // MARK: - Idle reclaim
+
+    /// Record whether anything is still capturing into this pool. Going idle
+    /// frees every unheld slot now and each held one as its last hold
+    /// releases, so a paused pane keeps only the slots its current frame and
+    /// its consumers still hold. Leaving idle restores ordinary reuse, and the
+    /// next acquire grows the epoch back as needed.
+    ///
+    /// `serial` comes from the one serial domain that issues demand changes,
+    /// which reach the pool through separate tasks. A call older than one
+    /// already applied is ignored, so a late change never overrides a newer
+    /// one. An acquire while idle (a capture already in flight when the
+    /// pause landed) works as usual, and its slot is freed once released.
+    func setIdle(_ idle: Bool, serial: UInt64) {
+        guard serial > idleSerial else { return }
+        idleSerial = serial
+        isIdle = idle
+        guard idle else { return }
+        for pool in allPools() { pool.slots.removeAll { $0.isFree } }
+        pruneEmptyQuarantined()
+    }
+
     // MARK: - Epoch rotation & quarantine
 
     /// Quarantine the active epoch (leases preserved, never re-acquired)
@@ -508,6 +536,9 @@ actor LeasedSurfacePool {
         slot.subscriptionHoldSince.removeAll()
         freeSeqCounter += 1
         slot.freeSeq = freeSeqCounter
+        guard isIdle else { return }
+        for pool in allPools() { pool.slots.removeAll { $0 === slot } }
+        pruneEmptyQuarantined()
     }
 
     private func closeIfDrained(_ token: UUID) {
