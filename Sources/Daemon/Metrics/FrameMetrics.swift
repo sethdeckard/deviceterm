@@ -104,9 +104,13 @@ struct FrameMetrics: Sendable {
         now &- windowStartNanoseconds
     }
 
-    /// Close the window. `leaseHold` comes from the surface pool, which owns
-    /// those timings because it owns the hold timestamps.
-    func summarize(now: UInt64, leaseHold: LatencyHistogram) -> FrameMetricsSummary {
+    /// Close the window. `leaseHold` and `poolSlots` come from the surface
+    /// pool, which owns the hold timestamps and the slots.
+    func summarize(
+        now: UInt64,
+        leaseHold: LatencyHistogram,
+        poolSlots: FrameMetricsSummary.PoolSlots
+    ) -> FrameMetricsSummary {
         FrameMetricsSummary(
             windowNanoseconds: elapsedNanoseconds(now: now),
             sourceWidth: sourceWidth,
@@ -121,7 +125,10 @@ struct FrameMetrics: Sendable {
             bytesMoved: bytesMoved,
             geometryChanges: geometryChanges,
             copy: Self.series(copy),
-            leaseHold: Self.series(leaseHold)
+            leaseHold: Self.series(leaseHold),
+            poolSlotsAllocated: poolSlots.allocated,
+            poolSlotsFree: poolSlots.free,
+            poolSlotsHighWater: poolSlots.highWater
         )
     }
 

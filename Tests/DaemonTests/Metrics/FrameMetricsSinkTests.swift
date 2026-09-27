@@ -17,7 +17,7 @@ private func sampleSummary() -> FrameMetricsSummary {
     metrics.noteConsumed()
     metrics.noteCopy(nanoseconds: 1_234, bytes: 256)
     metrics.notePublished()
-    return metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    return metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
 }
 
 private func temporaryBase() -> String {

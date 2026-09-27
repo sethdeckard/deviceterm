@@ -27,14 +27,18 @@ private final class PumpHarness: @unchecked Sendable {
     var published: [PublishedSurface] { queue.sync { frames } }
     var sourceID: IOSurfaceID { queue.sync { source.withRef { IOSurfaceGetID($0) } } }
 
+    let instrumentation: SimFramePump.Instrumentation?
+
     init(
         retaining: Bool = false,
         readLimit: Int = 1,
-        pool: LeasedSurfacePool = LeasedSurfacePool(slotCount: 3)
+        pool: LeasedSurfacePool = LeasedSurfacePool(slotCount: 3),
+        instrumentation: SimFramePump.Instrumentation? = nil
     ) throws {
         self.retaining = retaining
         self.readLimit = readLimit
         self.pool = pool
+        self.instrumentation = instrumentation
         source = RetainedSurface(try #require(SurfaceCopy.makeSurface(width: 32, height: 32)))
     }
 
@@ -55,6 +59,7 @@ private final class PumpHarness: @unchecked Sendable {
                     for _ in 0..<1_000 { self.signal.notify() }
                 }
             ),
+            instrumentation: instrumentation,
             read: {
                 self.queue.sync {
                     self.attempts.append(self.instant)
@@ -175,4 +180,116 @@ func aDrainingConsumerKeepsTheSimStreamPublishing() async throws {
     await harness.run()
     #expect(harness.readTimes.count == 40)
     #expect(harness.failureMessage == nil)
+}
+
+// MARK: - Frame metrics
+
+/// A nanosecond clock that advances a fixed step on every read, so a run of
+/// frames crosses metrics windows deterministically.
+private final class SteppingClock: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "test.sim-pump.clock")
+    private var value: UInt64 = 0
+    private let step: UInt64
+
+    init(step: UInt64) { self.step = step }
+
+    func next() -> UInt64 {
+        queue.sync {
+            value += step
+            return value
+        }
+    }
+}
+
+/// An armed sink writing to a fresh file, and a way to read its rows back.
+private struct MetricsCapture {
+    let base = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sim-pump-metrics-\(UUID().uuidString)").path
+    let deviceId = "sim"
+    let sink: FrameMetricsSink
+
+    init() throws {
+        let made = FrameMetricsSink.make(baseDirectory: base, deviceId: deviceId, log: nil)
+        sink = try #require(made)
+    }
+
+    func instrumentation(step: UInt64 = 100_000_000) -> SimFramePump.Instrumentation {
+        let clock = SteppingClock(step: step)
+        return SimFramePump.Instrumentation(sink: sink, now: { clock.next() })
+    }
+
+    func rows() throws -> [FrameMetricsSummary] {
+        sink.drain()
+        let path = "\(base).\(deviceId).frames.jsonl"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let contents = try String(contentsOfFile: path, encoding: .utf8)
+        return try contents.split(separator: "\n").map {
+            try JSONDecoder().decode(FrameMetricsSummary.self, from: Data($0.utf8))
+        }
+    }
+}
+
+@Test
+func anInstrumentedSimPumpRecordsWindowsThatAccountForEveryFrame() async throws {
+    let capture = try MetricsCapture()
+    let harness = try PumpHarness(readLimit: 12, instrumentation: capture.instrumentation())
+    await harness.run()
+    let rows = try capture.rows()
+    #expect(!rows.isEmpty)
+    for row in rows {
+        #expect(row.framesConsumed == row.framesPublished + row.framesDroppedNoSurface + row.framesDroppedExhaustion)
+        #expect(row.copy.sampleCount == UInt64(row.framesPublished))
+        #expect(row.bytesMoved > 0)
+        #expect(row.sourceWidth == 32 && row.contentWidth == 32)
+        #expect(row.pixelFormat == "BGRA")
+        #expect(row.poolSlotsAllocated >= 1)
+        #expect(row.poolSlotsHighWater >= row.poolSlotsAllocated)
+    }
+}
+
+@Test
+func anInstrumentedSimPumpCountsExhaustionDrops() async throws {
+    let capture = try MetricsCapture()
+    let harness = try PumpHarness(retaining: true, readLimit: 400, instrumentation: capture.instrumentation())
+    await harness.run()
+    let rows = try capture.rows()
+    #expect(rows.contains { $0.framesDroppedExhaustion > 0 })
+    #expect(rows.contains { $0.poolSlotsAllocated == 3 && $0.poolSlotsFree == 0 })
+}
+
+@Test
+func aSimPumpThatCapturesOnceWritesNoRow() async throws {
+    // The window only closes on a later update, so a pane that goes quiet
+    // after one frame keeps no timer and writes nothing.
+    let capture = try MetricsCapture()
+    let harness = try PumpHarness(readLimit: 1, instrumentation: capture.instrumentation(step: 10_000_000_000))
+    await harness.run()
+    #expect(harness.published.count == 1)
+    capture.sink.drain()
+    let path = "\(capture.base).\(capture.deviceId).frames.jsonl"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    #expect(try String(contentsOfFile: path, encoding: .utf8).isEmpty)
+}
+
+@Test
+func holdAgesAckedWhilePausedStayOutOfTheFirstRowAfterResume() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3, recordHoldAges: true)
+    let before = try PumpHarness(readLimit: 3, pool: pool, instrumentation: try MetricsCapture().instrumentation())
+    await before.run()
+
+    // While paused, the GUI acknowledges a hold, which the pool times.
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    let published = try #require(await pool.acquire(width: 32, height: 32))
+    let lease = try #require(published.lease)
+    let grant = try #require(await lease.acquireHold(token))
+    #expect(await grant.commit())
+    await pool.applyWatermark(token: token, epoch: lease.epoch, lowestHeld: lease.generation + 1, connectionId: 1)
+
+    let capture = try MetricsCapture()
+    let after = try PumpHarness(readLimit: 12, pool: pool, instrumentation: capture.instrumentation())
+    await after.run()
+    let first = try #require(try capture.rows().first)
+    #expect(first.leaseHold.sampleCount == 0)
+    _ = (before, published)
 }

@@ -25,6 +25,15 @@ struct FrameMetricsSummary: Codable, Sendable, Equatable {
         let maxNanoseconds: UInt64
     }
 
+    /// Surface-pool occupancy when the window closed. `allocated` and `free`
+    /// count the active epoch; `highWater` is the most slots any active epoch
+    /// has had allocated at once. Read in one step so the three agree.
+    struct PoolSlots: Sendable, Equatable {
+        var allocated = 0
+        var free = 0
+        var highWater = 0
+    }
+
     let windowNanoseconds: UInt64
     let sourceWidth: Int
     let sourceHeight: Int
@@ -54,6 +63,9 @@ struct FrameMetricsSummary: Codable, Sendable, Equatable {
     /// to the release watermark that freed it. Bounded by the surface pool: it
     /// reuses the hold timestamps the pool already keeps per slot.
     let leaseHold: Series
+    let poolSlotsAllocated: Int
+    let poolSlotsFree: Int
+    let poolSlotsHighWater: Int
 
     var framesPerSecond: Double {
         windowNanoseconds == 0 ? 0 : Double(framesPublished) * 1_000_000_000 / Double(windowNanoseconds)
@@ -84,6 +96,7 @@ struct FrameMetricsSummary: Codable, Sendable, Equatable {
             + " · lease p50=\(Self.microseconds(leaseHold.p50Nanoseconds))"
             + " p95=\(Self.microseconds(leaseHold.p95Nanoseconds))"
             + " max=\(Self.microseconds(leaseHold.maxNanoseconds))"
+            + " · slots=\(poolSlotsAllocated) free=\(poolSlotsFree) peak=\(poolSlotsHighWater)"
     }
 
     private static func rounded(_ value: Double) -> String {

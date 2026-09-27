@@ -496,6 +496,12 @@ actor LeasedSurfacePool {
     /// The most slots any active epoch has had allocated at once.
     func allocatedHighWater() -> Int { highWater }
 
+    /// Allocated and free slots in the active epoch, with the high-water mark,
+    /// read in one actor turn so they agree with each other.
+    func slotOccupancy() -> FrameMetricsSummary.PoolSlots {
+        FrameMetricsSummary.PoolSlots(allocated: allocatedSlotCount(), free: freeSlotCount(), highWater: highWater)
+    }
+
     func activeEpoch() -> UInt64? { active?.epoch }
 
     func quarantinedEpochCount() -> Int { quarantined.count }

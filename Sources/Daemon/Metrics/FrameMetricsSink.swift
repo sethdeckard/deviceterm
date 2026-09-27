@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// The destination for per-window device-frame summaries: one log line when a
+/// The destination for per-window frame summaries: one log line when a
 /// logger is supplied, plus one appended JSONL row when the configured path can
 /// be opened.
 ///
@@ -10,10 +10,10 @@ import Foundation
 /// disabled, so the frame task skips every clock read rather than measuring
 /// into a sink nobody reads.
 ///
-/// One file per device, because each mirrored device builds its own sink and
-/// two handles appending to one path interleave and overwrite each other's
-/// rows. The device identifier lives in the filename, so rows need not repeat
-/// it.
+/// One file per device, because each mirrored device or simulator builds its
+/// own sink and two handles appending to one path interleave and overwrite each
+/// other's rows. The identifier (a CoreDevice identifier or a simulator's UDID)
+/// lives in the filename, so rows need not repeat it.
 ///
 /// A file that cannot be opened, or a write that fails, is reported once
 /// through `log` rather than swallowed: logging keeps working either way, so an
@@ -49,7 +49,7 @@ final class FrameMetricsSink: @unchecked Sendable {
     }
 
     /// Build a sink when `baseDirectory` names one, nil (metrics off)
-    /// otherwise. `deviceId` keys the file so concurrent device panes never
+    /// otherwise. `deviceId` keys the file so concurrent mirrored panes never
     /// share one.
     static func make(
         baseDirectory: String?,

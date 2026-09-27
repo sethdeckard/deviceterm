@@ -64,10 +64,17 @@ final class SimDisplayLane: @unchecked Sendable {
     private var demandSerial: UInt64 = 0
 
     private let pool: LeasedSurfacePool
+    /// Handed to every pump this lane starts; nil unless frame metrics are on.
+    private let instrumentation: SimFramePump.Instrumentation?
 
-    init(handle: SimDisplayHandle, pool: LeasedSurfacePool) {
+    init(
+        handle: SimDisplayHandle,
+        pool: LeasedSurfacePool,
+        instrumentation: SimFramePump.Instrumentation? = nil
+    ) {
         self.handle = handle
         self.pool = pool
+        self.instrumentation = instrumentation
     }
 
     // MARK: - Bootstrap
@@ -267,6 +274,7 @@ final class SimDisplayLane: @unchecked Sendable {
     ) throws {
         guard let handle else { throw DeviceBackendError.notActive }
         let pool = self.pool
+        let instrumentation = self.instrumentation
         frameCallbacks = (onFrame, onFatal)
         // Install a fresh run token; teardown bumps it to fence late callbacks.
         // Checked and invoked together under `frameGate`, so teardown and a
@@ -291,6 +299,7 @@ final class SimDisplayLane: @unchecked Sendable {
             await SimFramePump(
                 signal: signal,
                 pool: pool,
+                instrumentation: instrumentation,
                 read: { [weak self] in await self?.readFrame(token: token) },
                 publish: publish,
                 fail: fail

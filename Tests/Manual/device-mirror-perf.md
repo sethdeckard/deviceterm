@@ -1,15 +1,17 @@
 # Device Mirror Performance
 
-Off-by-default measurement of the physical-device frame path: the decode
-hand-off, the copy into the surface pool, and how long the GUI holds a surface
-before acknowledging it. Each arriving frame that closes a window of at least
-one second emits one row, so output stays far below per-frame volume.
+Off-by-default measurement of the mirror frame path: the copy into the surface
+pool, how long the GUI holds a surface before acknowledging it, and how many
+pool slots the pane keeps. A physical device also reports its decode hand-off.
+Each arriving frame that closes a window of at least one second emits one row,
+so output stays far below per-frame volume.
 
 `LatencyHistogramTests`, `FrameMetricsTests`, and
 `LeasedSurfacePoolHoldAgeTests` cover the quantiles, the accumulator, and which
 releases get timed. None of them can see a real frame rate, a real copy
-duration, or a real lease round trip, because all three need a device streaming
-HEVC into VideoToolbox. That is what this procedure is for.
+duration, or a real lease round trip, because all three need a live mirror: a
+device streaming HEVC into VideoToolbox, or a booted simulator. That is what
+this procedure is for.
 
 Run it before and after any change to the frame path, with the same device and
 the same workloads both times. A number without a matching baseline says
@@ -28,6 +30,12 @@ still costing power and bandwidth, so a CPU delta on its own is not the verdict.
 - The device thermally settled. One that throttles mid-run invalidates the
   comparison.
 
+For a simulator instead:
+
+- A booted simulator in a pane, in the selected tab of a visible window.
+  Capture pauses for a hidden pane, and a paused pane records nothing.
+- The same kind of detail-dense app, for the same reason.
+
 ## Turning it on
 
 The daemon is launched on demand by launchd, so a variable set in a shell, an
@@ -41,8 +49,8 @@ launchctl setenv DEVICETERM_FRAME_METRICS "$base"
 ```
 
 Then stop the daemon (`make kill-daemon`, or let it idle-exit) so it restarts
-and inherits the variable. Only the daemon reads it, and only physical-device
-panes are measured; simulator panes never reach this code.
+and inherits the variable. Only the daemon reads it. Physical-device and
+simulator panes are both measured.
 
 ## Confirming it is measuring
 
@@ -61,9 +69,9 @@ same thing a disabled one shows. The file-open and write diagnostics are on
 the same level.
 
 You want `frame-metrics:` lines arriving while frames flow, with
-`decode-metrics:` lines alongside them. If neither appears while the mirror is
-visibly updating, the daemon did not inherit the variable. Restart it and check
-again.
+`decode-metrics:` lines alongside them on a physical device (a simulator has
+no decode stage). If none appear while the mirror is visibly updating, the
+daemon did not inherit the variable. Restart it and check again.
 
 ## The two workloads
 
@@ -73,7 +81,9 @@ Run both, and run the same two before and after.
    what the pipeline costs with almost no inter-frame motion. How many frames
    a still screen produces is the device's decision, not the daemon's, which
    copies every frame it receives. A static run with no frames flowing is
-   inconclusive, not a floor of zero.
+   inconclusive, not a floor of zero. A simulator's still home screen damages
+   nothing, so expect few or no frames there; that is inconclusive in the same
+   way.
 2. **Animating.** A scripted scroll over the detail-dense view, 60 s:
 
     ```sh
@@ -86,32 +96,35 @@ Run both, and run the same two before and after.
     done
     ```
 
-    Run it from a terminal in the tab holding the device pane, or target the
-    pane with `--pane <ref>`; `deviceterm pane list` prints the refs.
+    Run it from a terminal in the tab holding the device or simulator pane, or
+    target the pane with `--pane <ref>`; `deviceterm pane list` prints the refs.
 
 Do not scroll by hand. Velocity and duration vary between runs, and both change
 the frame rate the device's encoder produces, which changes every number below.
 
 ## Reading the summary
 
-One JSON row per closed window in `$base.<deviceId>.frames.jsonl`, plus a
-human-readable `frame-metrics:` summary of it. The log line is a digest: window
-duration, sample counts, means, and the exact byte total are in the JSON only.
-Each mirrored device writes its own file, so two device panes never interleave
-rows into one.
+One JSON row per closed window in `$base.<id>.frames.jsonl`, where the id is
+the device's CoreDevice identifier or the simulator's UDID, plus a
+human-readable `frame-metrics:` summary of it. The log line is a digest:
+window duration, sample counts, means, and the exact byte total are in the
+JSON only. Each mirrored device or simulator writes its own file, so two panes
+never interleave rows into one.
 
 | Field | What it is |
 |---|---|
-| `sourceWidth`, `sourceHeight` | The decoded surface, encoder padding included. |
+| `sourceWidth`, `sourceHeight` | The source surface, encoder padding included on a device. A simulator's surface has none. |
 | `contentWidth`, `contentHeight` | The cropped content rect the copy actually moves. |
-| `pixelFormat` | The decoder's output as a four-character code, for example `BGRA`. |
+| `pixelFormat` | The source surface's format as a four-character code, for example `BGRA`. |
 | `windowNanoseconds` | The window this row covers. Rates derive from it, not from an assumed 60 fps. |
-| `framesConsumed`, `framesPublished` | Taken off the decoder's stream, and reaching the pane. |
+| `framesConsumed`, `framesPublished` | Taken off the source stream, and reaching the pane. |
 | `framesDroppedNoSurface`, `framesDroppedExhaustion` | The shortfall between those two. |
 | `bytesMoved` | What the copies actually moved this window, summed and reported by the copy itself. An uncropped copy spans the whole row stride, so this exceeds the visible pixels by the surface's alignment padding. |
 | `geometryChanges` | How many times the geometry above changed within this window. Above zero means the row mixes geometries. |
 | `copy` | The CPU copy: `sampleCount`, `meanNanoseconds`, `p50Nanoseconds`, `p95Nanoseconds`, `maxNanoseconds`. |
 | `leaseHold` | Grant to release watermark, how long the GUI held a surface. Same five fields. |
+| `poolSlotsAllocated`, `poolSlotsFree` | The active epoch's surface-pool slots when the window closed, and how many were unheld. The log line shows them as `slots=` and `free=`. |
+| `poolSlotsHighWater` | The most slots any active epoch of this pool has had allocated at once, shown as `peak=`. |
 
 Quantiles are bucket upper bounds, so read them as "at most". Resolution is
 25%; `maxNanoseconds` is exact.
@@ -125,23 +138,41 @@ timeline.
 Report `p50`, `p95`, and `max` for both series. An average hides the tail a
 frame pipeline is judged on.
 
-The `decode-metrics:` lines come from the decode pipeline rather than the
-backend accumulator. Their `dropped` count is the one-deep buffer evicting a
-frame no consumer took, which means decode outran downstream frame handling.
-That consumer acquires a pool slot, copies, traces, and publishes, so the
-counter cannot single out the copy; a slower copy is one possible cause. Watch
-it either way.
+The `decode-metrics:` lines (physical devices only) come from the decode
+pipeline rather than the backend accumulator. Their `dropped` count is the
+one-deep buffer evicting a frame no consumer took, which means decode outran
+downstream frame handling. That consumer acquires a pool slot, copies, traces,
+and publishes, so the counter cannot single out the copy; a slower copy is one
+possible cause. Watch it either way.
 
-`contentWidth` equals `sourceWidth` until the content rect locks. The daemon
-probes for it on the first frame and every 60th frame after that until one
-succeeds, and a frame too dark to size returns nothing, so a device starting on
-a black screen reports the uncropped size for the first second or more.
+On a physical device, `contentWidth` equals `sourceWidth` until the content
+rect locks. The daemon probes for it on the first frame and every 60th frame
+after that until one succeeds, and a frame too dark to size returns nothing, so
+a device starting on a black screen reports the uncropped size for the first
+second or more.
 
 The window the rect locks in, and any window containing a rotation, carries
 frames of two different geometries. Its `sourceWidth` and `contentWidth` name
 the last of them while its counts and timings span all of them, so
 `geometryChanges` is what identifies it, not the dimensions. The log line marks
 the same row `(mixed xN)`.
+
+## Simulator panes
+
+A simulator pane records into the same accumulator, with a few differences.
+
+There is no crop, so `contentWidth` and `contentHeight` always equal the
+source. A row is mixed when the source dimensions or pixel format change within
+its window; a rotation is the usual cause.
+
+`framesConsumed` counts capture attempts, not frames the simulator rendered.
+The pump coalesces damage and captures at most every 16.67 ms (about 60 Hz).
+`framesDroppedNoSurface` counts a damage notice whose read returned no
+surface.
+
+A window closes only when a later update arrives. An idle simulator writes
+nothing, and the final open window is discarded when capture pauses or stops,
+however long it has run.
 
 ## OS-level capture
 
@@ -158,8 +189,8 @@ For memory bandwidth and per-frame attribution, record an Instruments trace
 against `deviceterm-daemon` with the Time Profiler and the Metal/GPU
 instruments. The daemon emits signposts under subsystem `com.deviceterm.daemon`,
 category `mirror`: a `decode` interval from the pipeline and a `copy` interval
-from the backend. They appear as an interval track, which is what lets a spike
-be attributed instead of guessed at.
+from the backend. A simulator emits only `copy`. They appear as an interval
+track, which is what lets a spike be attributed instead of guessed at.
 
 ## Comparing
 

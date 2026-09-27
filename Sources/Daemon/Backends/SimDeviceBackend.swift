@@ -3,6 +3,7 @@
 import CoreSimulatorBridge
 import DaemonProtocol
 import Foundation
+import os
 
 /// `DeviceBackend` over the CoreSimulator bridge.
 ///
@@ -122,13 +123,26 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         capabilities.fold = SimDisplayHandle.deviceHasMultiplePanels(udid: udid)
         self.capabilities = capabilities
         self.foldHelper = FoldHelperBuilder()
+        let sink = FrameMetricsSink.make(
+            baseDirectory: ProcessInfo.processInfo.environment[DeviceTermEnv.frameMetrics],
+            deviceId: udid,
+            log: { message in
+                Logger(subsystem: DiagnosticLog.subsystem, category: "mirror").debug("\(message, privacy: .public)")
+            }
+        )
         let slotCount = ProcessInfo.processInfo.environment[DeviceTermEnv.surfacePoolSlots]
             .flatMap(Int.init) ?? Self.defaultPoolSlots
-        let pool = LeasedSurfacePool(slotCount: slotCount)
+        let pool = LeasedSurfacePool(slotCount: slotCount, recordHoldAges: sink != nil)
         self.pool = pool
         self.display = SimDisplayLane(
             handle: displayHandle,
-            pool: pool
+            pool: pool,
+            instrumentation: sink.map { sink in
+                SimFramePump.Instrumentation(
+                    sink: sink,
+                    signposter: OSSignposter(subsystem: DiagnosticLog.subsystem, category: "mirror")
+                )
+            }
         )
     }
 

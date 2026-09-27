@@ -753,11 +753,16 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 if let metricsSink {
                     let now = DispatchTime.now().uptimeNanoseconds
                     if metrics == nil {
+                        // The pool outlives this frame task, so drop hold ages
+                        // acknowledged before it began; they belong to no
+                        // window this task will record.
+                        _ = await pool.drainHoldAges()
                         metrics = FrameMetrics(startNanoseconds: now)
                     } else if let elapsed = metrics?.elapsedNanoseconds(now: now),
                         elapsed >= Self.metricsWindowNanoseconds {
                         let leaseHold = await pool.drainHoldAges()
-                        if let summary = metrics?.summarize(now: now, leaseHold: leaseHold) {
+                        let poolSlots = await pool.slotOccupancy()
+                        if let summary = metrics?.summarize(now: now, leaseHold: leaseHold, poolSlots: poolSlots) {
                             metricsSink.record(summary)
                         }
                         metrics?.startWindow(at: now)

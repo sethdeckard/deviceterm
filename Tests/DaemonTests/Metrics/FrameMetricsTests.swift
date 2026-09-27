@@ -31,7 +31,7 @@ private func populated(startNanoseconds: UInt64 = 0) -> FrameMetrics {
 
 @Test
 func summaryCarriesTheWindowsCountsAndGeometry() {
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.windowNanoseconds == 1_000_000_000)
     #expect(summary.sourceWidth == 1_206)
     #expect(summary.sourceHeight == 2_624)
@@ -47,7 +47,7 @@ func summaryCarriesTheWindowsCountsAndGeometry() {
 
 @Test("consumed accounts for every frame: the published ones plus each drop")
 func consumedEqualsPublishedPlusDrops() {
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     let accounted = summary.framesPublished
         + summary.framesDroppedNoSurface
         + summary.framesDroppedExhaustion
@@ -56,7 +56,7 @@ func consumedEqualsPublishedPlusDrops() {
 
 @Test("the source's pixel format is reported as its four-character code")
 func pixelFormatRendersAsAFourCharacterCode() {
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.pixelFormat == "BGRA")
 }
 
@@ -64,7 +64,7 @@ func pixelFormatRendersAsAFourCharacterCode() {
 func unprintablePixelFormatFallsBackToDigits() {
     var metrics = FrameMetrics(startNanoseconds: 0)
     metrics.noteGeometry(sourceWidth: 4, sourceHeight: 4, contentWidth: 4, contentHeight: 4, pixelFormat: 1)
-    let summary = metrics.summarize(now: 1, leaseHold: LatencyHistogram())
+    let summary = metrics.summarize(now: 1, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.pixelFormat == "1")
 }
 
@@ -72,20 +72,20 @@ func unprintablePixelFormatFallsBackToDigits() {
 func ratesDeriveFromTheWindowRatherThanAnAssumedFrameRate() {
     // Half a second of 60 published frames is 120 fps, not 60: the rate has to
     // come from the window it was measured over.
-    let summary = populated().summarize(now: 500_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 500_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(abs(summary.framesPerSecond - 120) < 0.001)
     #expect(abs(summary.bytesPerSecond - Double(summary.bytesMoved) * 2) < 1)
 }
 
 @Test("bytes accumulate over the window instead of standing in for every frame")
 func bytesAccumulateAcrossTheWindow() {
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.bytesMoved == 60 * 1_206 * 4 * 2_622)
 }
 
 @Test("the first geometry of a run is not a change")
 func firstGeometryIsNotCountedAsAChange() {
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.geometryChanges == 0)
 }
 
@@ -102,7 +102,7 @@ func geometryChangeWithinAWindowIsCounted() {
     metrics.noteConsumed()
     metrics.noteCopy(nanoseconds: 3_000_000, bytes: 2_622 * 4 * 1_206)
     metrics.notePublished()
-    let summary = metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.geometryChanges == 1)
     // The row reports the newest geometry while its counts span both, which is
     // exactly why the marker has to be there.
@@ -127,7 +127,7 @@ func geometryChangingAtAWindowBoundaryIsNotCountedAsMixed() {
     metrics.noteConsumed()
     metrics.noteCopy(nanoseconds: 3_000_000, bytes: 2_622 * 4 * 1_206)
     metrics.notePublished()
-    let summary = metrics.summarize(now: 6_000_000_000, leaseHold: LatencyHistogram())
+    let summary = metrics.summarize(now: 6_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.geometryChanges == 0)
     #expect(summary.sourceWidth == 2_624)
     #expect(!summary.logLine.contains("mixed"))
@@ -143,7 +143,8 @@ func repeatedGeometryIsNotAChange() {
         contentHeight: 2_622,
         pixelFormat: kCVPixelFormatType_32BGRA
     )
-    #expect(metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram()).geometryChanges == 0)
+    let summary = metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
+    #expect(summary.geometryChanges == 0)
 }
 
 @Test("a new window clears the mixed marker and the byte total")
@@ -157,7 +158,7 @@ func startWindowClearsBytesAndGeometryChanges() {
         pixelFormat: kCVPixelFormatType_32BGRA
     )
     metrics.startWindow(at: 5_000_000_000)
-    let summary = metrics.summarize(now: 6_000_000_000, leaseHold: LatencyHistogram())
+    let summary = metrics.summarize(now: 6_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.geometryChanges == 0)
     #expect(summary.bytesMoved == 0)
     #expect(summary.bytesPerSecond == 0)
@@ -166,7 +167,7 @@ func startWindowClearsBytesAndGeometryChanges() {
 @Test
 func anEmptyWindowReportsZeroRatesRatherThanDividingByZero() {
     let metrics = FrameMetrics(startNanoseconds: 500)
-    let summary = metrics.summarize(now: 500, leaseHold: LatencyHistogram())
+    let summary = metrics.summarize(now: 500, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.windowNanoseconds == 0)
     #expect(summary.framesPerSecond == 0)
     #expect(summary.bytesPerSecond == 0)
@@ -176,7 +177,7 @@ func anEmptyWindowReportsZeroRatesRatherThanDividingByZero() {
 func startWindowClearsCountsAndKeepsGeometry() {
     var metrics = populated()
     metrics.startWindow(at: 5_000_000_000)
-    let summary = metrics.summarize(now: 6_000_000_000, leaseHold: LatencyHistogram())
+    let summary = metrics.summarize(now: 6_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     #expect(summary.windowNanoseconds == 1_000_000_000)
     #expect(summary.framesConsumed == 0)
     #expect(summary.framesPublished == 0)
@@ -191,14 +192,14 @@ func startWindowClearsCountsAndKeepsGeometry() {
 func leaseHoldSeriesComesFromTheCallersPool() {
     var holds = LatencyHistogram()
     holds.record(8_000_000)
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: holds)
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: holds, poolSlots: .init())
     #expect(summary.leaseHold.sampleCount == 1)
     #expect(summary.leaseHold.maxNanoseconds == 8_000_000)
 }
 
 @Test
 func theSummaryRoundTripsThroughJSON() throws {
-    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
     let data = try JSONEncoder().encode(summary)
     let decoded = try JSONDecoder().decode(FrameMetricsSummary.self, from: data)
     #expect(decoded == summary)
@@ -208,7 +209,7 @@ func theSummaryRoundTripsThroughJSON() throws {
 func logLineCarriesTheFieldsAComparisonNeeds() {
     var holds = LatencyHistogram()
     holds.record(8_000_000)
-    let line = populated().summarize(now: 1_000_000_000, leaseHold: holds).logLine
+    let line = populated().summarize(now: 1_000_000_000, leaseHold: holds, poolSlots: .init()).logLine
     #expect(line.contains("1206x2624→1206x2622"))
     #expect(line.contains("BGRA"))
     #expect(line.contains("consumed=63"))
@@ -216,4 +217,15 @@ func logLineCarriesTheFieldsAComparisonNeeds() {
     #expect(line.contains("dropped=1/2"))
     #expect(line.contains("copy p50="))
     #expect(line.contains("lease p50="))
+}
+
+@Test("pool occupancy round-trips through the JSONL row and appears in the log line")
+func poolOccupancyIsRecorded() throws {
+    let slots = FrameMetricsSummary.PoolSlots(allocated: 3, free: 1, highWater: 4)
+    let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: slots)
+    let decoded = try JSONDecoder().decode(FrameMetricsSummary.self, from: JSONEncoder().encode(summary))
+    #expect(decoded.poolSlotsAllocated == 3)
+    #expect(decoded.poolSlotsFree == 1)
+    #expect(decoded.poolSlotsHighWater == 4)
+    #expect(summary.logLine.contains("slots=3 free=1 peak=4"))
 }
