@@ -476,12 +476,27 @@ subscriptionToken)`, so two subscriptions on one pane never cross-deliver. The
 daemon wraps each `IOSurfaceRef` via
 `IOSurfaceCreateXPCObject` and the GUI resolves it with
 `IOSurfaceLookupFromXPCObject`: zero-copy, no `kIOSurfaceIsGlobal` mirror
-surface, no per-process visibility. The pairing threshold is 250 ms,
-swept roughly every 100 ms; a JSON-only timeout yields a `(_, nil)` event
-and the GUI holds its last good frame. By default the surface is *leased*; the
-surface-leasing kill switch sends it without a subscription hold. See "Surface
-lifecycle" under Data flows for the ownership contract that keeps a slot from
-being overwritten while the GPU still reads it.
+surface, no per-process visibility.
+
+The halves can arrive unpaired, because the daemon thins them independently:
+the JSON channel folds an unread notice into a newer one, and the leased
+delivery worker replaces a queued frame it hasn't started. A subscribe replay
+can also reach the GUI after a newer live frame.
+
+Delivery is latest-only, so once a frame yields for a subscription, the GUI
+drops every older half still parked for it, and any half arriving later at or
+below that sequence. A dropped side-band releases its lease at once instead of
+holding back the release watermark, and with it every newer generation's
+daemon slot.
+
+A half left unpaired is swept after 250 ms (the sweep runs roughly every
+100 ms). A side-band-only half is dropped. Of the expired JSON-only halves,
+the newest per subscription yields a `(_, nil)` event, so the GUI holds its
+last good frame, and counts as that subscription's yield. By default the
+surface is *leased*; the surface-leasing kill switch sends it without a
+subscription hold. See "Surface lifecycle" under Data flows for the ownership
+contract that keeps a slot from being overwritten while the GPU still reads
+it.
 
 Control requests and pane traffic use different XPC peers. Surface traffic
 therefore cannot wait ahead of `device.list` or another one-shot reply on the

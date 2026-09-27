@@ -75,27 +75,6 @@ private func describeXPCError(_ event: xpc_object_t) -> String {
 /// surface pump revalidates after lease accounting, so an old frame cannot
 /// repopulate or pair with the new connection's state.
 actor XPCDaemonConnection: DaemonRequestTransport {
-    /// Correlation key for one delivered frame. The subscription token
-    /// disambiguates two subscriptions on one pane that carry the same
-    /// `(paneId, sequence)`, so their frames never cross-deliver.
-    private struct PairKey: Hashable {
-        let paneId: String
-        let sequence: UInt64
-        let token: UUID
-    }
-
-    /// One half of a surface-pair slot. The `lease` is built when the
-    /// side-band lands; for a leased frame that means its use-count
-    /// bump + accountant `acquire` happen immediately (even before the JSON
-    /// half or the subscribe response), while an unleased frame takes
-    /// neither. The JSON `event` half arrives on the subscription's stream.
-    /// A dropped slot releases the lease by ARC.
-    private struct PendingSurfacePair {
-        var event: SurfaceChangedEvent?
-        var lease: SurfaceLease?
-        var insertedAt: Date
-    }
-
     /// Consumer-pulled coalescing state for one pane subscription. The VM
     /// stream is an `AsyncStream(unfolding:)` that pulls from here, so while
     /// the @MainActor consumer is stalled surfaces are held **latest-only**
@@ -166,7 +145,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     private var nextId: UInt32 = 1
     private var pendingRequests: [UInt32: CheckedContinuation<Data, Error>] = [:]
     private var subscriptions: [UInt32: SubscriptionRecord] = [:]
-    private var pendingSurfacePairs: [PairKey: PendingSurfacePair] = [:]
+    private var pendingSurfacePairs = SurfacePairTable()
     /// `pane.subscribe` request id → its correlation token, installed from
     /// the subscribe ack (synchronously, before the continuation resumes,
     /// so a following JSON `surface.changed` on that stream can find it).
@@ -793,6 +772,7 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         sendDrainNotification(paneId: state.paneId, subscribeRequestId: envelopeId)
         if let token = subscriptionTokens.removeValue(forKey: envelopeId) {
             envelopeForToken.removeValue(forKey: token)
+            pendingSurfacePairs.forget(token: token)
         }
     }
 
@@ -1168,16 +1148,8 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         )
     }
 
-    /// Slot reconciliation, keyed by `(paneId, sequence, token)` so two
-    /// subscriptions on one pane never cross-deliver. JSON and side-band
-    /// arrive as separate messages; whichever lands first parks its half.
-    ///
-    /// - Both halves present → yield once, drop the slot.
-    /// - JSON-only → park; the sweeper times it out at 250ms and yields a
-    ///   nil lease so the view keeps its last good frame.
-    /// - Side-band-only → park; the sweeper drops it, and the lease
-    ///   releases by ARC (freeing the daemon hold when leased; a no-op for
-    ///   an unleased frame).
+    /// Park one half of a frame in `SurfacePairTable`, and yield the frame
+    /// once both halves are present.
     private func tryFulfillSurfacePair(
         paneId: String,
         sequence: UInt64,
@@ -1185,20 +1157,14 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         inboundEvt: SurfaceChangedEvent? = nil,
         inboundLease: SurfaceLease? = nil
     ) {
-        let key = PairKey(paneId: paneId, sequence: sequence, token: token)
-        var slot = pendingSurfacePairs[key] ?? PendingSurfacePair(
-            event: nil,
-            lease: nil,
-            insertedAt: pairStamp()
-        )
-        if let inboundEvt { slot.event = inboundEvt }
-        if let inboundLease { slot.lease = inboundLease }
-        if let evt = slot.event, let lease = slot.lease {
-            pendingSurfacePairs.removeValue(forKey: key)
-            yieldSurface(token: token, evt: evt, lease: lease)
-            return
-        }
-        pendingSurfacePairs[key] = slot
+        let key = SurfacePairTable.Key(paneId: paneId, sequence: sequence, token: token)
+        guard let resolved = pendingSurfacePairs.offer(
+            key,
+            now: pairStamp(),
+            event: inboundEvt,
+            lease: inboundLease
+        ) else { return }
+        yieldSurface(token: resolved.token, evt: resolved.event, lease: resolved.lease)
     }
 
     /// Deliver a resolved frame to the one subscription that owns the
@@ -1244,10 +1210,10 @@ actor XPCDaemonConnection: DaemonRequestTransport {
 
     // MARK: - Sweeper
 
-    /// Sweeper: drops pending half-pairs older than 250ms. If only
-    /// the JSON evt is present, yields it with `nil` surface so the
-    /// view keeps its last good frame. If only the side-band is
-    /// present, it drops the pair and releases its lease by ARC.
+    /// Sweeper: drops pending half-pairs older than 250ms. The newest expired
+    /// JSON-only half per subscription yields with a `nil` surface so the
+    /// view keeps its last good frame; a side-band-only half is dropped and
+    /// its lease released by ARC. See `SurfacePairTable.sweep`.
     private func startSweeperIfNeeded() {
         guard sweeperTask == nil else { return }
         sweeperTask = Task { [weak self] in
@@ -1259,19 +1225,8 @@ actor XPCDaemonConnection: DaemonRequestTransport {
     }
 
     private func sweepPendingPairs() {
-        let now = pairStamp()
-        for (key, slot) in pendingSurfacePairs {
-            let age = now.timeIntervalSince(slot.insertedAt)
-            if age < 0.25 { continue }
-            pendingSurfacePairs.removeValue(forKey: key)
-            if let evt = slot.event {
-                // JSON-only timeout: yield a nil lease so the view keeps
-                // its last good frame.
-                yieldSurface(token: key.token, evt: evt, lease: nil)
-            }
-            // Side-band-only timeout: the slot (and its lease) is dropped
-            // here; the lease releases by ARC, freeing the daemon hold when
-            // it was leased.
+        for expired in pendingSurfacePairs.sweep(now: pairStamp(), maxAge: 0.25) {
+            yieldSurface(token: expired.token, evt: expired.event, lease: nil)
         }
     }
 
