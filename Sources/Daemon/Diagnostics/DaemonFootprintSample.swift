@@ -48,6 +48,12 @@ struct DaemonFootprintSample: Sendable, Equatable {
     /// the slot in use. The second says nothing about which holder kept it.
     var surfaceExhaustionDrops = 0
     var surfaceReuseWhileInUse = 0
+    /// Summed across every pane's pool. Failed slot-allocation attempts, and
+    /// the slots allocated right now, held or free, across active and retained
+    /// retired epochs. The second is the surface memory the pools hold, one
+    /// full-size frame per slot.
+    var surfaceAllocationFailures = 0
+    var surfaceSlotsAllocated = 0
     /// Cumulative sightings, not a current count, and physical devices only.
     /// The watchdog that produces them runs in `RealDeviceBackend`, so a
     /// simulator pool always reports zero, and one stuck hold on a device is
@@ -78,6 +84,8 @@ struct DaemonFootprintSample: Sendable, Equatable {
             + "xpcInFlight=\(xpcRequestsInFlight) xpcConns=\(xpcConnections) "
             + "surfaceDrops=\(surfaceExhaustionDrops) "
             + "surfaceReuseInUse=\(surfaceReuseWhileInUse) "
+            + "surfaceAllocFailures=\(surfaceAllocationFailures) "
+            + "surfaceSlots=\(surfaceSlotsAllocated) "
             + "delinquentSightings=\(delinquentSightings) "
             + "inputSends=\(inputSubmissions)"
     }

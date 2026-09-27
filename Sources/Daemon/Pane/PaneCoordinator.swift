@@ -1872,7 +1872,7 @@ public actor PaneCoordinator {
         await displayBootstrapSupervisor.inFlight
     }
 
-    /// The three pool counters the footprint sample carries, summed across
+    /// The pool counters the footprint sample carries, summed across
     /// live and retiring records that still have a backend. Backends without a
     /// pool contribute nothing, and a record whose backend teardown has already
     /// run contributes nothing either.
@@ -1883,6 +1883,8 @@ public actor PaneCoordinator {
             total.exhaustionDrops += counters.exhaustionDrops
             total.reuseWhileInUse += counters.reuseWhileInUse
             total.delinquentObserved += counters.delinquentObserved
+            total.allocationFailures += counters.allocationFailures
+            total.slotsAllocated += counters.slotsAllocated
         }
         return total
     }

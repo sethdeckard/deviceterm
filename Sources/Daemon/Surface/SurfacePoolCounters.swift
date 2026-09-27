@@ -15,4 +15,11 @@ struct SurfacePoolCounters: Sendable, Equatable {
     var delinquentObserved = 0
     var quarantineBudgetExceeded = 0
     var reuseWhileInUse = 0
+    /// Failed slot-allocation attempts, including ones followed by reuse of a
+    /// free slot still reported in use. Counted apart from `exhaustionDrops`,
+    /// which means every slot up to the ceiling was held.
+    var allocationFailures = 0
+    /// Slots currently allocated across the active and quarantined epochs. A
+    /// gauge filled when the counters are snapshotted, not a running count.
+    var slotsAllocated = 0
 }

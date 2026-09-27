@@ -40,7 +40,8 @@ public enum DeviceTermEnv {
 
     // MARK: Device-surface pool (daemon-internal tuning + instrumentation)
 
-    /// Device-surface pool slot count, clamped to a documented range.
+    /// Ceiling on each surface pool's slot count, clamped to a documented
+    /// range. Pools allocate slots on demand up to it.
     public static let surfacePoolSlots = "DEVICETERM_SURFACE_POOL_SLOTS"
     /// Enables off-by-default surface tracing (producer/consumer JSONL).
     public static let surfaceTrace = "DEVICETERM_SURFACE_TRACE"

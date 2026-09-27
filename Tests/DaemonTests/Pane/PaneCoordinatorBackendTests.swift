@@ -1658,7 +1658,9 @@ func poolCountersReachTheBackendThroughTheExistential() async throws {
     let backend = MockDeviceBackend()
     backend.poolCountersResult = SurfacePoolCounters(
         exhaustionDrops: 7,
-        reuseWhileInUse: 3
+        reuseWhileInUse: 3,
+        allocationFailures: 2,
+        slotsAllocated: 4
     )
     _ = try await coordinator.createMockPane(
         udid: "pool-counters",
@@ -1668,6 +1670,8 @@ func poolCountersReachTheBackendThroughTheExistential() async throws {
     let totals = await coordinator.poolCountersTotal()
     #expect(totals.exhaustionDrops == 7)
     #expect(totals.reuseWhileInUse == 3)
+    #expect(totals.allocationFailures == 2)
+    #expect(totals.slotsAllocated == 4)
 }
 
 @Test

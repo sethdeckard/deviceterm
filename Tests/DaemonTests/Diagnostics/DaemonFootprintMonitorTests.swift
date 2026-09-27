@@ -92,6 +92,8 @@ struct DaemonFootprintMonitorTests {
             xpcConnections: 9,
             surfaceExhaustionDrops: 10,
             surfaceReuseWhileInUse: 11,
+            surfaceAllocationFailures: 15,
+            surfaceSlotsAllocated: 16,
             delinquentSightings: 12,
             inputSubmissions: 14
         )
@@ -101,7 +103,8 @@ struct DaemonFootprintMonitorTests {
             "footprint=3MiB", "panes=2", "retiring=13", "subs=3", "paneEventsQueued=4",
             "surfaceNoticesConflated=5", "acquiresInFlight=6", "abandonedReads=7",
             "xpcInFlight=8", "xpcConns=9", "surfaceDrops=10",
-            "surfaceReuseInUse=11", "delinquentSightings=12", "inputSends=14"
+            "surfaceReuseInUse=11", "surfaceAllocFailures=15", "surfaceSlots=16",
+            "delinquentSightings=12", "inputSends=14"
         ] {
             #expect(line.contains(expected), "missing \(expected) in: \(line)")
         }

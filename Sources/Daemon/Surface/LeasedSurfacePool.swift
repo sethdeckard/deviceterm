@@ -23,6 +23,11 @@ import IOSurface
 /// allocate a fresh epoch, so old and new leases coexist while the retired
 /// set drains.
 ///
+/// Slots are allocated on demand, up to the configured per-epoch ceiling: an
+/// epoch starts empty and grows only when no free slot can be reused safely.
+/// A slot stays allocated until its epoch is discarded, and retained retired
+/// epochs count toward the footprint too.
+///
 /// This type is `actor`-isolated; every mutation is serialized. Subscription
 /// holds exist only for registered tokens, so a pane with no subscribers
 /// takes only `.daemonCurrent` holds and the pool behaves like a
@@ -80,9 +85,11 @@ actor LeasedSurfacePool {
         init(connectionId: UInt64) { self.connectionId = connectionId }
     }
 
-    /// Documented clamp for the configured slot count.
+    /// Documented clamp for the configured slot ceiling.
     static let slotRange = 3...8
 
+    /// The most slots one epoch may allocate. Reaching it with every slot held
+    /// is exhaustion.
     private let slotCount: Int
     private let now: @Sendable () -> UInt64
     private let delinquencyThresholdNs: UInt64
@@ -95,6 +102,8 @@ actor LeasedSurfacePool {
     private var nextGeneration: UInt64 = 0
     private var nextEpoch: UInt64 = 0
     private var freeSeqCounter: UInt64 = 0
+    /// The most slots any active epoch has had allocated at once.
+    private var highWater = 0
 
     private var active: EpochPool?
     private var quarantined: [EpochPool] = []
@@ -112,7 +121,7 @@ actor LeasedSurfacePool {
     private var usedRecovery = false
 
     /// - Parameters:
-    ///   - slotCount: clamped to `slotRange`.
+    ///   - slotCount: the per-epoch slot ceiling, clamped to `slotRange`.
     ///   - now: monotonic nanosecond clock (injected for tests).
     ///   - delinquencyThresholdNs: hold age past which `diagnoseDelinquent`
     ///     flags a lease (default ~2s).
@@ -134,31 +143,21 @@ actor LeasedSurfacePool {
 
     // MARK: - Acquire (daemon-current)
 
-    /// Acquire the least-recently-freed slot at `(width, height)` as a new
-    /// generation held by `.daemonCurrent`, ready for the caller to copy
-    /// pixels into. Rotates to a fresh epoch when the dimensions change.
-    /// Returns nil on exhaustion (no free slot) or when a rotation would
-    /// exceed the quarantine budget, so the caller drops the frame.
+    /// Acquire a slot at `(width, height)` as a new generation held by
+    /// `.daemonCurrent`, ready for the caller to copy pixels into. Rotates to
+    /// a fresh epoch when the dimensions change. Returns nil on exhaustion
+    /// (every slot up to the ceiling held), when a new slot cannot be
+    /// allocated and none is free, or when a rotation would exceed the
+    /// quarantine budget, so the caller drops the frame.
     func acquire(width: Int, height: Int) -> PublishedSurface? {
         guard width > 0, height > 0 else { return nil }
         pruneEmptyQuarantined()
         if active == nil || active?.width != width || active?.height != height {
-            // A rotation can fail because the quarantine budget is full
-            // (counted in `retireAll`) or because slot allocation failed;
-            // don't double-count the budget case here.
+            // A rotation fails only when the quarantine budget is full, which
+            // `retireAll` already counts; don't double-count it here.
             guard rotateEpoch(width: width, height: height) else { return nil }
         }
-        guard let epochPool = active else { return nil }
-        guard let slot = leastRecentlyFreedSlot(in: epochPool) else {
-            counters.exhaustionDrops += 1
-            return nil
-        }
-        // Telemetry (not an authority): count reuse attempts while the
-        // IOSurface still reports a nonzero use count. This does not prove
-        // which holder kept it in use or when it should have been released.
-        if IOSurfaceIsInUse(slot.surface) {
-            counters.reuseWhileInUse += 1
-        }
+        guard let epochPool = active, let slot = takeSlot(in: epochPool) else { return nil }
         nextGeneration += 1
         let generation = nextGeneration
         slot.generation = generation
@@ -185,8 +184,38 @@ actor LeasedSurfacePool {
         return PublishedSurface(owned: owned, lease: lease)
     }
 
-    private func leastRecentlyFreedSlot(in pool: EpochPool) -> PhysicalSlot? {
-        pool.slots.filter(\.isFree).min { $0.freeSeq < $1.freeSeq }
+    /// Pick the slot for the next generation, in order: the least-recently-
+    /// freed free slot the IOSurface no longer reports in use; a newly
+    /// allocated slot while under the ceiling; the least-recently-freed free
+    /// slot even though it is still in use. Nil when none of those exists.
+    ///
+    /// Growing before reusing an in-use surface is what keeps on-demand
+    /// allocation from collapsing reuse distance. A just-released slot may
+    /// still be touched by a consumer's use count, and without the check a
+    /// pool that settled at one slot would rewrite it immediately. Holds, not
+    /// distance, remain the correctness guarantee.
+    private func takeSlot(in pool: EpochPool) -> PhysicalSlot? {
+        let free = pool.slots.filter(\.isFree).sorted { $0.freeSeq < $1.freeSeq }
+        if let cool = free.first(where: { !IOSurfaceIsInUse($0.surface) }) { return cool }
+        if pool.slots.count < slotCount {
+            if let surface = SurfaceCopy.makeSurface(width: pool.width, height: pool.height) {
+                freeSeqCounter += 1
+                let slot = PhysicalSlot(surface: surface, freeSeq: freeSeqCounter)
+                pool.slots.append(slot)
+                highWater = max(highWater, pool.slots.count)
+                return slot
+            }
+            counters.allocationFailures += 1
+        }
+        guard let warm = free.first else {
+            if pool.slots.count >= slotCount { counters.exhaustionDrops += 1 }
+            return nil
+        }
+        // Telemetry (not an authority): count reuse while the IOSurface still
+        // reports a nonzero use count. This does not prove which holder kept
+        // it in use or when it should have been released.
+        counters.reuseWhileInUse += 1
+        return warm
     }
 
     private func releaseDaemonCurrent(epoch: UInt64, generation: UInt64) {
@@ -333,7 +362,7 @@ actor LeasedSurfacePool {
     // MARK: - Epoch rotation & quarantine
 
     /// Quarantine the active epoch (leases preserved, never re-acquired)
-    /// and clear it so the next `acquire` allocates a fresh epoch. Returns
+    /// and clear it so the next `acquire` starts a fresh epoch. Returns
     /// false if the quarantine budget is already full of live-hold epochs.
     @discardableResult
     func retireAll() -> Bool {
@@ -351,10 +380,10 @@ actor LeasedSurfacePool {
     /// Controlled recovery from sustained exhaustion. Retires (quarantines)
     /// the active epoch, **preserving every held slot**, never reclaiming a
     /// live lease. It does not allocate the replacement itself: the next
-    /// `acquire` (finding no active epoch) rotates in a fresh epoch of
-    /// unused slots. Permitted exactly once: a second call returns
-    /// `.exhausted`, as does a first call whose `retireAll` fails because the
-    /// quarantine budget is full. A quarantined slot is never re-acquired, so
+    /// `acquire` (finding no active epoch) rotates in a fresh, empty epoch
+    /// that grows new slots on demand. Permitted exactly once: a second call
+    /// returns `.exhausted`, as does a first call whose `retireAll` fails
+    /// because the quarantine budget is full. A quarantined slot is never re-acquired, so
     /// recovery only ever leads to brand-new generations.
     func recoverFromExhaustion() -> RecoveryOutcome {
         if usedRecovery { return .exhausted }
@@ -373,14 +402,7 @@ actor LeasedSurfacePool {
             guard retireAll() else { return false }
         }
         nextEpoch += 1
-        let epoch = nextEpoch
-        let slots: [PhysicalSlot] = (0..<slotCount).compactMap { _ in
-            guard let surface = SurfaceCopy.makeSurface(width: width, height: height) else { return nil }
-            freeSeqCounter += 1
-            return PhysicalSlot(surface: surface, freeSeq: freeSeqCounter)
-        }
-        guard !slots.isEmpty else { return false }
-        active = EpochPool(epoch: epoch, width: width, height: height, slots: slots)
+        active = EpochPool(epoch: nextEpoch, width: width, height: height, slots: [])
         return true
     }
 
@@ -421,7 +443,11 @@ actor LeasedSurfacePool {
 
     // MARK: - Counters / test queries
 
-    func snapshotCounters() -> SurfacePoolCounters { counters }
+    func snapshotCounters() -> SurfacePoolCounters {
+        var snapshot = counters
+        snapshot.slotsAllocated = allPools().reduce(0) { $0 + $1.slots.count }
+        return snapshot
+    }
 
     /// Take the hold ages accumulated since the last call and start a fresh
     /// window. Draining rather than snapshotting is what makes the caller's
@@ -433,8 +459,14 @@ actor LeasedSurfacePool {
         return drained
     }
 
-    /// Free (unheld) slot count in the active epoch.
+    /// Free (unheld) slot count among those the active epoch has allocated.
     func freeSlotCount() -> Int { active?.slots.filter(\.isFree).count ?? 0 }
+
+    /// Slots the active epoch has allocated, held or free.
+    func allocatedSlotCount() -> Int { active?.slots.count ?? 0 }
+
+    /// The most slots any active epoch has had allocated at once.
+    func allocatedHighWater() -> Int { highWater }
 
     func activeEpoch() -> UInt64? { active?.epoch }
 

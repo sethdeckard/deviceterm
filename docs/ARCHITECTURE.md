@@ -3517,17 +3517,32 @@ grows inside the daemon for as long as the consumer stays away.
   watermark acknowledgement removes an exposed hold; orphaning pins outstanding
   holds while preventing new grants.
 
-**Producer (daemon).** `LeasedSurfacePool` hands out the
-least-recently-freed slot with a fresh generation, or drops the frame when
-none is free (never blocks decode, never allocates unboundedly). Delivery to
-a token runs as one **per-token serial transaction** so exposure order equals
-reservation order: reserve a provisional grant (rejects an unknown/non-active
-token, a generation at-or-below the reservation frontier, or one below the
-accepted watermark) → revalidate → **commit before any send** (bumps the
-committed frontier) → revalidate → send through a **synchronous** closure so
-no actor reentrancy can interleave between the final check and the send. Any
-pre-commit failure cancels the grant; a post-commit-pre-send failure revokes
-it.
+**Producer (daemon).** `LeasedSurfacePool` hands each frame a slot with a
+fresh generation. An epoch starts with no slots and allocates one only when it
+can't safely reuse a free one, up to the `DEVICETERM_SURFACE_POOL_SLOTS`
+ceiling (clamped to 3...8, default 6). Slots stay allocated until their epoch
+is discarded, so an epoch holds the most it has needed at once, and retained
+retired epochs add to that.
+
+Reuse takes the least-recently-freed free slot whose IOSurface no longer
+reports itself in use. The pool grows rather than rewrite a surface a
+consumer's use count still touches, so a lingering use count can grow an epoch
+past what lease holds alone require. Holds are what guarantee correctness; the
+reuse order only widens the margin.
+
+When the ceiling is reached or an allocation fails, the pool falls back to a
+free slot still reported in use. The frame drops when every slot up to the
+ceiling is held, or when allocation fails and nothing is free. Decode never
+blocks, and no epoch grows past the ceiling.
+
+Delivery to a token runs as one **per-token serial transaction** so exposure
+order equals reservation order: reserve a provisional grant (rejects an
+unknown/non-active token, a generation at-or-below the reservation frontier,
+or one below the accepted watermark) → revalidate → **commit before any send**
+(bumps the committed frontier) → revalidate → send through a **synchronous**
+closure so no actor reentrancy can interleave between the final check and the
+send. Any pre-commit failure cancels the grant; a post-commit-pre-send failure
+revokes it.
 
 **Consumer (GUI).** A `SurfaceLease` (a `final class`) is built the instant a
 leased side-band arrives: it bumps `IOSurfaceIncrementUseCount` and registers

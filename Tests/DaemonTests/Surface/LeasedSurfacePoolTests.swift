@@ -39,17 +39,67 @@ private func waitForFreeSlots(_ pool: LeasedSurfacePool, atLeast count: Int) asy
     return await pool.freeSlotCount()
 }
 
-@Test("slot count clamps to the documented range")
-func slotCountClamps() async {
-    let low = LeasedSurfacePool(slotCount: 1)
-    let lowHeld = await low.acquire(width: 8, height: 8)
-    // 1 clamps up to 3, so after one acquire two remain free.
-    #expect(await low.freeSlotCount() == 2)
+@Test("slot ceiling clamps to the documented range", arguments: [(1, 3), (99, 8)])
+func slotCeilingClamps(configured: Int, ceiling: Int) async throws {
+    let pool = LeasedSurfacePool(slotCount: configured)
+    var held: [PublishedSurface] = []
+    for _ in 0..<ceiling { held.append(try await acquireOne(pool)) }
+    #expect(await pool.allocatedSlotCount() == ceiling)
+    #expect(await pool.acquire(width: 8, height: 8) == nil)
+    #expect(await pool.snapshotCounters().exhaustionDrops == 1)
+    _ = held
+}
 
-    let high = LeasedSurfacePool(slotCount: 99)
-    let highHeld = await high.acquire(width: 8, height: 8)
-    #expect(await high.freeSlotCount() == 7)
-    _ = (lowHeld, highHeld)
+@Test("an epoch allocates nothing until acquired, then one slot per concurrent hold")
+func slotsAllocateOnDemand() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    #expect(await pool.allocatedSlotCount() == 0)
+    let first = try await acquireOne(pool)
+    #expect(await pool.allocatedSlotCount() == 1)
+    let second = try await acquireOne(pool)
+    #expect(await pool.allocatedSlotCount() == 2)
+    #expect(await pool.snapshotCounters().slotsAllocated == 2)
+    #expect(await pool.allocatedHighWater() == 2)
+    _ = (first, second)
+}
+
+@Test("releasing each frame before the next reuses one slot")
+func oneHoldAtATimeReusesOneSlot() async throws {
+    let pool = LeasedSurfacePool(slotCount: 6)
+    for _ in 0..<5 {
+        var published: PublishedSurface? = try await acquireOne(pool)
+        _ = published
+        published = nil
+        _ = await waitForFreeSlots(pool, atLeast: 1)
+    }
+    #expect(await pool.allocatedSlotCount() == 1)
+    #expect(await pool.allocatedHighWater() == 1)
+}
+
+@Test("while allocations succeed, a free slot still in use is grown past and reused only at the ceiling")
+func inUseSlotIsReusedOnlyAtTheCeiling() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    var first: PublishedSurface? = try await acquireOne(pool)
+    let warm = try #require(first).surface.withRef { $0 }
+    let warmID = IOSurfaceGetID(warm)
+    // A consumer's use count outliving the slot's release.
+    IOSurfaceIncrementUseCount(warm)
+    defer { IOSurfaceDecrementUseCount(warm) }
+    first = nil
+    _ = await waitForFreeSlots(pool, atLeast: 1)
+
+    let second = try await acquireOne(pool)
+    let third = try await acquireOne(pool)
+    #expect(surfaceID(second) != warmID)
+    #expect(surfaceID(third) != warmID)
+    #expect(await pool.snapshotCounters().reuseWhileInUse == 0)
+
+    // At the ceiling the in-use slot is the only one left, so it is reused
+    // and counted.
+    let fourth = try await acquireOne(pool)
+    #expect(surfaceID(fourth) == warmID)
+    #expect(await pool.snapshotCounters().reuseWhileInUse == 1)
+    _ = (second, third, fourth)
 }
 
 @Test("acquire exhausts to nil and counts the drop")
@@ -71,7 +121,7 @@ func generationsAreMonotonic() async throws {
         var published: PublishedSurface? = try await acquireOne(pool)
         generations.append(try #require(published?.lease).generation)
         published = nil
-        _ = await waitForFreeSlots(pool, atLeast: 3)
+        _ = await waitForFreeSlots(pool, atLeast: 1)
     }
     #expect(generations == [1, 2, 3])
 }
@@ -81,9 +131,9 @@ func daemonCurrentReleaseFreesSlot() async throws {
     let pool = LeasedSurfacePool(slotCount: 3)
     var published: PublishedSurface? = try await acquireOne(pool)
     _ = published
-    #expect(await pool.freeSlotCount() == 2)
+    #expect(await pool.freeSlotCount() == 0)
     published = nil
-    #expect(await waitForFreeSlots(pool, atLeast: 3) == 3)
+    #expect(await waitForFreeSlots(pool, atLeast: 1) == 1)
 }
 
 @Test("free selection is least-recently-freed")
@@ -94,8 +144,8 @@ func leastRecentlyFreedReuse() async throws {
     let frameC = try #require(await pool.acquire(width: 8, height: 8))
     let idA = surfaceID(try #require(frameA))
     let idB = surfaceID(try #require(frameB))
-    // Free A first, then B. The next acquire reuses A (freed least
-    // recently), not B.
+    // All three slots are allocated. Free A first, then B. The next acquire
+    // reuses A (freed least recently), not B, and allocates nothing new.
     frameA = nil
     _ = await waitForFreeSlots(pool, atLeast: 1)
     frameB = nil
@@ -103,6 +153,7 @@ func leastRecentlyFreedReuse() async throws {
     let reused = try #require(await pool.acquire(width: 8, height: 8))
     #expect(surfaceID(reused) == idA)
     #expect(surfaceID(reused) != idB)
+    #expect(await pool.allocatedSlotCount() == 3)
     _ = frameC
 }
 
