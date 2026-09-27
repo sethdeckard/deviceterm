@@ -24,8 +24,27 @@ struct TabPillLayoutTests {
             ("cellMinimumWidth", TabPillLayout.cellMinimumWidthPriority),
             ("stackTrailingPin", TabPillLayout.stackTrailingPin),
             ("soloPillTarget", TabPillLayout.soloPillTarget),
-            ("frozenWidthPin", TabPillLayout.frozenWidthPin)
+            ("frozenWidthPin", TabPillLayout.frozenWidthPin),
+            ("pinnedCellWidth", TabPillLayout.pinnedCellWidthPriority)
         ]
+    }
+
+    /// The shared minimum is what makes every one-glyph pinned pill the same
+    /// width, so it has to hold the widest single glyph, the terminal, with
+    /// the pill's 10pt insets either side. Under that, the terminal pill
+    /// alone would grow past it.
+    @Test
+    func thePinnedMinimumHoldsEverySingleGlyph() {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        for marker in [TabPillMarker.automation, .protection, .terminal] {
+            let glyph = NSImage(systemSymbolName: marker.symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(configuration)
+            let needed = (glyph?.size.width ?? .infinity) + 20
+            #expect(
+                needed <= TabPillLayout.pinnedCellMinimumWidth,
+                "\(marker) needs \(needed)pt, so its pinned pill comes out wider than the rest"
+            )
+        }
     }
 
     @Test

@@ -558,6 +558,9 @@ final class Router {
         case let .reorderTab(windowID, tabID, toIndex):
             workspace.window(id: windowID)?.tabs.move(id: tabID, toIndex: toIndex)
 
+        case let .setTabPinned(windowID, tabID, isPinned):
+            workspace.window(id: windowID)?.tabs.setPinned(id: tabID, isPinned)
+
         case let .reorderPane(tabID, slot, target, zone):
             guard let window = workspace.windowContaining(tab: tabID) else { return }
             window.tabs.reorderPane(

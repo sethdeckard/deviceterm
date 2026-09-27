@@ -6,8 +6,8 @@ import AppKit
 ///
 /// Provides the standard per-tab right-click actions: renaming,
 /// lifecycle (close / close others / close to the right),
-/// duplication, protection toggle, and the automation-tab escape
-/// hatch. Each item gets an EXPLICIT `target` (the strip VC) rather
+/// duplication, protection and pin toggles, and the automation-tab
+/// escape hatch. Each item gets an EXPLICIT `target` (the strip VC) rather
 /// than a nil-targeted responder-chain dispatch. The strip VC is a
 /// sibling of the focused pane's VC, not an ancestor, so a chain walk
 /// from a focused terminal / sim pane goes up through the pane's VC
@@ -29,8 +29,9 @@ import AppKit
 func makeTabStripContextMenu(
     for tabID: TabID,
     isEffectivelyProtected: Bool,
-    isOnlyTab: Bool,
-    isLastTab: Bool,
+    isPinned: Bool,
+    canCloseOthers: Bool,
+    canCloseToTheRight: Bool,
     target: AnyObject? = nil
 ) -> NSMenu {
     let menu = NSMenu()
@@ -38,8 +39,8 @@ func makeTabStripContextMenu(
     // item's enabled state from the responder chain at display time
     // and silently overrides any `item.isEnabled = false` we set here.
     // The strip handlers don't validateMenuItem, so AppKit would
-    // re-enable "Close Other Tabs" / "Close Tabs to the Right" even on
-    // a single-tab window. Opting out keeps our manual enable bits.
+    // re-enable "Close Other Tabs" / "Close Tabs to the Right" even
+    // when they have nothing to close. Opting out keeps our manual enable bits.
     menu.autoenablesItems = false
 
     let rename = menuItem(
@@ -68,6 +69,17 @@ func makeTabStripContextMenu(
     // the left, the way AppKit's own menus pair the two.
     protection.image = .menuSymbol("lock.fill", describedAs: "Protected tab")
     menu.addItem(protection)
+
+    // A plain title flip, with no state checkmark: the pill itself shows
+    // whether the tab is pinned, since a pinned pill is the compact one.
+    let pin = menuItem(
+        title: isPinned ? "Unpin Tab" : "Pin Tab",
+        action: #selector(TabStripViewController.togglePinFromMenu(_:)),
+        for: tabID,
+        target: target
+    )
+    pin.image = .menuSymbol(isPinned ? "pin.slash" : "pin", describedAs: pin.title)
+    menu.addItem(pin)
 
     menu.addItem(.separator())
     let duplicate = menuItem(
@@ -110,27 +122,28 @@ func makeTabStripContextMenu(
     )
     closeTab.image = .menuSymbol("xmark", describedAs: "Close Tab")
     menu.addItem(closeTab)
-    // "Close Other Tabs" is a no-op when this is the only tab; AppKit
-    // would still dispatch it, so we disable rather than hide so the
-    // item is consistently present and discoverable.
+    // "Close Other Tabs" is a no-op when no other unpinned tab exists
+    // (`TabBulkCloseTargets`); AppKit would still dispatch it, so we
+    // disable rather than hide so the item is consistently present and
+    // discoverable.
     let closeOthers = menuItem(
         title: "Close Other Tabs",
         action: #selector(TabStripViewController.closeOtherTabsFromMenu(_:)),
         for: tabID,
         target: target
     )
-    closeOthers.isEnabled = !isOnlyTab
+    closeOthers.isEnabled = canCloseOthers
     closeOthers.image = .menuSymbol("xmark", describedAs: "Close Other Tabs")
     menu.addItem(closeOthers)
-    // "Close Tabs to the Right" needs at least one tab to the right
-    // of this one, so a last-tab right-click sees it disabled.
+    // "Close Tabs to the Right" needs at least one unpinned tab to the
+    // right of this one, so a last-tab right-click sees it disabled.
     let closeRight = menuItem(
         title: "Close Tabs to the Right",
         action: #selector(TabStripViewController.closeTabsToRightFromMenu(_:)),
         for: tabID,
         target: target
     )
-    closeRight.isEnabled = !isLastTab
+    closeRight.isEnabled = canCloseToTheRight
     closeRight.image = .menuSymbol("xmark", describedAs: "Close Tabs to the Right")
     menu.addItem(closeRight)
 

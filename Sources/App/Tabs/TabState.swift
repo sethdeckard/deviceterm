@@ -139,6 +139,12 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// keeping it lets the memory survive the detach/re-attach cycle
     /// that replaces a sim pane's record behind the same udid.
     var lastFocusedPane: PaneSlot?
+    /// Whether the tab is pinned: drawn as a compact, icon-only pill at the
+    /// front of the strip with no close button. Presentation only, and it
+    /// lasts for the session. `TabListViewModel` keeps pinned tabs as a
+    /// contiguous prefix of its array, so set it through
+    /// `TabListViewModel.setPinned`, never directly on a live tab.
+    var isPinned: Bool
 
     /// The primary terminal pane at index 0, always present. Tab-scoped
     /// operations such as sim-pane attribution use this. Public workspace
@@ -156,7 +162,8 @@ struct TabState: Identifiable, Equatable, Sendable {
         name: String? = nil,
         lifecycle: WorkspaceTabLifecycle = .ready,
         failureMessage: String? = nil,
-        automationCommand: [String]? = nil
+        automationCommand: [String]? = nil,
+        isPinned: Bool = false
     ) {
         precondition(!terminals.isEmpty, "TabState must have at least one terminal pane")
         self.id = id
@@ -173,6 +180,7 @@ struct TabState: Identifiable, Equatable, Sendable {
         self.protectionState = isProtected ? .protected : .unprotected
         self.lastFocusedTerminal = nil
         self.lastFocusedPane = nil
+        self.isPinned = isPinned
         // Seed the layout tree: primary terminal as a single leaf, then
         // sibling-append every other terminal, sim, and device along the
         // horizontal axis. The mutation methods on `TabListViewModel`

@@ -26,6 +26,9 @@ final class TabListViewModel {
         return tabs[selectedIndex]
     }
 
+    /// How many tabs the pinned prefix holds.
+    var pinnedCount: Int { tabs.prefix(while: \.isPinned).count }
+
     /// Selection after removing the tab at `index`. Removing a tab left of
     /// the selection shifts it down one; removing the selection (or a tab
     /// to its right) leaves the index on the right neighbor, clamped to
@@ -120,10 +123,13 @@ final class TabListViewModel {
         }
     }
 
-    /// Append a tab and select it, since new tabs become active.
+    /// Append a tab and select it, since new tabs become active. A pinned
+    /// tab goes at the end of the pinned run rather than the end of the
+    /// array, so the pinned prefix holds.
     func append(_ tab: TabState) {
-        tabs.append(tab)
-        selectedIndex = tabs.count - 1
+        let index = tab.isPinned ? pinnedCount : tabs.count
+        tabs.insert(tab, at: index)
+        selectedIndex = index
     }
 
     func select(id: TabID) {
@@ -146,14 +152,32 @@ final class TabListViewModel {
     /// Same-window reorder: move the tab identified by `id` to `toIndex`
     /// in the array. Selection follows the *identity* of whatever was
     /// selected before (not a fixed slot), so dragging tab A past the
-    /// selected tab B leaves B selected. `toIndex` is clamped to the
-    /// valid range; a no-op when the tab isn't present.
+    /// selected tab B leaves B selected. `toIndex` is clamped into the
+    /// moving tab's zone (`TabPinZoneMath`), so no reorder crosses the
+    /// boundary between pinned and unpinned tabs; a no-op when the tab
+    /// isn't present.
     func move(id: TabID, toIndex: Int) {
         guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
         let selectedID = selectedIndex.flatMap { tabs.indices.contains($0) ? tabs[$0].id : nil }
         let moved = tabs.remove(at: from)
-        let clamped = min(max(toIndex, 0), tabs.count)
-        tabs.insert(moved, at: clamped)
+        tabs.insert(moved, at: clampedInsertion(toIndex, for: moved))
+        if let selectedID {
+            selectedIndex = tabs.firstIndex { $0.id == selectedID }
+        }
+    }
+
+    /// Pin or unpin a tab. Pinning moves it to the end of the pinned run,
+    /// and unpinning moves it to the head of the unpinned tabs; both are
+    /// the boundary between the two zones. Selection follows identity as
+    /// in `move`. A no-op when the tab isn't present or already in that
+    /// state.
+    func setPinned(id: TabID, _ pinned: Bool) {
+        guard let from = tabs.firstIndex(where: { $0.id == id }),
+            tabs[from].isPinned != pinned else { return }
+        let selectedID = selectedIndex.flatMap { tabs.indices.contains($0) ? tabs[$0].id : nil }
+        var tab = tabs.remove(at: from)
+        tab.isPinned = pinned
+        tabs.insert(tab, at: pinnedCount)
         if let selectedID {
             selectedIndex = tabs.firstIndex { $0.id == selectedID }
         }
@@ -176,13 +200,14 @@ final class TabListViewModel {
         return removed
     }
 
-    /// Insert a relocated tab at `index`. `select == true` makes it the
-    /// active tab (matches `append`'s "the moved/new tab becomes
-    /// active"); `select == false` preserves the current selection by
-    /// identity, shifting the stored index when the insert lands at or
+    /// Insert a relocated tab at `index`, clamped into the tab's zone so a
+    /// pinned tab stays in the pinned run of its new window. `select ==
+    /// true` makes it the active tab (matches `append`'s "the moved/new tab
+    /// becomes active"); `select == false` preserves the current selection
+    /// by identity, shifting the stored index when the insert lands at or
     /// before it.
     func insert(_ tab: TabState, at index: Int, select: Bool = true) {
-        let clamped = min(max(index, 0), tabs.count)
+        let clamped = clampedInsertion(index, for: tab)
         tabs.insert(tab, at: clamped)
         if select {
             selectedIndex = clamped
@@ -192,6 +217,17 @@ final class TabListViewModel {
     }
 
     func tab(id: TabID) -> TabState? { tabs.first { $0.id == id } }
+
+    /// `index` clamped into the zone `tab` belongs to, against the current
+    /// array, which must not contain `tab`.
+    private func clampedInsertion(_ index: Int, for tab: TabState) -> Int {
+        TabPinZoneMath.clampedInsertion(
+            index,
+            pinned: tab.isPinned,
+            pinnedOthers: pinnedCount,
+            totalOthers: tabs.count
+        )
+    }
 
     func renameTab(id: TabID, to name: String?) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }

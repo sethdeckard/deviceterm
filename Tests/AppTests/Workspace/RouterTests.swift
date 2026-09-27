@@ -236,6 +236,28 @@ struct RouterTests {
     }
 
     @Test
+    func setTabPinnedMovesTheTabToThePinnedRun() async {
+        let fake = FakeDaemonClient()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        router.dispatch(.newTab(WindowID(value: 1)))
+        router.dispatch(.newTab(WindowID(value: 1)))
+        await settle()
+        router.dispatch(.setTabPinned(WindowID(value: 1), TabID(value: 3), isPinned: true))
+        await settle()
+        let tabs = workspace.window(id: WindowID(value: 1))?.tabs
+        #expect(tabs?.tabs.map(\.id) == [TabID(value: 3), TabID(value: 1), TabID(value: 2)])
+        #expect(tabs?.pinnedCount == 1)
+        // A reorder queued behind the pin can't carry the tab back out.
+        router.dispatch(.reorderTab(WindowID(value: 1), TabID(value: 3), toIndex: 2))
+        await settle()
+        #expect(tabs?.tabs.first?.id == TabID(value: 3))
+        router.dispatch(.setTabPinned(WindowID(value: 1), TabID(value: 3), isPinned: false))
+        await settle()
+        #expect(tabs?.pinnedCount == 0)
+    }
+
+    @Test
     func queuedRelativeSelectionsEachAdvanceOneTab() async {
         let fake = FakeDaemonClient()
         let (router, workspace) = makeRouter(fake)

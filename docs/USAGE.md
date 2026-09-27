@@ -412,6 +412,32 @@ vertical. Use **View ▸ Reset Pane Layout** to restore the default proportions.
 Panes do not move between tabs. Move or reorder the whole tab when the
 workspace belongs in another position or window.
 
+### Pin a Tab
+
+Right-click a tab and choose **Pin Tab** to keep it at the front of the strip.
+A pinned tab shrinks to an icon with no close button. An automation tab shows
+the bolt, a protected tab shows the lock, and a tab that is neither shows a
+terminal glyph. A protected automation tab shows both. Hover it to see its
+title.
+
+Pinned tabs sit in their own lane ahead of every other tab. Pinning moves the
+tab to the end of that lane, and **Unpin Tab** moves it back to the start of
+the unpinned tabs.
+
+A tab can't cross the boundary between the lanes. Dragging, ⌃⇧← and ⌃⇧→, and
+`tab move --index` all stop at it. A pinned tab dragged to another window
+stays pinned there.
+
+Close a pinned tab with **Close Tab** in its right-click menu or with ⌥⌘W; ⌘W
+on its final terminal closes it too. **Close Other Tabs** and **Close Tabs to
+the Right** skip pinned tabs.
+
+⌘1 through ⌘8 count pinned tabs by position, though a pinned tab doesn't show
+its shortcut.
+
+DeviceTerm doesn't save pins between launches. The CLI can't pin a tab, and
+`tab list` doesn't report which tabs are pinned.
+
 ### Focus and Close Panes
 
 Use ⌘] and ⌘[ to select the next or previous pane. These shortcuts wrap around

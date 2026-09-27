@@ -38,7 +38,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// mint. It keeps the committed tab visible and closable without ever
     /// provisioning a shell for the sentinel model terminal.
     private var failedTabContentByID: [TabID: NSViewController] = [:]
-    /// Outer drag-source row: `[cellsContainer, addButton]`. Empty
+    /// Outer drag-source row: `[pinnedContainer, cellsContainer, addButton]`. Empty
     /// regions report `mouseDownCanMoveWindow = true` so click-and-drag
     /// on background moves the window (the strip is mounted in the
     /// title-bar region thanks to `.fullSizeContentView`).
@@ -50,6 +50,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// DraggableStackView so click-and-drag on the empty space between
     /// pills still drags the window.
     private var cellsContainer = DraggableStackView()
+    /// Holds the pinned tabs' compact pills, ahead of `cellsContainer`.
+    /// `.fill` rather than `.fillEqually`, because each pinned pill takes the
+    /// width its glyphs call for rather than a share of the strip. Hidden while no
+    /// tab is pinned, so the strip has no empty lane.
+    private var pinnedContainer = DraggableStackView()
     private var content = NSView()
     /// Activated only when 2+ tabs are present, this constraint forces the
     /// strip to span the full window width so `.fillEqually` inside the
@@ -83,6 +88,9 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// materials introduce a warm tint in dark mode that reads as
     /// discolored over a neutral terminal background).
     private let tabTrack = NSView()
+    /// The same lane behind `pinnedContainer`. A lane of its own marks where
+    /// pinned tabs end, and it hides with its container.
+    private let pinnedTrack = NSView()
     private var observation: ObservationToken?
     /// Cross-window / tear-off relocation seam (see `TabTransferCoordinating`).
     /// Set by `AppDelegate` after construction; nil in unit contexts, where
@@ -90,12 +98,16 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     weak var tabTransfer: (any TabTransferCoordinating)?
     /// The tab whose pill is being live-reordered within this strip, or
     /// nil when no same-window drag is in progress. While set, the
-    /// arranged order of `cellsContainer` is ahead of the nav model; the
-    /// drop commits it, a cancel/exit snaps it back.
+    /// arranged order of the pill's container is ahead of the nav model;
+    /// the drop commits it, a cancel/exit snaps it back.
     private var liveReorderTabID: TabID?
     /// Tab-id order at the last render, so we only rebuild the strip on
     /// structure change (not on every title-driven re-render).
     private var lastTabIDs: [TabID] = []
+    /// Pinned-tab count at the last render. With `lastTabIDs` it fixes which
+    /// lane every pill sits in, since pinned tabs are always a prefix, so
+    /// pinning the first tab rebuilds even though the order didn't change.
+    private var lastPinnedCount = 0
     /// Selected tab at the last render, so we only swap the content view
     /// and refocus the terminal on a *real* selection change. Without
     /// this, every OSC/CWD title update would steal first responder back
@@ -168,7 +180,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// The paragraph style carries the button's truncation and alignment
     /// forward: an attributed title supplies its own, so the `lineBreakMode`
     /// set when the button was built stops reaching the text.
+    ///
+    /// Assigning `attributedTitle` also resets the button's `imagePosition`
+    /// to `.imageOverlaps`, which would draw a pinned pill's title over its
+    /// glyphs, so the position is put back afterwards.
     static func applyTitleStyling(to button: NSButton, text: String, isSelected: Bool) {
+        let imagePosition = button.imagePosition
+        defer { button.imagePosition = imagePosition }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         paragraph.alignment = button.alignment
@@ -223,6 +241,15 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // "+" button hugs tight.
         cellsContainer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
+        pinnedContainer.orientation = .horizontal
+        pinnedContainer.spacing = 1
+        pinnedContainer.alignment = .centerY
+        pinnedContainer.distribution = .fill
+        pinnedContainer.translatesAutoresizingMaskIntoConstraints = false
+        // Hugs its pills, so the leftover strip width goes to the cells lane.
+        pinnedContainer.setContentHuggingPriority(.required, for: .horizontal)
+        pinnedContainer.isHidden = true
+
         content.translatesAutoresizingMaskIntoConstraints = false
 
         let addButton = NewTabButton()
@@ -240,20 +267,27 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         //   - Track: ~5% white tint (faint lane)
         //   - Hover: ~10% (cell paints over track)
         //   - Selected: ~16% (clearly active)
-        tabTrack.translatesAutoresizingMaskIntoConstraints = false
-        tabTrack.wantsLayer = true
-        // 14pt matches the cell pills' radius: same shape, different
-        // alpha for each state.
-        tabTrack.layer?.cornerRadius = 14
-        tabTrack.layer?.cornerCurve = .continuous
-        tabTrack.layer?.masksToBounds = true
-        tabTrack.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
+        for track in [tabTrack, pinnedTrack] {
+            track.translatesAutoresizingMaskIntoConstraints = false
+            track.wantsLayer = true
+            // 14pt matches the cell pills' radius: same shape, different
+            // alpha for each state.
+            track.layer?.cornerRadius = 14
+            track.layer?.cornerCurve = .continuous
+            track.layer?.masksToBounds = true
+            track.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
+        }
+        pinnedTrack.isHidden = true
 
         root.addSubview(strip)
         root.addSubview(content)
         strip.addSubview(tabTrack, positioned: .below, relativeTo: nil)
+        strip.addSubview(pinnedTrack, positioned: .below, relativeTo: nil)
+        strip.addArrangedSubview(pinnedContainer)
         strip.addArrangedSubview(cellsContainer)
         strip.addArrangedSubview(addButton)
+        // The two lanes sit closer together than the lanes and "+" do.
+        strip.setCustomSpacing(4, after: pinnedContainer)
 
         // Tab strip sits BELOW the native title bar. With
         // `.fullSizeContentView` on, our root extends to the window's
@@ -301,6 +335,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             tabTrack.bottomAnchor.constraint(equalTo: cellsContainer.bottomAnchor, constant: -3),
             tabTrack.leadingAnchor.constraint(equalTo: cellsContainer.leadingAnchor),
             tabTrack.trailingAnchor.constraint(equalTo: cellsContainer.trailingAnchor),
+            pinnedContainer.heightAnchor.constraint(equalTo: strip.heightAnchor),
+            pinnedTrack.topAnchor.constraint(equalTo: pinnedContainer.topAnchor, constant: 3),
+            pinnedTrack.bottomAnchor.constraint(equalTo: pinnedContainer.bottomAnchor, constant: -3),
+            pinnedTrack.leadingAnchor.constraint(equalTo: pinnedContainer.leadingAnchor),
+            pinnedTrack.trailingAnchor.constraint(equalTo: pinnedContainer.trailingAnchor),
             content.topAnchor.constraint(equalTo: strip.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -331,12 +370,14 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             wireTerminalExit(of: tabContent)
         }
         observation = App.observe { [weak self] in self?.render() }
-        // Accept tab drags over the cells lane: reorder within this
-        // window, and adopt a tab dragged from another window.
-        cellsContainer.dropDelegate = self
-        cellsContainer.registerForDraggedTypes(
-            [NSPasteboard.PasteboardType(TabDragPayload.pasteboardType)]
-        )
+        // Accept tab drags over both lanes: reorder within this window, and
+        // adopt a tab dragged from another window.
+        for lane in [pinnedContainer, cellsContainer] {
+            lane.dropDelegate = self
+            lane.registerForDraggedTypes(
+                [NSPasteboard.PasteboardType(TabDragPayload.pasteboardType)]
+            )
+        }
         applyChromeTint()
     }
 
@@ -542,7 +583,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     }
 
     /// The count-driven width policy: span the window with two or more tabs,
-    /// take the solo cap with one.
+    /// take the solo cap with one. `tabCount` counts the cells lane only,
+    /// since pinned pills take a fixed width and never share the strip.
     ///
     /// Deferred while frozen, because closing down to a single tab applies it
     /// mid-run otherwise. Dropping the full-width constraint moves the "+" and
@@ -569,7 +611,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         }
         cellsContainer.distribution = .fillEqually
         // The policy the freeze deferred, now against the strip as it stands.
-        applyStripWidthPolicy(tabCount: tabListVM.tabs.count)
+        applyStripWidthPolicy(tabCount: tabListVM.tabs.count - tabListVM.pinnedCount)
     }
 
     /// Window → Move Tab Left / Right (⌃⇧← / ⌃⇧→): shift the selected
@@ -1073,6 +1115,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     }
 
     @objc
+    func togglePinFromMenu(_ sender: NSMenuItem) {
+        guard let tabID = sender.representedObject as? TabID,
+            let tab = tabListVM.tab(id: tabID) else { return }
+        router.dispatch(.setTabPinned(windowID, tabID, isPinned: !tab.isPinned))
+    }
+
+    @objc
     func duplicateTabFromMenu(_ sender: NSMenuItem) {
         guard let tabID = sender.representedObject as? TabID else { return }
         duplicateTab(id: tabID)
@@ -1123,17 +1172,13 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     @objc
     func closeOtherTabsFromMenu(_ sender: NSMenuItem) {
         guard let tabID = sender.representedObject as? TabID else { return }
-        let others = tabListVM.tabs.map(\.id).filter { $0 != tabID }
-        requestBulkCloseTabs(ids: others)
+        requestBulkCloseTabs(ids: TabBulkCloseTargets.others(of: tabID, in: tabListVM.tabs))
     }
 
     @objc
     func closeTabsToRightFromMenu(_ sender: NSMenuItem) {
         guard let tabID = sender.representedObject as? TabID else { return }
-        let ids = tabListVM.tabs.map(\.id)
-        guard let pivot = ids.firstIndex(of: tabID) else { return }
-        let trailing = Array(ids[(pivot + 1)...])
-        requestBulkCloseTabs(ids: trailing)
+        requestBulkCloseTabs(ids: TabBulkCloseTargets.toTheRight(of: tabID, in: tabListVM.tabs))
     }
 
     // MARK: - Reconcile (observe { render() })
@@ -1207,9 +1252,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         }
 
         let currentIDs = tabs.map(\.id)
-        if currentIDs != lastTabIDs {
+        let pinnedCount = tabListVM.pinnedCount
+        if currentIDs != lastTabIDs || pinnedCount != lastPinnedCount {
             rebuildStrip(for: tabs)
             lastTabIDs = currentIDs
+            lastPinnedCount = pinnedCount
         } else {
             updateStripLabels(for: tabs)
         }
@@ -1272,13 +1319,17 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     }
 
     private func rebuildStrip(for tabs: [TabState]) {
-        // Tear down previous cells in the container (independent of the
-        // outer strip, which holds [cellsContainer, addButton]).
-        for cell in cellsContainer.arrangedSubviews {
-            cellsContainer.removeArrangedSubview(cell)
-            cell.removeFromSuperview()
+        // Tear down previous cells in both lanes (independent of the outer
+        // strip, which holds [pinnedContainer, cellsContainer, addButton]).
+        for lane in [pinnedContainer, cellsContainer] {
+            for cell in lane.arrangedSubviews {
+                lane.removeArrangedSubview(cell)
+                cell.removeFromSuperview()
+            }
         }
-        // Width policy:
+        let pinnedCount = tabs.prefix(while: \.isPinned).count
+        let unpinnedCount = tabs.count - pinnedCount
+        // Width policy, for the cells lane:
         //   1 tab  → solo cap 480, strip narrow (trailing empty)
         //   N ≥ 2  → strip spans full width, cellsContainer divides
         //            equally via .fillEqually
@@ -1287,15 +1338,20 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         // below the window-drag threshold. `TabPillLayout` holds the band
         // and the order they yield in.
         if TabWidthFreezeDecision.shouldThawOnTabCountChange(
-            from: lastTabIDs.count,
-            to: tabs.count
+            from: lastTabIDs.count - lastPinnedCount,
+            to: unpinnedCount
         ) {
             thawCellWidths()
         }
         // Held still while frozen; `thawCellWidths` applies it on release.
         if frozenCellWidth == nil {
-            applyStripWidthPolicy(tabCount: tabs.count)
+            applyStripWidthPolicy(tabCount: unpinnedCount)
         }
+        // An empty lane leaves the strip, taking its track with it.
+        pinnedContainer.isHidden = pinnedCount == 0
+        pinnedTrack.isHidden = pinnedCount == 0
+        cellsContainer.isHidden = unpinnedCount == 0
+        tabTrack.isHidden = unpinnedCount == 0
         for (idx, tab) in tabs.enumerated() {
             let title = TabTitleButton(
                 title: displayTitle(for: tab),
@@ -1314,7 +1370,8 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 return TabDragPayload(
                     sourceWindowID: self.windowID,
                     tabID: tab.id,
-                    sourceIndex: index
+                    sourceIndex: index,
+                    isPinned: self.tabListVM.tabs[index].isPinned
                 )
             }
             title.onTearOff = { [weak self] screenPoint in
@@ -1331,18 +1388,6 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // accent-tinted `.recessed` style.
             title.isBordered = false
             title.bezelStyle = .texturedRounded
-            // Let the title stretch so the cell can fill its slot in
-            // the cellsContainer.
-            title.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            // Truncation is a drawing behavior and leaves the button
-            // asking for its full width, so the title only actually
-            // gives way once its compression resistance is lowered too.
-            // It yields first, being the part that degrades into
-            // something still worth reading.
-            title.setContentCompressionResistancePriority(
-                TabPillLayout.titleCompression,
-                for: .horizontal
-            )
             // Single-line, tail-truncate at narrow widths so a long
             // title never pushes the close button past the cell's
             // trailing edge.
@@ -1354,12 +1399,45 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // fire when the menu opens; each item carries the TabID
             // via `representedObject` so the handler knows which tab
             // it was clicked on.
-            title.menu = makeTabStripContextMenu(
-                for: tab.id,
-                isEffectivelyProtected: tab.isEffectivelyProtected,
-                isOnlyTab: tabs.count == 1,
-                isLastTab: idx == tabs.count - 1,
-                target: self
+            title.menu = contextMenu(for: tab, in: tabs)
+
+            let cell = TabPillCell(frame: .zero)
+            cell.onHoverChange = { [weak self] in self?.applySeparators() }
+            // The whole pill is the drag image.
+            title.snapshotSource = cell
+            cell.translatesAutoresizingMaskIntoConstraints = false
+            // Pin the pill height: the strip is 34pt and the cell
+            // centers at 28pt with .centerY alignment on the cells
+            // container, giving 3pt margin top/bottom. The track is
+            // pinned to the same 28pt extent below.
+            cell.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            if tab.isPinned {
+                // Glyphs only, so the title shows only through the tooltip
+                // and the accessibility title `applyPinnedGlyphs` sets.
+                title.imagePosition = .imageOnly
+                title.imageScaling = .scaleNone
+                // Fills the pill between its insets, so a glyph narrower than
+                // the pill's minimum width sits centred rather than leading.
+                title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                Self.applyAccessibilityIdentifiers(
+                    pill: title, close: nil, shortId: Self.accessibilityShortID(for: tab)
+                )
+                cell.install(close: nil, title: title)
+                applyPinnedGlyphs(to: cell, tab: tab)
+                pinnedContainer.insertArrangedSubview(cell, at: idx)
+                continue
+            }
+            // Let the title stretch so the cell can fill its slot in
+            // the cellsContainer.
+            title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            // Truncation is a drawing behavior and leaves the button
+            // asking for its full width, so the title only actually
+            // gives way once its compression resistance is lowered too.
+            // It yields first, being the part that degrades into
+            // something still worth reading.
+            title.setContentCompressionResistancePriority(
+                TabPillLayout.titleCompression,
+                for: .horizontal
             )
 
             let close = NSButton(
@@ -1387,21 +1465,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // Reserve space always but fade alpha 0 → 1 on hover so
             // entering the cell doesn't reflow the layout.
 
-            let cell = TabPillCell(frame: .zero)
             cell.install(close: close, title: title)
             applyMarkers(to: cell, tab: tab)
             cell.setShortcut(
                 TabShortcutDecision.action(atIndex: idx, tabCount: tabs.count)
             )
-            cell.onHoverChange = { [weak self] in self?.applySeparators() }
-            // The whole pill is the drag image.
-            title.snapshotSource = cell
-            cell.translatesAutoresizingMaskIntoConstraints = false
-            // Pin the pill height: the strip is 34pt and the cell
-            // centers at 28pt with .centerY alignment on the cells
-            // container, giving 3pt margin top/bottom. The track is
-            // pinned to the same 28pt extent below.
-            cell.heightAnchor.constraint(equalToConstant: 28).isActive = true
             // A preference, not a floor: `.fillEqually` under a required
             // stripFillTrailing already determines the width from the
             // window, so this only decides what a cell asks for. It sits
@@ -1413,7 +1481,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             )
             minWidth.priority = TabPillLayout.cellMinimumWidthPriority
             minWidth.isActive = true
-            cellsContainer.insertArrangedSubview(cell, at: idx)
+            cellsContainer.insertArrangedSubview(cell, at: idx - pinnedCount)
         }
         applyFrozenCellWidths()
     }
@@ -1503,6 +1571,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 text: displayTitle(for: tab),
                 isSelected: isSelected
             )
+            if tab.isPinned { applyPinnedGlyphs(to: cell, tab: tab) }
         }
         applySeparators()
         if let tabContent = selectedContent as? TabContentViewController {
@@ -1537,9 +1606,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// `applySelection`/`updateStripLabels` correct if `rebuildStrip`
     /// ever skips a tab whose content is still being provisioned.
     private func cell(forTab tabID: TabID) -> TabPillCell? {
-        for case let pill as TabPillCell in cellsContainer.arrangedSubviews
-        where pill.titleButton?.tag == tabID.value {
-            return pill
+        for lane in [pinnedContainer, cellsContainer] {
+            for case let pill as TabPillCell in lane.arrangedSubviews
+            where pill.titleButton?.tag == tabID.value {
+                return pill
+            }
         }
         return nil
     }
@@ -1547,13 +1618,17 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// Paint a boundary only when both neighboring cells are inactive
     /// and unhovered. Reading the arranged subviews keeps the rule correct
     /// during live drag reordering, before the navigation model commits.
+    /// Each lane is decided on its own: the lanes sit on separate tracks,
+    /// and the gap between them is the boundary.
     private func applySeparators() {
-        let cells = cellsContainer.arrangedSubviews.compactMap { $0 as? TabPillCell }
-        let visibility = TabSeparatorDecision.trailingVisibility(
-            for: cells.map { (isSelected: $0.isSelected, isHovered: $0.isHovered) }
-        )
-        for (cell, isVisible) in zip(cells, visibility) {
-            cell.showsTrailingSeparator = isVisible
+        for lane in [pinnedContainer, cellsContainer] {
+            let cells = lane.arrangedSubviews.compactMap { $0 as? TabPillCell }
+            let visibility = TabSeparatorDecision.trailingVisibility(
+                for: cells.map { (isSelected: $0.isSelected, isHovered: $0.isHovered) }
+            )
+            for (cell, isVisible) in zip(cells, visibility) {
+                cell.showsTrailingSeparator = isVisible
+            }
         }
     }
 
@@ -1573,6 +1648,39 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         )
     }
 
+    /// Draw a pinned pill's glyphs and its hover text from the tab's
+    /// current state. The pinned counterpart of `applyMarkers`, called from
+    /// the same passes plus `applySelection`, because the terminal glyph
+    /// dims with selection the way a title does.
+    private func applyPinnedGlyphs(to cell: TabPillCell, tab: TabState) {
+        let glyphs = TabPinnedGlyphDecision.glyphs(
+            role: tab.role,
+            isEffectivelyProtected: tab.isEffectivelyProtected
+        )
+        cell.setPinnedGlyphs(glyphs, isSelected: cell.isSelected)
+        let title = displayTitle(for: tab)
+        cell.titleButton?.toolTip = TabPinnedGlyphDecision.toolTip(title: title, glyphs: glyphs)
+        // An image-only button reports an empty accessibility title and the
+        // image's description as its label, and neither follows a later title
+        // change. Name the tab explicitly on every pass, the way an unpinned
+        // title button reports it on its own.
+        cell.titleButton?.setAccessibilityTitle(title)
+        cell.titleButton?.setAccessibilityLabel(title)
+    }
+
+    /// The right-click menu for `tab`, with its toggles and bulk-close
+    /// enable bits read from `tabs` as they stand.
+    private func contextMenu(for tab: TabState, in tabs: [TabState]) -> NSMenu {
+        makeTabStripContextMenu(
+            for: tab.id,
+            isEffectivelyProtected: tab.isEffectivelyProtected,
+            isPinned: tab.isPinned,
+            canCloseOthers: !TabBulkCloseTargets.others(of: tab.id, in: tabs).isEmpty,
+            canCloseToTheRight: !TabBulkCloseTargets.toTheRight(of: tab.id, in: tabs).isEmpty,
+            target: self
+        )
+    }
+
     private func updateStripLabels(for tabs: [TabState]) {
         for (idx, tab) in tabs.enumerated() {
             // Look up by TabID rather than array index: same reasoning
@@ -1584,10 +1692,14 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
                 text: displayTitle(for: tab),
                 isSelected: cell.isSelected
             )
-            applyMarkers(to: cell, tab: tab)
-            cell.setShortcut(
-                TabShortcutDecision.action(atIndex: idx, tabCount: tabs.count)
-            )
+            if tab.isPinned {
+                applyPinnedGlyphs(to: cell, tab: tab)
+            } else {
+                applyMarkers(to: cell, tab: tab)
+                cell.setShortcut(
+                    TabShortcutDecision.action(atIndex: idx, tabCount: tabs.count)
+                )
+            }
             Self.applyAccessibilityIdentifiers(
                 pill: button, close: cell.closeButton, shortId: Self.accessibilityShortID(for: tab)
             )
@@ -1598,13 +1710,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             // when the tab-ID list changes; same-tabs-different-state
             // paths (protection toggle, position-driven last-tab flip)
             // land here.
-            button.menu = makeTabStripContextMenu(
-                for: tab.id,
-                isEffectivelyProtected: tab.isEffectivelyProtected,
-                isOnlyTab: tabs.count == 1,
-                isLastTab: idx == tabs.count - 1,
-                target: self
-            )
+            button.menu = contextMenu(for: tab, in: tabs)
         }
     }
 
@@ -1673,7 +1779,7 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
             payload.tabID,
             from: payload.sourceWindowID,
             to: windowID,
-            atIndex: insertionSlot(for: sender)
+            atIndex: insertionSlot(for: sender, pinned: payload.isPinned)
         )
         return true
     }
@@ -1697,27 +1803,37 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     }
 
     /// Slide the dragged pill to the slot the cursor is over. Purely
-    /// visual: the arranged order of `cellsContainer` changes but the nav
+    /// visual: the arranged order of the pill's lane changes but the nav
     /// model doesn't until the drop commits, so a cancel just restores the
     /// order and no mid-drag `render()` can tear down the in-flight drag
     /// source pill.
+    ///
+    /// The pill only moves within its own lane, so a pinned tab never
+    /// slides among unpinned ones or back. A cursor over the other lane
+    /// reads as past that end of this one.
     private func liveShiftDraggedPill(_ tabID: TabID, for sender: any NSDraggingInfo) {
-        guard let draggedCell = cell(forTab: tabID) else { return }
+        guard let draggedCell = cell(forTab: tabID),
+            let lane = lane(holding: draggedCell) else { return }
         liveReorderTabID = tabID
         draggedCell.alphaValue = Self.draggedPillAlpha
-        let cells = cellsContainer.arrangedSubviews
+        let cells = lane.arrangedSubviews
         guard let current = cells.firstIndex(of: draggedCell) else { return }
-        let cursorX = cellsContainer.convert(sender.draggingLocation, from: nil).x
-        let frames = cells.map { cellsContainer.convert($0.bounds, from: $0) }
+        let cursorX = lane.convert(sender.draggingLocation, from: nil).x
+        let frames = cells.map { lane.convert($0.bounds, from: $0) }
         let target = TabDropMath.liveTargetIndex(
             draggedIndex: current,
             cursorX: cursorX,
             cellFrames: frames
         )
         guard target != current else { return }
-        cellsContainer.removeArrangedSubview(draggedCell)
-        cellsContainer.insertArrangedSubview(draggedCell, at: target)
+        lane.removeArrangedSubview(draggedCell)
+        lane.insertArrangedSubview(draggedCell, at: target)
         applySeparators()
+    }
+
+    /// The lane a pill is arranged in, nil for a pill in neither.
+    private func lane(holding cell: TabPillCell) -> DraggableStackView? {
+        [pinnedContainer, cellsContainer].first { $0.arrangedSubviews.contains(cell) }
     }
 
     /// Finish a live reorder. `commit` dispatches the reorder to the nav
@@ -1730,9 +1846,12 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         liveReorderTabID = nil
         if commit,
             let draggedCell = cell(forTab: tabID),
-            let finalIndex = cellsContainer.arrangedSubviews.firstIndex(of: draggedCell) {
+            let lane = lane(holding: draggedCell),
+            let laneIndex = lane.arrangedSubviews.firstIndex(of: draggedCell) {
             draggedCell.alphaValue = 1
-            router.dispatch(.reorderTab(windowID, tabID, toIndex: finalIndex))
+            // The cells lane starts after the pinned tabs in the model.
+            let offset = lane === cellsContainer ? tabListVM.pinnedCount : 0
+            router.dispatch(.reorderTab(windowID, tabID, toIndex: offset + laneIndex))
             return
         }
         restoreStripOrder()
@@ -1743,31 +1862,39 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     /// arrangement (never removes cells from the view hierarchy), so an
     /// active drag session's source pill stays alive.
     private func restoreStripOrder() {
-        var cellByTag: [Int: TabPillCell] = [:]
-        for case let cell as TabPillCell in cellsContainer.arrangedSubviews {
-            cell.alphaValue = 1
-            if let tag = cell.titleButton?.tag { cellByTag[tag] = cell }
-        }
-        for cell in cellsContainer.arrangedSubviews {
-            cellsContainer.removeArrangedSubview(cell)
-        }
-        for tab in tabListVM.tabs {
-            if let cell = cellByTag[tab.id.value] {
-                cellsContainer.addArrangedSubview(cell)
+        for lane in [pinnedContainer, cellsContainer] {
+            var cellByTag: [Int: TabPillCell] = [:]
+            for case let cell as TabPillCell in lane.arrangedSubviews {
+                cell.alphaValue = 1
+                if let tag = cell.titleButton?.tag { cellByTag[tag] = cell }
+            }
+            // Only the pills: a ✕ run's trailing spacer keeps its place at
+            // the end of the cells lane.
+            for cell in cellByTag.values {
+                lane.removeArrangedSubview(cell)
+            }
+            var index = 0
+            for tab in tabListVM.tabs {
+                if let cell = cellByTag[tab.id.value] {
+                    lane.insertArrangedSubview(cell, at: index)
+                    index += 1
+                }
             }
         }
         applySeparators()
     }
 
     /// Insertion slot for a cross-window drop: the gap index the cursor
-    /// is over among this strip's pills (which don't include the dragged
-    /// tab).
-    private func insertionSlot(for sender: any NSDraggingInfo) -> Int {
-        let cursorX = cellsContainer.convert(sender.draggingLocation, from: nil).x
-        let midXs = cellsContainer.arrangedSubviews.map {
-            cellsContainer.convert($0.bounds, from: $0).midX
+    /// is over among the pills of the lane the tab will land in (which
+    /// don't include the dragged tab), as an index into the whole strip.
+    private func insertionSlot(for sender: any NSDraggingInfo, pinned: Bool) -> Int {
+        let lane = pinned ? pinnedContainer : cellsContainer
+        let cursorX = lane.convert(sender.draggingLocation, from: nil).x
+        let midXs = lane.arrangedSubviews.compactMap { $0 as? TabPillCell }.map {
+            lane.convert($0.bounds, from: $0).midX
         }
-        return TabDropMath.insertionIndex(forX: cursorX, cellMidXs: midXs)
+        let laneIndex = TabDropMath.insertionIndex(forX: cursorX, cellMidXs: midXs)
+        return (pinned ? 0 : tabListVM.pinnedCount) + laneIndex
     }
 }
 
@@ -1982,6 +2109,14 @@ private extension TabStripViewController {
     /// Selection comes from the strip controller; the cell tracks hover and
     /// paints both states.
     final class TabPillCell: NSView {
+        /// The point size and weight every marker renders at, in a pill's
+        /// marker row and in a pinned pill's glyphs alike. Solid glyphs stay
+        /// legible at this size.
+        private static let markerSymbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 13,
+            weight: .semibold
+        )
+
         weak var closeButton: NSButton?
         var isSelected: Bool = false {
             didSet { refreshMaterial() }
@@ -2015,6 +2150,13 @@ private extension TabStripViewController {
         /// action, because that is what the comparison is actually about.
         private var installedShortcut: String?
         private var shortcutLabel: TabShortcutLabel?
+        /// What `setPinnedGlyphs` last drew, so it can return early when
+        /// nothing changed. Empty on an unpinned pill.
+        private var installedPinnedGlyphs: [TabPillMarker] = []
+        private var installedPinnedSelection = false
+        /// Holds a pinned pill at its preferred width. Nil on an unpinned
+        /// pill, whose width comes from the strip.
+        private var pinnedWidth: NSLayoutConstraint?
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -2078,12 +2220,27 @@ private extension TabStripViewController {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-        /// The image view for one marker.
+        /// The color a marker renders in.
         ///
-        /// Solid glyphs stay legible at this size. Teal and orange separate the
-        /// two markers independently of the user's accent color, which a
-        /// low-chroma choice such as Graphite can otherwise flatten into the
-        /// pill. Yellow is the obvious bolt and blurs into the orange lock.
+        /// Teal and orange separate the two markers independently of the
+        /// user's accent color, which a low-chroma choice such as Graphite can
+        /// otherwise flatten into the pill. Yellow is the obvious bolt and
+        /// blurs into the orange lock. The terminal glyph stands in for a
+        /// title, so it takes the title's color and dims with it.
+        private static func tint(for marker: TabPillMarker, isSelected: Bool) -> NSColor {
+            switch marker {
+            case .automation:
+                return .systemTeal
+
+            case .protection:
+                return .systemOrange
+
+            case .terminal:
+                return TabStripViewController.titleColor(isSelected: isSelected)
+            }
+        }
+
+        /// The image view for one marker.
         ///
         /// Neither carries an accessibility *identifier*. Consumers collect the
         /// strip's named controls by the `deviceterm.tab.` prefix and count the
@@ -2091,33 +2248,13 @@ private extension TabStripViewController {
         /// image carries a description instead, which names the marker without
         /// putting it in that set.
         private static func markerView(for marker: TabPillMarker) -> NSImageView {
-            let symbolName: String
-            let describedAs: String
-            let hoverText: String
-            let tint: NSColor
-            switch marker {
-            case .automation:
-                symbolName = "bolt.fill"
-                describedAs = "Automation tab"
-                hoverText = "Automation tab: can control other tabs and send input to their terminals"
-                tint = .systemTeal
-
-            case .protection:
-                symbolName = "lock.fill"
-                describedAs = "Protected tab"
-                hoverText = "Protected tab: hidden from other sessions and closed to automation"
-                tint = .systemOrange
-            }
             let view = NSImageView()
             view.image = NSImage(
-                systemSymbolName: symbolName,
-                accessibilityDescription: describedAs
+                systemSymbolName: marker.symbolName,
+                accessibilityDescription: marker.accessibilityDescription
             )
-            view.contentTintColor = tint
-            view.symbolConfiguration = NSImage.SymbolConfiguration(
-                pointSize: 13,
-                weight: .semibold
-            )
+            view.contentTintColor = tint(for: marker, isSelected: false)
+            view.symbolConfiguration = markerSymbolConfiguration
             view.imageScaling = .scaleNone
             view.setContentHuggingPriority(.required, for: .horizontal)
             // Outlasts the badge, signalling automation role and protected
@@ -2126,8 +2263,38 @@ private extension TabStripViewController {
                 TabPillLayout.markerCompression,
                 for: .horizontal
             )
-            view.toolTip = hoverText
+            view.toolTip = marker.hoverText
             return view
+        }
+
+        /// A pinned pill's glyphs drawn side by side as one image, each in its
+        /// marker's color, spaced as the pill's stack spaces its markers.
+        ///
+        /// Drawn through a handler, so the colors resolve against the
+        /// appearance at draw time and follow a light/dark flip.
+        private static func pinnedImage(for glyphs: [TabPillMarker], isSelected: Bool) -> NSImage {
+            let symbols: [NSImage] = glyphs.compactMap { glyph in
+                let configuration = markerSymbolConfiguration.applying(
+                    NSImage.SymbolConfiguration(paletteColors: [tint(for: glyph, isSelected: isSelected)])
+                )
+                return NSImage(
+                    systemSymbolName: glyph.symbolName,
+                    accessibilityDescription: glyph.accessibilityDescription
+                )?.withSymbolConfiguration(configuration)
+            }
+            let spacing: CGFloat = 4
+            let width = symbols.map(\.size.width).reduce(0, +)
+                + spacing * CGFloat(max(symbols.count - 1, 0))
+            let height = symbols.map(\.size.height).max() ?? 0
+            return NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
+                var x: CGFloat = 0
+                for symbol in symbols {
+                    let origin = NSPoint(x: x, y: (height - symbol.size.height) / 2)
+                    symbol.draw(in: NSRect(origin: origin, size: symbol.size))
+                    x += symbol.size.width + spacing
+                }
+                return true
+            }
         }
 
         /// The badge label. The title truncates ahead of it, but the badge is
@@ -2155,7 +2322,10 @@ private extension TabStripViewController {
         /// stable position, the title filling the rest. Markers go on afterwards
         /// through `setMarkers`, which inserts them between the two, and the
         /// shortcut badge through `setShortcut`, which appends after the title.
-        func install(close: NSButton, title: NSButton) {
+        ///
+        /// A pinned pill passes no ✕ and mounts the title alone, whose image
+        /// `setPinnedGlyphs` then supplies.
+        func install(close: NSButton?, title: NSButton) {
             for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
             installedMarkers = []
             markerViews = []
@@ -2163,9 +2333,41 @@ private extension TabStripViewController {
             shortcutLabel = nil
             closeButton = close
             titleButton = title
-            close.alphaValue = 0
-            stack.addArrangedSubview(close)
+            if let close {
+                close.alphaValue = 0
+                stack.addArrangedSubview(close)
+            }
             stack.addArrangedSubview(title)
+        }
+
+        /// Draw a pinned pill's glyphs as its title button's image and prefer
+        /// a width that fits them, at least
+        /// `TabPillLayout.pinnedCellMinimumWidth`. The width yields to a window
+        /// drag (`TabPillLayout.pinnedCellWidthPriority`). Idempotent like
+        /// `setMarkers`, since the same-tabs render path calls it on every
+        /// pass.
+        ///
+        /// The glyphs are one image on the button rather than image views
+        /// beside it, so the whole pill stays the button's click, drag and
+        /// right-click target.
+        func setPinnedGlyphs(_ glyphs: [TabPillMarker], isSelected: Bool) {
+            guard glyphs != installedPinnedGlyphs || isSelected != installedPinnedSelection else { return }
+            installedPinnedGlyphs = glyphs
+            installedPinnedSelection = isSelected
+            let image = Self.pinnedImage(for: glyphs, isSelected: isSelected)
+            titleButton?.image = image
+            let width = max(
+                TabPillLayout.pinnedCellMinimumWidth,
+                stack.edgeInsets.left + image.size.width + stack.edgeInsets.right
+            )
+            if let pinnedWidth {
+                pinnedWidth.constant = width
+            } else {
+                let constraint = widthAnchor.constraint(equalToConstant: width)
+                constraint.priority = TabPillLayout.pinnedCellWidthPriority
+                constraint.isActive = true
+                pinnedWidth = constraint
+            }
         }
 
         /// Reconcile the pill's markers against `markers`, in that order, between

@@ -3,7 +3,8 @@
 import Foundation
 
 /// The pasteboard payload for a tab-strip drag. Carries
-/// the source window + the dragged tab's id and its index at drag start.
+/// the source window + the dragged tab's id, its index at drag start, and
+/// whether it is pinned.
 /// A same-window drop reorders; a drop onto another window's strip moves
 /// the tab (its live view controller travels with it; see the AppDelegate
 /// transfer coordinator); a drop on empty space tears the tab off into a
@@ -25,4 +26,7 @@ struct TabDragPayload: Codable, Sendable, Equatable {
     /// destination recomputes the live index by `tabID` before moving,
     /// but kept on the wire so a future consumer can label the drag.
     let sourceIndex: Int
+    /// Whether the tab is pinned, so a strip in another window can place the
+    /// drop against the lane the tab will land in before the move happens.
+    let isPinned: Bool
 }

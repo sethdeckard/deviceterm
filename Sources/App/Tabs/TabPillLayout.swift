@@ -19,6 +19,13 @@ enum TabPillLayout {
     /// The width a pill prefers before the strip starts compressing it.
     static let cellMinimumWidth: CGFloat = 180
 
+    /// The narrowest width a pinned pill prefers: the terminal glyph, the
+    /// widest of the single glyphs, plus the pill's insets. Every one-glyph
+    /// pinned pill prefers the same width, and a pill drawing two glyphs
+    /// prefers more. A preference, like `cellMinimumWidth`: it holds at
+    /// `pinnedCellWidthPriority`, so a window drag can still narrow it.
+    static let pinnedCellMinimumWidth: CGFloat = 39
+
     /// The width below which a pill drops its shortcut badge rather than
     /// rendering a clipped fragment of the chord.
     static let shortcutVisibilityWidth: CGFloat = 140
@@ -63,4 +70,9 @@ enum TabPillLayout {
     /// narrowing the window ends the run's geometry rather than the window's
     /// resize.
     static let frozenWidthPin = NSLayoutConstraint.Priority(rawValue: 505)
+
+    /// Holds a pinned pill at its preferred width. Above the stack's breakable
+    /// trailing pin, so the pill keeps that width rather than stretching, and
+    /// below the window-drag threshold like the rest of the band.
+    static let pinnedCellWidthPriority = NSLayoutConstraint.Priority(rawValue: 505)
 }

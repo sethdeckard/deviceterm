@@ -13,15 +13,17 @@ import Testing
 struct TabStripContextMenuTests {
     private func menu(
         isProtected: Bool = false,
-        isOnlyTab: Bool = false,
-        isLastTab: Bool = false,
+        isPinned: Bool = false,
+        canCloseOthers: Bool = true,
+        canCloseToTheRight: Bool = true,
         target: AnyObject? = nil
     ) -> NSMenu {
         makeTabStripContextMenu(
             for: TabID(value: 42),
             isEffectivelyProtected: isProtected,
-            isOnlyTab: isOnlyTab,
-            isLastTab: isLastTab,
+            isPinned: isPinned,
+            canCloseOthers: canCloseOthers,
+            canCloseToTheRight: canCloseToTheRight,
             target: target
         )
     }
@@ -44,6 +46,7 @@ struct TabStripContextMenuTests {
         #expect(titles == [
             "Rename Tab…",
             "Protect Tab",
+            "Pin Tab",
             "",  // separator
             "Duplicate Tab",
             "",  // separator
@@ -93,6 +96,7 @@ struct TabStripContextMenuTests {
         let expected: [(String, Selector)] = [
             ("Rename Tab…", #selector(TabStripViewController.renameTabFromMenu(_:))),
             ("Protect Tab", #selector(TabStripViewController.toggleProtectionFromMenu(_:))),
+            ("Pin Tab", #selector(TabStripViewController.togglePinFromMenu(_:))),
             ("Duplicate Tab", #selector(TabStripViewController.duplicateTabFromMenu(_:))),
             ("New Tab", #selector(TabStripViewController.newTabFromMenu(_:))),
             (
@@ -136,29 +140,45 @@ struct TabStripContextMenuTests {
     }
 
     @Test
-    func closeOtherTabsDisabledWhenOnlyTab() {
-        let menu = menu(isOnlyTab: true)
+    func pinItemTitleFlipsWhenAlreadyPinned() {
+        let titles = menu(isPinned: true).items.map(\.title)
+        #expect(titles.contains("Unpin Tab"))
+        #expect(!titles.contains("Pin Tab"))
+        let unpin = menu(isPinned: true).items.first { $0.title == "Unpin Tab" }
+        #expect(unpin?.action == #selector(TabStripViewController.togglePinFromMenu(_:)))
+    }
+
+    /// A pinned tab has no ✕, so its menu is where it closes from.
+    @Test
+    func pinnedTabKeepsCloseTab() {
+        let closeTab = menu(isPinned: true).items.first { $0.title == "Close Tab" }
+        #expect(closeTab?.isEnabled == true)
+    }
+
+    @Test
+    func closeOtherTabsDisabledWhenNothingToClose() {
+        let menu = menu(canCloseOthers: false)
         let closeOthers = menu.items.first { $0.title == "Close Other Tabs" }
         #expect(closeOthers?.isEnabled == false)
     }
 
     @Test
     func closeOtherTabsEnabledWithSiblings() {
-        let menu = menu(isOnlyTab: false)
+        let menu = menu(canCloseOthers: true)
         let closeOthers = menu.items.first { $0.title == "Close Other Tabs" }
         #expect(closeOthers?.isEnabled == true)
     }
 
     @Test
-    func closeTabsToRightDisabledWhenLastTab() {
-        let menu = menu(isLastTab: true)
+    func closeTabsToRightDisabledWhenNothingFollows() {
+        let menu = menu(canCloseToTheRight: false)
         let closeRight = menu.items.first { $0.title == "Close Tabs to the Right" }
         #expect(closeRight?.isEnabled == false)
     }
 
     @Test
     func closeTabsToRightEnabledWhenTabsFollow() {
-        let menu = menu(isLastTab: false)
+        let menu = menu(canCloseToTheRight: true)
         let closeRight = menu.items.first { $0.title == "Close Tabs to the Right" }
         #expect(closeRight?.isEnabled == true)
     }

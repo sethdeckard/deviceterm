@@ -273,6 +273,11 @@ enum Route: Sendable {
     /// moves do NOT come through here; they relocate a live view
     /// controller and live in the AppDelegate transfer coordinator.
     case reorderTab(WindowID, TabID, toIndex: Int)
+    /// Pin or unpin `tab`. The handler delegates to
+    /// `TabListViewModel.setPinned`, which moves the tab to the boundary
+    /// between the pinned and unpinned tabs; the strip's render diff then
+    /// rebuilds the pills. Presentation only: nothing reaches the daemon.
+    case setTabPinned(WindowID, TabID, isPinned: Bool)
     /// Drag-to-rearrange: move `slot` next to `target` per `zone`.
     /// `.center` swaps; `.leftHalf` / `.rightHalf` reorder along the
     /// horizontal axis (possibly creating a new sub-split); top/bottom

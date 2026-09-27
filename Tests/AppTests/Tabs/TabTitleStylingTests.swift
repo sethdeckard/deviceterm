@@ -46,6 +46,27 @@ struct TabTitleStylingTests {
         #expect(attributes(of: button)[.foregroundColor] as? NSColor == .secondaryLabelColor)
     }
 
+    /// Assigning `attributedTitle` resets `imagePosition` to `.imageOverlaps`.
+    /// Styling has to put `.imageOnly` back, so a pinned pill shows only its
+    /// glyphs.
+    @Test(arguments: [true, false])
+    func aPinnedPillKeepsItsImageOnlyPosition(isSelected: Bool) {
+        let button = titleButton()
+        button.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        button.imagePosition = .imageOnly
+        TabStripViewController.applyTitleStyling(to: button, text: "shell", isSelected: isSelected)
+        #expect(button.imagePosition == .imageOnly)
+        #expect(button.attributedTitle.string == "shell")
+    }
+
+    /// The restore is a no-op on an unpinned title, which carries no image.
+    @Test
+    func anUnpinnedTitleKeepsNoImagePosition() {
+        let button = titleButton()
+        TabStripViewController.applyTitleStyling(to: button, text: "shell", isSelected: false)
+        #expect(button.imagePosition == .noImage)
+    }
+
     @Test(arguments: [true, false])
     func theTextIsCarriedThrough(isSelected: Bool) {
         let button = titleButton()
