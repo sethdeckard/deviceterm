@@ -600,9 +600,12 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
 
 /// Register the surface and damage callbacks on `renderable` under this
 /// handle's callback UUID. Returns NO when the proxy answers neither
-/// `registerCallbackWithUUID:` IOSurface shape. The damage-rectangles
-/// registration is attempted independently of that answer, so it can be left
-/// in place even when this returns NO.
+/// `registerCallbackWithUUID:` IOSurface shape, or when every shape it
+/// answers raises on registration: the proxy is a ROCKit remote, and a call
+/// into it can raise instead of returning, which counts as that registration
+/// not having taken. The damage-rectangles registration is attempted
+/// independently of that answer, and a raise from it is dropped, so it can be
+/// left in place even when this returns NO.
 ///
 /// Both blocks reach the live callback through the handle rather than
 /// capturing it, so they stay correct across a `start` that replaces the
@@ -671,37 +674,53 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
 
     BOOL registered = NO;
     if ([renderable respondsToSelector:@selector(registerCallbackWithUUID:ioSurfacesChangeCallback:)]) {
-        [renderable registerCallbackWithUUID:self.callbackUUID
-                    ioSurfacesChangeCallback:surfaceCallback];
-        registered = YES;
+        @try {
+            [renderable registerCallbackWithUUID:self.callbackUUID
+                        ioSurfacesChangeCallback:surfaceCallback];
+            registered = YES;
+        } @catch (NSException *e) {}
     }
     if ([renderable respondsToSelector:@selector(registerCallbackWithUUID:ioSurfaceChangeCallback:)]) {
-        [renderable registerCallbackWithUUID:self.callbackUUID
-                     ioSurfaceChangeCallback:surfaceCallback];
-        registered = YES;
+        @try {
+            [renderable registerCallbackWithUUID:self.callbackUUID
+                         ioSurfaceChangeCallback:surfaceCallback];
+            registered = YES;
+        } @catch (NSException *e) {}
     }
     id renderableUntyped = renderable;
     if ([renderableUntyped respondsToSelector:@selector(registerCallbackWithUUID:damageRectanglesCallback:)]) {
-        [renderableUntyped registerCallbackWithUUID:self.callbackUUID
-                            damageRectanglesCallback:damageCallback];
+        @try {
+            [renderableUntyped registerCallbackWithUUID:self.callbackUUID
+                                damageRectanglesCallback:damageCallback];
+        } @catch (NSException *e) {}
     }
     return registered;
 }
 
 /// Drop this handle's surface and damage registrations from `renderable`.
 /// Repeated start/stop and rebind cycles otherwise leak block registrations
-/// into CoreSimulator that live until the proxy goes away.
+/// into CoreSimulator that live until the proxy goes away. A raise from any
+/// unregister is dropped, as `stopOrientation` drops one: by the time the
+/// proxy raises, the registration is already gone with it, and a raise that
+/// escaped here would skip the unregisters after it and, from `dealloc`,
+/// escape teardown altogether.
 - (void)_unregisterSurfaceCallbacksOn:(nullable id<SimDisplayIOSurfaceRenderable>)renderable {
     if (!renderable) return;
     if ([renderable respondsToSelector:@selector(unregisterIOSurfacesChangeCallbackWithUUID:)]) {
-        [renderable unregisterIOSurfacesChangeCallbackWithUUID:self.callbackUUID];
+        @try {
+            [renderable unregisterIOSurfacesChangeCallbackWithUUID:self.callbackUUID];
+        } @catch (NSException *e) {}
     }
     if ([renderable respondsToSelector:@selector(unregisterIOSurfaceChangeCallbackWithUUID:)]) {
-        [renderable unregisterIOSurfaceChangeCallbackWithUUID:self.callbackUUID];
+        @try {
+            [renderable unregisterIOSurfaceChangeCallbackWithUUID:self.callbackUUID];
+        } @catch (NSException *e) {}
     }
     id renderableUntyped = renderable;
     if ([renderableUntyped respondsToSelector:@selector(unregisterDamageRectanglesCallbackWithUUID:)]) {
-        [renderableUntyped unregisterDamageRectanglesCallbackWithUUID:self.callbackUUID];
+        @try {
+            [renderableUntyped unregisterDamageRectanglesCallbackWithUUID:self.callbackUUID];
+        } @catch (NSException *e) {}
     }
 }
 
@@ -726,7 +745,7 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
             *error = [NSError errorWithDomain:kCSBErrorDomain
                                          code:CSBDisplayHandleErrorCallbackRegister
                                      userInfo:@{
-                NSLocalizedDescriptionKey: @"Renderable lacks any registerCallbackWithUUID: shape",
+                NSLocalizedDescriptionKey: @"Renderable took none of this handle's surface callbacks",
             }];
         }
         [self _unregisterSurfaceCallbacksOn:renderable];
