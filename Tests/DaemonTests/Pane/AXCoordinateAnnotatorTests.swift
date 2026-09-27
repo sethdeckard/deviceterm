@@ -113,8 +113,7 @@ func treeResponseAnnotatesItsRootAndChildren() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.coordinates.tree"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
     let tree = try decodedObject(data)
     let children = try #require(tree["children"] as? [[String: Any]])
@@ -132,7 +131,6 @@ func pointResponseUsesTheFrontmostRoot() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.coordinates.point"),
         paneId: UUID(),
-        orientation: { .portrait },
         x: 0.2,
         y: 0.1275
     )
@@ -152,7 +150,6 @@ func aPointResponseCarriesTheFrameItsCentreWasDividedBy() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.rootframe.point"),
         paneId: UUID(),
-        orientation: { .portrait },
         x: 0.2,
         y: 0.1275
     )
@@ -185,7 +182,6 @@ func aSweepRootCarriesTheScreenBesideItsNormalizedFrame() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.rootframe.sweep"),
         paneId: UUID(),
-        orientation: { .portrait },
         step: AXSweep.maxStep,
         budgetMs: AXSweepBudget.maxMs
     )
@@ -225,7 +221,6 @@ func anUnusableRootPublishesNeitherAScreenNorACentre() async throws {
             backend: backend,
             queue: BlockingWorkQueue(label: "test.ax.rootframe.unusable.point"),
             paneId: UUID(),
-            orientation: { .portrait },
             x: 0.5,
             y: 0.5
         ))
@@ -236,7 +231,6 @@ func anUnusableRootPublishesNeitherAScreenNorACentre() async throws {
             backend: backend,
             queue: BlockingWorkQueue(label: "test.ax.rootframe.unusable.sweep"),
             paneId: UUID(),
-            orientation: { .portrait },
             step: AXSweep.maxStep,
             budgetMs: AXSweepBudget.maxMs
         ))
@@ -260,7 +254,6 @@ func aRootWhoseOriginIsUnusableStillCentresButPublishesNoScreen() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.rootframe.origin"),
         paneId: UUID(),
-        orientation: { .portrait },
         x: 0.2,
         y: 0.1275
     ))
@@ -280,7 +273,6 @@ func aBridgeSuppliedRootFrameNeverSurvives() async throws {
         backend: usable,
         queue: BlockingWorkQueue(label: "test.ax.rootframe.collide.usable"),
         paneId: UUID(),
-        orientation: { .portrait },
         x: 0.2,
         y: 0.1275
     ))
@@ -295,7 +287,6 @@ func aBridgeSuppliedRootFrameNeverSurvives() async throws {
         backend: unusable,
         queue: BlockingWorkQueue(label: "test.ax.rootframe.collide.unusable"),
         paneId: UUID(),
-        orientation: { .portrait },
         x: 0.2,
         y: 0.1275
     ))
@@ -303,9 +294,12 @@ func aBridgeSuppliedRootFrameNeverSurvives() async throws {
 }
 
 @Test
-func anAccessibilityTreeCarriesNoScreenFrameAtAnyDepth() async throws {
-    // `ax tree` needs no such field: its own root frame *is* the divisor, so
-    // publishing a second copy of it would be the same number twice.
+func anAccessibilityTreeCarriesItsScreenFrameOnlyAtTheRoot() async throws {
+    // The root's own rectangle is not always the divisor, so `ax tree`
+    // publishes the divisor beside it the way `ax point` and `ax sweep` do.
+    // Nested nodes still carry none: one response, one screen, and a value
+    // the framework happened to put on a child is stripped rather than
+    // passed through where it would read as a second screen.
     var seeded = button()
     seeded["rootFrame"] = ["x": 7, "y": 7, "w": 7, "h": 7]
     var tree = rootTree()
@@ -318,13 +312,56 @@ func anAccessibilityTreeCarriesNoScreenFrameAtAnyDepth() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.rootframe.tree"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     ))
-    #expect(decoded["rootFrame"] == nil)
+    let published = try #require(decoded["rootFrame"] as? [String: Double])
+    // The seeded 7x7 is the framework value being stripped; the real root is
+    // what has to come back.
+    #expect(published["w"] != 7)
+    #expect(published["h"] != 7)
     let children = try #require(decoded["children"] as? [[String: Any]])
     let child = try #require(children.first)
     #expect(child["rootFrame"] == nil)
+}
+
+@Test
+func aTurnedTreePublishesTheDivisorItsCentresWereMadeWith() async throws {
+    // A root that reports one rectangle while its children lay out in the
+    // quarter-turn of it. Multiplying a published centre by the root's own
+    // `frame` would swap the axes, so the divisor has to travel separately.
+    // The full-width strip is what makes the tree read as turned: the
+    // children have to span the root's *height* to the point.
+    let strip: [String: Any] = [
+        "role": "Group",
+        "label": "Content",
+        "frame": ["x": 0.0, "y": 0.0, "w": 951.0, "h": 669.0]
+    ]
+    let far: [String: Any] = [
+        "role": "Button",
+        "label": "Far",
+        "frame": ["x": 900.0, "y": 300.0, "w": 40.0, "h": 40.0]
+    ]
+    let backend = MockDeviceBackend()
+    backend.frontmostTree = [
+        "role": "Application",
+        "frame": ["x": 0.0, "y": 0.0, "w": 669.0, "h": 951.0],
+        "children": [strip, far]
+    ]
+    let decoded = try decodedObject(try await PaneAccessibility.tree(
+        backend: backend,
+        queue: BlockingWorkQueue(label: "test.ax.rootframe.turned"),
+        paneId: UUID(),
+        family: .phone
+    ))
+    let published = try #require(decoded["rootFrame"] as? [String: Double])
+    #expect(published["w"] == 951)
+    #expect(published["h"] == 669)
+    // And the far element, which the root's own width would have normalized
+    // past 1 and dropped, comes back addressable.
+    let children = try #require(decoded["children"] as? [[String: Any]])
+    let centre = try #require(children.last?["normalizedCenter"] as? [String: Double])
+    #expect(centre["x"] == 920.0 / 951.0)
+    #expect(centre["y"] == 320.0 / 669.0)
 }
 
 @Test
@@ -337,7 +374,6 @@ func sweepAnnotatesChildrenButNotItsSyntheticRoot() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "test.ax.coordinates.sweep"),
         paneId: UUID(),
-        orientation: { .portrait },
         step: AXSweep.maxStep,
         budgetMs: AXSweepBudget.maxMs
     )

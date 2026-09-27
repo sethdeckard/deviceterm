@@ -3845,8 +3845,7 @@ public actor PaneCoordinator {
             backend: backend,
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
-            family: family,
-            orientation: { [record] in record.presentationOrientation }
+            family: family
         )
         try revalidateAccessibility(
             record: record,
@@ -3873,7 +3872,6 @@ public actor PaneCoordinator {
             backend: backend,
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
-            orientation: { [record] in record.presentationOrientation },
             x: x,
             y: y
         )
@@ -3902,7 +3900,6 @@ public actor PaneCoordinator {
             backend: backend,
             queue: record.accessibilityWorkQueue,
             paneId: paneId,
-            orientation: { [record] in record.presentationOrientation },
             step: step,
             budgetMs: budgetMs
         )

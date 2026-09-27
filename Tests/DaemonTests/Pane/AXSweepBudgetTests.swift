@@ -20,7 +20,6 @@ private func sweepRoot(
         backend: backend,
         queue: queue,
         paneId: UUID(),
-        orientation: { .portrait },
         step: step,
         budgetMs: budgetMs
     )

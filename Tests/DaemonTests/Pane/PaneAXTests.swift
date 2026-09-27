@@ -111,17 +111,13 @@ func bridgeFailedMapsToDedicatedWireCode() {
 
 // MARK: - Coordinator-level: coordinate mapping
 
-@Test("a point query follows the pane's own orientation")
-func accessibilityElementFollowsThePanesOrientation() async throws {
-    // `AXSweepTests` pins the transform; this pins that the coordinator
-    // hands it the pane's live orientation rather than a constant. The
-    // same displayed coordinate has to reach two different panel points
-    // before and after the device turns.
-    //
-    // The fixture is a control whose interface frame is
-    // {x: 232, y: 298, w: 100, h: 24} against an 874×402 landscape root,
-    // so its displayed centre is (282/874, 310/402) and the panel it
-    // sits on is 402×874.
+@Test("a point query scales against the tree it just read")
+func aPointQueryScalesAgainstTheTreeItJustRead() async throws {
+    // Accessibility is asked in the tree's own space: the root frame turns
+    // with the interface and `objectAtPoint:` hit-tests in that same
+    // rectangle, measured on an iPad in both orientations. So a displayed
+    // point scales straight into whichever root the tree reports, and is
+    // never rotated into the panel.
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend()
     backend.frontmostTree = [
@@ -136,124 +132,34 @@ func accessibilityElementFollowsThePanesOrientation() async throws {
     )
     let centre = (x: 282.0 / 874.0, y: 310.0 / 402.0)
 
-    // Portrait first: the pane starts there, and the transform is the
-    // identity, so the query scales against the root frame as it reads.
     _ = try await coordinator.accessibilityElement(
         paneId: result.paneId,
         as: .guiPeer,
         x: centre.x,
         y: centre.y
     )
-    let inPortrait = try #require(backend.accessibilityPoints.last)
-    #expect(abs(inPortrait.x - centre.x * 402) < 0.001)
-    #expect(abs(inPortrait.y - centre.y * 874) < 0.001)
+    let portrait = try #require(backend.accessibilityPoints.last)
+    #expect(abs(portrait.x - centre.x * 402) < 0.001)
+    #expect(abs(portrait.y - centre.y * 874) < 0.001)
 
-    // Turn the device. The tree now reports the interface transposed,
-    // as the real bridge does, while the panel underneath is unchanged.
+    // Turn the device. The tree reports the interface transposed, as the real
+    // bridge does, and the query follows it rather than the panel.
     backend.frontmostTree = [
         "role": "Application",
         "frame": ["x": 0, "y": 0, "w": 874, "h": 402],
         "children": []
     ]
-    let (subscriptionId, stream) = try await coordinator.subscribe(
-        paneId: result.paneId,
-        as: .guiPeer
-    )
-    backend.emitDisplayOrientation(.landscapeLeft)
-    let watchdog = Task {
-        try? await Task.sleep(for: .seconds(2))
-        await coordinator.unsubscribe(paneId: result.paneId, subscriptionId: subscriptionId)
-    }
-    var turned = false
-    for await event in stream {
-        if case let .orientationChanged(_, orientation) = event, orientation == .landscapeLeft {
-            turned = true
-            break
-        }
-    }
-    watchdog.cancel()
-    #expect(turned, "the rotation never reached the pane")
-
     _ = try await coordinator.accessibilityElement(
         paneId: result.paneId,
         as: .guiPeer,
         x: centre.x,
         y: centre.y
     )
-    let inLandscape = try #require(backend.accessibilityPoints.last)
+    let landscape = try #require(backend.accessibilityPoints.last)
     #expect(
-        abs(inLandscape.x - 92) < 0.001 && abs(inLandscape.y - 282) < 0.001,
-            "landscape query hit \(inLandscape); unrotated it would hit (282.0, 310.0)"
-        )
-    await coordinator.unsubscribe(paneId: result.paneId, subscriptionId: subscriptionId)
-}
-
-@Test("a point query reads the orientation beside the tree, not before")
-func accessibilityElementReadsOrientationBesideTheTree() async throws {
-    // The orientation and the tree have to describe one screen. The AX
-    // queue is shared with `sweep`, so a read can wait on it for as long
-    // as a whole grid walk, and a value captured before that wait can be
-    // stale by the time the tree is read.
-    //
-    // The fake turns the device as the tree is read, which is the moment
-    // the two designs diverge: a query that sampled earlier maps through
-    // portrait, one that reads beside the tree maps through landscape.
-    let backend = MockDeviceBackend()
-    backend.frontmostTree = [
-        "role": "Application",
-        "frame": ["x": 0, "y": 0, "w": 874, "h": 402],
-        "children": []
-    ]
-    backend.onFrontmostTree = { [weak backend] in backend?.displayOrientation = .landscapeLeft }
-
-    _ = try await PaneAccessibility.element(
-        backend: backend,
-        queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax"),
-        paneId: UUID(),
-        orientation: { backend.displayOrientation ?? .portrait },
-        x: 282.0 / 874.0,
-        y: 310.0 / 402.0
+        abs(landscape.x - 282) < 0.001 && abs(landscape.y - 310) < 0.001,
+        "landscape query hit \(landscape), want root-frame scaling (282.0, 310.0)"
     )
-    let queried = try #require(backend.accessibilityPoints.last)
-    #expect(
-        abs(queried.x - 92) < 0.001 && abs(queried.y - 282) < 0.001,
-            "query hit \(queried); want landscape (92.0, 282.0), not a pre-read portrait (282.0, 310.0)"
-        )
-}
-
-@Test("a pane with no display source maps through its confirmed reply")
-func accessibilityElementUsesTheConfirmedReplyOrientation() async throws {
-    // A command-reply backend has no passive display source. Its returned
-    // orientation updates the same mapping the display observer would.
-    let coordinator = PaneCoordinator()
-    let backend = MockDeviceBackend()
-    backend.displayOrientationAvailable = false
-    backend.frontmostTree = [
-        "role": "Application",
-        "frame": ["x": 0, "y": 0, "w": 874, "h": 402],
-        "children": []
-    ]
-    let result = try await coordinator.createMockPane(
-        udid: "udid-ax-no-source",
-        sessionId: UUID(),
-        backend: backend
-    )
-    #expect(backend.currentDisplayOrientation() == nil)
-    try await coordinator.rotate(
-        paneId: result.paneId,
-        as: .guiPeer,
-        target: .absolute(.landscapeLeft)
-    )
-
-    _ = try await coordinator.accessibilityElement(
-        paneId: result.paneId,
-        as: .guiPeer,
-        x: 282.0 / 874.0,
-        y: 310.0 / 402.0
-    )
-    let queried = try #require(backend.accessibilityPoints.last)
-    #expect(abs(queried.x - 92) < 0.001)
-    #expect(abs(queried.y - 282) < 0.001)
 }
 
 // MARK: - The completeness probe
@@ -332,25 +238,20 @@ private func uncoveredTree(interface: CGSize) -> [String: Any] {
 }
 
 @Test(
-    "the completeness probe maps through the pane's orientation",
+    "the completeness probe scales against the tree it read",
     arguments: [
-        (Orientation.portrait, CGSize(width: 402, height: 874)),
-        (.portraitUpsideDown, CGSize(width: 402, height: 874)),
-        (.landscapeLeft, CGSize(width: 874, height: 402)),
-        (.landscapeRight, CGSize(width: 874, height: 402))
+        (CGSize(width: 402, height: 874), CGPoint(x: 201, y: 437)),
+        (CGSize(width: 874, height: 402), CGPoint(x: 437, y: 201))
     ]
 )
-func theProbeMapsThroughTheOrientation(
-    orientation: Orientation,
-    interface: CGSize
+func theProbeScalesAgainstTheTree(
+    interface: CGSize,
+    expected: CGPoint
 ) async throws {
-    // The panel stays at the device's portrait dimensions however the device
-    // is turned, so the centre of the interface is the centre of the panel in
-    // every orientation and the expected pixel is the same (201, 437) four
-    // times over. That sameness is the result, not the computation: an
-    // implementation that skipped the rotation would read the landscape
-    // interface as if it were portrait and hit-test (437, 201) instead. The
-    // two landscape rows are what separate the two.
+    // The probe hit-tests the centre of whatever root the tree reported,
+    // because that rectangle is the space `objectAtPoint:` answers in. A
+    // landscape tree probes the centre of a landscape rectangle, not the
+    // centre of a portrait panel.
     let backend = MockDeviceBackend()
     backend.frontmostTree = uncoveredTree(interface: interface)
 
@@ -358,37 +259,14 @@ func theProbeMapsThroughTheOrientation(
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-probe"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { orientation }
+        family: .phone
     )
 
     let queried = try #require(backend.accessibilityPoints.last)
     #expect(
-        abs(queried.x - 201) < 0.001 && abs(queried.y - 437) < 0.001,
-        "\(orientation) probed \(queried); want panel centre (201.0, 437.0), not (437.0, 201.0)"
+        abs(queried.x - expected.x) < 0.001 && abs(queried.y - expected.y) < 0.001,
+        "probed \(queried); want the centre of the reported root \(expected)"
     )
-}
-
-@Test("the probe reads the orientation beside the tree, not before")
-func theProbeReadsOrientationBesideTheTree() async throws {
-    // Same hazard the point path documents: the AX queue is shared with
-    // `sweep`, so this read can wait on it for as long as a whole grid walk,
-    // and an orientation sampled before that wait can be stale by the time
-    // the tree is read. The fake turns the device as the tree is read.
-    let backend = MockDeviceBackend()
-    backend.frontmostTree = uncoveredTree(interface: CGSize(width: 874, height: 402))
-    backend.onFrontmostTree = { [weak backend] in backend?.displayOrientation = .landscapeLeft }
-
-    _ = try await PaneAccessibility.tree(
-        backend: backend,
-        queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-probe-late"),
-        paneId: UUID(),
-        family: .phone,
-        orientation: { backend.displayOrientation ?? .portrait }
-    )
-
-    let queried = try #require(backend.accessibilityPoints.last)
-    #expect(abs(queried.x - 201) < 0.001 && abs(queried.y - 437) < 0.001)
 }
 
 @Test
@@ -409,8 +287,7 @@ func aFailedProbeStillAnswersTheTree() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-probe-fails"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
 
     let tree = try #require(
@@ -444,8 +321,7 @@ func aScreenThatChangedMidReadEarnsNoNote() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-raced"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
 
     let tree = try #require(
@@ -478,8 +354,7 @@ func aMoveToAnotherIncompleteScreenEarnsNoNote() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-swapped"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
 
     let tree = try #require(
@@ -507,8 +382,7 @@ func aStableScreenSurvivesConfirmationAndIsNoted() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-stable"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
 
     let tree = try #require(
@@ -535,8 +409,7 @@ func aRejectedProbeSpendsNoConfirmingRead() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-fallback"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
 
     #expect(reads.value == 1)
@@ -564,8 +437,7 @@ func aCoveredCentreCostsNoBridgeCall() async throws {
         backend: backend,
         queue: BlockingWorkQueue(label: "com.deviceterm.test.pane-ax-no-probe"),
         paneId: UUID(),
-        family: .phone,
-        orientation: { .portrait }
+        family: .phone
     )
 
     #expect(backend.accessibilityPoints.isEmpty)

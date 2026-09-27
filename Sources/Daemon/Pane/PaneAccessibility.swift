@@ -12,8 +12,11 @@ import Foundation
 /// (not Sendable), so serialization happens here synchronously and only
 /// `Data` (Sendable) crosses back. The coordinator resolves the backend
 /// (its one stateful step) and hands it here with whatever else the op
-/// needs off the record: the pane's immutable `family` for `tree`, and a
-/// reader for its presentation orientation, which all three ops take.
+/// needs off the record: the pane's immutable `family` for `tree`.
+///
+/// Accessibility takes no orientation. It is asked in the tree's own space,
+/// which turns with the interface, so the panel rotation the input verbs
+/// apply has no place here.
 enum PaneAccessibility {
     /// AXP's callback bridge waits synchronously for each simulator reply.
     /// Keep the whole read and JSON conversion on the pane's serial Dispatch
@@ -23,23 +26,17 @@ enum PaneAccessibility {
     /// Serialize the frontmost iOS app's accessibility tree to JSON
     /// bytes, annotated for `family`.
     ///
-    /// `orientation` is read late, beside the tree rather than when the
-    /// request entered the actor, for the reason `element` documents: the
-    /// completeness probe hit-tests a point, and a rotation while this waited
-    /// its turn on the queue would map that point through the previous screen.
     static func tree(
         backend: any DeviceBackend,
         queue: BlockingWorkQueue,
         paneId: UUID,
-        family: DeviceFamily,
-        orientation: @escaping @Sendable () -> Orientation
+        family: DeviceFamily
     ) async throws -> Data {
         try await queue.run {
             try treeSynchronously(
                 backend: backend,
                 paneId: paneId,
-                family: family,
-                orientation: orientation
+                family: family
             )
         }
     }
@@ -47,8 +44,7 @@ enum PaneAccessibility {
     private static func treeSynchronously(
         backend: any DeviceBackend,
         paneId: UUID,
-        family: DeviceFamily,
-        orientation: @Sendable () -> Orientation
+        family: DeviceFamily
     ) throws -> Data {
         let tree: [String: Any]
         do {
@@ -68,11 +64,17 @@ enum PaneAccessibility {
             probedElement: probeForOmittedElement(
                 backend: backend,
                 tree: tree,
-                family: family,
-                orientation: orientation
+                family: family
             )
         )
-        let annotated = AXCoordinateAnnotator.tree(noted)
+        var annotated = AXCoordinateAnnotator.tree(noted)
+        // The divisor, beside the root's own rectangle rather than instead of
+        // it. The two are the same number on every device whose tree is not
+        // turned a quarter from its own root, and on one that is, the root
+        // rectangle is not what the centres below it were made with.
+        if let rootFrame = AXCoordinateAnnotator.rootFrame(of: noted) {
+            annotated["rootFrame"] = rootFrame
+        }
         do {
             return try JSONSerialization.data(
                 withJSONObject: annotated,
@@ -104,17 +106,15 @@ enum PaneAccessibility {
     private static func probeForOmittedElement(
         backend: any DeviceBackend,
         tree: [String: Any],
-        family: DeviceFamily,
-        orientation: @Sendable () -> Orientation
+        family: DeviceFamily
     ) -> [String: Any]? {
         guard let probe = AXTreeAnnotator.probePoint(for: tree, family: family) else { return nil }
-        let interface = AXSweep.interfaceSize(fromTree: tree)
-            ?? CGSize(width: 1, height: 1)
-        let pixelPoint = AXSweep.nativePixel(
-            displayed: probe,
-            orientation: orientation(),
-            interface: interface
-        )
+        let geometry = AXSweep.geometry(fromTree: tree)
+            ?? AXSweep.TreeGeometry(
+                hitTest: CGSize(width: 1, height: 1),
+                viewer: CGSize(width: 1, height: 1)
+            )
+        let pixelPoint = AXSweep.hitTestPoint(displayed: probe, geometry: geometry)
         guard let element = try? backend.accessibilityElement(at: pixelPoint),
             AXTreeAnnotator.provesIncompleteness(element, of: tree)
         else { return nil }
@@ -143,29 +143,23 @@ enum PaneAccessibility {
     }
 
     /// Serialize the single AX element at a normalized point. Same dict shape
-    /// as `tree` minus the `children` key, plus `rootFrame`: the pre-flight
-    /// screen frame this element's `normalizedCenter` was divided by, omitted
-    /// when that root carried no usable frame.
+    /// as a `tree` root minus the `children` key. `rootFrame` carries the
+    /// pre-flight screen frame this element's `normalizedCenter` was divided
+    /// by, omitted when that root carried no usable frame.
     ///
     /// `(x, y)` is normalized in `[0, 1]` in displayed space, the same
     /// space the coordinate-bearing input verbs take, with the origin at
-    /// the top-left of what the device is showing. Mapping it into the
-    /// display panel's own frame needs the orientation, because
-    /// AXPTranslator's `objectAtPoint:` hit-tests the panel, which never
-    /// turns, while the frames in the tree describe the interface, which
-    /// does.
+    /// the top-left of what the device is showing. It is mapped through the
+    /// tree's own geometry: AXPTranslator's `objectAtPoint:` hit-tests in the
+    /// space of the root frame, which turns with the interface, so the point
+    /// needs no rotation into the panel. On a device whose children lay out
+    /// turned from that root, a foldable's inner panel so far, the mapping
+    /// carries the quarter turn.
     ///
-    /// `orientation` is read rather than passed by value, and is read
-    /// after the queue wait and after the tree, so it is never an
-    /// enqueue-time snapshot: this queue is shared with `sweep`, and a
-    /// read can wait on it for as long as a full grid walk takes. The two
-    /// reads are not atomic, so a rotation landing between them still
-    /// mismatches the tree.
     static func element(
         backend: any DeviceBackend,
         queue: BlockingWorkQueue,
         paneId: UUID,
-        orientation: @escaping @Sendable () -> Orientation,
         x: Double,
         y: Double
     ) async throws -> Data {
@@ -173,7 +167,6 @@ enum PaneAccessibility {
             try elementSynchronously(
                 backend: backend,
                 paneId: paneId,
-                orientation: orientation,
                 x: x,
                 y: y
             )
@@ -183,7 +176,6 @@ enum PaneAccessibility {
     private static func elementSynchronously(
         backend: any DeviceBackend,
         paneId: UUID,
-        orientation: @Sendable () -> Orientation,
         x: Double,
         y: Double
     ) throws -> Data {
@@ -200,12 +192,14 @@ enum PaneAccessibility {
                     + BridgeMessage.unwrap(error)
             )
         }
-        let interface = AXSweep.interfaceSize(fromTree: rootTree)
-            ?? CGSize(width: 1, height: 1)
-        let pixelPoint = AXSweep.nativePixel(
+        let geometry = AXSweep.geometry(fromTree: rootTree)
+            ?? AXSweep.TreeGeometry(
+                hitTest: CGSize(width: 1, height: 1),
+                viewer: CGSize(width: 1, height: 1)
+            )
+        let pixelPoint = AXSweep.hitTestPoint(
             displayed: CGPoint(x: x, y: y),
-            orientation: orientation(),
-            interface: interface
+            geometry: geometry
         )
         let element: [String: Any]
         do {
@@ -240,9 +234,10 @@ enum PaneAccessibility {
 
     /// Grid-walk the screen via `elementAtPoint` and aggregate unique
     /// elements. The grid is laid out in displayed space and each point
-    /// carried into the panel's frame through the pane's orientation, so
-    /// a turned device is swept over its whole screen rather than a
-    /// transposed corner of it. The watchOS workaround for the case where
+    /// mapped into the hit-test space derived from the pre-flight tree, with
+    /// a quarter turn applied when that tree's geometry calls for one, so a
+    /// turned device is swept over its whole screen rather than a transposed
+    /// corner of it. The watchOS workaround for the case where
     /// `accessibilityChildren` enumeration returns empty (the limitation
     /// `AXTreeAnnotator` notes on `ax tree`), agents can still discover
     /// the on-screen elements by sweeping with `objectAtPoint:`.
@@ -314,7 +309,6 @@ enum PaneAccessibility {
         backend: any DeviceBackend,
         queue: BlockingWorkQueue,
         paneId: UUID,
-        orientation: @escaping @Sendable () -> Orientation,
         step: Double?,
         budgetMs: Int?
     ) async throws -> Data {
@@ -331,7 +325,6 @@ enum PaneAccessibility {
             try sweepSynchronously(
                 backend: backend,
                 paneId: paneId,
-                orientation: orientation,
                 step: step,
                 budgetMs: budget,
                 deadline: deadline
@@ -342,7 +335,6 @@ enum PaneAccessibility {
     private static func sweepSynchronously(
         backend: any DeviceBackend,
         paneId: UUID,
-        orientation: @Sendable () -> Orientation,
         step: Double?,
         budgetMs: Int,
         deadline: ContinuousClock.Instant
@@ -391,14 +383,14 @@ enum PaneAccessibility {
                     + BridgeMessage.unwrap(error)
             )
         }
-        let interface = AXSweep.interfaceSize(fromTree: rootTree)
-            ?? CGSize(width: 1, height: 1)
-        // Read after the tree, not when the request entered the actor, so
-        // a rotation while this waited its turn on the queue doesn't map
-        // the walk through the previous screen. Two limits remain: the
-        // tree and this are separate reads, so a rotation between them
-        // still mismatches, and one *during* the walk splits it.
-        let orientation = orientation()
+        let geometry = AXSweep.geometry(fromTree: rootTree)
+            ?? AXSweep.TreeGeometry(
+                hitTest: CGSize(width: 1, height: 1),
+                viewer: CGSize(width: 1, height: 1)
+            )
+        // The geometry comes from this tree, so the walk and the hit-tests
+        // agree by construction. A screen that turns *during* the walk still
+        // splits it: the grid keeps mapping through the tree it started with.
         let clampedStep = AXSweep.clampStep(step)
         let points = AXSweep.gridPoints(step: clampedStep)
         var seen = Set<String>()
@@ -415,17 +407,12 @@ enum PaneAccessibility {
                 break
             }
             swept += 1
-            // Carry the displayed grid point into the panel frame
+            // Map the displayed grid point into the hit-test space
             // before the bridge call. AXPTranslator's
-            // `objectAtPoint:` works in panel coordinates, so an
-            // unscaled point lands in the sub-pixel `(0,0)`
-            // neighborhood and every cell returns code 78, and an
-            // unrotated one walks the wrong axis in landscape.
-            let pixelPoint = AXSweep.nativePixel(
-                displayed: point,
-                orientation: orientation,
-                interface: interface
-            )
+            // `objectAtPoint:` works in that space, so an unscaled
+            // point lands in the sub-pixel `(0,0)` neighborhood and
+            // every cell returns code 78.
+            let pixelPoint = AXSweep.hitTestPoint(displayed: point, geometry: geometry)
             let element: [String: Any]
             do {
                 element = try backend.accessibilityElement(at: pixelPoint)

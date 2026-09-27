@@ -12,25 +12,29 @@ import Foundation
 ///
 /// `rootFrame` is the other half of the same contract, and the annotator only
 /// vends it: it is the screen frame those centres were divided by, which
-/// `PaneAccessibility` stamps on a point response and on the sweep root so a
-/// caller can carry a normalized coordinate back to displayed points without
-/// re-reading the screen.
+/// `PaneAccessibility` stamps on every response so a caller can carry a
+/// normalized coordinate back to displayed points without re-reading the
+/// screen. A tree response carries it too, beside the root's own rectangle:
+/// on a panel whose tree is turned a quarter from its own root the two are
+/// different numbers, and only one of them is the divisor.
 enum AXCoordinateAnnotator {
     private struct Scale {
         let width: Double
         let height: Double
 
+        /// Built from the space the children lay out in, not the root
+        /// rectangle. The two differ only on a panel whose tree is turned a
+        /// quarter from its own root, and there the root is the wrong
+        /// divisor: it rejects visible centres that fall past its width, and
+        /// gives the ones it keeps coordinates that cannot be handed to
+        /// `ax point` or an input verb.
         init?(root: [String: Any]) {
-            guard let frame = root["frame"] as? [String: Any],
-                let width = AXCoordinateAnnotator.number(frame["w"]),
-                let height = AXCoordinateAnnotator.number(frame["h"]),
-                width.isFinite,
-                height.isFinite,
-                width > 0,
-                height > 0
+            guard let geometry = AXSweep.geometry(fromTree: root),
+                geometry.viewer.width > 0,
+                geometry.viewer.height > 0
             else { return nil }
-            self.width = width
-            self.height = height
+            self.width = Double(geometry.viewer.width)
+            self.height = Double(geometry.viewer.height)
         }
 
         func normalizedCenter(of node: [String: Any]) -> (x: Double, y: Double)? {
@@ -57,12 +61,13 @@ enum AXCoordinateAnnotator {
         }
     }
 
-    /// Annotate a recursive frontmost tree using its root frame as the screen.
+    /// Annotate a recursive frontmost tree using its viewer size as the screen.
     static func tree(_ tree: [String: Any]) -> [String: Any] {
         node(tree, scale: Scale(root: tree), recursively: true)
     }
 
-    /// Annotate one flat point/sweep element using a frontmost tree's frame.
+    /// Annotate one flat point/sweep element using a frontmost tree's viewer
+    /// size.
     static func element(
         _ element: [String: Any],
         rootTree: [String: Any]
@@ -70,13 +75,14 @@ enum AXCoordinateAnnotator {
         node(element, scale: Scale(root: rootTree), recursively: false)
     }
 
-    /// The frontmost root's frame, in the same `{x, y, w, h}` shape a node
-    /// carries, or nil when it cannot be published.
+    /// The frame every `normalizedCenter` in this response was divided by, in
+    /// the same `{x, y, w, h}` shape a node carries, or nil when it cannot be
+    /// published. The origin is the root's own; the dimensions are the viewer
+    /// size.
     ///
-    /// `w` and `h` are the exact divisor every `normalizedCenter` in the same
-    /// response was produced from, so a caller who wants displayed points back
-    /// multiplies by them instead of issuing a second `ax tree` and trusting
-    /// the screen to have held still between the two reads.
+    /// A caller who wants displayed points back multiplies by `w` and `h`
+    /// instead of issuing a second `ax tree` and trusting the screen to have
+    /// held still between the two reads.
     ///
     /// Rebuilt from validated numbers rather than passed through. The bridge
     /// writes `accessibilityFrame` into the tree as it finds it, and a null
@@ -93,16 +99,19 @@ enum AXCoordinateAnnotator {
     /// frame there and a caller loses a convenience; publish a repaired one
     /// and they get a number that is quietly wrong.
     static func rootFrame(of root: [String: Any]) -> [String: Double]? {
-        guard Scale(root: root) != nil,
+        guard let scale = Scale(root: root),
             let frame = root["frame"] as? [String: Any],
             let x = number(frame["x"]),
             let y = number(frame["y"]),
-            let width = number(frame["w"]),
-            let height = number(frame["h"]),
+            number(frame["w"]) != nil,
+            number(frame["h"]) != nil,
             x.isFinite,
             y.isFinite
         else { return nil }
-        return ["x": x, "y": y, "w": width, "h": height]
+        // `w` and `h` come from the scale, not the root's own frame: on a
+        // turned panel those disagree, and this rectangle's whole purpose is
+        // to be the divisor the published centres were made with.
+        return ["x": x, "y": y, "w": scale.width, "h": scale.height]
     }
 
     private static func number(_ value: Any?) -> Double? {

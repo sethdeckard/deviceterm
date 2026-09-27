@@ -1532,12 +1532,13 @@ the node lacks a finite origin or positive finite dimensions, or the resulting
 centre falls outside the inclusive 0 through 1 range. An older daemon can also
 omit it. Omission is a successful result, not an error.
 
-For `ax tree`, the tree root supplies the scale for every node. `ax point` and
+For `ax tree`, the scale comes from the space the root's children lay out in,
+which is the root's own frame on every device but a foldable's inner panel. `ax point` and
 `ax sweep` use the real frontmost tree read during their preflight. The
 synthetic `AXSweepRoot` frame remains a 0,0,1,1 placeholder and is never used
 as the scale.
 
-`ax point` and `ax sweep` also hand back the frame they used, as `rootFrame`:
+Every `ax` read hands back the frame it divided by, as `rootFrame`:
 
 ```json
 "rootFrame": {"x": 0, "y": 0, "w": 400, "h": 800}
@@ -1547,8 +1548,10 @@ Multiply a `normalizedCenter` by `rootFrame.w` and `rootFrame.h` to get
 displayed points back.
 
 When present, it appears once per response, at the top of the `ax point`
-element and on the `ax sweep` root, and never on a nested child. `ax tree`
-doesn't carry it, because its own root `frame` is already the scale.
+element and on the `ax sweep` and `ax tree` roots, and never on a nested child.
+On a tree it sits beside the root's own `frame`, which is the rectangle the
+root reports rather than the one its children lay out in. Those differ only on
+a foldable's inner panel, and there `rootFrame` is the one to multiply by.
 
 `rootFrame` is omitted when the preflight root had no usable frame, and on a
 sweep that expired before its preflight. There is no placeholder,
@@ -1582,6 +1585,12 @@ same recursive shape as an accessibility tree.
     "normalizedCenter": {
       "x": 0.5,
       "y": 0.5
+    },
+    "rootFrame": {
+      "x": 0,
+      "y": 0,
+      "w": 400,
+      "h": 800
     },
     "children": [
       {
@@ -1653,8 +1662,8 @@ DeviceTerm-owned stable-additive fields even though they appear inside the
 node.
 
 `rootFrame` is absent from the list above because it isn't a nested node field.
-It appears once, on the top-level `ax point` element and on the `ax sweep`
-root, and on no child.
+It appears once, on the top-level `ax point` element and on the `ax sweep` and
+`ax tree` roots, and on no child.
 
 On watchOS, `ax tree` can return an empty `children` array even when elements
 are visible. The object under `tree` may include a diagnostic `note` directing

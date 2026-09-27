@@ -11,8 +11,7 @@ import Testing
 // generator (`gridPoints(step:)`), the dedup key (`dedupKey(element:)`),
 // the per-cell error classifier (`classify(error:)`), and the
 // displayed-to-panel conversion (`interfaceSize(fromTree:)` +
-// `nativeSize(interface:orientation:)` +
-// `nativePixel(displayed:orientation:interface:)`) that carries the
+// `geometry(fromTree:)` + `hitTestPoint(displayed:geometry:)`) that carries the
 // daemon's normalized RPC surface into the coordinates AXPTranslator's
 // `objectAtPoint:` hit-tests. All are unit-testable without a live sim
 // because the bridge IPC is a separate concern; the live
@@ -145,19 +144,13 @@ func interfaceSizeReadsFloatingDimensions() {
 }
 
 @Test
-func interfaceSizeReportsTheTurnedInterfaceNotThePanel() {
-    // A landscape app reports a wide root frame while the panel
-    // underneath stays portrait, so this value is the interface's size
-    // and not the panel's. Anything that scales by it without asking
-    // `nativeSize` first divides each axis by the other one's length.
+func interfaceSizeReadsTheRootFrameInLandscape() {
+    // A landscape app reports a wide root frame, and that rectangle is also
+    // the space `objectAtPoint:` hit-tests in, so it is read as given.
     let landscape: [String: Any] = [
         "frame": ["x": 0, "y": 0, "w": 874, "h": 402]
     ]
     #expect(AXSweep.interfaceSize(fromTree: landscape) == CGSize(width: 874, height: 402))
-    #expect(
-        AXSweep.nativeSize(interface: CGSize(width: 874, height: 402), orientation: .landscapeLeft)
-            == CGSize(width: 402, height: 874)
-    )
 }
 
 @Test
@@ -181,29 +174,26 @@ func interfaceSizeReturnsNilOnZeroDimensions() {
     #expect(AXSweep.interfaceSize(fromTree: zeroH) == nil)
 }
 
-// MARK: - nativeSize
-
-@Test("the panel transposes in landscape and holds in portrait", arguments: [
-    (Orientation.portrait, CGSize(width: 402, height: 874)),
-    (Orientation.portraitUpsideDown, CGSize(width: 402, height: 874)),
-    (Orientation.landscapeLeft, CGSize(width: 874, height: 402)),
-    (Orientation.landscapeRight, CGSize(width: 874, height: 402))
-])
-func nativeSizeTransposesOnlyInLandscape(orientation: Orientation, interface: CGSize) {
-    // Whatever the interface reports, the panel is the same portrait
-    // rectangle. Upside-down turns the picture without turning the
-    // rectangle, which is why it groups with portrait here.
-    #expect(
-        AXSweep.nativeSize(interface: interface, orientation: orientation)
-            == CGSize(width: 402, height: 874)
-    )
+@Test
+func interfaceSizeReturnsNilOnNonFiniteDimensions() {
+    // `> 0` does not reject an infinity, and it reaches two places that
+    // cannot take one: a hit-test point multiplied by it, and the divisor
+    // published beside a normalized centre, where `JSONSerialization`
+    // raises rather than returning an error.
+    let infiniteW: [String: Any] = ["frame": ["x": 0, "y": 0, "w": Double.infinity, "h": 800]]
+    let infiniteH: [String: Any] = ["frame": ["x": 0, "y": 0, "w": 400, "h": Double.infinity]]
+    let notANumber: [String: Any] = ["frame": ["x": 0, "y": 0, "w": Double.nan, "h": 800]]
+    #expect(AXSweep.interfaceSize(fromTree: infiniteW) == nil)
+    #expect(AXSweep.interfaceSize(fromTree: infiniteH) == nil)
+    #expect(AXSweep.interfaceSize(fromTree: notANumber) == nil)
+    #expect(AXSweep.geometry(fromTree: infiniteW) == nil)
 }
 
-// MARK: - nativePixel
+// MARK: - hitTestPoint
 
 @Test
-func nativePixelScalesNormalizedToThePanelInPortrait() {
-    // Portrait is the identity rotation, so the whole conversion is
+func hitTestPointScalesNormalizedIntoTheTreesOwnSpace() {
+    // An unturned tree maps straight through: the whole conversion is
     // (normalized × size), the coordinate AXPTranslator expects.
     // Center of a watch screen → midpoints of (184, 224); top-left →
     // origin; near-edge (0.95) → just inside the half-open upper
@@ -213,31 +203,19 @@ func nativePixelScalesNormalizedToThePanelInPortrait() {
     // rounds to 174.79999… and asserting an exact 174.8 would be
     // a false-precision test, not a correctness test).
     let interface = CGSize(width: 184, height: 224)
+    let geometry = AXSweep.TreeGeometry(hitTest: interface, viewer: interface)
     #expect(
-        AXSweep.nativePixel(
-        displayed: CGPoint(x: 0.5, y: 0.5),
-        orientation: .portrait,
-        interface: interface
-    ) == CGPoint(x: 92.0, y: 112.0)
-        )
-    #expect(
-        AXSweep.nativePixel(
-        displayed: CGPoint.zero,
-        orientation: .portrait,
-        interface: interface
-    ) == CGPoint.zero
-        )
-    let near = AXSweep.nativePixel(
-        displayed: CGPoint(x: 0.95, y: 0.95),
-        orientation: .portrait,
-        interface: interface
+        AXSweep.hitTestPoint(displayed: CGPoint(x: 0.5, y: 0.5), geometry: geometry)
+            == CGPoint(x: 92.0, y: 112.0)
     )
+    #expect(AXSweep.hitTestPoint(displayed: .zero, geometry: geometry) == CGPoint.zero)
+    let near = AXSweep.hitTestPoint(displayed: CGPoint(x: 0.95, y: 0.95), geometry: geometry)
     #expect(abs(near.x - 174.8) < 0.001)
     #expect(abs(near.y - 212.8) < 0.001)
 }
 
 @Test
-func nativePixelHitsKnownWatchOSElement() {
+func hitTestPointHitsKnownWatchOSElement() {
     // Regression cover for the coord-space mismatch: on a 184×224
     // Apple Watch screen, a Text element at pixel frame
     // {x:7, y:63.5, w:78, h:11} sits within the default-grid cell
@@ -250,10 +228,9 @@ func nativePixelHitsKnownWatchOSElement() {
     // (or a misclassification of bridge coord-space contract)
     // surfaces here as a clear failure.
     let interface = CGSize(width: 184, height: 224)
-    let pixel = AXSweep.nativePixel(
+    let pixel = AXSweep.hitTestPoint(
         displayed: CGPoint(x: 0.25, y: 0.30),
-        orientation: .portrait,
-        interface: interface
+        geometry: AXSweep.TreeGeometry(hitTest: interface, viewer: interface)
     )
     let element = CGRect(x: 7, y: 63.5, width: 78, height: 11)
     #expect(
@@ -263,100 +240,102 @@ func nativePixelHitsKnownWatchOSElement() {
 }
 
 @Test
-func nativePixelHitsALandscapeElementReadOutOfTheTree() {
-    // The underlying mapping that produces `normalizedCenter`, end to end,
-    // in landscape: scale the frame's centre by the real tree root and hand
-    // that normalized point back to the query path.
-    //
-    // The frame and the root are landscape-left interface space. The
-    // element is a control near the displayed top-left. The query has
-    // to come back inside the frame, and it only does if the point is
-    // rotated *and* divided by the panel's own 402×874 rather than by
-    // the 874×402 the tree reported.
-    let interface = CGSize(width: 874, height: 402)
+func hitTestPointReturnsALandscapeElementToItsOwnFrame() {
+    // Measured on an iPad in landscape: the root frame turns with the
+    // interface and `objectAtPoint:` hit-tests in that same space, so a
+    // frame's centre normalized by the root has to come back inside that
+    // frame.
+    let root = CGSize(width: 1_210, height: 834)
     let element = CGRect(x: 232, y: 298, width: 100, height: 24)
-    let centre = CGPoint(
-        x: element.midX / interface.width,
-        y: element.midY / interface.height
-    )
-    let pixel = AXSweep.nativePixel(
+    let centre = CGPoint(x: element.midX / root.width, y: element.midY / root.height)
+    let point = AXSweep.hitTestPoint(
         displayed: centre,
-        orientation: .landscapeLeft,
-        interface: interface
+        geometry: AXSweep.TreeGeometry(hitTest: root, viewer: root)
     )
-    // The panel sees the same element transposed: its interface
-    // (x, y) is the panel's (h - y, x).
-    let onPanel = CGRect(
-        x: interface.height - element.maxY,
-        y: element.minX,
-        width: element.height,
-        height: element.width
-    )
-    #expect(
-        onPanel.contains(pixel),
-            "\(pixel) must fall inside the panel-space element \(onPanel)"
-        )
+    #expect(element.contains(point), "\(point) must fall inside \(element)")
 }
 
-// A 402×874 panel, and the interface size the accessibility tree
-// reports for it in each orientation. Shared by the two tests below so
-// the panel stays one number while the reported size turns.
-private let panelUnderTest = CGRect(x: 0, y: 0, width: 402, height: 874)
-private let portraitInterface = CGSize(width: 402, height: 874)
-private let landscapeInterface = CGSize(width: 874, height: 402)
-
-@Test("every orientation maps the displayed corner it names", arguments: [
-    (Orientation.portrait, portraitInterface, CGPoint(x: 40.2, y: 87.4)),
-    (Orientation.landscapeLeft, landscapeInterface, CGPoint(x: 361.8, y: 87.4)),
-    (Orientation.portraitUpsideDown, portraitInterface, CGPoint(x: 361.8, y: 786.6)),
-    (Orientation.landscapeRight, landscapeInterface, CGPoint(x: 40.2, y: 786.6))
-])
-func nativePixelRotatesWithTheDevice(
-    orientation: Orientation,
-    interface: CGSize,
-    expected: CGPoint
-) {
-    // One displayed point, a tenth in from the top-left of the picture,
-    // through each orientation. The panel is 402×874 throughout; what
-    // changes is which of its corners the picture's top-left sits in.
-    let pixel = AXSweep.nativePixel(
-        displayed: CGPoint(x: 0.1, y: 0.1),
-        orientation: orientation,
-        interface: interface
+@Test
+func hitTestPointTurnsAFoldableInnerPanelIntoItsHitSpace() {
+    // Measured on an unfolded iPhone Duo: the root reports 669x951 while the
+    // children lay out 951x669, and `Button|About` centred at (691, 373) in
+    // that child space hit-tests back to itself only at (373, 951 - 691).
+    let geometry = AXSweep.TreeGeometry(
+        hitTest: CGSize(width: 669, height: 951),
+        viewer: CGSize(width: 951, height: 669)
     )
-    #expect(abs(pixel.x - expected.x) < 0.001, "x: got \(pixel.x), want \(expected.x)")
-    #expect(abs(pixel.y - expected.y) < 0.001, "y: got \(pixel.y), want \(expected.y)")
+    let about = CGPoint(x: 691, y: 373)
+    let point = AXSweep.hitTestPoint(
+        displayed: CGPoint(x: about.x / 951, y: about.y / 669),
+        geometry: geometry
+    )
+    #expect(abs(point.x - about.y) < 0.001)
+    #expect(abs(point.y - (951 - about.x)) < 0.001)
 }
 
-@Test("a rotated edge stays on the panel", arguments: [
-    (Orientation.portrait, portraitInterface),
-    (Orientation.portraitUpsideDown, portraitInterface),
-    (Orientation.landscapeLeft, landscapeInterface),
-    (Orientation.landscapeRight, landscapeInterface)
+@Test
+func geometryTellsATurnedTreeFromAPartlyFilledOne() {
+    // Turned: the children overflow the root's width and fit its height.
+    let turned: [String: Any] = [
+        "frame": ["x": 0, "y": 0, "w": 669, "h": 951],
+        "children": [["frame": ["x": 0, "y": 0, "w": 951, "h": 669]]]
+    ]
+    #expect(AXSweep.geometry(fromTree: turned)?.viewer == CGSize(width: 951, height: 669))
+    #expect(AXSweep.geometry(fromTree: turned)?.isTurned == true)
+
+    // Content that scrolls past the visible height is still turned: only the
+    // width is matched, because a long list overruns the other axis.
+    let scrolled: [String: Any] = [
+        "frame": ["x": 0, "y": 0, "w": 669, "h": 951],
+        "children": [["frame": ["x": 0, "y": 0, "w": 951, "h": 1_400]]]
+    ]
+    #expect(AXSweep.geometry(fromTree: scrolled)?.isTurned == true)
+
+    // Wider than the root but not matching its height: a sideways-scrolling
+    // view, not a turn.
+    let sideways: [String: Any] = [
+        "frame": ["x": 0, "y": 0, "w": 669, "h": 951],
+        "children": [["frame": ["x": 0, "y": 0, "w": 1_500, "h": 400]]]
+    ]
+    #expect(AXSweep.geometry(fromTree: sideways)?.isTurned == false)
+
+    // A dialog over a full-screen app fills less than the root, which is not
+    // a quarter turn and must not be read as one.
+    let partial: [String: Any] = [
+        "frame": ["x": 0, "y": 0, "w": 669, "h": 951],
+        "children": [["frame": ["x": 100, "y": 400, "w": 300, "h": 200]]]
+    ]
+    #expect(AXSweep.geometry(fromTree: partial)?.isTurned == false)
+    #expect(AXSweep.geometry(fromTree: partial)?.viewer == CGSize(width: 669, height: 951))
+}
+
+@Test("a displayed edge stays inside the hit-test rectangle", arguments: [
+    AXSweep.TreeGeometry(
+        hitTest: CGSize(width: 402, height: 874),
+        viewer: CGSize(width: 402, height: 874)
+    ),
+    AXSweep.TreeGeometry(
+        hitTest: CGSize(width: 669, height: 951),
+        viewer: CGSize(width: 951, height: 669)
+    )
 ])
-func nativePixelKeepsTheRotatedEdgeAddressable(orientation: Orientation, interface: CGSize) {
-    // Every orientation but portrait sends some displayed boundary the
-    // grid emits to exactly 1.0, one past the last coordinate a frame
-    // contains: the top edge (y = 0) under landscape-left, the left edge
-    // (x = 0) under landscape-right, both upside-down. Unclamped, that
-    // whole line of the sweep hits nothing.
-    let boundary = [
+func hitTestPointKeepsTheFarEdgeAddressable(geometry: AXSweep.TreeGeometry) {
+    // A caller may supply displayed 1.0, and turning a sampled zero edge can
+    // reach the far hit-test boundary too. That boundary is one past the last
+    // coordinate any frame contains, so unclamped it would hit nothing.
+    let rectangle = CGRect(origin: .zero, size: geometry.hitTest)
+    for displayed in [
         CGPoint.zero,
-        CGPoint(x: 0.5, y: 0),      // mid displayed top edge
-        CGPoint(x: 0, y: 0.5),      // mid displayed left edge
+        CGPoint(x: 0.5, y: 0),
+        CGPoint(x: 0, y: 0.5),
         CGPoint(x: 1, y: 0),
         CGPoint(x: 1, y: 1)
-    ]
-    for displayed in boundary {
-        let pixel = AXSweep.nativePixel(
-            displayed: displayed,
-            orientation: orientation,
-            interface: interface
-        )
+    ] {
+        let point = AXSweep.hitTestPoint(displayed: displayed, geometry: geometry)
         #expect(
-            panelUnderTest.contains(pixel),
-                "\(orientation) sent displayed \(displayed) to \(pixel), off the panel"
-            )
+            rectangle.contains(point),
+            "displayed \(displayed) landed at \(point), outside \(rectangle)"
+        )
     }
 }
 

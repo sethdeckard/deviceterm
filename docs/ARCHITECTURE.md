@@ -2217,9 +2217,9 @@ keeps the result only when both coordinates fall inside the inclusive 0 through
 it to annotate the point result or unique sweep children. The synthetic sweep
 root is not annotated with a `normalizedCenter`.
 
-Those two methods also publish the preflight frame itself, as `rootFrame`: a
-`{x, y, w, h}` object in displayed points, on the point element and on the
-sweep root.
+All three methods also publish the frame the centres were divided by, as
+`rootFrame`: a `{x, y, w, h}` object in displayed points, on the point
+element, on the sweep root, and on the tree root.
 
 Multiplying a `normalizedCenter` by its `w` and `h` recovers the displayed
 centre. A caller that needs the screen scale can take it from here rather than
@@ -2242,9 +2242,13 @@ height are usable while its origin is not can still produce centres, since the
 scale never reads the root's origin, and still omits `rootFrame`. The caller
 loses a convenience rather than receiving a repaired number.
 
-`pane.ax.tree` publishes no `rootFrame`, because its own root frame is the
-scale. The daemon strips the key from every node it annotates, so a colliding
-framework value never reaches a caller.
+`pane.ax.tree` carries `rootFrame` beside its root's own `frame` rather than
+instead of it. The two hold the same numbers wherever a tree lays its children
+out in the rectangle its root reports, which is every device except a
+foldable's inner panel. There the root reports a portrait rectangle while the
+children lay out in the quarter turn of it, and only the second is the
+divisor. The daemon still strips the key from every node it annotates, so a
+colliding framework value never reaches a caller.
 
 #### `pane.ax.tree`
 

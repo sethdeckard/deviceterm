@@ -81,7 +81,7 @@ func frontmostTreeReturnsRecursiveDict() throws {
 @Test
 func sweepYieldsAtLeastOneElementOnBootedSim() throws {
     // The watchOS workaround. Drives the bridge call pattern
-    // the daemon uses (`AXSweep.gridPoints` + `nativePixel` +
+    // the daemon uses (`AXSweep.gridPoints` + `hitTestPoint` +
     // `elementAtPoint`) and confirms a freshly-booted sim yields
     // at least one element regardless of family. The bridge's
     // `accessibilityChildren` is empty on watchOS, but
@@ -91,7 +91,7 @@ func sweepYieldsAtLeastOneElementOnBootedSim() throws {
     // returns empty on every screen.
     //
     // The track boots its own sim for a clean slate, so the device
-    // is portrait and `nativePixel` is the identity beyond scaling.
+    // is portrait, where the tree's two spaces coincide.
     // Rotated mapping is covered in `AXSweepTests`, which needs no
     // sim.
     try #require(
@@ -112,10 +112,9 @@ func sweepYieldsAtLeastOneElementOnBootedSim() throws {
     var seen = Set<String>()
     var unique: [[String: Any]] = []
     for displayed in AXSweep.gridPoints(step: AXSweep.defaultStep) {
-        let pixel = AXSweep.nativePixel(
+        let pixel = AXSweep.hitTestPoint(
             displayed: displayed,
-            orientation: .portrait,
-            interface: interface
+            geometry: AXSweep.TreeGeometry(hitTest: interface, viewer: interface)
         )
         guard let element = try? client.elementAtPoint(pixel) else { continue }
         let key = AXSweep.dedupKey(element: element)
@@ -146,10 +145,9 @@ func elementAtPointReturnsFlatDict() throws {
     // does it. The track's own sim is portrait.
     let rootTree = try client.frontmostTree()
     let interface = try #require(AXSweep.interfaceSize(fromTree: rootTree))
-    let center = AXSweep.nativePixel(
+    let center = AXSweep.hitTestPoint(
         displayed: CGPoint(x: 0.5, y: 0.5),
-        orientation: .portrait,
-        interface: interface
+        geometry: AXSweep.TreeGeometry(hitTest: interface, viewer: interface)
     )
     let element = try client.elementAtPoint(center)
     // Flat variant: same keys as the root of a tree, but no
@@ -188,12 +186,55 @@ func twoClientsCoexistWithoutClobberingEachOther() throws {
     #expect(treeB["role"] is String)
 }
 
+/// Run `body` with the device unfolded, restoring the hinge before returning
+/// however `body` ended.
+///
+/// Deliberately not a `defer`: `defer` cannot await, so cleanup started there
+/// runs unstructured and the serialized runner can begin the next test while
+/// the shared simulator is still moving, which is a posture a display, AX or
+/// hinge read would catch mid-transition. A restore that fails is recorded
+/// rather than dropped, because it hands every test after this one a device
+/// in the wrong posture, and it never replaces the original failure.
+///
+/// Both the fold and the wait after it sit inside the protected region: a
+/// `Task.sleep` throws the instant its task is cancelled, so a wait left
+/// outside would hand a torn-down run back with the hinge still open.
+private func withDeviceUnfolded<T>(
+    _ backend: any DeviceBackend,
+    settling: UInt64 = 3_000_000_000,
+    _ body: () async throws -> T
+) async throws -> T {
+    let outcome: Result<T, any Error>
+    do {
+        try await backend.fold(toDegrees: 180, generation: backend.currentInputGeneration())
+        try await Task.sleep(nanoseconds: settling)
+        outcome = .success(try await body())
+    } catch {
+        outcome = .failure(error)
+    }
+    // Unstructured, and awaited. Unstructured because such a task does not
+    // inherit the caller's cancellation, so the hinge still goes back when
+    // the run is torn down mid-test, where an inline `Task.sleep` would
+    // throw before it could. Awaited because the device is shared: nothing
+    // after this may start while it is still moving.
+    await Task {
+        do {
+            try await backend.fold(toDegrees: 0, generation: backend.currentInputGeneration())
+            try await Task.sleep(nanoseconds: settling)
+        } catch {
+            Issue.record("the device was left unfolded for the tests after this one: \(error)")
+        }
+    }.value
+    return try outcome.get()
+}
+
 /// Every positive-size frame in the tree, containers included, as candidate
 /// hit-test locations. Taking them from the tree rather than naming a fixed
 /// point keeps the probe on coordinates the tree itself reports.
 private func framedNodes(_ node: [String: Any], into out: inout [(String, CGRect)]) {
     let role = node["role"] as? String ?? "?"
     let label = node["label"] as? String ?? node["identifier"] as? String ?? ""
+    let children = node["children"] as? [[String: Any]] ?? []
     if let frame = node["frame"] as? [String: Any],
         let originX = frame["x"] as? Double, let originY = frame["y"] as? Double,
         let width = frame["w"] as? Double, let height = frame["h"] as? Double,
@@ -203,7 +244,7 @@ private func framedNodes(_ node: [String: Any], into out: inout [(String, CGRect
             CGRect(x: originX, y: originY, width: width, height: height)
         ))
     }
-    for child in node["children"] as? [[String: Any]] ?? [] { framedNodes(child, into: &out) }
+    for child in children { framedNodes(child, into: &out) }
 }
 
 /// Try up to 15 pairs of reads a second apart for two whose role, label and
@@ -225,6 +266,170 @@ private func settledTree(_ accessibility: SimAccessibility) -> [String: Any]? {
         if signature(first) == signature(second) { return second }
     }
     return nil
+}
+
+/// Whether the booted device turns its interface when rotated. iPhone keeps
+/// Settings portrait however the device is held, so only a pad exercises the
+/// landscape geometry.
+private func bootedDeviceRotatesItsInterface() -> Bool {
+    let identifier = (try? SimDeviceHandle.singleBootedDevice())?
+        .deviceTypeIdentifier ?? ""
+    return DeviceFamilyClassifier.classify(identifier) == .pad
+}
+
+@Test(.enabled(if: bootedDeviceRotatesItsInterface()))
+func aDisplayedPointReachesTheElementUnderItInLandscape() throws {
+    // In landscape the displayed centre must map to the interface centre and
+    // resolve the same element. That is true of any rotation and needs no
+    // device knowledge to assert.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    try waitForAXServer(udid: booted.udid)
+    let purple = try SimPurpleHID.client(forUDID: booted.udid)
+    try purple.rotate(to: Orientation.landscapeLeft.bridgeValue)
+    // Put the device back before returning, and wait for it: this is the
+    // shared simulator, and a sibling test starting mid-rotation reads a
+    // screen that is neither orientation.
+    defer {
+        try? purple.rotate(to: Orientation.portrait.bridgeValue)
+        Thread.sleep(forTimeInterval: 3.0)
+    }
+    Thread.sleep(forTimeInterval: 3.0)
+
+    let accessibility = try SimAccessibility.client(forUDID: booted.udid)
+    let tree = try #require(
+        settledTree(accessibility),
+        "the tree never stopped changing, so no hit-test could be judged"
+    )
+    let geometry = try #require(AXSweep.geometry(fromTree: tree))
+    let viaCentre = AXSweep.hitTestPoint(
+        displayed: CGPoint(x: 0.5, y: 0.5),
+        geometry: geometry
+    )
+    let middle = CGPoint(x: geometry.hitTest.width / 2, y: geometry.hitTest.height / 2)
+    #expect(
+        abs(viaCentre.x - middle.x) < 1 && abs(viaCentre.y - middle.y) < 1,
+        "displayed centre mapped to \(viaCentre), want \(middle)"
+    )
+    let atCentre = try #require(
+        try? accessibility.elementAtPoint(viaCentre),
+        "nothing under the displayed centre in landscape"
+    )
+    let atMiddle = try? accessibility.elementAtPoint(middle)
+    #expect(
+        AXSweep.dedupKey(element: atCentre) == AXSweep.dedupKey(element: atMiddle ?? [:]),
+        "the displayed centre and the interface centre found different elements"
+    )
+}
+
+/// Whether the booted device vends a second panel.
+private func bootedDeviceIsTwoPanel() -> Bool {
+    guard let booted = try? SimDeviceHandle.singleBootedDevice() else { return false }
+    return SimDisplayHandle.deviceHasMultiplePanels(udid: booted.udid)
+}
+
+@Test(.enabled(if: bootedDeviceIsTwoPanel()))
+func everyElementOfATurnedPanelIsReachableByPoint() async throws {
+    // A foldable's inner panel reports its children turned a quarter from the
+    // rectangle it hit-tests in. Each displayed probe must return an element
+    // whose frame contains that probe, including probes past the root's
+    // reported width.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    try waitForAXServer(udid: booted.udid)
+
+    // Unfold, rather than read whatever posture the device is in. The track
+    // boots from a clean slate at 0 degrees, where the two spaces coincide,
+    // so a test that took the posture as it found it would only ever exercise
+    // the turned case by accident.
+    let backend = try SimBackendAcquirer.acquireFromBridge(udid: booted.udid).backend
+    try await withDeviceUnfolded(backend) {
+        // Put a turned app on screen. `frontmostTree` takes no display, and the
+        // home screen is not laid out turned even on the inner panel, so whatever
+        // happened to be frontmost would decide whether this case is present.
+        let launch = Process()
+        launch.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        launch.arguments = ["simctl", "launch", booted.udid, "com.apple.Preferences"]
+        launch.standardOutput = FileHandle.nullDevice
+        launch.standardError = FileHandle.nullDevice
+        try launch.run()
+        launch.waitUntilExit()
+        try await Task.sleep(nanoseconds: 4_000_000_000)
+
+        let display = try SimDisplayHandle.handle(forUDID: booted.udid)
+        try display.start { _ in }
+        defer { display.stop() }
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let accessibility = try SimAccessibility.client(forUDID: booted.udid)
+        accessibility.displayID = display.boundScreenID
+        let tree = try #require(
+            settledTree(accessibility),
+            "the tree never stopped changing, so no hit-test could be judged"
+        )
+        let geometry = try #require(AXSweep.geometry(fromTree: tree))
+        // On a folded device the two spaces coincide and every assertion below
+        // would hold without the transform ever running, so a run that did not
+        // reach the turned panel is a failure rather than a pass.
+        try #require(geometry.isTurned, "the inner panel never came up turned")
+        // Ask in displayed space and check the answer covers where the question
+        // pointed, rather than probing element centres and demanding identity
+        // back. Identity cannot be judged here: the serialized tree is not always
+        // complete, so a container arrives looking like a leaf and correctly
+        // answers its own centre with a child. Containment is the property the
+        // transform actually owes, and it holds for a container and a leaf alike.
+        let displayedProbes: [(Double, Double)] = [
+            (0.15, 0.30), (0.35, 0.50), (0.55, 0.40), (0.75, 0.60), (0.90, 0.50)
+        ]
+        // Two of those sit past the root's own width once scaled into the viewer,
+        // which is the strip that was unreachable at any point before.
+        try #require(displayedProbes.contains { $0.0 * geometry.viewer.width > geometry.hitTest.width })
+
+        var wrong: [String] = []
+        for (displayedX, displayedY) in displayedProbes {
+            let displayed = CGPoint(x: displayedX, y: displayedY)
+            let point = AXSweep.hitTestPoint(displayed: displayed, geometry: geometry)
+            let expected = CGPoint(
+                x: displayedX * geometry.viewer.width,
+                y: displayedY * geometry.viewer.height
+            )
+            // Both numbers travel with a failure: this is read against a live
+            // screen nobody can re-inspect after the run, and they are what
+            // separates a bad transform from an empty patch of screen.
+            let probed = "\(displayed)->\(point) expecting to cover \(expected)"
+            guard let found = try? accessibility.elementAtPoint(point) else {
+                wrong.append("\(probed): nothing")
+                continue
+            }
+            let box = found["frame"] as? [String: Any] ?? [:]
+            let rect = CGRect(
+                x: box["x"] as? Double ?? .nan,
+                y: box["y"] as? Double ?? .nan,
+                width: box["w"] as? Double ?? .nan,
+                height: box["h"] as? Double ?? .nan
+            )
+            let role = found["role"] as? String ?? "?"
+            let label = found["label"] as? String ?? found["identifier"] as? String ?? ""
+            guard !rect.insetBy(dx: -1, dy: -1).contains(expected) else { continue }
+            wrong.append("\(probed): got \(role)|\(label)@\(rect)")
+        }
+        #expect(
+            wrong.isEmpty,
+            "viewer=\(geometry.viewer) hit=\(geometry.hitTest); \(wrong.joined(separator: "; "))"
+        )
+    }
 }
 
 @Test

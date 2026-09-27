@@ -144,14 +144,16 @@ public enum AgentsText {
           the real preflight tree for their scale. The synthetic
           `AXSweepRoot` remains a 0,0,1,1 placeholder and has no
           `normalizedCenter`.
-        - When their preflight yields a usable screen frame,
-          `ax point` and `ax sweep` report it as `rootFrame`, in
+        - When a usable screen frame is available, `ax point`,
+          `ax sweep` and `ax tree` report it as `rootFrame`, in
           displayed points. Multiply a `normalizedCenter` by its
           `w` and `h` for point coordinates without a second
           `ax tree` call. It's absent when that frame was
           unusable, and on a sweep whose budget went before the
-          preflight ran. `ax tree` publishes no `rootFrame`,
-          because its own root frame is the scale.
+          preflight ran. On a tree it sits beside the root's own
+          `frame`, and differs from it only on a foldable's
+          inner panel, where the root reports a portrait
+          rectangle and its children lay out sideways.
 
       all input commands (tap, swipe, long-press, pinch, button,
       key, text, rotate, crown)

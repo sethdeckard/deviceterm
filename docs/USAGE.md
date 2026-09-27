@@ -787,13 +787,16 @@ response.
 for the sweep's preflight. The synthetic sweep root remains a normalized
 0,0,1,1 placeholder and has no `normalizedCenter`.
 
-`ax point` reports the measured screen at `.element.rootFrame`; `ax sweep`
-reports it at `.tree.rootFrame`. It is not a top-level sibling of `element` or
-`tree`. Multiply a `normalizedCenter` by its `w` and `h` for displayed points,
-instead of running a second `ax tree` for the size.
+`ax point` reports the measured screen at `.element.rootFrame`; `ax sweep` and
+`ax tree` report it at `.tree.rootFrame`. It is not a top-level sibling of
+`element` or `tree`. Multiply a `normalizedCenter` by its `w` and `h` for
+displayed points, instead of running a second `ax tree` for the size.
 
-It's omitted when the daemon couldn't measure the screen. `ax tree` never
-carries it, since its own root frame is the scale.
+Take those numbers from `rootFrame` rather than from the tree root's own
+`frame`. They agree everywhere except a foldable's inner panel, which reports a
+portrait rectangle while laying its children out sideways.
+
+It's omitted when the daemon couldn't measure the screen.
 
 A completed sweep makes `ceil(1/step)^2` point queries: 400 at the 0.05
 default, 2500 at the 0.02 floor. Steps outside `[0.02, 0.5]` are clamped

@@ -8,13 +8,32 @@ import Foundation
 /// Pure math behind `pane.ax.point` and `pane.ax.sweep`: the grid the
 /// sweep walks, the key that collapses it to unique elements, the
 /// per-cell error classifier, and the displayed-to-native coordinate
-/// conversion both verbs hand the bridge. `pane.ax.tree` addresses no
-/// point and uses none of it.
+/// conversion both verbs hand the bridge. `pane.ax.tree` uses the geometry
+/// helpers too, for normalization and for its completeness probe.
 ///
 /// Kept out of `PaneCoordinator` so grid density, dedup uniqueness, and
 /// coordinate mapping are testable without a live sim. The bridge IPC
 /// and the JSON wrapping live in `PaneAccessibility`.
 enum AXSweep {
+    /// The two coordinate spaces one accessibility tree can occupy.
+    ///
+    /// `objectAtPoint:` hit-tests against the root element's own frame, and on
+    /// nearly every device the children lay out inside exactly that rectangle,
+    /// so one space serves both. A foldable's inner panel is the exception
+    /// measured so far: its root reports the panel's portrait size while its
+    /// children lay out turned 90° from it, which is also the way round the
+    /// pane draws them. Keeping the two apart is what lets a point a viewer
+    /// picked reach the element under it.
+    struct TreeGeometry: Equatable {
+        /// The root frame: where `objectAtPoint:` expects to be asked.
+        let hitTest: CGSize
+        /// Where the children lay out, which is what the pane shows.
+        let viewer: CGSize
+
+        /// Whether the two disagree by a quarter turn.
+        var isTurned: Bool { viewer != hitTest }
+    }
+
     /// What to do with one `elementAtPoint` throw inside the sweep
     /// loop. Routine misses (sparse AX coverage, blank canvas
     /// regions) skip and the loop continues; anything else is a
@@ -97,66 +116,93 @@ enum AXSweep {
     /// `frontmostTree()` response. That app's root element is fullscreen
     /// on iOS and watchOS, so its `frame.{w, h}` spans the display.
     ///
-    /// This is the size of the interface as presented, not the display
-    /// panel's own: in landscape the two are transposed, which is why
-    /// `nativePixel(displayed:orientation:interface:)` takes an
-    /// orientation as well. Returns nil when the tree carries no frame
-    /// or a zero-sized one, leaving the caller to pick a degenerate
-    /// stand-in rather than divide by zero.
+    /// This is also the space `objectAtPoint:` hit-tests in, which is why
+    /// `TreeGeometry` takes it as the hit-test rectangle. Returns nil when the
+    /// tree carries no frame or a zero-sized one, leaving the caller to pick a
+    /// degenerate stand-in rather than divide by zero.
+    ///
+    /// A non-finite dimension is rejected here too, and `> 0` does not cover
+    /// it: an infinity passes that test, and every consumer then carries it
+    /// somewhere it does real damage. Multiplied into a hit-test point it
+    /// gives a coordinate no display holds; published as a divisor it reaches
+    /// `JSONSerialization`, which raises an Objective-C exception no Swift
+    /// `catch` sees.
     static func interfaceSize(fromTree tree: [String: Any]) -> CGSize? {
         guard let frame = tree["frame"] as? [String: Any] else { return nil }
         let width = (frame["w"] as? NSNumber)?.doubleValue ?? 0
         let height = (frame["h"] as? NSNumber)?.doubleValue ?? 0
-        guard width > 0, height > 0 else { return nil }
+        guard width > 0, height > 0, width.isFinite, height.isFinite else { return nil }
         return CGSize(width: width, height: height)
     }
 
-    /// The display panel's own size, given the interface size the
-    /// accessibility tree reported and the orientation the pane is
-    /// presenting at.
+    /// Read both spaces out of a serialized `frontmostTree()` response.
     ///
-    /// CoreSimulator holds the panel at the device's portrait
-    /// dimensions however the device is turned, while the accessibility
-    /// tree measures the app's interface, which turns with it. The two
-    /// agree in portrait and transpose in landscape.
-    static func nativeSize(interface size: CGSize, orientation: Orientation) -> CGSize {
-        switch orientation {
-        case .landscapeLeft, .landscapeRight:
-            return CGSize(width: size.height, height: size.width)
-
-        case .portrait, .portraitUpsideDown:
-            return size
-        }
+    /// Treat the tree as turned when the descendants' right edge runs past the
+    /// root's width and lands within a point of the root's height. That is a
+    /// heuristic, not a guarantee: content falling short of the root, a dialog
+    /// over a full-screen app, reads as unturned, and so does content merely
+    /// wider than the root, a view that scrolls sideways.
+    static func geometry(fromTree tree: [String: Any]) -> TreeGeometry? {
+        guard let root = interfaceSize(fromTree: tree) else { return nil }
+        let extent = contentExtent(ofChildrenIn: tree)
+        // Descendant height is deliberately not checked: content scrolls, so
+        // it overruns the visible axis on any list long enough to scroll.
+        let turned = extent.width > root.width
+            && abs(extent.width - root.height) <= 1
+        return TreeGeometry(
+            hitTest: root,
+            viewer: turned ? CGSize(width: root.height, height: root.width) : root
+        )
     }
 
-    /// Convert a normalized point in displayed space to the panel
-    /// coordinate AXPTranslator's `objectAtPoint:` hit-tests against.
+    /// The furthest any descendant frame reaches. The root is excluded: it is
+    /// the rectangle being compared against.
+    private static func contentExtent(ofChildrenIn tree: [String: Any]) -> CGSize {
+        var maximum = CGSize.zero
+        func walk(_ node: [String: Any], isRoot: Bool) {
+            if !isRoot, let frame = node["frame"] as? [String: Any] {
+                let originX = (frame["x"] as? NSNumber)?.doubleValue ?? 0
+                let originY = (frame["y"] as? NSNumber)?.doubleValue ?? 0
+                let width = (frame["w"] as? NSNumber)?.doubleValue ?? 0
+                let height = (frame["h"] as? NSNumber)?.doubleValue ?? 0
+                maximum.width = max(maximum.width, originX + width)
+                maximum.height = max(maximum.height, originY + height)
+            }
+            for child in node["children"] as? [[String: Any]] ?? [] {
+                walk(child, isRoot: false)
+            }
+        }
+        walk(tree, isRoot: true)
+        return maximum
+    }
+
+    /// Convert a normalized point in displayed space to the coordinate
+    /// `objectAtPoint:` hit-tests against.
     ///
-    /// Rotate the point into the panel's frame, then scale by the
-    /// panel's size rather than by the interface size the tree reported.
-    /// Scaling a rotated point by the interface size divides each axis by
-    /// the other axis's length, so in landscape a legal coordinate
-    /// resolves the wrong element or none at all.
+    /// Accessibility is asked in the tree's own space, which turns with the
+    /// interface, so a displayed point needs no rotation into the panel. When
+    /// the viewer and hit-test sizes agree it scales straight into the root
+    /// rectangle; when they differ by a quarter turn it is placed in the
+    /// viewer's space first and then turned into the hit-test one. Input verbs
+    /// apply their surface mapping separately, through
+    /// `Orientation.surfacePoint`.
     ///
-    /// The result is clamped to the panel. Every orientation but portrait
-    /// sends some displayed boundary to exactly `1.0`, one past the last
-    /// coordinate a frame contains: the top edge under landscape-left,
-    /// the left edge under landscape-right, both upside-down. Those are
-    /// coordinates the grid emits and a caller can legitimately ask for,
-    /// so without the clamp they would hit nothing.
-    static func nativePixel(
-        displayed point: CGPoint,
-        orientation: Orientation,
-        interface size: CGSize
-    ) -> CGPoint {
-        let native = nativeSize(interface: size, orientation: orientation)
-        let rotated = orientation.surfacePoint(
-            displayedX: Double(point.x),
-            displayedY: Double(point.y)
+    /// The result is clamped. A caller may legitimately supply `1.0`, and
+    /// turning a sampled zero edge can map it to the far hit-test boundary,
+    /// which sits one past the last coordinate any frame contains.
+    static func hitTestPoint(displayed point: CGPoint, geometry: TreeGeometry) -> CGPoint {
+        let viewer = geometry.viewer
+        let hit = geometry.hitTest
+        let placed = CGPoint(
+            x: Double(point.x) * Double(viewer.width),
+            y: Double(point.y) * Double(viewer.height)
         )
+        let mapped = geometry.isTurned
+            ? CGPoint(x: placed.y, y: Double(viewer.width) - placed.x)
+            : placed
         return CGPoint(
-            x: clampedToPanel(rotated.x * Double(native.width), extent: Double(native.width)),
-            y: clampedToPanel(rotated.y * Double(native.height), extent: Double(native.height))
+            x: clampedToPanel(Double(mapped.x), extent: Double(hit.width)),
+            y: clampedToPanel(Double(mapped.y), extent: Double(hit.height))
         )
     }
 

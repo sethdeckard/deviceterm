@@ -42,10 +42,9 @@ private func bootedDeviceHasSettingsList() -> Bool {
 /// are not enough, because the bridge omits an empty identifier and two
 /// static-text rows then read the same.
 private func centerSignature(_ accessibility: SimAccessibility, interface: CGSize) -> String {
-    let center = AXSweep.nativePixel(
+    let center = AXSweep.hitTestPoint(
         displayed: CGPoint(x: 0.5, y: 0.5),
-        orientation: .portrait,
-        interface: interface
+        geometry: AXSweep.TreeGeometry(hitTest: interface, viewer: interface)
     )
     guard let element = try? accessibility.elementAtPoint(center) else { return "<none>" }
     return AXSweep.dedupKey(element: element)
