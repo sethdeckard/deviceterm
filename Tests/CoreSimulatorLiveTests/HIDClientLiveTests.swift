@@ -90,13 +90,16 @@ func eachHardwareButtonPressesCleanly() throws {
 }
 
 // The Digital Crown is watchOS-only and its SimulatorKit builder is
-// optional (absent on older Xcode). The two crown tests below are gated
-// on its availability AND on the booted device's family via
+// optional (absent on older Xcode). The crown test below is gated on its
+// availability AND on the booted device being a watch via
 // `.enabled(if:)`, which *skips* (a `#require` would *fail*). So:
-//   - `make test-live` (default iPhone) runs only the non-watch guard;
-//   - `DEVICETERM_LIVE_DEVICE_FAMILY=watch make test-live` runs only the
-//     watch test;
-//   - a host whose SimulatorKit lacks the builder skips both, instead of
+//   - `DEVICETERM_LIVE_DEVICE_FAMILY=watch make test-live` runs it;
+//   - `make test-live` (default iPhone) skips it, and the non-watch
+//     refusal is checked at the coordinator in
+//     `CrownCapabilityLiveTests` instead. No test sends a crown event to
+//     a non-watch through the bridge: after one, the next HID client
+//     built in the process can't connect.
+//   - a host whose SimulatorKit lacks the builder skips it, instead of
 //     failing the whole live track.
 private func crownBuilderAvailable() -> Bool {
     SimHIDClient.isDigitalCrownAvailable()
@@ -121,21 +124,6 @@ func crownRotationScrollsCleanlyOnWatch() throws {
     // follow-up touch still lands).
     try client.rotateCrown(delta: 30)
     try client.rotateCrown(delta: -30)
-    let center = CGPoint(x: 0.5, y: 0.5)
-    try client.tapDown(at: center)
-    try client.tapUp(at: center)
-}
-
-@Test(.enabled(if: crownBuilderAvailable() && !bootedDeviceIsWatch()))
-func crownRotationIsGracefulNoOpOnNonWatch() throws {
-    let booted = try #require(
-        try? SimDeviceHandle.singleBootedDevice(),
-        "no booted sim — run via `make test-live`"
-    )
-    let client = try SimHIDClient.client(forUDID: booted.udid)
-    // A non-watch has no crown; the send must be a graceful no-op: not
-    // throw, and not wedge the HID port (the Siri-style regression guard).
-    try client.rotateCrown(delta: 30)
     let center = CGPoint(x: 0.5, y: 0.5)
     try client.tapDown(at: center)
     try client.tapUp(at: center)

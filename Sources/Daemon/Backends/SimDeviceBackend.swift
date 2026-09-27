@@ -110,6 +110,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     init(
         udid: String,
+        family: DeviceFamily,
         displayHandle: SimDisplayHandle,
         hidClient: SimHIDClient,
         purpleClient: SimPurpleHID
@@ -117,7 +118,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.udid = udid
         self.hidClient = hidClient
         self.purpleClient = purpleClient
-        var capabilities = DeviceBackendCapabilities.simulator
+        var capabilities = DeviceBackendCapabilities.simulator(family: family)
         capabilities.fold = SimDisplayHandle.deviceHasMultiplePanels(udid: udid)
         self.capabilities = capabilities
         self.foldHelper = FoldHelperBuilder()

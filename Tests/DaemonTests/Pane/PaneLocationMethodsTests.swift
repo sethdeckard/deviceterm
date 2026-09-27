@@ -20,7 +20,7 @@ import Testing
 /// Distinct from `MockDeviceBackend`, which deliberately takes the
 /// protocol's throwing defaults to model an unwired backend.
 private final class LocationMockBackend: DeviceBackend, @unchecked Sendable {
-    let capabilities: DeviceBackendCapabilities = .simulator
+    let capabilities: DeviceBackendCapabilities = .simulator(family: .phone)
     private(set) var coordinates: [(latitude: Double, longitude: Double)] = []
     private(set) var scenarios: [String] = []
     private(set) var routes: [RouteSpec] = []
@@ -503,7 +503,7 @@ private actor LocationGate {
 }
 
 private final class ParkingLocationBackend: DeviceBackend, @unchecked Sendable {
-    let capabilities: DeviceBackendCapabilities = .simulator
+    let capabilities: DeviceBackendCapabilities = .simulator(family: .phone)
     private let gate: LocationGate
     /// When set, scenario *enumeration* parks on this instead of
     /// returning, so a test can hold a `locationState` read mid-flight.

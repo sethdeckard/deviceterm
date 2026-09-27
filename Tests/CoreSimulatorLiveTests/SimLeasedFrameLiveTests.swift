@@ -22,6 +22,7 @@ private func bootedBackend() throws -> SimDeviceBackend {
     )
     return SimDeviceBackend(
         udid: booted.udid,
+        family: DeviceFamilyClassifier.classify(booted.deviceTypeIdentifier),
         displayHandle: try SimDisplayHandle.handle(forUDID: booted.udid),
         hidClient: try SimHIDClient.client(forUDID: booted.udid),
         purpleClient: try SimPurpleHID.client(forUDID: booted.udid)

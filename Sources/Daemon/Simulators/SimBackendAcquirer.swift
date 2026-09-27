@@ -154,11 +154,9 @@ actor SimBackendAcquirer {
     /// failure) surfaces before the pane is recorded.
     static func acquireFromBridge(udid normalized: String) throws -> Acquired {
         let handle = try? SimDeviceHandle.handle(forUDID: normalized)
-        let family = (
-            handle
+        let family = handle
             .map { DeviceFamilyClassifier.classify($0.deviceTypeIdentifier) }
             ?? .unknown
-            ).rawValue
         let deviceType: String? = handle.flatMap {
             $0.deviceTypeName.isEmpty ? nil : $0.deviceTypeName
         }
@@ -192,11 +190,12 @@ actor SimBackendAcquirer {
         }
         let backend = SimDeviceBackend(
             udid: normalized,
+            family: family,
             displayHandle: displayHandle,
             hidClient: hidClient,
             purpleClient: purpleClient
         )
-        return Acquired(backend: backend, family: family, deviceType: deviceType)
+        return Acquired(backend: backend, family: family.rawValue, deviceType: deviceType)
     }
 
     /// Release an acquisition nobody will be handed. Its handles are live

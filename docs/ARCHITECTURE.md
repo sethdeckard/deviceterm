@@ -1814,11 +1814,15 @@ gestures. A physical-device pane supports the subset advertised in its
 `capabilities` block, with one gap today: on a device pane `touch` covers
 the single-finger verbs only, and the two-finger `pinch`/`multitouch` are
 rejected by the backend (surfacing as `error.bridgeFailed`). Device panes
-report `crown: false`; every sim pane advertises `crown`, and restricting
-it to watch families is a client affordance concern
-(`PaneControlAffordance`), not a daemon gate. Edge gestures ride the
-simulator's edge tags on a sim and enriched system-gesture reports on
-physical hardware. Coordinates are normalized display coordinates.
+report `crown: false`. A sim pane advertises `crown` only when its device
+classifies as a watch family. SimulatorKit accepts a crown event for any
+family, but one sent to a phone leaves the next HID client the daemon
+builds unable to connect, so the daemon refuses the verb on every other
+family with `unsupportedOperation` instead of leaving the gate to a client
+affordance (`PaneControlAffordance` still hides the control). Edge
+gestures ride the simulator's edge tags on a sim and enriched
+system-gesture reports on physical hardware. Coordinates are normalized
+display coordinates.
 
 A pane has one shared digitizer stream, so the contact-producing verbs
 take turns through a per-pane lane: `tap`, `touch`, `edgeTouch`,

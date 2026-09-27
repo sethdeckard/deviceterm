@@ -13,17 +13,16 @@ import DaemonProtocol
 /// the surfaces from drifting: a control disabled in one place is
 /// disabled in all.
 ///
-/// A pane mirrors either a CoreSimulator (every control supported) or a
-/// physically-connected device (a capability subset). The gate reads the
+/// A pane mirrors either a CoreSimulator or a physically-connected
+/// device (a capability subset). The gate reads the
 /// per-pane `PaneCapabilities` for the input-verb families (buttons,
 /// rotation, crown, accessibility) and falls back to "is this a
 /// simulator" for the housekeeping actions that have no physical-device
 /// equivalent (Erase / Shut Down / Open in Simulator / Reveal in Finder
 /// / Apple Pay) or that the physical-device backend does not support
 /// (Reboot / Screenshot
-/// / Record / Install). Sim panes report the full capability set, so the
-/// gate is a no-op for them; it only ever subtracts affordances from a
-/// device pane.
+/// / Record / Install). Capability flags gate controls on both simulator
+/// and physical-device panes; crown actions also require a watch family.
 @MainActor
 enum PaneControlAffordance: Equatable {
     /// Hardware buttons Home / Lock / Side / Siri (`capabilities.button`).
@@ -37,9 +36,10 @@ enum PaneControlAffordance: Equatable {
     case applePay
     /// Device orientation Rotate Left / Right (`capabilities.rotate`).
     case rotate
-    /// Watch Digital Crown: `capabilities.crown` AND a watch family (a
-    /// phone sim reports crown-capable but has no crown; a device
-    /// reports crown:false).
+    /// Watch Digital Crown: `capabilities.crown` AND a watch family. The
+    /// daemon advertises crown for a watch-family sim only and a device
+    /// reports crown:false, so the family check covers a daemon that
+    /// predates the family gate.
     case crown
     /// Screenshot / Record, simulator-only. There is no device
     /// path; grabbing or recording the in-process mirror is not

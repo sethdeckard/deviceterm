@@ -555,7 +555,7 @@ private func expectCoordinatorSubscriberCount(
 /// one thread, and nothing here tears the pane down while a turn is in
 /// flight.
 private final class NoopBackend: DeviceBackend, @unchecked Sendable {
-    let capabilities = DeviceBackendCapabilities.simulator.withoutLocation
+    let capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
     /// Observation hook, so a test can turn the display the way the
     /// bridge's callback does. Orientation events are the only pane events
     /// these transport tests can drive on demand.

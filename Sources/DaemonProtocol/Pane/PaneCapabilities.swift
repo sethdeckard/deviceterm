@@ -2,8 +2,7 @@
 
 /// What input/control verbs a pane's device supports, reported per
 /// pane on `pane.create` / `device.attach` and `pane.deviceList`. The daemon
-/// hosts a mix of pane kinds at once (a CoreSimulator pane supports
-/// everything, a physical-device pane a subset), so capability is a
+/// hosts panes with different capabilities at once, so capability is a
 /// **per-pane** property, not a daemon-wide one. The GUI gates
 /// applicable input and control actions on these flags; `location` only
 /// reports backend support.
@@ -24,11 +23,11 @@
 /// `false` (see `init(from:)`), so no capability is assumed on a peer's
 /// behalf.
 public struct PaneCapabilities: Codable, Sendable, Equatable {
-    /// Everything a CoreSimulator pane supports.
+    /// Everything a CoreSimulator pane can support.
     ///
-    /// `fold` is not here: it is the one flag that varies between simulators
-    /// rather than between pane kinds, so the daemon sets it per device from
-    /// the panel count.
+    /// Two flags vary between simulators rather than between pane kinds, so
+    /// the daemon sets them per device: `crown` is advertised for a watch
+    /// family only, and `fold` follows the panel count, so it is not here.
     public static let simulator = PaneCapabilities(
         touch: true,
         key: true,

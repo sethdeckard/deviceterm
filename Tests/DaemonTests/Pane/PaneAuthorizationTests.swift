@@ -195,7 +195,7 @@ func adoptionRevokesPriorOwnerAndTransfersToAdopter() async throws {
 /// hermetic test prove a paced gesture stops driving the device once the
 /// pane transfers.
 private final class GatingMockBackend: DeviceBackend, @unchecked Sendable {
-    let capabilities = DeviceBackendCapabilities.simulator.withoutLocation
+    let capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
     private let gate = DispatchQueue(label: "test.gating.input")
     private var generation: UInt64 = 1
     private var taps: [CGPoint] = []
@@ -302,7 +302,7 @@ func transferFencesInFlightGesture() async throws {
 /// `quiesceInputForTransfer` reports failure, standing in for a device
 /// that still holds input after a failed release.
 private final class UnquiescableBackend: DeviceBackend, @unchecked Sendable {
-    let capabilities = DeviceBackendCapabilities.simulator.withoutLocation
+    let capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
         onFatal: @escaping @Sendable (String) -> Void,
@@ -374,7 +374,7 @@ func transferAbortsWhenInputNotQuiesced() async throws {
 /// A backend whose input can't be quiesced on the *first* transfer attempt
 /// but recovers afterward (e.g. an up-only release lands on the retry).
 private final class RecoveringBackend: DeviceBackend, @unchecked Sendable {
-    let capabilities = DeviceBackendCapabilities.simulator.withoutLocation
+    let capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
     private let gate = DispatchQueue(label: "test.recovering")
     private var quiesceCalls = 0
     func startFrames(

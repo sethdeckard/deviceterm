@@ -213,7 +213,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     var slowElementCall: (index: Int, seconds: Double)?
 
     init(
-        capabilities: DeviceBackendCapabilities = .simulator.withoutLocation,
+        // A watch, so every verb the mock implements is admitted by default.
+        capabilities: DeviceBackendCapabilities = .simulator(family: .watch).withoutLocation,
         edgeUnsupported: Bool = false,
         appSwitcherUnsupported: Bool = false,
         rotateReaches: Bool = true,
@@ -1063,7 +1064,7 @@ func aSimulatorWithoutOrientationObservationReportsConfirmationUnsupported() asy
 
 @Test
 func aBackendThatRejectsRotationReportsRefused() async throws {
-    var capabilities = DeviceBackendCapabilities.simulator.withoutLocation
+    var capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
     capabilities.rotate = false
     let coordinator = PaneCoordinator()
     let backend = MockDeviceBackend(capabilities: capabilities)
@@ -1878,13 +1879,43 @@ func subscribeReplaysPortraitForAPaneNothingHasRotated() async throws {
 }
 
 @Test
+func crownOnAPhoneFamilySimBackendIsUnsupported() async throws {
+    // The verb is refused at the coordinator's capability gate, so the
+    // event never reaches SimulatorKit, where it would leave the next HID
+    // client the daemon builds unable to connect.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(
+        capabilities: DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
+    )
+    let result = try await coordinator.createMockPane(udid: "udid-crown-phone", sessionId: UUID(), backend: backend)
+    #expect(!result.capabilities.crown)
+    await #expect(throws: PaneError.unsupportedOperation(paneId: result.paneId, operation: .crown)) {
+        try await coordinator.crown(paneId: result.paneId, as: .guiPeer, delta: 1.0, durationMs: 0)
+    }
+    #expect(backend.crownDeltas.isEmpty)
+}
+
+@Test
+func crownOnAWatchFamilySimBackendReachesTheBackend() async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(
+        capabilities: DeviceBackendCapabilities.simulator(family: .watch).withoutLocation
+    )
+    let result = try await coordinator.createMockPane(udid: "udid-crown-watch", sessionId: UUID(), backend: backend)
+    #expect(result.capabilities.crown)
+    try await coordinator.crown(paneId: result.paneId, as: .guiPeer, delta: 1.0, durationMs: 0)
+    #expect(!backend.crownDeltas.isEmpty)
+    #expect(abs(backend.crownDeltas.reduce(0, +) - 1.0) < 0.001)
+}
+
+@Test
 func verbUnsupportedByBackendThrowsUnsupportedOperation() async throws {
     let coordinator = PaneCoordinator()
     // A backend that supports touch but not crown, like a physical
     // device pane will.
     // `.withoutLocation` because the mock takes the protocol's throwing
     // location defaults; only `crown` is the subject here.
-    var caps = DeviceBackendCapabilities.simulator.withoutLocation
+    var caps = DeviceBackendCapabilities.simulator(family: .watch).withoutLocation
     caps.crown = false
     let backend = MockDeviceBackend(capabilities: caps)
     let result = try await coordinator.createMockPane(udid: "udid-c", sessionId: UUID(), backend: backend)
