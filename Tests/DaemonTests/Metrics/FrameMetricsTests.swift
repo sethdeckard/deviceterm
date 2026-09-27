@@ -5,8 +5,8 @@ import CoreVideo
 import Foundation
 import Testing
 
-private func populated(startNanoseconds: UInt64 = 0) -> DeviceFrameMetrics {
-    var metrics = DeviceFrameMetrics(startNanoseconds: startNanoseconds)
+private func populated(startNanoseconds: UInt64 = 0) -> FrameMetrics {
+    var metrics = FrameMetrics(startNanoseconds: startNanoseconds)
     metrics.noteGeometry(
         sourceWidth: 1_206,
         sourceHeight: 2_624,
@@ -54,7 +54,7 @@ func consumedEqualsPublishedPlusDrops() {
     #expect(summary.framesConsumed == accounted)
 }
 
-@Test("the decoder's format is reported as its four-character code")
+@Test("the source's pixel format is reported as its four-character code")
 func pixelFormatRendersAsAFourCharacterCode() {
     let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
     #expect(summary.pixelFormat == "BGRA")
@@ -62,7 +62,7 @@ func pixelFormatRendersAsAFourCharacterCode() {
 
 @Test("a format with unprintable bytes falls back to its numeric value")
 func unprintablePixelFormatFallsBackToDigits() {
-    var metrics = DeviceFrameMetrics(startNanoseconds: 0)
+    var metrics = FrameMetrics(startNanoseconds: 0)
     metrics.noteGeometry(sourceWidth: 4, sourceHeight: 4, contentWidth: 4, contentHeight: 4, pixelFormat: 1)
     let summary = metrics.summarize(now: 1, leaseHold: LatencyHistogram())
     #expect(summary.pixelFormat == "1")
@@ -165,7 +165,7 @@ func startWindowClearsBytesAndGeometryChanges() {
 
 @Test
 func anEmptyWindowReportsZeroRatesRatherThanDividingByZero() {
-    let metrics = DeviceFrameMetrics(startNanoseconds: 500)
+    let metrics = FrameMetrics(startNanoseconds: 500)
     let summary = metrics.summarize(now: 500, leaseHold: LatencyHistogram())
     #expect(summary.windowNanoseconds == 0)
     #expect(summary.framesPerSecond == 0)
@@ -200,7 +200,7 @@ func leaseHoldSeriesComesFromTheCallersPool() {
 func theSummaryRoundTripsThroughJSON() throws {
     let summary = populated().summarize(now: 1_000_000_000, leaseHold: LatencyHistogram())
     let data = try JSONEncoder().encode(summary)
-    let decoded = try JSONDecoder().decode(DeviceFrameMetricsSummary.self, from: data)
+    let decoded = try JSONDecoder().decode(FrameMetricsSummary.self, from: data)
     #expect(decoded == summary)
 }
 

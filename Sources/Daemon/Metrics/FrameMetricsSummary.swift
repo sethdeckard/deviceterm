@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// One window of device-frame measurements, emitted as a single JSONL row and
+/// One window of frame measurements, emitted as a single JSONL row and
 /// a single log line.
 ///
 /// Everything here is an aggregate over the window rather than a per-frame
@@ -13,7 +13,7 @@ import Foundation
 /// can be interpreted, because a frame rate means nothing without the frame
 /// size that produced it. Identifying the run itself (device, OS, workload,
 /// thermal state) is the capture procedure's job, not the row's.
-struct DeviceFrameMetricsSummary: Codable, Sendable, Equatable {
+struct FrameMetricsSummary: Codable, Sendable, Equatable {
     /// One duration distribution. Quantiles are bucket upper bounds, so read
     /// them as "at most", and `sampleCount` can differ between series in the same
     /// window because not every frame reaches every stage.
@@ -30,9 +30,10 @@ struct DeviceFrameMetricsSummary: Codable, Sendable, Equatable {
     let sourceHeight: Int
     let contentWidth: Int
     let contentHeight: Int
-    /// The decoder's output format as its four-character code, e.g. `BGRA`.
+    /// The source surface's pixel format as a four-character code (e.g.
+    /// `BGRA`), or decimal text if any byte is unprintable.
     let pixelFormat: String
-    /// Frames taken off the decoder's stream this window.
+    /// Frames taken off the source's stream this window.
     let framesConsumed: Int
     /// Frames that reached the pane. The shortfall against `framesConsumed` is
     /// the two drop counts below.

@@ -743,7 +743,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             // rather than the task doing it: a stream that takes seconds to
             // produce one would otherwise close an empty window first and emit
             // a row carrying no geometry and no outcome.
-            var metrics: DeviceFrameMetrics?
+            var metrics: FrameMetrics?
             for await frame in frames {
                 // Close the window *before* counting this frame, so no window
                 // holds a frame's arrival without its outcome. Counting first
@@ -753,7 +753,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 if let metricsSink {
                     let now = DispatchTime.now().uptimeNanoseconds
                     if metrics == nil {
-                        metrics = DeviceFrameMetrics(startNanoseconds: now)
+                        metrics = FrameMetrics(startNanoseconds: now)
                     } else if let elapsed = metrics?.elapsedNanoseconds(now: now),
                         elapsed >= Self.metricsWindowNanoseconds {
                         let leaseHold = await pool.drainHoldAges()

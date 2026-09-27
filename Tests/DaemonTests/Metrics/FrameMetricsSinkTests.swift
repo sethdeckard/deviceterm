@@ -5,8 +5,8 @@ import CoreVideo
 import Foundation
 import Testing
 
-private func sampleSummary() -> DeviceFrameMetricsSummary {
-    var metrics = DeviceFrameMetrics(startNanoseconds: 0)
+private func sampleSummary() -> FrameMetricsSummary {
+    var metrics = FrameMetrics(startNanoseconds: 0)
     metrics.noteGeometry(
         sourceWidth: 8,
         sourceHeight: 8,
@@ -49,7 +49,7 @@ func recordAppendsOneJSONLineAndLogsIt() throws {
     let contents = try String(contentsOfFile: path, encoding: .utf8)
     let rows = contents.split(separator: "\n")
     #expect(rows.count == 2)
-    let decoded = try JSONDecoder().decode(DeviceFrameMetricsSummary.self, from: Data(rows[0].utf8))
+    let decoded = try JSONDecoder().decode(FrameMetricsSummary.self, from: Data(rows[0].utf8))
     #expect(decoded == summary)
     #expect(logged.lines == [summary.logLine, summary.logLine])
 }

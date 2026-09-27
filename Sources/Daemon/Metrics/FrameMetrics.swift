@@ -3,7 +3,7 @@
 import CoreVideo
 import Foundation
 
-/// Accumulates one window of device-frame measurements for the frame task.
+/// Accumulates one window of frame measurements for the frame task.
 ///
 /// A plain value confined to the backend's single serial frame task: it is
 /// mutated only there, summarized once per window, and reset in place, so there
@@ -12,8 +12,8 @@ import Foundation
 ///
 /// Bytes and dimensions are recorded from the surfaces actually handled rather
 /// than derived from an assumed pixel size, so the row stays honest if the
-/// decoder's output format ever changes.
-struct DeviceFrameMetrics: Sendable {
+/// source's output format ever changes.
+struct FrameMetrics: Sendable {
     private var windowStartNanoseconds: UInt64
     private var framesConsumed = 0
     private var framesPublished = 0
@@ -106,8 +106,8 @@ struct DeviceFrameMetrics: Sendable {
 
     /// Close the window. `leaseHold` comes from the surface pool, which owns
     /// those timings because it owns the hold timestamps.
-    func summarize(now: UInt64, leaseHold: LatencyHistogram) -> DeviceFrameMetricsSummary {
-        DeviceFrameMetricsSummary(
+    func summarize(now: UInt64, leaseHold: LatencyHistogram) -> FrameMetricsSummary {
+        FrameMetricsSummary(
             windowNanoseconds: elapsedNanoseconds(now: now),
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
@@ -141,9 +141,9 @@ struct DeviceFrameMetrics: Sendable {
     }
 }
 
-private extension DeviceFrameMetrics {
-    static func series(_ histogram: LatencyHistogram) -> DeviceFrameMetricsSummary.Series {
-        DeviceFrameMetricsSummary.Series(
+private extension FrameMetrics {
+    static func series(_ histogram: LatencyHistogram) -> FrameMetricsSummary.Series {
+        FrameMetricsSummary.Series(
             sampleCount: histogram.sampleCount,
             meanNanoseconds: histogram.mean,
             p50Nanoseconds: histogram.p50,

@@ -60,7 +60,7 @@ final class FrameMetricsSink: @unchecked Sendable {
         return FrameMetricsSink(path: "\(base).\(deviceId).frames.jsonl", log: log)
     }
 
-    func record(_ summary: DeviceFrameMetricsSummary) {
+    func record(_ summary: FrameMetricsSummary) {
         log?(summary.logLine)
         guard let handle else { return }
         queue.async { [self] in

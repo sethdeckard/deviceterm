@@ -5,7 +5,7 @@ hand-off, the copy into the surface pool, and how long the GUI holds a surface
 before acknowledging it. Each arriving frame that closes a window of at least
 one second emits one row, so output stays far below per-frame volume.
 
-`LatencyHistogramTests`, `DeviceFrameMetricsTests`, and
+`LatencyHistogramTests`, `FrameMetricsTests`, and
 `LeasedSurfacePoolHoldAgeTests` cover the quantiles, the accumulator, and which
 releases get timed. None of them can see a real frame rate, a real copy
 duration, or a real lease round trip, because all three need a device streaming
