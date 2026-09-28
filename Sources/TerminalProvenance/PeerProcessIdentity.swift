@@ -39,7 +39,7 @@ public struct PeerProcessIdentity: Sendable, Equatable {
     /// not here.
     public let controllingTTYDev: dev_t
     /// Start time of the POSIX session leader, in microseconds since the epoch
-    /// (`sysctl(KERN_PROC_PID)`). Pairs with `posixSessionId` to survive SID/pid
+    /// (`ProcInfo.leaderStartMicros`). Pairs with `posixSessionId` to survive SID/pid
     /// reuse: a recycled session-leader pid has a different start time. `0` means
     /// the leader's start time was unavailable (a dead leader); only a nonzero
     /// value provides the reuse guard, and a `0` here matches no real anchor.

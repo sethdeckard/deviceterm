@@ -401,4 +401,39 @@ func resolverReturnsNilForNonSocketDescriptor() throws {
     }
     #expect(PeerProcessIdentity.resolve(fd: fds[0]) == nil)
 }
+
+@Test("the pid lookup and the process-list read agree on a same-uid process", arguments: [
+    getpid(),
+    getppid()
+])
+func procInfoReadsAgreeForSameUIDProcess(pid: pid_t) throws {
+    // `snapshot(of:)` reads `proc_pidinfo` first and keeps
+    // `sysctl(KERN_PROC_PID)` as the fallback. Every consumer depends on the two
+    // mapping the same fields. While the process state holds still between
+    // the two reads, comparing them catches a wrong field or a sign conversion
+    // on `NODEV`.
+    let byLookup = try #require(ProcInfo.pidInfoSnapshot(of: pid))
+    let byListing = try #require(ProcInfo.sysctlSnapshot(of: pid))
+    #expect(byLookup == byListing)
+    #expect(ProcInfo.snapshot(of: pid) == byLookup)
+}
+
+@Test
+func procInfoFallsBackAcrossTheUIDBoundary() throws {
+    // launchd is root-owned, the same shape as a login-shell terminal's
+    // `/usr/bin/login` session leader. The pid lookup refuses it, so the
+    // terminal arm's leader start only survives through the fallback.
+    try #require(geteuid() != 0, "the cross-uid refusal needs a non-root test runner")
+    #expect(ProcInfo.pidInfoSnapshot(of: 1) == nil)
+    let launchd = try #require(ProcInfo.snapshot(of: 1))
+    #expect(launchd.euid == 0)
+    #expect(ProcInfo.leaderStartMicros(1) != nil)
+}
+
+@Test
+func procInfoReturnsNilForAPidNoProcessHolds() {
+    #expect(ProcInfo.pidInfoSnapshot(of: pid_t.max) == nil)
+    #expect(ProcInfo.sysctlSnapshot(of: pid_t.max) == nil)
+    #expect(ProcInfo.snapshot(of: pid_t.max) == nil)
+}
 #endif
