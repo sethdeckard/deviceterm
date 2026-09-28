@@ -436,4 +436,208 @@ func procInfoReturnsNilForAPidNoProcessHolds() {
     #expect(ProcInfo.sysctlSnapshot(of: pid_t.max) == nil)
     #expect(ProcInfo.snapshot(of: pid_t.max) == nil)
 }
+
+// MARK: - Narrow token confirm
+
+@Test
+func tokenConfirmNamesTheConnectedPeer() throws {
+    // A socketpair's far end is this process, so the confirm must name this
+    // exact process instance and agree with the full resolve on the same fd.
+    var fds: [Int32] = [-1, -1]
+    try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+    defer {
+        Darwin.close(fds[0])
+        Darwin.close(fds[1])
+    }
+    let confirmed = try #require(PeerProcessIdentity.confirmToken(fd: fds[0]))
+    #expect(confirmed.pid == getpid())
+    let resolved = try #require(PeerProcessIdentity.resolve(fd: fds[0]))
+    #expect(confirmed.pid == resolved.pid)
+    #expect(confirmed.pidVersion == resolved.pidVersion)
+}
+
+@Test
+func tokenConfirmReturnsNilForNonSocketDescriptor() throws {
+    var fds: [Int32] = [-1, -1]
+    try #require(pipe(&fds) == 0)
+    defer {
+        Darwin.close(fds[0])
+        Darwin.close(fds[1])
+    }
+    #expect(PeerProcessIdentity.confirmToken(fd: fds[0]) == nil)
+}
+
+// MARK: - Snapshot composition
+
+private let composedPeer = PeerProcessIdentity(
+    pid: getpid(),
+    pidVersion: 7,
+    euid: geteuid(),
+    posixSessionId: getsid(0),
+    controllingTTYDev: dev_t(-1),
+    posixSessionLeaderStartTime: 0
+)
+
+@Test
+func compositionWithoutAConfirmerConfirmsThroughThePeerResolver() {
+    // A synthetic peer governs the confirm too, so an injected resolver never
+    // falls through to a real `LOCAL_PEERTOKEN` read on the harness's fd.
+    let resolve = composedProvenanceSnapshotResolver(peer: { _ in composedPeer })
+    #expect(resolve(-1)?.peer == composedPeer)
+}
+
+@Test
+func compositionRefusesAConfirmThatNamesAnotherProcessInstance() {
+    let recycled = composedProvenanceSnapshotResolver(
+        peer: { _ in composedPeer },
+        confirm: { _ in (pid: composedPeer.pid, pidVersion: composedPeer.pidVersion + 1) }
+    )
+    #expect(recycled(-1) == nil)
+    let vanished = composedProvenanceSnapshotResolver(peer: { _ in composedPeer }, confirm: { _ in nil })
+    #expect(vanished(-1) == nil)
+    let intact = composedProvenanceSnapshotResolver(
+        peer: { _ in composedPeer },
+        confirm: { _ in (pid: composedPeer.pid, pidVersion: composedPeer.pidVersion) }
+    )
+    #expect(intact(-1)?.peer == composedPeer)
+}
+
+// MARK: - The walk over a synthetic process table
+
+/// A synthetic process table for the walk. A pid with no entry is one the
+/// kernel won't name.
+private struct SyntheticProcesses {
+    struct Entry {
+        var ppid: pid_t
+        var euid: uid_t
+        var start: UInt64
+        var sid: pid_t
+    }
+
+    var table: [pid_t: Entry]
+
+    func snapshot(_ pid: pid_t) -> ProcInfo.Snapshot? {
+        guard let entry = table[pid] else { return nil }
+        return ProcInfo.Snapshot(
+            pid: pid,
+            ppid: entry.ppid,
+            euid: entry.euid,
+            startMicros: entry.start,
+            controllingTTYDev: dev_t(-1),
+            foregroundProcessGroup: 0
+        )
+    }
+
+    func sessionId(_ pid: pid_t) -> pid_t {
+        table[pid]?.sid ?? -1
+    }
+}
+
+private let walkEUID: uid_t = 501
+private let walkPeer = PeerProcessIdentity(
+    pid: 100,
+    pidVersion: 1,
+    euid: walkEUID,
+    posixSessionId: 100,
+    controllingTTYDev: dev_t(-1),
+    posixSessionLeaderStartTime: 0
+)
+
+/// Peer 100 under three same-uid ancestors, then a root boundary at 104.
+private func agentChain(ancestorSessions: [pid_t]) -> SyntheticProcesses {
+    SyntheticProcesses(table: [
+        100: .init(ppid: 101, euid: walkEUID, start: 50, sid: 100),
+        101: .init(ppid: 102, euid: walkEUID, start: 40, sid: ancestorSessions[0]),
+        102: .init(ppid: 103, euid: walkEUID, start: 30, sid: ancestorSessions[1]),
+        103: .init(ppid: 104, euid: walkEUID, start: 20, sid: ancestorSessions[2]),
+        104: .init(ppid: 1, euid: 0, start: 10, sid: 104)
+    ])
+}
+
+@Test
+func theWalkReadsEachSessionLeaderOncePerWalk() {
+    let processes = agentChain(ancestorSessions: [900, 900, 900])
+    var leaderReads: [pid_t] = []
+    let prefix = AncestorProcessIdentity.verifiedPrefix(
+        above: walkPeer,
+        snapshot: processes.snapshot,
+        sessionId: processes.sessionId,
+        leaderStart: { leaderReads.append($0); return 5 }
+    )
+    #expect(prefix.map(\.pid) == [101, 102, 103])
+    #expect(prefix.allSatisfy { $0.posixSessionLeaderStartTime == 5 })
+    #expect(leaderReads == [900])
+}
+
+@Test
+func theWalkReadsEachDistinctSessionLeader() {
+    let processes = agentChain(ancestorSessions: [800, 900, 900])
+    var leaderReads: [pid_t] = []
+    let prefix = AncestorProcessIdentity.verifiedPrefix(
+        above: walkPeer,
+        snapshot: processes.snapshot,
+        sessionId: processes.sessionId,
+        leaderStart: { leaderReads.append($0); return $0 == 800 ? nil : 5 }
+    )
+    #expect(prefix.map(\.posixSessionLeaderStartTime) == [0, 5, 5])
+    #expect(leaderReads == [800, 900])
+}
+
+@Test
+func theWalkTruncatesAtEachGuardAndKeepsTheVerifiedPrefix() {
+    func walk(_ processes: SyntheticProcesses) -> [pid_t] {
+        let prefix = AncestorProcessIdentity.verifiedPrefix(
+            above: walkPeer,
+            snapshot: processes.snapshot,
+            sessionId: processes.sessionId,
+            leaderStart: { _ in 5 }
+        )
+        return prefix.map(\.pid)
+    }
+    // The root-owned hop above 103 is the uid boundary: read, never admitted.
+    #expect(walk(agentChain(ancestorSessions: [900, 900, 900])) == [101, 102, 103])
+
+    var graft = agentChain(ancestorSessions: [900, 900, 900])
+    graft.table[102]?.start = 45  // started after its child 101
+    #expect(walk(graft) == [101])
+
+    var vanished = agentChain(ancestorSessions: [900, 900, 900])
+    vanished.table[103] = nil
+    #expect(walk(vanished) == [101, 102])
+
+    var sessionless = agentChain(ancestorSessions: [900, 900, 900])
+    sessionless.table[102]?.sid = -1
+    #expect(walk(sessionless) == [101])
+}
+
+@Test
+func theWalkTruncatesWhenTheChildNoLongerNamesItsParent() {
+    // The child re-read happens after the parent read. A child that has been
+    // reparented to launchd in between means the parent pid may have been
+    // recycled, so the edge is not trusted.
+    let processes = agentChain(ancestorSessions: [900, 900, 900])
+    var reads: [pid_t: Int] = [:]
+    let prefix = AncestorProcessIdentity.verifiedPrefix(
+        above: walkPeer,
+        snapshot: { pid in
+            reads[pid, default: 0] += 1
+            guard var snapshot = processes.snapshot(pid) else { return nil }
+            // 102's second read, as the child of 103, finds it orphaned.
+            if pid == 102, reads[pid] == 2 {
+                snapshot = ProcInfo.Snapshot(
+                    pid: pid,
+                    ppid: 1,
+                    euid: snapshot.euid,
+                    startMicros: snapshot.startMicros,
+                    controllingTTYDev: snapshot.controllingTTYDev,
+                    foregroundProcessGroup: snapshot.foregroundProcessGroup
+                )
+            }
+            return snapshot
+        },
+        sessionId: processes.sessionId,
+        leaderStart: { _ in 5 }
+    )
+    #expect(prefix.map(\.pid) == [101, 102])
+}
 #endif

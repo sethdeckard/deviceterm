@@ -44,21 +44,35 @@ public typealias ProvenanceSnapshotResolver = @Sendable (Int32) -> ProvenanceSna
 /// zero at request time too, instead of silently falling through to a real
 /// `LOCAL_PEERTOKEN` read on a loopback fd.
 ///
-/// The peer is resolved on both sides of the walk, and the walk's result is
-/// discarded unless the same `(pid, pidVersion)` comes back. The first resolve
-/// validates the audit token, but the walk then seeds from a bare numeric pid,
-/// so a peer that exits mid-walk and has its pid recycled would otherwise let
-/// the replacement's parent chain be read as this caller's. Re-resolving closes
-/// that: `pidVersion` is monotonic, so a recycled pid can never re-match the
-/// token and the second resolve fails instead.
+/// The walk's result is discarded unless the confirm, run after the walk,
+/// returns the same `(pid, pidVersion)` the peer resolved with. The production
+/// peer resolver validates the audit token, but the walk then seeds from a
+/// bare numeric pid, so a peer that exits mid-walk and has its pid recycled
+/// would otherwise let the replacement's parent chain be read as this caller's.
+/// The confirm closes that: `pidVersion` is monotonic, so a recycled pid can
+/// never re-match the token and the confirm fails instead.
+///
+/// `confirm` defaults to `resolvePeer` projected to `(pid, pidVersion)`, so a
+/// synthetic peer governs the confirm too. Production passes
+/// `defaultPeerTokenConfirmer` (see `defaultProvenanceSnapshotResolver`),
+/// which confirms without repeating the resolve's session and terminal reads.
 public func composedProvenanceSnapshotResolver(
-    peer resolvePeer: @escaping PeerIdentityResolver
+    peer resolvePeer: @escaping PeerIdentityResolver,
+    confirm: PeerTokenConfirmer? = nil
 ) -> ProvenanceSnapshotResolver {
-    { fd in
+    let confirmPeer: PeerTokenConfirmer = confirm ?? { fd in
+        resolvePeer(fd).map { (pid: $0.pid, pidVersion: $0.pidVersion) }
+    }
+    return { fd in
         guard let peer = resolvePeer(fd) else { return nil }
         let ancestors = AncestorProcessIdentity.verifiedPrefix(above: peer)
-        guard let confirmed = resolvePeer(fd) else { return nil }
+        guard let confirmed = confirmPeer(fd) else { return nil }
         guard confirmed.pid == peer.pid, confirmed.pidVersion == peer.pidVersion else { return nil }
         return ProvenanceSnapshot(peer: peer, ancestors: ancestors)
     }
 }
+
+/// The production snapshot resolver: the real `LOCAL_PEERTOKEN` resolve for hop
+/// zero, and the narrow token confirm after the walk.
+public let defaultProvenanceSnapshotResolver: ProvenanceSnapshotResolver =
+    composedProvenanceSnapshotResolver(peer: defaultPeerIdentityResolver, confirm: defaultPeerTokenConfirmer)

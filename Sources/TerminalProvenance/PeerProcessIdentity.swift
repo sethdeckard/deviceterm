@@ -75,12 +75,7 @@ public extension PeerProcessIdentity {
     /// nil result MUST fail closed at the call site; it must never degrade to
     /// cap-only trust.
     static func resolve(fd: Int32) -> PeerProcessIdentity? {
-        var token = audit_token_t()
-        var len = socklen_t(MemoryLayout<audit_token_t>.size)
-        let rc = getsockopt(fd, solLocal, localPeerToken, &token, &len)
-        guard rc == 0, len == socklen_t(MemoryLayout<audit_token_t>.size) else {
-            return nil
-        }
+        guard var token = peerToken(fd: fd) else { return nil }
         let pid = audit_token_to_pid(token)
         let pidVersion = audit_token_to_pidversion(token)
         let euid = audit_token_to_euid(token)
@@ -118,6 +113,27 @@ public extension PeerProcessIdentity {
         )
     }
 
+    /// The connected peer's live `(pid, pidVersion)` from `LOCAL_PEERTOKEN`, or
+    /// nil (fail closed) when the token can't be read or its process generation
+    /// is gone. For confirming an identity `resolve(fd:)` already returned.
+    static func confirmToken(fd: Int32) -> (pid: pid_t, pidVersion: Int32)? {
+        guard var token = peerToken(fd: fd) else { return nil }
+        guard tokenNamesLiveProcess(&token) else { return nil }
+        return (audit_token_to_pid(token), audit_token_to_pidversion(token))
+    }
+
+    /// The connected peer's audit token (`LOCAL_PEERTOKEN`), or nil when `fd`
+    /// isn't a connected local socket.
+    private static func peerToken(fd: Int32) -> audit_token_t? {
+        var token = audit_token_t()
+        var len = socklen_t(MemoryLayout<audit_token_t>.size)
+        let rc = getsockopt(fd, solLocal, localPeerToken, &token, &len)
+        guard rc == 0, len == socklen_t(MemoryLayout<audit_token_t>.size) else {
+            return nil
+        }
+        return token
+    }
+
     /// Whether the audit token still names a live process of its exact
     /// `(pid, pidVersion)` generation. `proc_pidpath_audittoken` looks up by
     /// the token's generation, not the bare pid, so it returns 0 once the
@@ -149,4 +165,17 @@ public let defaultPeerIdentityResolver: PeerIdentityResolver = {
 }
 #else
 public let defaultPeerIdentityResolver: PeerIdentityResolver = { _ in nil }
+#endif
+
+/// Injectable confirm seam: the `(pid, pidVersion)` a connected fd's peer
+/// token names, confirmed live, or nil (fail closed). See
+/// `PeerProcessIdentity.confirmToken(fd:)`.
+public typealias PeerTokenConfirmer = @Sendable (Int32) -> (pid: pid_t, pidVersion: Int32)?
+
+#if canImport(Darwin)
+public let defaultPeerTokenConfirmer: PeerTokenConfirmer = {
+    PeerProcessIdentity.confirmToken(fd: $0)
+}
+#else
+public let defaultPeerTokenConfirmer: PeerTokenConfirmer = { _ in nil }
 #endif

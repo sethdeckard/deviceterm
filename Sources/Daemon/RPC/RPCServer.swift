@@ -30,12 +30,13 @@ public actor RPCServer {
     /// construction. Nil disables the check (a granted session then can't reach
     /// the automation surface over UDS: fail closed).
     private let automationGrantStore: AutomationGrantStore?
-    private let peerIdentityResolver: PeerIdentityResolver
+    private let peerIdentityResolver: PeerIdentityResolver?
     /// Test seam: called with the connection id each time a connection's read
     /// source fires. Nil in production.
     private let readEventObserver: (@Sendable (UInt64) -> Void)?
-    /// Nil makes each connection compose a resolver over `peerIdentityResolver`;
-    /// inject one when a test must vary the ancestor prefix between requests.
+    /// Nil makes each connection use the production resolver, or compose one
+    /// over an injected `peerIdentityResolver`; inject one when a test must
+    /// vary the ancestor prefix between requests.
     private let provenanceSnapshotResolver: ProvenanceSnapshotResolver?
     nonisolated private let acceptQueue: DispatchQueue
     private var listenerFd: Int32 = -1
@@ -59,19 +60,20 @@ public actor RPCServer {
     /// scoped call with `unauthorized`, useful for testing the
     /// rejection path).
     /// `peerIdentityResolver` reads the kernel-established identity of each
-    /// accepted UDS peer (production: `LOCAL_PEERTOKEN`). Tests inject a
-    /// synthetic resolver so provenance can be exercised without real
-    /// sockets; the default is the real one.
+    /// accepted UDS peer. Nil, the production case, means the real
+    /// `LOCAL_PEERTOKEN` resolve. Tests inject a synthetic resolver so
+    /// provenance can be exercised without real sockets.
     /// `provenanceSnapshotResolver` is the per-request seam that re-reads that
     /// identity and walks the caller's parent chain. Leave it nil and each
-    /// connection composes one over `peerIdentityResolver`, so a synthetic peer
-    /// keeps governing hop zero; inject one only to vary the ancestor prefix
-    /// between requests.
+    /// connection uses `defaultProvenanceSnapshotResolver`, or composes one
+    /// over an injected `peerIdentityResolver` so a synthetic peer keeps
+    /// governing hop zero; inject one only to vary the ancestor prefix between
+    /// requests.
     public init(
         socketPath: String,
         methods: MethodRegistry,
         authValidator: AuthValidator? = nil,
-        peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
+        peerIdentityResolver: PeerIdentityResolver? = nil,
         provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil,
         readEventObserver: (@Sendable (UInt64) -> Void)? = nil
     ) {

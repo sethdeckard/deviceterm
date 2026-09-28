@@ -32,8 +32,7 @@ final class BootClaimRelay: @unchecked Sendable {
     init(
         sessionId: String,
         handler: @escaping Handler,
-        resolveProvenance: @escaping ProvenanceSnapshotResolver =
-            composedProvenanceSnapshotResolver(peer: defaultPeerIdentityResolver)
+        resolveProvenance: @escaping ProvenanceSnapshotResolver = defaultProvenanceSnapshotResolver
     ) {
         self.sessionId = sessionId
         self.handler = handler

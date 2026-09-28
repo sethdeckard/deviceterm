@@ -182,7 +182,7 @@ actor RPCConnection {
         sessionProvenanceLookup: SessionProvenanceLookup? = nil,
         restorationGate: RestorationGate? = nil,
         automationGrantStore: AutomationGrantStore? = nil,
-        peerIdentityResolver: @escaping PeerIdentityResolver = defaultPeerIdentityResolver,
+        peerIdentityResolver: PeerIdentityResolver? = nil,
         provenanceSnapshotResolver: ProvenanceSnapshotResolver? = nil,
         readEventObserver: (@Sendable () -> Void)? = nil
     ) {
@@ -200,14 +200,13 @@ actor RPCConnection {
         // connection: `resolve` binds the SID/TTY facts to the peer's
         // audit-token `(pid, pidVersion)` generation, so a later pid reuse
         // can't retroactively change what this connection authenticated as.
-        self.peerProcess = peerIdentityResolver(fd)
-        // Default the request-time resolver by COMPOSING it over the same peer
-        // resolver, so whatever governs hop zero at accept still governs it per
-        // request. A second, independent seam defaulting to the real
-        // `LOCAL_PEERTOKEN` read would leave every synthetic-peer harness
-        // resolving a loopback fd for real.
+        self.peerProcess = (peerIdentityResolver ?? defaultPeerIdentityResolver)(fd)
+        // Compose request checks from an injected peer resolver, so a synthetic
+        // peer governs hop zero both at accept and per request; otherwise use
+        // the production resolver.
         self.provenanceSnapshotResolver = provenanceSnapshotResolver
-            ?? composedProvenanceSnapshotResolver(peer: peerIdentityResolver)
+            ?? peerIdentityResolver.map { composedProvenanceSnapshotResolver(peer: $0) }
+            ?? defaultProvenanceSnapshotResolver
         self.server = server
         self.ioQueue = DispatchQueue(label: "deviceterm.daemon.conn.\(id)")
         self.writeQueue = BlockingWorkQueue(label: "deviceterm.daemon.conn-write.\(id)")

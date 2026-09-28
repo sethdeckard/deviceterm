@@ -133,11 +133,41 @@ public extension AncestorProcessIdentity {
     /// arms should be denied.
     static func verifiedPrefix(above peer: PeerProcessIdentity) -> [AncestorProcessIdentity] {
         #if canImport(Darwin)
+        verifiedPrefix(
+            above: peer,
+            snapshot: { ProcInfo.snapshot(of: $0) },
+            sessionId: { getsid($0) },
+            leaderStart: { ProcInfo.leaderStartMicros($0) }
+        )
+        #else
+        []
+        #endif
+    }
+
+    #if canImport(Darwin)
+    /// `verifiedPrefix(above:)` over injected process readers, so the guards and
+    /// the per-walk leader memo can be exercised against synthetic process
+    /// tables. Production passes `ProcInfo` and `getsid`, whose `-1` failure
+    /// value `sessionId` keeps.
+    ///
+    /// Consecutive hops usually share a POSIX session (a tab's shell and the
+    /// agent it runs both sit in the terminal's session), so the session
+    /// leader's start time is read once per distinct session id for the walk's
+    /// duration. The memo lives only as long as this call. Nothing carries over
+    /// to the next request, which re-derives the whole chain as the trust
+    /// boundary requires.
+    internal static func verifiedPrefix(
+        above peer: PeerProcessIdentity,
+        snapshot: (pid_t) -> ProcInfo.Snapshot?,
+        sessionId: (pid_t) -> pid_t,
+        leaderStart: (pid_t) -> UInt64?
+    ) -> [AncestorProcessIdentity] {
         // Hop zero's own record supplies the ppid to start from and the start
         // time the first monotonic comparison is made against. The peer's
         // terminal facts are already on `PeerProcessIdentity` and the matcher
         // tests those directly, so hop zero never enters this list.
-        guard let origin = ProcInfo.snapshot(of: peer.pid) else { return [] }
+        guard let origin = snapshot(peer.pid) else { return [] }
+        var leaderStarts: [pid_t: UInt64] = [:]
         var prefix: [AncestorProcessIdentity] = []
         var childPid = origin.pid
         var childStart = origin.startMicros
@@ -145,7 +175,7 @@ public extension AncestorProcessIdentity {
         var depth = 0
         while depth < maxWalkDepth, next > 1 {
             // A hop the kernel won't name (it exited mid-walk) truncates.
-            guard let hop = ProcInfo.snapshot(of: next) else { break }
+            guard let hop = snapshot(next) else { break }
             // The graft and uid-boundary guards; see `admitsHop`.
             guard admitsHop(
                 startMicros: hop.startMicros,
@@ -157,15 +187,26 @@ public extension AncestorProcessIdentity {
             // the edge between them still exists; see `linkageHolds`. Without
             // this the walk trusts a ppid it read strictly before the parent,
             // which is the window a recycled pid needs.
-            let child = ProcInfo.snapshot(of: childPid)
+            let child = snapshot(childPid)
             guard linkageHolds(
                 childPPID: child?.ppid,
                 childStart: child?.startMicros,
                 expectedParent: next,
                 expectedChildStart: childStart
             ) else { break }
-            let sid = getsid(hop.pid)
+            let sid = sessionId(hop.pid)
             guard sid != -1 else { break }
+            // Same `0` sentinel discipline as `PeerProcessIdentity`: an
+            // unavailable leader start degrades this one entry instead of
+            // truncating the walk, and `0` matches no real anchor. The `0` is
+            // memoized too, so an unreadable leader is asked about once.
+            let sessionLeaderStart: UInt64
+            if let known = leaderStarts[sid] {
+                sessionLeaderStart = known
+            } else {
+                sessionLeaderStart = leaderStart(sid) ?? 0
+                leaderStarts[sid] = sessionLeaderStart
+            }
             prefix.append(
                 AncestorProcessIdentity(
                     pid: hop.pid,
@@ -173,10 +214,7 @@ public extension AncestorProcessIdentity {
                     startMicros: hop.startMicros,
                     posixSessionId: sid,
                     controllingTTYDev: hop.controllingTTYDev,
-                    // Same `0` sentinel discipline as `PeerProcessIdentity`: an
-                    // unavailable leader start degrades this one entry instead
-                    // of truncating the walk, and `0` matches no real anchor.
-                    posixSessionLeaderStartTime: ProcInfo.leaderStartMicros(sid) ?? 0
+                    posixSessionLeaderStartTime: sessionLeaderStart
                 )
             )
             childPid = hop.pid
@@ -185,8 +223,6 @@ public extension AncestorProcessIdentity {
             depth += 1
         }
         return prefix
-        #else
-        return []
-        #endif
     }
+    #endif
 }
