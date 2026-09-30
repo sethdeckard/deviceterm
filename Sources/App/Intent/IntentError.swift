@@ -20,6 +20,13 @@ enum IntentError: Error, Sendable, Equatable {
         ref: String
         )
 
+    /// A pane close resolved its pane, then found it gone or re-admitted by
+    /// the time the close ran: resurrection and reconnect recovery replace a
+    /// mounted pane with an in-place attachment placeholder the CLI can't see.
+    /// Nothing was closed. Reports `intent.notFound`, which is true of the pane named,
+    /// with a hint that says a retry can find it again.
+    case paneReplacedBeforeClose(ref: String)
+
     /// External ref was ambiguous, e.g. `--tab feature` matched two
     /// tabs both named "feature".
     case ambiguous(
@@ -80,7 +87,7 @@ enum IntentError: Error, Sendable, Equatable {
     /// strings agents key on.
     var code: String {
         switch self {
-        case .notFound:
+        case .notFound, .paneReplacedBeforeClose:
             return "intent.notFound"
 
         case .ambiguous:
@@ -120,6 +127,10 @@ enum IntentError: Error, Sendable, Equatable {
         switch self {
         case let .notFound(kind, ref):
             return "\(kind) '\(ref)' not found"
+
+        case let .paneReplacedBeforeClose(ref):
+            return "pane '\(ref)' was closed or re-attached before this close ran, "
+                + "so this close did nothing; run `pane list` and retry"
 
         case let .ambiguous(kind, ref, matchCount):
             return "\(kind) ref '\(ref)' matched \(matchCount) entries; "

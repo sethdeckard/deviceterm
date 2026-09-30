@@ -645,22 +645,28 @@ final class IntentDispatcher {
                 )
 
             case let .simulator(pane):
-                await router.dispatchAndWait(
+                // `expecting` fences the close to the admission resolved
+                // here, so a pane re-admitted while this waited its turn is
+                // refused rather than closed on an answer given about it.
+                let outcome = await router.dispatchAndWaitForDetach(
                     .detachSimPane(
                         tab: resolved.tabID,
                         udid: pane.udid,
-                        mode: paneCloseMode(selectedMode)
+                        mode: paneCloseMode(selectedMode),
+                        expecting: pane.admission
                     )
                 )
+                if outcome != .closed { throw IntentError.paneReplacedBeforeClose(ref: closed.shortId) }
 
             case let .device(pane):
-                await router.dispatchAndWait(
+                let outcome = await router.dispatchAndWaitForDetach(
                     .detachDevicePane(
                         tab: resolved.tabID,
                         deviceId: pane.deviceId,
                         mode: paneCloseMode(selectedMode)
                     )
                 )
+                if outcome != .closed { throw IntentError.paneReplacedBeforeClose(ref: closed.shortId) }
             }
             do {
                 _ = try resolver.resolveWorkspacePane(closed.id)

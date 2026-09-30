@@ -8,6 +8,7 @@ import Testing
 struct IntentDispatcherTests {
     private struct Harness {
         let dispatcher: IntentDispatcher
+        let router: Router
         let workspace: WorkspaceViewModel
         let fake: FakeDaemonClient
         let delegate: RecordingActionDelegate
@@ -17,14 +18,16 @@ struct IntentDispatcherTests {
         let workspace = WorkspaceViewModel()
         let fake = FakeDaemonClient()
         let delegate = RecordingActionDelegate()
+        let router = Router(workspace: workspace, daemon: fake)
         let dispatcher = IntentDispatcher(
             workspace: workspace,
-            router: Router(workspace: workspace, daemon: fake),
+            router: router,
             actionDelegate: delegate,
             automationPrograms: FakeAutomationPrograms()
         )
         return Harness(
             dispatcher: dispatcher,
+            router: router,
             workspace: workspace,
             fake: fake,
             delegate: delegate
@@ -204,6 +207,61 @@ struct IntentDispatcherTests {
         )
 
         #expect(result == .error(.wouldCloseTab))
+    }
+
+    @Test
+    func workspacePaneCloseRefusesAPaneThatLeftBeforeTheCloseRan() async {
+        // The close resolves its pane at once but runs in the route drain.
+        // A route already queued ahead of it (here a plain detach, standing
+        // in for a resurrect's in-place re-attach) can take the pane first.
+        // The close then touches nothing, so reporting it closed would tell
+        // the caller a simulator was shut down when it's still running.
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed",
+            panes: [SimPaneState(paneId: "P1", udid: "U-1", displayName: "iPhone", family: "phone")]
+        )
+        harness.router.dispatch(.detachSimPane(tab: TabID(value: 1), udid: "U-1", mode: .detach))
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneClose("P1", mode: .shutdown),
+            origin: .inProcess
+        )
+
+        guard case let .error(error) = result else {
+            Issue.record("a close that closed nothing reported \(result)")
+            return
+        }
+        #expect(error.code == "intent.notFound")
+        #expect(error.hint.contains("closed or re-attached before this close ran"))
+        // Only the queued detach reached the daemon; no shutdown was sent.
+        #expect(harness.fake.closePaneCalls.map(\.mode) == [.detach])
+    }
+
+    @Test
+    func workspacePaneCloseStillReportsAClosedSimulatorPane() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-seed",
+            panes: [SimPaneState(paneId: "P1", udid: "U-1", displayName: "iPhone", family: "phone")]
+        )
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneClose("P1", mode: .shutdown),
+            origin: .inProcess
+        )
+
+        guard case .data(.workspaceMutation) = result else {
+            Issue.record("an ordinary close should return its receipt, got \(result)")
+            return
+        }
+        #expect(harness.fake.closePaneCalls.map(\.mode) == [.shutdown])
     }
 
     @Test

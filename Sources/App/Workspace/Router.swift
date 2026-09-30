@@ -17,7 +17,17 @@ import Foundation
 final class Router {
     private struct QueuedRoute: Sendable {
         let route: Route
-        let completion: CheckedContinuation<Void, Never>?
+        let completion: CheckedContinuation<DetachOutcome?, Never>?
+    }
+
+    /// Whether a pane-close route closed the pane it named. A caller that
+    /// resolved a pane and then waited its turn in the drain can find it gone
+    /// or re-admitted by then: resurrection and reconnect recovery replace a
+    /// mounted pane with an in-place attachment placeholder. The route then
+    /// closes nothing, and only this outcome says so.
+    enum DetachOutcome: Sendable, Equatable {
+        case closed
+        case notApplied
     }
     /// Wire codes for a *definite* pre-commit protection rejection: the
     /// daemon validated and refused **before** the atomic mutation, so this
@@ -52,6 +62,10 @@ final class Router {
     private let detectWorktreeName: @MainActor () -> String?
     private var continuation: AsyncStream<QueuedRoute>.Continuation?
     private var drainTask: Task<Void, Never>?
+    /// The outcome the route being drained reported, if it is a pane close.
+    /// Reset before each route and read after it, which the serial drain makes
+    /// safe: only one route's handler runs at a time.
+    private var drainedDetachOutcome: DetachOutcome?
     private var nextWindowValue = 1
     private var nextTabValue = 1
     private var nextTerminalValue = 1
@@ -232,8 +246,8 @@ final class Router {
     var restoreWindow: Duration = .seconds(30)
     /// Deadline for an awaited `applyTabProtection` to report `.pending` when
     /// the daemon is slow, so a stalled RPC can't wedge the serial command
-    /// drain. Kept below the daemon's 5s back-channel timeout; tests
-    /// shorten it.
+    /// drain. Kept below every back-channel reply deadline in
+    /// `AppCommandDeadline`; tests shorten it.
     var protectionOutcomeDeadlineNanos: UInt64 = 3_000_000_000
     /// How long a close gesture waits for `beginClose`'s authoritative
     /// verdict before proceeding on the binary tombstone fallback. Bounded
@@ -265,8 +279,9 @@ final class Router {
         self.continuation = continuation
         self.drainTask = Task { @MainActor [weak self] in
             for await queued in stream {
+                self?.drainedDetachOutcome = nil
                 await self?.handle(queued.route)
-                queued.completion?.resume()
+                queued.completion?.resume(returning: self?.drainedDetachOutcome)
             }
         }
     }
@@ -289,10 +304,25 @@ final class Router {
 
     /// Enqueue a route and suspend until its serial handler has completed.
     func dispatchAndWait(_ route: Route) async {
+        _ = await enqueueAndWait(route)
+    }
+
+    /// Enqueue a sim or device pane close and report whether it closed the
+    /// pane it named. Nil when the router has shut down and ran nothing.
+    func dispatchAndWaitForDetach(_ route: Route) async -> DetachOutcome? {
+        await enqueueAndWait(route)
+    }
+
+    private func enqueueAndWait(_ route: Route) async -> DetachOutcome? {
         reserveClosingWindow(for: route)
-        guard let continuation else { return }
-        await withCheckedContinuation { completion in
-            continuation.yield(QueuedRoute(route: route, completion: completion))
+        guard let continuation else { return nil }
+        return await withCheckedContinuation { completion in
+            // After `shutdown` the stream is finished and drops the route
+            // unrun, taking the completion with it, so resume here instead of
+            // suspending forever.
+            if case .terminated = continuation.yield(QueuedRoute(route: route, completion: completion)) {
+                completion.resume(returning: nil)
+            }
         }
     }
 
@@ -2556,13 +2586,20 @@ final class Router {
     ) async {
         guard let window = workspace.windowContaining(tab: tabID),
             let pane = window.tabs.tab(id: tabID)?.simPanes
-                .first(where: { $0.udid == udid }) else { return }
+                .first(where: { $0.udid == udid }) else {
+            drainedDetachOutcome = .notApplied
+            return
+        }
         // The pane moved between accepting this route and draining it: it
         // was replaced, or the same record was re-admitted under a new
         // attachment. Either way this close names something that is no
         // longer here, and applying it would carry an answer the user gave
         // about a different admission.
-        if let expecting, pane.admission != expecting { return }
+        if let expecting, pane.admission != expecting {
+            drainedDetachOutcome = .notApplied
+            return
+        }
+        drainedDetachOutcome = .closed
         do {
             try await daemon.closePane(
                 paneId: pane.paneId,
@@ -2805,7 +2842,11 @@ final class Router {
     ) async {
         guard let window = workspace.windowContaining(tab: tabID),
             let pane = window.tabs.tab(id: tabID)?.devicePanes
-                .first(where: { $0.deviceId == deviceId }) else { return }
+                .first(where: { $0.deviceId == deviceId }) else {
+            drainedDetachOutcome = .notApplied
+            return
+        }
+        drainedDetachOutcome = .closed
         try? await daemon.closePane(
             paneId: pane.paneId,
             mode: mode,

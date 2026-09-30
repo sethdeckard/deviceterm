@@ -711,6 +711,60 @@ struct RouterTests {
     }
 
     @Test
+    func aDetachReportsWhetherItClosedThePaneItNamed() async {
+        // The drain is the only place that knows whether a queued close found
+        // its pane, so it reports that back to the caller that waited on it.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "P1", scale: nil, family: "phone")
+        let (router, _) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        let tabID = TabID(value: 1)
+        router.dispatch(.attachSimPane(tab: tabID, udid: "U", displayName: "iPhone"))
+        await settle()
+
+        let stale = await router.dispatchAndWaitForDetach(
+            .detachSimPane(
+                tab: tabID,
+                udid: "U",
+                mode: .shutdown,
+                expecting: PaneAdmission(paneId: "P-other", attachment: nil)
+            )
+        )
+        let closed = await router.dispatchAndWaitForDetach(
+            .detachSimPane(tab: tabID, udid: "U", mode: .detach)
+        )
+        let gone = await router.dispatchAndWaitForDetach(
+            .detachSimPane(tab: tabID, udid: "U", mode: .detach)
+        )
+        let noDevice = await router.dispatchAndWaitForDetach(
+            .detachDevicePane(tab: tabID, deviceId: "D", mode: .detach)
+        )
+
+        #expect(stale == .notApplied)
+        #expect(closed == .closed)
+        #expect(gone == .notApplied)
+        #expect(noDevice == .notApplied)
+        #expect(fake.closePaneCalls.count == 1)
+    }
+
+    @Test
+    func waitingOnARouteAfterShutdownReturnsInsteadOfHanging() async {
+        // Shutdown finishes the drain's stream, which then drops anything
+        // yielded to it. A waiter whose route was dropped must still be
+        // resumed, or it suspends forever.
+        let (router, _) = makeRouter(FakeDaemonClient())
+        await router.shutdown()
+
+        let outcome = await router.dispatchAndWaitForDetach(
+            .detachSimPane(tab: TabID(value: 1), udid: "U", mode: .detach)
+        )
+        await router.dispatchAndWait(.openWindow())
+
+        #expect(outcome == nil)
+    }
+
+    @Test
     func detachSimPaneRefusesWhenOnlyTheAttachmentMoved() async {
         // A re-attach keeps the daemon's record and its id, bumping only
         // `attachment`. The paneId therefore still matches while naming a
