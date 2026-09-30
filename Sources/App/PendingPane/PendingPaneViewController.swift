@@ -48,10 +48,12 @@ final class PendingPaneViewController: NSViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-    /// Shown label: the caller's name when present, else a target-prefix
-    /// placeholder (the CLI-claim path passes nil).
+    /// Shown label: the caller's name when present, else the device name
+    /// looked up for a caller that gave none (the CLI-claim path), else a
+    /// target-prefix placeholder until that lookup answers.
     static func label(for pending: PendingPaneState) -> String {
         if let displayName = pending.displayName { return displayName }
+        if let resolvedLabel = pending.resolvedLabel { return resolvedLabel }
         switch pending.target {
         case let .sim(udid):
             return "Sim \(udid.prefix(8))"
@@ -65,10 +67,11 @@ final class PendingPaneViewController: NSViewController {
         view = NSHostingView(rootView: PendingPaneView(model: model))
     }
 
-    /// Push the latest pending state (phase may have flipped
-    /// attaching↔failed). The label is immutable for the pane's life.
+    /// Push the latest pending state: the phase may have flipped, and a
+    /// looked-up device name may have replaced the target-prefix label.
     func update(pending: PendingPaneState) {
         model.phase = pending.phase
+        model.label = Self.label(for: pending)
     }
 
     /// Drop the placeholder, cancelling the attach when one is still in

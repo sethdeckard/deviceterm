@@ -71,3 +71,33 @@ struct PendingPaneReducerTests {
         #expect(phase.isSettledFailure == settled)
     }
 }
+
+/// The placeholder's shown label: the caller's name, then a looked-up device
+/// name, then a target-prefix stub.
+@MainActor
+struct PendingPaneLabelTests {
+    private func pending(displayName: String?, resolvedLabel: String?) -> PendingPaneState {
+        var state = PendingPaneState(
+            id: PendingPaneID(value: 1),
+            target: .sim(udid: "1d464fbe-56ba-4a49-8d73-277a7e8a0e92"),
+            displayName: displayName
+        )
+        state.resolvedLabel = resolvedLabel
+        return state
+    }
+
+    @Test
+    func theCallersNameWins() {
+        #expect(PendingPaneViewController.label(for: pending(displayName: "Desk", resolvedLabel: "Looked")) == "Desk")
+    }
+
+    @Test
+    func aLookedUpNameReplacesTheStub() {
+        #expect(PendingPaneViewController.label(for: pending(displayName: nil, resolvedLabel: "Looked")) == "Looked")
+    }
+
+    @Test
+    func theStubRemainsWithoutEither() {
+        #expect(PendingPaneViewController.label(for: pending(displayName: nil, resolvedLabel: nil)) == "Sim 1d464fbe")
+    }
+}

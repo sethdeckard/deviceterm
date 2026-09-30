@@ -27,6 +27,10 @@ struct PendingPaneState: Identifiable, Equatable, Sendable {
     /// name-resolution semantics. The view derives a shown label from
     /// this (falling back to a `target`-prefix placeholder).
     let displayName: String?
+    /// The device's name, looked up after the placeholder appeared because
+    /// the caller supplied none. A label only: the attach and a retry still
+    /// resolve from `displayName`, so this never changes what they send.
+    var resolvedLabel: String?
     /// Coarse device family (wire string), used to size the placeholder
     /// leaf with the same metrics the real pane will take so the success
     /// swap doesn't resize. nil → `.unknown` → phone-default.

@@ -2419,6 +2419,103 @@ struct RouterTests {
     }
 
     @Test
+    func aNamelessSimPlaceholderShowsTheLookedUpNameWhileAttaching() async {
+        // The CLI passes no name. Without the lookup the placeholder reads
+        // "Sim 1d464fbe" for as long as the attach runs.
+        let fake = FakeDaemonClient()
+        fake.deviceListResult = [
+            DeviceListEntry(
+                udid: "1D464FBE-56BA-4A49-8D73-277A7E8A0E92",
+                name: "CrownsGambit",
+                state: "Booted",
+                ownedBySession: nil
+            )
+        ]
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(
+            .attachSimPane(tab: TabID(value: 1), udid: "1D464FBE-56BA-4A49-8D73-277A7E8A0E92", displayName: nil)
+        )
+        await settle()
+        #expect(fake.attachesWaiting == 1)
+        #expect(pendingPanes(workspace).first?.resolvedLabel == "CrownsGambit")
+        fake.releaseAttach()
+        await settle()
+    }
+
+    @Test
+    func aNamelessPlaceholderKeepsItsNameAfterItFails() async {
+        let fake = FakeDaemonClient()
+        fake.deviceListResult = [
+            DeviceListEntry(udid: "U", name: "iPhone 17 Pro", state: "Shutdown", ownedBySession: nil)
+        ]
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: nil))
+        await settle()
+        guard case .failed = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected a failed placeholder")
+            return
+        }
+        #expect(pendingPanes(workspace).first?.resolvedLabel == "iPhone 17 Pro")
+    }
+
+    @Test
+    func aNamelessPlaceholderKeepsThePrefixLabelWhenTheLookupFails() async {
+        let fake = FakeDaemonClient()
+        fake.deviceListError = FakeDaemonError.attachFailed
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: nil))
+        await settle()
+        #expect(pendingPanes(workspace).first?.resolvedLabel == nil)
+    }
+
+    @Test
+    func aNamelessDevicePlaceholderAndPaneShowTheLookedUpName() async {
+        // A physical device attached from the CLI: the placeholder shows the
+        // name while attaching, and the mounted pane keeps it rather than
+        // falling back to a deviceId stub.
+        let fake = FakeDaemonClient()
+        fake.physicalDeviceListResult = [
+            PhysicalDeviceListEntry(deviceId: "00008140-AB", name: "Test iPhone")
+        ]
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachDevicePane(tab: TabID(value: 1), deviceId: "00008140-AB", displayName: nil))
+        await settle()
+        #expect(pendingPanes(workspace).first?.resolvedLabel == "Test iPhone")
+        fake.releaseAttach()
+        await settle()
+        let device = workspace.window(id: WindowID(value: 1))?.tabs.tab(id: TabID(value: 1))?.devicePanes.first
+        #expect(device?.displayName == "Test iPhone")
+    }
+
+    @Test
+    func aNamedAttachLooksNothingUp() async {
+        // The caller's name is the source; recovery and the picker supply one.
+        let fake = FakeDaemonClient()
+        fake.armAttachBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachDevicePane(tab: TabID(value: 1), deviceId: "00008140-AB", displayName: "Desk iPad"))
+        await settle()
+        #expect(fake.physicalDeviceListCallCount == 0)
+        #expect(pendingPanes(workspace).first?.resolvedLabel == nil)
+        fake.releaseAttach()
+        await settle()
+    }
+
+    @Test
     func routeDrainAdvancesWhileAttachBlocked() async {
         // The core regression: a slow attach must not freeze the serial
         // route drain. With the attach barrier held, a route dispatched
@@ -2577,6 +2674,34 @@ struct RouterTests {
         #expect(fake.closePaneCalls.contains(.init(paneId: "LEAK", mode: .detach)))
         #expect(simPanes(workspace).isEmpty)
         // Let the teardown finish.
+        fake.releaseCloseSession()
+        await settle()
+        #expect(workspace.window(id: WindowID(value: 1))?.tabs.tabs.isEmpty == true)
+    }
+
+    @Test
+    func aTabClosedDuringTheNameLookupClosesThePaneNotMountsIt() async {
+        // A nameless attach returns, then suspends on the device-list lookup
+        // for its name. A tab close that begins there must still stop the
+        // mount: the placeholder is present until teardown finishes, and the
+        // teardown already snapshotted the tab's panes.
+        let fake = FakeDaemonClient()
+        fake.attachResult = PaneCreateResponse(paneId: "LEAK", scale: nil, family: "phone")
+        fake.armDeviceListBarrier()
+        fake.armCloseSessionBarrier()
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: nil))
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 1)          // attach answered
+        router.dispatch(.closeTab(WindowID(value: 1), TabID(value: 1), mode: .detach))
+        await settle()
+        #expect(fake.closeSessionsWaiting == 1)             // teardown mid-flight
+        fake.releaseDeviceList()
+        await settle()
+        #expect(fake.closePaneCalls.contains(.init(paneId: "LEAK", mode: .detach)))
+        #expect(simPanes(workspace).isEmpty)
         fake.releaseCloseSession()
         await settle()
         #expect(workspace.window(id: WindowID(value: 1))?.tabs.tabs.isEmpty == true)

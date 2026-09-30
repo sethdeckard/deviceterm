@@ -2091,12 +2091,13 @@ final class Router {
     /// (`noteSimOwned` records a sim's boot claim for cold-start orphan
     /// recovery; device panes are never persisted).
     ///
-    /// There is no name lookup on this path. Recovery sends the pane's
-    /// user-set name as `carriedName`, and without a display name or a
-    /// response name the label falls back to a deviceId stub. The caller's
-    /// name is the real source, which is why recovery hands its own label back rather
-    /// than resolving. Nothing composes a device type onto it either (a
-    /// physical attach reports none), so that label round-trips unchanged.
+    /// The caller's name is the real source. Recovery sends the pane's user-set
+    /// name as `carriedName` and hands its own label back rather than
+    /// resolving. Only an attach with neither a display name nor a response
+    /// name (the CLI passes none) looks the device up, and falls back to a
+    /// deviceId stub when the lookup finds nothing. Nothing composes a device
+    /// type onto the label (a physical attach reports none), so it round-trips
+    /// unchanged.
     private func deviceAttachSpec(
         tab tabID: TabID,
         deviceId: String,
@@ -2115,9 +2116,10 @@ final class Router {
                     name: carriedName
                 )
             },
-            resolveName: { response in
+            resolveName: { [weak self] response in
                 if let displayName { return displayName }
                 if let responseName = response.name { return responseName }
+                if let looked = await self?.resolvePhysicalDeviceName(deviceId: deviceId) { return looked }
                 return "Device \(deviceId.prefix(8))"
             },
             mount: { window, pendingId, response, resolvedName in
@@ -2176,6 +2178,42 @@ final class Router {
             spawningTerminal: spawningTerminalID
         )
         spawnAttach(tab: tabID, pendingId: pendingId, spec: spec)
+        if spec.displayName == nil {
+            resolvePendingLabel(tab: tabID, pendingId: pendingId, target: spec.target)
+        }
+    }
+
+    /// Replace a nameless placeholder's target-prefix label when the
+    /// device-name lookup succeeds. An attach started without a name (the CLI
+    /// passes none) shows the prefix until then.
+    ///
+    /// Runs beside the attach rather than before it, so the placeholder still
+    /// appears the instant the user acts. Best-effort: a lookup that fails or
+    /// finds nothing leaves the prefix label, and one that answers after the
+    /// placeholder has gone does nothing.
+    private func resolvePendingLabel(tab tabID: TabID, pendingId: PendingPaneID, target: PaneTarget) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let name: String?
+            switch target {
+            case let .sim(udid):
+                name = await resolveDeviceName(udid: udid)
+
+            case let .device(deviceId):
+                name = await resolvePhysicalDeviceName(deviceId: deviceId)
+            }
+            guard let name, !name.isEmpty else { return }
+            workspace.windowContaining(tab: tabID)?.tabs.setPendingLabel(name, id: pendingId, inTab: tabID)
+        }
+    }
+
+    /// A connected physical device's name, or nil when it isn't listed or the
+    /// list can't be read.
+    private func resolvePhysicalDeviceName(deviceId: String) async -> String? {
+        guard let devices = try? await daemon.physicalDeviceList() else { return nil }
+        guard let name = devices.first(where: { $0.deviceId == deviceId })?.name,
+            !name.isEmpty else { return nil }
+        return name
     }
 
     /// Run the attach RPC for a pending pane and reconcile the result: swap
@@ -2250,10 +2288,22 @@ final class Router {
                 )
                 return false
             }
-            // Resolve the bare name (the sim path may await a `device.list`
+            // Resolve the bare name (a nameless attach awaits a device-list
             // lookup here), then compose "Name · Type" using the response's
             // deviceType (collapsed to just the name for a stock device).
             let bareName = await spec.resolveName(response)
+            // That lookup suspended, so a tab close or quit can have begun in
+            // it. Same check and the same detach as above: the placeholder is
+            // still present mid-teardown, so the guard below would mount into
+            // a tab whose panes were already snapshotted for closing.
+            if Task.isCancelled || closingTabs.contains(tabID) {
+                await detachUnclaimedPane(
+                    response,
+                    target: spec.target,
+                    ignoring: pendingId
+                )
+                return false
+            }
             let resolvedName: String
             if let deviceType = response.deviceType, deviceType != bareName {
                 resolvedName = "\(bareName) · \(deviceType)"

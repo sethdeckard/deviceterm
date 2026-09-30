@@ -11,7 +11,7 @@ import SwiftUI
 @Observable
 final class PendingPaneViewModel {
     var phase: PendingPanePhase
-    let label: String
+    var label: String
     @ObservationIgnored var onRetry: () -> Void = {}
     @ObservationIgnored var onBoot: () -> Void = {}
     @ObservationIgnored var onCancel: () -> Void = {}

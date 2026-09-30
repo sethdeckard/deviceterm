@@ -487,6 +487,15 @@ final class TabListViewModel {
         )
     }
 
+    /// Give a placeholder the device name looked up for it. No-op if the
+    /// placeholder is gone.
+    func setPendingLabel(_ label: String, id pendingId: PendingPaneID, inTab id: TabID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }),
+            let paneIndex = tabs[index].pendingPanes.firstIndex(where: { $0.id == pendingId })
+        else { return }
+        tabs[index].pendingPanes[paneIndex].resolvedLabel = label
+    }
+
     /// Renumber where a placeholder will land in the typed array when it
     /// mounts. Recovery calls this as it re-enumerates a tab, because a
     /// placeholder left over from an earlier recovery carries the index it was
