@@ -39,4 +39,15 @@ public enum PaneEvent: Sendable {
         UUID,
         orientation: Orientation
         )
+    /// A foldable device's hinge moved, in degrees, `0` shut and `180` flat.
+    ///
+    /// An observation rather than a command receipt: the daemon watches the
+    /// hinge, so a fold driven from Device Hub or from another tab publishes
+    /// here as well as one this daemon dispatched. A device with one panel
+    /// never emits.
+    case hingeChanged(
+        paneId:
+        UUID,
+        degrees: Double
+        )
 }

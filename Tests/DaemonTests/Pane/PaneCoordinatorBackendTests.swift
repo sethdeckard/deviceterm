@@ -1279,6 +1279,49 @@ func aDisplayWithNoOrientationSourceStillRenders() async throws {
 }
 
 @Test
+func aLateSubscriberIsToldTheHingeAngle() async throws {
+    // The monitor reads the device's current angle as its first line, which
+    // routinely lands before the GUI subscribes. Without a replay the pane
+    // would show its seeded angle until someone moved the hinge again, which
+    // is the whole point of reading it.
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "hinge-replay",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    // A reading arriving with nobody listening.
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 137)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var replayed: [Double] = []
+    for await event in stream {
+        if case let .hingeChanged(_, degrees) = event { replayed.append(degrees) }
+    }
+    #expect(replayed == [137])
+}
+
+@Test
+func aPaneNeverReadReplaysNoHingeAngle() async throws {
+    // Nothing has been read, so there is no angle to claim. A replayed zero
+    // would read as "shut" on a device that may well be open.
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "hinge-unread",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var replayed: [Double] = []
+    for await event in stream {
+        if case let .hingeChanged(_, degrees) = event { replayed.append(degrees) }
+    }
+    #expect(replayed.isEmpty)
+}
+
+@Test
 func aPaneWithNoDisplaySourceStillTurnsOnACommand() async throws {
     // A command-reply backend needs no passive display observer. Its returned
     // orientation confirms the command, updates presentation, and reaches the

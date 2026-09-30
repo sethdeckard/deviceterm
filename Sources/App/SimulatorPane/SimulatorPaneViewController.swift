@@ -816,6 +816,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         let orientation = viewModel.currentOrientation
         contentView?.applyFrame(lease: lease, traceSequence: viewModel.currentSurfaceSequence)
         contentView?.setOrientation(orientation)
+        adoptConfirmedHinge()
         refreshOverlay(for: state)
         // Push the bezel inputs every render(). The wrapper's
         // `BezelContext.didSet` gates layout to actual changes, so
@@ -996,6 +997,20 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         )
     }
 
+    /// Move the fold slider onto the angle the daemon observed.
+    ///
+    /// Skipped while the user is dragging the slider, because their drag owns
+    /// the value until they let go. Skipped before the daemon has
+    /// reported anything, which leaves the seeded value in place rather than
+    /// claiming a reading nobody made.
+    private func adoptConfirmedHinge() {
+        guard !chromeViewModel.foldSliderIsTracking,
+            let degrees = viewModel.confirmedHingeDegrees,
+            chromeViewModel.foldDegrees != degrees
+        else { return }
+        chromeViewModel.foldDegrees = degrees
+    }
+
     /// Resize the chrome strip to whatever rows it is drawing now.
     ///
     /// The SwiftUI chrome sizes itself to its content, but the constraint
@@ -1019,10 +1034,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Drive the hinge, and record the angle for the chrome's slider.
     ///
     /// Every fold surface goes through here: the fold bar's postures and
-    /// slider, the Device menu, and the pane's context menu. Nothing reports
-    /// the hinge back, so this echo is the only thing the slider can show,
-    /// and a surface that skipped it would leave the slider contradicting a
-    /// fold the user had just made from somewhere else in the same app.
+    /// slider, the Device menu, and the pane's context menu. Setting the
+    /// slider here is immediate feedback for a request this app made; the
+    /// device's own readings correct it, and are what catch a fold made
+    /// somewhere else.
     func requestFold(toDegrees degrees: Double) {
         chromeViewModel.foldDegrees = degrees
         viewModel.fold(toDegrees: degrees)

@@ -30,5 +30,11 @@ public enum DaemonProtocolInfo {
     /// join, and the restore-inventory check. A GUI that outlived a helper
     /// replacement would compare its old spellings against the new one and
     /// silently fail all four, so the version gate stops the pairing instead.
-    public static let wireVersion = "0.8.0"
+    ///
+    /// 0.9.0 raised from 0.8.0 for the `hinge.changed` subscription event. A
+    /// `PaneEventName` rawValue is the wire contract, and a GUI that outlived
+    /// a helper replacement would not know the name, so a foldable pane's
+    /// hinge would stop tracking silently rather than the pairing being
+    /// refused.
+    public static let wireVersion = "0.9.0"
 }

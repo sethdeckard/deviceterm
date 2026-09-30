@@ -13,4 +13,8 @@ public enum PaneEventName: String, Sendable, Equatable, CaseIterable {
     /// display observation and physical-device rotation replies both publish
     /// through this event.
     case orientationChanged = "orientation.changed"
+    /// A foldable device's hinge angle changed. Published from the daemon's
+    /// own observation of the device, so a fold made outside DeviceTerm
+    /// reaches subscribers too.
+    case hingeChanged = "hinge.changed"
 }

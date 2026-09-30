@@ -1534,6 +1534,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                                 continuation.yield(.orientationChanged(event))
                             }
 
+                        case .hingeChanged:
+                            if let event = try? JSONDecoder().decode(
+                                HingeChangedEvent.self,
+                                from: data
+                            ) {
+                                continuation.yield(.hingeChanged(event))
+                            }
+
                         case nil:
                             break
                         }

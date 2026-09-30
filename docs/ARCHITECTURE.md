@@ -595,11 +595,12 @@ extensions; `DaemonProtocol` never links `CoreSimulatorBridge`.
 **Streaming model.** Server-streamed events reuse the request's `id` for every
 event frame. The client distinguishes a final `res` from a streaming `evt` by
 `type`. `app.commands` uses the control peer; every pane subscription uses the
-pane peer. A pane stream is consumer-pulled: control events (`state.changed` /
-`orientation.changed`) queue losslessly in order, while `surface.changed` is
-held latest-only. A stalled consumer therefore coalesces to the newest frame
-without evicting a control event. Surface storage is bounded latest-only;
-control events have no configured queue bound and drain as the consumer pulls.
+pane peer. A pane stream is consumer-pulled: `state.changed` and
+`orientation.changed` queue losslessly in order, while `surface.changed` and
+`hinge.changed` are each held latest-only in a slot of their own. A stalled
+consumer therefore coalesces to the newest frame and the newest angle without
+evicting a lifecycle event. Those two slots are bounded; the lossless events
+have no configured queue bound and drain as the consumer pulls.
 
 **Reconnect / resubscribe.** Each pane's `SimulatorPaneViewModel` owns its
 subscription retry loop. When the pane connection drops, the transport finishes
@@ -2524,8 +2525,8 @@ pane instead of faulting, because the GUI builds its menu from this.
 - Result: `{ok, subscriptionToken?}`, then a stream of pane events
 - Scope: session
 
-`frames` defaults to `true`. Setting it to `false` subscribes to lifecycle and
-orientation events without requesting capture, replaying a surface, or
+`frames` defaults to `true`. Setting it to `false` subscribes to every event
+but `surface.changed` without requesting capture, replaying a surface, or
 registering a surface delivery lane or pool lease token.
 
 Events are correlated to the subscription's request-envelope id:
@@ -2541,10 +2542,29 @@ Events are correlated to the subscription's request-envelope id:
   returned by a DeviceTerm rotation, including a non-target result. Replayed
   once at subscribe and sent again whenever it changes. A pane that has neither
   been read nor rotated replays `portrait`.
+- `hinge.changed`: `{paneId, degrees}`, a foldable device's hinge angle, `0`
+  shut and `180` flat. An observation of the device rather than a receipt for
+  `pane.input.fold`, so a fold made in Device Hub or from another tab arrives
+  here too. Sent only for a device advertising the `fold` capability: the first
+  angle read, the current one replayed to each new subscriber, and every later
+  change. The source suppresses movement under a degree.
 
 A frame subscriber receives the current surface when one exists. Each new
 simulator frame subscriber also requests a fresh capture, even if another
 subscriber already keeps capture active.
+
+The daemon reads the hinge through a long-lived `devicectl device motion
+hinge-angle`, one child process per attached foldable. CoreSimulator exposes no
+hinge property, and the guest helper that drives the hinge links only the
+dispatch half of IOHIDEventSystem, so this is the reader available. It prints
+the current angle on start, which is what saves an attach from needing a
+separate read.
+
+The daemon owns the process lifetime. An exit does notify it, and it replaces
+the reader when one arrives, but the monitoring window ends with no notification
+at all, so the daemon times that window and schedules the replacement itself. It
+also stops the reader when the pane's backend comes down. An exit is therefore
+always unexpected, since the reader does not end on its own.
 
 The initial ack returns a `subscriptionToken` on every XPC subscription,
 including `frames: false`. A frame subscription registers that token for

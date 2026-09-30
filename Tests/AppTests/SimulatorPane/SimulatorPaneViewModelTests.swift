@@ -719,6 +719,50 @@ struct SimulatorPaneViewModelTests {
         #expect(viewModel.currentOrientation == orientation)
     }
 
+    @Test("the hinge event is the only writer of the observed angle", arguments: [
+        0.0, 45.5, 120.0, 180.0
+    ])
+    func hingeChangedEventDrivesTheObservedAngle(_ degrees: Double) async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.start()
+        await settle()
+        // Nothing has reported yet, so there is no angle to claim.
+        #expect(viewModel.confirmedHingeDegrees == nil)
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: degrees))
+        )
+        await settle()
+        #expect(viewModel.confirmedHingeDegrees == degrees)
+    }
+
+    @Test("a fold this app asked for does not write the observed angle")
+    func foldingDoesNotWriteTheObservedAngle() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: 90)
+        await settle()
+        // The request went out, and the value stays unset until the device is
+        // observed. Writing it here would make the reading an echo again.
+        #expect(fake.foldCalls.map(\.degrees) == [90])
+        #expect(viewModel.confirmedHingeDegrees == nil)
+    }
+
+    @Test("an out-of-range hinge event is ignored", arguments: [-1.0, 181.0, 900.0])
+    func anOutOfRangeHingeEventIsIgnored(_ degrees: Double) async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.start()
+        await settle()
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: degrees))
+        )
+        await settle()
+        // This reaches a slider and a renderer, so a nonsense angle is dropped
+        // rather than carried.
+        #expect(viewModel.confirmedHingeDegrees == nil)
+    }
+
     @Test
     func anUnknownOrientationEventIsIgnored() async {
         let fake = FakeDaemonClient()

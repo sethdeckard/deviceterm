@@ -85,13 +85,19 @@ final class PaneChromeViewModel {
 
     /// The angle the fold bar's slider is showing.
     ///
-    /// **The selected angle, not a reading.** Dragging writes it continuously
-    /// and release is what sends it, so mid-drag it leads the device. No RPC
-    /// reports the hinge either, so it cannot know an angle set from Device
-    /// Hub, from `deviceterm fold` in another tab, or by the boot itself. It starts shut because that is
-    /// where a Duo boots, which is an observation about one device rather
-    /// than a contract any foldable owes.
+    /// Follows the angles the daemon observes, except while the user is
+    /// dragging the slider, when their drag owns it. Until the first reading
+    /// arrives it holds the seeded value, which is shut.
     var foldDegrees: Double
+
+    /// Whether the user is actively dragging the fold slider, as
+    /// `Slider.onEditingChanged` reports it.
+    ///
+    /// While they are, their drag owns `foldDegrees` and the device's own
+    /// readings are ignored. Without this the daemon's `hinge.changed` stream
+    /// would fight the drag: the slider would jump back to wherever the hinge
+    /// actually is between every frame of it.
+    var foldSliderIsTracking = false
 
     /// Latch behind `foldControlVisible`'s one automatic open. Capabilities
     /// arrive after attach and are rewritten on every refresh, so without

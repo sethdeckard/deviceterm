@@ -1249,5 +1249,13 @@ private func encodeSubscriptionEvent(
             method: PaneEventName.orientationChanged.rawValue,
             params: encoded
         )
+
+    case let .hingeChanged(_, degrees):
+        let payload = HingeChangedEvent(paneId: paneId, degrees: degrees)
+        guard let encoded = try? encoder.encode(payload) else { return nil }
+        return MethodRegistry.SubscriptionEvent(
+            method: PaneEventName.hingeChanged.rawValue,
+            params: encoded
+        )
     }
 }

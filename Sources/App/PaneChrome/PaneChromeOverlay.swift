@@ -492,14 +492,14 @@ struct PaneChromeOverlay: View {
                 ),
                 in: FoldPosture.degreeRange,
                 onEditingChanged: { editing in
+                    viewModel.foldSliderIsTracking = editing
                     guard !editing else { return }
                     viewModel.onFold(viewModel.foldDegrees)
                 }
             )
             .controlSize(.small)
             .accessibilityIdentifier("fold.angle")
-            // The selected angle, which is all this can honestly show: no
-            // RPC reports the hinge back. Fixed width and tabular digits so
+            // The slider's current value. Fixed width and tabular digits so
             // the slider does not resize as the number changes.
             Text("\(Int(viewModel.foldDegrees.rounded()))°")
                 .font(.caption)

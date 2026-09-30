@@ -125,6 +125,15 @@ final class SimulatorPaneViewModel {
     /// input mapping.
     private(set) var currentOrientation: Orientation = .portrait
 
+    /// The hinge angle the daemon last observed on this device, in degrees,
+    /// `0` shut and `180` flat. Nil until the daemon reports one, which is
+    /// never on a device with one panel.
+    ///
+    /// Written only from the `hinge.changed` pane event, so it is a reading
+    /// rather than an echo of a `fold` this app asked for. A fold made in
+    /// Device Hub or from another tab lands here too.
+    private(set) var confirmedHingeDegrees: Double?
+
     // Infrastructure, not observable state. Kept out of the registrar so
     // changes don't trigger renders and `deinit` can touch the task.
     @ObservationIgnored private let daemonClient: any PaneControlling & PaneSubscribing
@@ -366,6 +375,13 @@ final class SimulatorPaneViewModel {
             // value is ignored.
             if let orientation = Orientation(rawValue: change.orientation) {
                 currentOrientation = orientation
+            }
+
+        case let .hingeChanged(change):
+            // The device's own angle. Range-checked rather than trusted,
+            // because this reaches a slider and a renderer.
+            if FoldPosture.degreeRange.contains(change.degrees) {
+                confirmedHingeDegrees = change.degrees
             }
         }
     }

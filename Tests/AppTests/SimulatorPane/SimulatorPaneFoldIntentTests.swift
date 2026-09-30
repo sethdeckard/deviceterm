@@ -195,6 +195,50 @@ struct SimulatorPaneFoldIntentTests {
         return StackedFoldSplit(controller: controller, pane: pane, host: host, window: window)
     }
 
+    @Test("the slider adopts the angle the daemon observed")
+    func sliderFollowsTheDevice() async {
+        let (viewController, fake) = makeViewController()
+        viewController.loadViewIfNeeded()
+        // `viewDidLoad` starts the pane view model and its subscription.
+        viewController.chromeViewModel.foldDegrees = 0
+        await Task.yield()
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 137))
+        )
+        // The event crosses a stream, so poll rather than assume one turn.
+        for _ in 0..<200 where viewController.chromeViewModel.foldDegrees != 137 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(viewController.chromeViewModel.foldDegrees == 137)
+    }
+
+    @Test("a drag in progress owns the slider")
+    func aDragIsNotOverwrittenByTheDevice() async {
+        let (viewController, fake) = makeViewController()
+        viewController.loadViewIfNeeded()
+        // The user has the thumb down and has dragged to 60.
+        viewController.chromeViewModel.foldSliderIsTracking = true
+        viewController.chromeViewModel.foldDegrees = 60
+        await Task.yield()
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 10))
+        )
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        // Without the guard the slider would snap to wherever the hinge is
+        // between every frame of the drag.
+        #expect(viewController.chromeViewModel.foldDegrees == 60)
+
+        // Letting go hands control back.
+        viewController.chromeViewModel.foldSliderIsTracking = false
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 10))
+        )
+        for _ in 0..<200 where viewController.chromeViewModel.foldDegrees != 10 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(viewController.chromeViewModel.foldDegrees == 10)
+    }
+
     @Test("the fold bar and the menus share one intent")
     func theBarGoesThroughTheSamePath() async {
         let (viewController, fake) = makeViewController()

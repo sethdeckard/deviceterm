@@ -1038,6 +1038,13 @@ actor XPCDaemonConnection: DaemonRequestTransport {
                     ) else { return }
                     deliverLifecycle(state, .orientationChanged(evt))
 
+                case .hingeChanged:
+                    guard let evt = try? JSONDecoder().decode(
+                        HingeChangedEvent.self,
+                        from: data
+                    ) else { return }
+                    deliverLifecycle(state, .hingeChanged(evt))
+
                 case nil:
                     return
                 }

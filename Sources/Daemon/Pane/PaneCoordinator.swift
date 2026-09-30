@@ -172,6 +172,14 @@ public actor PaneCoordinator {
         /// create time so `pane.deviceList` can still report it after the
         /// pane shuts down (when `backend` is nil).
         let capabilities: PaneCapabilities
+        /// Watches this device's hinge, on a foldable only. Held for the
+        /// pane's life and stopped when the backend comes down, because it
+        /// owns a child process that outlives its parent otherwise.
+        var hingeMonitor: HingeMonitor?
+        /// Last angle published, so an unchanged reading is not re-broadcast.
+        /// The device suppresses sub-degree movement itself, but a restarted
+        /// monitor re-reports the current angle on its first line.
+        var observedHingeDegrees: Double?
         /// What drives this pane's frames + input. A `SimDeviceBackend`
         /// wrapping the CoreSimulator bridge handles for a sim pane; a
         /// physical-device backend otherwise. Held for the pane's life
@@ -1467,6 +1475,7 @@ public actor PaneCoordinator {
             record.confirmedOrientation = seed
         }
         panes[paneId] = record
+        startHingeMonitorIfFoldable(record: record, paneId: paneId)
         // The one line that ties a pane to the backend it publishes on. The
         // acquisition number matches the acquirer's "backend built" line by
         // value, and the short id is what `pane show` prints, so a reader can
@@ -1743,6 +1752,14 @@ public actor PaneCoordinator {
         channel.send(
             .orientationChanged(paneId: paneId, orientation: record.presentationOrientation)
         )
+        // And the hinge, for the same reason. The monitor reads the device's
+        // current angle as its first line, which routinely lands before the
+        // GUI has subscribed, so without this replay a foldable pane shows its
+        // seeded angle until someone moves the hinge again. Nil means nothing
+        // has been read yet, and there is no angle to claim.
+        if let degrees = record.observedHingeDegrees {
+            channel.send(.hingeChanged(paneId: paneId, degrees: degrees))
+        }
 
         if frames, record.lastSequence > 0, let published = record.currentSurface {
             channel.send(
@@ -2663,6 +2680,11 @@ public actor PaneCoordinator {
     /// still awaits the result, because it must not release the target while a
     /// backend is still coming down.
     private func shutDownBackendAsync(for record: Record) async {
+        // Stopped first and unconditionally. It is a child process, not part
+        // of the backend, so an early return on a nil backend would leave a
+        // `devicectl` running for a pane that no longer exists.
+        record.hingeMonitor?.stop()
+        record.hingeMonitor = nil
         guard let backend = record.backend else { return }
         record.backend = nil
         await backend.shutdownBackendAsync()
@@ -2872,6 +2894,39 @@ public actor PaneCoordinator {
         record.presentationOrientation = orientation
         for subscriber in record.subscribers.values {
             subscriber.channel.send(.orientationChanged(paneId: paneId, orientation: orientation))
+        }
+    }
+
+    /// Begin watching a foldable's hinge, and publish what it reads.
+    ///
+    /// A device with one panel starts nothing, so no pane pays for a child
+    /// process it has no use for. The capability comes from the backend's own
+    /// panel count, so this asks the same question the fold verb does.
+    private func startHingeMonitorIfFoldable(record: Record, paneId: UUID) {
+        guard record.capabilities.fold else { return }
+        let monitor = HingeMonitor(udid: record.target.key) { [weak self] degrees in
+            guard let self else { return }
+            Task { await self.publishHinge(paneId: paneId, degrees: degrees) }
+        }
+        record.hingeMonitor = monitor
+        monitor.start()
+    }
+
+    /// Hand a hinge reading to this pane's subscribers.
+    ///
+    /// Dropped when the pane has gone: the monitor's callback arrives off-actor,
+    /// so a reading can outlive the pane it was read for. A live pane whose
+    /// monitor has already stopped still records the reading, because the angle
+    /// was true when it was taken and a subscriber replaying later wants it.
+    ///
+    /// Internal rather than private so a daemon test can hand the pane a
+    /// reading without starting a monitor against a device that is not there.
+    func publishHinge(paneId: UUID, degrees: Double) {
+        guard let record = panes[paneId] else { return }
+        guard record.observedHingeDegrees != degrees else { return }
+        record.observedHingeDegrees = degrees
+        for subscriber in record.subscribers.values {
+            subscriber.channel.send(.hingeChanged(paneId: paneId, degrees: degrees))
         }
     }
 

@@ -186,48 +186,6 @@ func twoClientsCoexistWithoutClobberingEachOther() throws {
     #expect(treeB["role"] is String)
 }
 
-/// Run `body` with the device unfolded, restoring the hinge before returning
-/// however `body` ended.
-///
-/// Deliberately not a `defer`: `defer` cannot await, so cleanup started there
-/// runs unstructured and the serialized runner can begin the next test while
-/// the shared simulator is still moving, which is a posture a display, AX or
-/// hinge read would catch mid-transition. A restore that fails is recorded
-/// rather than dropped, because it hands every test after this one a device
-/// in the wrong posture, and it never replaces the original failure.
-///
-/// Both the fold and the wait after it sit inside the protected region: a
-/// `Task.sleep` throws the instant its task is cancelled, so a wait left
-/// outside would hand a torn-down run back with the hinge still open.
-private func withDeviceUnfolded<T>(
-    _ backend: any DeviceBackend,
-    settling: UInt64 = 3_000_000_000,
-    _ body: () async throws -> T
-) async throws -> T {
-    let outcome: Result<T, any Error>
-    do {
-        try await backend.fold(toDegrees: 180, generation: backend.currentInputGeneration())
-        try await Task.sleep(nanoseconds: settling)
-        outcome = .success(try await body())
-    } catch {
-        outcome = .failure(error)
-    }
-    // Unstructured, and awaited. Unstructured because such a task does not
-    // inherit the caller's cancellation, so the hinge still goes back when
-    // the run is torn down mid-test, where an inline `Task.sleep` would
-    // throw before it could. Awaited because the device is shared: nothing
-    // after this may start while it is still moving.
-    await Task {
-        do {
-            try await backend.fold(toDegrees: 0, generation: backend.currentInputGeneration())
-            try await Task.sleep(nanoseconds: settling)
-        } catch {
-            Issue.record("the device was left unfolded for the tests after this one: \(error)")
-        }
-    }.value
-    return try outcome.get()
-}
-
 /// Every positive-size frame in the tree, containers included, as candidate
 /// hit-test locations. Taking them from the tree rather than naming a fixed
 /// point keeps the probe on coordinates the tree itself reports.
