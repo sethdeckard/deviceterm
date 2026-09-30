@@ -150,10 +150,22 @@ actor SimBackendAcquirer {
     /// a `SimDeviceBackend`. Classifies the device family and human-readable
     /// type up front (best-effort, since a lookup failure leaves the pane
     /// usable with an unknown family), so every attach path gets them from the
-    /// daemon's response. An unusable sim (display, HID, or Purple acquisition
-    /// failure) surfaces before the pane is recorded.
+    /// daemon's response. A simulator observed as shut down or shutting down is
+    /// refused before display acquisition, and one that is unusable (display,
+    /// HID, or Purple acquisition failure) surfaces before the pane is
+    /// recorded.
     static func acquireFromBridge(udid normalized: String) throws -> Acquired {
         let handle = try? SimDeviceHandle.handle(forUDID: normalized)
+        // Checked before any display lookup, which is not a boot check of its
+        // own: it fails only when the device vends no display port, and a pane
+        // built on a display that never draws waits for a frame indefinitely.
+        if let handle, !admitsAttach(handle.state) {
+            throw PaneError.deviceNotBooted(
+                udid: normalized,
+                name: handle.name.isEmpty ? nil : handle.name,
+                shuttingDown: handle.state == .shuttingDown
+            )
+        }
         let family = handle
             .map { DeviceFamilyClassifier.classify($0.deviceTypeIdentifier) }
             ?? .unknown
@@ -196,6 +208,25 @@ actor SimBackendAcquirer {
             purpleClient: purpleClient
         )
         return Acquired(backend: backend, family: family.rawValue, deviceType: deviceType)
+    }
+
+    /// Whether a sim in `state` may be attached.
+    ///
+    /// Only a sim that is shut down or on its way there is refused. Booting is
+    /// admitted because the shim attaches a sim the moment its boot starts, and
+    /// the pane's first frame is what moves it to rendering. An unrecognized
+    /// state is admitted too, leaving the display lookup to decide.
+    static func admitsAttach(_ state: CSBSimState) -> Bool {
+        switch state {
+        case .shutdown, .shuttingDown:
+            return false
+
+        case .unknown, .creating, .booting, .booted:
+            return true
+
+        @unknown default:
+            return true
+        }
     }
 
     /// Release an acquisition nobody will be handed. Its handles are live

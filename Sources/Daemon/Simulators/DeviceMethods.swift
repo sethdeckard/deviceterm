@@ -18,7 +18,7 @@ import Foundation
 ///          → {restoredCount, udids}
 ///
 /// `device.attach({udid, sessionId, cap, revision?}) → {paneId, scale?, family,
-/// …}` transfers ownership of an already-Booted udid to
+/// …}` transfers ownership of a Booted or Booting udid to
 /// (sessionId, cap) and creates a sim pane for it in one shot. The
 /// orphan re-attach path uses it so adoption into a fresh session
 /// updates the daemon's ownership map; without it `device.list`
@@ -291,8 +291,40 @@ public enum DeviceMethods {
         }
     }
 
-    /// `device.attach`: transfer ownership of an already-Booted
-    /// udid to (sessionId, cap) and create a sim pane for it. The
+    /// The refusal for an attach a shutdown overtook.
+    private static func shutdownDuringAttachRefusal(
+        udid: String,
+        coordinator: DeviceCoordinator
+    ) async -> RPCMethodError {
+        let device = await coordinator.observedDevice(udid: udid)
+        return PaneMethods.mapPaneError(
+            refusal(afterShutdownDuringAttach: udid, state: device?.state, name: device?.name)
+        )
+    }
+
+    /// Choose that refusal from the state the device snapshot reports now.
+    ///
+    /// Only a sim read as shut down or shutting down gets the not-booted
+    /// refusal a client offers Boot for. Anything else (booting again, booted,
+    /// absent, or unreadable) asks for the attach again rather than claiming
+    /// a state nobody observed.
+    static func refusal(afterShutdownDuringAttach udid: String, state: CSBSimState?, name: String?) -> PaneError {
+        let knownName = name.flatMap { $0.isEmpty ? nil : $0 }
+        switch state {
+        case .shutdown:
+            return .deviceNotBooted(udid: udid, name: knownName, shuttingDown: false)
+
+        case .shuttingDown:
+            return .deviceNotBooted(udid: udid, name: knownName, shuttingDown: true)
+
+        default:
+            return .shutDownDuringCreate(udid: udid)
+        }
+    }
+
+    /// `device.attach`: transfer ownership of a Booted or Booting
+    /// udid to (sessionId, cap) and create a sim pane for it. A sim
+    /// that is shut down or shutting down is refused. The
     /// orphan re-attach path uses this so the daemon's ownership
     /// map updates atomically with pane creation. `recordOwnership`
     /// overwrites any prior owner; that's the intent here (the
@@ -335,6 +367,10 @@ public enum DeviceMethods {
             let ownerIncarnation = await PaneAccessPrincipal.ownerIncarnation(for: sessionId) {
                 await sessionManager.incarnation(of: sessionId)
             }
+            // Taken before the create. A shutdown seen after this clears
+            // ownership, possibly while the pane is already published, and the
+            // transfer below must not write an owner back for it.
+            let shutdownsBefore = await coordinator.shutdownCount(forUDID: params.udid)
             do {
                 result = try await paneCoordinator.createSim(
                     sessionId: sessionId,
@@ -347,13 +383,17 @@ public enum DeviceMethods {
                         await sessionManager.isAlive(priorOwner)
                     }
                 )
+            } catch PaneError.shutDownDuringCreate {
+                throw await shutdownDuringAttachRefusal(udid: params.udid, coordinator: coordinator)
             } catch let error as PaneError {
                 throw PaneMethods.mapPaneError(error)
             }
+            let recorded: Bool
             do {
-                try await coordinator.transferOwnership(
+                recorded = try await coordinator.transferOwnership(
                     udid: params.udid,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    unlessShutDownSince: shutdownsBefore
                 )
             } catch let error as DeviceError {
                 // Roll back the pane so we don't leave a half-baked record (a
@@ -366,6 +406,17 @@ public enum DeviceMethods {
                     mode: .detach
                 )
                 throw mapDeviceError(error)
+            }
+            guard recorded else {
+                // A shutdown occurred during the attach, so the transfer is
+                // refused even if the create recovered onto a later boot. The
+                // pane goes the same way as above.
+                _ = await paneCoordinator.close(
+                    paneId: result.paneId,
+                    as: .session(sessionId, incarnation: ownerIncarnation),
+                    mode: .detach
+                )
+                throw await shutdownDuringAttachRefusal(udid: params.udid, coordinator: coordinator)
             }
             let response = PaneMethods.CreateResponse(
                 paneId: PublicIdentifier.string(result.paneId),

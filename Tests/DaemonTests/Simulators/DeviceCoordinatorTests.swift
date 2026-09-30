@@ -171,3 +171,31 @@ func liveListOwnedReturnsRecordedSimsOnly() async throws {
     #expect(owned.count == 1)
     #expect(owned.first?.udid.lowercased() == pick.udid.lowercased())
 }
+
+@Test
+func aTransferGuardedByAShutdownCountRecordsWhenNoShutdownWasSeen() async throws {
+    let coordinator = DeviceCoordinator()
+    let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
+    let session = UUID()
+    let before = await coordinator.shutdownCount(forUDID: udid)
+
+    let recorded = try await coordinator.transferOwnership(udid: udid, sessionId: session, unlessShutDownSince: before)
+
+    #expect(recorded)
+    #expect(await coordinator.ownerSession(forUDID: udid) == session)
+}
+
+@Test
+func aTransferGuardedByAShutdownCountRefusesAfterAShutdown() async throws {
+    // The shutdown cleared ownership after the attach began. Writing the owner
+    // now would put one back for a simulator that is down.
+    let coordinator = DeviceCoordinator()
+    let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
+    let before = await coordinator.shutdownCount(forUDID: udid)
+    await coordinator.releaseOwnership(udid: udid.uppercased())
+
+    let recorded = try await coordinator.transferOwnership(udid: udid, sessionId: UUID(), unlessShutDownSince: before)
+
+    #expect(!recorded)
+    #expect(await coordinator.ownerSession(forUDID: udid) == nil)
+}

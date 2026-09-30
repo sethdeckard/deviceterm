@@ -24,8 +24,10 @@ final class PendingPaneViewController: NSViewController {
     /// pending-leaf sizing. `.unknown` → phone-default metrics.
     let family: String
     /// Forwarded to the Router via `Route.retryPendingPane` /
-    /// `Route.cancelPendingPane`; set by the reconcile wiring.
+    /// `Route.bootPendingPane` / `Route.cancelPendingPane`; set by the
+    /// reconcile wiring.
     var onRetry: (() -> Void)?
+    var onBoot: (() -> Void)?
     var onCancel: (() -> Void)?
 
     private let model: PendingPaneViewModel
@@ -39,6 +41,7 @@ final class PendingPaneViewController: NSViewController {
         )
         super.init(nibName: nil, bundle: nil)
         model.onRetry = { [weak self] in self?.onRetry?() }
+        model.onBoot = { [weak self] in self?.onBoot?() }
         model.onCancel = { [weak self] in self?.onCancel?() }
     }
 

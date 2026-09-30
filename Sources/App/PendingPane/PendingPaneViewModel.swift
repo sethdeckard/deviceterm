@@ -13,6 +13,7 @@ final class PendingPaneViewModel {
     var phase: PendingPanePhase
     let label: String
     @ObservationIgnored var onRetry: () -> Void = {}
+    @ObservationIgnored var onBoot: () -> Void = {}
     @ObservationIgnored var onCancel: () -> Void = {}
 
     init(phase: PendingPanePhase, label: String) {

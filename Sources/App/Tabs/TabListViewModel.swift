@@ -474,6 +474,19 @@ final class TabListViewModel {
         )
     }
 
+    /// Feed a pending pane one reducer event: a not-booted refusal, or the
+    /// user pressing Boot. The leaf stays in the tree either way. No-op if
+    /// the pending pane is gone.
+    func reducePendingPane(id pendingId: PendingPaneID, event: PendingPaneEvent, inTab id: TabID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }),
+            let paneIndex = tabs[index].pendingPanes.firstIndex(where: { $0.id == pendingId })
+        else { return }
+        tabs[index].pendingPanes[paneIndex].phase = PendingPaneReducer.reduce(
+            tabs[index].pendingPanes[paneIndex].phase,
+            event
+        )
+    }
+
     /// Renumber where a placeholder will land in the typed array when it
     /// mounts. Recovery calls this as it re-enumerates a tab, because a
     /// placeholder left over from an earlier recovery carries the index it was

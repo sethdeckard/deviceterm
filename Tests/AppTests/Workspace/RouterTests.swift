@@ -7,6 +7,12 @@ import Testing
 
 private enum FakeDaemonError: Error { case attachFailed }
 
+/// The daemon's refusal for a shut-down sim, as the client surfaces it.
+private let notBootedRefusal = DaemonClientError.daemon(
+    code: DaemonErrorCode.deviceNotBooted,
+    message: "iPhone Duo is shut down"
+)
+
 /// The Router driving the nav model against a fake daemon. Routes
 /// dispatch onto the serial drain, so each test settles before asserting
 /// nav state + recorded daemon calls. Window/tab ids are allocated
@@ -2301,6 +2307,115 @@ struct RouterTests {
         #expect(pendingPanes(workspace).isEmpty)
         #expect(simPanes(workspace).map(\.udid) == ["U"])
         #expect(fake.attachDeviceCalls.count == 2)   // first try + retry
+    }
+
+    /// Open a window and attach "U" with its first attach refused as not
+    /// booted, leaving a `.notBooted` placeholder. Later attaches succeed.
+    private func makeNotBootedPlaceholder(
+        _ fake: FakeDaemonClient
+    ) async -> (Router, WorkspaceViewModel) {
+        fake.attachFailure = { _, index in index == 0 ? notBootedRefusal : nil }
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone Duo"))
+        await settle()
+        return (router, workspace)
+    }
+
+    @Test
+    func aNotBootedRefusalOffersBootWithTheDaemonsMessage() async {
+        // Retry could only be refused again, so the placeholder moves to its
+        // own phase, carrying the message that names the device.
+        let fake = FakeDaemonClient()
+        let (_, workspace) = await makeNotBootedPlaceholder(fake)
+        #expect(pendingPanes(workspace).first?.phase == .notBooted("iPhone Duo is shut down"))
+        #expect(simPanes(workspace).isEmpty)
+        if let pendingId = pendingPanes(workspace).first?.id {
+            #expect(leaves(workspace).contains(.pending(pendingId)))
+        }
+    }
+
+    @Test
+    func bootBootsUnderAClaimThenAttachesIntoTheSameSlot() async throws {
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeNotBootedPlaceholder(fake)
+        let id = try #require(pendingPanes(workspace).first?.id)
+        router.dispatch(.bootPendingPane(tab: TabID(value: 1), pendingId: id))
+        await settle()
+        // One boot, claimed for the tab's primary session, the binding the
+        // attach uses too.
+        #expect(fake.bootDeviceCalls.count == 1)
+        #expect(fake.bootDeviceCalls.first?.udid == "U")
+        #expect(fake.bootDeviceCalls.first?.sessionId == "S")
+        #expect(fake.bootDeviceCalls.first?.capability == "C")
+        #expect(fake.bootDeviceCalls.first?.claim != nil)
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(simPanes(workspace).map(\.udid) == ["U"])
+        #expect(fake.attachDeviceCalls.count == 2)   // the refusal + the re-attach
+    }
+
+    @Test
+    func aRefusedBootFailsThePlaceholderWithTheReason() async throws {
+        let fake = FakeDaemonClient()
+        fake.bootDeviceError = DaemonClientError.daemon(code: -32_602, message: "unknown UDID: U")
+        let (router, workspace) = await makeNotBootedPlaceholder(fake)
+        let id = try #require(pendingPanes(workspace).first?.id)
+        router.dispatch(.bootPendingPane(tab: TabID(value: 1), pendingId: id))
+        await settle()
+        guard case let .failed(message) = pendingPanes(workspace).first?.phase else {
+            Issue.record("expected a failed placeholder after a refused boot")
+            return
+        }
+        #expect(message.contains("Couldn't boot"))
+        #expect(message.contains("unknown UDID"))
+        #expect(fake.attachDeviceCalls.count == 1)   // no re-attach after a refusal
+    }
+
+    @Test
+    func anUncertainBootStillReattaches() async throws {
+        // A transport failure may have booted the sim anyway, so the attach
+        // goes and the daemon answers whether it did.
+        let fake = FakeDaemonClient()
+        fake.bootDeviceError = DaemonClientError.timedOut(method: RPCMethod.deviceBoot.rawValue)
+        let (router, workspace) = await makeNotBootedPlaceholder(fake)
+        let id = try #require(pendingPanes(workspace).first?.id)
+        router.dispatch(.bootPendingPane(tab: TabID(value: 1), pendingId: id))
+        await settle()
+        #expect(fake.attachDeviceCalls.count == 2)
+        #expect(simPanes(workspace).map(\.udid) == ["U"])
+    }
+
+    @Test
+    func bootIsIgnoredUnlessThePlaceholderIsNotBooted() async throws {
+        let fake = FakeDaemonClient()
+        fake.attachError = FakeDaemonError.attachFailed
+        let (router, workspace) = makeRouter(fake)
+        router.dispatch(.openWindow())
+        await settle()
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "U", displayName: "iPhone"))
+        await settle()
+        let id = try #require(pendingPanes(workspace).first?.id)
+        router.dispatch(.bootPendingPane(tab: TabID(value: 1), pendingId: id))
+        await settle()
+        #expect(fake.bootDeviceCalls.isEmpty)
+    }
+
+    @Test
+    func anAttachForASimBehindANotBootedPlaceholderRetriesIt() async {
+        // How a sim booted some other way (`xcrun simctl boot`, discovery's
+        // attach) fills the waiting slot rather than being deduped away.
+        let fake = FakeDaemonClient()
+        let (router, workspace) = await makeNotBootedPlaceholder(fake)
+        let pendingId = pendingPanes(workspace).first?.id
+        router.dispatch(.attachSimPane(tab: TabID(value: 1), udid: "u", displayName: "iPhone Duo"))
+        await settle()
+        #expect(pendingPanes(workspace).isEmpty)
+        #expect(simPanes(workspace).map(\.udid) == ["U"])
+        #expect(fake.attachDeviceCalls.count == 2)
+        if let pendingId {
+            #expect(!leaves(workspace).contains(.pending(pendingId)))
+        }
     }
 
     @Test

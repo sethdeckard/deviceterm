@@ -254,8 +254,12 @@ enum Route: Sendable {
     )
     /// Retry a failed pending pane: re-run the attach whose first try
     /// threw. Dispatched by the placeholder pane's Retry button. No-op
-    /// unless the pending pane is in `.failed` (re-entrancy guard).
+    /// while the pending pane is still `.attaching` (re-entrancy guard).
     case retryPendingPane(tab: TabID, pendingId: PendingPaneID)
+    /// Boot the simulator behind a not-booted placeholder, then re-run its
+    /// attach. Dispatched by the placeholder's Boot button. No-op unless the
+    /// pending pane is in `.notBooted`.
+    case bootPendingPane(tab: TabID, pendingId: PendingPaneID)
     /// Cancel/close a pending pane (the placeholder's Close button, or
     /// teardown). Cancels the in-flight attach Task and drops the leaf;
     /// if the attach later returns a pane id, the Task closes it so the

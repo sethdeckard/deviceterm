@@ -373,6 +373,38 @@ func deviceAttachUnknownRefDoesNotPublish() throws {
 }
 
 @Test
+func deviceAttachOfAShutDownSimNamesItAndSaysHowToBoot() throws {
+    let udid = "5af10b0f-628c-416d-9063-282e2f9d0c1c"
+    let roster = [DeviceRosterEntry(id: udid, kind: .sim, name: "iPhone Duo", state: "Shutdown")]
+    let refusal = CLIError.daemon(code: DaemonErrorCode.deviceNotBooted, message: "iPhone Duo is shut down")
+    let human = try handleDeviceAttach(
+        ref: udid,
+        transport: FakeTransport(responses: [try encoded(roster)], error: refusal),
+        output: .human,
+        creds: testCredentials
+    )
+    #expect(human.exitCode == 1)
+    #expect(human.failure?.code == .deviceNotBooted)
+    #expect(human.stderr == """
+        iPhone Duo is shut down
+          boot it with the Boot button in its pane, or `xcrun simctl boot \(udid)` in this tab
+        """)
+
+    let json = try handleDeviceAttach(
+        ref: udid,
+        transport: FakeTransport(responses: [try encoded(roster)], error: refusal),
+        output: .json,
+        creds: testCredentials
+    ).renderingFailure(for: .deviceAttach(ref: udid), output: .json)
+    let envelope = try #require(
+        try JSONSerialization.jsonObject(with: json.stdout) as? [String: Any]
+    )
+    let error = try #require(envelope["error"] as? [String: Any])
+    #expect(error["code"] as? String == "device.notBooted")
+    #expect((error["details"] as? [String: Any])?["rpcCode"] as? Int == DaemonErrorCode.deviceNotBooted)
+}
+
+@Test
 func deviceInputResolutionUsesInternalDevicePaneList() throws {
     let fake = FakeTransport(response: try oneDevicePaneResponse())
     let resolved = try resolvePane(ref: nil, transport: fake, creds: testCredentials)

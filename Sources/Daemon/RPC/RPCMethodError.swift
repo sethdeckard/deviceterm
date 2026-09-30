@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import DaemonProtocol
 import Foundation
 
 /// Typed error a method handler can throw to return
@@ -67,6 +68,10 @@ public struct RPCMethodError: Error, Sendable, Equatable {
     /// point" outcomes are NOT this; those are routine per-point
     /// misses in a sweep and surface as a normal empty result.
     public static let bridgeFailedCode = -32_020
+
+    /// A simulator attach refused because the simulator is not booted. See
+    /// `DaemonErrorCode.deviceNotBooted`, which clients match on.
+    public static let deviceNotBootedCode = DaemonErrorCode.deviceNotBooted
 
     public let code: Int
     public let message: String

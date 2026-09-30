@@ -108,6 +108,7 @@ Current shared codes are:
 | `pane.ambiguous` | More than one accessible pane matched the reference |
 | `pane.unavailable` | The resolved pane cannot currently perform the request |
 | `pane.bridgeFailed` | The pane's device bridge failed |
+| `device.notBooted` | `device attach` named a simulator that is shut down or shutting down |
 | `input.refused` | A backend refused a valid input operation |
 | `rotate.unconfirmed` | The requested rotation target was not confirmed |
 | `rotate.confirmationUnsupported` | The command or backend cannot provide rotation confirmation |
@@ -1098,6 +1099,15 @@ daemon's typed error. For example, daemon code `-32000` becomes
 `device attach` command to retry the placeholder in its existing layout slot.
 A successful retry returns the host `tab` and committed `pane`; rendering may
 still be pending.
+
+A simulator that is shut down or shutting down fails with `device.notBooted`
+and `details.rpcCode` set to `-32021`. The placeholder stays and offers Boot.
+Repeating `device attach` retries it and fails the same way until the
+simulator is booted.
+
+Booting it with `xcrun simctl boot` from the same tab fills the placeholder
+once the boot lands. A boot from outside DeviceTerm doesn't, because
+DeviceTerm doesn't claim it; press Boot or repeat `device attach` instead.
 
 Refs in receipts are canonical committed objects. The CLI does not echo an
 input such as `"current"` or a short ref and ask the caller to rediscover what

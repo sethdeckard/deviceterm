@@ -75,3 +75,34 @@ func paneAlreadyAttachedMapsToInvalidParamsWithUDIDInMessage() {
     #expect(mapped.message.contains(udid))
     #expect(mapped.message.contains("different session"))
 }
+
+@Test("not-booted refusal message", arguments: [
+    ("iPhone Duo", false, "iPhone Duo is shut down"),
+    ("iPhone Duo", true, "iPhone Duo is shutting down"),
+    (nil, false, "simulator 7db632b6-86d3-437d-b567-36a80e59788b is shut down")
+])
+func deviceNotBootedMapsToItsOwnCode(name: String?, shuttingDown: Bool, message: String) {
+    // Its own code, not `invalidParams`: the GUI offers Boot on this value
+    // and the CLI maps it, so neither reads the message.
+    let error = PaneError.deviceNotBooted(
+        udid: "7db632b6-86d3-437d-b567-36a80e59788b",
+        name: name,
+        shuttingDown: shuttingDown
+    )
+    let mapped = PaneMethods.mapPaneError(error)
+    #expect(mapped.code == DaemonErrorCode.deviceNotBooted)
+    #expect(mapped.message == message)
+    #expect(error.diagnosticKind == "device-not-booted")
+}
+
+@Test
+func aCreateOvertakenByShutdownsAsksForTheAttachAgain() {
+    // Nothing on this path knows whether the sim is down or back, so it claims
+    // neither: a retryable server error, not the not-booted code.
+    let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
+    let error = PaneError.shutDownDuringCreate(udid: udid)
+    let mapped = PaneMethods.mapPaneError(error)
+    #expect(mapped.code == RPCErrorCode.serverError)
+    #expect(mapped.message == "simulator \(udid) shut down during the attach; attach it again")
+    #expect(error.diagnosticKind == "shut-down-during-create")
+}

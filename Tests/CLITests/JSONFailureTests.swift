@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import DaemonProtocol
 @testable import DeviceTermCLI
 import Foundation
 import Testing
@@ -198,6 +199,16 @@ func daemonCodesMapWithoutParsingProse() {
     #expect(
         errorOutcome(CLIError.daemon(code: -32_020, message: "bridge failed"))
             .failure?.code == .paneBridgeFailed
+    )
+    #expect(
+        errorOutcome(CLIError.daemon(code: DaemonErrorCode.deviceNotBooted, message: "iPhone Duo is shut down"))
+            .failure?.code == .deviceNotBooted
+    )
+    // The GUI relays an attach refusal with the daemon's code; that code wins
+    // over any intent prefix on the message.
+    #expect(
+        errorOutcome(CLIError.daemon(code: DaemonErrorCode.deviceNotBooted, message: "intent.attachFailed: down"))
+            .failure?.code == .deviceNotBooted
     )
 }
 

@@ -30,6 +30,11 @@ func jsonOutcome(_ value: some Encodable) -> CommandOutcome {
 
 /// Map one numeric daemon failure onto the public CLI code namespace.
 private func daemonErrorCode(code: Int, message: String) -> CLIErrorCode {
+    // Matched ahead of the intent prefix: the GUI relays an attach refusal
+    // with the daemon's own code, and that code is the more specific answer.
+    if code == DaemonErrorCode.deviceNotBooted {
+        return .deviceNotBooted
+    }
     if let separator = message.firstIndex(of: ":") {
         let candidate = String(message[..<separator])
         if candidate.hasPrefix("intent."),
@@ -1078,11 +1083,26 @@ func handleDeviceAttach(
     case let .ambiguous(ids):
         return .failure("'\(ref)' is ambiguous; matches: \(ids.joined(separator: ", "))")
     }
-    return try sendWorkspaceMutation(
-        transport: transport,
-        output: output,
-        build: { try CLICommands.deviceAttachRequest(target: target) }
-    )
+    do {
+        return try sendWorkspaceMutation(
+            transport: transport,
+            output: output,
+            build: { try CLICommands.deviceAttachRequest(target: target) }
+        )
+    } catch let CLIError.daemon(code, message, details) where code == DaemonErrorCode.deviceNotBooted {
+        // The daemon's message names the device; the hint says how to go on.
+        // The placeholder it left in the tab offers the same Boot.
+        var hint = "  boot it with the Boot button in its pane"
+        if case let .sim(udid) = target {
+            hint += ", or `xcrun simctl boot \(udid)` in this tab"
+        }
+        return .failure(
+            code: .deviceNotBooted,
+            message: message,
+            details: daemonErrorDetails(code: code, details: details),
+            stderr: "\(message)\n\(hint)"
+        )
+    }
 }
 
 /// `deviceterm pane capture-text`: human mode writes the captured text

@@ -788,6 +788,16 @@ public actor PaneCoordinator {
     private var tearingDownWaiters: [
         (target: PaneTarget, continuation: CheckedContinuation<Void, Never>)
     ] = []
+    /// How many shutdowns `markPanesShutdown` has seen per simulator udid.
+    ///
+    /// A create holds its record out of `panes` from backend acquisition until
+    /// publication, so a shutdown reported in that window finds nothing to
+    /// retire, and no later report comes. The create compares this count
+    /// across the window instead. A moved count cannot say which boot the
+    /// backend came from (the sim may have booted again, and the report may
+    /// trail the shutdown), so the create discards what it built and starts
+    /// over rather than publishing it.
+    private var simShutdownCounts: [String: UInt64] = [:]
     /// Test-only seam captured when a pane creates its pump. Always nil in
     /// production.
     private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
@@ -890,7 +900,8 @@ public actor PaneCoordinator {
 
     // MARK: - Create
 
-    /// Spawn a sim pane against an already-booted simulator. The
+    /// Spawn a sim pane against a booted or booting simulator. One that is
+    /// shut down or shutting down is refused with `deviceNotBooted`. The
     /// caller is responsible for validating session credentials
     /// upstream. `PaneCoordinator` doesn't see capabilities at all.
     ///
@@ -1011,7 +1022,8 @@ public actor PaneCoordinator {
         requireConcreteIncarnation: Bool = false,
         isOwnerSessionAlive: (@Sendable (UUID) async -> Bool)? = nil,
         acquire: () async throws -> AcquiredBackend,
-        onUnused: () -> Void = {}
+        onUnused: () -> Void = {},
+        restartsAfterShutdown: Int = 1
     ) async throws -> PaneCreateResult {
         // Production pane ownership requires a CONCRETE target incarnation: the
         // handler resolves it from the target session's live phase (nil when the
@@ -1101,6 +1113,7 @@ public actor PaneCoordinator {
             }
         }
         let acquired: AcquiredBackend
+        var shutdownsBeforeAcquire: UInt64?
         // Resolve the target's current owner, re-checking after every
         // suspension. A pane whose close deferred still owns its device while
         // the gesture runs, and a live pane can become one of those inside any
@@ -1145,6 +1158,10 @@ public actor PaneCoordinator {
                     // teardowns.
                     let token = try await displayBootstrapSupervisor.admit(udid: key)
                     admissionToken = token
+                    // Taken immediately before the acquire. A shutdown
+                    // reported earlier is the acquire's own boot-state check
+                    // to refuse, not a reason to discard what it builds.
+                    shutdownsBeforeAcquire = simShutdownCount(of: target)
                     do {
                         pendingBackend = try await acquire()
                     } catch {
@@ -1439,7 +1456,15 @@ public actor PaneCoordinator {
         // taken it) and the owner incarnation still current. Losing either
         // means the display we just started belongs to nobody, so release it
         // rather than publishing a pane the caller no longer wants.
-        guard creating[target]?.token == creatingToken, ownerIncarnationStillActive() else {
+        //
+        // A shutdown reported since the acquire began also stops publication.
+        // The record was out of `panes`, so that shutdown retired nothing, and
+        // nothing says whether this backend belongs to the boot that ended or
+        // to a later one. Publishing it would either strand a pane on a dead
+        // display or hand the caller a pane it then claims ownership through.
+        let handoffStillOurs = creating[target]?.token == creatingToken && ownerIncarnationStillActive()
+        let shutDownMeanwhile = simShutdownCount(of: target) != shutdownsBeforeAcquire
+        guard handoffStillOurs, !shutDownMeanwhile else {
             surfaceContinuation.finish()
             orientationContinuation.finish()
             lifecycleContinuation.finish()
@@ -1461,7 +1486,28 @@ public actor PaneCoordinator {
                 )
             }
             releaseAbandonedCreating(target: target, token: creatingToken)
-            throw PaneError.ownerNotReady(sessionId: sessionId)
+            guard handoffStillOurs else {
+                throw PaneError.ownerNotReady(sessionId: sessionId)
+            }
+            // Start over: the fresh acquire re-reads the boot state, so a sim
+            // that stayed down is refused and one that came back gets a
+            // backend on its current boot. Bounded, so a sim cycling through
+            // shutdowns gets a refusal rather than an endless attach.
+            guard restartsAfterShutdown > 0 else {
+                throw PaneError.shutDownDuringCreate(udid: key)
+            }
+            return try await createPane(
+                target: target,
+                sessionId: sessionId,
+                name: name,
+                revision: revision,
+                ownerIncarnation: ownerIncarnation,
+                requireConcreteIncarnation: requireConcreteIncarnation,
+                isOwnerSessionAlive: isOwnerSessionAlive,
+                acquire: acquire,
+                onUnused: onUnused,
+                restartsAfterShutdown: restartsAfterShutdown - 1
+            )
         }
 
         // No `await` from here to the end of this actor step: the record is
@@ -1583,6 +1629,13 @@ public actor PaneCoordinator {
         }
         reconcileFrameDemand(record)
         return resultFor(record)
+    }
+
+    /// The shutdowns `markPanesShutdown` has seen for a simulator target; nil
+    /// for any other kind, which that method never retires.
+    private func simShutdownCount(of target: PaneTarget) -> UInt64? {
+        guard case let .sim(udid) = target else { return nil }
+        return simShutdownCounts[udid, default: 0]
     }
 
     /// Predicate for the dedup loop: a record mirrors `target` and is
@@ -2362,6 +2415,7 @@ public actor PaneCoordinator {
     /// shutdown overlay and offer Reboot. Idempotent.
     public func markPanesShutdown(forUDID udid: String) async {
         let normalized = (try? canonicalizeUDID(udid)) ?? udid
+        simShutdownCounts[normalized, default: 0] &+= 1
         for record in panes.values {
             // Sim shutdown matches sim panes only. Matching on `.key`
             // would let a sim shutdown tear down a physical-device pane

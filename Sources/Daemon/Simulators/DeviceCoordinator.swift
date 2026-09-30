@@ -117,6 +117,14 @@ public actor DeviceCoordinator {
     /// so the two levels never get confused: a bare subscript yields a double
     /// optional, the outer being ownership and the inner attribution.
     private var ownership: [String: UUID?] = [:]
+    /// Shutdowns seen per UDID, counted wherever ownership is dropped for one.
+    ///
+    /// An attach snapshots this before it starts and hands it back to
+    /// `transferOwnership`, which refuses when it moved. That is the only way
+    /// to catch a shutdown that clears ownership while the attach is between
+    /// creating its pane and recording its owner: the write would otherwise
+    /// put back an owner for a simulator that is down.
+    private var shutdownsSeen: [String: UInt64] = [:]
     private var bootClaims: [UUID: BootClaimRecord] = [:]
     private var activeBootClaimByUDID: [String: UUID] = [:]
     private var bootClaimPoller: Task<Void, Never>?
@@ -748,6 +756,7 @@ public actor DeviceCoordinator {
             )
         }
         ownership.removeValue(forKey: normalized)
+        shutdownsSeen[normalized, default: 0] &+= 1
         cancelBootClaim(forUDID: normalized)
         // Publish device.shutdown. Symmetric with boot: debounced
         // against a same-UDID notification arrival.
@@ -1079,10 +1088,40 @@ public actor DeviceCoordinator {
 
     /// Transfer an already-Booted simulator into a session without fabricating
     /// a lifecycle transition. Used by `device.attach`.
-    public func transferOwnership(udid: String, sessionId: UUID) throws {
+    ///
+    /// `unlessShutDownSince` is a `shutdownCount(forUDID:)` taken before the
+    /// caller's work began. When a shutdown has been seen since, nothing is
+    /// written and this returns false, even if the caller's work recovered
+    /// onto a later boot.
+    @discardableResult
+    public func transferOwnership(
+        udid: String,
+        sessionId: UUID,
+        unlessShutDownSince shutdownsBefore: UInt64? = nil
+    ) throws -> Bool {
         let normalized = try requireValidUDID(udid)
+        if let shutdownsBefore, shutdownsSeen[normalized, default: 0] != shutdownsBefore {
+            return false
+        }
         invalidateDeviceSnapshot()
         ownership[normalized] = sessionId
+        return true
+    }
+
+    /// The device CoreSimulator last reported for `udid`, from the shared
+    /// device snapshot. Nil when the device is absent or the set couldn't be
+    /// read, so a nil says nothing about boot state.
+    public func observedDevice(udid: String) async -> CSBDeviceInfo? {
+        guard case let .completed(.success(devices)) = await deviceRead() else { return nil }
+        let normalized = udid.lowercased()
+        return devices.first { $0.udid.lowercased() == normalized }
+    }
+
+    /// Shutdowns seen for `udid` so far; see `shutdownsSeen`. Compare two
+    /// readings, never the value itself.
+    public func shutdownCount(forUDID udid: String) -> UInt64 {
+        let normalized = (try? requireValidUDID(udid)) ?? udid.lowercased()
+        return shutdownsSeen[normalized, default: 0]
     }
 
     /// MIGRATION: Accepts claimless shim.event boots during mixed-version
@@ -1198,6 +1237,7 @@ public actor DeviceCoordinator {
         let normalized = udid.lowercased()
         invalidateDeviceSnapshot()
         ownership.removeValue(forKey: normalized)
+        shutdownsSeen[normalized, default: 0] &+= 1
         cancelBootClaim(forUDID: normalized)
         // The shim told us this UDID has shut down. Publish even if
         // our ownership map didn't have a record (the shim's view
@@ -1371,6 +1411,7 @@ public actor DeviceCoordinator {
         let normalized = udid.lowercased()
         invalidateDeviceSnapshot()
         ownership.removeValue(forKey: normalized)
+        shutdownsSeen[normalized, default: 0] &+= 1
         cancelBootClaim(forUDID: normalized)
         // Settle the debounce against `arrivedAt` before converging: both
         // the window comparison and the recorded stamp. Backend teardown is

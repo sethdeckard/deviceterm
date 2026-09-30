@@ -52,6 +52,12 @@ extension PaneError {
         case .deviceNotFound:
             return "device-not-found"
 
+        case .deviceNotBooted:
+            return "device-not-booted"
+
+        case .shutDownDuringCreate:
+            return "shut-down-during-create"
+
         case .malformedUDID:
             return "malformed-udid"
 

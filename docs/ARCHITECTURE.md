@@ -1547,10 +1547,22 @@ bookkeeping.
 - Result: as `pane.create`
 - Scope: session
 
-Transfers ownership of an already-booted udid to `(sessionId, cap)` and
+Transfers ownership of a booted or booting udid to `(sessionId, cap)` and
 creates a sim pane in one shot. `family`, the coarse device class, is the
 uniform source the GUI sizes from, since every attach path returns it;
 `capabilities` and `target` are as in `pane.create`.
+
+A simulator that is shut down or shutting down is refused, as in
+`pane.create`.
+
+A shutdown seen at any point during the attach also refuses it, including
+one that lands after the pane is created. The attach writes no owner, because
+the shutdown already cleared ownership and writing it back would claim a
+simulator that is down. The pane it created is closed.
+
+The error is `-32021` when the simulator is still down. When it has already
+booted again the error is `-32000`, asking for the attach again, since
+nothing is wrong with the simulator by then.
 
 `name` restores a pane's user-set name across a re-attach. A record is
 otherwise unnamed, so a pane coming back from a helper restart would have lost
@@ -1732,6 +1744,24 @@ so a legitimate close would be refused).
 `kind` is reserved as a discriminator; only `"sim"` is valid, and `udid`
 is then required. `family` is the coarse device class
 (`watch`/`phone`/`pad`/`tv`/`unknown`) so the GUI can size the pane.
+
+A simulator that is shut down or shutting down is refused with code `-32021`
+(`DaemonErrorCode.deviceNotBooted`), not `invalidParams`, so a client can
+offer to boot it without reading the message. The message names the device,
+for example `iPhone Duo is shut down`. A booting simulator is admitted, and
+its first frame moves the pane to rendering.
+
+A shutdown reported while the pane is being created stops the create before
+the pane is published. The daemon can't tell whether the half-built pane
+belongs to the boot that ended or to a later one, so the create starts over
+and reads the simulator's state again. A simulator that is still down is
+refused with `-32021`, and one that has booted again gets a pane on its
+current boot.
+
+The create starts over only once. A second shutdown during that attempt is
+refused too, so a simulator cycling through shutdowns can't hold an attach
+open. A refused `device.attach` records no ownership. A shutdown after
+publication retires the published pane the usual way.
 
 `capabilities` is the per-pane control set
 (`touch`/`key`/`text`/`button`/`rotate`/`crown`/`accessibility`) clients

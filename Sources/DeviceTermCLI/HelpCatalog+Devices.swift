@@ -31,6 +31,9 @@ extension HelpCatalog {
                   device into the caller's tab. A bare UDID not in the roster
                   is claimed as an externally-booted sim. This is the only
                   explicit-attach verb; there is no `pane attach`.
+                  A sim that is shut down is refused (device.notBooted);
+                  the pane it leaves offers Boot, or run
+                  `xcrun simctl boot <udid>` from this tab.
                   Example: deviceterm device attach iPhone-17-Pro
             """
         )

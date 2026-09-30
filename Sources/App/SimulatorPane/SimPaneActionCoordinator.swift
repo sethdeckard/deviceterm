@@ -148,33 +148,14 @@ final class SimPaneActionCoordinator {
         sessionId: String,
         capability: String
     ) async {
-        let claim = router.beginGUIBootClaim(udid: udid, sessionId: sessionId)
-        do {
-            _ = try await daemonClient.bootDeviceWithGeneration(
-                udid: udid,
-                sessionId: sessionId,
-                capability: capability,
-                claim: claim
-            )
-            router.finishGUIBootRequest(attemptId: claim.attemptId, outcome: .accepted)
-        } catch {
-            router.finishGUIBootRequest(
-                attemptId: claim.attemptId,
-                outcome: bootClaimOutcome(for: error)
-            )
-        }
-    }
-
-    private func bootClaimOutcome(for error: Error) -> BootClaimRequestOutcome {
-        guard let clientError = error as? DaemonClientError else { return .rejected }
-        switch clientError {
-        case .daemon:
-            return .rejected
-
-        case .transport, .timedOut, .versionMismatch, .decode,
-            .shutdownNotAcknowledged, .shutdownTimedOut:
-            return .uncertain
-        }
+        // No boot leg here reports a failed boot; the claim is settled either
+        // way, which is all this path needs.
+        try? await router.bootClaimedSim(
+            udid: udid,
+            sessionId: sessionId,
+            capability: capability,
+            using: daemonClient
+        )
     }
 
     /// Close a sim pane, prompting when its sim is one deviceterm owns, is

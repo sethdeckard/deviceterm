@@ -1059,6 +1059,21 @@ public enum PaneMethods {
         case let .deviceNotFound(udid):
             return RPCMethodError.invalidParams("unknown UDID: \(udid)")
 
+        case let .deviceNotBooted(udid, name, shuttingDown):
+            // A code of its own rather than `invalidParams`, so a client can
+            // offer to boot without reading this message.
+            let subject = name ?? "simulator \(udid)"
+            return RPCMethodError(
+                code: RPCMethodError.deviceNotBootedCode,
+                message: "\(subject) is \(shuttingDown ? "shutting down" : "shut down")"
+            )
+
+        case let .shutDownDuringCreate(udid):
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "simulator \(udid) shut down during the attach; attach it again"
+            )
+
         case .malformedUDID:
             return RPCMethodError.invalidParams("udid must be a UUID string")
 

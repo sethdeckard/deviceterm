@@ -1029,3 +1029,286 @@ private final class SideResourceCounter: @unchecked Sendable {
         value += 1
     }
 }
+
+/// The state `panesForSession` reports for the one pane `session` owns.
+private func soleState(_ coordinator: PaneCoordinator, _ session: UUID) async throws -> PaneLifecycle {
+    let panes = await coordinator.panesForSession(session)
+    return try #require(panes.first).state
+}
+
+/// Numbers acquisitions, so a test can script what each attempt returns.
+/// `@unchecked Sendable`: `count` is guarded by `lock`.
+private final class AcquireScript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var calls: Int { lock.withLock { count } }
+
+    /// Record one acquisition and return its zero-based index.
+    func next() -> Int {
+        lock.withLock {
+            defer { count += 1 }
+            return count
+        }
+    }
+}
+
+private func mockAcquired(_ backend: MockDeviceBackend) -> PaneCoordinator.AcquiredBackend {
+    PaneCoordinator.AcquiredBackend(backend: backend, family: "phone", deviceType: "iPhone")
+}
+
+@Test
+func aShutdownDuringTheBootstrapRefusesASimThatStayedDown() async throws {
+    // The record is out of `panes` for the whole bootstrap, so this shutdown
+    // retires nothing. The create discards what it built and starts over, and
+    // the fresh acquire's boot-state check is what refuses.
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let first = MockDeviceBackend()
+    first.parkBootstrap = true
+    let counter = AcquireScript()
+    let refusal = PaneError.deviceNotBooted(udid: "udid-down", name: "iPhone Duo", shuttingDown: false)
+
+    let create = Task {
+        try await coordinator.createPane(
+            target: .sim(udid: "udid-down"),
+            sessionId: session,
+            acquire: {
+                guard counter.next() == 0 else { throw refusal }
+                return mockAcquired(first)
+            }
+        )
+    }
+    #expect(await waitUntil { first.bootstrapParked })
+    await coordinator.markPanesShutdown(forUDID: "udid-down")
+    first.releaseBootstrap()
+
+    await #expect(throws: refusal) { try await create.value }
+    #expect(counter.calls == 2)
+    #expect(await coordinator.panesForSession(session).isEmpty)
+    #expect(await waitUntil { first.shutdownCalled })
+}
+
+@Test
+func aShutdownDuringTheBootstrapRestartsOntoTheCurrentBoot() async throws {
+    // A moved count can't say which boot the backend came from: the sim may
+    // already be back. Starting over builds on whatever boot is current.
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let first = MockDeviceBackend()
+    first.parkBootstrap = true
+    let second = MockDeviceBackend()
+    let counter = AcquireScript()
+
+    let create = Task {
+        try await coordinator.createPane(
+            target: .sim(udid: "udid-rebooted-mid-boot"),
+            sessionId: session,
+            acquire: { mockAcquired(counter.next() == 0 ? first : second) }
+        )
+    }
+    #expect(await waitUntil { first.bootstrapParked })
+    await coordinator.markPanesShutdown(forUDID: "udid-rebooted-mid-boot")
+    first.releaseBootstrap()
+    _ = try await create.value
+
+    #expect(counter.calls == 2)
+    #expect(try await soleState(coordinator, session) != .shutdown)
+    #expect(await waitUntil { first.shutdownCalled })
+    #expect(!second.shutdownCalled)
+}
+
+@Test
+func aShutdownDuringAcquisitionRestarts() async throws {
+    // The window before the target is claimed: the acquire has already read
+    // the boot state, and the shutdown lands before the bootstrap starts.
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let first = MockDeviceBackend()
+    let second = MockDeviceBackend()
+    let counter = AcquireScript()
+
+    _ = try await coordinator.createPane(
+        target: .sim(udid: "udid-down-mid-acquire"),
+        sessionId: session,
+        acquire: {
+            guard counter.next() == 0 else { return mockAcquired(second) }
+            await coordinator.markPanesShutdown(forUDID: "udid-down-mid-acquire")
+            return mockAcquired(first)
+        }
+    )
+
+    #expect(counter.calls == 2)
+    #expect(try await soleState(coordinator, session) != .shutdown)
+    #expect(await waitUntil { first.shutdownCalled })
+}
+
+@Test
+func aSimThatKeepsShuttingDownIsRefusedRatherThanRetriedForever() async throws {
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let counter = AcquireScript()
+
+    // Whether it is down now or back is unknown here, so neither is claimed.
+    await #expect(throws: PaneError.shutDownDuringCreate(udid: "udid-cycling")) {
+        try await coordinator.createPane(
+            target: .sim(udid: "udid-cycling"),
+            sessionId: session,
+            acquire: {
+                _ = counter.next()
+                await coordinator.markPanesShutdown(forUDID: "udid-cycling")
+                return mockAcquired(MockDeviceBackend())
+            }
+        )
+    }
+    #expect(counter.calls == 2)
+    #expect(await coordinator.panesForSession(session).isEmpty)
+}
+
+@Test
+func aShutdownBeforeTheCreateDoesNotAffectIt() async throws {
+    // An earlier shutdown is the boot-state check's to refuse. A create it
+    // admitted was admitted against a sim that has booted since.
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let counter = AcquireScript()
+    await coordinator.markPanesShutdown(forUDID: "udid-rebooted")
+
+    _ = try await coordinator.createPane(
+        target: .sim(udid: "udid-rebooted"),
+        sessionId: session,
+        acquire: {
+            _ = counter.next()
+            return mockAcquired(MockDeviceBackend())
+        }
+    )
+
+    #expect(counter.calls == 1)
+    #expect(try await soleState(coordinator, session) != .shutdown)
+}
+
+@Test
+func aShutdownOfAnotherSimDuringTheBootstrapLeavesTheCreateAlone() async throws {
+    let coordinator = bootstrapCoordinator()
+    let session = UUID()
+    let backend = MockDeviceBackend()
+    backend.parkBootstrap = true
+
+    let create = Task {
+        try await coordinator.createMockPane(udid: "udid-kept", sessionId: session, backend: backend)
+    }
+    #expect(await waitUntil { backend.bootstrapParked })
+    await coordinator.markPanesShutdown(forUDID: "udid-other")
+    backend.releaseBootstrap()
+    _ = try await create.value
+
+    #expect(try await soleState(coordinator, session) != .shutdown)
+    #expect(!backend.shutdownCalled)
+}
+
+/// `device.attach` wired to real session, device, and pane coordinators, with
+/// the sim backend scripted: the first acquisition parks in its bootstrap, and
+/// any later one is refused as not booted.
+private struct AttachHarness {
+    let udid = "7db632b6-86d3-437d-b567-36a80e59788b"
+    let first = MockDeviceBackend()
+    let panes: PaneCoordinator
+    /// Reads an empty device set, so nothing here reaches CoreSimulator or
+    /// depends on which simulators this Mac happens to have.
+    let devices = DeviceCoordinator(readDevices: { [] })
+    let sessionId: UUID
+    let handler: MethodRegistry.Handler
+    let params: Data
+
+    init() async throws {
+        first.parkBootstrap = true
+        let first = first
+        let script = AcquireScript()
+        let acquirer = SimBackendAcquirer(acquireHandles: { handleUDID in
+            guard script.next() == 0 else {
+                throw PaneError.deviceNotBooted(udid: handleUDID, name: "iPhone Duo", shuttingDown: false)
+            }
+            return mockAcquired(first)
+        })
+        panes = PaneCoordinator(
+            mintShortID: { ShortID.generate() },
+            eventBroker: nil,
+            subscriptionRegistry: nil,
+            rotationConfirmationTimeoutNanoseconds: 10_000_000,
+            simBackendAcquirer: acquirer
+        )
+        let sessions = SessionManager()
+        let session = try await sessions.createSession(label: nil)
+        let panes = panes
+        await sessions.setPaneActivator { sid, inc in
+            await panes.noteSessionActive(sid, incarnation: inc)
+        }
+        sessionId = session.state.id
+        handler = DeviceMethods.attach(coordinator: devices, paneCoordinator: panes, sessionManager: sessions)
+        params = try JSONEncoder().encode(
+            DeviceMethods.AttachParams(
+                udid: udid,
+                sessionId: session.state.id.uuidString,
+                cap: session.capability.token
+            )
+        )
+    }
+
+    /// Start the attach as the GUI, the caller that sends `device.attach`.
+    func attach() -> Task<Data, any Error> {
+        let handler = handler
+        let params = params
+        let guiPeer = DispatchPeerContext(transport: .xpc, connectionId: 1, validatedGUIPeer: true)
+        return Task {
+            try await DispatchPeerContext.$current.withValue(guiPeer) {
+                try await handler(params)
+            }
+        }
+    }
+}
+
+@Test
+func deviceAttachRecordsNoOwnershipWhenTheSimShutsDownMidCreate() async throws {
+    // A shutdown clears ownership before it converges panes. An attach that
+    // succeeded afterwards would write the owner back for a sim that is down,
+    // and a later boot from outside DeviceTerm would look owned by this
+    // session. The create refuses instead, so the handler never records it.
+    let harness = try await AttachHarness()
+    let attach = harness.attach()
+    #expect(await waitUntil { harness.first.bootstrapParked })
+    await harness.panes.markPanesShutdown(forUDID: harness.udid)
+    harness.first.releaseBootstrap()
+
+    do {
+        _ = try await attach.value
+        Issue.record("the attach should be refused")
+    } catch let error as RPCMethodError {
+        #expect(error.code == DaemonErrorCode.deviceNotBooted)
+    }
+    #expect(await harness.devices.ownerSession(forUDID: harness.udid) == nil)
+    #expect(await harness.panes.panesForSession(harness.sessionId).isEmpty)
+}
+
+@Test
+func deviceAttachRecordsNoOwnershipForAShutdownThePaneOutlived() async throws {
+    // The shutdown reaches ownership but not this create's shutdown count, the
+    // shape of one landing after publication: the pane is created, and only
+    // the transfer can notice. It must refuse, roll the pane back, and leave
+    // no owner behind.
+    let harness = try await AttachHarness()
+    let attach = harness.attach()
+    #expect(await waitUntil { harness.first.bootstrapParked })
+    await harness.devices.releaseOwnership(udid: harness.udid)
+    harness.first.releaseBootstrap()
+
+    do {
+        _ = try await attach.value
+        Issue.record("the attach should be refused")
+    } catch let error as RPCMethodError {
+        // The device set is empty, so the sim's state is unknown and the
+        // refusal claims neither down nor back: attach again.
+        #expect(error.code == RPCErrorCode.serverError)
+    }
+    #expect(await harness.devices.ownerSession(forUDID: harness.udid) == nil)
+    #expect(await harness.panes.panesForSession(harness.sessionId).isEmpty)
+}

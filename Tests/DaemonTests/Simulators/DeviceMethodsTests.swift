@@ -448,3 +448,25 @@ func liveDeviceBootRejectsUnknownUDID() async throws {
     }
     #expect(rpcError.code == RPCMethodError.invalidParamsCode)
 }
+
+@Test("refusal after a shutdown overtook an attach", arguments: [
+    (CSBSimState.shutdown, PaneError.deviceNotBooted(udid: "u", name: "iPhone Duo", shuttingDown: false)),
+    (CSBSimState.shuttingDown, PaneError.deviceNotBooted(udid: "u", name: "iPhone Duo", shuttingDown: true)),
+    (CSBSimState.booting, PaneError.shutDownDuringCreate(udid: "u")),
+    (CSBSimState.booted, PaneError.shutDownDuringCreate(udid: "u")),
+    (CSBSimState.unknown, PaneError.shutDownDuringCreate(udid: "u"))
+])
+func onlyAnObservedShutdownGetsTheNotBootedRefusal(state: CSBSimState, expected: PaneError) {
+    // A sim already booting again must not be offered Boot: only a state the
+    // snapshot actually read as down earns the not-booted refusal.
+    #expect(DeviceMethods.refusal(afterShutdownDuringAttach: "u", state: state, name: "iPhone Duo") == expected)
+}
+
+@Test
+func anUnreadableStateAsksForTheAttachAgain() {
+    // Absent from the snapshot, or the set couldn't be read: nothing observed.
+    #expect(
+        DeviceMethods.refusal(afterShutdownDuringAttach: "u", state: nil, name: nil)
+            == .shutDownDuringCreate(udid: "u")
+    )
+}

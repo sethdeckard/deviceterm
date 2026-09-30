@@ -6,7 +6,8 @@ import SwiftUI
 /// sim/device attach is in flight, or after it failed. This is exactly
 /// the "loading / error+retry empty state" the SwiftUI-first convention
 /// routes away from the AppKit hot path: a spinner + label while
-/// attaching, an error message + Retry/Close when it threw. Hosted by
+/// attaching, an error message + Retry/Close when it threw, and Boot/Close
+/// when the sim it was attaching is shut down. Hosted by
 /// `PendingPaneViewController` via `NSHostingView`; driven by an
 /// `@Observable` view model the controller flips when the daemon attach
 /// resolves.
@@ -49,6 +50,44 @@ struct PendingPaneView: View {
                 // cleanup needs.
                 Button("Close") { model.onCancel() }
                     .padding(.top, 4)
+            }
+
+        case .booting:
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                    .colorScheme(.dark)
+                Text(model.label)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text("Booting…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button("Close") { model.onCancel() }
+                    .padding(.top, 4)
+            }
+
+        case let .notBooted(message):
+            // The daemon's message names the device ("iPhone Duo is shut
+            // down"), so it is the headline. Retry would be refused again, so
+            // the action on offer is Boot.
+            VStack(spacing: 12) {
+                Image(systemName: "power")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                Text(message)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                Text("Boot it to show it here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("Boot") { model.onBoot() }
+                        .keyboardShortcut(.defaultAction)
+                    Button("Close") { model.onCancel() }
+                }
+                .padding(.top, 4)
             }
 
         case let .failed(message):

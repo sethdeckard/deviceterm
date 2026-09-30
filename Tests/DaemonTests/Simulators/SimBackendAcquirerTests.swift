@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import CoreSimulatorBridge
 @testable import Daemon
 import Foundation
 import Testing
@@ -421,4 +422,18 @@ func aTargetClaimedDuringAcquireReleasesTheBackendItBuilt() async throws {
     let panes = await coordinator.panesForSession(claimant)
     #expect(panes.count == 1)
     #expect(await coordinator.panesForSession(attaching).isEmpty)
+}
+
+@Test("attach admission by simulator state", arguments: [
+    (CSBSimState.shutdown, false),
+    (CSBSimState.shuttingDown, false),
+    (CSBSimState.booting, true),
+    (CSBSimState.booted, true),
+    (CSBSimState.creating, true),
+    (CSBSimState.unknown, true)
+])
+func admitsAttachOnlyOutsideShutdown(state: CSBSimState, admitted: Bool) {
+    // Booting stays admitted: the shim attaches as soon as a boot starts,
+    // and refusing it would break every attach made from a boot command.
+    #expect(SimBackendAcquirer.admitsAttach(state) == admitted)
 }

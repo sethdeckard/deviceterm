@@ -23,6 +23,27 @@ public enum PaneError: Error, Equatable, Sendable {
         udid:
         String
         )
+    /// The simulator is shut down or shutting down, so it has no display to
+    /// mirror. Refused at attach because nothing would ever move the pane on:
+    /// a shutdown is only reported as a transition, and a sim that is already
+    /// down never makes one.
+    ///
+    /// `name` is the simulator's own name when the lookup found one, so the
+    /// refusal can say which device it means. `shuttingDown` separates a sim
+    /// on its way down from one already down.
+    case deviceNotBooted(
+        udid:
+        String,
+        name: String?,
+        shuttingDown: Bool
+        )
+    /// A simulator create gave up after shutdowns kept landing while it was
+    /// being built. Nothing here knows whether the sim is down now or already
+    /// back, so this asks for the attach again rather than claiming either.
+    case shutDownDuringCreate(
+        udid:
+        String
+        )
     case malformedUDID(
         udid:
         String

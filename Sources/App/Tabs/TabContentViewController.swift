@@ -1141,13 +1141,17 @@ final class TabContentViewController: NSViewController {
         }
     }
 
-    /// Wire a pending placeholder's Retry / Close buttons to the Router.
-    /// Retry re-runs the attach whose first try threw; Close cancels the
-    /// in-flight attach and drops the placeholder.
+    /// Wire a pending placeholder's Retry / Boot / Close buttons to the
+    /// Router. Retry re-runs the attach whose first try threw; Boot boots a
+    /// shut-down sim and then re-runs it; Close removes the placeholder, and an
+    /// attach that later succeeds is detached.
     private func wire(pendingVC paneVC: PendingPaneViewController, pendingId: PendingPaneID) {
         let tabID = self.tabID
         paneVC.onRetry = { [weak self] in
             self?.router.dispatch(.retryPendingPane(tab: tabID, pendingId: pendingId))
+        }
+        paneVC.onBoot = { [weak self] in
+            self?.router.dispatch(.bootPendingPane(tab: tabID, pendingId: pendingId))
         }
         paneVC.onCancel = { [weak self] in
             self?.router.dispatch(
@@ -1177,7 +1181,11 @@ final class TabContentViewController: NSViewController {
         // Sims with an in-flight / failed pending pane count as
         // "attaching" so a racing poll doesn't insert a second
         // placeholder (or stomp a visible failed one) for the same sim.
+        // A placeholder waiting on a shut-down sim is the exception: this
+        // sim has booted since, and the attach dispatched below retries that
+        // placeholder in its own slot.
         let attaching = tabListVM.tab(id: tabID)?.pendingPanes.compactMap { pending -> String? in
+            if case .notBooted = pending.phase { return nil }
             if case let .sim(udid) = pending.target { return udid }
             return nil
         } ?? []

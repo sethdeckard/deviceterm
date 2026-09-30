@@ -313,7 +313,7 @@ final class Router {
             .first(where: {
                 TabListViewModel.targetsMatch($0.target, target)
             })
-        if let existing, case .failed = existing.phase {
+        if let existing, existing.phase.isSettledFailure {
             // An explicit attach is itself a retry request. Reuse the failed
             // placeholder so its layout slot remains stable, exactly as the
             // visible Retry button does.
@@ -552,6 +552,9 @@ final class Router {
 
         case let .retryPendingPane(tabID, pendingId):
             retryPendingPane(tab: tabID, pendingId: pendingId)
+
+        case let .bootPendingPane(tabID, pendingId):
+            bootPendingPane(tab: tabID, pendingId: pendingId)
 
         case let .cancelPendingPane(tabID, pendingId, mode):
             cancelPendingPane(tab: tabID, pendingId: pendingId, mode: mode)
@@ -822,6 +825,49 @@ final class Router {
 
     func finishGUIBootRequest(attemptId: String, outcome: BootClaimRequestOutcome) {
         bootClaims.bootRequestFinished(attemptId: attemptId, outcome: outcome)
+    }
+
+    /// Boot `udid` for `sessionId` under a GUI boot claim, so the sim is owned
+    /// by that session once the daemon observes it Booted. The one boot path
+    /// behind every GUI Boot and Reboot.
+    ///
+    /// `client` is the caller's own device client rather than this Router's,
+    /// so each caller keeps the client it was built with. The claim is settled
+    /// before this returns or throws; a thrown error is the boot request's own.
+    func bootClaimedSim(
+        udid: String,
+        sessionId: String,
+        capability: String,
+        using client: any DeviceControlling
+    ) async throws {
+        let claim = beginGUIBootClaim(udid: udid, sessionId: sessionId)
+        do {
+            _ = try await client.bootDeviceWithGeneration(
+                udid: udid,
+                sessionId: sessionId,
+                capability: capability,
+                claim: claim
+            )
+            finishGUIBootRequest(attemptId: claim.attemptId, outcome: .accepted)
+        } catch {
+            finishGUIBootRequest(attemptId: claim.attemptId, outcome: bootClaimOutcome(for: error))
+            throw error
+        }
+    }
+
+    /// How a failed boot request settles its claim: a daemon refusal or an
+    /// unrecognized error type rejects it; any other `DaemonClientError`
+    /// (transport, timeout) leaves it uncertain, since the boot may have run.
+    private func bootClaimOutcome(for error: Error) -> BootClaimRequestOutcome {
+        guard let clientError = error as? DaemonClientError else { return .rejected }
+        switch clientError {
+        case .daemon:
+            return .rejected
+
+        case .transport, .timedOut, .versionMismatch, .decode,
+            .shutdownNotAcknowledged, .shutdownTimedOut:
+            return .uncertain
+        }
     }
 
     func resumeBootClaimsAfterSessionRestore() {
@@ -2101,6 +2147,15 @@ final class Router {
     private func attachPaneOptimistically(tab tabID: TabID, spec: PendingAttachSpec) {
         guard let window = workspace.windowContaining(tab: tabID),
             let tab = window.tabs.tab(id: tabID) else { return }
+        // A placeholder waiting on a shut-down sim takes this attach instead.
+        // Discovery only offers a sim once it has booted, however it was
+        // booted, so this is how `xcrun simctl boot` fills the waiting slot.
+        if let waiting = tab.pendingPanes.first(where: {
+            TabListViewModel.targetsMatch($0.target, spec.target)
+        }), case .notBooted = waiting.phase {
+            retryPendingPane(tab: tabID, pendingId: waiting.id)
+            return
+        }
         // Target-based dedup across mounted + pending panes so discovery
         // (every 2s), menu, CLI, and picker can't stack a second (or a
         // duplicate failed) placeholder for the same target.
@@ -2248,11 +2303,20 @@ final class Router {
             if isPlaceholderPresent(pendingId, inTab: tabID),
                 !closingTabs.contains(tabID) {
                 attachFailures[pendingId] = PaneAttachFailure(error)
-                workspace.windowContaining(tab: tabID)?.tabs.failPendingPane(
-                    id: pendingId,
-                    message: ErrorText.describing(error),
-                    inTab: tabID
-                )
+                let tabs = workspace.windowContaining(tab: tabID)?.tabs
+                if case let DaemonClientError.daemon(code, message) = error,
+                    code == DaemonErrorCode.deviceNotBooted {
+                    // Retry would only be refused again, so the placeholder
+                    // offers Boot instead, under the daemon's message, which
+                    // names the device.
+                    tabs?.reducePendingPane(id: pendingId, event: .deviceNotBooted(message), inTab: tabID)
+                } else {
+                    tabs?.failPendingPane(
+                        id: pendingId,
+                        message: ErrorText.describing(error),
+                        inTab: tabID
+                    )
+                }
             } else {
                 attachFailures[pendingId] = nil
             }
@@ -2540,8 +2604,11 @@ final class Router {
     }
 
     /// Retry a failed pending pane: re-run the attach whose first try
-    /// threw. Guarded on the `.failed` phase so a stray retry while an
-    /// attach is already in flight is a no-op (re-entrancy).
+    /// threw. Guarded against `.attaching` so a stray retry while an attach
+    /// is already in flight is a no-op (re-entrancy). A not-booted
+    /// placeholder retries too: discovery and an explicit attach reach it
+    /// that way once the sim has booted, and so does Boot once its boot is
+    /// accepted.
     ///
     /// A retry the user asked for goes immediately and clears the target's
     /// backoff. One that recovery drove waits that backoff out first, and is
@@ -2555,7 +2622,7 @@ final class Router {
         guard let window = workspace.windowContaining(tab: tabID),
             let pending = window.tabs.tab(id: tabID)?.pendingPanes
                 .first(where: { $0.id == pendingId }),
-            case .failed = pending.phase else { return }
+            pending.phase != .attaching else { return }
         let key = targetKey(pending.target)
         var delayNanoseconds: UInt64 = 0
         if automatic {
@@ -2612,6 +2679,47 @@ final class Router {
             spec: spec,
             delayNanoseconds: delayNanoseconds
         )
+    }
+
+    /// Boot the simulator behind a not-booted placeholder, then re-run its
+    /// attach into the same slot.
+    ///
+    /// The boot is claimed for the tab's primary session, the same binding the
+    /// attach uses, so the sim is owned by this tab exactly as a Reboot would
+    /// leave it. The attach goes as soon as the boot is accepted: the daemon
+    /// admits a sim that is still booting, and its first frame moves the pane
+    /// on. Closing the placeholder meanwhile leaves the retry nothing to find.
+    private func bootPendingPane(tab tabID: TabID, pendingId: PendingPaneID) {
+        guard let window = workspace.windowContaining(tab: tabID),
+            let tab = window.tabs.tab(id: tabID),
+            let pending = tab.pendingPanes.first(where: { $0.id == pendingId }),
+            case .notBooted = pending.phase,
+            case let .sim(udid) = pending.target else { return }
+        let primary = tab.primaryTerminal
+        window.tabs.reducePendingPane(id: pendingId, event: .bootStarted, inTab: tabID)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await bootClaimedSim(
+                    udid: udid,
+                    sessionId: primary.sessionId,
+                    capability: primary.capability,
+                    using: daemon
+                )
+            } catch {
+                // A daemon refusal is definite, so say why. Anything else may
+                // still have booted the sim, and the attach below finds out.
+                if case DaemonClientError.daemon = error {
+                    workspace.windowContaining(tab: tabID)?.tabs.failPendingPane(
+                        id: pendingId,
+                        message: "Couldn't boot: \(ErrorText.describing(error))",
+                        inTab: tabID
+                    )
+                    return
+                }
+            }
+            retryPendingPane(tab: tabID, pendingId: pendingId)
+        }
     }
 
     /// Close a pending pane: drop the placeholder leaf and leave the in-flight
