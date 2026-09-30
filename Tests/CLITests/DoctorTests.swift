@@ -547,3 +547,83 @@ func parseTextTreatsDoctorAsLiteral() {
         == .text(pane: nil, text: "doctor")
         )
 }
+
+// MARK: - Check-name column and session identity
+
+@Test
+func formatHumanPrintsAWholeLongCheckNameBeforeItsDetail() throws {
+    let report = Doctor.Report(
+        checks: [
+            Doctor.Check(name: "Session authenticates (cap + provenance)", status: .ok, detail: "accepted"),
+            Doctor.Check(name: "Short", status: .ok, detail: "fine")
+        ],
+        session: nil,
+        targets: nil
+    )
+    let lines = Doctor.formatHuman(report).split(separator: "\n").map(String.init)
+    let long = try #require(lines.first { $0.contains("Session authenticates") })
+    #expect(long.contains("Session authenticates (cap + provenance)  accepted"))
+    // Both details start at the same column.
+    let short = try #require(lines.first { $0.contains("Short") })
+    let longDetail = try #require(long.range(of: "accepted"))
+    let shortDetail = try #require(short.range(of: "fine"))
+    #expect(long.distance(from: long.startIndex, to: longDetail.lowerBound)
+        == short.distance(from: short.startIndex, to: shortDetail.lowerBound))
+}
+
+private func doctorTerminalPane(id: String) -> WorkspacePane {
+    WorkspacePane(
+        id: id,
+        shortId: "q59yjj",
+        name: "build",
+        kind: .terminal,
+        tabId: "22222222-2222-2222-2222-222222222222",
+        tabTitle: "shell",
+        windowId: "33333333-3333-3333-3333-333333333333",
+        current: true,
+        focused: true,
+        capabilities: [.sendInput, .captureText],
+        terminal: .init(sessionId: id, title: "zsh", tty: "/dev/ttys001", cwd: "/tmp")
+    )
+}
+
+@Test
+func sessionInfoTakesShortIdAndNameFromTheSessionsTerminalPane() {
+    let sessionId = "11111111-1111-1111-1111-111111111111"
+    let info = Doctor.sessionInfo(
+        sessionId: sessionId,
+        pane: doctorTerminalPane(id: sessionId.uppercased()),
+        lookupFailure: nil
+    )
+    #expect(info.shortId == "q59yjj")
+    #expect(info.name == "build")
+    #expect(info.lookupFailure == nil)
+    let output = Doctor.formatHuman(Doctor.Report(checks: [], session: info, targets: nil))
+    #expect(output.contains("shortId    q59yjj"))
+    #expect(!output.contains("older daemon"))
+}
+
+@Test
+func sessionInfoReportsWhyTheLookupFailed() throws {
+    let sessionId = "11111111-1111-1111-1111-111111111111"
+    let info = Doctor.sessionInfo(sessionId: sessionId, pane: nil, lookupFailure: "intent.guiUnavailable")
+    #expect(info.shortId == nil)
+    let output = Doctor.formatHuman(Doctor.Report(checks: [], session: info, targets: nil))
+    #expect(output.contains("shortId    (unavailable: intent.guiUnavailable)"))
+    #expect(output.contains("name       (unavailable)"))
+    // JSON omits the unknown fields and never carries the failure note.
+    let json = try #require(String(data: JSONEncoder().encode(info), encoding: .utf8))
+    #expect(!json.contains("shortId"))
+    #expect(!json.contains("lookupFailure"))
+}
+
+@Test
+func sessionInfoRefusesAPaneThatIsNotTheSessionsTerminal() {
+    let info = Doctor.sessionInfo(
+        sessionId: "11111111-1111-1111-1111-111111111111",
+        pane: doctorTerminalPane(id: "44444444-4444-4444-4444-444444444444"),
+        lookupFailure: nil
+    )
+    #expect(info.shortId == nil)
+    #expect(info.lookupFailure != nil)
+}

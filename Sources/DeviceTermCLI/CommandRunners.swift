@@ -37,6 +37,22 @@ func helpOutcome(topic: String?) -> CommandOutcome {
     return .stdout(HelpText.render(role: helpRole))
 }
 
+/// The session section's identity, read from the GUI's workspace projection:
+/// the daemon-direct calls `doctor` makes don't carry a pane's short id or name.
+private func doctorSessionInfo(sessionId: String) -> Doctor.SessionInfo {
+    do {
+        let data = try send(CLICommands.paneShowRequest(pane: sessionId))
+        let pane = try JSONDecoder().decode(WorkspacePane.self, from: data)
+        return Doctor.sessionInfo(sessionId: sessionId, pane: pane, lookupFailure: nil)
+    } catch {
+        return Doctor.sessionInfo(
+            sessionId: sessionId,
+            pane: nil,
+            lookupFailure: errorOutcome(error).failure?.code.rawValue ?? "\(error)"
+        )
+    }
+}
+
 /// `deviceterm doctor`: gather env/socket/daemon/session checks, hand
 /// them to the pure `Doctor.*` primitives, and render the report. Exit
 /// 0 when every check is ok/warn, 1 when any fails.
@@ -162,11 +178,7 @@ func doctorOutcome(output: OutputMode) -> CommandOutcome {
                     authenticated: true
                 )
             )
-            sessionInfo = Doctor.SessionInfo(
-                sessionId: sessionEnv,
-                shortId: nil,
-                name: nil
-            )
+            sessionInfo = doctorSessionInfo(sessionId: sessionEnv)
             targets = panes
         } catch CLIError.daemon(let code, let message, _) {
             doctorChecks.append(

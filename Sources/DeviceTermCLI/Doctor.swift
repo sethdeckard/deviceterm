@@ -49,9 +49,18 @@ public enum Doctor {
     }
 
     public struct SessionInfo: Encodable, Sendable, Equatable {
+        private enum CodingKeys: String, CodingKey {
+            case sessionId, shortId, name
+        }
+
         public let sessionId: String
         public let shortId: String?
         public let name: String?
+        /// Why the pane lookup failed, leaving `shortId` and `name` unknown:
+        /// the failure's public error code, or a note when the pane found was
+        /// not this session's terminal. Human output only; the JSON report
+        /// omits the unknown fields instead.
+        public var lookupFailure: String?
     }
 
     public struct Report: Encodable, Sendable {
@@ -125,11 +134,10 @@ public enum Doctor {
     /// 8 keeps the detail column aligned regardless of mix.
     public static let badgeWidth = 8
 
-    /// Width of the check-name column. Long enough for
-    /// `DEVICETERM_SESSION_CAP` (19 chars) + the
-    /// `xcrun resolves to shim` (22 chars) check label. Padded so
-    /// the detail column lands at the same x on every row.
-    public static let nameWidth = 24
+    /// Spaces between the longest check name and its detail. The name
+    /// column is sized to the longest name in the report, so every detail
+    /// starts at the same x and no name is ever cut short.
+    public static let nameGap = 2
 
     // MARK: - Pure checks
 
@@ -357,6 +365,35 @@ public enum Doctor {
             )
     }
 
+    /// The caller's own session identity, from a workspace `pane show` of its
+    /// terminal pane (a terminal pane's id is its session id). A failed lookup,
+    /// or a pane that isn't this session's terminal, keeps the session id and
+    /// records why, so the report says why the short id is missing rather than
+    /// guessing.
+    public static func sessionInfo(
+        sessionId: String,
+        pane: WorkspacePane?,
+        lookupFailure: String?
+    ) -> SessionInfo {
+        guard let pane else {
+            return SessionInfo(
+                sessionId: sessionId,
+                shortId: nil,
+                name: nil,
+                lookupFailure: lookupFailure ?? "unknown"
+            )
+        }
+        guard PublicIdentifier.canonicalized(pane.id) == PublicIdentifier.canonicalized(sessionId) else {
+            return SessionInfo(
+                sessionId: sessionId,
+                shortId: nil,
+                name: nil,
+                lookupFailure: "pane \(pane.id) is not this session's terminal"
+            )
+        }
+        return SessionInfo(sessionId: sessionId, shortId: pane.shortId, name: pane.name)
+    }
+
     // MARK: - Format
 
     /// Render the report in human-readable form. Stable layout
@@ -367,6 +404,7 @@ public enum Doctor {
         lines.append("deviceterm doctor: environment + daemon diagnostic")
         lines.append("")
         lines.append("Checks")
+        let nameWidth = (report.checks.map(\.name.count).max() ?? 0) + nameGap
         for check in report.checks {
             let badge = "[\(check.status.rawValue)]"
                 .padding(toLength: badgeWidth, withPad: " ", startingAt: 0)
@@ -377,8 +415,13 @@ public enum Doctor {
         if let session = report.session {
             lines.append("")
             lines.append("Session")
-            lines.append("  shortId    \(session.shortId ?? "(missing: older daemon)")")
-            lines.append("  name       \(session.name ?? "(unset)")")
+            if let failure = session.lookupFailure {
+                lines.append("  shortId    (unavailable: \(failure))")
+                lines.append("  name       (unavailable)")
+            } else {
+                lines.append("  shortId    \(session.shortId ?? "(unavailable)")")
+                lines.append("  name       \(session.name ?? "(unset)")")
+            }
             lines.append("  sessionId  \(session.sessionId)")
         }
         if let targets = report.targets {
