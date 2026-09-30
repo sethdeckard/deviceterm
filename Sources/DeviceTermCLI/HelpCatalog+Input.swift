@@ -343,6 +343,11 @@ extension HelpCatalog {
                   wait.timeout. It reports on the probe that saw it when
                   probing again can't help, and at the deadline when it
                   can.
+                  A probe that finds no frontmost application, as can
+                  happen while a simulator is starting up, is retried. If
+                  the last probe before the deadline still found none, the
+                  wait reports wait.inconclusive with details.reason
+                  ax.notReady and no note.
                   --state absent waits for the query to match nothing, and
                   reports the condition ax.disappears. That is the assertion
                   a check usually wants: the spinner went, the error banner
@@ -352,6 +357,7 @@ extension HelpCatalog {
                   unsupported walk reports wait.unsupported. An incomplete
                   tree is retried instead, and reports wait.inconclusive only
                   if no complete observation arrives before the deadline.
+                  So is a probe that finds no frontmost application.
                   Still seeing the element at the deadline is an ordinary
                   wait.timeout,
                   because a sighting settles the question whatever else

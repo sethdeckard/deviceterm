@@ -309,6 +309,12 @@ public enum AgentsText {
         # the whole pane reports that rather than wait.timeout.
         # wait.inconclusive means coverage fell short, and
         # carries the daemon's note and noteCode.
+        # A probe that finds no frontmost application, as can
+        # happen while a simulator is starting up, is retried
+        # rather than failing the wait. If the last probe still
+        # found none, it reports wait.inconclusive with
+        # details.reason ax.notReady and no note. Raise --timeout
+        # rather than wrapping the wait in your own retry loop.
         # wait.unsupported means full coverage was unavailable:
         # either the pane has no accessibility capability and
         # nothing was observed, or the family's tree walk didn't
