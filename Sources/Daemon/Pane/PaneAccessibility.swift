@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import CoreGraphics
+import CoreSimulatorBridge
 import DaemonProtocol
 import Foundation
 
@@ -52,7 +53,8 @@ enum PaneAccessibility {
         } catch let error as DeviceBackendError {
             throw PaneError.mapBackendError(error, paneId: paneId, operation: .axTree)
         } catch {
-            throw PaneError.bridgeFailed(
+            throw frontmostFailure(
+                error,
                 paneId: paneId,
                 operation: .axTree,
                 message: BridgeMessage.unwrap(error)
@@ -185,7 +187,8 @@ enum PaneAccessibility {
         } catch let error as DeviceBackendError {
             throw PaneError.mapBackendError(error, paneId: paneId, operation: .axPoint)
         } catch {
-            throw PaneError.bridgeFailed(
+            throw frontmostFailure(
+                error,
                 paneId: paneId,
                 operation: .axPoint,
                 message: "AX bridge unavailable (frontmostTree probe failed): "
@@ -376,7 +379,8 @@ enum PaneAccessibility {
         } catch let error as DeviceBackendError {
             throw PaneError.mapBackendError(error, paneId: paneId, operation: .axSweep)
         } catch {
-            throw PaneError.bridgeFailed(
+            throw frontmostFailure(
+                error,
                 paneId: paneId,
                 operation: .axSweep,
                 message: "AX bridge unavailable (frontmostTree probe failed): "
@@ -524,5 +528,22 @@ enum PaneAccessibility {
                 message: "sweep root is not JSON-serializable: \(BridgeMessage.unwrap(error))"
             )
         }
+    }
+
+    /// Map a failed `frontmostTree` read. A nil frontmost application is
+    /// treated as retryable because it can occur during simulator startup.
+    /// Other failures map to `bridgeFailed`.
+    static func frontmostFailure(
+        _ error: Error,
+        paneId: UUID,
+        operation: PaneOperation,
+        message: String
+    ) -> PaneError {
+        let nsError = error as NSError
+        if nsError.domain == SimAccessibilityErrorDomain,
+            nsError.code == SimAccessibilityErrorCode.frontmostNil.rawValue {
+            return .accessibilityNotReady(paneId: paneId, operation: operation, message: message)
+        }
+        return .bridgeFailed(paneId: paneId, operation: operation, message: message)
     }
 }

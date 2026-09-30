@@ -77,6 +77,9 @@ extension PaneError {
             // the interpolated case, is the text clients read.
             return "bridge-failed:\(operation.label)"
 
+        case let .accessibilityNotReady(_, operation, _):
+            return "accessibility-not-ready:\(operation.label)"
+
         case .unsupportedCharacter:
             return "unsupported-character"
 

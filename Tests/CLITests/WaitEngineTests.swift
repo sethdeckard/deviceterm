@@ -2643,3 +2643,102 @@ func surfaceSubscriptionFailureClosesDemandAndCannotSatisfyWait() throws {
     }
     #expect(transport.observation.closed)
 }
+
+// MARK: - A probe that finds no frontmost application
+
+private func axNotReadyError(_ reason: String? = AXFailureReason.notReady.rawValue) -> CLIError {
+    let details = reason.flatMap {
+        try? JSONSerialization.data(withJSONObject: [AXFailureReason.detailsKey: $0])
+    }
+    return CLIError.daemon(
+        code: -32_020,
+        message: "pane.ax.tree: frontmostApplication returned nil; is anything running on the device?",
+        details: details
+    )
+}
+
+@Test("a probe that finds no frontmost application is waited out", arguments: [
+    CLICommand.WaitAXState.present,
+    CLICommand.WaitAXState.absent
+])
+func aProbeWithNoFrontmostApplicationIsWaitedOut(state: CLICommand.WaitAXState) throws {
+    // A probe that finds no frontmost application saw nothing, which is not a
+    // verdict on the screen, so neither direction may end on it: presence
+    // keeps polling until the element shows, and absence must not read "saw
+    // nothing" as "gone".
+    let button = element(role: "Button", x: 0, y: 0, width: 10, height: 10, centre: (0.5, 0.5))
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .failure(axNotReadyError()),
+        .success(try waitData([waitPane()])),
+        .success(Data(axTree(state == .present ? try jsonText(button) : "").utf8))
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Go"),
+        timeoutMs: 5_000,
+        transport: transport,
+        output: .json,
+        state: state,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure == nil)
+    #expect(outcome.exitCode == 0)
+    // Two probes: the not-ready one, then the one that saw the screen.
+    #expect(transport.sent.filter { $0.method == RPCMethod.paneAXTree.rawValue }.count == 2)
+}
+
+@Test
+func aDeadlineOnAProbeWithNoFrontmostApplicationIsInconclusive() throws {
+    // The last probe observed nothing, so "the element never appeared" would
+    // be a claim about a screen that probe never saw.
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .failure(axNotReadyError())
+    ])
+    let outcome = try handleWaitAX(
+        pane: nil,
+        query: axQuery(label: "Go"),
+        timeoutMs: 1,
+        transport: transport,
+        output: .json,
+        creds: waitCreds,
+        runtime: clock.runtime
+    )
+
+    #expect(outcome.failure?.code == .waitInconclusive)
+    #expect(outcome.failure?.message.contains("found no frontmost application") == true)
+    let details = try waitFailureDetails(outcome)
+    #expect(details[AXFailureReason.detailsKey] as? String == AXFailureReason.notReady.rawValue)
+    #expect(details["condition"] as? String == "ax.appears")
+}
+
+@Test
+func aBridgeFailureWithoutTheNotReadyReasonStillEndsTheWait() throws {
+    // Only the marked failure is retried. The same code with no reason is a
+    // broken bridge, and waiting it out would only delay the report.
+    let clock = WaitTestClock()
+    let transport = WaitScriptTransport([
+        .success(try waitData([waitPane()])),
+        .failure(axNotReadyError(nil))
+    ])
+    do {
+        _ = try handleWaitAX(
+            pane: nil,
+            query: axQuery(label: "Go"),
+            timeoutMs: 5_000,
+            transport: transport,
+            output: .json,
+            creds: waitCreds,
+            runtime: clock.runtime
+        )
+        Issue.record("an unmarked bridge failure was waited out")
+    } catch let CLIError.daemon(code, _, _) {
+        #expect(code == -32_020)
+    }
+    #expect(transport.sent.filter { $0.method == RPCMethod.paneAXTree.rawValue }.count == 1)
+}

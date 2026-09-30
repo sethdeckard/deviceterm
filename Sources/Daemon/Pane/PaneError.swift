@@ -79,6 +79,15 @@ public enum PaneError: Error, Equatable, Sendable {
         operation: PaneOperation,
         message: String
         )
+    /// An accessibility read found no frontmost application, which can occur
+    /// during simulator startup. Same wire code as `bridgeFailed`, plus an
+    /// `AXFailureReason.notReady` detail marking it retryable.
+    case accessibilityNotReady(
+        paneId:
+        UUID,
+        operation: PaneOperation,
+        message: String
+        )
     /// `pane.input.text` got a character outside the daemon's ASCII
     /// translation table. Carries the offending character so the
     /// caller knows exactly which char to filter or split out.

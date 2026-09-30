@@ -228,7 +228,9 @@ at once, and an unsupported walk reports
 .BR wait.unsupported .
 An incomplete tree is retried instead, and reports
 .B wait.inconclusive
-only if no complete observation arrives before the deadline. An element still
+only if no complete observation arrives before the deadline.
+A probe that finds no frontmost application is retried the same way.
+An element still
 matching at the deadline is an ordinary
 .BR wait.timeout .
 It cannot be combined with
@@ -268,7 +270,8 @@ Every wait accepts
 The default timeout is 30000 ms. An overall deadline reports
 .B wait.timeout
 and exits 124. Unsupported observation, inconclusive coverage, and query
-failures remain distinct. Each sub-verb reads its own flags beyond
+failures remain distinct. A probe that finds no frontmost application is
+retried rather than treated as a query failure. Each sub-verb reads its own flags beyond
 .B --pane
 and
 .BR --timeout ,

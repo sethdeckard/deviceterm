@@ -80,7 +80,8 @@ enum WaitEngine {
         let matches: [[String: Any]]
         /// Non-nil when the observation is known not to have seen everything:
         /// enumeration unsupported for the family, a sweep that stopped short,
-        /// or a tree caught omitting an element the daemon hit-tested.
+        /// a tree caught omitting an element the daemon hit-tested, or a probe
+        /// that found no frontmost application and so saw nothing at all.
         let incompleteness: Incompleteness?
     }
 
@@ -923,16 +924,18 @@ private func axSelectionFailure(
 /// knows that.
 ///
 /// An observation that failed outright still throws: a pane without
-/// accessibility, and a response that will not parse. Unsupported enumeration
-/// comes back as incompleteness instead, beside whatever the root itself
-/// matched, because a caller asking only whether something is present is
-/// answered by that root.
+/// accessibility, a failed fetch, and a response that will not parse. Two
+/// outcomes come back as incompleteness instead. Unsupported enumeration comes
+/// back beside whatever the root itself matched, because a caller asking only
+/// whether something is present is answered by that root. A probe that found
+/// no frontmost application comes back with no matches, because that can occur
+/// during simulator startup and a later probe may succeed.
 ///
 /// A nil `matcher` is a query that can never match. After a successful fetch
 /// and parse it returns empty before the response-note check, leaving the probe
 /// pending rather than classifying the observation as unsupported. The
-/// capability check, the fetch, and the parse run ahead of it and can still
-/// fail the wait.
+/// capability check, the fetch, and the parse run ahead of it, so they can
+/// still fail the wait or report a probe that found no frontmost application.
 private func observeAXMatches(
     entry: PanesListEntry,
     context: WaitEngine.ProbeContext,
@@ -951,31 +954,36 @@ private func observeAXMatches(
         )
     }
     let data: Data
-    switch query.source {
-    case .tree:
-        data = try sendWaitRequest(
-            try CLICommands.axTreeRequest(paneId: entry.paneId),
-            transport: transport,
-            context: context,
-            maximumSeconds: AXTimeout.response
-        )
+    do {
+        switch query.source {
+        case .tree:
+            data = try sendWaitRequest(
+                try CLICommands.axTreeRequest(paneId: entry.paneId),
+                transport: transport,
+                context: context,
+                maximumSeconds: AXTimeout.response
+            )
 
-    case .sweep:
-        data = try sendWaitRequest(
-            transport: transport,
-            context: context,
-            maximumSeconds: AXTimeout.response
-        ) {
-            let budgetMs = min(
-                AXSweepBudget.clamp(query.budgetMs),
-                try context.remainingMilliseconds()
-            )
-            return try CLICommands.axSweepRequest(
-                paneId: entry.paneId,
-                step: query.step,
-                budgetMs: budgetMs
-            )
+        case .sweep:
+            data = try sendWaitRequest(
+                transport: transport,
+                context: context,
+                maximumSeconds: AXTimeout.response
+            ) {
+                let budgetMs = min(
+                    AXSweepBudget.clamp(query.budgetMs),
+                    try context.remainingMilliseconds()
+                )
+                return try CLICommands.axSweepRequest(
+                    paneId: entry.paneId,
+                    step: query.step,
+                    budgetMs: budgetMs
+                )
+            }
         }
+    } catch let CLIError.daemon(_, message, details)
+        where accessibilityFailureReason(details) == .notReady {
+        return notReadyObservation(query: query, daemonMessage: message)
     }
     let object: Any
     do {
@@ -1010,6 +1018,43 @@ private func observeAXMatches(
             note: daemonNote,
             noteCode: daemonNoteCode ?? note?.code,
             treeNote: note
+        )
+    )
+}
+
+/// The `AXFailureReason` a daemon error carries in its `details`, if any.
+private func accessibilityFailureReason(_ details: Data?) -> AXFailureReason? {
+    guard let details,
+        let object = try? JSONSerialization.jsonObject(with: details) as? [String: Any],
+        let raw = object[AXFailureReason.detailsKey] as? String else { return nil }
+    return AXFailureReason(rawValue: raw)
+}
+
+/// An observation that saw nothing because the probe found no frontmost
+/// application, which can occur during simulator startup.
+///
+/// Incomplete rather than failed, and not terminal: a later probe may succeed.
+/// Matching nothing here says nothing about the screen, so a presence wait
+/// keeps polling and an absence wait can't conclude the element is gone. If
+/// the deadline arrives in this state, report that the last probe could not
+/// observe the screen instead of reporting that nothing appeared.
+private func notReadyObservation(
+    query: CLICommand.WaitAXQuery,
+    daemonMessage: String
+) -> WaitEngine.AXObservation {
+    WaitEngine.AXObservation(
+        matches: [],
+        incompleteness: WaitEngine.AXObservation.Incompleteness(
+            failure: WaitEngine.Failure(
+                code: .waitInconclusive,
+                message: "the last accessibility probe found no frontmost application: \(daemonMessage)",
+                exitCode: 1,
+                details: waitDetails([
+                    "source": query.source.rawValue,
+                    AXFailureReason.detailsKey: AXFailureReason.notReady.rawValue
+                ])
+            ),
+            isTerminal: false
         )
     )
 }

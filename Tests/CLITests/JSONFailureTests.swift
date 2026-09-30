@@ -213,6 +213,23 @@ func daemonCodesMapWithoutParsingProse() {
 }
 
 @Test
+func aNotReadyBridgeFailureCarriesItsReasonInDetails() throws {
+    // `ax tree`/`point`/`sweep` report a missing frontmost application under
+    // their usual code; the reason rides beside `rpcCode`.
+    let details = try JSONSerialization.data(
+        withJSONObject: [AXFailureReason.detailsKey: AXFailureReason.notReady.rawValue]
+    )
+    let failure = try #require(
+        errorOutcome(CLIError.daemon(code: -32_020, message: "pane.ax.tree: not up", details: details)).failure
+    )
+    #expect(failure.code == .paneBridgeFailed)
+    let data = try #require(failure.details)
+    let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(object[AXFailureReason.detailsKey] as? String == AXFailureReason.notReady.rawValue)
+    #expect(object["rpcCode"] as? Int == -32_020)
+}
+
+@Test
 func decodingErrorMapsToInvalidResponse() {
     do {
         _ = try JSONDecoder().decode(Int.self, from: Data("{}".utf8))

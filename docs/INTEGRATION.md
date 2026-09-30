@@ -130,6 +130,12 @@ Current shared codes are:
 | `intent.mutationFailed` | A compound mutation partially committed; inspect `error.details.committed` |
 | `intent.internalError` | A DeviceTerm invariant failed after the request reached the GUI |
 
+On `ax tree`, `ax point`, and `ax sweep`, a `pane.bridgeFailed` can carry
+`details.reason` set to `ax.notReady`. The accessibility bridge found no
+frontmost application, which can happen while a simulator is starting up, so
+the same command may succeed if you retry it. `wait ax` and `tap --label` retry
+it for you.
+
 An `intent.*` code supplied by the daemon passes through unchanged. Commands
 may define additional dotted codes for their own outcomes; those codes are
 documented with the command.
@@ -1251,7 +1257,9 @@ everything, because the element could be in the part that went unseen. A
 truncated sweep returns `wait.inconclusive` at once, and an unsupported tree
 walk returns `wait.unsupported`. An incomplete tree is retried, and returns
 `wait.inconclusive` only if no complete observation arrives before the
-deadline. An element still matching at the deadline returns `wait.timeout`, since
+deadline. A probe that finds no frontmost application is retried the same
+way, because matching nothing then says nothing about the screen. An
+element still matching at the deadline returns `wait.timeout`, since
 a sighting settles the question whatever else the observation missed.
 
 `--state absent` cannot be combined with `--print center`. There is no element
@@ -1294,6 +1302,11 @@ match and the last observation still carried the note, the wait returns
 `wait.inconclusive` in place of `wait.timeout`. A match on a still-noted tree
 succeeds, because presence needs no more coverage than the sighting.
 
+A probe that finds no frontmost application is retried too. It leaves nothing
+to match, so if the last probe before the deadline still found none, the wait
+returns `wait.inconclusive` with `details.reason` set to `ax.notReady`, not
+`wait.timeout`, because that probe could not observe the screen.
+
 That substitution needs an observation this wait actually reached. A probe that
 dies in one of its own requests produces none, so the wait reports the deadline
 rather than a verdict drawn from an earlier probe.
@@ -1303,15 +1316,18 @@ when the visible matches contain one eligible target. Anything the observation
 missed could add another target, reveal the real control behind a caption, or
 change the containment result.
 
-A tree marked `ax.treeIncomplete` is retried. If no complete observation
-arrives before the deadline, the command returns `wait.inconclusive`.
+A tree marked `ax.treeIncomplete` is retried, and so is a probe that finds no
+frontmost application. If no complete observation arrives before
+the deadline, the command returns `wait.inconclusive`.
 Unsupported enumeration and a truncated sweep refuse immediately. None of
 these outcomes prints a coordinate or dispatches a tap.
 
-In every case the message is the daemon's own note, and `details` carries
-`note` and `noteCode`, plus `sweepedPoints`, `step`, and `budgetMs` when a
-sweep raised it, so a caller can tell a sweep worth retrying with a larger
-budget from one already at the ceiling.
+For the three notes, the message is the daemon's own note, and `details`
+carries `note` and `noteCode`, plus `sweepedPoints`, `step`, and `budgetMs`
+when a sweep raised it, so a caller can tell a sweep worth retrying with a
+larger budget from one already at the ceiling. A last probe that found no
+frontmost application has no note. Its message says so, and `details` carries
+`reason` set to `ax.notReady`.
 
 A tree observation that comes back empty on watchOS returns `wait.unsupported`,
 carrying the same two fields. The refusal follows the daemon's note rather than
@@ -1485,7 +1501,9 @@ reads, and retryable session-readiness delays share that single RPC deadline. A
 timeout when the remaining overall time is limiting becomes `wait.timeout`; an
 earlier command-specific RPC deadline remains `transport.timeout`. Connection,
 authentication, bridge, and response-decoding failures retain their shared
-codes and return immediately.
+codes and return immediately. The one exception is a `pane.bridgeFailed` with
+`details.reason` `ax.notReady`, which an AX wait keeps polling through, as
+described above.
 
 Pane resolution splits three ways. An ambiguous target returns
 `pane.ambiguous` on the first probe; waits retry absence, not ambiguity. A

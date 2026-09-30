@@ -1103,6 +1103,17 @@ public enum PaneMethods {
                 message: "pane.\(operation.label): \(message)"
             )
 
+        case let .accessibilityNotReady(_, operation, message):
+            // The bridge failure's code for clients that ignore `details`;
+            // `details.reason` identifies it as retryable.
+            return RPCMethodError(
+                code: RPCMethodError.bridgeFailedCode,
+                message: "pane.\(operation.label): \(message)",
+                details: try? JSONEncoder().encode(
+                    [AXFailureReason.detailsKey: AXFailureReason.notReady]
+                )
+            )
+
         case let .unsupportedCharacter(_, character):
             return RPCMethodError.invalidParams(
                 "unsupported character in text: '\(character)'"

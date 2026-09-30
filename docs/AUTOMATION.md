@@ -717,7 +717,8 @@ everything, because the element could be in the part that went unseen. A
 truncated sweep reports `wait.inconclusive` at once, and an unsupported tree
 walk reports `wait.unsupported`. An incomplete tree is retried, and reports
 `wait.inconclusive` only if no complete observation arrives before the
-deadline. An element still matching at the deadline is an ordinary
+deadline. So is a probe that finds no frontmost application, which can happen
+while a simulator is starting up. An element still matching at the deadline is an ordinary
 `wait.timeout`, because a sighting settles the question whatever else the
 observation missed.
 
@@ -785,6 +786,10 @@ all, while a family whose tree walk does not enumerate still returns its root
 and carries a `noteCode`. That field tells them apart, and only the second is
 helped by another `--source`.
 
+A wait whose last probe found no frontmost application reports
+`wait.inconclusive` too, but with no note. `details.reason` is `ax.notReady`
+instead. If the simulator was still starting up, raise `--timeout`.
+
 Because the root survives the second case, a query the root itself matches
 succeeds rather than reporting `wait.unsupported`.
 
@@ -829,7 +834,9 @@ The three outcome classes are distinct:
 An individual RPC deadline remains `transport.timeout`. A malformed response,
 connection failure, pane ambiguity, or other query failure returns immediately
 under its shared error code and is neither retried nor remapped to
-`wait.timeout`.
+`wait.timeout`. The exception is an AX query answered with `pane.bridgeFailed`
+and `details.reason` `ax.notReady`: the probe found no frontmost application,
+so the wait keeps polling.
 
 ### Use Events as a Latency Signal
 

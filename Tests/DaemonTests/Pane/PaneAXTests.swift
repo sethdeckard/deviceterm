@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import CoreGraphics
+import CoreSimulatorBridge
 @testable import Daemon
 import DaemonProtocol
 import DaemonTestSupport
@@ -107,6 +108,51 @@ func bridgeFailedMapsToDedicatedWireCode() {
     #expect(mapped.code != RPCErrorCode.serverError)
     #expect(mapped.message.contains("ax.sweep"))
     #expect(mapped.message.contains("AX server not ready"))
+}
+
+@Test
+func aMissingFrontmostApplicationIsReportedAsNotReady() throws {
+    // A missing frontmost application can occur during simulator startup, so
+    // it's retryable. It keeps the bridge-failure code for clients that ignore
+    // `details`; the reason is what tells a wait it can keep polling.
+    let frontmostNil = NSError(
+        domain: SimAccessibilityErrorDomain,
+        code: SimAccessibilityErrorCode.frontmostNil.rawValue
+    )
+    let error = PaneAccessibility.frontmostFailure(
+        frontmostNil,
+        paneId: UUID(),
+        operation: .axTree,
+        message: "frontmostApplication returned nil"
+    )
+    guard case .accessibilityNotReady = error else {
+        Issue.record("expected accessibilityNotReady, got \(error)")
+        return
+    }
+    let mapped = PaneMethods.mapPaneError(error)
+    #expect(mapped.code == RPCMethodError.bridgeFailedCode)
+    #expect(mapped.message.contains("ax.tree"))
+    let details = try #require(mapped.details)
+    let object = try #require(JSONSerialization.jsonObject(with: details) as? [String: String])
+    #expect(object[AXFailureReason.detailsKey] == AXFailureReason.notReady.rawValue)
+}
+
+@Test("every other frontmost failure stays a plain bridge failure", arguments: [
+    NSError(domain: SimAccessibilityErrorDomain, code: 77),
+    NSError(domain: "SomeOtherDomain", code: SimAccessibilityErrorCode.frontmostNil.rawValue)
+])
+func otherFrontmostFailuresStayBridgeFailures(error: NSError) {
+    let mapped = PaneAccessibility.frontmostFailure(
+        error,
+        paneId: UUID(),
+        operation: .axPoint,
+        message: "boom"
+    )
+    guard case .bridgeFailed = mapped else {
+        Issue.record("expected bridgeFailed, got \(mapped)")
+        return
+    }
+    #expect(PaneMethods.mapPaneError(mapped).details == nil)
 }
 
 // MARK: - Coordinator-level: coordinate mapping

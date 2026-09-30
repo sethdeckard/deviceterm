@@ -50,6 +50,10 @@ extern NSString * const SimAccessibilityErrorDomain;
 /// `SimAccessibility.m`; only the codes pinned here are part of the
 /// daemon-facing contract.
 typedef NS_ENUM(NSInteger, SimAccessibilityErrorCode) {
+    /// `frontmostTree` found no frontmost application to read. This can
+    /// occur during simulator startup, so the daemon reports it as
+    /// retryable rather than as a broken bridge.
+    SimAccessibilityErrorCodeFrontmostNil = 76,
     /// `elementAtPoint:` returned no element. This is a routine
     /// per-cell outcome inside a `pane.ax.sweep` (blank regions on
     /// most screens) and the daemon must NOT treat it as a bridge

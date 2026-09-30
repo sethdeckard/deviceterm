@@ -682,7 +682,10 @@ Absence is a claim about what isn't there, so an observation that didn't see
 everything can't support it. A truncated sweep reports `wait.inconclusive`
 straight away, and an unsupported tree walk reports `wait.unsupported`. An
 incomplete tree is retried instead, and reports `wait.inconclusive` only if no
-complete observation arrives before the deadline. Still seeing the element at
+complete observation arrives before the deadline. A probe that finds no
+frontmost application, as can happen while a simulator is starting up, is
+retried the same way.
+Still seeing the element at
 the deadline is an ordinary `wait.timeout`.
 
 A `wait ax` receipt lists the matched elements, ordered so the one you are most
@@ -707,8 +710,9 @@ deviceterm tap --label Continue --match contains
 
 Both make the same selection. Neither selects from a tree marked
 `ax.treeIncomplete`, because an omitted element could make the target ambiguous
-or change the containment result. An incomplete tree is retried and returns
-`wait.inconclusive` if no complete observation arrives before the deadline.
+or change the containment result. An incomplete tree is retried, and so is a
+probe that finds no frontmost application. Either returns
+`wait.inconclusive` if the deadline arrives first.
 Unsupported enumeration and a truncated sweep refuse immediately and dispatch
 no tap.
 
@@ -728,7 +732,8 @@ observation and inconclusive AX coverage use their own nonzero error codes. A
 request reaching its earlier command-specific RPC deadline remains
 `transport.timeout`. Other transport, authentication, pane-resolution, and
 response-decoding failures retain their shared classifications and return
-immediately.
+immediately. A probe that finds no frontmost application is the exception:
+`wait ax` keeps polling until one is found or the deadline arrives.
 
 ### Turn the Digital Crown
 
