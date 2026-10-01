@@ -1560,9 +1560,11 @@ one that lands after the pane is created. The attach writes no owner, because
 the shutdown already cleared ownership and writing it back would claim a
 simulator that is down. The pane it created is closed.
 
-The error is `-32021` when the simulator is still down. When it has already
-booted again the error is `-32000`, asking for the attach again, since
-nothing is wrong with the simulator by then.
+The error is `-32021` when the device list reads the simulator as shut down
+or shutting down. Any other answer gets `-32000`, asking for the attach
+again: a simulator that is booted or booting again, and one the daemon
+couldn't find or read the state of. So `-32000` means try again, not that
+the simulator is up.
 
 `name` restores a pane's user-set name across a re-attach. A record is
 otherwise unnamed, so a pane coming back from a helper restart would have lost
