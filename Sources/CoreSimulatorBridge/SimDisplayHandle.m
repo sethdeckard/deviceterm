@@ -213,6 +213,35 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
     return sized;
 }
 
+/// A candidate's framebuffer area in square pixels, or 0 when it vends no
+/// usable size. Extent is what tells a foldable's two panels apart.
+static CGFloat CSBCandidateArea(id candidate) {
+    CGSize size = CGSizeZero;
+    @try {
+        if ([candidate respondsToSelector:@selector(displaySize)]) {
+            size = [candidate displaySize];
+        }
+    } @catch (NSException *e) {}
+    if (size.width <= 0 || size.height <= 0) return 0;
+    return size.width * size.height;
+}
+
+/// Whether `candidate` has the greatest area in `sized`.
+///
+/// NO for a lone candidate: a single-panel device has no larger or smaller
+/// panel to be, and answering YES would claim a hinge it does not have. Two
+/// candidates of equal area both answer YES, which no foldable produces.
+static BOOL CSBIsLargestCandidate(
+    id candidate, NSArray<id<SimDisplayIOSurfaceRenderable>> *sized) {
+    if (!candidate || sized.count <= 1) return NO;
+    CGFloat area = CSBCandidateArea(candidate);
+    if (area <= 0) return NO;
+    for (id other in sized) {
+        if (CSBCandidateArea(other) > area) return NO;
+    }
+    return YES;
+}
+
 @interface SimDisplayHandle ()
 @property (nonatomic, copy, readwrite) NSString *udid;
 @property (nonatomic, strong, nullable) SimDevice *device;
@@ -222,6 +251,7 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
 @property (nonatomic, assign, readwrite) unsigned int boundScreenID;
 @property (nonatomic, copy, readwrite, nullable) NSString *boundScreenUniqueId;
 @property (nonatomic, assign, readwrite) BOOL hasMultiplePanels;
+@property (nonatomic, assign, readwrite) BOOL boundPanelIsLargest;
 /// Delivery queue for the screen callbacks, held so a rebind can re-register
 /// them on the new panel without the caller registering again.
 @property (nonatomic, strong, nullable) dispatch_queue_t screenCallbackQueue;
@@ -445,7 +475,7 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
     // candidates fall through to the content tiebreaker below.
     if (sized.count <= 1) {
         id<SimDisplayIOSurfaceRenderable> chosen = sized.firstObject ?: candidates.firstObject;
-        [self _recordBoundPanelFor:chosen];
+        [self _recordBoundPanelFor:chosen among:sized];
         return chosen;
     }
 
@@ -472,7 +502,7 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
     // `rebindToLitPanel` is what corrects a guess that lands here, once some
     // panel is drawing.
     id<SimDisplayIOSurfaceRenderable> chosen = lit ?: sized.firstObject;
-    [self _recordBoundPanelFor:chosen];
+    [self _recordBoundPanelFor:chosen among:sized];
     return chosen;
 }
 
@@ -480,7 +510,9 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
 /// can name it, re-resolve it, or notice it changed. Best-effort: a proxy
 /// that vends no `SimScreenProperties` leaves the fields at their
 /// "unknown" values rather than failing the bind.
-- (void)_recordBoundPanelFor:(nullable id)candidate {
+- (void)_recordBoundPanelFor:(nullable id)candidate
+                       among:(NSArray<id<SimDisplayIOSurfaceRenderable>> *)sized {
+    self.boundPanelIsLargest = CSBIsLargestCandidate(candidate, sized);
     id<CSBSimScreenProperties> props = CSBPropertiesForCandidate(candidate);
     if (!props) {
         self.boundScreenID = 0;
@@ -552,7 +584,7 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
     [self _unregisterScreenCallbacks];
 
     self.renderable = lit;
-    [self _recordBoundPanelFor:lit];
+    [self _recordBoundPanelFor:lit among:sized];
     BOOL bound = self.framesPaused || [self _registerSurfaceCallbacksOn:lit];
     // Orientation observation has to move with the binding. Screen callbacks
     // are the only thing that makes a later fold noticeable, so a handle that
@@ -570,7 +602,7 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
         // is retried later. Staying on the new panel half-registered would
         // instead leave the pane correct and stuck.
         self.renderable = current;
-        [self _recordBoundPanelFor:current];
+        [self _recordBoundPanelFor:current among:sized];
         if (!self.framesPaused) [self _registerSurfaceCallbacksOn:current];
         if (wantsScreenCallbacks) [self _registerScreenCallbacksWithError:NULL];
         return NO;

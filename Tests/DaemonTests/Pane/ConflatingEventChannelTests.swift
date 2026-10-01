@@ -37,7 +37,7 @@ struct ConflatingEventChannelTests {
 
     private func angles(_ events: [PaneEvent]) -> [Double] {
         events.compactMap {
-            if case let .hingeChanged(_, degrees) = $0 { return degrees }
+            if case let .hingeChanged(_, degrees, _) = $0 { return degrees }
             return nil
         }
     }
@@ -48,7 +48,7 @@ struct ConflatingEventChannelTests {
         // a long fold would otherwise accumulate one notice per degree.
         let channel = ConflatingEventChannel()
         for degrees in stride(from: 0.0, through: 180.0, by: 1.0) {
-            channel.send(.hingeChanged(paneId: paneId, degrees: degrees))
+            channel.send(.hingeChanged(paneId: paneId, degrees: degrees, spansHinge: true))
         }
         #expect(channel.pendingCount == 1)
         #expect(angles(drain(channel)) == [180])
@@ -60,9 +60,9 @@ struct ConflatingEventChannelTests {
         // bookkeeping exists for: neither may collapse the other.
         let channel = ConflatingEventChannel()
         channel.send(.surfaceChanged(paneId: paneId, sequence: 1))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 30))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 30, spansHinge: true))
         channel.send(.surfaceChanged(paneId: paneId, sequence: 2))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 60))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 60, spansHinge: true))
         #expect(channel.pendingCount == 2)
         let drained = drain(channel)
         #expect(sequences(drained) == [2])
@@ -76,10 +76,10 @@ struct ConflatingEventChannelTests {
         // entry, dropping a lifecycle event instead of the old reading.
         let channel = ConflatingEventChannel()
         channel.send(.surfaceChanged(paneId: paneId, sequence: 1))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 30))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 30, spansHinge: true))
         channel.send(.stateChanged(paneId: paneId, state: .rendering))
         channel.send(.surfaceChanged(paneId: paneId, sequence: 2))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 90))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 90, spansHinge: true))
         let drained = drain(channel)
         #expect(sequences(drained) == [2])
         #expect(angles(drained) == [90])
@@ -92,9 +92,9 @@ struct ConflatingEventChannelTests {
         // the next reading would replace a neighbour's event.
         let channel = ConflatingEventChannel()
         channel.send(.stateChanged(paneId: paneId, state: .rendering))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 30))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 30, spansHinge: true))
         _ = channel.take()
-        channel.send(.hingeChanged(paneId: paneId, degrees: 120))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 120, spansHinge: true))
         #expect(angles(drain(channel)) == [120])
     }
 
@@ -103,9 +103,9 @@ struct ConflatingEventChannelTests {
         // The seal drops a pending frame, which shifts a hinge slot behind it.
         let channel = ConflatingEventChannel()
         channel.send(.surfaceChanged(paneId: paneId, sequence: 1))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 30))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 30, spansHinge: true))
         channel.send(.stateChanged(paneId: paneId, state: .shutdown))
-        channel.send(.hingeChanged(paneId: paneId, degrees: 150))
+        channel.send(.hingeChanged(paneId: paneId, degrees: 150, spansHinge: true))
         let drained = drain(channel)
         #expect(sequences(drained).isEmpty)
         #expect(angles(drained) == [150])

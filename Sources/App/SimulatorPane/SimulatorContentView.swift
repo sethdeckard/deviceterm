@@ -84,6 +84,9 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// (rounded inside the bezel, not a sharp rectangle). Set
     /// alongside `displayInset` so the two stay in sync.
     private var screenCornerRadius: CGFloat = 0
+    /// How the picture bends at the hinge, or nil when it is flat. Only a
+    /// foldable showing the panel the hinge runs through ever sets it.
+    private var crease: FoldCreaseGeometry.Crease?
     private var dragStart: CGPoint?
     private var dragStartTime: Date?
     private var liveTouchActive = false
@@ -263,6 +266,15 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         requestRedraw()
     }
 
+    /// Push the bend the hinge is holding the picture at, nil when flat.
+    /// The owner recomputes it on every render pass, so only a changed value
+    /// requests a draw.
+    func setCrease(_ crease: FoldCreaseGeometry.Crease?) {
+        guard crease != self.crease else { return }
+        self.crease = crease
+        requestRedraw()
+    }
+
     // MARK: MTKViewDelegate
 
     func draw(in view: MTKView) {
@@ -279,6 +291,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             orientation: orientation,
             displayInset: displayInset,
             screenCornerRadius: screenCornerRadius,
+            crease: crease,
             in: view,
             trace: trace
         )
@@ -387,7 +400,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             viewSize: bounds.size,
             surfaceSize: surfaceSize,
             orientation: orientation,
-            displayInset: displayInset
+            displayInset: displayInset,
+            crease: crease
         ) {
             dragStart = normalized
             dragStartTime = Date()
@@ -408,7 +422,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 viewSize: bounds.size,
                 surfaceSize: surfaceSize,
                 orientation: orientation,
-                displayInset: displayInset
+                displayInset: displayInset,
+                crease: crease
             )
         else { return }
         dragStart = extended
@@ -431,7 +446,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 viewSize: bounds.size,
                 surfaceSize: surfaceSize,
                 orientation: orientation,
-                displayInset: displayInset
+                displayInset: displayInset,
+                crease: crease
             )
         else { return false }
         return SimGestureMath.isInBottomEdgeBand(orientedY: displayed.y)
@@ -754,7 +770,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             viewSize: bounds.size,
             surfaceSize: surfaceSize,
             orientation: orientation,
-            displayInset: displayInset
+            displayInset: displayInset,
+            crease: crease
         ) {
             return inScreen
         }
@@ -764,7 +781,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 viewSize: bounds.size,
                 surfaceSize: surfaceSize,
                 orientation: orientation,
-                displayInset: displayInset
+                displayInset: displayInset,
+                crease: crease
             ) {
             return extended
         }
@@ -778,9 +796,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// superview. Both are safe defaults for the gating in mouseDown
     /// / mouseUp.
     private func isPointInBezel(_ viewPoint: NSPoint) -> Bool {
-        guard let wrapper = superview as? SimulatorPaneWrapperView,
-            let bezel = wrapper.contentLocalBezelRect() else { return false }
-        return bezel.contains(viewPoint)
+        guard let wrapper = superview as? SimulatorPaneWrapperView else { return false }
+        return wrapper.bezelContains(viewPoint)
     }
 
     /// Whether `viewPoint` is inside the wrapper's watch Digital
@@ -804,7 +821,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             viewSize: bounds.size,
             surfaceSize: surfaceSize,
             orientation: orientation,
-            displayInset: displayInset
+            displayInset: displayInset,
+            crease: crease
         )
         else { return }
         gestureCenter = center

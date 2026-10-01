@@ -332,3 +332,34 @@ private final class Counter: @unchecked Sendable {
         return count
     }
 }
+
+/// The environment the hinge reader runs in.
+///
+/// `LANG` is the difference between a reader that streams and one that is
+/// silent for the life of a pane, so it gets its own coverage rather than
+/// riding along with the parse.
+struct HingeReaderEnvironmentTests {
+    @Test
+    func aMissingLocaleIsSuppliedSoTheReaderStreams() {
+        // launchd starts the daemon without one. Left alone, `devicectl`
+        // block-buffers stdout, and this reader never exits to flush it.
+        let prepared = HingeMonitor.readerEnvironment(inheriting: ["PATH": "/usr/bin"])
+        #expect(prepared["LANG"] == HingeMonitor.readerLocale)
+        #expect(prepared["PATH"] == "/usr/bin")
+    }
+
+    @Test
+    func anOperatorsOwnLocaleIsLeftAlone() {
+        let prepared = HingeMonitor.readerEnvironment(
+            inheriting: ["LANG": "de_DE.UTF-8"]
+        )
+        #expect(prepared["LANG"] == "de_DE.UTF-8")
+    }
+
+    @Test
+    func theSuppliedLocaleIsUTF8() {
+        // A non-UTF-8 locale parses fine but drops the degree signs, so the
+        // one supplied deliberately is not that.
+        #expect(HingeMonitor.readerLocale.hasSuffix("UTF-8"))
+    }
+}

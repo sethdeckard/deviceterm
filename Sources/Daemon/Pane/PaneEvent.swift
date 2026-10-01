@@ -48,6 +48,7 @@ public enum PaneEvent: Sendable {
     case hingeChanged(
         paneId:
         UUID,
-        degrees: Double
+        degrees: Double,
+        spansHinge: Bool
         )
 }

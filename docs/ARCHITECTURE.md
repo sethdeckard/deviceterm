@@ -2572,12 +2572,25 @@ Events are correlated to the subscription's request-envelope id:
   returned by a DeviceTerm rotation, including a non-target result. Replayed
   once at subscribe and sent again whenever it changes. A pane that has neither
   been read nor rotated replays `portrait`.
-- `hinge.changed`: `{paneId, degrees}`, a foldable device's hinge angle, `0`
-  shut and `180` flat. An observation of the device rather than a receipt for
+- `hinge.changed`: `{paneId, degrees, spansHinge}`, a foldable device's hinge
+  angle, `0` shut and `180` flat, and whether the panel on show is the one the
+  hinge runs through. An observation of the device rather than a receipt for
   `pane.input.fold`, so a fold made in Device Hub or from another tab arrives
   here too. Sent only for a device advertising the `fold` capability: the first
   angle read, the current one replayed to each new subscriber, and every later
   change. The source suppresses movement under a degree.
+
+  `spansHinge` is what says whether the picture bends, and the angle cannot
+  stand in for it. A foldable's cover panel sits outside the fold and is flat
+  at every angle, and which panel is lit follows the path the hinge took rather
+  than where it stopped, so the same angle occurs with either panel on show.
+
+  The lit panel moves a few hundred milliseconds after the hinge settles, so
+  this is published again on its own when the panel changes, carrying the angle
+  already reached. The daemon tells the panels apart by extent, the one that
+  spans the hinge being the one that unfolds, so `false` also covers a device
+  whose panels it could not size. A peer that predates the field omits it,
+  where it decodes as `false`.
 
 A frame subscriber receives the current surface when one exists. Each new
 simulator frame subscriber also requests a fresh capture, even if another

@@ -133,6 +133,14 @@ final class SimulatorPaneViewModel {
     /// rather than an echo of a `fold` this app asked for. A fold made in
     /// Device Hub or from another tab lands here too.
     private(set) var confirmedHingeDegrees: Double?
+    /// Whether the panel this pane is showing is the one the hinge runs
+    /// through, so the picture bends with the angle.
+    ///
+    /// False for a foldable's cover panel and for every single-panel device.
+    /// The angle cannot stand in for this: which panel is lit depends on the
+    /// path the hinge took, so the same angle occurs with either panel
+    /// showing.
+    private(set) var confirmedPanelSpansHinge = false
 
     // Infrastructure, not observable state. Kept out of the registrar so
     // changes don't trigger renders and `deinit` can touch the task.
@@ -383,6 +391,7 @@ final class SimulatorPaneViewModel {
             if FoldPosture.degreeRange.contains(change.degrees) {
                 confirmedHingeDegrees = change.degrees
             }
+            confirmedPanelSpansHinge = change.spansHinge
         }
     }
 

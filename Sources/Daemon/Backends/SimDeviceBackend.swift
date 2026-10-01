@@ -46,6 +46,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// under `inputGate`: the display lane writes it, and every accessibility
     /// call reads it before touching the client.
     private var boundScreenID: UInt32 = 0
+    /// Whether the bound panel spans the hinge, updated under `inputGate`
+    /// alongside `boundScreenID` because the same lane callback writes both.
+    private var boundPanelSpansHinge = false
+    /// Told whenever the bound panel moves. Set under `inputGate`, read there
+    /// and called outside it, so a handler that hops to an actor never runs
+    /// with the gate held.
+    private var onBoundPanel: (@Sendable () -> Void)?
     /// Lazily acquired on the first location call, with the same
     /// permanent-failure latch as the AX client.
     private var locationClient: SimLocation?
@@ -336,8 +343,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // Accessibility hit-testing addresses a display, so it follows the
         // panel the display settles on. Registered before the bootstrap
         // because the bootstrap is what publishes the first binding.
-        display.observePanelChanges { [weak self] screenID in
-            self?.noteBoundPanel(screenID)
+        display.observePanelChanges { [weak self] panel in
+            self?.noteBoundPanel(panel)
         }
         return try await display.bootstrap(
             onFrame: onFrame,
@@ -358,8 +365,33 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Input needs no equivalent: contacts carry a normalized ratio and reach
     /// the mirrored panel through Indigo's fixed digitizer target on a
     /// foldable as well as a single-panel device.
-    private func noteBoundPanel(_ screenID: UInt32) {
-        inputGate.sync { boundScreenID = screenID }
+    private func noteBoundPanel(_ panel: BoundPanel) {
+        let observer = inputGate.sync { () -> (@Sendable () -> Void)? in
+            boundScreenID = panel.screenID
+            boundPanelSpansHinge = panel.spansHinge
+            return onBoundPanel
+        }
+        observer?()
+    }
+
+    /// Register `handler` and signal it once.
+    ///
+    /// The immediate call is what lets a caller register *after* the display
+    /// has bootstrapped and still learn the current panel. The lane resolves
+    /// the first binding inside the bootstrap, so a caller that only took
+    /// future changes would sit on the default until the next fold.
+    ///
+    /// The stored binding is written before the signal goes out, so a reader
+    /// answering this notice never sees a panel older than the one it names.
+    func observeBoundPanel(_ handler: @escaping @Sendable () -> Void) {
+        inputGate.sync { onBoundPanel = handler }
+        handler()
+    }
+
+    func currentBoundPanel() -> BoundPanel {
+        inputGate.sync {
+            BoundPanel(screenID: boundScreenID, spansHinge: boundPanelSpansHinge)
+        }
     }
 
     func stopFrames() { display.stopFrames() }

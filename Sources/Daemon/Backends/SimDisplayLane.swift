@@ -58,7 +58,7 @@ final class SimDisplayLane: @unchecked Sendable {
     private var panelSwapTask: Task<Void, Never>?
     /// Told which panel the display is mirroring, whenever that changes.
     /// Owned by `queue`.
-    private var onPanelChange: (@Sendable (UInt32) -> Void)?
+    private var onPanelChange: (@Sendable (BoundPanel) -> Void)?
     /// Stamps each frame-demand change for the pool's idle state, which is
     /// set from a task per change. Owned by `queue`.
     private var demandSerial: UInt64 = 0
@@ -75,6 +75,12 @@ final class SimDisplayLane: @unchecked Sendable {
         self.handle = handle
         self.pool = pool
         self.instrumentation = instrumentation
+    }
+
+    /// Read the bound panel's identity and shape in one trip, so a fold
+    /// cannot land between the two reads.
+    private static func boundPanel(of handle: SimDisplayHandle) -> BoundPanel {
+        BoundPanel(screenID: handle.boundScreenID, spansHinge: handle.boundPanelIsLargest)
     }
 
     // MARK: - Bootstrap
@@ -101,7 +107,7 @@ final class SimDisplayLane: @unchecked Sendable {
             // on this queue. A caller that read it afterwards and applied it
             // itself would be doing two unordered steps, and a fold landing
             // between them would be overwritten by the older snapshot.
-            onPanelChange?(handle?.boundScreenID ?? 0)
+            onPanelChange?(handle.map(Self.boundPanel(of:)) ?? BoundPanel(screenID: 0, spansHinge: false))
             let observing = startOrientationLocked(onChange: onOrientation)
             let dimensions = pixelDimensionsLocked()
             return DisplayBootstrap(
@@ -199,7 +205,7 @@ final class SimDisplayLane: @unchecked Sendable {
     /// resolves and again whenever a fold moves it, so the observer sees
     /// them in the order they happened and never has to read the panel back
     /// itself. Register before `bootstrap`, or the first one is missed.
-    func observePanelChanges(_ handler: @escaping @Sendable (UInt32) -> Void) {
+    func observePanelChanges(_ handler: @escaping @Sendable (BoundPanel) -> Void) {
         queue.sync { onPanelChange = handler }
     }
 
@@ -397,7 +403,7 @@ final class SimDisplayLane: @unchecked Sendable {
                         callbacks.fail("could not resume rebound simulator display: \(error)")
                     }
                 }
-                onPanelChange?(handle.boundScreenID)
+                onPanelChange?(Self.boundPanel(of: handle))
                 continuation.resume(returning: true)
             }
         }

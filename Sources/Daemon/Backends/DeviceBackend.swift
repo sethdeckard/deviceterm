@@ -82,6 +82,21 @@ protocol DeviceBackend: AnyObject, Sendable {
         onDisconnect: @escaping @Sendable () -> Void,
         onOrientation: @escaping @Sendable (Orientation) -> Void
     ) async throws -> DisplayBootstrap
+
+    /// Be told, whenever the panel this device's display mirrors may have
+    /// moved. A backend whose panel can move also signals once on
+    /// registration, so a caller that registers after the display has
+    /// bootstrapped still learns there is a panel to read. The default
+    /// implementation signals nothing, having one panel that never moves.
+    ///
+    /// Deliberately carries no payload. Notices reach an actor out of order,
+    /// and a snapshot taken at delivery can be applied after a newer one; a
+    /// caller reads `currentBoundPanel()` from its own isolation instead,
+    /// where the answer is always the current one.
+    func observeBoundPanel(_ handler: @escaping @Sendable () -> Void)
+
+    /// The panel the display is mirroring now.
+    func currentBoundPanel() -> BoundPanel
     /// Tear the backend down without holding the caller's executor.
     ///
     /// Callers that must not block on teardown use this: simulator shutdown
@@ -395,6 +410,17 @@ extension DeviceBackend {
     // backends (physical device, stub) reject edge gestures.
     // swiftlint:disable async_without_await
     func setFrameDemand(_ demanded: Bool) {}
+
+    /// Default: nothing to observe. Only a multi-panel device ever moves the
+    /// panel it mirrors, so every other backend leaves the pane on the
+    /// `spansHinge: false` it starts at, which is the true answer for a device
+    /// whose one panel no hinge runs through.
+    func observeBoundPanel(_ handler: @escaping @Sendable () -> Void) {}
+
+    /// Default: a device with one panel, which no hinge runs through.
+    func currentBoundPanel() -> BoundPanel {
+        BoundPanel(screenID: 0, spansHinge: false)
+    }
 
     /// Sequential default: starts frames before orientation observation, so a
     /// synchronous first-frame callback arrives before observation is

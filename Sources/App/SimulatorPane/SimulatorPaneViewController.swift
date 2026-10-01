@@ -817,6 +817,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         contentView?.applyFrame(lease: lease, traceSequence: viewModel.currentSurfaceSequence)
         contentView?.setOrientation(orientation)
         adoptConfirmedHinge()
+        let crease = currentCrease()
+        contentView?.setCrease(crease)
         refreshOverlay(for: state)
         // Push the bezel inputs every render(). The wrapper's
         // `BezelContext.didSet` gates layout to actual changes, so
@@ -825,7 +827,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             wrapper.bezelContext = SimulatorPaneWrapperView.BezelContext(
                 family: DeviceFamily(wire: viewModel.family),
                 surfaceSize: content.surfaceSize,
-                orientation: viewModel.currentOrientation
+                orientation: viewModel.currentOrientation,
+                spansHinge: viewModel.confirmedPanelSpansHinge,
+                crease: crease
             )
         }
         // Mirror VM state + record status into the chrome's view
@@ -1009,6 +1013,22 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             chromeViewModel.foldDegrees != degrees
         else { return }
         chromeViewModel.foldDegrees = degrees
+    }
+
+    /// How the picture bends right now, or nil when it is flat.
+    ///
+    /// Only the panel the hinge runs through ever bends. A foldable's cover
+    /// panel sits outside the fold, so it stays flat at every angle, and the
+    /// angle alone cannot tell the two apart: which panel is lit depends on
+    /// the path the hinge took rather than where it stopped.
+    ///
+    /// Internal rather than private so a test can read the gate without a
+    /// Metal device and a rendered frame.
+    func currentCrease() -> FoldCreaseGeometry.Crease? {
+        guard viewModel.confirmedPanelSpansHinge,
+            let degrees = viewModel.confirmedHingeDegrees
+        else { return nil }
+        return FoldCreaseGeometry.crease(degrees: degrees)
     }
 
     /// Resize the chrome strip to whatever rows it is drawing now.

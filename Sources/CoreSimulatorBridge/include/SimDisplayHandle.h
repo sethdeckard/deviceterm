@@ -176,6 +176,18 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// device, where it lets a caller skip the fold-following machinery.
 @property (nonatomic, readonly) BOOL hasMultiplePanels;
 
+/// Whether the bound panel is the largest of the sized candidates.
+///
+/// A foldable's two panels differ in extent, because one of them spans the
+/// hinge and unfolds to roughly twice the other. That one is the larger, so
+/// this is what tells a caller whether the panel being mirrored is the one
+/// that bends when the hinge moves.
+///
+/// NO on a single-panel device, where there is no other panel to be larger
+/// than, and NO before a renderable is resolved. Re-read wherever
+/// `boundScreenID` is, so it follows a fold.
+@property (nonatomic, readonly) BOOL boundPanelIsLargest;
+
 /// Whether a booted device vends more than one sized display candidate,
 /// answered without binding one.
 ///

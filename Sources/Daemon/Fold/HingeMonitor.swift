@@ -45,6 +45,13 @@ final class HingeMonitor: @unchecked Sendable {
     /// diagnostic below is the only sign of such a host.
     static let defaultRestartDelay: DispatchTimeInterval = .seconds(2)
 
+    /// The locale handed to the reader when the daemon's own environment
+    /// carries none.
+    ///
+    /// Any UTF-8 locale will do. This one exists on every macOS install, which
+    /// a generic `C.UTF-8` does not.
+    static let readerLocale = "en_US.UTF-8"
+
     private let udid: String
     private let onAngle: @Sendable (Double) -> Void
     private let sessionSeconds: Int
@@ -85,6 +92,28 @@ final class HingeMonitor: @unchecked Sendable {
         self.queue = DispatchQueue(label: "com.deviceterm.daemon.hinge-monitor.\(udid)")
     }
 
+    /// The environment the reader runs in.
+    ///
+    /// **`LANG` decides whether the reader streams at all.** Without it
+    /// `devicectl` block-buffers its stdout, and since this reader never exits
+    /// the buffer is never flushed: a pane sees nothing for its whole life,
+    /// however far the hinge moves. With it, each line arrives as it is
+    /// printed. launchd starts the daemon with no `LANG`, so inheriting the
+    /// environment unchanged is what silence looks like.
+    ///
+    /// An existing `LANG` is left alone, so the operator's locale still
+    /// decides how the reader formats what it prints. The parse handles either
+    /// form: without a UTF-8 locale the degree signs and bullet are dropped,
+    /// and the numbers this reads are ASCII in both.
+    static func readerEnvironment(
+        inheriting environment: [String: String]
+    ) -> [String: String] {
+        guard environment["LANG"] == nil else { return environment }
+        var prepared = environment
+        prepared["LANG"] = readerLocale
+        return prepared
+    }
+
     /// Spawn the real reader, streaming its stdout.
     ///
     /// stdout, not stderr, and no `--json-output`: with that flag these lines
@@ -96,6 +125,9 @@ final class HingeMonitor: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.environment = readerEnvironment(
+            inheriting: ProcessInfo.processInfo.environment
+        )
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice

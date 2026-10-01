@@ -730,7 +730,7 @@ struct SimulatorPaneViewModelTests {
         // Nothing has reported yet, so there is no angle to claim.
         #expect(viewModel.confirmedHingeDegrees == nil)
         fake.lastPaneEventContinuation?.yield(
-            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: degrees))
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: degrees, spansHinge: true))
         )
         await settle()
         #expect(viewModel.confirmedHingeDegrees == degrees)
@@ -755,12 +755,56 @@ struct SimulatorPaneViewModelTests {
         viewModel.start()
         await settle()
         fake.lastPaneEventContinuation?.yield(
-            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: degrees))
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: degrees, spansHinge: true))
         )
         await settle()
         // This reaches a slider and a renderer, so a nonsense angle is dropped
         // rather than carried.
         #expect(viewModel.confirmedHingeDegrees == nil)
+    }
+
+    @Test("the hinge event carries which panel is on show")
+    func hingeChangedEventDrivesTheObservedPanel() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.start()
+        await settle()
+        // Nothing bends until the daemon says the panel spanning the hinge is
+        // the one on show.
+        #expect(viewModel.confirmedPanelSpansHinge == false)
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 120, spansHinge: true))
+        )
+        await settle()
+        #expect(viewModel.confirmedPanelSpansHinge)
+
+        // Folding shut moves the pane onto the cover panel, which sits outside
+        // the fold and is flat at every angle.
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 60, spansHinge: false))
+        )
+        await settle()
+        #expect(viewModel.confirmedPanelSpansHinge == false)
+    }
+
+    @Test("an out-of-range angle still updates which panel is on show")
+    func anOutOfRangeAngleStillUpdatesThePanel() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.start()
+        await settle()
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 120, spansHinge: true))
+        )
+        await settle()
+        // The angle is nonsense and is dropped; the panel it names is not, and
+        // a stale `true` would keep bending a cover panel.
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 900, spansHinge: false))
+        )
+        await settle()
+        #expect(viewModel.confirmedHingeDegrees == 120)
+        #expect(viewModel.confirmedPanelSpansHinge == false)
     }
 
     @Test

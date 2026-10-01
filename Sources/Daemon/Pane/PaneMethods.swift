@@ -1276,8 +1276,10 @@ private func encodeSubscriptionEvent(
             params: encoded
         )
 
-    case let .hingeChanged(_, degrees):
-        let payload = HingeChangedEvent(paneId: paneId, degrees: degrees)
+    case let .hingeChanged(_, degrees, spansHinge):
+        let payload = HingeChangedEvent(
+            paneId: paneId, degrees: degrees, spansHinge: spansHinge
+        )
         guard let encoded = try? encoder.encode(payload) else { return nil }
         return MethodRegistry.SubscriptionEvent(
             method: PaneEventName.hingeChanged.rawValue,

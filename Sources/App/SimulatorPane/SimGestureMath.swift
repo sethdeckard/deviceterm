@@ -90,7 +90,8 @@ enum SimGestureMath {
         viewSize: CGSize,
         surfaceSize: CGSize,
         orientation: Orientation = .portrait,
-        displayInset: CGFloat = 0
+        displayInset: CGFloat = 0,
+        crease: FoldCreaseGeometry.Crease? = nil
     ) -> CGPoint? {
         guard let rect = imageRect(
             viewSize: viewSize,
@@ -99,10 +100,21 @@ enum SimGestureMath {
             displayInset: displayInset
         ) else { return nil }
         guard rect.contains(viewPoint) else { return nil }
-        return CGPoint(
+        let point = CGPoint(
             x: (viewPoint.x - rect.origin.x) / rect.width,
             y: (viewPoint.y - rect.origin.y) / rect.height
         )
+        guard let crease else { return point }
+        // A bent picture sits inside its flat rect, so containment above is no
+        // longer enough: the area the halves turned away from is inside the
+        // rect and off the screen. `flattened` is unbounded, so the test is
+        // here.
+        guard let flat = FoldCreaseGeometry.flattened(
+            unitPoint: point,
+            crease: crease,
+            vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation)
+        ), (0...1).contains(flat.x), (0...1).contains(flat.y) else { return nil }
+        return flat
     }
 
     /// Map a point in view coordinates to a **displayed**-space
@@ -123,7 +135,8 @@ enum SimGestureMath {
         viewSize: CGSize,
         surfaceSize: CGSize,
         orientation: Orientation = .portrait,
-        displayInset: CGFloat = 0
+        displayInset: CGFloat = 0,
+        crease: FoldCreaseGeometry.Crease? = nil
     ) -> CGPoint? {
         guard let rect = imageRect(
             viewSize: viewSize,
@@ -131,10 +144,20 @@ enum SimGestureMath {
             orientation: orientation,
             displayInset: displayInset
         ) else { return nil }
-        return CGPoint(
+        let point = CGPoint(
             x: (viewPoint.x - rect.origin.x) / rect.width,
             y: (viewPoint.y - rect.origin.y) / rect.height
         )
+        guard let crease else { return point }
+        // Off-screen coordinates are this path's whole purpose, so the bend is
+        // undone past the picture's edge as well as inside it. Falling back to
+        // the flat reading there would step the coordinate backwards as a drag
+        // crossed the edge, which is where the edge gesture starts.
+        return FoldCreaseGeometry.flattened(
+            unitPoint: point,
+            crease: crease,
+            vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation)
+        ) ?? point
     }
 
     /// Whether a displayed-space (oriented) unit-Y sits in the bottom-edge

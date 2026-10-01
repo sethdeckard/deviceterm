@@ -12,9 +12,32 @@ public struct HingeChangedEvent: Codable, Sendable, Equatable {
     /// Hinge angle in degrees, `0` shut and `180` flat, matching the
     /// `pane.input.fold` wire convention.
     public let degrees: Double
+    /// Whether the panel the pane is showing is the one the hinge runs
+    /// through, so its picture bends as the angle changes.
+    ///
+    /// False for a foldable's cover panel, which sits outside the fold and
+    /// stays flat at every angle, and false on a device with one panel. The
+    /// angle alone cannot answer this: which panel is lit depends on the path
+    /// the hinge took rather than where it stopped, so the same angle occurs
+    /// with either panel showing.
+    ///
+    /// Republished whenever the lit panel moves, since a fold changes this
+    /// after the angle has stopped moving.
+    public let spansHinge: Bool
 
-    public init(paneId: String, degrees: Double) {
+    public init(paneId: String, degrees: Double, spansHinge: Bool) {
         self.paneId = paneId
         self.degrees = degrees
+        self.spansHinge = spansHinge
+    }
+
+    /// Absent `spansHinge` decodes as `false`, so a peer that predates the
+    /// field claims no hinge-spanning panel rather than having one assumed
+    /// on its behalf.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        paneId = try container.decode(String.self, forKey: .paneId)
+        degrees = try container.decode(Double.self, forKey: .degrees)
+        spansHinge = try container.decodeIfPresent(Bool.self, forKey: .spansHinge) ?? false
     }
 }

@@ -23,6 +23,10 @@ import Testing
 /// `PaneCoordinator` actor mutates it during a call; tests read the
 /// recorded calls after awaiting that call (a happens-before barrier).
 final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
+    /// What `currentBoundPanel()` answers. Settable so a test can move the
+    /// binding and then announce it, which is the order the display lane uses.
+    var boundPanelSpansHinge = false
+
     let capabilities: DeviceBackendCapabilities
     /// What this backend reports as its pool's counters. Nil is the no-pool
     /// default every backend without a `LeasedSurfacePool` inherits.
@@ -232,6 +236,10 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { inputGenerationCurrent }
 
     func releaseHeldContact() -> Bool { !failReleaseHeldContact }
+
+    func currentBoundPanel() -> BoundPanel {
+        BoundPanel(screenID: boundPanelSpansHinge ? 3 : 1, spansHinge: boundPanelSpansHinge)
+    }
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
@@ -1297,7 +1305,7 @@ func aLateSubscriberIsToldTheHingeAngle() async throws {
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var replayed: [Double] = []
     for await event in stream {
-        if case let .hingeChanged(_, degrees) = event { replayed.append(degrees) }
+        if case let .hingeChanged(_, degrees, _) = event { replayed.append(degrees) }
     }
     #expect(replayed == [137])
 }
@@ -1316,9 +1324,115 @@ func aPaneNeverReadReplaysNoHingeAngle() async throws {
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var replayed: [Double] = []
     for await event in stream {
-        if case let .hingeChanged(_, degrees) = event { replayed.append(degrees) }
+        if case let .hingeChanged(_, degrees, _) = event { replayed.append(degrees) }
     }
     #expect(replayed.isEmpty)
+}
+
+@Test
+func aPanelSwapRepublishesTheAngleItSettledAt() async throws {
+    // A fold moves the lit panel a few hundred milliseconds after the hinge
+    // stops, so the panel routinely changes with the angle already settled.
+    // Nothing would republish on its own, and a pane left on the previous
+    // panel's shape draws a cover panel bent or an inner panel flat.
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "hinge-panel-swap",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    // The angle does not move; only the panel under it does.
+    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var published: [(Double, Bool)] = []
+    for await event in stream {
+        if case let .hingeChanged(_, degrees, spans) = event { published.append((degrees, spans)) }
+    }
+    // The subscribe replay carried the old panel and the swap supersedes it,
+    // conflated into the one event that matters. `spansHinge` being true is
+    // what proves the swap republished: the replay alone would leave it false.
+    #expect(published.count == 1)
+    #expect(published.first?.0 == 120)
+    #expect(published.first?.1 == true)
+}
+
+@Test
+func aPanelThatHasNotChangedIsNotRepublished() async throws {
+    // The backend signals on registration as well as on every fold, so a pane
+    // routinely reads a binding that has not moved. Passing that through to
+    // subscribers would put a redundant event on the wire each time.
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "hinge-panel-steady",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var published: [Double] = []
+    for await event in stream {
+        if case let .hingeChanged(_, degrees, _) = event { published.append(degrees) }
+    }
+    #expect(published == [120])
+}
+
+@Test
+func aPanelLearnedBeforeAnyAngleIsCarriedIntoTheFirstReading() async throws {
+    // The display resolves its panel during bootstrap, which is earlier than
+    // the hinge monitor's first line. That panel has to survive the wait, or
+    // the first angle published claims a flat cover panel on an open device.
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "hinge-panel-first",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 95)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var published: [(Double, Bool)] = []
+    for await event in stream {
+        if case let .hingeChanged(_, degrees, spans) = event { published.append((degrees, spans)) }
+    }
+    #expect(published.count == 1)
+    #expect(published.first?.0 == 95)
+    #expect(published.first?.1 == true)
+}
+
+@Test
+func thePanelIsReadOnArrivalRatherThanCarriedWithTheNotice() async throws {
+    // Two notices hop onto the actor as separate tasks and can arrive either
+    // way round. A value sampled when each was raised could then be applied
+    // after a newer one, leaving the pane on a panel it has already left; the
+    // coordinator reads the binding on arrival instead, so the last pass
+    // settles on what is true now.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let pane = try await coordinator.createMockPane(
+        udid: "hinge-panel-read",
+        sessionId: UUID(),
+        backend: backend
+    )
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    // The binding moves onto the hinge-spanning panel, then is announced.
+    backend.boundPanelSpansHinge = true
+    await coordinator.refreshBoundPanel(paneId: pane.paneId)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var published: [Bool] = []
+    for await event in stream {
+        if case let .hingeChanged(_, _, spans) = event { published.append(spans) }
+    }
+    #expect(published.last == true)
 }
 
 @Test

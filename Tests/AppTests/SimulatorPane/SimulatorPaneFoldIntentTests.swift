@@ -25,7 +25,7 @@ struct SimulatorPaneFoldIntentTests {
         fold: true
     )
 
-    private func makeViewController() -> (SimulatorPaneViewController, FakeDaemonClient) {
+    func makeViewController() -> (SimulatorPaneViewController, FakeDaemonClient) {
         let pane = SimPaneState(
             paneId: "p1",
             udid: "U",
@@ -203,7 +203,7 @@ struct SimulatorPaneFoldIntentTests {
         viewController.chromeViewModel.foldDegrees = 0
         await Task.yield()
         fake.lastPaneEventContinuation?.yield(
-            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 137))
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 137, spansHinge: true))
         )
         // The event crosses a stream, so poll rather than assume one turn.
         for _ in 0..<200 where viewController.chromeViewModel.foldDegrees != 137 {
@@ -221,7 +221,7 @@ struct SimulatorPaneFoldIntentTests {
         viewController.chromeViewModel.foldDegrees = 60
         await Task.yield()
         fake.lastPaneEventContinuation?.yield(
-            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 10))
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 10, spansHinge: true))
         )
         try? await Task.sleep(nanoseconds: 150_000_000)
         // Without the guard the slider would snap to wherever the hinge is
@@ -231,7 +231,7 @@ struct SimulatorPaneFoldIntentTests {
         // Letting go hands control back.
         viewController.chromeViewModel.foldSliderIsTracking = false
         fake.lastPaneEventContinuation?.yield(
-            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 10))
+            .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 10, spansHinge: true))
         )
         for _ in 0..<200 where viewController.chromeViewModel.foldDegrees != 10 {
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -266,4 +266,73 @@ private struct StackedFoldSplit {
     var paneHeight: CGFloat { pane.view.frame.height }
 
     func layout() { host.layoutSubtreeIfNeeded() }
+}
+
+/// Whether the pane's picture bends at all.
+///
+/// The angle cannot answer this on its own. Which panel a foldable lights
+/// depends on the path the hinge took rather than where it stopped, so the
+/// same angle occurs with the bending inner panel on show and with the flat
+/// cover panel on show.
+@MainActor
+struct SimulatorPaneCreaseGateTests {
+    private func drive(
+        _ viewController: SimulatorPaneViewController,
+        _ fake: FakeDaemonClient,
+        degrees: Double,
+        spansHinge: Bool
+    ) async {
+        // `viewDidLoad` starts the pane view model and its subscription, so
+        // the continuation does not exist until this yields. The delivery check
+        // at the end of this helper is what proves the event landed.
+        await Task.yield()
+        fake.lastPaneEventContinuation?.yield(
+            .hingeChanged(
+                HingeChangedEvent(paneId: "p1", degrees: degrees, spansHinge: spansHinge)
+            )
+        )
+        // `adoptConfirmedHinge` runs inside the render pass this event
+        // triggers, so the slider arriving means the pass has read the panel
+        // flag too.
+        for _ in 0..<200 where viewController.chromeViewModel.foldDegrees != degrees {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        // Proves the event arrived. Three of the four cases below expect no
+        // crease, which is also what a pane that heard nothing reports.
+        #expect(viewController.chromeViewModel.foldDegrees == degrees)
+    }
+
+    @Test("nothing bends before the daemon has reported a hinge")
+    func noCreaseUntilSomethingIsObserved() {
+        let (viewController, _) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        #expect(viewController.currentCrease() == nil)
+    }
+
+    @Test("the panel the hinge runs through bends")
+    func theInnerPanelCreases() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        viewController.chromeViewModel.foldDegrees = 7
+        await drive(viewController, fake, degrees: 120, spansHinge: true)
+        #expect(viewController.currentCrease() != nil)
+    }
+
+    @Test("the cover panel stays flat at the same angle")
+    func theCoverPanelDoesNotCrease() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        // The identical angle, on the panel that sits outside the fold.
+        await drive(viewController, fake, degrees: 120, spansHinge: false)
+        #expect(viewController.currentCrease() == nil)
+    }
+
+    @Test("an open device is flat even on the panel that bends")
+    func aFlatHingeDoesNotCrease() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        viewController.chromeViewModel.foldDegrees = 7
+        await drive(viewController, fake, degrees: 180, spansHinge: true)
+        #expect(viewController.currentCrease() == nil)
+    }
 }

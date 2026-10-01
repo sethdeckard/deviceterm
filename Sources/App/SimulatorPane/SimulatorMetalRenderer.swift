@@ -38,6 +38,22 @@ final class SimulatorMetalRenderer {
         var drawable: SIMD4<Float>
     }
 
+    /// One corner of a bent half. Layout MUST match `CVertex` in the shader
+    /// source, where both fields are 16 bytes (Metal struct alignment).
+    /// Marshalled raw via `setVertexBytes`, so the layout is the contract.
+    private struct CreaseVertex {
+        /// `(ndcX, ndcY, u, v)`, the projected position and the texture
+        /// coordinate before the orientation rotation is applied.
+        var positionUV: SIMD4<Float>
+        /// `(localX, localY, shade, w)`. `local` is the corner's position in
+        /// the *flat* picture, in pixels from its centre, which is what the
+        /// rounded-screen SDF measures so the corners follow the bend. `w` is
+        /// the clip-space divisor: a bent half is a trapezoid on screen, and
+        /// without a real `w` the rasterizer interpolates its texture affinely
+        /// and the picture warps across the fold.
+        var localShade: SIMD4<Float>
+    }
+
     /// Concurrent queue for the off-by-default post-completion trace scans,
     /// so a delayed scan never runs on Metal's completion thread and delays
     /// overlap instead of serializing into a backlog.
@@ -55,10 +71,82 @@ final class SimulatorMetalRenderer {
 
     private let queue: MTLCommandQueue?
     private var pipelineState: MTLRenderPipelineState?
+    /// Draws the two halves of a creased picture. Kept separate from
+    /// `pipelineState` so a flat picture goes through the single-quad path
+    /// whatever the fold is doing.
+    private var creasePipelineState: MTLRenderPipelineState?
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat) {
         queue = device.makeCommandQueue()
         buildPipeline(device: device, pixelFormat: pixelFormat)
+    }
+
+    /// The twelve corners of a creased picture: two triangles per half.
+    ///
+    /// `ndc` is the flat picture's half-extents in normalized device
+    /// coordinates; `screen` is its full size in pixels. `vertical` says which
+    /// way the crease runs, which decides whether the fold divides x or y;
+    /// everything below is written in the crease's own axes (*across* it and
+    /// *along* it) and mapped out at the end, so the two cases share one piece
+    /// of geometry.
+    ///
+    /// Texture coordinates come from which corner of the half a vertex is,
+    /// never from where the projection put it: the picture is a rectangle
+    /// glued to a shape that is no longer rectangular.
+    private static func creaseVertices(
+        crease: FoldCreaseGeometry.Crease,
+        vertical: Bool,
+        ndc: SIMD2<Float>,
+        screen: SIMD2<Float>
+    ) -> [CreaseVertex] {
+        let acrossNdc = vertical ? ndc.x : ndc.y
+        let alongNdc = vertical ? ndc.y : ndc.x
+        let acrossPixels = (vertical ? screen.x : screen.y) / 2
+        let alongPixels = (vertical ? screen.y : screen.x) / 2
+        let outerAcross = acrossNdc * Float(crease.outerAcross)
+        let creaseAlong = alongNdc * Float(crease.creaseAlong)
+        // The crease's clip divisor. The outer edges lie in the screen plane
+        // and divide by one; the crease sits behind them, which is what makes
+        // it the shorter edge.
+        let creaseW = Float(1 / crease.creaseAlong)
+
+        /// One corner, in the crease's axes. `across` is -1 on the leading
+        /// half's outer edge, 0 on the crease itself, +1 on the trailing
+        /// half's; `along` is -1 or +1 down the crease.
+        func corner(across: Float, along: Float, shade: Float) -> CreaseVertex {
+            let onCrease = across == 0
+            let acrossNdcPosition = across * outerAcross
+            let alongNdcPosition = along * (onCrease ? creaseAlong : alongNdc)
+            let position = vertical
+                ? SIMD2<Float>(acrossNdcPosition, alongNdcPosition)
+                : SIMD2<Float>(alongNdcPosition, acrossNdcPosition)
+            let local = vertical
+                ? SIMD2<Float>(across * acrossPixels, along * alongPixels)
+                : SIMD2<Float>(along * alongPixels, across * acrossPixels)
+            // Texture coordinates follow the flat picture: the x unit runs
+            // with u, and the y unit against v, matching the single-quad path.
+            let unit = vertical
+                ? SIMD2<Float>(across, along)
+                : SIMD2<Float>(along, across)
+            let uvPoint = SIMD2<Float>((unit.x + 1) / 2, (1 - unit.y) / 2)
+            return CreaseVertex(
+                positionUV: SIMD4<Float>(position.x, position.y, uvPoint.x, uvPoint.y),
+                localShade: SIMD4<Float>(
+                    local.x, local.y, shade, onCrease ? creaseW : 1
+                )
+            )
+        }
+
+        func half(outerSide: Float, shade: Float) -> [CreaseVertex] {
+            let outerLow = corner(across: outerSide, along: -1, shade: shade)
+            let outerHigh = corner(across: outerSide, along: 1, shade: shade)
+            let creaseLow = corner(across: 0, along: -1, shade: shade)
+            let creaseHigh = corner(across: 0, along: 1, shade: shade)
+            return [outerLow, outerHigh, creaseLow, outerHigh, creaseHigh, creaseLow]
+        }
+
+        return half(outerSide: -1, shade: Float(crease.leadingShade))
+            + half(outerSide: 1, shade: Float(crease.trailingShade))
     }
 
     /// Render `surface` into `view`'s current drawable. `orientation`
@@ -74,6 +162,7 @@ final class SimulatorMetalRenderer {
         orientation: Orientation,
         displayInset: CGFloat,
         screenCornerRadius: CGFloat,
+        crease: FoldCreaseGeometry.Crease?,
         in view: MTKView,
         trace: SurfaceConsumerTrace? = nil
     ) -> Bool {
@@ -169,7 +258,13 @@ final class SimulatorMetalRenderer {
                 descriptor: descriptor
             )
         else { return false }
-        enc.setRenderPipelineState(pipeline)
+        // A creased picture takes the two-quad path, and only when its
+        // pipeline built: a foldable on a host where that failed draws flat
+        // rather than not at all.
+        let bent = crease.flatMap { shape in
+            creasePipelineState.map { (shape, $0) }
+        }
+        enc.setRenderPipelineState(bent?.1 ?? pipeline)
         enc.setFragmentTexture(texture, index: 0)
         enc.setVertexBytes(
             &params,
@@ -181,7 +276,22 @@ final class SimulatorMetalRenderer {
             length: MemoryLayout<RenderParams>.size,
             index: 0
         )
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        if let (shape, _) = bent {
+            var vertices = Self.creaseVertices(
+                crease: shape,
+                vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation),
+                ndc: SIMD2<Float>(ndcW, ndcH),
+                screen: SIMD2<Float>(Float(screenW), Float(screenH))
+            )
+            enc.setVertexBytes(
+                &vertices,
+                length: MemoryLayout<CreaseVertex>.stride * vertices.count,
+                index: 1
+            )
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+        } else {
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
         enc.endEncoding()
         commandBuffer.present(drawable)
         // Off-by-default: once the command buffer reaches a terminal state,
@@ -315,13 +425,67 @@ final class SimulatorMetalRenderer {
             return tex.sample(s, in.uv);
         }
         """
+        // The creased path. Positions arrive already projected, so the vertex
+        // shader's only job is to restore the clip divisor the projection
+        // divided out: without it the rasterizer interpolates each trapezoid's
+        // texture affinely and the picture slides across the fold.
+        let creaseSource = """
+        struct CVertex { float4 positionUV; float4 localShade; };
+        struct COut {
+            float4 position [[position]];
+            float2 uv;
+            float2 local;
+            float shade;
+        };
+        vertex COut vcrease(uint vid [[vertex_id]],
+                            constant Params& p [[buffer(0)]],
+                            constant CVertex *verts [[buffer(1)]]) {
+            CVertex v = verts[vid];
+            float2 centered = v.positionUV.zw - float2(0.5, 0.5);
+            float2x2 rot = float2x2(
+                float2(p.uvRotation.x, p.uvRotation.z),
+                float2(p.uvRotation.y, p.uvRotation.w)
+            );
+            float w = v.localShade.w;
+            COut o;
+            o.position = float4(v.positionUV.xy * w, 0, w);
+            o.uv = rot * centered + float2(0.5, 0.5);
+            o.local = v.localShade.xy;
+            o.shade = v.localShade.z;
+            return o;
+        }
+        fragment float4 fcrease(COut in [[stage_in]],
+                                constant Params& p [[buffer(0)]],
+                                texture2d<float> tex [[texture(0)]]) {
+            constexpr sampler s(address::clamp_to_edge, filter::linear);
+            // Same rounded-screen SDF as the flat path, measured against the
+            // corner's place in the unbent picture rather than its place on
+            // the framebuffer, so the rounding bends with the panel.
+            float radius = p.screen.z;
+            if (radius > 0.0) {
+                float2 q = abs(in.local) - p.screen.xy * 0.5 + float2(radius);
+                float dist = min(max(q.x, q.y), 0.0)
+                    + length(max(q, float2(0))) - radius;
+                if (dist > 0.0) {
+                    discard_fragment();
+                }
+            }
+            float4 colour = tex.sample(s, in.uv);
+            return float4(colour.rgb * in.shade, colour.a);
+        }
+        """
         do {
-            let lib = try device.makeLibrary(source: source, options: nil)
+            let lib = try device.makeLibrary(source: source + creaseSource, options: nil)
             let desc = MTLRenderPipelineDescriptor()
             desc.vertexFunction = lib.makeFunction(name: "vmain")
             desc.fragmentFunction = lib.makeFunction(name: "fmain")
             desc.colorAttachments[0].pixelFormat = pixelFormat
             pipelineState = try device.makeRenderPipelineState(descriptor: desc)
+            let creaseDesc = MTLRenderPipelineDescriptor()
+            creaseDesc.vertexFunction = lib.makeFunction(name: "vcrease")
+            creaseDesc.fragmentFunction = lib.makeFunction(name: "fcrease")
+            creaseDesc.colorAttachments[0].pixelFormat = pixelFormat
+            creasePipelineState = try device.makeRenderPipelineState(descriptor: creaseDesc)
         } catch {
             NSLog("deviceterm: metal pipeline setup failed: \(error)")
         }

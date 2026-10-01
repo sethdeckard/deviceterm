@@ -430,3 +430,121 @@ struct SimGestureMathTests {
         #expect(abs(point.y - 1.1) < 1e-9)
     }
 }
+
+/// Input against a creased picture.
+///
+/// The renderer bends the picture and the user aims at what they see, so the
+/// gesture path has to undo the bend. This is the half of the fold that is
+/// invisible when it is wrong: the picture looks right and the taps land
+/// short.
+struct SimGestureMathCreaseTests {
+    /// The Duo's inner panel, which is what the hinge runs through, shown at
+    /// its own size so the letterbox is the identity and only the fold moves
+    /// anything.
+    private let surface = CGSize(width: 2_007, height: 2_853)
+    private let view = CGSize(width: 2_853, height: 2_007)
+    private let orientation = Orientation.landscapeLeft
+
+    private func normalized(
+        x: CGFloat,
+        crease: FoldCreaseGeometry.Crease?
+    ) -> CGPoint? {
+        SimGestureMath.normalizedPoint(
+            viewPoint: CGPoint(x: x, y: view.height / 2),
+            viewSize: view,
+            surfaceSize: surface,
+            orientation: orientation,
+            displayInset: 0,
+            crease: crease
+        )
+    }
+
+    @Test
+    func aTapOnTheBentEdgeReachesTheEdgeOfTheGuestScreen() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        let edge = view.width * (0.5 - CGFloat(crease.outerAcross) / 2)
+        let bent = try #require(normalized(x: edge, crease: crease))
+        #expect(abs(bent.x) < 1e-6)
+        // The same click read flat lands well inside the guest's screen, which
+        // is exactly the error the inverse exists to remove. `book` is a gentle
+        // bend and still misses by several percent of the screen's width.
+        let flat = try #require(normalized(x: edge, crease: nil))
+        #expect(flat.x > 0.05)
+    }
+
+    @Test
+    func theCentreIsUnmovedByTheFold() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        let bent = try #require(normalized(x: view.width / 2, crease: crease))
+        #expect(abs(bent.x - 0.5) < 1e-9)
+    }
+
+    @Test
+    func aTapInTheAreaTheFoldVacatedIsNotOnTheScreen() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        // Inside the pane's picture rect, outside the bent picture.
+        let vacated = view.width * (0.5 - CGFloat(crease.outerAcross) / 2) / 2
+        #expect(normalized(x: vacated, crease: crease) == nil)
+        // Without the fold that same point is ordinary screen.
+        #expect(normalized(x: vacated, crease: nil) != nil)
+    }
+
+    @Test
+    func anEdgeSwipeKeepsItsOffScreenCoordinates() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        // Below the picture, where the App Switcher swipe starts. The extended
+        // path must keep handing back out-of-range values rather than dropping
+        // the point, because the cross-edge trajectory is made of them.
+        let extended = SimGestureMath.extendedNormalizedPoint(
+            viewPoint: CGPoint(x: view.width / 2, y: view.height * 1.05),
+            viewSize: view,
+            surfaceSize: surface,
+            orientation: orientation,
+            displayInset: 0,
+            crease: crease
+        )
+        let point = try #require(extended)
+        #expect(point.y > 1)
+    }
+}
+
+/// The two gesture entry points disagree about containment on purpose.
+struct SimGestureMathCreaseBoundsTests {
+    private let surface = CGSize(width: 2_007, height: 2_853)
+    private let view = CGSize(width: 2_853, height: 2_007)
+
+    @Test
+    func theStrictPathRejectsWhatTheFoldTurnedAwayFrom() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        let vacated = view.width * (0.5 - CGFloat(crease.outerAcross) / 2) / 2
+        #expect(
+            SimGestureMath.normalizedPoint(
+                viewPoint: CGPoint(x: vacated, y: view.height / 2),
+                viewSize: view,
+                surfaceSize: surface,
+                orientation: .landscapeLeft,
+                displayInset: 0,
+                crease: crease
+            ) == nil
+        )
+    }
+
+    @Test
+    func theExtendedPathCarriesThatSamePointOffScreen() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        let vacated = view.width * (0.5 - CGFloat(crease.outerAcross) / 2) / 2
+        let point = try #require(
+            SimGestureMath.extendedNormalizedPoint(
+                viewPoint: CGPoint(x: vacated, y: view.height / 2),
+                viewSize: view,
+                surfaceSize: surface,
+                orientation: .landscapeLeft,
+                displayInset: 0,
+                crease: crease
+            )
+        )
+        // Off the screen, and on the side it left by, so a drag crossing the
+        // edge keeps its direction.
+        #expect(point.x < 0)
+    }
+}

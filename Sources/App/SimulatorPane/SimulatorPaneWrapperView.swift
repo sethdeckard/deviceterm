@@ -38,6 +38,11 @@ final class SimulatorPaneWrapperView: NSView {
         var family: DeviceFamily = .unknown
         var surfaceSize: CGSize = .zero
         var orientation: Orientation = .portrait
+        /// Whether the panel on show is the one the hinge runs through, which
+        /// decides whether this device frame carries a fold at all.
+        var spansHinge = false
+        /// How far that fold is bent, or nil when the panel is flat.
+        var crease: FoldCreaseGeometry.Crease?
     }
 
     /// The input-target subview that should actually own first-
@@ -83,6 +88,11 @@ final class SimulatorPaneWrapperView: NSView {
     /// Coordinates match the content view's bounds (bezelView is
     /// constraint-pinned to the content view + same `isFlipped`).
     private(set) var currentCrownRect: CGRect = .zero
+    /// The bent outline last painted, when the panel is creased. Held so the
+    /// gesture-capturing region is the shape on screen rather than the flat
+    /// rect it was cut from: once the halves turn away, that rect covers pane
+    /// background the device no longer occupies.
+    private var currentCreasedBezelPath: CGPath?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -213,6 +223,19 @@ final class SimulatorPaneWrapperView: NSView {
         )?.bezelRect
     }
 
+    /// Whether `point` is on the device frame, in the content view's space.
+    ///
+    /// Follows the painted outline on a creased panel and the plain rect
+    /// otherwise, so a click beside a folded device lands on the pane rather
+    /// than reaching the guest as an off-screen gesture. A flat device is
+    /// hit-tested against its rectangle, corner regions included.
+    func bezelContains(_ point: CGPoint) -> Bool {
+        if let path = currentCreasedBezelPath {
+            return path.contains(point)
+        }
+        return contentLocalBezelRect()?.contains(point) ?? false
+    }
+
     /// Paint the effective focus state (focused ∧ enabled). Wraps the
     /// entire pane (chrome strip + Metal sim area), because a SwiftUI ring
     /// inside the chrome host would only surround the strip. Color
@@ -293,6 +316,63 @@ final class SimulatorPaneWrapperView: NSView {
         )
     }
 
+    /// The device frame as two bent halves, drawn from the same `Crease` the
+    /// renderer bends the picture with, so the frame cannot disagree with what
+    /// it frames.
+    ///
+    /// One path with two subpaths rather than two layers: the bezel is a flat
+    /// dark fill, and the shading that makes the fold read is the picture's.
+    private func creasedBezelPath(
+        layout: DeviceBezelLayout,
+        imageRect: CGRect,
+        crease: FoldCreaseGeometry.Crease
+    ) -> CGPath {
+        let halves = FoldCreaseGeometry.halves(
+            of: layout.bezelRect,
+            foldedAbout: imageRect,
+            crease: crease,
+            vertical: FoldCreaseGeometry.creaseRunsVertically(in: bezelContext.orientation)
+        )
+        let path = CGMutablePath()
+        for half in [halves.leading, halves.trailing] {
+            append(half: half, cornerRadius: layout.cornerRadius, to: path)
+        }
+        return path
+    }
+
+    /// Trace one half: rounded at the two outer corners, square where it meets
+    /// the crease, because the fold is a crease and not an edge.
+    private func append(
+        half: FoldCreaseGeometry.HalfQuad,
+        cornerRadius: CGFloat,
+        to path: CGMutablePath
+    ) {
+        func distance(_ start: CGPoint, _ end: CGPoint) -> CGFloat {
+            hypot(end.x - start.x, end.y - start.y)
+        }
+        // A tangent arc wider than the edges it joins produces a shape that is
+        // not the quad, so the radius yields to the shortest of them.
+        let radius = min(
+            cornerRadius,
+            distance(half.creaseLow, half.outerLow) / 2,
+            distance(half.outerLow, half.outerHigh) / 2,
+            distance(half.outerHigh, half.creaseHigh) / 2
+        )
+        // Starting midway down the first edge, so the opening arc has the
+        // run-up `addArc(tangent1End:…)` needs.
+        path.move(
+            to: CGPoint(
+                x: (half.creaseLow.x + half.outerLow.x) / 2,
+                y: (half.creaseLow.y + half.outerLow.y) / 2
+            )
+        )
+        path.addArc(tangent1End: half.outerLow, tangent2End: half.outerHigh, radius: radius)
+        path.addArc(tangent1End: half.outerHigh, tangent2End: half.creaseHigh, radius: radius)
+        path.addLine(to: half.creaseHigh)
+        path.addLine(to: half.creaseLow)
+        path.closeSubpath()
+    }
+
     private func applyBezel() {
         installBezelSublayersIfNeeded()
         pushDisplayFrameToContent()
@@ -309,6 +389,7 @@ final class SimulatorPaneWrapperView: NSView {
             notchLayer.isHidden = true
             crownLayer.isHidden = true
             currentCrownRect = .zero
+            currentCreasedBezelPath = nil
             return
         }
         // CALayer animations + frame changes battle here, so disable
@@ -317,13 +398,22 @@ final class SimulatorPaneWrapperView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bezelShapeLayer.isHidden = false
-        bezelShapeLayer.path = CGPath(
+        currentCreasedBezelPath = bezelContext.crease.map {
+            creasedBezelPath(layout: layout, imageRect: imageRect, crease: $0)
+        }
+        bezelShapeLayer.path = currentCreasedBezelPath ?? CGPath(
             roundedRect: layout.bezelRect,
             cornerWidth: layout.cornerRadius,
             cornerHeight: layout.cornerRadius,
             transform: nil
         )
-        if let notch = layout.notchRect, let radius = layout.notchCornerRadius {
+        // The panel that spans the hinge carries no notch. The cover panel's
+        // sits at the middle of the top edge, which on the inner panel is
+        // where the crease comes out, and a foldable's inner display has no
+        // camera cutout to stand for anyway.
+        if bezelContext.spansHinge {
+            notchLayer.isHidden = true
+        } else if let notch = layout.notchRect, let radius = layout.notchCornerRadius {
             notchLayer.isHidden = false
             notchLayer.path = CGPath(
                 roundedRect: notch,
