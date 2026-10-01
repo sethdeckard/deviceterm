@@ -25,13 +25,18 @@ final class SimulatorMetalRenderer {
     private struct RenderParams {
         var imageRect: SIMD4<Float>
         var uvRotation: SIMD4<Float>
-        /// `(screenWidthPx, screenHeightPx, cornerRadiusPx, 0)`.
-        /// The fragment shader uses these to round the screen's
-        /// corners via SDF discard (CAShapeLayer masks on
+        /// `(screenWidthPx, screenHeightPx, 0, 0)`.
+        /// The fragment shader uses these with `corners` to round the
+        /// screen via SDF discard (CAShapeLayer masks on
         /// CAMetalLayer don't compose reliably with Metal
         /// drawable presentation; SDF in shader is the
         /// guaranteed path).
         var screen: SIMD4<Float>
+        /// `(topLeftPx, topRightPx, bottomLeftPx, bottomRightPx)`, in the
+        /// order the viewer sees them. Four because a display is not
+        /// always a rounded rectangle; the fragment picks the one for the
+        /// quadrant it is in.
+        var corners: SIMD4<Float>
         /// `(drawableWidthPx, drawableHeightPx, 0, 0)`. The
         /// fragment shader needs the framebuffer size to recover
         /// its position relative to the screen center.
@@ -151,8 +156,8 @@ final class SimulatorMetalRenderer {
 
     /// Render `surface` into `view`'s current drawable. `orientation`
     /// counter-rotates UV sampling so rotated content shows upright;
-    /// `displayInset` reserves the bezel margin; `screenCornerRadius`
-    /// drives the rounded-screen SDF mask. With no surface / pipeline
+    /// `displayInset` reserves the bezel margin; `screenCorners`
+    /// drives the rounded-screen SDF mask, one radius per corner. With no surface / pipeline
     /// yet, presents an empty drawable so the view doesn't show garbage
     /// on the first frames. Returns whether a supplied `trace` was
     /// installed (i.e. this draw reached commit), so the caller only
@@ -161,7 +166,7 @@ final class SimulatorMetalRenderer {
         lease: SurfaceLease?,
         orientation: Orientation,
         displayInset: CGFloat,
-        screenCornerRadius: CGFloat,
+        screenCorners: DeviceBezelLayout.Corners,
         crease: FoldCreaseGeometry.Crease?,
         in view: MTKView,
         trace: SurfaceConsumerTrace? = nil
@@ -240,17 +245,23 @@ final class SimulatorMetalRenderer {
         }
         let ndcW = Float(screenW / viewW)
         let ndcH = Float(screenH / viewH)
-        // Screen-corner radius in pixels for the fragment shader's
-        // SDF rounding. Clamp to half the smaller screen dimension
-        // so an absurdly-large radius can't invert the corner.
-        let cornerPx = max(0, min(
-            screenCornerRadius * backing,
-            min(screenW, screenH) * 0.5
-        ))
+        // Screen-corner radii in pixels for the fragment shader's SDF
+        // rounding. Each clamps to half the smaller screen dimension so an
+        // absurdly-large radius can't invert its corner.
+        let cornerLimit = min(screenW, screenH) * 0.5
+        func cornerPx(_ radius: CGFloat) -> Float {
+            Float(max(0, min(radius * backing, cornerLimit)))
+        }
         var params = RenderParams(
             imageRect: SIMD4<Float>(-ndcW, -ndcH, ndcW, ndcH),
             uvRotation: uvRotation(for: orientation),
-            screen: SIMD4<Float>(Float(screenW), Float(screenH), Float(cornerPx), 0),
+            screen: SIMD4<Float>(Float(screenW), Float(screenH), 0, 0),
+            corners: SIMD4<Float>(
+                cornerPx(screenCorners.topLeft),
+                cornerPx(screenCorners.topRight),
+                cornerPx(screenCorners.bottomLeft),
+                cornerPx(screenCorners.bottomRight)
+            ),
             drawable: SIMD4<Float>(Float(viewW), Float(viewH), 0, 0)
         )
         guard let commandBuffer = queue.makeCommandBuffer(),
@@ -375,7 +386,8 @@ final class SimulatorMetalRenderer {
         struct Params {
             float4 imageRect;
             float4 uvRotation;
-            float4 screen;   // (screenWpx, screenHpx, cornerPx, _)
+            float4 screen;   // (screenWpx, screenHpx, _, _)
+            float4 corners;  // (topLeftPx, topRightPx, bottomLeftPx, bottomRightPx)
             float4 drawable; // (drawableWpx, drawableHpx, _, _)
         };
         vertex VOut vmain(uint vid [[vertex_id]], constant Params& p [[buffer(0)]]) {
@@ -407,13 +419,16 @@ final class SimulatorMetalRenderer {
             // gives the signed distance to the rounded-rect edge:
             // positive outside → discard so the bezel below shows
             // through; negative or zero inside → sample texture.
-            // Skip entirely when cornerPx==0 (tv, or before the
+            // Skip entirely when the radius is 0 (tv, or before the
             // wrapper has pushed a frame).
             float2 fragCoord = in.position.xy;
             float2 center = p.drawable.xy * 0.5;
             float2 fromCenter = fragCoord - center;
             float2 halfScreen = p.screen.xy * 0.5;
-            float radius = p.screen.z;
+            // Framebuffer y grows downward, so a negative offset is the top.
+            float radius = (fromCenter.x < 0.0)
+                ? ((fromCenter.y < 0.0) ? p.corners.x : p.corners.z)
+                : ((fromCenter.y < 0.0) ? p.corners.y : p.corners.w);
             if (radius > 0.0) {
                 float2 q = abs(fromCenter) - halfScreen + float2(radius);
                 float dist = min(max(q.x, q.y), 0.0)
@@ -461,7 +476,11 @@ final class SimulatorMetalRenderer {
             // Same rounded-screen SDF as the flat path, measured against the
             // corner's place in the unbent picture rather than its place on
             // the framebuffer, so the rounding bends with the panel.
-            float radius = p.screen.z;
+            // `local` is in the picture's own axes, where y grows upward,
+            // so the sign test is the other way round from the flat path.
+            float radius = (in.local.x < 0.0)
+                ? ((in.local.y > 0.0) ? p.corners.x : p.corners.z)
+                : ((in.local.y > 0.0) ? p.corners.y : p.corners.w);
             if (radius > 0.0) {
                 float2 q = abs(in.local) - p.screen.xy * 0.5 + float2(radius);
                 float dist = min(max(q.x, q.y), 0.0)

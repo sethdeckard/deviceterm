@@ -828,6 +828,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
                 family: DeviceFamily(wire: viewModel.family),
                 surfaceSize: content.surfaceSize,
                 orientation: viewModel.currentOrientation,
+                foldable: viewModel.capabilities.fold,
                 spansHinge: viewModel.confirmedPanelSpansHinge,
                 crease: crease
             )

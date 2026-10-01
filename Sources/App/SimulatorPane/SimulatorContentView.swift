@@ -78,12 +78,15 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// reuse the same value. Every coord translation must use
     /// the same inset the shader does.
     private(set) var displayInset: CGFloat = 0
-    /// Inner corner radius (in points) applied to the rendered
-    /// screen via the screen-mask layer. Matches the bezel's
-    /// inner curve so the screen reads as a real device's display
-    /// (rounded inside the bezel, not a sharp rectangle). Set
-    /// alongside `displayInset` so the two stay in sync.
-    private var screenCornerRadius: CGFloat = 0
+    /// Inner corner radii (in points) applied to the rendered screen by the
+    /// shader's SDF discard. They match the bezel's inner curve so the
+    /// screen reads as a real device's display rather than a sharp
+    /// rectangle, and are set alongside `displayInset` so the two stay in
+    /// sync.
+    ///
+    /// One per corner, because a display is not always a rounded rectangle:
+    /// a foldable's cover panel is a D.
+    private var screenCorners = DeviceBezelLayout.Corners.square
     /// How the picture bends at the hinge, or nil when it is flat. Only a
     /// foldable showing the panel the hinge runs through ever sets it.
     private var crease: FoldCreaseGeometry.Crease?
@@ -254,15 +257,14 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
 
     /// Push the wrapper's device-frame geometry in. `inset` is the
     /// per-side bezel margin the shader's aspect-fit must reserve
-    /// (in points); `screenCornerRadius` is the inner corner radius
-    /// the shader discards outside of so the rendered screen has
-    /// rounded corners that match the device's display. The wrapper
-    /// pushes on every layout pass, so only a changed value requests
-    /// a draw.
-    func setDisplayFrame(inset: CGFloat, screenCornerRadius: CGFloat) {
-        guard inset != displayInset || screenCornerRadius != self.screenCornerRadius else { return }
+    /// (in points); `screenCorners` are the inner corner radii the shader
+    /// discards outside of so the rendered screen has rounded corners that
+    /// match the device's display. The wrapper pushes on every layout pass,
+    /// so only a changed value requests a draw.
+    func setDisplayFrame(inset: CGFloat, screenCorners: DeviceBezelLayout.Corners) {
+        guard inset != displayInset || screenCorners != self.screenCorners else { return }
         displayInset = inset
-        self.screenCornerRadius = screenCornerRadius
+        self.screenCorners = screenCorners
         requestRedraw()
     }
 
@@ -290,7 +292,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             lease: currentSurface,
             orientation: orientation,
             displayInset: displayInset,
-            screenCornerRadius: screenCornerRadius,
+            screenCorners: screenCorners,
             crease: crease,
             in: view,
             trace: trace

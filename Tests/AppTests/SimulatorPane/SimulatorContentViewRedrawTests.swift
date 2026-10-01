@@ -20,6 +20,15 @@ import Testing
 /// case reads the flag on a fresh mount, where AppKit does record it.
 @MainActor
 struct SimulatorContentViewRedrawTests {
+    /// A plain rounded display, for the pushes that only care that the
+    /// geometry changed.
+    private static let rounded = DeviceBezelLayout.Corners(
+        topLeft: 40,
+        topRight: 40,
+        bottomLeft: 40,
+        bottomRight: 40
+    )
+
     private let frame = NSRect(x: 0, y: 0, width: 64, height: 64)
 
     private func makeSurface() throws -> IOSurfaceRef {
@@ -86,7 +95,7 @@ struct SimulatorContentViewRedrawTests {
     @Test
     func aNewDisplayFrameRequestsADraw() {
         let view = SimulatorContentView()
-        view.setDisplayFrame(inset: 12, screenCornerRadius: 40)
+        view.setDisplayFrame(inset: 12, screenCorners: Self.rounded)
         #expect(view.redrawRequests == 1)
     }
 
@@ -95,9 +104,27 @@ struct SimulatorContentViewRedrawTests {
         // The wrapper pushes its geometry on every layout pass; an unchanged
         // push must not cost a draw.
         let view = SimulatorContentView()
-        view.setDisplayFrame(inset: 12, screenCornerRadius: 40)
-        view.setDisplayFrame(inset: 12, screenCornerRadius: 40)
+        view.setDisplayFrame(inset: 12, screenCorners: Self.rounded)
+        view.setDisplayFrame(inset: 12, screenCorners: Self.rounded)
         #expect(view.redrawRequests == 1)
+    }
+
+    /// One corner moving is a changed frame. A display can be rounder at one
+    /// end than the other, so the gate cannot watch a single radius.
+    @Test
+    func oneChangedCornerRequestsADraw() {
+        let view = SimulatorContentView()
+        view.setDisplayFrame(inset: 12, screenCorners: Self.rounded)
+        view.setDisplayFrame(
+            inset: 12,
+            screenCorners: DeviceBezelLayout.Corners(
+                topLeft: 40,
+                topRight: 40,
+                bottomLeft: 40,
+                bottomRight: 6
+            )
+        )
+        #expect(view.redrawRequests == 2)
     }
 
     @Test

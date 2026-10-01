@@ -38,6 +38,11 @@ final class SimulatorPaneWrapperView: NSView {
         var family: DeviceFamily = .unknown
         var surfaceSize: CGSize = .zero
         var orientation: Orientation = .portrait
+        /// Whether the device folds at all, which is what separates a
+        /// foldable's cover panel from an ordinary phone's only display.
+        /// The two are the same shape on the wire and a very different
+        /// shape on the device.
+        var foldable = false
         /// Whether the panel on show is the one the hinge runs through, which
         /// decides whether this device frame carries a fold at all.
         var spansHinge = false
@@ -83,7 +88,6 @@ final class SimulatorPaneWrapperView: NSView {
     private let focusTracker = PaneFocusTracker()
     private let bezelView = LayerBackedView()
     private let bezelShapeLayer = CAShapeLayer()
-    private let notchLayer = CAShapeLayer()
     private let crownLayer = CAShapeLayer()
     /// Pane-local rect the crown bump occupies, read by
     /// `SimulatorContentView` so a click on the crown lights up
@@ -99,6 +103,16 @@ final class SimulatorPaneWrapperView: NSView {
     private var currentCreasedBezelPath: CGPath?
 
     override var acceptsFirstResponder: Bool { true }
+
+    /// Which of the device's panels this pane is framing.
+    ///
+    /// Read everywhere the layout is computed rather than passed around, so
+    /// the painted outline, the hit-tested rect and the screen's rounded
+    /// corners cannot be built from different panels.
+    private var bezelPanel: DeviceBezelLayoutMath.Panel {
+        guard bezelContext.foldable else { return .standard }
+        return bezelContext.spansHinge ? .foldableInner : .foldableCover
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -129,13 +143,11 @@ final class SimulatorPaneWrapperView: NSView {
         // effect once AppKit materializes the layer.
         // Bezel fill: dark neutral that reads on top of the
         // ghostty bg without clashing with the focus border. The
-        // notch/crown sublayers paint a touch darker for visual
+        // crown sublayer paints a touch darker for visual
         // separation against the bezel.
         bezelShapeLayer.fillColor = NSColor(white: 0.15, alpha: 1).cgColor
-        notchLayer.fillColor = NSColor(white: 0.08, alpha: 1).cgColor
         crownLayer.fillColor = NSColor(white: 0.08, alpha: 1).cgColor
         bezelShapeLayer.isHidden = true
-        notchLayer.isHidden = true
         crownLayer.isHidden = true
 
         focusTracker.onFocusChange = { [weak self] focused in
@@ -223,7 +235,9 @@ final class SimulatorPaneWrapperView: NSView {
         guard let image = currentImageRect() else { return nil }
         return DeviceBezelLayoutMath.layout(
             family: bezelContext.family,
-            imageRect: image
+            imageRect: image,
+            panel: bezelPanel,
+            orientation: bezelContext.orientation
         )?.bezelRect
     }
 
@@ -255,7 +269,7 @@ final class SimulatorPaneWrapperView: NSView {
         layer?.borderColor = effective ? color.cgColor : NSColor.clear.cgColor
     }
 
-    /// Attach the bezel/notch/crown CAShapeLayers to the bezel
+    /// Attach the bezel/crown CAShapeLayers to the bezel
     /// view's backing layer. Called from `applyBezel` on each
     /// layout pass; idempotent, early-returning once attached.
     /// Doing it lazily (not in `init`) sidesteps the
@@ -278,7 +292,6 @@ final class SimulatorPaneWrapperView: NSView {
         // bottom-corner arc and needs to draw past its bounds.)
         bezelLayer.masksToBounds = true
         bezelLayer.addSublayer(bezelShapeLayer)
-        bezelLayer.addSublayer(notchLayer)
         bezelLayer.addSublayer(crownLayer)
     }
 
@@ -292,15 +305,13 @@ final class SimulatorPaneWrapperView: NSView {
     private func pushDisplayFrameToContent() {
         guard let content = inputTarget as? SimulatorContentView else { return }
         guard bezelView.bounds.width > 0, bezelView.bounds.height > 0 else {
-            content.setDisplayFrame(inset: 0, screenCornerRadius: 0)
+            content.setDisplayFrame(inset: 0, screenCorners: .square)
             return
         }
         let inset = DeviceBezelLayoutMath.maxBezelInset(family: bezelContext.family)
-        // Inner corner radius: outer bezel radius minus the inset.
-        // Use a probe image rect to compute the would-be outer
-        // radius for this family + bounds without circularly
-        // re-running the full layout. Falls back to 0 when no
-        // bezel layout is produced (tv).
+        // Use a probe image rect to size the panel's own rounding for this
+        // family + bounds without circularly re-running the full layout.
+        // Falls back to 0 when no bezel layout is produced (tv).
         guard let probeImage = SimGestureMath.imageRect(
             viewSize: bezelView.bounds.size,
             surfaceSize: bezelContext.surfaceSize,
@@ -309,15 +320,47 @@ final class SimulatorPaneWrapperView: NSView {
         ),
             let layout = DeviceBezelLayoutMath.layout(
                 family: bezelContext.family,
-                imageRect: probeImage
+                imageRect: probeImage,
+                panel: bezelPanel,
+                orientation: bezelContext.orientation
             ) else {
-            content.setDisplayFrame(inset: 0, screenCornerRadius: 0)
+            content.setDisplayFrame(inset: 0, screenCorners: .square)
             return
         }
         content.setDisplayFrame(
             inset: inset,
-            screenCornerRadius: max(0, layout.cornerRadius - inset)
+            screenCorners: layout.screenCornerRadii
         )
+    }
+
+    /// A rounded outline with a radius of its own at each corner, which
+    /// `CGPath(roundedRect:)` cannot express.
+    ///
+    /// Traced from the top edge clockwise in this view's flipped
+    /// coordinates, so `minY` is the top. Each radius yields to half the
+    /// shorter side, past which the arcs would cross and the outline would
+    /// stop being the rect.
+    private func roundedPath(
+        rect: CGRect,
+        corners: DeviceBezelLayout.Corners
+    ) -> CGPath {
+        let limit = min(rect.width, rect.height) / 2
+        let topLeft = min(corners.topLeft, limit)
+        let topRight = min(corners.topRight, limit)
+        let bottomLeft = min(corners.bottomLeft, limit)
+        let bottomRight = min(corners.bottomRight, limit)
+        let topLeading = CGPoint(x: rect.minX, y: rect.minY)
+        let topTrailing = CGPoint(x: rect.maxX, y: rect.minY)
+        let bottomTrailing = CGPoint(x: rect.maxX, y: rect.maxY)
+        let bottomLeading = CGPoint(x: rect.minX, y: rect.maxY)
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX + topLeft, y: rect.minY))
+        path.addArc(tangent1End: topTrailing, tangent2End: bottomTrailing, radius: topRight)
+        path.addArc(tangent1End: bottomTrailing, tangent2End: bottomLeading, radius: bottomRight)
+        path.addArc(tangent1End: bottomLeading, tangent2End: topLeading, radius: bottomLeft)
+        path.addArc(tangent1End: topLeading, tangent2End: topTrailing, radius: topLeft)
+        path.closeSubpath()
+        return path
     }
 
     /// The device frame as two bent halves, drawn from the same `Crease` the
@@ -331,37 +374,59 @@ final class SimulatorPaneWrapperView: NSView {
         imageRect: CGRect,
         crease: FoldCreaseGeometry.Crease
     ) -> CGPath {
+        let vertical = FoldCreaseGeometry.creaseRunsVertically(in: bezelContext.orientation)
         let halves = FoldCreaseGeometry.halves(
             of: layout.bezelRect,
             foldedAbout: imageRect,
             crease: crease,
-            vertical: FoldCreaseGeometry.creaseRunsVertically(in: bezelContext.orientation)
+            vertical: vertical
         )
+        let radii = layout.cornerRadii
         let path = CGMutablePath()
-        for half in [halves.leading, halves.trailing] {
-            append(half: half, cornerRadius: layout.cornerRadius, to: path)
-        }
+        // Each half keeps the two radii belonging to the side of the picture
+        // it is, so a panel whose corners differ keeps them across the fold.
+        // A vertical crease splits the picture left from right, so a half's
+        // outer corners are the two down one side; a horizontal one splits
+        // top from bottom.
+        append(
+            half: halves.leading,
+            lowRadius: vertical ? radii.topLeft : radii.topLeft,
+            highRadius: vertical ? radii.bottomLeft : radii.topRight,
+            to: path
+        )
+        append(
+            half: halves.trailing,
+            lowRadius: vertical ? radii.topRight : radii.bottomLeft,
+            highRadius: vertical ? radii.bottomRight : radii.bottomRight,
+            to: path
+        )
         return path
     }
 
     /// Trace one half: rounded at the two outer corners, square where it meets
     /// the crease, because the fold is a crease and not an edge.
+    ///
+    /// `lowRadius` belongs to the corner at the low end of the crease's
+    /// along-axis and `highRadius` to the other, matching `HalfQuad`'s own
+    /// `outerLow` and `outerHigh`.
     private func append(
         half: FoldCreaseGeometry.HalfQuad,
-        cornerRadius: CGFloat,
+        lowRadius: CGFloat,
+        highRadius: CGFloat,
         to path: CGMutablePath
     ) {
         func distance(_ start: CGPoint, _ end: CGPoint) -> CGFloat {
             hypot(end.x - start.x, end.y - start.y)
         }
         // A tangent arc wider than the edges it joins produces a shape that is
-        // not the quad, so the radius yields to the shortest of them.
-        let radius = min(
-            cornerRadius,
+        // not the quad, so each radius yields to the shortest of them.
+        let limit = min(
             distance(half.creaseLow, half.outerLow) / 2,
             distance(half.outerLow, half.outerHigh) / 2,
             distance(half.outerHigh, half.creaseHigh) / 2
         )
+        let low = min(lowRadius, limit)
+        let high = min(highRadius, limit)
         // Starting midway down the first edge, so the opening arc has the
         // run-up `addArc(tangent1End:…)` needs.
         path.move(
@@ -370,8 +435,8 @@ final class SimulatorPaneWrapperView: NSView {
                 y: (half.creaseLow.y + half.outerLow.y) / 2
             )
         )
-        path.addArc(tangent1End: half.outerLow, tangent2End: half.outerHigh, radius: radius)
-        path.addArc(tangent1End: half.outerHigh, tangent2End: half.creaseHigh, radius: radius)
+        path.addArc(tangent1End: half.outerLow, tangent2End: half.outerHigh, radius: low)
+        path.addArc(tangent1End: half.outerHigh, tangent2End: half.creaseHigh, radius: high)
         path.addLine(to: half.creaseHigh)
         path.addLine(to: half.creaseLow)
         path.closeSubpath()
@@ -387,10 +452,11 @@ final class SimulatorPaneWrapperView: NSView {
             let imageRect = currentImageRect(),
             let layout = DeviceBezelLayoutMath.layout(
                 family: bezelContext.family,
-                imageRect: imageRect
+                imageRect: imageRect,
+                panel: bezelPanel,
+                orientation: bezelContext.orientation
             ) else {
             bezelShapeLayer.isHidden = true
-            notchLayer.isHidden = true
             crownLayer.isHidden = true
             currentCrownRect = .zero
             currentCreasedBezelPath = nil
@@ -405,29 +471,10 @@ final class SimulatorPaneWrapperView: NSView {
         currentCreasedBezelPath = bezelContext.crease.map {
             creasedBezelPath(layout: layout, imageRect: imageRect, crease: $0)
         }
-        bezelShapeLayer.path = currentCreasedBezelPath ?? CGPath(
-            roundedRect: layout.bezelRect,
-            cornerWidth: layout.cornerRadius,
-            cornerHeight: layout.cornerRadius,
-            transform: nil
+        bezelShapeLayer.path = currentCreasedBezelPath ?? roundedPath(
+            rect: layout.bezelRect,
+            corners: layout.cornerRadii
         )
-        // The panel that spans the hinge carries no notch. The cover panel's
-        // sits at the middle of the top edge, which on the inner panel is
-        // where the crease comes out, and a foldable's inner display has no
-        // camera cutout to stand for anyway.
-        if bezelContext.spansHinge {
-            notchLayer.isHidden = true
-        } else if let notch = layout.notchRect, let radius = layout.notchCornerRadius {
-            notchLayer.isHidden = false
-            notchLayer.path = CGPath(
-                roundedRect: notch,
-                cornerWidth: radius,
-                cornerHeight: radius,
-                transform: nil
-            )
-        } else {
-            notchLayer.isHidden = true
-        }
         if let crown = layout.crownRect, let radius = layout.crownCornerRadius {
             crownLayer.isHidden = false
             crownLayer.path = CGPath(
