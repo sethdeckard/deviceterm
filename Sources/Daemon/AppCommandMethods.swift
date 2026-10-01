@@ -189,23 +189,12 @@ public enum AppCommandMethods {
         }
     }
 
-    private static func timeout(for kind: AppCommandKind) -> Int {
-        switch kind {
-        case .windowOpen, .windowFocus, .windowClose,
-            .tabOpen, .tabFocus, .tabClose, .tabRename, .tabMove,
-            .tabProtect, .tabUnprotect,
-            .paneSplit, .paneFocus, .paneClose, .paneRename,
-            .paneSendInput, .paneAttach,
-            // Restart opens or retypes into a tab, so it waits on the same
-            // budget as the other surface mutations.
-            .automationRestart:
-            AppCommandDeadline.workspaceGUIReplyTimeoutMs
-
-        case .windowList, .windowShow,
-            .tabList, .tabShow,
-            .paneList, .paneShow, .paneCaptureText,
-            .automationStatus:
-            AppCommandCoordinator.defaultTimeoutMs
-        }
+    /// The reply budget for `kind`. The same classification decides which
+    /// kinds the GUI answers without queuing, so the short budget only ever
+    /// covers a command that isn't waiting behind a mutation.
+    static func timeout(for kind: AppCommandKind) -> Int {
+        kind.isRead
+            ? AppCommandCoordinator.defaultTimeoutMs
+            : AppCommandDeadline.workspaceGUIReplyTimeoutMs
     }
 }

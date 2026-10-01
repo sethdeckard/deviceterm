@@ -35,4 +35,27 @@ public enum AppCommandKind: String, Codable, Sendable, CaseIterable {
 
     case automationStatus = "automation.status"
     case automationRestart = "automation.restart"
+
+    /// Whether the GUI answers this kind from its current workspace, changing
+    /// nothing and waiting on nothing. The GUI answers a read as soon as it
+    /// arrives instead of queuing it behind mutations, and the daemon gives it
+    /// the short reply budget. Exhaustive, so a new kind has to choose.
+    public var isRead: Bool {
+        switch self {
+        case .windowList, .windowShow,
+            .tabList, .tabShow,
+            .paneList, .paneShow, .paneCaptureText,
+            .automationStatus:
+            true
+
+        case .windowOpen, .windowFocus, .windowClose,
+            .tabOpen, .tabFocus, .tabClose, .tabRename, .tabMove,
+            .tabProtect, .tabUnprotect,
+            .paneSplit, .paneFocus, .paneClose, .paneRename,
+            .paneSendInput, .paneAttach,
+            // Restart opens or retypes into a tab, so it's a mutation.
+            .automationRestart:
+            false
+        }
+    }
 }

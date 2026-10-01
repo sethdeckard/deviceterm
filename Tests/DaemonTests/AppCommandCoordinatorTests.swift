@@ -116,8 +116,12 @@ struct AppCommandCoordinatorTests {
             params: Data(#"{"all":false}"#.utf8),
             timeoutMs: 50
         )
-        if case let .error(code, _, _, _) = outcome {
+        if case let .error(code, message, _, _) = outcome {
             #expect(code == "intent.guiUnavailable")
+            // The timer can't tell an unseen command from an unfinished one,
+            // so the message must not claim the GUI never answered.
+            #expect(message == AppCommandCoordinator.timeoutMessage(timeoutMs: 50))
+            #expect(message.contains("may still complete"))
         } else {
             Issue.record("expected .error; got \(outcome)")
         }
@@ -163,6 +167,24 @@ struct AppCommandCoordinatorTests {
         let cliMs = AppCommandDeadline.cliRequestTimeoutSeconds * 1_000
         #expect(Double(AppCommandCoordinator.defaultTimeoutMs) < cliMs)
         #expect(Double(AppCommandDeadline.guiReplyTimeoutMs) < cliMs)
+    }
+
+    /// Same pairing for mutations, which get the longer budget.
+    @Test
+    func workspaceMutationDeadlineStaysUnderTheCLIRequestTimeout() {
+        let cliMs = AppCommandDeadline.workspaceCLIRequestTimeoutSeconds * 1_000
+        #expect(Double(AppCommandDeadline.workspaceGUIReplyTimeoutMs) < cliMs)
+    }
+
+    /// The short budget is only safe for a command the GUI answers without
+    /// queuing, so the budget has to follow the same classification the GUI
+    /// uses to skip its queue.
+    @Test("each kind's reply budget follows its read classification", arguments: AppCommandKind.allCases)
+    func replyBudgetFollowsTheReadClassification(kind: AppCommandKind) {
+        let expected = kind.isRead
+            ? AppCommandDeadline.guiReplyTimeoutMs
+            : AppCommandDeadline.workspaceGUIReplyTimeoutMs
+        #expect(AppCommandMethods.timeout(for: kind) == expected)
     }
 
     @Test

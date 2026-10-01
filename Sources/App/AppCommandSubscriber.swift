@@ -52,6 +52,20 @@ final class AppCommandSubscriber {
         return false
     }
 
+    /// Decode one AppCommand frame, or nil (logged) when it's malformed.
+    private static func decode(_ payload: Data) -> AppCommand? {
+        do {
+            return try JSONDecoder().decode(AppCommand.self, from: payload)
+        } catch {
+            FileHandle.standardError.write(
+                Data(
+                "deviceterm: malformed AppCommand frame: \(error)\n".utf8
+            )
+                )
+            return nil
+        }
+    }
+
     /// Begin draining. Idempotent. Calling twice is a no-op.
     func start() {
         guard drainTask == nil else { return }
@@ -107,31 +121,52 @@ final class AppCommandSubscriber {
         }
     }
 
-    /// One subscription session: open the stream, drain every
+    /// One subscription session: open the stream, handle every
     /// AppCommand frame, exit when the stream finishes. Throws on
     /// transport errors so the outer loop can re-establish.
+    ///
+    /// Mutations run one at a time, in arrival order, on a single worker.
+    /// Reads don't wait for them: each is answered as soon as it arrives, so a
+    /// `pane list` can't spend its short reply budget queued behind a close
+    /// that is waiting on a simulator shutdown. A read still runs on the main
+    /// actor, between a mutation's suspension points, so it can observe a
+    /// mutation in flight, which is what a person looking at the window sees.
     private func subscribeAndDrain() async throws {
         let (_, events) = try await daemon.subscribeAppCommands()
-        for await (method, payload) in events {
-            guard method == "app.command" else { continue }
-            await handleCommand(payload: payload)
+        let (mutations, mutationQueue) = AsyncStream.makeStream(of: AppCommand.self)
+        // Unstructured, so it doesn't inherit the drain's cancellation. The
+        // handler below forwards it for the worker's whole lifetime, including
+        // while this waits for the worker after the stream has ended.
+        let mutationWorker = Task { @MainActor [weak self] in
+            for await command in mutations {
+                guard !Task.isCancelled else { return }
+                await self?.handle(command)
+            }
+        }
+        // A stream that ends on its own leaves the frames already read to run.
+        // Cancelling the drain (`stop`, at app termination) discards queued
+        // mutations, so none runs against windows being torn down. An
+        // in-flight handler is awaited and observes the worker's cancellation.
+        await withTaskCancellationHandler {
+            for await (method, payload) in events {
+                guard method == "app.command",
+                    let command = Self.decode(payload) else { continue }
+                if command.kind.isRead {
+                    Task { @MainActor [weak self] in await self?.handle(command) }
+                } else {
+                    mutationQueue.yield(command)
+                }
+            }
+            mutationQueue.finish()
+            await mutationWorker.value
+        } onCancel: {
+            mutationWorker.cancel()
         }
     }
 
-    /// Decode one AppCommand frame, translate to RouteIntent,
-    /// dispatch, and ack via `app.commandResult`.
-    private func handleCommand(payload: Data) async {
-        let command: AppCommand
-        do {
-            command = try JSONDecoder().decode(AppCommand.self, from: payload)
-        } catch {
-            FileHandle.standardError.write(
-                Data(
-                "deviceterm: malformed AppCommand frame: \(error)\n".utf8
-            )
-                )
-            return
-        }
+    /// Translate one AppCommand to a RouteIntent, dispatch it, and ack via
+    /// `app.commandResult`.
+    private func handle(_ command: AppCommand) async {
         // Decline expired frames before dispatch so a command buffered
         // past its reply deadline can't mutate state, potentially after
         // the caller received an error. The ack may still win the

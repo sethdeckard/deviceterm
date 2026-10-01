@@ -2737,7 +2737,8 @@ connection is refused with `error.scope_violation`, so a second local
 process can't forge replies. The daemon's `AppCommandCoordinator` keys
 pending continuations by `commandId` and resumes the matching awaiting
 CLI handler. Read operations retain the 4 second GUI and 5 second CLI
-budgets. Workspace mutations use 17 seconds in the daemon and 18 seconds in
+budgets. That budget holds because a read doesn't queue behind mutations in
+the GUI. Workspace mutations use 17 seconds in the daemon and 18 seconds in
 the CLI because they await committed AppKit and session state. In both cases
 the margin reserves time for `intent.guiUnavailable` to return before the
 transport deadline (`AppCommandDeadline`).
@@ -3430,17 +3431,26 @@ Components:
   state, then returns a public projection. Singular list and show intents read
   that projection directly.
 - **`AppCommandSubscriber`** (`Sources/App/AppCommandSubscriber.swift`):
-  the GUI's drain loop on the `app.commands` subscription. Translates
-  each `AppCommand` to a `RouteIntent`, dispatches, and replies via
-  `app.commandResult` so the daemon coordinator can resume the
-  originating CLI handler.
+  the GUI's consumer of the `app.commands` subscription. Translates each
+  `AppCommand` to a `RouteIntent`, dispatches it, and replies via
+  `app.commandResult` so the daemon coordinator can resume the originating
+  CLI handler. Mutations run one at a time, in arrival order. Reads
+  (`AppCommandKind.isRead`: the list and show verbs, `pane capture-text`, and
+  `automation status`) are answered as soon as they arrive, so a `pane list`
+  never waits behind a close that's waiting on a simulator shutdown. A read
+  can observe a mutation partway through, as the window itself would show
+  it.
 - **`AppCommandCoordinator`** (`Sources/Daemon/AppCommandCoordinator.swift`):
   daemon-side actor. Owns the subscription stream + a map of
   pending continuations keyed by `commandId`. Per-verb handlers
   (`AppCommandMethods.publishVerb(kind:)`) call
   `publishAndAwait(...)` to ship a command and block until the GUI
-  replies (4s timeout → `intent.guiUnavailable`; an absent subscriber
-  fails immediately rather than waiting).
+  replies: 4 seconds for a read, 17 for a mutation, then
+  `intent.guiUnavailable`. An absent subscriber fails immediately rather
+  than waiting. The timer runs from publish to the reply's arrival, so it
+  can't tell a command the GUI never saw from one it's still working on or one
+  that finished with its reply delayed. A mutation may have completed, or may
+  still complete, after the error.
 - **`SessionDispatchContext.originatingSessionId`**: task-local,
   bound by both dispatchers (`RPCConnection`, `XPCConnection`) around
   every handler call. The

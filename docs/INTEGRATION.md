@@ -122,7 +122,7 @@ Current shared codes are:
 | `rpc.error` | The daemon returned an otherwise unclassified RPC error |
 | `intent.notFound` | No caller-visible workspace object matched the reference |
 | `intent.ambiguous` | More than one caller-visible object matched within a resolution tier |
-| `intent.guiUnavailable` | The GUI back-channel was absent or missed its deadline |
+| `intent.guiUnavailable` | The GUI back-channel was absent or missed its deadline. A mutation may still complete afterward, so check its effect before retrying |
 | `intent.userCancelled` | The person cancelled a GUI confirmation |
 | `intent.automationRequired` | The resolved target requires ownership the caller lacks or a live grant |
 | `intent.wouldCloseTab` | Closing the selected terminal would remove the tab's final terminal |

@@ -72,6 +72,11 @@ struct AppCommandSubscriberTests {
             let payload = try JSONEncoder().encode(command)
             continuation?.yield(("app.command", payload))
         }
+
+        /// End the live stream, as a daemon closing the subscription would.
+        func finish() {
+            continuation?.finish()
+        }
     }
 
     /// A `window.list` command, optionally stamped with a deadline.
@@ -208,5 +213,145 @@ struct AppCommandSubscriberTests {
         // declined for expiry.
         #expect(fake.results.first?.status == "data")
         subscriber.stop()
+    }
+
+    // MARK: - Reads don't queue behind mutations
+
+    /// A workspace holding two sim panes in a tab owned by `S-seed`, and a
+    /// dispatcher over it whose daemon parks every `pane.closeById`.
+    private func parkedCloseHarness() -> (dispatcher: IntentDispatcher, daemon: FakeDaemonClient) {
+        let workspace = WorkspaceViewModel()
+        let list = TabListViewModel()
+        workspace.addWindow(WindowState(id: WindowID(value: 1), tabs: list, name: "window-1"))
+        list.append(
+            TabState(
+                id: TabID(value: 1),
+                terminals: [
+                    TerminalPaneState(id: TerminalPaneID(value: 1), sessionId: "S-seed", capability: "cap")
+                ],
+                simPanes: [
+                    SimPaneState(paneId: "P1", udid: "U-1", displayName: "iPhone", family: "phone"),
+                    SimPaneState(paneId: "P2", udid: "U-2", displayName: "iPad", family: "pad")
+                ],
+                name: "tab-1"
+            )
+        )
+        let daemon = FakeDaemonClient()
+        daemon.armClosePaneBarrier()
+        let dispatcher = IntentDispatcher(
+            workspace: workspace,
+            router: Router(workspace: workspace, daemon: daemon),
+            actionDelegate: nil,
+            automationPrograms: FakeAutomationPrograms()
+        )
+        return (dispatcher, daemon)
+    }
+
+    private func paneCloseCommand(id: String, pane: String) throws -> AppCommand {
+        AppCommand(
+            commandId: id,
+            kind: .paneClose,
+            originatingSessionId: "S-seed",
+            params: try JSONEncoder().encode(AppCommandParams.ClosePane(pane: pane, mode: .detach)),
+            originAutomationGrant: true
+        )
+    }
+
+    @Test
+    func aReadIsAnsweredWhileAMutationIsStillRunning() async throws {
+        // Reads must complete while a close awaits the daemon (in the field, a
+        // simulator shutdown), so they don't exhaust their reply budget behind
+        // a suspended mutation.
+        let (dispatcher, daemon) = parkedCloseHarness()
+        let fake = ScriptedBackChannel()
+        let subscriber = AppCommandSubscriber(dispatcher: dispatcher, daemon: fake)
+        subscriber.start()
+        #expect(await waitUntil(3) { fake.isSubscribed })
+
+        try fake.emit(paneCloseCommand(id: "close", pane: "P1"))
+        #expect(await waitUntil(3) { daemon.closePanesWaiting == 1 })
+        try fake.emit(windowsListCommand(expiresAtMonotonicNanos: nil))
+
+        let readAnswered = await waitUntil(3) { fake.results.contains { $0.status == "data" } }
+        #expect(readAnswered)
+        // The close is still parked, so the read didn't wait for it.
+        #expect(daemon.closePanesWaiting == 1)
+        #expect(!fake.results.contains { $0.commandId == "close" })
+
+        daemon.releaseClosePane()
+        #expect(await waitUntil(3) { fake.results.contains { $0.commandId == "close" } })
+        subscriber.stop()
+    }
+
+    @Test
+    func mutationsStillRunOneAtATimeInArrivalOrder() async throws {
+        let (dispatcher, daemon) = parkedCloseHarness()
+        let fake = ScriptedBackChannel()
+        let subscriber = AppCommandSubscriber(dispatcher: dispatcher, daemon: fake)
+        subscriber.start()
+        #expect(await waitUntil(3) { fake.isSubscribed })
+
+        try fake.emit(paneCloseCommand(id: "first", pane: "P1"))
+        try fake.emit(paneCloseCommand(id: "second", pane: "P2"))
+        #expect(await waitUntil(3) { daemon.closePanesWaiting == 1 })
+        // The second close hasn't started: only one is ever in flight.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(daemon.closePanesWaiting == 1)
+        #expect(daemon.closePaneCalls.map(\.paneId) == ["P1"])
+
+        // Releasing disarms the barrier, so the second close runs straight
+        // through once the first finishes.
+        daemon.releaseClosePane()
+        #expect(await waitUntil(3) { fake.results.count == 2 })
+        #expect(daemon.closePaneCalls.map(\.paneId) == ["P1", "P2"])
+        #expect(fake.results.map(\.commandId) == ["first", "second"])
+        subscriber.stop()
+    }
+
+    @Test
+    func stoppingDiscardsMutationsStillQueued() async throws {
+        // `stop` runs at app termination. A queued mutation that ran after it
+        // would act on windows being torn down, which is what stopping is for.
+        let (dispatcher, daemon) = parkedCloseHarness()
+        let fake = ScriptedBackChannel()
+        let subscriber = AppCommandSubscriber(dispatcher: dispatcher, daemon: fake)
+        subscriber.start()
+        #expect(await waitUntil(3) { fake.isSubscribed })
+        let drain = try #require(subscriber.drainTask)
+
+        try fake.emit(paneCloseCommand(id: "first", pane: "P1"))
+        try fake.emit(paneCloseCommand(id: "second", pane: "P2"))
+        #expect(await waitUntil(3) { daemon.closePanesWaiting == 1 })
+        subscriber.stop()
+        daemon.releaseClosePane()
+        await drain.value
+
+        #expect(daemon.closePaneCalls.map(\.paneId) == ["P1"])
+        #expect(!fake.results.contains { $0.commandId == "second" })
+    }
+
+    @Test
+    func stoppingAfterTheStreamEndedStillDiscardsQueuedMutations() async throws {
+        // The stream can end on its own while a mutation is parked, leaving the
+        // drain waiting on the worker. A `stop` that arrives then must still
+        // reach the worker, or the queued close runs during teardown.
+        let (dispatcher, daemon) = parkedCloseHarness()
+        let fake = ScriptedBackChannel()
+        let subscriber = AppCommandSubscriber(dispatcher: dispatcher, daemon: fake)
+        subscriber.start()
+        #expect(await waitUntil(3) { fake.isSubscribed })
+        let drain = try #require(subscriber.drainTask)
+
+        try fake.emit(paneCloseCommand(id: "first", pane: "P1"))
+        try fake.emit(paneCloseCommand(id: "second", pane: "P2"))
+        #expect(await waitUntil(3) { daemon.closePanesWaiting == 1 })
+        fake.finish()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        subscriber.stop()
+        daemon.releaseClosePane()
+        await drain.value
+
+        #expect(daemon.closePaneCalls.map(\.paneId) == ["P1"])
+        #expect(!fake.results.contains { $0.commandId == "second" })
     }
 }

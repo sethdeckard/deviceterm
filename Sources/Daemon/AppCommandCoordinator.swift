@@ -93,6 +93,13 @@ public actor AppCommandCoordinator {
 
     public init() {}
 
+    /// The `guiUnavailable` message for a command whose reply didn't arrive
+    /// within `timeoutMs`. See `fireTimeout` for why it hedges.
+    static func timeoutMessage(timeoutMs: Int) -> String {
+        "no GUI reply arrived within \(timeoutMs)ms; the command may have completed or may still "
+            + "complete, so check its effect (for example `pane list`) before retrying"
+    }
+
     // MARK: - Subscription (GUI side)
 
     /// Begin a new subscription for the connection `connectionId`.
@@ -270,12 +277,18 @@ public actor AppCommandCoordinator {
 
     /// Timeout fan-out. Resumes the pending continuation with
     /// `guiUnavailable` and drops the bookkeeping record.
+    ///
+    /// The timer runs from publish to the reply's arrival, so it can't tell a
+    /// GUI that never saw the command from one still working on it, or from
+    /// one that finished and whose reply is late. The message says so, because
+    /// a caller that retries a mutation the GUI completes applies it twice, or
+    /// finds the target already gone.
     private func fireTimeout(commandId: String, timeoutMs: Int) {
         guard let record = pending.removeValue(forKey: commandId) else { return }
         record.continuation.resume(
             returning: .error(
             code: "intent.guiUnavailable",
-            message: "no GUI response within \(timeoutMs)ms",
+            message: Self.timeoutMessage(timeoutMs: timeoutMs),
             details: nil
         )
             )
