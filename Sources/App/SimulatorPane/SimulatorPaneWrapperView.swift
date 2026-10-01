@@ -62,9 +62,13 @@ final class SimulatorPaneWrapperView: NSView {
     /// Pushed by the VC on every render. The bezel reshapes
     /// whenever the device family arrives, the IOSurface
     /// dimensions change, or the device rotates. The wrapper
-    /// re-runs its layout pass on assignment.
+    /// re-runs its layout pass only when the context changes:
+    /// render runs on every frame, and a layout pass per frame
+    /// starves the main thread while several panes animate.
     var bezelContext: BezelContext = .init() {
-        didSet { needsLayout = true }
+        didSet {
+            if bezelContext != oldValue { needsLayout = true }
+        }
     }
     /// Watch Digital Crown handlers, wired by the VC to the same
     /// VM closures the chrome ribbon's crown buttons already

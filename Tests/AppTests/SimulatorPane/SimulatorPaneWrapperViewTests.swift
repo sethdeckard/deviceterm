@@ -128,4 +128,30 @@ struct SimulatorPaneWrapperViewTests {
         }
         #expect(reported == [true])
     }
+
+    @Test
+    func anUnchangedBezelContextRequestsNoLayout() throws {
+        // `render()` assigns the context on every frame, so a layout pass per
+        // assignment would keep the main thread busy while several panes
+        // animate, and GUI reads would miss their reply deadline.
+        let mount = try makeMountedPane()
+        let context = SimulatorPaneWrapperView.BezelContext(
+            family: .phone,
+            surfaceSize: CGSize(width: 1_206, height: 2_622),
+            orientation: .portrait
+        )
+        mount.wrapper.bezelContext = context
+        mount.wrapper.layoutSubtreeIfNeeded()
+        #expect(!mount.wrapper.needsLayout)
+
+        mount.wrapper.bezelContext = context
+        #expect(!mount.wrapper.needsLayout)
+
+        // The changed case proves `needsLayout` reads reliably here, so the
+        // unchanged assertions above aren't passing vacuously.
+        var turned = context
+        turned.orientation = .landscapeLeft
+        mount.wrapper.bezelContext = turned
+        #expect(mount.wrapper.needsLayout)
+    }
 }
