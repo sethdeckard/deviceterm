@@ -20,6 +20,10 @@ private final class PumpHarness: @unchecked Sendable {
     private let retaining: Bool
     private let readLimit: Int
     var replaceDuringSleep: RetainedSurface?
+    /// How long past its deadline every sleep wakes.
+    var wakeLate: Duration = .zero
+    /// How long every surface read takes.
+    var readDelay: Duration = .zero
 
     var readTimes: [ContinuousClock.Instant] { queue.sync { attempts } }
     var sleepCount: Int { queue.sync { sleeps } }
@@ -52,7 +56,7 @@ private final class PumpHarness: @unchecked Sendable {
                 sleep: { deadline in
                     self.queue.sync {
                         self.sleeps += 1
-                        self.instant = deadline
+                        self.instant = deadline.advanced(by: self.wakeLate)
                         if let replacement = self.replaceDuringSleep { self.source = replacement }
                     }
                     // Multiple callbacks during the wait still mean one read.
@@ -63,6 +67,7 @@ private final class PumpHarness: @unchecked Sendable {
             read: {
                 self.queue.sync {
                     self.attempts.append(self.instant)
+                    self.instant = self.instant.advanced(by: self.readDelay)
                     if self.attempts.count >= self.readLimit {
                         self.signal.finish()
                     } else {
@@ -105,6 +110,67 @@ func simulatorCopiesArePacedAndReadTheNewestSurface() async throws {
     #expect(harness.sleepCount == 1)
     let frame = try #require(harness.published.last)
     #expect(frame.surface.withRef { IOSurfaceGetWidth($0) } == 64)
+}
+
+@Test("a sleep that wakes late doesn't stretch every later period")
+func lateWakesKeepTheCadenceAnchored() async throws {
+    let harness = try PumpHarness(readLimit: 11)
+    harness.wakeLate = .milliseconds(4)
+    await harness.run()
+    let times = harness.readTimes
+    #expect(times.count == 11)
+    // The first sleep lands 4 ms late; every later one is due one interval after
+    // the previous deadline, so the lateness never accumulates.
+    #expect(times[10] - times[1] == .nanoseconds(16_666_667) * 9)
+}
+
+@Test("a read slower than an interval still leaves half an interval before the next read")
+func slowResolvesDoNotCopyBackToBack() async throws {
+    let harness = try PumpHarness(readLimit: 6)
+    harness.readDelay = .milliseconds(20)
+    await harness.run()
+    let times = harness.readTimes
+    #expect(times.count == 6)
+    for (earlier, later) in zip(times, times.dropFirst()) {
+        // Each read ends 20 ms after it starts, and the next waits half an
+        // interval past that.
+        #expect(later - earlier >= .milliseconds(20) + .nanoseconds(16_666_667) / 2)
+    }
+}
+
+@Test("a slow resolve pushes the deadline out; a normal one leaves it", arguments: [
+    (deadline: 16, resolvedAt: 1, expected: 16),
+    (deadline: 16, resolvedAt: 8, expected: 16),
+    (deadline: 16, resolvedAt: 9, expected: 17),
+    (deadline: 16, resolvedAt: 20, expected: 28)
+])
+func resolveFloorsTheDeadline(deadline: Int, resolvedAt: Int, expected: Int) {
+    let origin = ContinuousClock.now
+    let instant = { (milliseconds: Int) in origin.advanced(by: .milliseconds(milliseconds)) }
+    let result = SimFramePump.deadline(
+        instant(deadline),
+        afterResolvingAt: instant(resolvedAt),
+        interval: .milliseconds(16)
+    )
+    #expect(result == instant(expected))
+}
+
+@Test("the next deadline anchors to the last one while the pump keeps pace", arguments: [
+    (previous: nil as Int?, now: 0, expected: 16),
+    (previous: 0 as Int?, now: 4, expected: 16),
+    (previous: 0 as Int?, now: 7, expected: 16),
+    (previous: 0 as Int?, now: 9, expected: 25),
+    (previous: 0 as Int?, now: 500, expected: 516)
+])
+func nextDeadlineAnchorsOrRestarts(previous: Int?, now: Int, expected: Int) {
+    let origin = ContinuousClock.now
+    let instant = { (milliseconds: Int) in origin.advanced(by: .milliseconds(milliseconds)) }
+    let deadline = SimFramePump.nextDeadline(
+        after: previous.map(instant),
+        now: instant(now),
+        interval: .milliseconds(16)
+    )
+    #expect(deadline == instant(expected))
 }
 
 @Test

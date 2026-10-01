@@ -31,6 +31,9 @@ struct FrameMetrics: Sendable {
     /// means they cannot answer "did the geometry change *within this row*".
     private var windowHasGeometry = false
     private var copy = LatencyHistogram()
+    private var copyCPU = LatencyHistogram()
+    private var wakeLate = LatencyHistogram()
+    private var resolve = LatencyHistogram()
 
     init(startNanoseconds: UInt64) {
         windowStartNanoseconds = startNanoseconds
@@ -96,6 +99,21 @@ struct FrameMetrics: Sendable {
         bytesMoved += bytes
     }
 
+    /// The copying thread's CPU time for one copy, beside `noteCopy`'s wall time.
+    mutating func noteCopyCPU(nanoseconds: UInt64) {
+        copyCPU.record(nanoseconds)
+    }
+
+    /// How far past its deadline a pacing sleep woke.
+    mutating func noteWakeLate(nanoseconds: UInt64) {
+        wakeLate.record(nanoseconds)
+    }
+
+    /// Wall time to resolve an invalidation to the source's current surface.
+    mutating func noteResolve(nanoseconds: UInt64) {
+        resolve.record(nanoseconds)
+    }
+
     mutating func notePublished() {
         framesPublished += 1
     }
@@ -128,7 +146,10 @@ struct FrameMetrics: Sendable {
             leaseHold: Self.series(leaseHold),
             poolSlotsAllocated: poolSlots.allocated,
             poolSlotsFree: poolSlots.free,
-            poolSlotsHighWater: poolSlots.highWater
+            poolSlotsHighWater: poolSlots.highWater,
+            copyCPU: Self.optionalSeries(copyCPU),
+            wakeLate: Self.optionalSeries(wakeLate),
+            resolve: Self.optionalSeries(resolve)
         )
     }
 
@@ -145,6 +166,9 @@ struct FrameMetrics: Sendable {
         geometryChanges = 0
         windowHasGeometry = false
         copy.reset()
+        copyCPU.reset()
+        wakeLate.reset()
+        resolve.reset()
     }
 }
 
@@ -157,5 +181,9 @@ private extension FrameMetrics {
             p95Nanoseconds: histogram.p95,
             maxNanoseconds: histogram.maximum
         )
+    }
+
+    static func optionalSeries(_ histogram: LatencyHistogram) -> FrameMetricsSummary.Series? {
+        histogram.sampleCount == 0 ? nil : series(histogram)
     }
 }

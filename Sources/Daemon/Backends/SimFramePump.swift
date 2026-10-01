@@ -43,6 +43,9 @@ struct SimFramePump: Sendable {
             do {
                 if let deadline = nextAttempt, timing.now() < deadline {
                     try await timing.sleep(deadline)
+                    if metrics != nil {
+                        metrics?.noteWakeLate(nanoseconds: Self.nanoseconds(timing.now() - deadline))
+                    }
                 }
                 try Task.checkCancellation()
             } catch { return }
@@ -53,14 +56,21 @@ struct SimFramePump: Sendable {
                 metrics = await rolledWindow(metrics, instrumentation)
             }
             metrics?.noteConsumed()
-            nextAttempt = timing.now().advanced(by: timing.interval)
+            nextAttempt = Self.nextDeadline(after: nextAttempt, now: timing.now(), interval: timing.interval)
             let resolved: RetainedSurface?
             switch update {
             case let .surface(surface):
                 resolved = surface
 
             case .invalidated:
+                let resolveStart = instrumentation?.now() ?? 0
                 resolved = await read()
+                if let instrumentation {
+                    metrics?.noteResolve(nanoseconds: instrumentation.now() &- resolveStart)
+                }
+            }
+            if let deadline = nextAttempt {
+                nextAttempt = Self.deadline(deadline, afterResolvingAt: timing.now(), interval: timing.interval)
             }
             guard let source = resolved else {
                 metrics?.noteDroppedNoSurface()
@@ -68,7 +78,6 @@ struct SimFramePump: Sendable {
             }
             guard !Task.isCancelled else { continue }
             let now = timing.now()
-            nextAttempt = now.advanced(by: timing.interval)
             let dims = source.withRef { (IOSurfaceGetWidth($0), IOSurfaceGetHeight($0)) }
             if metrics != nil {
                 // A simulator surface has no padding to crop, so the content is
@@ -102,14 +111,11 @@ struct SimFramePump: Sendable {
             guard !Task.isCancelled else { return }
             let copyStart = instrumentation?.now() ?? 0
             let copyInterval = instrumentation?.signposter.beginInterval("copy")
-            let bytesCopied = published.surface.withRef { destination in
-                source.withRef { origin in
-                    SurfaceCopy.copy(from: origin, to: destination)
-                }
-            }
+            let copied = Self.timedCopy(from: source, to: published, measuring: instrumentation != nil)
             if let instrumentation, let copyInterval {
                 instrumentation.signposter.endInterval("copy", copyInterval)
-                metrics?.noteCopy(nanoseconds: instrumentation.now() &- copyStart, bytes: bytesCopied)
+                metrics?.noteCopy(nanoseconds: instrumentation.now() &- copyStart, bytes: copied.bytes)
+                metrics?.noteCopyCPU(nanoseconds: copied.cpuNanoseconds)
             }
             guard !Task.isCancelled else { return }
             publish(published)
@@ -136,5 +142,61 @@ struct SimFramePump: Sendable {
         instrumentation.sink.record(metrics.summarize(now: now, leaseHold: leaseHold, poolSlots: poolSlots))
         metrics.startWindow(at: now)
         return metrics
+    }
+}
+
+extension SimFramePump {
+    /// The next copy's deadline, one interval after the previous deadline while
+    /// the pump is keeping its cadence, so a sleep that wakes late doesn't
+    /// stretch every period by its lateness. An update taken at least half an
+    /// interval past its deadline (the pump was idle, or a wake ran very late)
+    /// restarts the cadence from `now`.
+    static func nextDeadline(
+        after previous: ContinuousClock.Instant?,
+        now: ContinuousClock.Instant,
+        interval: Duration
+    ) -> ContinuousClock.Instant {
+        if let previous, now < previous.advanced(by: interval / 2) {
+            return previous.advanced(by: interval)
+        }
+        return now.advanced(by: interval)
+    }
+
+    /// `deadline`, pushed out to half an interval after the surface resolved
+    /// when the resolve itself ran long. The deadline is set before the
+    /// resolve, so a resolve slower than an interval would otherwise leave it
+    /// expired and let the next update's copy follow this one immediately. A
+    /// normal resolve finishes well inside the interval and changes nothing.
+    static func deadline(
+        _ deadline: ContinuousClock.Instant,
+        afterResolvingAt resolvedAt: ContinuousClock.Instant,
+        interval: Duration
+    ) -> ContinuousClock.Instant {
+        max(deadline, resolvedAt.advanced(by: interval / 2))
+    }
+}
+
+private extension SimFramePump {
+    /// Copy `source` into the slot. Reports the bytes moved and, when
+    /// `measuring`, the calling thread's CPU time for comparison with wall
+    /// time. Without measurement, CPU time is zero.
+    static func timedCopy(
+        from source: RetainedSurface,
+        to published: PublishedSurface,
+        measuring: Bool
+    ) -> (bytes: Int, cpuNanoseconds: UInt64) {
+        let start = measuring ? clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) : 0
+        let bytes = published.surface.withRef { destination in
+            source.withRef { origin in
+                SurfaceCopy.copy(from: origin, to: destination)
+            }
+        }
+        guard measuring else { return (bytes, 0) }
+        return (bytes, clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start)
+    }
+
+    static func nanoseconds(_ duration: Duration) -> UInt64 {
+        let (seconds, attoseconds) = duration.components
+        return UInt64(max(0, seconds * 1_000_000_000 + attoseconds / 1_000_000_000))
     }
 }

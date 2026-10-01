@@ -205,6 +205,34 @@ func theSummaryRoundTripsThroughJSON() throws {
     #expect(decoded == summary)
 }
 
+@Test("wake lateness, resolve time, and copy CPU each become a series")
+func pacingAndResolveSeriesAreRecorded() throws {
+    var metrics = populated()
+    metrics.noteWakeLate(nanoseconds: 4_000_000)
+    metrics.noteResolve(nanoseconds: 500_000)
+    metrics.noteCopyCPU(nanoseconds: 1_500_000)
+    let summary = metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
+    #expect(summary.wakeLate?.maxNanoseconds == 4_000_000)
+    #expect(summary.resolve?.sampleCount == 1)
+    #expect(summary.copyCPU?.maxNanoseconds == 1_500_000)
+    let decoded = try JSONDecoder().decode(FrameMetricsSummary.self, from: JSONEncoder().encode(summary))
+    #expect(decoded == summary)
+}
+
+@Test("a window with no samples omits the optional series, and a row without them decodes")
+func absentSeriesAreOmittedAndStillDecode() throws {
+    var metrics = populated()
+    metrics.startWindow(at: 0)
+    let summary = metrics.summarize(now: 1_000_000_000, leaseHold: LatencyHistogram(), poolSlots: .init())
+    #expect(summary.wakeLate == nil)
+    #expect(summary.resolve == nil)
+    #expect(summary.copyCPU == nil)
+    let json = try #require(String(data: JSONEncoder().encode(summary), encoding: .utf8))
+    #expect(!json.contains("wakeLate"))
+    let decoded = try JSONDecoder().decode(FrameMetricsSummary.self, from: Data(json.utf8))
+    #expect(decoded == summary)
+}
+
 @Test("the log line names the geometry, the counts, and both duration series")
 func logLineCarriesTheFieldsAComparisonNeeds() {
     var holds = LatencyHistogram()

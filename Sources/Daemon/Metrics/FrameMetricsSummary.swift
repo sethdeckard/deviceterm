@@ -66,6 +66,12 @@ struct FrameMetricsSummary: Codable, Sendable, Equatable {
     let poolSlotsAllocated: Int
     let poolSlotsFree: Int
     let poolSlotsHighWater: Int
+    /// The copying thread's CPU time per copy; `copy` is wall time.
+    var copyCPU: Series?
+    /// How far past its deadline the pump's pacing sleep woke.
+    var wakeLate: Series?
+    /// Wall time to resolve an invalidation to the source's surface.
+    var resolve: Series?
 
     var framesPerSecond: Double {
         windowNanoseconds == 0 ? 0 : Double(framesPublished) * 1_000_000_000 / Double(windowNanoseconds)

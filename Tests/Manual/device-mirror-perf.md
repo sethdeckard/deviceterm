@@ -121,13 +121,17 @@ never interleave rows into one.
 | `framesDroppedNoSurface`, `framesDroppedExhaustion` | The shortfall between those two. |
 | `bytesMoved` | What the copies actually moved this window, summed and reported by the copy itself. An uncropped copy spans the whole row stride, so this exceeds the visible pixels by the surface's alignment padding. |
 | `geometryChanges` | How many times the geometry above changed within this window. Above zero means the row mixes geometries. |
-| `copy` | The CPU copy: `sampleCount`, `meanNanoseconds`, `p50Nanoseconds`, `p95Nanoseconds`, `maxNanoseconds`. |
+| `copy` | The CPU copy, timed by the wall clock: `sampleCount`, `meanNanoseconds`, `p50Nanoseconds`, `p95Nanoseconds`, `maxNanoseconds`. |
 | `leaseHold` | Grant to release watermark, how long the GUI held a surface. Same five fields. |
+| `copyCPU` | Simulator only. The copying thread's CPU time for the same copies, same five fields. Compare it with `copy` to separate CPU time from elapsed time; a large gap doesn't tell you its cause. |
+| `wakeLate` | Simulator only. How far past its deadline the pump's pacing sleep woke, same five fields. A p95 near 100 ms is what the background clamp produces, but lateness alone doesn't establish it. Check the daemon with `ps -M -p <pid>`; clamped threads show priority 4. |
+| `resolve` | Simulator only. Wall time to read the simulator's current surface after a damage notice, same five fields. |
 | `poolSlotsAllocated`, `poolSlotsFree` | The active epoch's surface-pool slots when the window closed, and how many were unheld. The log line shows them as `slots=` and `free=`. |
 | `poolSlotsHighWater` | The most slots any active epoch of this pool has had allocated at once, shown as `peak=`. |
 
 Quantiles are bucket upper bounds, so read them as "at most". Resolution is
-25%; `maxNanoseconds` is exact.
+25%; `maxNanoseconds` is exact. A row leaves out a simulator-only series that
+recorded no samples in its window.
 
 `leaseHold` starts its clock when the pool grants the hold, which is before the
 surface is sent, so it brackets the publish-to-ack round trip rather than
@@ -135,7 +139,7 @@ isolating it. It is an aggregate distribution and not a per-frame record, so
 there is no way to line an individual round trip up against an Instruments
 timeline.
 
-Report `p50`, `p95`, and `max` for both series. An average hides the tail a
+Report `p50`, `p95`, and `max` for every series. An average hides the tail a
 frame pipeline is judged on.
 
 The `decode-metrics:` lines (physical devices only) come from the decode
