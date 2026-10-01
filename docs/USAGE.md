@@ -484,9 +484,14 @@ The bar appears on its own the first time a pane reports that it folds. The
 fold button in the title row hides it again, which gives the picture back
 the height.
 
-The slider shows the angle you have selected and sends it when you let go.
-It never reads the hinge's own position, so folding from Device Hub or from
-`deviceterm fold` in another tab leaves the slider where it was.
+The slider shows the angle the device is at and sends a new one when you let
+go. It follows the hinge the rest of the time, so a fold from Device Hub or
+from `deviceterm fold` in another tab moves it; while you are dragging it, your
+drag owns it.
+
+While the panel the hinge runs through is the one lit, the picture bends at the
+crease to match the angle and the device frame bends with it. The cover panel
+sits outside the fold, so it stays flat whatever the angle.
 
 On a Simulator pane, the **Device** menu offers buttons, rotation, the hinge
 on a foldable, reboot, shutdown, erase, screenshots, screen recording, app
@@ -764,6 +769,35 @@ environment, but they are not a cross-runtime guarantee.
 
 The measured response curves and environment are recorded in
 [`watchos-checklist.md`](../Tests/Manual/watchos-checklist.md).
+
+### Fold a Two-Panel Device
+
+Use `fold` with a foldable Simulator such as the iPhone Duo:
+
+```sh
+deviceterm fold open
+deviceterm fold book
+deviceterm fold 45
+```
+
+`closed` is shut, `open` is flat, and `book` is part-way open, far enough that
+the inner panel is the one lit. A bare number is an absolute angle in degrees,
+from 0 through 180.
+
+Which panel the guest lights is its own decision, and it depends on how the
+hinge got where it is rather than only on where it is. Opening past roughly
+100 degrees moves it to the inner panel, closing doesn't always move it back at
+the same angle, and a device driven through several positions can stay on the
+inner panel well below that. Read the pane rather than inferring the panel from
+the angle.
+
+When a fold lights a different panel the pane follows it, and its pixel
+dimensions change with it. A script holding coordinates against one panel's
+size should re-read them after a fold.
+
+Only a device with two panels accepts this; anything else refuses with
+`unsupportedOperation`. A device that isn't booted refuses too, rather than
+folding quietly.
 
 ### Select a Device Pane
 
