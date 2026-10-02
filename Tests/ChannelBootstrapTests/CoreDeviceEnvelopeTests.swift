@@ -62,6 +62,31 @@ struct CoreDeviceEnvelopeTests {
         #expect(try CoreDeviceEnvelope.output(from: reply) == .object([("ok", .flag(true))]))
     }
 
+    @Test("a device error surfaces the device's own description")
+    func deviceErrorCarriesDescription() {
+        let error: DeviceObject = .object([
+            ("code", .signed(9_021)),
+            ("userInfo", .object([("NSLocalizedDescription", .text("Remote control requires iOS 27.0 or later."))])),
+            ("domain", .text("com.apple.dt.CoreDeviceError"))
+        ])
+        let reply: DeviceObject = .object([("CoreDevice.error", error)])
+        #expect(throws: DeviceRefusal(reason: "Remote control requires iOS 27.0 or later.")) {
+            _ = try CoreDeviceEnvelope.output(from: reply)
+        }
+    }
+
+    @Test("a device error with no description falls back to its domain and code")
+    func deviceErrorWithoutDescription() {
+        let error: DeviceObject = .object([
+            ("code", .signed(9_021)),
+            ("domain", .text("com.apple.dt.CoreDeviceError"))
+        ])
+        let reply: DeviceObject = .object([("CoreDevice.error", error)])
+        #expect(throws: DeviceRefusal(reason: "com.apple.dt.CoreDeviceError 9021")) {
+            _ = try CoreDeviceEnvelope.output(from: reply)
+        }
+    }
+
     @Test("output extraction throws when the reply has no output")
     func outputMissingThrows() {
         #expect(throws: CoreDeviceEnvelope.InvokeError.self) {

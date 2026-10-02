@@ -3337,10 +3337,11 @@ flowchart TD
   service identifiers, the `ChannelRole`→service map, envelope keys, and framing
   constants. Its package-facing surface is the `ChannelBroker`, `ChannelRole`,
   typed channels, the neutral ordered `DeviceObject` payload, the device
-  identity, and the typed `ChannelBrokerError`/`WireCompatibilityError`;
-  a message *selector* is an opaque `String` the consuming target supplies
-  to
-  `DeviceChannel.invoke`. The daemon reasons about **roles**, never Apple service
+  identity, and the typed `ChannelBrokerError`/`WireCompatibilityError`/
+  `DeviceRefusal`. A message *selector* is an opaque `String` the consuming
+  target supplies to `DeviceChannel.invoke`. The one exception is the read-only
+  feature `ChannelRole.identifyingFeature` names, which bootstrap uses to find
+  the display service. The daemon reasons about **roles**, never Apple service
   names.
 - `InteractionRelay` turns typed interaction intents (touch, keyboard, buttons,
   orientation) into device reports, keeping the HID layouts, gesture geometry,
@@ -3356,6 +3357,41 @@ shape fails with a typed compatibility error instead of sending a guessed
 request. The video receiver discards an access unit with RTP loss, requests a
 keyframe, and only resumes decoding at a complete keyframe so damaged references
 cannot persist.
+
+**Service ports come from the directory, but a single-peer device moves
+them.** Bootstrap sweeps the tunnel's open ports and handshakes them until one
+answers with the service directory, which lists every service's port. iOS 27.2
+(measured on beta 24B5089g) serves that directory to one peer per host. macOS's
+`remoted` normally holds that session, so the bootstrap handshake displaces it.
+`remoted` reconnects within about a second, displacing bootstrap in turn, and
+every port the listing named closes. iOS 26.7 serves several peers and keeps
+its ports.
+
+`LivePortResolver` recovers the live ports from the listing's layout, because
+the device allocates each peer's service ports as one block in the same order.
+It searches blocks of consecutive open ports largest-first, tolerating gaps of
+up to two missing ports, for the display service: a read-only status call only
+that service answers. It then shifts every listed role by the same offset and
+confirms the anchor still answers. Ports outside candidate blocks receive no
+feature probes, because they include directory endpoints. A device whose listed
+ports still accept connections after the settle delay keeps them as listed.
+
+Attaching a device this way briefly disconnects `remoted`, so an Xcode or
+`devicectl` operation against the same device at that moment can fail.
+Bootstrap never opens a session on the directory port after its one handshake,
+because any session there displaces the other peer again; in one measurement it
+also reset the tunnel.
+
+With default timings and a listed mirror role, resolution adds at least 1.75
+seconds, including when the listed ports remain usable. If no live
+block matches, bootstrap returns the listing unchanged and the failure surfaces
+when a channel opens.
+
+**A refused stream start reports the device's reason.** When the device
+answers a feature call with an error, `DeviceRefusal` carries its localized
+description, and the mirror's give-up message includes it. With Xcode 27's disk
+image, an iOS 26.7 iPhone 11 Pro refuses with "Remote control requires iOS 27.0
+or later on this device."
 
 **Device reachability is distinct from surface leasing.** `MirrorPipeline` ends
 at decoded frames and owns none of the surface machinery: the daemon

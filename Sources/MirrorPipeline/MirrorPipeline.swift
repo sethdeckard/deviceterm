@@ -110,6 +110,10 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
     private var videoSSRC: UInt32?
     private var lastReceiverReportNanos: UInt64 = 0
     private var lastKeyframeRequestNanos: UInt64 = 0
+    /// The device's own reason for refusing the most recent stream start, kept
+    /// so a give-up can say why instead of only that sessions came back empty.
+    /// Cleared once a session produces frames.
+    private var lastRefusal: String?
     private let keyframeThrottleNanos: UInt64 = 250_000_000
 
     private var isRunning: Bool {
@@ -358,6 +362,7 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
             history.record(framesProduced: produced)
             if !isRunning || Task.isCancelled { break }
             emptyRestarts = produced > 0 ? 0 : emptyRestarts + 1
+            if produced > 0 { lastRefusal = nil }
             guard emptyRestarts < emptyRestartLimit else {
                 switch history.giveUpTermination {
                 case .disconnected:
@@ -365,7 +370,8 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
                     disconnect()
 
                 default:
-                    fail("mirror gave up after \(emptyRestartLimit) consecutive empty sessions")
+                    let base = "mirror gave up after \(emptyRestartLimit) consecutive empty sessions"
+                    fail(lastRefusal.map { "\(base): \($0)" } ?? base)
                 }
                 return
             }
@@ -428,6 +434,10 @@ package final class MirrorPipeline: DecodedFrameFeed, @unchecked Sendable {
                 if Task.isCancelled { break }
                 handle(datagram, ingress: ingress)
             }
+        } catch let refusal as DeviceRefusal {
+            // The device answered the start with an error: an empty session
+            // whose reason is worth reporting if the run gives up.
+            lastRefusal = refusal.reason
         } catch {
             // Couldn't start (or the channel errored): an empty session.
         }

@@ -59,9 +59,19 @@ enum CoreDeviceEnvelope {
         )
     }
 
-    /// Extract the invoke result from a reply, or throw when it is absent.
+    /// Extract the invoke result from a reply. Throws `DeviceRefusal` when the
+    /// device answered with an error, and `InvokeError.missingOutput` when the
+    /// reply carries neither.
     static func output(from reply: DeviceObject) throws -> DeviceObject {
-        guard let output = reply["CoreDevice.output"] else { throw InvokeError.missingOutput }
-        return output
+        if let output = reply["CoreDevice.output"] { return output }
+        if let error = reply["CoreDevice.error"] {
+            if let message = error["userInfo"]?["NSLocalizedDescription"]?.text {
+                throw DeviceRefusal(reason: message)
+            }
+            let domain = error["domain"]?.text ?? "device error"
+            let code = error["code"]?.signed.map { " \($0)" } ?? ""
+            throw DeviceRefusal(reason: domain + code)
+        }
+        throw InvokeError.missingOutput
     }
 }
