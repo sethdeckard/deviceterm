@@ -9,31 +9,51 @@ import Foundation
 /// sweeps the device's open ports and handshake-probes them concurrently; the
 /// first that answers with a services map is the directory. That single
 /// handshake yields every service's port plus the device identity, which is
-/// enough to open any role on demand.
+/// enough to open any role on demand, once `LivePortResolver` has matched the
+/// listed ports to the ones the device is serving.
 package enum ChannelBroker {
+    /// One successful directory handshake: the roles it listed, where the
+    /// directory itself answered, and the lowest service port in the listing.
+    struct Listing: Sendable {
+        let channels: DeviceChannels
+        let directoryPort: UInt16
+        let lowestListedPort: UInt16
+    }
+
     /// Discover the device's directory over `route` and return its channels.
-    package static func bootstrap(route: DeviceRoute) async throws -> DeviceChannels {
-        let ports = await PortSweep.openPorts(on: route.deviceAddress)
-        // Surface cancellation as `CancellationError`, not as a directory failure:
-        // a cancelled attach must not read as "device isn't serving its directory".
-        try Task.checkCancellation()
-        guard let channels = await probeForDirectory(route.deviceAddress, ports) else {
+    ///
+    /// Discovery is retried briefly: a handshake that lands while another host
+    /// peer is reconnecting to the directory can be dropped before it replies.
+    package static func bootstrap(
+        route: DeviceRoute,
+        discoveryAttempts: Int = 3,
+        retryDelay: Duration = .seconds(1)
+    ) async throws -> DeviceChannels {
+        for attempt in 1...max(1, discoveryAttempts) {
+            let ports = await PortSweep.openPorts(on: route.deviceAddress)
+            // Surface cancellation as `CancellationError`, not as a directory
+            // failure: a cancelled attach must not read as "device isn't serving
+            // its directory".
             try Task.checkCancellation()
-            throw ChannelBrokerError.directoryUnavailable
+            if let listing = await probeForDirectory(route.deviceAddress, ports) {
+                // A handshake can succeed even after cancellation (the probe's
+                // socket ops aren't cancellation-aware); don't hand back
+                // channels for a cancelled attach.
+                try Task.checkCancellation()
+                return try await LivePortResolver.resolve(listing, deviceAddress: route.deviceAddress)
+            }
+            try Task.checkCancellation()
+            if attempt < discoveryAttempts { try await Task.sleep(for: retryDelay) }
         }
-        // A handshake can succeed even after cancellation (the probe's socket ops
-        // aren't cancellation-aware); don't hand back channels for a cancelled
-        // attach.
-        try Task.checkCancellation()
-        return channels
+        throw ChannelBrokerError.directoryUnavailable
     }
 
     /// Concurrent first-match handshake probe over `ports`. The directory is one
     /// specific port among many; probing each serially with a handshake and
     /// timeout would be too slow, so a bounded task window races them and the
     /// first success cancels the rest.
-    private static func probeForDirectory(_ address: String, _ ports: [UInt16]) async -> DeviceChannels? {
-        await withTaskGroup(of: DeviceChannels?.self) { group in
+    private static func probeForDirectory(_ address: String, _ ports: [UInt16]) async -> Listing? {
+        await withTaskGroup(of: Listing?.self) { group in
             let window = 16
             var next = 0
             while next < ports.count, next < window, !Task.isCancelled {
@@ -42,9 +62,9 @@ package enum ChannelBroker {
                 next += 1
             }
             while let result = await group.next() {
-                if let channels = result {
+                if let listing = result {
                     group.cancelAll()
-                    return channels
+                    return listing
                 }
                 // Stop scheduling once cancelled so a cancelled attach doesn't keep
                 // probing; the outer `bootstrap` surfaces the `CancellationError`.
@@ -60,12 +80,15 @@ package enum ChannelBroker {
 
     /// Handshake one port and parse a directory from a reply that carries a
     /// services map. Any other reply or a failure means it isn't the directory.
-    private static func handshakeDirectory(_ address: String, _ port: UInt16) async -> DeviceChannels? {
+    private static func handshakeDirectory(_ address: String, _ port: UInt16) async -> Listing? {
         let channel = DeviceChannel(host: address, port: port, readTimeout: 3)
         defer { channel.close() }
         do {
             try await channel.connect(timeout: 1)
-            return parseDirectory(try await channel.requestServiceDirectory(), deviceAddress: address)
+            let reply = try await channel.requestServiceDirectory()
+            guard let channels = parseDirectory(reply, deviceAddress: address),
+                let lowest = listedPorts(in: reply).min() else { return nil }
+            return Listing(channels: channels, directoryPort: port, lowestListedPort: lowest)
         } catch {
             return nil
         }
@@ -97,6 +120,14 @@ package enum ChannelBroker {
             marketingName: properties?["ProductTypeDescForUserVisibility"]?.text
         )
         return DeviceChannels(deviceAddress: deviceAddress, ports: ports, identity: identity)
+    }
+
+    /// Every service port a directory reply lists, including services that back
+    /// no role. The device allocates them as one block, so the lowest one is
+    /// the origin the roles' offsets are measured from.
+    static func listedPorts(in reply: DeviceObject) -> [UInt16] {
+        guard case let .fields(serviceEntries)? = reply["Services"] else { return [] }
+        return serviceEntries.compactMap { portNumber($0.value["Port"]) }
     }
 
     /// Coerce a directory `Port` to `UInt16` however it was encoded. Observed as

@@ -13,8 +13,9 @@ import Foundation
 /// Three ways to talk to a service: `emit` fires a report with no reply
 /// (the streaming input path), `request` sends a payload and awaits the reply,
 /// and `invoke` wraps a CoreDevice feature call (request + reply, unwrapping the
-/// result). Message selectors are opaque strings supplied by the caller; this
-/// target never names a device feature itself.
+/// result). Message selectors are opaque strings supplied by the caller; the
+/// only feature this target names is the one `ChannelRole` uses to identify a
+/// service during bootstrap.
 package actor DeviceChannel {
     package enum ChannelError: Error, Sendable {
         case streamReset(UInt32)

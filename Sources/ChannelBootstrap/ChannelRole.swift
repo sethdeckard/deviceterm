@@ -3,8 +3,9 @@
 /// roles, never Apple service identifiers.
 ///
 /// Each role maps privately to the device service that fulfils it (see
-/// `serviceIdentifier`); that mapping is the only place the identifiers are
-/// used, and it never crosses the package boundary. `description` is the
+/// `serviceIdentifier`, and `identifyingFeature` for telling that service apart
+/// by behaviour); that mapping is the only place the identifiers are used, and
+/// it never crosses the package boundary. `description` is the
 /// human-facing name the daemon surfaces when a required role is absent.
 package enum ChannelRole: Sendable, Hashable, CaseIterable {
     /// The display mirror (decoded video frames).
@@ -31,6 +32,19 @@ package enum ChannelRole: Sendable, Hashable, CaseIterable {
 
         case .deviceControl:
             "com.apple.coredevice.devicecontrol"
+        }
+    }
+
+    /// A read-only feature that only this role's service answers with output,
+    /// so the service can be told apart from its neighbours without a directory.
+    /// Nil for roles whose services drop any message they can't act on.
+    var identifyingFeature: String? {
+        switch self {
+        case .mirror:
+            "com.apple.coredevice.feature.getmediastreamserverstatus"
+
+        case .humanInput, .hardwareControls, .deviceControl:
+            nil
         }
     }
 

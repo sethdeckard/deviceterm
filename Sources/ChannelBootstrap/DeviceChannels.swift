@@ -13,6 +13,12 @@ package struct DeviceChannels: Sendable {
     private let deviceAddress: String
     private let ports: [ChannelRole: UInt16]
 
+    /// Every role's port, for checking a listing against the ports the device
+    /// is actually serving.
+    var servicePorts: [UInt16] {
+        Array(ports.values)
+    }
+
     /// Build from the roles a device vends, each mapped to its port. Callers name
     /// roles, never device-service identifiers.
     package init(deviceAddress: String, ports: [ChannelRole: UInt16], identity: DeviceIdentity) {
@@ -24,6 +30,22 @@ package struct DeviceChannels: Sendable {
     /// Whether the device vends the service backing `role`.
     package func supports(_ role: ChannelRole) -> Bool {
         ports[role] != nil
+    }
+
+    /// The port serving `role`, or nil when the device doesn't vend it.
+    func port(for role: ChannelRole) -> UInt16? {
+        ports[role]
+    }
+
+    /// The same roles with every port moved by `offset`, or nil when a moved
+    /// port would leave the valid port range.
+    func shifted(by offset: Int) -> DeviceChannels? {
+        var moved: [ChannelRole: UInt16] = [:]
+        for (role, port) in ports {
+            guard let target = UInt16(exactly: Int(port) + offset) else { return nil }
+            moved[role] = target
+        }
+        return DeviceChannels(deviceAddress: deviceAddress, ports: moved, identity: identity)
     }
 
     /// Open a fresh channel for `role`, throwing if the device doesn't vend it

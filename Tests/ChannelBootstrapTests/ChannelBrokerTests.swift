@@ -60,7 +60,65 @@ struct ChannelBrokerTests {
         }
     }
 
+    @Test("listed ports include services that back no role")
+    func listedPortsIncludeUnmappedServices() {
+        let reply: DeviceObject = .object([
+            ("Services", .object([
+                ("com.apple.coredevice.displayservice", .object([("Port", .text("51404"))])),
+                ("com.example.unmapped", .object([("Port", .unsigned(51_390))]))
+            ]))
+        ])
+        #expect(ChannelBroker.listedPorts(in: reply).sorted() == [51_390, 51_404])
+    }
+
+    @Test("shifting moves every role by the same offset")
+    func shiftMovesEveryRole() throws {
+        let moved = try #require(parseDirectory()?.shifted(by: 170))
+        #expect(moved.port(for: .humanInput) == 51_573)
+        #expect(moved.port(for: .mirror) == 51_574)
+        #expect(moved.port(for: .hardwareControls) == 51_575)
+        #expect(moved.port(for: .deviceControl) == nil)
+        #expect(moved.identity.uniqueDeviceID == "UDID-123")
+    }
+
+    @Test("a shift that leaves the port range yields nothing", arguments: [-60_000, 20_000])
+    func shiftOutOfRangeRejected(offset: Int) throws {
+        let channels = try #require(parseDirectory())
+        #expect(channels.shifted(by: offset) == nil)
+    }
+
     private func parseDirectory() -> DeviceChannels? {
         ChannelBroker.parseDirectory(directoryReply(), deviceAddress: "fd00::1")
+    }
+}
+
+/// Locating the device's live service block among its open ports.
+struct LivePortResolverTests {
+    private static func run(_ start: UInt16, _ count: Int) -> [UInt16] {
+        (0..<count).map { start + UInt16($0) }
+    }
+
+    @Test("scattered ports outside the service block are never candidates")
+    func dropsScatteredPorts() {
+        let open = [49_152, 55_655, 55_703, 55_704, 61_770, 62_078] + Self.run(62_100, 85)
+        #expect(LivePortResolver.serviceBlocks(open) == [Self.run(62_100, 85)])
+    }
+
+    @Test("a block split by a missed connect stays one block")
+    func mergesSmallGap() {
+        let block = Self.run(62_000, 40) + Self.run(62_042, 45)
+        #expect(LivePortResolver.serviceBlocks(block) == [block])
+    }
+
+    @Test("a wider gap separates blocks, and the larger one is searched first")
+    func ordersBlocksBySize() {
+        let small = Self.run(50_000, 10)
+        let large = Self.run(62_000, 85)
+        #expect(LivePortResolver.serviceBlocks(small + large) == [large, small])
+    }
+
+    @Test("no open ports yields no blocks")
+    func emptySweep() {
+        #expect(LivePortResolver.serviceBlocks([]).isEmpty)
     }
 }
