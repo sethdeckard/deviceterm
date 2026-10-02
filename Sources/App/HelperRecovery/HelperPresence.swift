@@ -17,10 +17,22 @@ import Foundation
 enum HelperPresence: Equatable {
     case running
     case notRunning
-    /// The scan couldn't complete, or a live process's executable couldn't be
-    /// read. Treat it as possibly running: an ambiguous answer must never
-    /// license a rebuild.
+    /// The scan couldn't complete, or a live process could be identified by
+    /// neither path nor name. Treat it as possibly running: an ambiguous answer
+    /// must never license a rebuild.
     case unknown
+
+    /// What the scan could learn about one live process.
+    enum Sighting: Equatable {
+        /// Its executable's path.
+        case path(String)
+        /// Only its name, as `proc_name` reports it: the executable's name at
+        /// exec, cut to 31 bytes. A process whose binary was deleted or
+        /// replaced after launch has no readable path but keeps its name.
+        case name(String)
+        /// Neither.
+        case unreadable
+    }
 
     /// The helper's executable name, the last component of the agent plist's
     /// `BundleProgram`, or nil when the plist doesn't carry one.
@@ -40,17 +52,19 @@ enum HelperPresence: Equatable {
             proc_listpids(UInt32(PROC_UID_ONLY), uid, buffer, bytes)
         }
         guard let pids else { return .unknown }
-        var paths: [String?] = []
+        var sightings: [Sighting] = []
         for pid in pids {
             if let path = executablePath(of: pid) {
-                paths.append(path)
+                sightings.append(.path(path))
+            } else if let name = name(of: pid) {
+                sightings.append(.name(name))
             } else if kill(pid, 0) == 0 || errno != ESRCH {
                 // Alive, but unreadable. Skip processes that exited after
                 // enumeration; they are no longer running.
-                paths.append(nil)
+                sightings.append(.unreadable)
             }
         }
-        return classify(executablePaths: paths, executableName: executableName)
+        return classify(sightings, executableName: executableName)
     }
 
     /// The full list `list` produces, or nil when one couldn't be had.
@@ -80,18 +94,44 @@ enum HelperPresence: Equatable {
         return nil
     }
 
-    /// `executablePaths` holds one entry per live process, nil where its path
-    /// couldn't be read. A match anywhere means running; otherwise an unread
-    /// path leaves the answer unknown.
-    static func classify(executablePaths: [String?], executableName: String) -> Self {
-        if executablePaths.contains(where: { $0.map { ($0 as NSString).lastPathComponent } == executableName }) {
+    /// One sighting per live process. A match anywhere means running;
+    /// otherwise an unreadable process leaves the answer unknown.
+    static func classify(_ sightings: [Sighting], executableName: String) -> Self {
+        if sightings.contains(where: { isHelper($0, executableName: executableName) }) {
             return .running
         }
-        return executablePaths.contains(where: { $0 == nil }) ? .unknown : .notRunning
+        return sightings.contains(.unreadable) ? .unknown : .notRunning
+    }
+
+    /// A name matches when it is the executable's name, or a cut-short prefix
+    /// of one too long to fit.
+    static func isHelper(_ sighting: Sighting, executableName: String) -> Bool {
+        switch sighting {
+        case let .path(path):
+            return (path as NSString).lastPathComponent == executableName
+
+        case let .name(name):
+            return name == executableName
+                || (name.utf8.count >= nameLimit && executableName.hasPrefix(name))
+
+        case .unreadable:
+            return false
+        }
     }
 }
 
 private extension HelperPresence {
+    /// The longest name `proc_name` reports: the kernel's `2 * MAXCOMLEN`
+    /// byte name field, less its terminator.
+    static var nameLimit: Int { 2 * Int(MAXCOMLEN) - 1 }
+
+    static func name(of pid: pid_t) -> String? {
+        var buffer = [UInt8](repeating: 0, count: 2 * Int(MAXCOMLEN) + 1)
+        let length = proc_name(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(bytes: buffer.prefix(Int(length)), encoding: .utf8)
+    }
+
     static func executablePath(of pid: pid_t) -> String? {
         // `PROC_PIDPATHINFO_MAXSIZE`, which doesn't import into Swift.
         var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))

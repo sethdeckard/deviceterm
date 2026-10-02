@@ -11,16 +11,29 @@ import Testing
 /// as not running, because that answer licenses rebuilding the registration.
 /// Anything ambiguous must read as possibly running.
 struct HelperPresenceTests {
-    @Test("the scan's paths decide presence", arguments: [
-        ([String?](), HelperPresence.notRunning),
-        (["/bin/zsh", "/usr/bin/login"], .notRunning),
-        (["/bin/zsh", "/A/B.app/Contents/MacOS/deviceterm-daemon"], .running),
-        (["/bin/zsh", nil], .unknown),
-        ([nil, "/X/deviceterm-daemon"], .running),
-        (["/bin/deviceterm-daemon-old"], .notRunning)
+    @Test("the scan's sightings decide presence", arguments: [
+        ([HelperPresence.Sighting](), HelperPresence.notRunning),
+        ([.path("/bin/zsh"), .path("/usr/bin/login")], .notRunning),
+        ([.path("/bin/zsh"), .path("/A/B.app/Contents/MacOS/deviceterm-daemon")], .running),
+        ([.path("/bin/zsh"), .unreadable], .unknown),
+        ([.unreadable, .path("/X/deviceterm-daemon")], .running),
+        ([.path("/bin/deviceterm-daemon-old")], .notRunning),
+        // A binary replaced after launch leaves only the name.
+        ([.name("codex"), .name("SourceKitService")], .notRunning),
+        ([.name("codex"), .name("deviceterm-daemon")], .running),
+        ([.name("deviceterm-daemo")], .notRunning)
     ])
-    func classifiesTheScan(paths: [String?], expected: HelperPresence) {
-        #expect(HelperPresence.classify(executablePaths: paths, executableName: "deviceterm-daemon") == expected)
+    func classifiesTheScan(sightings: [HelperPresence.Sighting], expected: HelperPresence) {
+        #expect(HelperPresence.classify(sightings, executableName: "deviceterm-daemon") == expected)
+    }
+
+    @Test
+    func aNameCutShortAtTheLimitStillMatches() {
+        // `proc_name` returns at most 31 bytes for a longer executable name.
+        let long = String(repeating: "h", count: 40)
+        let cut = String(long.prefix(31))
+        #expect(HelperPresence.isHelper(.name(cut), executableName: long))
+        #expect(!HelperPresence.isHelper(.name(String(cut.dropLast())), executableName: long))
     }
 
     @Test
