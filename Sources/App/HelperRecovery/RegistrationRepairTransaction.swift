@@ -44,7 +44,7 @@ struct RegistrationRepairTransaction {
         do {
             try markUnderway()
         } catch {
-            throw RegistrationRepairFailure(unregistered: false, underlying: error)
+            throw RegistrationRepairFailure(unregistered: false, underlying: error, teardownAttempted: false)
         }
         do {
             try await unregister()

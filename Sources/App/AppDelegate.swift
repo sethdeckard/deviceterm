@@ -464,7 +464,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                         presentUpdateRestart(stall)
                         return
                     }
-                    try? DaemonRegistration.registerOnFirstLaunch()
+                    if let stall = await refreshRegistration(holding: startupRepairLock) {
+                        presentUpdateRestart(stall)
+                        return
+                    }
                     // Drive inventory re-supply on every reconnect (a daemon-only
                     // restart while the GUI stays alive) through the coordinator.
                     // Skipped under `--smoke`: the UDS fallback can't carry the
@@ -836,7 +839,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             )
         )
         switch await reconciler.reconcile() {
-        case .nothingToDo:
+        case .nothingToDo, .untouched:
             return nil
 
         case .reconciled:
@@ -845,6 +848,127 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         case let .surrender(situation):
             registrationLog.error("registration repair could not be completed")
+            return situation
+        }
+    }
+
+    /// Register the helper, or rebuild a registration whose plist has changed,
+    /// returning a situation to surface if a rebuild can't be completed.
+    ///
+    /// launchd keeps the scheduling policy a job was registered with, so a
+    /// changed plist reaches an existing install only through a rebuild. The
+    /// rebuild runs only when no helper process is running, because
+    /// unregistering a running one discards its live sessions and panes,
+    /// another checkout's included. With a helper running it waits for a later launch. Every
+    /// outcome short of a stalled rebuild, or one that tore the old
+    /// registration down, falls through to the ordinary connect.
+    private func refreshRegistration(
+        holding lock: RegistrationRepairLock.Handle?
+    ) async -> UpdateRestartSituation? {
+        guard let plist = RegistrationFingerprintStore.embeddedPlist(named: DaemonRegistration.plistName) else {
+            registrationLog.error("the bundle carries no LaunchAgent plist; registering without a fingerprint")
+            try? DaemonRegistration.registerOnFirstLaunch()
+            return nil
+        }
+        let current = RegistrationFingerprintStore.fingerprint(of: plist)
+        let fingerprints: RegistrationFingerprintStore
+        let recorded: String?
+        do {
+            fingerprints = try RegistrationFingerprintStore.standard()
+            recorded = try fingerprints.recorded()
+        } catch {
+            registrationLog.error(
+                "could not read the registration fingerprint: \(ErrorText.describing(error), privacy: .public)"
+            )
+            try? DaemonRegistration.registerOnFirstLaunch()
+            return nil
+        }
+        let decision = RegistrationRefreshDecision.evaluate(
+            status: DaemonRegistration.status,
+            recorded: recorded,
+            current: current,
+            presence: {
+                guard let name = HelperPresence.executableName(fromAgentPlist: plist) else { return .unknown }
+                return HelperPresence.probe(executableName: name)
+            }
+        )
+        switch decision {
+        case .upToDate:
+            return nil
+
+        case .register:
+            do {
+                try DaemonRegistration.registerOnFirstLaunch()
+                try fingerprints.record(current)
+            } catch {
+                registrationLog.error(
+                    "registering the helper failed: \(ErrorText.describing(error), privacy: .public)"
+                )
+            }
+            return nil
+
+        case .deferred:
+            registrationLog.notice(
+                "the helper's registration predates its plist and a helper may be running; leaving it"
+            )
+            return nil
+
+        case .repair:
+            return await rebuildRegistration(recording: current, in: fingerprints, holding: lock)
+        }
+    }
+
+    /// Rebuild a stale registration through the bounded runner an interrupted
+    /// repair's replay uses, so a stuck `unregister()` can't park the launch.
+    private func rebuildRegistration(
+        recording fingerprint: String,
+        in fingerprints: RegistrationFingerprintStore,
+        holding lock: RegistrationRepairLock.Handle?
+    ) async -> UpdateRestartSituation? {
+        let store: RegistrationRepairStore
+        do {
+            store = try RegistrationRepairStore.standard()
+        } catch {
+            // Without its marker a repair can't run safely; keep the registration
+            // that stands and try again on a later launch.
+            registrationLog.error(
+                "could not resolve the registration-repair marker: \(ErrorText.describing(error), privacy: .public)"
+            )
+            return nil
+        }
+        registrationLog.notice("rebuilding the helper's registration: its plist changed and no helper is running")
+        let reconciler = InterruptedRepairReconciler(
+            InterruptedRepairReconciler.Dependencies(
+                heldLock: lock,
+                // `rebuild()` never reads the marker; the repair writes it.
+                isRepairUnderway: { false },
+                repair: { held in
+                    try await DaemonRegistration.repair(store: store, holding: held)
+                },
+                sleep: { try? await Task.sleep(nanoseconds: $0) }
+            )
+        )
+        switch await reconciler.rebuild() {
+        case .reconciled:
+            do {
+                try fingerprints.record(fingerprint)
+            } catch {
+                registrationLog.error(
+                    """
+                    rebuilt the registration but could not record its fingerprint: \
+                    \(ErrorText.describing(error), privacy: .public)
+                    """
+                )
+            }
+            registrationLog.notice("rebuilt the helper's registration")
+            return nil
+
+        case .nothingToDo, .untouched:
+            registrationLog.error("the registration rebuild failed before its teardown; keeping the old registration")
+            return nil
+
+        case let .surrender(situation):
+            registrationLog.error("the registration rebuild could not be completed")
             return situation
         }
     }

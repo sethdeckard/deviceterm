@@ -29,6 +29,6 @@
     </dict>
 
     <key>ProcessType</key>
-    <string>Adaptive</string>
+    <string>Interactive</string>
 </dict>
 </plist>

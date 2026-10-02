@@ -61,6 +61,10 @@ final class InterruptedRepairReconciler {
         case nothingToDo
         /// The replay finished and the registration is whole.
         case reconciled
+        /// A fresh rebuild stopped before attempting its teardown, so the
+        /// registration it set out to replace still stands. Only `rebuild()`
+        /// returns this.
+        case untouched
         /// The registration is not known to be in a working state, so the launch
         /// should say so rather than register or connect. Every failed replay
         /// ends here, whatever stage it reached.
@@ -73,6 +77,18 @@ final class InterruptedRepairReconciler {
         case failed(RegistrationRepairFailure)
     }
 
+    /// The launch owns the lock, so arriving without one is a wiring error
+    /// rather than contention. Fail closed.
+    private static var lockNotHeld: Outcome {
+        let reason = "the startup repair lock is not held"
+        return .surrender(
+            UpdateRestartSituation(
+                cause: .registrationStateUnknown(reason),
+                detail: reason
+            )
+        )
+    }
+
     private let deps: Dependencies
     /// Where the unstructured replay leaves its result. Nil while it is still
     /// running, which is what the wait polls.
@@ -83,17 +99,7 @@ final class InterruptedRepairReconciler {
     }
 
     func reconcile() async -> Outcome {
-        guard let handle = deps.heldLock else {
-            // The launch owns the lock, so arriving without one is a wiring
-            // error rather than contention. Fail closed.
-            let reason = "the startup repair lock is not held"
-            return .surrender(
-                UpdateRestartSituation(
-                    cause: .registrationStateUnknown(reason),
-                    detail: reason
-                )
-            )
-        }
+        guard let handle = deps.heldLock else { return Self.lockNotHeld }
 
         let underway: Bool
         do {
@@ -107,13 +113,26 @@ final class InterruptedRepairReconciler {
         return await replay(holding: handle)
     }
 
+    /// Run a fresh repair, for a launch that found its registration stale with
+    /// no helper running, bounded and surrendered exactly as a replay is.
+    ///
+    /// One failure reads differently from a replay's. A fresh attempt that
+    /// stopped before attempting its teardown touched nothing, because no
+    /// earlier attempt is in play, so the old registration still stands and the
+    /// launch can carry on with it. An unregister that threw may have changed
+    /// the registration, so that surrenders as a replay's failure would.
+    func rebuild() async -> Outcome {
+        guard let handle = deps.heldLock else { return Self.lockNotHeld }
+        return await replay(holding: handle, fresh: true)
+    }
+
     /// Replay the whole repair under the lock the launch is holding.
     ///
     /// The handle is passed to the repair rather than released here. The launch
     /// holds it through registration and the version handshake, so a replay that
     /// is still running keeps every other process out for that whole window,
     /// which is what stops one of them registering over an unfinished teardown.
-    private func replay(holding handle: RegistrationRepairLock.Handle) async -> Outcome {
+    private func replay(holding handle: RegistrationRepairLock.Handle, fresh: Bool = false) async -> Outcome {
         // Unstructured on purpose: it must outlive this function and its
         // cancellation, so the register leg still runs after startup has stopped
         // waiting. It never touches UI.
@@ -151,6 +170,21 @@ final class InterruptedRepairReconciler {
         switch finished {
         case .completed:
             return .reconciled
+
+        case let .failed(failure) where fresh && !failure.teardownAttempted:
+            return .untouched
+
+        case let .failed(failure) where fresh && !failure.unregistered:
+            // The rebuild's own unregister threw, and it may have changed the
+            // registration before it did.
+            return .surrender(
+                UpdateRestartSituation(
+                    cause: .registrationStateUnknown(
+                        "the rebuild's unregister failed, so the registration state is unknown"
+                    ),
+                    detail: "\(failure)"
+                )
+            )
 
         case let .failed(failure):
             // Any failed replay blocks the launch. The stage explains what

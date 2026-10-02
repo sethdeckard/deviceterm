@@ -140,9 +140,13 @@ The daemon has no foreground UI. Two transports vend the same
   LaunchAgent plist via `SMAppService.agent(plistName:)`; launchd holds the
   listener, demand-launches the daemon on the GUI's first send, and applies the
   plist's `KeepAlive={SuccessfulExit:false}` policy to relaunch on abnormal
-  exit only. `ProcessType=Adaptive` lets launchd move the daemon between
-  background and interactive scheduling as XPC messages arrive over the
-  declared mach service.
+  exit only. `ProcessType=Interactive` keeps launchd from throttling the
+  daemon. Under `Adaptive`, launchd runs it at background priority whenever no
+  XPC message is boosting it, and much of a mirror's work (the frame pump,
+  driven by CoreSimulator's damage callbacks) doesn't run inside one. Clamped,
+  the pump's timers fire late, its copies slow down, and swipes lose touch
+  steps. The cost is that an idle daemon isn't throttled either, which idle
+  exit bounds.
 - **UDS** (Unix domain socket): the CLI and shim path. Each terminal pane's
   shell env carries `DEVICETERM_DAEMON_SOCK` pointing at the socket the daemon
   vends alongside the mach service.
@@ -154,11 +158,22 @@ LaunchAgent declares only the mach service, so a CLI or shim call finds
 the daemon only because an in-tab caller implies a live GUI that already
 brought it up. Outside a tab the CLI reports it cannot connect.
 
-An ordinary launch does not rebuild an enabled registration. Re-registering
-would stop the helper and discard its in-memory sessions and panes, including
-work another checkout may still be driving. New registrations and any later
-repair that rebuilds the registration read the current plist and pick up its
-scheduling policy.
+An ordinary launch doesn't rebuild an enabled registration while a helper is
+running. Re-registering would stop the helper and discard its in-memory
+sessions and panes, including work another checkout may still be driving.
+New registrations and any later repair read the current plist and pick up
+its scheduling policy.
+
+The exception is a stale registration nobody is using. The registration
+refresh path attempts to record the embedded plist's fingerprint after
+successful registration or rebuild. When a launch finds the plist changed and
+no helper process running, it rebuilds the registration, because there's
+nothing to discard. Rebuilding re-shows macOS's "Background Activity"
+notification.
+
+If a helper is running, the rebuild waits for a later launch, so an
+upgraded install can keep its old scheduling policy until it finds the
+daemon idle-exited.
 
 **Stay alive while:** any GUI XPC peer connected OR any CLI UDS peer
 connected OR a non-terminal pane exists whose owner GUI is still alive (a

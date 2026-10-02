@@ -340,4 +340,80 @@ struct InterruptedRepairReconcilerTests {
 
         #expect(harness.repairCalls == 1)
     }
+
+    @Test
+    func aCompletedRebuildReconcilesWithoutReadingTheMarker() async {
+        // A fresh rebuild writes its own marker, so it doesn't consult one.
+        let harness = Harness()
+        harness.underway = false
+
+        #expect(await makeReconciler(harness).rebuild() == .reconciled)
+        #expect(harness.repairCalls == 1)
+    }
+
+    @Test
+    func aRebuildThatStopsBeforeAttemptingItsTeardownLeavesTheRegistrationStanding() async {
+        // Unlike a replay, no earlier attempt is in play, so stopping before
+        // the unregister was called means nothing was touched.
+        let harness = Harness()
+        harness.repairResult = .some(
+            RegistrationRepairFailure(unregistered: false, underlying: Boom(), teardownAttempted: false)
+        )
+
+        #expect(await makeReconciler(harness).rebuild() == .untouched)
+    }
+
+    @Test
+    func aRebuildWhoseUnregisterThrewSurrenders() async {
+        // The unregister may have changed the registration before it threw.
+        let harness = Harness()
+        harness.repairResult = .some(RegistrationRepairFailure(unregistered: false, underlying: Boom()))
+
+        let outcome = await makeReconciler(harness).rebuild()
+
+        guard case .registrationStateUnknown = cause(outcome) else {
+            Issue.record("expected an unknown-state surrender, got \(outcome)")
+            return
+        }
+    }
+
+    @Test
+    func aRebuildThatFailsAfterItsTeardownSurrenders() async {
+        let harness = Harness()
+        harness.repairResult = .some(RegistrationRepairFailure(unregistered: true, underlying: Boom()))
+
+        let outcome = await makeReconciler(harness).rebuild()
+
+        guard case .registrationNotRestored = cause(outcome) else {
+            Issue.record("expected a not-restored surrender, got \(outcome)")
+            return
+        }
+    }
+
+    @Test
+    func aRebuildThatNeverCompletesReachesAVisibleOutcome() async {
+        let harness = Harness()
+        harness.repairResult = nil  // never completes
+
+        let outcome = await makeReconciler(harness).rebuild()
+
+        guard case .registrationRepairStalled = cause(outcome) else {
+            Issue.record("expected a stalled surrender, got \(outcome)")
+            return
+        }
+    }
+
+    @Test
+    func rebuildingWithoutTheLockFailsClosed() async {
+        let harness = Harness()
+        harness.expectsHeldLock = false
+
+        let outcome = await makeReconciler(harness).rebuild()
+
+        guard case .registrationStateUnknown = cause(outcome) else {
+            Issue.record("expected an unknown-state surrender, got \(outcome)")
+            return
+        }
+        #expect(harness.repairCalls == 0)
+    }
 }

@@ -81,7 +81,7 @@ func launchAgentPlistShapeIsValid() throws {
     #expect(plist.associatedBundleIdentifiers == ["com.deviceterm"])
     #expect(plist.runAtLoad == false)
     #expect(plist.keepAlive.successfulExit == false)
-    #expect(plist.processType == "Adaptive")
+    #expect(plist.processType == "Interactive")
 }
 
 @Test

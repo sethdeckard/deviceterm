@@ -144,4 +144,22 @@ struct RegistrationRepairTransactionTests {
             #expect(error is RegistrationRepairFailure)
         }
     }
+
+    @Test
+    func onlyAFailedMarkReportsTheTeardownAsNeverAttempted() async {
+        // A failed mark touched nothing. A thrown unregister may already have
+        // changed the registration, so it must not read the same way.
+        let marked = Legs()
+        marked.markError = Boom()
+        let unregistering = Legs()
+        unregistering.unregisterError = Boom()
+        for (legs, attempted) in [(marked, false), (unregistering, true)] {
+            do {
+                try await legs.transaction().run()
+                Issue.record("expected the repair to fail")
+            } catch {
+                #expect((error as? RegistrationRepairFailure)?.teardownAttempted == attempted)
+            }
+        }
+    }
 }
