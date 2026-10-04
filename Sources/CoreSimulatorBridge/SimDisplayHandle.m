@@ -628,6 +628,13 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
     return YES;
 }
 
+- (BOOL)boundPanelShowsContent {
+    if (!self.running) return NO;
+    id<SimDisplayIOSurfaceRenderable> current = self.renderable;
+    if (!current) return NO;
+    return CSBCandidateLuminanceOf(current) == CSBCandidateLuminanceLit;
+}
+
 #pragma mark Start / stop
 
 /// Register the surface and damage callbacks on `renderable` under this

@@ -247,6 +247,14 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// be completed.
 - (BOOL)rebindToLitPanel;
 
+/// Whether the bound panel's framebuffer shows content, by the same coarse
+/// sample `rebindToLitPanel` reads.
+///
+/// NO when the handle isn't started or the surface can't be sampled. A lit
+/// panel drawing black also reads NO, so a NO means only that no content was
+/// seen.
+- (BOOL)boundPanelShowsContent;
+
 /// Begin observing the display's presented orientation. Requires a prior
 /// successful `start(callback:)`: both ride the same display proxy, which
 /// the surface subscription is what resolves.

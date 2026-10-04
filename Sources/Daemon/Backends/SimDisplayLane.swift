@@ -23,16 +23,6 @@ import Foundation
 /// to it happens on `queue`. The `Locked` helpers assume they are already on
 /// that queue, so none of them may hop back onto it and deadlock.
 final class SimDisplayLane: @unchecked Sendable {
-    /// How long to keep asking the bridge whether the lit panel moved, and how
-    /// often. A fold takes the old panel dark before the new one lights, so
-    /// the first ask lands in a gap where neither is lit and reports nothing;
-    /// the measured gap is a few hundred milliseconds. The window is generous
-    /// against that and costs nothing in the common case, because a swap that
-    /// resolves ends the search immediately and a device with one panel never
-    /// starts one.
-    private static let panelSwapAttempts = 30
-    private static let panelSwapIntervalNanoseconds: UInt64 = 100_000_000
-
     private let queue = DispatchQueue(label: "com.deviceterm.sim.display-lane")
     /// Delivery queue for the bridge's orientation callbacks. Separate from the
     /// lane so an observation callback never lands on the lane's own queue.
@@ -361,9 +351,9 @@ final class SimDisplayLane: @unchecked Sendable {
     ///
     /// Only the bridge can tell whether the panel moved, and it answers a
     /// question rather than raising an event, so following a fold means asking
-    /// repeatedly across the window where the panels swap. A device with one
-    /// panel never asks. A search already running is replaced, since the later
-    /// properties change describes the more recent posture.
+    /// repeatedly, paced by `PanelSwapCadence`. A device with one panel never
+    /// asks. A search already running is replaced, since the later properties
+    /// change describes the more recent posture.
     ///
     /// After rebinding, an active frame run is replaced with a fresh signal,
     /// pump, and token.
@@ -373,11 +363,35 @@ final class SimDisplayLane: @unchecked Sendable {
             panelSwapTask?.cancel()
             panelSwapTask = Task { [weak self] in
                 guard let self else { return }
-                for _ in 0..<Self.panelSwapAttempts {
-                    if Task.isCancelled { return }
-                    if await self.rebindToLitPanel() { return }
-                    try? await Task.sleep(nanoseconds: Self.panelSwapIntervalNanoseconds)
+                var attempts = 0
+                while !Task.isCancelled {
+                    let rebound = await self.rebindToLitPanel()
+                    attempts += 1
+                    // Sampled only once the quick phase is over, where it decides
+                    // whether to go on; before that the answer is ignored.
+                    let pending = !rebound && PanelSwapCadence.isPatient(afterAttempts: attempts)
+                        ? await self.swapStillPending()
+                        : true
+                    switch PanelSwapCadence.next(afterAttempts: attempts, rebound: rebound, swapPending: pending) {
+                    case .stop:
+                        return
+
+                    case let .wait(nanoseconds):
+                        try? await Task.sleep(nanoseconds: nanoseconds)
+                    }
                 }
+            }
+        }
+    }
+
+    /// Whether the bound panel shows no sampled content, on the lane's own
+    /// queue. A panel that can't be sampled counts as pending too, since it
+    /// can't show that no swap is under way. A lane with no handle has nothing
+    /// left to follow, so it reports no swap pending.
+    private func swapStillPending() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(returning: handle.map { !$0.boundPanelShowsContent() } ?? false)
             }
         }
     }
