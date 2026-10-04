@@ -59,16 +59,21 @@ final class SimDisplayLane: @unchecked Sendable {
         label: "com.deviceterm.sim.surface-copy",
         qos: .userInteractive
     )
+    /// Handed to every pump this lane starts; nil without Metal, which leaves
+    /// every copy on `copyQueue`.
+    private let blitter: SurfaceBlitter?
     /// Handed to every pump this lane starts; nil unless frame metrics are on.
     private let instrumentation: SimFramePump.Instrumentation?
 
     init(
         handle: SimDisplayHandle,
         pool: LeasedSurfacePool,
+        blitter: SurfaceBlitter? = nil,
         instrumentation: SimFramePump.Instrumentation? = nil
     ) {
         self.handle = handle
         self.pool = pool
+        self.blitter = blitter
         self.instrumentation = instrumentation
     }
 
@@ -276,6 +281,7 @@ final class SimDisplayLane: @unchecked Sendable {
         guard let handle else { throw DeviceBackendError.notActive }
         let pool = self.pool
         let copyQueue = self.copyQueue
+        let blitter = self.blitter
         let instrumentation = self.instrumentation
         frameCallbacks = (onFrame, onFatal)
         // Install a fresh run token; teardown bumps it to fence late callbacks.
@@ -302,11 +308,17 @@ final class SimDisplayLane: @unchecked Sendable {
                 signal: signal,
                 pool: pool,
                 copyQueue: copyQueue,
+                blitter: blitter,
                 instrumentation: instrumentation,
                 read: { [weak self] in await self?.readFrame(token: token) },
                 publish: publish,
                 fail: fail
             ).run()
+            // Drop the cached textures so the slots an idle pool frees aren't
+            // kept alive. This run has awaited its own last blit; a newer
+            // run's in-flight blit keeps its textures, and its next blit
+            // rebuilds the cache.
+            blitter?.purge()
         }
         do {
             try handle.startInvalidations { surface in

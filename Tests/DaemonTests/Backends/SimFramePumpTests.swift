@@ -32,16 +32,19 @@ private final class PumpHarness: @unchecked Sendable {
     var sourceID: IOSurfaceID { queue.sync { source.withRef { IOSurfaceGetID($0) } } }
 
     let instrumentation: SimFramePump.Instrumentation?
+    let blitter: SurfaceBlitter?
 
     init(
         retaining: Bool = false,
         readLimit: Int = 1,
         pool: LeasedSurfacePool = LeasedSurfacePool(slotCount: 3),
+        blitter: SurfaceBlitter? = nil,
         instrumentation: SimFramePump.Instrumentation? = nil
     ) throws {
         self.retaining = retaining
         self.readLimit = readLimit
         self.pool = pool
+        self.blitter = blitter
         self.instrumentation = instrumentation
         source = RetainedSurface(try #require(SurfaceCopy.makeSurface(width: 32, height: 32)))
     }
@@ -54,6 +57,7 @@ private final class PumpHarness: @unchecked Sendable {
             signal: signal,
             pool: pool,
             copyQueue: BlockingWorkQueue(label: "test.sim-pump.copy", qos: .userInteractive),
+            blitter: blitter,
             timing: .init(
                 now: { self.queue.sync { self.instant } },
                 sleep: { deadline in
@@ -101,9 +105,11 @@ func aPumpedSimFrameCarriesALeaseAndCopiesOffTheSource() async throws {
     #expect(harness.failureMessage == nil)
 }
 
-@Test
-func aPumpedSimFrameHoldsTheSourcePixels() async throws {
-    let harness = try PumpHarness()
+@Test("a pumped frame holds the source's pixels, copied on the CPU or blitted", arguments: [false, true])
+func aPumpedSimFrameHoldsTheSourcePixels(blitting: Bool) async throws {
+    let blitter = blitting ? SurfaceBlitter(cacheCapacity: 4) : nil
+    if blitting, blitter == nil { return }
+    let harness = try PumpHarness(blitter: blitter)
     let expected = harness.withSource { surface in
         IOSurfaceLock(surface, [], nil)
         defer { IOSurfaceUnlock(surface, [], nil) }
@@ -337,6 +343,21 @@ func anInstrumentedSimPumpRecordsWindowsThatAccountForEveryFrame() async throws 
         #expect(row.pixelFormat == "BGRA")
         #expect(row.poolSlotsAllocated >= 1)
         #expect(row.poolSlotsHighWater >= row.poolSlotsAllocated)
+    }
+}
+
+@Test
+func aBlittingSimPumpRecordsCopyCPUForEveryFrame() async throws {
+    guard let blitter = SurfaceBlitter(cacheCapacity: 4) else { return }
+    let capture = try MetricsCapture()
+    let harness = try PumpHarness(readLimit: 12, blitter: blitter, instrumentation: capture.instrumentation())
+    await harness.run()
+    let rows = try capture.rows()
+    #expect(!rows.isEmpty)
+    for row in rows {
+        #expect(row.framesPublished > 0)
+        #expect(row.copyCPU?.sampleCount == UInt64(row.framesPublished))
+        #expect(row.bytesMoved > 0)
     }
 }
 

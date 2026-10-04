@@ -30,6 +30,9 @@ struct SimFramePump: Sendable {
     /// `.userInteractive`, so the copy takes that QoS rather than whatever the
     /// pump task inherited, and doesn't occupy a cooperative-pool worker.
     let copyQueue: BlockingWorkQueue
+    /// Copies on the GPU when set and the surfaces allow it; otherwise, and
+    /// whenever a blit fails, the copy runs on `copyQueue`.
+    var blitter: SurfaceBlitter?
     var timing = Timing()
     var instrumentation: Instrumentation?
     let read: @Sendable () async -> RetainedSurface?
@@ -119,6 +122,7 @@ struct SimFramePump: Sendable {
                 from: source,
                 to: published,
                 on: copyQueue,
+                blitter: blitter,
                 measuring: instrumentation != nil
             )
             if let instrumentation, let copyInterval {
@@ -186,17 +190,27 @@ extension SimFramePump {
 }
 
 private extension SimFramePump {
-    /// Copy `source` into the slot on `queue`. Reports the bytes moved and,
-    /// when `measuring`, the copying thread's CPU time for comparison with
-    /// wall time. The CPU clock is read on `queue`'s thread, the one doing the
-    /// copy. Without measurement, CPU time is zero.
+    /// Copy `source` into the slot, with a GPU blit when `blitter` can do it,
+    /// else on `queue`. Reports the bytes moved and, when `measuring`, CPU
+    /// time for comparison with wall time: for a blit, preparing, encoding,
+    /// and committing it; for a CPU copy, the copying thread's time, read on
+    /// `queue`'s thread, plus any blit attempt that failed first. Without
+    /// measurement, CPU time is zero.
     static func timedCopy(
         from source: RetainedSurface,
         to published: PublishedSurface,
         on queue: BlockingWorkQueue,
+        blitter: SurfaceBlitter?,
         measuring: Bool
     ) async -> (bytes: Int, cpuNanoseconds: UInt64) {
-        await queue.run {
+        var attemptNanoseconds: UInt64 = 0
+        if let blitter {
+            let attempt = await blitter.blit(from: source, to: published.surface)
+            if let bytes = attempt.bytes { return (bytes, measuring ? attempt.cpuNanoseconds : 0) }
+            attemptNanoseconds = attempt.cpuNanoseconds
+        }
+        let failedAttemptNanoseconds = attemptNanoseconds
+        return await queue.run {
             let start = measuring ? clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) : 0
             let bytes = published.surface.withRef { destination in
                 source.withRef { origin in
@@ -204,7 +218,7 @@ private extension SimFramePump {
                 }
             }
             guard measuring else { return (bytes, 0) }
-            return (bytes, clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start)
+            return (bytes, failedAttemptNanoseconds &+ (clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start))
         }
     }
 

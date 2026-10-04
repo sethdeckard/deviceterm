@@ -312,6 +312,8 @@ let package = Package(
             swiftSettings: strictWarnings,
             linkerSettings: [
                 .linkedFramework("Security"),
+                // The simulator frame copy blits into pool slots on the GPU.
+                .linkedFramework("Metal"),
                 // libbsm vends the documented audit_token_to_pid /
                 // audit_token_to_pidversion accessors used to key the
                 // GUI-verdict cache, instead of poking the token's

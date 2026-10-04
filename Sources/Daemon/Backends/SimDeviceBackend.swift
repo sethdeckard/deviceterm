@@ -149,6 +149,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         self.display = SimDisplayLane(
             handle: displayHandle,
             pool: pool,
+            blitter: SurfaceBlitter(cacheCapacity: slotCount + 1),
             instrumentation: sink.map { sink in
                 SimFramePump.Instrumentation(
                     sink: sink,
