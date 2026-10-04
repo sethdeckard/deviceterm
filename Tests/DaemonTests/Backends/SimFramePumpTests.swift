@@ -46,11 +46,14 @@ private final class PumpHarness: @unchecked Sendable {
         source = RetainedSurface(try #require(SurfaceCopy.makeSurface(width: 32, height: 32)))
     }
 
+    func withSource<T>(_ body: (IOSurfaceRef) -> T) -> T { queue.sync { source.withRef(body) } }
+
     func run() async {
         signal.notify()
         await SimFramePump(
             signal: signal,
             pool: pool,
+            copyQueue: BlockingWorkQueue(label: "test.sim-pump.copy", qos: .userInteractive),
             timing: .init(
                 now: { self.queue.sync { self.instant } },
                 sleep: { deadline in
@@ -96,6 +99,28 @@ func aPumpedSimFrameCarriesALeaseAndCopiesOffTheSource() async throws {
     #expect(frame.surface.withRef { IOSurfaceGetID($0) } != harness.sourceID)
     #expect(harness.sleepCount == 0)
     #expect(harness.failureMessage == nil)
+}
+
+@Test
+func aPumpedSimFrameHoldsTheSourcePixels() async throws {
+    let harness = try PumpHarness()
+    let expected = harness.withSource { surface in
+        IOSurfaceLock(surface, [], nil)
+        defer { IOSurfaceUnlock(surface, [], nil) }
+        let count = IOSurfaceGetBytesPerRow(surface) * IOSurfaceGetHeight(surface)
+        let bytes = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt8.self)
+        for index in 0..<count { bytes[index] = UInt8(truncatingIfNeeded: index * 31 + 7) }
+        return Array(UnsafeBufferPointer(start: bytes, count: count))
+    }
+    await harness.run()
+    let frame = try #require(harness.published.first)
+    let copied = frame.surface.withRef { surface in
+        IOSurfaceLock(surface, .readOnly, nil)
+        defer { IOSurfaceUnlock(surface, .readOnly, nil) }
+        let bytes = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt8.self)
+        return Array(UnsafeBufferPointer(start: bytes, count: expected.count))
+    }
+    #expect(copied == expected)
 }
 
 @Test
@@ -231,6 +256,7 @@ func simulatorPumpCancellationDoesNotReadOrCopy() async {
         await SimFramePump(
             signal: signal,
             pool: LeasedSurfacePool(slotCount: 3),
+            copyQueue: BlockingWorkQueue(label: "test.sim-pump.copy"),
             read: { Issue.record("cancelled pump read a surface"); return nil },
             publish: { _ in Issue.record("cancelled pump published") },
             fail: { _ in Issue.record("cancelled pump failed") }
@@ -305,6 +331,7 @@ func anInstrumentedSimPumpRecordsWindowsThatAccountForEveryFrame() async throws 
     for row in rows {
         #expect(row.framesConsumed == row.framesPublished + row.framesDroppedNoSurface + row.framesDroppedExhaustion)
         #expect(row.copy.sampleCount == UInt64(row.framesPublished))
+        #expect((row.copyCPU?.sampleCount ?? 0) == UInt64(row.framesPublished))
         #expect(row.bytesMoved > 0)
         #expect(row.sourceWidth == 32 && row.contentWidth == 32)
         #expect(row.pixelFormat == "BGRA")

@@ -26,6 +26,10 @@ struct SimFramePump: Sendable {
 
     let signal: SimFrameSignal
     let pool: LeasedSurfacePool
+    /// Where the copy into a slot runs: a dedicated queue the owner creates at
+    /// `.userInteractive`, so the copy takes that QoS rather than whatever the
+    /// pump task inherited, and doesn't occupy a cooperative-pool worker.
+    let copyQueue: BlockingWorkQueue
     var timing = Timing()
     var instrumentation: Instrumentation?
     let read: @Sendable () async -> RetainedSurface?
@@ -111,7 +115,12 @@ struct SimFramePump: Sendable {
             guard !Task.isCancelled else { return }
             let copyStart = instrumentation?.now() ?? 0
             let copyInterval = instrumentation?.signposter.beginInterval("copy")
-            let copied = Self.timedCopy(from: source, to: published, measuring: instrumentation != nil)
+            let copied = await Self.timedCopy(
+                from: source,
+                to: published,
+                on: copyQueue,
+                measuring: instrumentation != nil
+            )
             if let instrumentation, let copyInterval {
                 instrumentation.signposter.endInterval("copy", copyInterval)
                 metrics?.noteCopy(nanoseconds: instrumentation.now() &- copyStart, bytes: copied.bytes)
@@ -177,22 +186,26 @@ extension SimFramePump {
 }
 
 private extension SimFramePump {
-    /// Copy `source` into the slot. Reports the bytes moved and, when
-    /// `measuring`, the calling thread's CPU time for comparison with wall
-    /// time. Without measurement, CPU time is zero.
+    /// Copy `source` into the slot on `queue`. Reports the bytes moved and,
+    /// when `measuring`, the copying thread's CPU time for comparison with
+    /// wall time. The CPU clock is read on `queue`'s thread, the one doing the
+    /// copy. Without measurement, CPU time is zero.
     static func timedCopy(
         from source: RetainedSurface,
         to published: PublishedSurface,
+        on queue: BlockingWorkQueue,
         measuring: Bool
-    ) -> (bytes: Int, cpuNanoseconds: UInt64) {
-        let start = measuring ? clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) : 0
-        let bytes = published.surface.withRef { destination in
-            source.withRef { origin in
-                SurfaceCopy.copy(from: origin, to: destination)
+    ) async -> (bytes: Int, cpuNanoseconds: UInt64) {
+        await queue.run {
+            let start = measuring ? clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) : 0
+            let bytes = published.surface.withRef { destination in
+                source.withRef { origin in
+                    SurfaceCopy.copy(from: origin, to: destination)
+                }
             }
+            guard measuring else { return (bytes, 0) }
+            return (bytes, clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start)
         }
-        guard measuring else { return (bytes, 0) }
-        return (bytes, clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start)
     }
 
     static func nanoseconds(_ duration: Duration) -> UInt64 {

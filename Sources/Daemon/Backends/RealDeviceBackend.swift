@@ -199,6 +199,13 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
     private let location: any DeviceLocationSimulating
     private let onDiagnostic: (@Sendable (String) -> Void)?
     private let pool: LeasedSurfacePool
+    /// Runs the frame task's slot copy at interactive QoS, so the copy takes
+    /// that QoS rather than whatever the frame task inherited, and doesn't
+    /// occupy a cooperative-pool worker.
+    private let copyQueue = BlockingWorkQueue(
+        label: "com.deviceterm.device.surface-copy",
+        qos: .userInteractive
+    )
     /// Off-by-default frame measurement. Non-nil is the on switch: the frame
     /// task reads no clocks and builds no accumulator without it.
     private let metricsSink: FrameMetricsSink?
@@ -726,6 +733,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
         // the copied slot so the GUI can compare the generation it intended to
         // render against what it scans back, and carry it on the published frame.
         let tracing = SurfaceTraceSink.daemonProducer != nil
+        let copyQueue = self.copyQueue
         frameTask = Task {
             var openedGate = false
             // Consecutive exhaustion drops. Sustained exhaustion (the GUI isn't
@@ -833,16 +841,23 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 consecutiveDrops = 0
                 // The decoder owns `frame.pixelBuffer`; copy it into the pool slot
                 // before publishing so the published surface is never the
-                // decoder's (which VideoToolbox may recycle). `frame` stays
-                // retained across the copy.
+                // decoder's (which VideoToolbox may recycle). `source` keeps
+                // the decoder's surface retained across the hop to the copy
+                // queue.
+                let source = RetainedSurface(ioSurface)
+                let frameContentSize = contentSize
                 let copyStart = metricsSink == nil ? 0 : DispatchTime.now().uptimeNanoseconds
                 let copyInterval = signposter.beginInterval("copy")
                 // The copy reports what it moved rather than the metrics
                 // recomputing it: an uncropped copy spans the whole row stride,
                 // alignment padding included, so deriving the figure from the
                 // content rect would undercount the bandwidth.
-                let bytesCopied = published.surface.withRef { destination in
-                    SurfaceCopy.copy(from: ioSurface, to: destination, contentSize: contentSize)
+                let bytesCopied = await copyQueue.run { [published] in
+                    published.surface.withRef { destination in
+                        source.withRef { origin in
+                            SurfaceCopy.copy(from: origin, to: destination, contentSize: frameContentSize)
+                        }
+                    }
                 }
                 signposter.endInterval("copy", copyInterval)
                 if metricsSink != nil {

@@ -54,6 +54,11 @@ final class SimDisplayLane: @unchecked Sendable {
     private var demandSerial: UInt64 = 0
 
     private let pool: LeasedSurfacePool
+    /// Runs every pump's slot copy, one at a time, at interactive QoS.
+    private let copyQueue = BlockingWorkQueue(
+        label: "com.deviceterm.sim.surface-copy",
+        qos: .userInteractive
+    )
     /// Handed to every pump this lane starts; nil unless frame metrics are on.
     private let instrumentation: SimFramePump.Instrumentation?
 
@@ -270,6 +275,7 @@ final class SimDisplayLane: @unchecked Sendable {
     ) throws {
         guard let handle else { throw DeviceBackendError.notActive }
         let pool = self.pool
+        let copyQueue = self.copyQueue
         let instrumentation = self.instrumentation
         frameCallbacks = (onFrame, onFatal)
         // Install a fresh run token; teardown bumps it to fence late callbacks.
@@ -295,6 +301,7 @@ final class SimDisplayLane: @unchecked Sendable {
             await SimFramePump(
                 signal: signal,
                 pool: pool,
+                copyQueue: copyQueue,
                 instrumentation: instrumentation,
                 read: { [weak self] in await self?.readFrame(token: token) },
                 publish: publish,
