@@ -117,3 +117,150 @@ func aSinglePanelDeviceRefusesToFold() async throws {
         }
     }
 }
+
+/// A node's label and its frame in the tree's own layout space.
+private typealias LabelledFrame = (label: String, frame: CGRect)
+
+/// Every framed node's label and frame, in the tree's own layout space.
+private func framedLabels(_ node: [String: Any], into out: inout [LabelledFrame]) {
+    let label = node["label"] as? String ?? node["identifier"] as? String ?? ""
+    if let frame = node["frame"] as? [String: Any],
+        let originX = frame["x"] as? Double, let originY = frame["y"] as? Double,
+        let width = frame["w"] as? Double, let height = frame["h"] as? Double,
+        width > 0, height > 0 {
+        out.append((label, CGRect(x: originX, y: originY, width: width, height: height)))
+    }
+    for child in node["children"] as? [[String: Any]] ?? [] { framedLabels(child, into: &out) }
+}
+
+/// The second of two reads a second apart whose framed labels and frames
+/// match, with those rows, or nil if no pair matches in 15 tries. Settings
+/// animates for seconds after launch, and a verdict judged against a tree
+/// still moving is worthless either way.
+private func settledRows(_ accessibility: SimAccessibility) -> (tree: [String: Any], rows: [LabelledFrame])? {
+    func rows(_ tree: [String: Any]) -> [LabelledFrame] {
+        var out: [LabelledFrame] = []
+        framedLabels(tree, into: &out)
+        return out
+    }
+    func signature(_ rows: [LabelledFrame]) -> String {
+        rows.map { "\($0.label)|\($0.frame)" }.joined(separator: "\n")
+    }
+    for _ in 0..<15 {
+        guard let first = try? accessibility.frontmostTree() else { continue }
+        Thread.sleep(forTimeInterval: 1.0)
+        guard let second = try? accessibility.frontmostTree() else { continue }
+        let settled = rows(second)
+        if signature(rows(first)) == signature(settled) { return (second, settled) }
+    }
+    return nil
+}
+
+private func simctl(_ arguments: [String]) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    process.arguments = ["simctl"] + arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+}
+
+@Test(.enabled(if: bootedDeviceIsFoldable()))
+func aTapReachesWhicheverPanelIsLit() async throws {
+    // Indigo's fixed digitizer target reaches only one of a foldable's panels,
+    // and which one changes from boot to boot, so a pass on one panel says
+    // nothing about the other. This taps both, in one pane, across folds made
+    // through that pane, so a stale panel or orientation fails here as well.
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let restore = try SimBackendAcquirer.acquireFromBridge(udid: booted.udid).backend
+    try await withHingeRestored(restore) {
+        let coordinator = PaneCoordinator()
+        let session = UUID()
+        let pane = try await coordinator.createSim(sessionId: session, udid: booted.udid)
+        // The pane is closed on both paths and awaited, not deferred, for the
+        // same reason `withHingeRestored` awaits its restore.
+        let outcome: Result<[String], any Error>
+        do {
+            outcome = .success(try await tapEachPosture(
+                coordinator,
+                pane: pane.paneId,
+                session: session,
+                udid: booted.udid
+            ))
+        } catch {
+            outcome = .failure(error)
+        }
+        _ = await coordinator.close(paneId: pane.paneId, as: .session(session), mode: .detach)
+        let missed = try outcome.get()
+        #expect(missed.isEmpty, "taps that opened nothing: \(missed.joined(separator: "; "))")
+    }
+}
+
+/// Tap a Settings row at each posture and return the taps that opened nothing.
+private func tapEachPosture(
+    _ coordinator: PaneCoordinator,
+    pane: UUID,
+    session: UUID,
+    udid: String
+) async throws -> [String] {
+    // Back to the cover after the inner panel, so the binding is tested
+    // after moving in each direction.
+    var missed: [String] = []
+    for angle in [0.0, 180.0, 0.0] {
+        try await coordinator.fold(paneId: pane, as: .session(session), degrees: angle)
+        try await Task.sleep(nanoseconds: 6_000_000_000)
+        try simctl(["terminate", udid, "com.apple.Preferences"])
+        try simctl(["launch", udid, "com.apple.Preferences"])
+        try await Task.sleep(nanoseconds: 4_000_000_000)
+
+        let display = try SimDisplayHandle.handle(forUDID: udid)
+        try display.start { _ in }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let lit = display.boundScreenID
+        display.stop()
+        let accessibility = try SimAccessibility.client(forUDID: udid)
+        accessibility.displayID = lit
+
+        let before = try #require(settledRows(accessibility), "at \(angle)°, Settings never settled")
+        let geometry = try #require(AXSweep.geometry(fromTree: before.tree))
+        try #require(
+            !before.rows.contains { $0.label == "BackButton" },
+            "at \(angle)°, Settings relaunched onto a pushed page"
+        )
+        // A row Settings lists on either panel. The inner panel shows a
+        // sidebar beside a detail page, and its tree carries only part of
+        // the sidebar, so the cover's first choice is not always present.
+        let row = try #require(
+            ["Accessibility", "About", "Dictionary"].lazy.compactMap { name in
+                before.rows.first { $0.label == name }
+            }.first,
+            "at \(angle)°, no known row on screen: \(before.rows.map(\.label))"
+        )
+        // A third of the way along the row, off the diagonal, so a rotation
+        // applied wrongly lands somewhere else instead of on the same row.
+        let displayed = CGPoint(
+            x: (row.frame.minX + row.frame.width * 0.3) / geometry.viewer.width,
+            y: row.frame.midY / geometry.viewer.height
+        )
+        try await coordinator.tap(
+            paneId: pane,
+            as: .session(session),
+            x: displayed.x,
+            y: displayed.y
+        )
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        let after = settledRows(accessibility)?.rows ?? []
+        if !after.contains(where: { $0.label == "BackButton" }) {
+            missed.append("\(angle)° screen \(lit): \(row.label) at \(displayed)")
+        }
+    }
+    return missed
+}

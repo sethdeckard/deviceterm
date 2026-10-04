@@ -102,6 +102,11 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     private var inputSubmissions = 0
     /// The contact currently held down, if any (see `HeldTouch`).
     private var heldTouch: HeldTouch?
+    /// The panel `heldTouch` went down on, as the screen id its sends were
+    /// addressed to. Meaningful only while a contact is held, and always
+    /// written with it, so a fold mid-contact cannot split one contact across
+    /// two panels.
+    private var heldTouchScreenID: UInt32 = 0
     private var heldKeys: Set<UInt32> = []
     /// Hardware buttons whose composite press+release *failed*: the up may
     /// not have landed (down without up), and the sim sends the pair as one
@@ -151,6 +156,20 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
                 )
             }
         )
+    }
+
+    /// The screen id a touch send is addressed to, or `0` for Indigo's fixed
+    /// digitizer target.
+    ///
+    /// A device with two panels addresses contacts by screen id, because the
+    /// fixed target reaches only one of them, and which one varies from boot to
+    /// boot. A new contact goes to the panel the pane is bound to. A held one
+    /// stays on the panel it went down on, so its moves and its release reach
+    /// that panel even if a fold has moved the binding since. A single-panel
+    /// device keeps the fixed target.
+    static func touchScreenID(foldable: Bool, holding: Bool, heldOn: UInt32, bound: UInt32) -> UInt32 {
+        guard foldable else { return 0 }
+        return holding ? heldOn : bound
     }
 
     // MARK: Ownership-transfer input fence
@@ -360,11 +379,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// client belongs to the pane's accessibility queue, and reaching across
     /// to it from here would both race that queue's own acquisition and
     /// touch the client from a second domain; `requireAX` applies the value
-    /// instead, where the client is owned.
-    ///
-    /// Input needs no equivalent: contacts carry a normalized ratio and reach
-    /// the mirrored panel through Indigo's fixed digitizer target on a
-    /// foldable as well as a single-panel device.
+    /// instead, where the client is owned. `requireHID` applies it to touch
+    /// for the same reason.
     private func noteBoundPanel(_ panel: BoundPanel) {
         let observer = inputGate.sync { () -> (@Sendable () -> Void)? in
             boundScreenID = panel.screenID
@@ -482,15 +498,40 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     // MARK: Touch / keyboard / buttons / crown
 
+    /// The HID client, with its contacts addressed to the right panel.
+    ///
+    /// Applied per send, as `requireAX` applies the panel to accessibility.
+    /// See `touchScreenID(foldable:holding:heldOn:bound:)` for which panel.
     private func requireHID() throws -> SimHIDClient {
         guard let hidClient else { throw DeviceBackendError.notActive }
+        hidClient.touchScreenID = inputGate.sync {
+            Self.touchScreenID(
+                foldable: capabilities.fold,
+                holding: heldTouch != nil,
+                heldOn: heldTouchScreenID,
+                bound: boundScreenID
+            )
+        }
         return hidClient
+    }
+
+    /// Record `touch` as held, on the panel the send that produced it went to.
+    ///
+    /// Reads the client's target rather than the binding, because the binding
+    /// can move between the send and this record. Runs on `inputWorkQueue`,
+    /// after `requireHID` set that target for the send.
+    private func hold(_ touch: HeldTouch) {
+        let screenID = hidClient?.touchScreenID ?? 0
+        inputGate.sync {
+            heldTouch = touch
+            heldTouchScreenID = screenID
+        }
     }
 
     func tapDown(at point: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
             if try gatedSend(generation, { try requireHID().tapDown(at: point) }) {
-                inputGate.sync { heldTouch = .single(point) }
+                hold(.single(point))
             }
         }
     }
@@ -506,7 +547,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
             if try gatedSend(generation, { try requireHID().edgeTouchDown(at: point, edge: edge) }) {
-                inputGate.sync { heldTouch = .edge(point, edge) }
+                hold(.edge(point, edge))
             }
         }
     }
@@ -514,7 +555,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
             if try gatedSend(generation, { try requireHID().edgeTouchMove(at: point, edge: edge) }) {
-                inputGate.sync { heldTouch = .edge(point, edge) }
+                hold(.edge(point, edge))
             }
         }
     }
@@ -530,7 +571,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
             if try gatedSend(generation, { try requireHID().twoFingerDown(f1: finger1, f2: finger2) }) {
-                inputGate.sync { heldTouch = .twoFinger(finger1, finger2) }
+                hold(.twoFinger(finger1, finger2))
             }
         }
     }

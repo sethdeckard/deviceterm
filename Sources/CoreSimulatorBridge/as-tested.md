@@ -314,12 +314,37 @@ switch, in about a second. So a test that asserts "below 90° means the cover
 panel" is flaky depending on the route taken to get there. Bind by content,
 never by angle; the picker already does.
 
-**Touch input addresses no display and needs no equivalent.** Indigo offers a
-screen-based contact target (`screenID | 0x40000000`) beside the fixed
-digitizer target, and the fixed target delivers to a folded Duo: five runs out
-of five, judged against a tree whose frames had stopped changing between two
-reads. Contacts carry a normalized ratio and no display, and nothing measured
-here shows them reaching the wrong panel.
+**Touch input addresses the bound panel.** Indigo's fixed digitizer target
+(`0x32`) reaches only one of the Duo's panels, and which one varies from boot
+to boot. Within one boot, a tap at the same point through three targets, each
+judged against a settled tree, gave:
+
+| Lit panel | `0x32` | `0x40000001` | `0x40000003` |
+|---|---|---|---|
+| Cover (screen 1) | missed | opened the row | missed |
+| Inner (screen 3) | opened the row | missed | opened the row |
+
+The screen-based target (`screenID | 0x40000000`) reached the panel it named
+and no other. On a two-panel device, `SimDeviceBackend` addresses every touch,
+edge and two-finger contact to a panel's screen-based target: the bound panel
+for a new contact, and the panel it went down on for a held one. A one-panel
+device keeps the fixed target, and keys and buttons address no panel. Only taps
+and single-finger swipes have been measured through the screen-based target.
+
+The earlier result here, the fixed target delivering to a folded Duo five runs
+out of five, came from a single boot in which `0x32` happened to reach the
+cover. A single boot can't show a property that varies by boot, so check a
+foldable input result on a second boot before trusting it.
+
+Every run had a pane attached, so the display handle held screen callbacks on
+the panel being tapped. Whether the screen-based target needs that
+registration was not tested.
+
+A contact held across a fold stays on the panel it went down on: its moves and
+its release are addressed to that panel's screen id, not the newly bound one.
+Checked by hand once in each direction, holding a still press in the GUI pane
+through `deviceterm fold open` and through `deviceterm fold 0`. After each
+release, the newly lit panel took the next tap normally.
 
 **A delivery check is only as good as the tree it is judged against.** Settings
 keeps animating for seconds after launch, so a tree read too early differs from

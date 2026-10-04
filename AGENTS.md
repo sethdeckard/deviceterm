@@ -375,11 +375,15 @@ decided whether the default run measured a one-panel or two-panel device.
 device, which is how the Duo's `.enabled(if:)`-gated two-panel tests run
 under the clean-slate boot and the sim lock.
 
-A Duo run is **flakier than a one-panel phone**: the AX-verified swipe test
-has failed on it and passed on it from the same clean-slate boot, and fails
-reliably against a warm Duo that has been folded back and forth. It passes on
-a one-panel phone. The cause is not established — treat a foldable failure
-there as unproven until someone measures it, not as a known defect.
+On a foldable, Indigo's fixed digitizer target reaches only one panel, and
+which one changes from boot to boot, so the daemon addresses touches to the
+bound panel instead. A live test that drives `SimHIDClient` directly on a Duo
+sets `touchScreenID` to the bound panel, or its result depends on which panel
+that boot's fixed target reaches.
+
+The AX-verified swipe test's Duo failures had this cause. In a boot where
+`0x32` reached only the inner panel, it failed three of three on the folded
+cover and passed three of three once addressed to it.
 
 `make test-device-live` requires a connected, unlocked, trusted iPhone or iPad
 with a working CoreDevice tunnel. It fails when no device is available and

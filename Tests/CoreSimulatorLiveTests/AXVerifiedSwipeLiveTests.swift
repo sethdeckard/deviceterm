@@ -184,6 +184,17 @@ func aSwipeFromALateClientScrollsTheGuest() throws {
     )
     let client = try connectedClient(udid: booted.udid)
     let accessibility = try SimAccessibility.client(forUDID: booted.udid)
+    // A foldable's fixed digitizer target reaches only one of its panels, and
+    // which one varies from boot to boot, so address the lit panel as the
+    // daemon does. Reads go to the same panel, so both halves judge one screen.
+    if SimDisplayHandle.deviceHasMultiplePanels(udid: booted.udid) {
+        let display = try SimDisplayHandle.handle(forUDID: booted.udid)
+        try display.start { _ in }
+        Thread.sleep(forTimeInterval: 0.5)
+        client.touchScreenID = display.boundScreenID
+        accessibility.displayID = display.boundScreenID
+        display.stop()
+    }
     try #require(waitForAXServer(accessibility, client: client), "the AX server never answered")
 
     dismissFirstBootAlert(client, accessibility: accessibility)

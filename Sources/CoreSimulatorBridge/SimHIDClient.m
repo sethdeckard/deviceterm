@@ -364,6 +364,19 @@ static BOOL CSBIsNilMessage(NSError *error) {
     return NO;
 }
 
+#pragma mark Touch target
+
+/// The flag Indigo ORs into a `screenID` to address a contact to that panel.
+static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
+
+/// The Indigo target for a touch contact: the screen-based target for
+/// `touchScreenID` when one is set, otherwise the fixed digitizer target.
+- (int)_touchTarget {
+    unsigned int screenID = self.touchScreenID;
+    if (screenID == 0) return ButtonEventTargetDigitizer;
+    return (int)(screenID | kCSBIndigoScreenTargetFlag);
+}
+
 #pragma mark Single-finger touch (doubled-payload, reverse-engineered)
 
 /// Build a doubled-payload IndigoTouch message for a normalized point.
@@ -393,7 +406,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
     // touch struct out of. We pass `ratio` as if it were a point, since we'll
     // overwrite xRatio/yRatio anyway.
     CGPoint pt = ratio;
-    IndigoMessage *base = self.fnMouse(&pt, NULL, ButtonEventTargetDigitizer, direction, NO);
+    IndigoMessage *base = self.fnMouse(&pt, NULL, [self _touchTarget], direction, NO);
     if (!base) return NULL;
     base->payload.event.touch.xRatio = ratio.x;
     base->payload.event.touch.yRatio = ratio.y;
@@ -448,7 +461,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
                                        eventType:(int)eventType
                                             edge:(int)edge {
     CGPoint pt = ratio;
-    IndigoMessage *base = self.fnMouseEdge(&pt, NULL, ButtonEventTargetDigitizer, (NSUInteger)eventType, CGSizeZero,
+    IndigoMessage *base = self.fnMouseEdge(&pt, NULL, [self _touchTarget], (NSUInteger)eventType, CGSizeZero,
                                            (NSInteger)edge);
     if (!base) return NULL;
     base->payload.event.touch.xRatio = ratio.x;
@@ -576,7 +589,7 @@ static BOOL CSBIsNilMessage(NSError *error) {
                                              direction:(int)direction {
     CGPoint r1 = ratio1;
     CGPoint r2 = ratio2;
-    IndigoMessage *message = self.fnMouse(&r1, &r2, ButtonEventTargetDigitizer, direction, NO);
+    IndigoMessage *message = self.fnMouse(&r1, &r2, [self _touchTarget], direction, NO);
     if (!message) return NULL;
 
     char *bytes = (char *)message;

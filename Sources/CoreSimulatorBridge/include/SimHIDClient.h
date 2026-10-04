@@ -47,6 +47,17 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
 
 @property (nonatomic, copy, readonly) NSString *udid;
 
+/// The panel touch contacts are addressed to, as its `screenID`, or `0` for
+/// Indigo's fixed digitizer target.
+///
+/// A device with two panels needs this. Its fixed digitizer target reaches
+/// only one of them, and which one varies from boot to boot, so a contact
+/// sent there can miss the panel that is lit. A non-zero value addresses the
+/// contact to `screenID | 0x40000000`, the screen-based target, which reaches
+/// the named panel. Keys, buttons and the crown address no panel and ignore
+/// it.
+@property (atomic, assign) unsigned int touchScreenID;
+
 // MARK: Single-finger touch
 //
 // A press-and-hold is `tapDown` + nothing else; the touch stays down
