@@ -204,6 +204,9 @@ func nextDeadlineAnchorsOrRestarts(previous: Int?, now: Int, expected: Int) {
     #expect(deadline == instant(expected))
 }
 
+/// The harness retains its frames without registering a subscription token, so
+/// no live consumer holds a slot: once its one recovery is spent, nothing can
+/// free a slot and the pane must fail.
 @Test
 func anUnackedSimStreamRecoversOnceThenFailsThePane() async throws {
     let harness = try PumpHarness(retaining: true, readLimit: 400)
@@ -213,6 +216,44 @@ func anUnackedSimStreamRecoversOnceThenFailsThePane() async throws {
     #expect(harness.readTimes.count < 400)
     let times = harness.readTimes
     #expect(try #require(times.last) - #require(times.first) >= .seconds(4))
+}
+
+@Test("a live consumer that falls behind past recovery keeps the pane, which resumes")
+func aSlowLiveConsumerKeepsThePaneAlive() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    // Spend the one recovery, and leave every slot of the new epoch held by
+    // the live consumer, the state a GUI that stops acknowledging leaves.
+    func fill() async throws -> UInt64 {
+        var epoch: UInt64 = 0
+        for _ in 0..<3 {
+            let published = try #require(await pool.acquire(width: 32, height: 32))
+            let lease = try #require(published.lease)
+            epoch = lease.epoch
+            let grant = try #require(await lease.acquireHold(token))
+            #expect(await grant.commit())
+        }
+        return epoch
+    }
+    _ = try await fill()
+    #expect(await pool.recoverFromExhaustion(width: 32, height: 32) == .recovered)
+    let epoch = try await fill()
+
+    // Well past the two-second recovery delay, the pane is still alive.
+    let stalled = try PumpHarness(readLimit: 400, pool: pool)
+    await stalled.run()
+    #expect(stalled.failureMessage == nil)
+    #expect(stalled.published.isEmpty)
+    let times = stalled.readTimes
+    #expect(try #require(times.last) - #require(times.first) >= .seconds(4))
+
+    // The consumer catches up, and the next pump publishes again.
+    #expect(await pool.applyWatermark(token: token, epoch: epoch, lowestHeld: .max, connectionId: 1))
+    let resumed = try PumpHarness(readLimit: 3, pool: pool)
+    await resumed.run()
+    #expect(resumed.failureMessage == nil)
+    #expect(resumed.published.count == 1)
 }
 
 @Test

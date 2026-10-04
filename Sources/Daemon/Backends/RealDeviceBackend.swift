@@ -738,8 +738,12 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
             var openedGate = false
             // Consecutive exhaustion drops. Sustained exhaustion (the GUI isn't
             // acking, e.g. after a reconnect stranded holds) triggers one
-            // controlled pool recovery; a second bout fails the pane.
+            // controlled pool recovery. Further exhaustion fails the pane only
+            // when consumer releases cannot unblock acquisition.
             var consecutiveDrops = 0
+            // Set once a stall has been reported, so a consumer that stays
+            // behind logs once rather than every recovery threshold.
+            var reportedStall = false
             // The real content rect within the decoded (padded) surface, and the
             // surface dims it was measured for. Locked once a frame can be sized
             // confidently; reset when the surface dims change (e.g. rotation).
@@ -816,17 +820,27 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 // decode or backlogs. Held slots are one cause; `acquire` also
                 // returns nil when a rotation exceeds the quarantine budget or
                 // a slot allocation fails. Sustained unavailability drives one
-                // controlled recovery, then fails the pane, whatever the cause.
+                // controlled recovery. After that it fails the pane, unless
+                // capacity has become available or live consumers can release
+                // what the next acquisition needs: a slow consumer catches up,
+                // so frames keep dropping until it does.
                 guard var published = await pool.acquire(width: contentDims.width, height: contentDims.height)
                 else {
                     metrics?.noteDroppedExhaustion()
                     consecutiveDrops += 1
                     if consecutiveDrops >= recoveryThreshold {
                         consecutiveDrops = 0
-                        switch await pool.recoverFromExhaustion() {
+                        switch await pool.recoverFromExhaustion(width: contentDims.width, height: contentDims.height) {
                         case .recovered:
                             log?("surface pool unavailable; retired the active "
                                 + "epoch; the next frame allocates a fresh pool")
+
+                        case .consumerBehind:
+                            if !reportedStall {
+                                reportedStall = true
+                                log?("surface pool acquisition will retry; capacity is "
+                                    + "free or consumer releases can unblock it")
+                            }
 
                         case .exhausted:
                             // Fenced: dropped if teardown already invalidated the
@@ -839,6 +853,7 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                     continue
                 }
                 consecutiveDrops = 0
+                reportedStall = false
                 // The decoder owns `frame.pixelBuffer`; copy it into the pool slot
                 // before publishing so the published surface is never the
                 // decoder's (which VideoToolbox may recycle). `source` keeps

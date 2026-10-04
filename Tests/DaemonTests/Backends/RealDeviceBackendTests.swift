@@ -92,6 +92,18 @@ private final class ControlledFeed: DecodedFrameFeed, @unchecked Sendable {
         fatal?(reason)
     }
 
+    /// Deliver one frame, returning false until the backend has opened the
+    /// stream.
+    @discardableResult
+    func yield(_ frame: DecodedFrame) -> Bool {
+        lock.lock()
+        let pending = continuation
+        lock.unlock()
+        guard let pending else { return false }
+        pending.yield(frame)
+        return true
+    }
+
     func stop() { stopped = true }
 }
 
@@ -1326,4 +1338,68 @@ func openAppSwitcherGivesUpWhenTheDeviceNeverStreams() async throws {
     // It returned, and the macro is cancelled, so it no-ops if the gate opens
     // later and the pump finally drains it.
     #expect(await relay.startedCount == 0)
+}
+
+/// A consumer that holds every frame's lease under a live token and never
+/// acknowledges it, the state a GUI that has fallen behind leaves. Like the
+/// GUI, it keeps the published surface only until its hold is committed:
+/// keeping it longer would pin the producer's own hold too, and dropping it
+/// sooner lets the slot free before the hold is taken.
+private actor HoldingConsumer {
+    private let token: UUID
+    /// Frames whose hold has been attempted, committed or not.
+    private(set) var handled = 0
+
+    init(token: UUID) { self.token = token }
+
+    func hold(_ published: PublishedSurface) async {
+        if let grant = await published.lease?.acquireHold(token) {
+            _ = await grant.commit()
+        }
+        withExtendedLifetime(published) {}
+        handled += 1
+    }
+}
+
+private actor FatalRecorder {
+    private(set) var reasons: [String] = []
+    func record(_ reason: String) { reasons.append(reason) }
+}
+
+@Test("a live consumer that falls behind past recovery doesn't fail the device pane")
+func aSlowLiveConsumerKeepsTheDevicePaneAlive() async throws {
+    let pixelBuffer = try #require(makePixelBuffer(width: 16, height: 16))
+    let frame = DecodedFrame(pixelBuffer: pixelBuffer)
+    let feed = ControlledFeed()
+    let device = RealDeviceBackend(deviceId: "test-device", feed: feed, device: FakeRelay(support: touchOnly))
+    let token = UUID()
+    await device.registerLeaseToken(token, connectionId: 1)
+    let consumer = HoldingConsumer(token: token)
+    let fatal = FatalRecorder()
+    try device.startFrames(
+        onFrame: { published in Task { await consumer.hold(published) } },
+        onFatal: { reason in Task { await fatal.record(reason) } },
+        onDisconnect: {}
+    )
+    try await waitUntil { feed.yield(frame) }
+    // One frame at a time, each either held by the consumer or dropped before
+    // the next arrives, so the backend can't outrun the consumer's holds.
+    // Enough frames to exhaust the pool past the recovery threshold twice.
+    var settled = (handled: await consumer.handled, drops: 0)
+    for _ in 0..<300 {
+        for _ in 0..<2_000 {
+            let handled = await consumer.handled
+            let drops = await device.poolCounters()?.exhaustionDrops ?? 0
+            if handled > settled.handled || drops > settled.drops {
+                settled = (handled, drops)
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000)
+        }
+        feed.yield(frame)
+    }
+    #expect(settled.drops >= 240)
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await fatal.reasons.isEmpty)
+    device.shutdownBackend()
 }

@@ -42,6 +42,9 @@ struct SimFramePump: Sendable {
     func run() async {
         var nextAttempt: ContinuousClock.Instant?
         var unavailableSince: ContinuousClock.Instant?
+        // Set once a stall has been reported, so a consumer that stays behind
+        // for minutes logs once rather than every recovery interval.
+        var reportedStall = false
         // Nil unless instrumented. The first consumed update opens the window,
         // and a later one closes it, so an idle pump writes no rows and keeps
         // no timer. A window still open when the run ends is discarded.
@@ -103,9 +106,20 @@ struct SimFramePump: Sendable {
                 if unavailableSince == nil { unavailableSince = now }
                 if let since = unavailableSince, now - since >= timing.recoveryDelay {
                     unavailableSince = nil
-                    switch await pool.recoverFromExhaustion() {
+                    switch await pool.recoverFromExhaustion(width: dims.0, height: dims.1) {
                     case .recovered:
                         DiagnosticLog.attach.notice("surface pool unavailable; recovery will retry on the next frame")
+
+                    case .consumerBehind:
+                        if !reportedStall {
+                            reportedStall = true
+                            DiagnosticLog.attach.notice(
+                                """
+                                surface pool acquisition will retry; capacity is free or consumer \
+                                releases can unblock it
+                                """
+                            )
+                        }
 
                     case .exhausted:
                         fail("surface pool stayed unavailable after recovery; the mirror can't continue")
@@ -115,6 +129,7 @@ struct SimFramePump: Sendable {
                 continue
             }
             unavailableSince = nil
+            reportedStall = false
             guard !Task.isCancelled else { return }
             let copyStart = instrumentation?.now() ?? 0
             let copyInterval = instrumentation?.signposter.beginInterval("copy")

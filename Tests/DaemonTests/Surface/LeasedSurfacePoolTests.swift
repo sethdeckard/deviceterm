@@ -501,8 +501,8 @@ func delinquencyIsPerSubscription() async throws {
 func recoveryIsOneShot() async throws {
     let pool = LeasedSurfacePool(slotCount: 3)
     _ = try #require(await pool.acquire(width: 4, height: 4))
-    #expect(await pool.recoverFromExhaustion() == .recovered)
-    #expect(await pool.recoverFromExhaustion() == .exhausted)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .exhausted)
 }
 
 @Test("recovery never re-hands a held (orphaned) generation")
@@ -526,7 +526,7 @@ func recoveryDoesNotReuseHeldSurfaces() async throws {
     // Sustained exhaustion → one recovery: the active epoch (with its
     // pinned holds) is quarantined. Recovery itself allocates nothing: the
     // replacement epoch is allocated lazily by the next `acquire` below.
-    #expect(await pool.recoverFromExhaustion() == .recovered)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
 
     // Every post-recovery frame is a brand-new generation from the freshly
     // allocated epoch, so no held surface from the quarantined epoch is ever
@@ -664,4 +664,162 @@ func idleFreesUnheldRetiredSlots() async throws {
     #expect(await pool.quarantinedEpochCount() == 1)
     #expect(await pool.snapshotCounters().slotsAllocated == 1)
     _ = held
+}
+
+/// Acquire `count` slots with committed holds by `token`, and return their
+/// epoch. The published surfaces are dropped, so only the subscription holds
+/// remain once their daemon-current releases land, which this waits for.
+private func fillWithCommittedHolds(
+    _ pool: LeasedSurfacePool,
+    token: UUID,
+    count: Int = 3,
+    width: Int = 4
+) async throws -> UInt64 {
+    var epoch: UInt64 = 0
+    for _ in 0..<count {
+        let published = try #require(await pool.acquire(width: width, height: width))
+        let lease = try #require(published.lease)
+        epoch = lease.epoch
+        let grant = try #require(await lease.acquireHold(token))
+        #expect(await grant.commit())
+    }
+    #expect(await waitForDaemonCurrentReleases(pool))
+    return epoch
+}
+
+/// Poll for the producer's own holds on dropped frames to release, which
+/// happens asynchronously from `LeasedSurface.deinit`. Checks up to 400 times
+/// with a delay, then checks once more before returning whether they did.
+private func waitForDaemonCurrentReleases(_ pool: LeasedSurfacePool) async -> Bool {
+    for _ in 0..<400 {
+        if await pool.daemonCurrentHoldCount() == 0 { return true }
+        try? await Task.sleep(nanoseconds: 500_000)
+    }
+    return await pool.daemonCurrentHoldCount() == 0
+}
+
+@Test("after recovery, a slot held by a live consumer answers consumerBehind")
+func spentRecoveryWithALiveHoldWaitsForTheConsumer() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    _ = try await fillWithCommittedHolds(pool, token: token)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
+    _ = try await fillWithCommittedHolds(pool, token: token)
+    #expect(await pool.acquire(width: 4, height: 4) == nil)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .consumerBehind)
+}
+
+@Test("after recovery, holds pinned only by an orphaned consumer still fail")
+func spentRecoveryWithOnlyOrphanedHoldsIsExhausted() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    _ = try await fillWithCommittedHolds(pool, token: token)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
+    _ = try await fillWithCommittedHolds(pool, token: token)
+    await pool.orphan(token)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .exhausted)
+}
+
+@Test("a full quarantine budget with a live hold waits rather than failing")
+func fullQuarantineBudgetWithALiveHoldWaits() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3, quarantineBudget: 1)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    // A resize rotates the held epoch into the single quarantine place.
+    _ = try await fillWithCommittedHolds(pool, token: token, count: 1, width: 4)
+    _ = try await fillWithCommittedHolds(pool, token: token, width: 8)
+    #expect(await pool.quarantinedEpochCount() == 1)
+    // The first recovery's retirement fails on the full budget.
+    #expect(await pool.recoverFromExhaustion(width: 8, height: 8) == .consumerBehind)
+}
+
+@Test("a consumer that catches up frees its slots in the same epoch")
+func aCaughtUpConsumerFreesSlotsWithoutANewEpoch() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    _ = try await fillWithCommittedHolds(pool, token: token)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
+    let epoch = try await fillWithCommittedHolds(pool, token: token)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .consumerBehind)
+
+    // The watermark acknowledges every generation the consumer held.
+    #expect(await pool.applyWatermark(token: token, epoch: epoch, lowestHeld: .max, connectionId: 1))
+    _ = await waitForFreeSlots(pool, atLeast: 1)
+    let next = try #require(await pool.acquire(width: 4, height: 4))
+    #expect(try #require(next.lease).epoch == epoch)
+}
+
+@Test("a resize blocked by orphan-pinned quarantine fails even while a live consumer holds the current epoch")
+func aResizeBlockedByOrphanedQuarantineIsExhausted() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3, quarantineBudget: 1)
+    let gone = UUID()
+    let live = UUID()
+    await pool.registerToken(gone, connectionId: 1)
+    await pool.registerToken(live, connectionId: 2)
+    // An epoch pinned by a consumer that went away fills the only quarantine
+    // place once a resize rotates it out.
+    _ = try await fillWithCommittedHolds(pool, token: gone, count: 1, width: 4)
+    await pool.orphan(gone)
+    // A healthy consumer holds the current epoch, including its current frame.
+    let current = try #require(await pool.acquire(width: 8, height: 8))
+    let grant = try #require(await current.lease?.acquireHold(live))
+    #expect(await grant.commit())
+    #expect(await pool.quarantinedEpochCount() == 1)
+    // Another resize can't rotate, and no live release can drain the
+    // orphan-pinned quarantine, so waiting would freeze the pane for good.
+    #expect(await pool.acquire(width: 16, height: 16) == nil)
+    #expect(await pool.recoverFromExhaustion(width: 16, height: 16) == .exhausted)
+    _ = current
+}
+
+@Test("slots pinned by an orphan or the producer's own frame can't be freed by a live consumer")
+func slotsOnlyAnOrphanOrTheProducerCanFreeAreExhausted() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let gone = UUID()
+    let live = UUID()
+    await pool.registerToken(gone, connectionId: 1)
+    await pool.registerToken(live, connectionId: 2)
+    _ = try await fillWithCommittedHolds(pool, token: live)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
+    // Two slots pinned by the departed consumer, and the producer's current
+    // frame, which the live consumer also holds.
+    _ = try await fillWithCommittedHolds(pool, token: gone, count: 2)
+    await pool.orphan(gone)
+    let current = try #require(await pool.acquire(width: 4, height: 4))
+    let grant = try #require(await current.lease?.acquireHold(live))
+    #expect(await grant.commit())
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .exhausted)
+    _ = current
+}
+
+@Test("an acknowledgement landing before the recovery check counts as freed capacity")
+func anAckBeforeTheRecoveryCheckWaitsRatherThanFailing() async throws {
+    let pool = LeasedSurfacePool(slotCount: 3)
+    let token = UUID()
+    await pool.registerToken(token, connectionId: 1)
+    _ = try await fillWithCommittedHolds(pool, token: token)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .recovered)
+    // Two older frames the consumer holds, and the current frame, which the
+    // producer and the consumer both hold.
+    let epoch = try await fillWithCommittedHolds(pool, token: token, count: 2)
+    let current = try #require(await pool.acquire(width: 4, height: 4))
+    let currentLease = try #require(current.lease)
+    let grant = try #require(await currentLease.acquireHold(token))
+    #expect(await grant.commit())
+    #expect(await pool.acquire(width: 4, height: 4) == nil)
+    // The consumer catches up between the failed acquire and the check,
+    // releasing everything older than the current frame.
+    #expect(await pool.applyWatermark(
+        token: token,
+        epoch: epoch,
+        lowestHeld: currentLease.generation,
+        connectionId: 1
+    ))
+    _ = await waitForFreeSlots(pool, atLeast: 1)
+    #expect(await pool.recoverFromExhaustion(width: 4, height: 4) == .consumerBehind)
+    #expect(await pool.acquire(width: 4, height: 4) != nil)
+    _ = current
 }

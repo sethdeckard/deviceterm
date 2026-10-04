@@ -3655,9 +3655,14 @@ whether a disconnect is possible at all), which is why they stay separate.
 
 Leasing is also what bounds a stalled consumer. One that stops acknowledging
 keeps its slots, the pool runs out, and the producer drops frames rather than
-queueing them. Sustained exhaustion retires the epoch once and then fails the
-pane, which the GUI renders with Retry. Without it an unacknowledged stream
-grows inside the daemon for as long as the consumer stays away.
+queueing them. Without leasing, an unacknowledged stream would grow inside the
+daemon for as long as the consumer stayed away.
+
+Sustained exhaustion attempts to retire the epoch once. After that the producer
+keeps dropping frames while live consumers can still free a slot it needs,
+because a slow consumer frees its slots as it catches up. It fails the pane,
+which the GUI renders with Retry, when no release by a live consumer could
+unblock it.
 
 **Vocabulary.**
 
@@ -3745,8 +3750,10 @@ releases: subscription transactions cancel (provisional), revoke
 appropriate, while `.daemonCurrent` ends when the final `PublishedSurface`
 owner releases it, which can outlive `currentSurface` through in-flight
 delivery work. Orphaned holds can persist until backend teardown. Recovery is
-bounded to a single fresh epoch: a second bout fails the pane rather than
-growing memory.
+bounded to a single fresh epoch, and a second bout never grows memory. While
+releases by subscriptions that are still active or draining can free what the
+next acquire needs, the producer waits and drops frames; otherwise, as when only
+orphaned holds or the producer's own remain, it fails the pane.
 
 The simulator pump requests recovery when failed slot acquisitions span at
 least two seconds without a successful acquisition. Success resets that

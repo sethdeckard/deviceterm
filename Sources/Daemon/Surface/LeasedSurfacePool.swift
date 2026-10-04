@@ -409,20 +409,62 @@ actor LeasedSurfacePool {
     /// the active epoch, **preserving every held slot**, never reclaiming a
     /// live lease. It does not allocate the replacement itself: the next
     /// `acquire` (finding no active epoch) rotates in a fresh, empty epoch
-    /// that grows new slots on demand. Permitted exactly once: a second call
-    /// returns `.exhausted`, as does a first call whose `retireAll` fails
-    /// because the quarantine budget is full. A quarantined slot is never re-acquired, so
+    /// that grows new slots on demand. Retirement is attempted once.
+    /// Subsequent calls, and a first call whose `retireAll` fails because the
+    /// quarantine budget is full, classify whether consumer releases can
+    /// unblock acquisition. A quarantined slot is never re-acquired, so
     /// recovery only ever leads to brand-new generations.
-    func recoverFromExhaustion() -> RecoveryOutcome {
-        if usedRecovery { return .exhausted }
-        // Consume the single allowance up front: a failed `retireAll` (the
-        // quarantine budget is full) is terminal (the pane fails), so the
-        // attempt itself is spent whether or not it retires. This keeps the
-        // "at most one retirement attempt per pool" invariant literal; a
-        // budget that later frees up does not resurrect recovery.
+    ///
+    /// Where recovery is unavailable, the answer is `.consumerBehind` rather
+    /// than `.exhausted` when capacity is already free or live consumer
+    /// releases can unblock an acquire of `width` x `height`. A slow consumer frees its slots as it
+    /// catches up; slots pinned by consumers that can never release them, or
+    /// by the producer's own current frame, can't unblock anything, and fail
+    /// the pane.
+    func recoverFromExhaustion(width: Int, height: Int) -> RecoveryOutcome {
+        if usedRecovery { return unavailableOutcome(width: width, height: height) }
+        // Consume the retirement allowance even when the quarantine budget
+        // blocks retirement; later calls only classify whether acquisition can
+        // resume. This keeps the "at most one retirement attempt per pool"
+        // invariant literal; a budget that later frees up does not resurrect
+        // recovery.
         usedRecovery = true
-        guard retireAll() else { return .exhausted }
+        guard retireAll() else { return unavailableOutcome(width: width, height: height) }
         return .recovered
+    }
+
+    private func unavailableOutcome(width: Int, height: Int) -> RecoveryOutcome {
+        consumersCanUnblock(width: width, height: height) ? .consumerBehind : .exhausted
+    }
+
+    /// Whether an acquire of this size can succeed now, or once live
+    /// consumers release what they hold. An acknowledgement can land between
+    /// the failed acquire and this check, so a slot that is already free
+    /// counts too. An acquire into the active epoch needs one of its slots
+    /// free. One that has to rotate in a new epoch is blocked only by a full
+    /// quarantine budget, which frees when a quarantined epoch drains
+    /// completely; with room in the budget, the acquire failed for another
+    /// reason, such as a failed allocation, which isn't the consumers' to fix.
+    private func consumersCanUnblock(width: Int, height: Int) -> Bool {
+        if let active, active.width == width, active.height == height {
+            return active.slots.contains { $0.isFree || isReleasableByConsumers($0) }
+        }
+        guard quarantined.count >= quarantineBudget else { return false }
+        return quarantined.contains { epoch in
+            epoch.slots.allSatisfy { $0.isFree || isReleasableByConsumers($0) }
+        }
+    }
+
+    /// A held slot that frees once its live consumers acknowledge it: every
+    /// holder is a subscription whose token is still active or draining. An
+    /// orphaned token's hold stays pinned until a late ack that may never
+    /// come, and `.daemonCurrent` is the producer's current frame, which stays
+    /// current while nothing new can publish.
+    private func isReleasableByConsumers(_ slot: PhysicalSlot) -> Bool {
+        !slot.holders.isEmpty && slot.holders.allSatisfy { holder in
+            guard case let .subscription(token) = holder, let info = tokens[token] else { return false }
+            return info.state == .active || info.state == .draining
+        }
     }
 
     private func rotateEpoch(width: Int, height: Int) -> Bool {
@@ -505,6 +547,14 @@ actor LeasedSurfacePool {
     func activeEpoch() -> UInt64? { active?.epoch }
 
     func quarantinedEpochCount() -> Int { quarantined.count }
+
+    /// Test seam: how many slots, in any epoch, still carry the producer's
+    /// own hold. Its release runs asynchronously from `LeasedSurface.deinit`.
+    func daemonCurrentHoldCount() -> Int {
+        allPools().reduce(0) { count, pool in
+            count + pool.slots.filter { $0.holders.contains(.daemonCurrent) }.count
+        }
+    }
 
     /// The holder set for a generation, searching active + quarantined
     /// epochs. Empty when the generation is unknown or freed.
