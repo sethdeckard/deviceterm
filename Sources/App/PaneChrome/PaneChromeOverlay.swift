@@ -134,10 +134,11 @@ struct PaneChromeOverlay: View {
     }
 
     /// Whether the fold bar is on screen: this pane folds, and the user has
-    /// not hidden it. Read off the capability rather than the ribbon, so
-    /// narrowing the row cannot take the control away.
+    /// not hidden it. Defined on the view model, which the hit-test override
+    /// reads too, so the row drawn and the row withheld from the pane drag
+    /// cannot disagree.
     private var showsFoldBar: Bool {
-        viewModel.capabilities.fold && viewModel.foldControlVisible
+        viewModel.showsFoldBar
     }
 
     /// The drag affordance: a vertical capsule opening the row, ahead

@@ -449,6 +449,17 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // sized from, so the region this withholds and the region that can act
         // on it are the same span.
         chromeHost.interactiveOverride = { [chromeViewModel] point, bounds in
+            // The fold bar is controls end to end, so the whole row is
+            // SwiftUI's. Claiming it here is what stops a press in the gaps
+            // between the posture buttons, or a drag along the slider's
+            // track, from reaching the pane-rearrange host and lifting the
+            // pane.
+            if PaneChromeRibbonFit.isInFoldBar(
+                point: point,
+                showsFoldBar: chromeViewModel.showsFoldBar
+            ) {
+                return true
+            }
             let content = PaneChromeRibbonFit.contentWidth(
                 stop: chromeViewModel.ribbonRenderedStop
             )
