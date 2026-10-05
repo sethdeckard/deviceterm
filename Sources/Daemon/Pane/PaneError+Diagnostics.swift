@@ -67,6 +67,9 @@ extension PaneError {
         case .paneNotActive:
             return "pane-not-active"
 
+        case .paneFailed:
+            return "pane-failed"
+
         case .hidUnavailable:
             return "hid-unavailable"
 

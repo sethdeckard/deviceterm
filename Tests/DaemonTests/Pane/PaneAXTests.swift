@@ -111,6 +111,20 @@ func bridgeFailedMapsToDedicatedWireCode() {
 }
 
 @Test
+func aFailedPaneKeepsTheInactiveCodeAndGivesItsReason() {
+    // Clients dispatching on the code see no change from `paneNotActive`;
+    // the message is what stops claiming the simulator shut down.
+    let failed = PaneMethods.mapPaneError(
+        .paneFailed(paneId: UUID(), reason: "surface pool stayed unavailable")
+    )
+    let inactive = PaneMethods.mapPaneError(.paneNotActive(paneId: UUID()))
+
+    #expect(failed.code == inactive.code)
+    #expect(failed.message == "pane failed: surface pool stayed unavailable; attach it again to continue")
+    #expect(inactive.message == "pane is not active (sim has shut down)")
+}
+
+@Test
 func aMissingFrontmostApplicationIsReportedAsNotReady() throws {
     // A missing frontmost application can occur during simulator startup, so
     // it's retryable. It keeps the bridge-failure code for clients that ignore

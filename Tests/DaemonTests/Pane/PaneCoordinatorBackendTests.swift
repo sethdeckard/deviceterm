@@ -784,6 +784,36 @@ func accessibilityReadCompletedDuringShutdownIsRejectedAndReleasesClient() async
 }
 
 @Test
+func accessibilityReadCompletedDuringFailureReportsTheFailure() async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.blockAccessibility = true
+    let pane = try await coordinator.createMockPane(
+        udid: "ax-failed",
+        sessionId: UUID(),
+        backend: backend
+    )
+    let read = Task {
+        try await coordinator.accessibilityTree(paneId: pane.paneId, as: .guiPeer)
+    }
+    for _ in 0..<2_000 where !backend.accessibilityReadParked {
+        await Task.yield()
+    }
+    #expect(backend.accessibilityReadParked)
+
+    await coordinator.markPaneFailed(paneId: pane.paneId, reason: "surface pool exhausted")
+    backend.releaseAccessibility()
+
+    switch await read.result {
+    case .success:
+        Issue.record("failed pane returned its accessibility payload")
+
+    case let .failure(error):
+        #expect(error as? PaneError == .paneFailed(paneId: pane.paneId, reason: "surface pool exhausted"))
+    }
+}
+
+@Test
 func accessibilityReadOnOnePaneDoesNotBlockAnotherPane() async throws {
     let coordinator = PaneCoordinator()
     let blockedBackend = MockDeviceBackend()
@@ -1119,6 +1149,20 @@ func aMissingOrInactivePaneReportsUnavailable() async throws {
 
     #expect(inactiveResult.status == .unavailable)
     #expect(inactiveResult.targetOrientation == .landscapeLeft)
+
+    let failed = try await coordinator.createMockPane(
+        udid: "rotate-failed",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    await coordinator.markPaneFailed(paneId: failed.paneId, reason: "surface pool exhausted")
+    let failedResult = try await coordinator.rotate(
+        paneId: failed.paneId,
+        as: .guiPeer,
+        target: .absolute(.landscapeLeft)
+    )
+
+    #expect(failedResult.status == .unavailable)
 }
 
 @Test
@@ -3266,7 +3310,9 @@ func failureReleasesTheBackend() async throws {
     await coordinator.markPaneFailed(paneId: pane.paneId, reason: "surface pool exhausted")
 
     #expect(backend.shutdownCalled)
-    await #expect(throws: PaneError.paneNotActive(paneId: pane.paneId)) {
+    // Input names the failure and its reason, not a shutdown that never
+    // happened.
+    await #expect(throws: PaneError.paneFailed(paneId: pane.paneId, reason: "surface pool exhausted")) {
         try await coordinator.tap(paneId: pane.paneId, as: .guiPeer, x: 1, y: 1)
     }
 }

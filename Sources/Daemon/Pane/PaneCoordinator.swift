@@ -205,6 +205,9 @@ public actor PaneCoordinator {
         var subscribers: [UUID: Subscriber] = [:]
         var frameDemand = true
         var state: PaneLifecycle
+        /// The backend's failure reason, recorded when the pane fails. Input
+        /// and AX errors include it while the pane remains failed.
+        var failureReason: String?
         /// Set while an ownership transfer (adoption) is quiescing this
         /// record across its `await`s. The `authorize` gate consults it:
         /// no `.session` principal may reach the pane, and no principal
@@ -2553,6 +2556,13 @@ public actor PaneCoordinator {
     public func markPaneFailed(paneId: UUID, reason: String) async {
         guard let record = panes[paneId],
             record.state != .failed, record.state != .shutdown else { return }
+        record.failureReason = reason
+        DiagnosticLog.attach.error(
+            """
+            pane failed: shortId=\(record.shortId, privacy: .public) \
+            reason=\(reason, privacy: .public)
+            """
+        )
         await retire(record: record, to: .failed)
     }
 
@@ -3770,7 +3780,7 @@ public actor PaneCoordinator {
                 supporting: \.rotate,
                 operation: .rotate
             )
-        } catch PaneError.notFound, PaneError.paneNotActive {
+        } catch PaneError.notFound, PaneError.paneNotActive, PaneError.paneFailed {
             return RotateResult(
                 success: false,
                 status: .unavailable,
@@ -4115,7 +4125,7 @@ public actor PaneCoordinator {
             ObjectIdentifier(currentBackend) == ObjectIdentifier(backend),
             current.state != .shutdown,
             current.state != .failed else {
-            throw PaneError.paneNotActive(paneId: paneId)
+            throw inactivePaneError(record: current, paneId: paneId)
         }
     }
 
@@ -5018,7 +5028,8 @@ public actor PaneCoordinator {
     /// `authorize`) and then on a capability. Throws `notFound` if the
     /// paneId is unknown *or* the principal doesn't own it (indistinguishable
     /// by design), `paneNotActive` if the backend is gone (the device has
-    /// shut down / detached and the backend was released), and
+    /// shut down / detached and the backend was released), `paneFailed` if
+    /// it went because the pane failed, and
     /// `unsupportedOperation` if the backend exists but doesn't support
     /// `capability` (e.g. Crown on a physical device). Returns the record
     /// too, so a caller needing the pane's immutable fields (e.g.
@@ -5033,12 +5044,19 @@ public actor PaneCoordinator {
     ) throws -> (record: Record, backend: any DeviceBackend) {
         let record = try authorize(paneId: paneId, as: principal, gatesInput: true)
         guard let backend = record.backend else {
-            throw PaneError.paneNotActive(paneId: paneId)
+            throw inactivePaneError(record: record, paneId: paneId)
         }
         guard backend.capabilities[keyPath: capability] else {
             throw PaneError.unsupportedOperation(paneId: paneId, operation: operation)
         }
         return (record, backend)
+    }
+
+    /// The error for a pane with no backend to call: `paneFailed` with the
+    /// backend's reason once it has failed, `paneNotActive` otherwise.
+    private func inactivePaneError(record: Record, paneId: UUID) -> PaneError {
+        guard record.state == .failed else { return .paneNotActive(paneId: paneId) }
+        return .paneFailed(paneId: paneId, reason: record.failureReason ?? "unknown cause")
     }
 
     /// Resolve a pane's backend for an operation that will *send input*, and

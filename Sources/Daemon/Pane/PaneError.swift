@@ -62,6 +62,15 @@ public enum PaneError: Error, Equatable, Sendable {
         paneId:
         UUID
         )
+    /// Caller asked for an input or AX operation on a pane that failed: its
+    /// backend reported a fault it could not recover from and was torn down.
+    /// `reason` is the backend's own account. Unlike a shutdown, nothing
+    /// brings this pane back by itself; attaching again builds a new backend.
+    case paneFailed(
+        paneId:
+        UUID,
+        reason: String
+        )
     /// HID / PurpleHID acquisition failed at `pane.create` time.
     /// Surfacing here (rather than per-input-call lazily) keeps the
     /// failure mode visible to the caller before they wire the

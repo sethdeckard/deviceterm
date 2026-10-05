@@ -1082,6 +1082,13 @@ public enum PaneMethods {
                 "pane is not active (sim has shut down)"
             )
 
+        case let .paneFailed(_, reason):
+            // The same code as `paneNotActive`, so a client dispatching on it
+            // is unchanged; only the message says the pane failed, and why.
+            return RPCMethodError.invalidParams(
+                "pane failed: \(reason); attach it again to continue"
+            )
+
         case let .startStreamFailed(_, message):
             return RPCMethodError(
                 code: RPCErrorCode.serverError,

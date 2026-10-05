@@ -164,11 +164,15 @@ injected values.
 ## 2. Stalled consumer
 
 A stopped GUI is a consumer that holds leased surfaces and never acknowledges
-them. The daemon must fail the pane rather than grow.
+them. Its connection stays up, so the daemon counts it as live. The pane must
+keep dropping frames without growing, and catch up once the GUI resumes.
 
-Give the sim something that keeps producing frames before you stop the GUI. The
-pane fails only after 120 dropped acquisitions, one pool rotation, then 120
-more, and an idle SpringBoard may not emit damage callbacks anywhere near 60 Hz.
+Give the sim something that keeps producing frames before you stop the GUI.
+After acquisitions remain unavailable for two seconds, the pump attempts one
+pool retirement. If acquisitions remain unavailable for another two seconds, it
+checks whether consumer releases can unblock them. These checks run only when
+frames arrive, and an idle SpringBoard may not emit damage callbacks anywhere
+near 60 Hz.
 A scrolling list, a video, or a continuous animation in the guest is what makes
 2.3 land in seconds; without one it can wait indefinitely.
 
@@ -198,20 +202,19 @@ here; it would replace the one from setup and leave the sim lock held.
 |---|--------|----------|
 | 2.1 | Read `footprint=` from the next `footprint` line | A baseline in MiB. Use this rather than `ps` RSS: the daemon reports `phys_footprint`, which accounts for IOSurface and compressed memory that resident size may not. |
 | 2.2 | `kill -STOP "$APP_PID"` | The window stops redrawing. The daemon keeps running. |
-| 2.3 | Watch the attach stream for a few seconds | `surface pool unavailable; recovery will retry on the next frame` appears. That notice is the only log signal this check gets. The pool's fatal reason is **not** logged: `markPaneFailed` takes it and discards it. |
+| 2.3 | Watch the attach stream for a few seconds | `surface pool unavailable; recovery will retry on the next frame` appears, then `surface pool acquisition will retry; capacity is free or consumer releases can unblock it`. The second one is the daemon deciding to wait for the GUI rather than fail the pane. |
 | 2.4 | Read `footprint=` across the next three lines (about three minutes) | Plateaus. A value that keeps climbing is the failure this check exists for. |
-| 2.5 | Read the rest of that `footprint` line | `panes` still counts the pane. Its pool counters no longer contribute: failing the pane tore down its backend, so `surfaceDrops` will be flat or zero here rather than rising. |
-| 2.6 | `kill -CONT "$APP_PID" && APP_PID=` | The GUI resumes and the pane shows a buttonless overlay reading `Failed: daemon reported pane failure`. It does not catch up to live frames, and the text is generic because the daemon's failure event carries no reason. Clearing `APP_PID` disarms the resume: the restart below replaces that process, and a stale pid would make final cleanup report a false failure or signal something unrelated. |
+| 2.5 | Read the rest of that `footprint` line | `panes` still counts the pane, and `surfaceDrops` rises from one line to the next. The pump is still running, and it drops every frame it has no slot for. |
+| 2.6 | `kill -CONT "$APP_PID" && APP_PID=` | The GUI resumes, releases its leases, and the pane catches up to live frames without a re-attach. Clearing `APP_PID` disarms the resume: the restart below replaces that process, and a stale pid would make final cleanup report a false failure or signal something unrelated. |
 
-Because the pane fails within seconds and the footprint sampler runs once a
-minute, the sampler is not how you observe the drops. It is how you confirm what
-is left afterwards.
+The footprint sampler runs once a minute, so it shows the plateau and the rising
+drop count, not individual drops.
 
-Section 2 leaves the pane failed with no buttons on it, and the sim itself is
-**still Booted**. Restarting while it stays Booted can offer orphan recovery and
-reattach it without a new boot event, and booting an already-Booted sim produces
-no causal boot claim either way. Shut it down first, so section 3 starts from a
-fresh boot rather than a recovered orphan:
+Section 2 leaves the pane rendering, and the sim **still Booted**. Restarting
+while it stays Booted can offer orphan recovery and reattach it without a new
+boot event, and booting an already-Booted sim produces no causal boot claim
+either way. Shut it down first, so section 3 starts from a fresh boot rather
+than a recovered orphan:
 
 ```sh
 xcrun simctl shutdown <udid>      # in a DeviceTerm tab
@@ -288,10 +291,12 @@ A pane in `.rendering` proves the daemon thinks it is streaming, not that frames
 are arriving. Only visible motion in the guest distinguishes those, which is why
 sections 2 and 3 both require it.
 
-The pool's fatal reason reaches nothing you can read. `markPaneFailed` accepts
-it and drops it, and the daemon's `.failed` lifecycle event carries no message,
-so the GUI substitutes `daemon reported pane failure`. To find out why a pane
-failed you need the `.recovered` notice that preceded it, or a debugger.
+None of these sections fails a pane, because a stopped GUI keeps its connection
+and the daemon waits for it. When a pane does fail, its reason goes to the
+daemon log at error level on the `attach` category (`pane failed: shortId=…
+reason=…`), and input or AX calls to the pane return it. The `.failed`
+lifecycle event still carries no message, so the GUI overlay still reads
+`daemon reported pane failure`.
 
 `surfaceNoticesConflated` does not rise just because a consumer stopped. XPC
 delivery drains the pane event channel as soon as `xpc_connection_send_message`
