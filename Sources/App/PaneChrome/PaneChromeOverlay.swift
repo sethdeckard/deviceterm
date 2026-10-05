@@ -56,9 +56,14 @@ struct PaneChromeOverlay: View {
         case resize
     }
 
-    /// The ghostty selection-background color (fallback to system accent) for
-    /// the on-state tint an active toggle carries. Shared across every ribbon
-    /// control that needs the theme color.
+    /// The directly configured ghostty `selection-background` color,
+    /// falling back to the system accent when it is unavailable.
+    ///
+    /// Every chrome control carrying the theme's color reads this: the
+    /// on-state tint an active toggle shows, the hinge slider's filled
+    /// track, and the booting spinner. The same fallback backs the pane's
+    /// focus border and the drag overlay, so a config that sets no usable
+    /// value keeps the system accent throughout rather than going colorless.
     private static var themeTint: Color {
         let fallback = NSColor.controlAccentColor
         return Color(nsColor: GhosttyThemeColors.cachedSelectionBackground() ?? fallback)
@@ -499,6 +504,10 @@ struct PaneChromeOverlay: View {
                 }
             )
             .controlSize(.small)
+            // SwiftUI tints a slider from the system accent unless told
+            // otherwise. Keeps the filled track consistent with the pane's
+            // focus border, which reads the same color.
+            .tint(Self.themeTint)
             .accessibilityIdentifier("fold.angle")
             // The slider's current value. Fixed width and tabular digits so
             // the slider does not resize as the number changes.
@@ -809,7 +818,7 @@ private extension PaneChromeOverlay {
     /// Status badge: small colored indicator showing the sim's lifecycle
     /// state. Mirrors the four `SimulatorPaneState` cases:
     ///
-    ///   .booting → spinning ProgressView (no fixed color; system-tint).
+    ///   .booting → spinning ProgressView, tinted with `themeTint`.
     ///   .rendering → solid green dot.
     ///   .shutdown → solid gray dot.
     ///   .failed → solid red dot.
@@ -826,6 +835,9 @@ private extension PaneChromeOverlay {
                     .progressViewStyle(.circular)
                     .controlSize(.small)
                     .scaleEffect(0.6)
+                    // Keeps the booting indicator on the pane's theme
+                    // tint rather than the system accent.
+                    .tint(PaneChromeOverlay.themeTint)
 
             case .rendering:
                 Circle().fill(.green)
