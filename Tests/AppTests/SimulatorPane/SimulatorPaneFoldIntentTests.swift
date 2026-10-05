@@ -58,7 +58,7 @@ struct SimulatorPaneFoldIntentTests {
         #expect(fake.foldCalls.map(\.degrees) == [posture.degrees])
     }
 
-    @Test("the chrome reserves a second row only while the bar is up")
+    @Test("the picture loses both rows to chrome only while the bar is up")
     func chromeHeightFollowsTheFoldBar() {
         let (viewController, _) = makeViewController()
         viewController.loadViewIfNeeded()
@@ -68,6 +68,80 @@ struct SimulatorPaneFoldIntentTests {
         #expect(viewController.currentChromeHeight() == twoRows)
         viewController.chromeViewModel.foldControlVisible = false
         #expect(viewController.currentChromeHeight() == oneRow)
+    }
+
+    @Test("the fold bar sits under the picture and the chrome row above it")
+    func foldBarLaysOutBelowThePicture() throws {
+        let (viewController, _) = makeViewController()
+        viewController.view.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        viewController.syncChromeHeight()
+        viewController.view.layoutSubtreeIfNeeded()
+        let views = viewController.view.subviews
+        let chrome = try #require(views.first { $0 is PaneChromeDragHostView<PaneChromeOverlay> })
+        let content = try #require(views.first { $0 is SimulatorContentView })
+        let bar = try #require(views.first { $0 is PaneChromeDragHostView<PaneFoldBarView> })
+        #expect(chrome.frame.height == PaneChromeRibbonFit.chromeRowHeight)
+        #expect(bar.frame.height == PaneChromeRibbonFit.foldBarHeight)
+        // The rows the picture loses are the rows Fit Screen subtracts.
+        #expect(content.frame.height == 600 - viewController.currentChromeHeight())
+        // Bottom edge of the pane, under the picture, in either flip sense.
+        let wrapper = viewController.view
+        let barAtBottom = wrapper.isFlipped ? bar.frame.maxY == 600 : bar.frame.minY == 0
+        #expect(barAtBottom)
+        #expect(!bar.frame.intersects(content.frame))
+        #expect(!chrome.frame.intersects(content.frame))
+    }
+
+    @Test("hiding the fold bar gives its height back to the picture")
+    func hidingTheFoldBarCollapsesItsHost() throws {
+        let (viewController, _) = makeViewController()
+        viewController.view.frame = NSRect(x: 0, y: 0, width: 400, height: 600)
+        viewController.chromeViewModel.foldControlVisible = false
+        viewController.syncChromeHeight()
+        viewController.view.layoutSubtreeIfNeeded()
+        let views = viewController.view.subviews
+        let content = try #require(views.first { $0 is SimulatorContentView })
+        let bar = try #require(views.first { $0 is PaneChromeDragHostView<PaneFoldBarView> })
+        #expect(bar.frame.height == 0)
+        #expect(content.frame.height == 600 - PaneChromeRibbonFit.chromeRowHeight)
+    }
+
+    @Test("the fold bar's host can never arm a pane drag")
+    func foldBarHostCarriesNoDragPayload() throws {
+        let (viewController, _) = makeViewController()
+        viewController.loadViewIfNeeded()
+        // Set after load, which is when the chrome host picks it up, so a
+        // forward that reached the bar's host too would show here.
+        viewController.tabID = TabID(value: 1)
+        let bar = try #require(
+            viewController.view.subviews.first {
+                $0 is PaneChromeDragHostView<PaneFoldBarView>
+            } as? PaneChromeDragHostView<PaneFoldBarView>
+        )
+        #expect(bar.tabID == nil)
+        #expect(bar.slot == nil)
+        #expect(bar.focusReceiver is SimulatorContentView)
+    }
+
+    /// SwiftUI answers the hosting view itself along the slider's track. A
+    /// host that passed that hit on would hand the drag to a host with no
+    /// payload, and the slider would never move.
+    @Test("the fold bar's host keeps every hit with SwiftUI", arguments: [
+        CGPoint.zero,
+        CGPoint(x: 200, y: 16),
+        CGPoint(x: 399, y: 31)
+    ])
+    func foldBarHostClaimsItsWholeRow(point: CGPoint) throws {
+        let (viewController, _) = makeViewController()
+        viewController.loadViewIfNeeded()
+        let bar = try #require(
+            viewController.view.subviews.first {
+                $0 is PaneChromeDragHostView<PaneFoldBarView>
+            } as? PaneChromeDragHostView<PaneFoldBarView>
+        )
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: PaneChromeRibbonFit.foldBarHeight)
+        let claims = try #require(bar.interactiveOverride)
+        #expect(claims(point, bounds))
     }
 
     @Test("a pane that cannot fold never reserves the second row")

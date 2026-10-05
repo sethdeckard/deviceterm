@@ -83,16 +83,15 @@ final class PaneChromeViewModel {
     /// almost certainly wants to set straight after boot.
     var foldControlVisible: Bool
 
-    /// Whether the pane draws a fold bar under its chrome row.
+    /// Whether the pane draws a fold bar under its device picture.
     ///
     /// Read off the capability rather than the ribbon, so narrowing the row
     /// cannot take the control away.
     ///
     /// Lives here rather than in the view because two surfaces have to agree
-    /// on it: the SwiftUI row that draws the bar, and the AppKit hit-test
-    /// override that withholds the bar's region from the pane-rearrange drag.
-    /// A second copy of the expression would let the row drawn and the row
-    /// withheld drift apart.
+    /// on it: the SwiftUI row that draws the bar, and the pane view
+    /// controller's constraint that reserves its height. A second copy of the
+    /// expression would let the row drawn and the row reserved drift apart.
     var showsFoldBar: Bool {
         capabilities.fold && foldControlVisible
     }

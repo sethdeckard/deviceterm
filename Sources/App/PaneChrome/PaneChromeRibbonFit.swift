@@ -36,12 +36,11 @@ enum PaneChromeRibbonFit {
     /// it leaves a band that neither the gesture nor the pane drag will take.
     static let chromeRowHeight: CGFloat = 28
 
-    /// Height of the fold bar, the second chrome row a foldable pane shows
-    /// under the first.
+    /// Height of the fold bar a foldable pane shows under its device picture.
     ///
     /// Taller than `chromeRowHeight` because it carries a slider, whose thumb
     /// needs more room than a 22pt button. Read by the SwiftUI row that draws
-    /// it and by the constraint the pane view controller sizes its chrome
+    /// it and by the constraint the pane view controller sizes its host
     /// with, so the strip drawn and the strip reserved are one number.
     static let foldBarHeight: CGFloat = 32
 
@@ -150,27 +149,6 @@ enum PaneChromeRibbonFit {
             + badgeSize
             + badgeTitleSpacing
             + minimumTitleGap
-    }
-
-    // MARK: - Hit regions
-
-    /// Whether `point`, in the chrome host's own flipped coordinates, falls in
-    /// the fold bar.
-    ///
-    /// The row is controls end to end: three posture buttons and the hinge
-    /// slider. SwiftUI reports nothing interactive in the gaps between them or
-    /// along the slider's track away from its thumb, and the host's hit test
-    /// hands anything SwiftUI declines to the pane-rearrange drag. Without
-    /// this the row reads as a drag handle, and a press beside a button or a
-    /// drag along the track lifts the pane instead of folding the device.
-    ///
-    /// The chrome row above keeps its own hits, which is what still
-    /// rearranges a pane. False when the pane shows no fold bar, where the
-    /// region is not drawn and withholding it would take hits from the
-    /// content below.
-    static func isInFoldBar(point: CGPoint, showsFoldBar: Bool) -> Bool {
-        guard showsFoldBar else { return false }
-        return point.y > chromeRowHeight && point.y <= chromeRowHeight + foldBarHeight
     }
 
     // MARK: - Reveal ladder

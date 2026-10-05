@@ -475,10 +475,11 @@ rotation. Drag upward from the bottom edge to send the system edge gesture.
 On a watchOS pane, scroll over the display or drag on the bezel to turn the
 Digital Crown.
 
-On a foldable Simulator pane, a fold bar sits under the pane's title row:
+On a foldable Simulator pane, a fold bar sits under the device picture:
 Fold Closed, Fold to Book, Unfold, and a slider for any angle between them.
 The same three positions sit in **Device ▸ Hardware** and in the pane's
-right-click menu.
+right-click menu. Dragging the bar doesn't move the pane; drag the title row
+for that.
 
 The bar appears on its own the first time a pane reports that it folds. The
 fold button in the title row hides it again, which gives the picture back

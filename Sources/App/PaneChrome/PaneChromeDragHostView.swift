@@ -38,7 +38,8 @@ final class PaneChromeDragHostView<Content: View>: NSView, NSDraggingSource {
     /// Region of the chrome that belongs to SwiftUI even where SwiftUI
     /// reports nothing interactive under the pointer, forwarded to the
     /// hosting view's hit test. The sim ribbon's gesture-driven resize handle
-    /// is the one caller; see `PaneChromeHostingView.interactiveOverride`.
+    /// and the fold bar's slider are the callers; see
+    /// `PaneChromeHostingView.interactiveOverride`.
     var interactiveOverride: ((NSPoint, CGRect) -> Bool)? {
         get { hosting.interactiveOverride }
         set { hosting.interactiveOverride = newValue }

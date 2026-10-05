@@ -64,7 +64,7 @@ struct PaneChromeOverlay: View {
     /// track, and the booting spinner. The same fallback backs the pane's
     /// focus border and the drag overlay, so a config that sets no usable
     /// value keeps the system accent throughout rather than going colorless.
-    private static var themeTint: Color {
+    static var themeTint: Color {
         let fallback = NSColor.controlAccentColor
         return Color(nsColor: GhosttyThemeColors.cachedSelectionBackground() ?? fallback)
     }
@@ -116,34 +116,17 @@ struct PaneChromeOverlay: View {
         // Spacing here comes from `PaneChromeRibbonFit`, which also
         // predicts which reveal stops this row can hold. Shared constants
         // so a tweak here can't leave that prediction stale.
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                dragGrip
-                badgeAndTitle
-                    .allowsHitTesting(false)
-                    .padding(.leading, PaneChromeRibbonFit.handleTrailingGap)
-                Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
-                ribbonControl
-            }
-            .frame(height: PaneChromeRibbonFit.chromeRowHeight)
-            // A second row rather than something over the pane. The hinge is
-            // continuous, so the control needs a slider, and a slider needs
-            // width the ribbon does not have.
-            if showsFoldBar {
-                foldBar
-                    .frame(height: PaneChromeRibbonFit.foldBarHeight)
-            }
+        HStack(spacing: 0) {
+            dragGrip
+            badgeAndTitle
+                .allowsHitTesting(false)
+                .padding(.leading, PaneChromeRibbonFit.handleTrailingGap)
+            Spacer(minLength: PaneChromeRibbonFit.minimumTitleGap)
+            ribbonControl
         }
+        .frame(height: PaneChromeRibbonFit.chromeRowHeight)
         .background(GhosttyThemeColors.backgroundSwiftUI(opacity: 1.0))
         .onHover { isHovering = $0 }
-    }
-
-    /// Whether the fold bar is on screen: this pane folds, and the user has
-    /// not hidden it. Defined on the view model, which the hit-test override
-    /// reads too, so the row drawn and the row withheld from the pane drag
-    /// cannot disagree.
-    private var showsFoldBar: Bool {
-        viewModel.showsFoldBar
     }
 
     /// The drag affordance: a vertical capsule opening the row, ahead
@@ -183,7 +166,7 @@ struct PaneChromeOverlay: View {
         HStack(spacing: PaneChromeRibbonFit.ribbonItemSpacing) {
             chevronHandle
             ribbonViewport
-            chromeControlButton(
+            Self.chromeControlButton(
                 systemImage: "ellipsis.circle",
                 help: "Pane Actions",
                 action: viewModel.onOpenContextMenu
@@ -473,52 +456,30 @@ struct PaneChromeOverlay: View {
         )
     }
 
-    /// The fold bar: the three named postures, then the hinge itself.
-    ///
-    /// The slider sends on release, never while dragging. Each fold spawns a
-    /// guest helper the daemon waits on, serialized behind the pane's input
-    /// queue, so a drag that sent per tick would enqueue a few hundred of
-    /// them and the hinge would still be catching up long after the pointer
-    /// stopped.
-    private var foldBar: some View {
-        HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
-            ForEach(FoldPosture.allCases, id: \.self) { posture in
-                chromeControlButton(
-                    systemImage: posture.chromeSymbol,
-                    help: posture.chromeTitle,
-                    tint: nil,
-                    action: { viewModel.onFold(posture.degrees) }
+    /// Shared shape for the ribbon's buttons and the ⋯ overflow.
+    /// Tint optional so callers can mark hot or stateful buttons with
+    /// the theme color. Use `.borderless` to preserve action delivery
+    /// and provide the default press highlight.
+    /// `contentShape` covers the whole 22×22 frame so taps in the
+    /// gaps of thin SF symbol strokes still register. Shared with
+    /// `PaneFoldBarView`, whose posture buttons match the ribbon's.
+    static func chromeControlButton(
+        systemImage: String,
+        help: String,
+        tint: Color? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint ?? Color.primary)
+                .frame(
+                    width: PaneChromeRibbonFit.controlButtonWidth,
+                    height: PaneChromeRibbonFit.controlButtonWidth
                 )
-                .accessibilityIdentifier("fold.posture.\(posture.rawValue)")
-            }
-            Slider(
-                value: Binding(
-                    get: { viewModel.foldDegrees },
-                    set: { viewModel.foldDegrees = $0 }
-                ),
-                in: FoldPosture.degreeRange,
-                onEditingChanged: { editing in
-                    viewModel.foldSliderIsTracking = editing
-                    guard !editing else { return }
-                    viewModel.onFold(viewModel.foldDegrees)
-                }
-            )
-            .controlSize(.small)
-            // SwiftUI tints a slider from the system accent unless told
-            // otherwise. Keeps the filled track consistent with the pane's
-            // focus border, which reads the same color.
-            .tint(Self.themeTint)
-            .accessibilityIdentifier("fold.angle")
-            // The slider's current value. Fixed width and tabular digits so
-            // the slider does not resize as the number changes.
-            Text("\(Int(viewModel.foldDegrees.rounded()))°")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .trailing)
-                .accessibilityIdentifier("fold.angle.readout")
+                .contentShape(Rectangle())
         }
-        .padding(.horizontal, PaneChromeRibbonFit.leadingPadding)
+        .buttonStyle(.borderless)
+        .help(help)
     }
 
     // MARK: - Methods
@@ -611,7 +572,7 @@ struct PaneChromeOverlay: View {
                 return nil
             }
         }()
-        return chromeControlButton(
+        return Self.chromeControlButton(
             systemImage: action.systemImage(
                 recording: viewModel.recordingActive,
                 axOn: viewModel.axInspectorEnabled
@@ -680,32 +641,6 @@ struct PaneChromeOverlay: View {
             // continuous slider a row of their own.
             viewModel.onFoldBarToggle()
         }
-    }
-
-    /// Shared shape for the ribbon's buttons and the ⋯ overflow.
-    /// Tint optional so callers can mark hot or stateful buttons with
-    /// the theme color. Custom ButtonStyle interfered with action
-    /// firing; `.borderless` is the reliable choice, and press feedback
-    /// is the borderless default (subtle highlight on click).
-    /// `contentShape` covers the whole 22×22 frame so taps in the
-    /// gaps of thin SF symbol strokes still register.
-    private func chromeControlButton(
-        systemImage: String,
-        help: String,
-        tint: Color? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint ?? Color.primary)
-                .frame(
-                    width: PaneChromeRibbonFit.controlButtonWidth,
-                    height: PaneChromeRibbonFit.controlButtonWidth
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .help(help)
     }
 }
 

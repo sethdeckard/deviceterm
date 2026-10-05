@@ -88,9 +88,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     let locationViewModel: PaneLocationViewModel
     private var axPanelHost: NSHostingView<SimulatorPaneAXInspector>?
     private var contentTrailingToWrapperEdge: NSLayoutConstraint?
-    /// The chrome strip's height. Held because the fold bar makes it a second
-    /// row: the constant moves when a foldable pane shows or hides it.
-    private var chromeHeightToWrapper: NSLayoutConstraint?
+    /// The fold bar's height. Held because the constant moves when a
+    /// foldable pane shows or hides the bar.
+    private var foldBarHeightConstraint: NSLayoutConstraint?
     private var foldBarObservation: ObservationToken?
     private var contentTrailingToAxPanel: NSLayoutConstraint?
     private var axPanelTrailingConstraint: NSLayoutConstraint?
@@ -353,8 +353,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
 
-    /// Chrome height: the resizable ribbon row, plus the fold bar when a
-    /// foldable pane is showing one.
+    /// Chrome height: the vertical space the device picture loses to chrome.
+    /// That is the resizable ribbon row above it, plus the fold bar below it
+    /// when a foldable pane is showing one.
     ///
     /// Uniform across device families otherwise. Hardware buttons never earn
     /// a row of their own; they live further up the ribbon's reveal ladder
@@ -363,7 +364,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     ///
     /// The numbers come from `PaneChromeRibbonFit`, which the SwiftUI rows
     /// and the ribbon's resize handle also read, so the strip reserved cannot
-    /// drift from the strip drawn.
+    /// drift from the strip drawn. Both rows count, because Fit Screen sizes
+    /// the picture from what is left of the pane.
     static func chromeHeight(forFamily family: String, foldBarVisible: Bool = false) -> CGFloat {
         PaneChromeRibbonFit.chromeRowHeight
             + (foldBarVisible ? PaneChromeRibbonFit.foldBarHeight : 0)
@@ -449,38 +451,37 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // sized from, so the region this withholds and the region that can act
         // on it are the same span.
         chromeHost.interactiveOverride = { [chromeViewModel] point, bounds in
-            // The fold bar is controls end to end, so the whole row is
-            // SwiftUI's. Claiming it here is what stops a press in the gaps
-            // between the posture buttons, or a drag along the slider's
-            // track, from reaching the pane-rearrange host and lifting the
-            // pane.
-            if PaneChromeRibbonFit.isInFoldBar(
-                point: point,
-                showsFoldBar: chromeViewModel.showsFoldBar
-            ) {
-                return true
-            }
             let content = PaneChromeRibbonFit.contentWidth(
                 stop: chromeViewModel.ribbonRenderedStop
             )
             let ribbonLeadingEdge = bounds.width
                 - PaneChromeRibbonFit.ribbonWidth(contentWidth: content)
-            // The host is flipped, so the ribbon row is the top
-            // `chromeRowHeight` of it. Without this bound the handle's column
-            // would keep claiming hits all the way down the fold bar, and the
-            // slider sitting in that column would never see a drag.
-            guard point.y <= PaneChromeRibbonFit.chromeRowHeight else { return false }
             let zone = PaneChromeRibbonFit.chevronHandleZone
             return point.x >= ribbonLeadingEdge + zone.lowerBound
                 && point.x <= ribbonLeadingEdge + zone.upperBound
         }
         chromeHost.translatesAutoresizingMaskIntoConstraints = false
         chromeHostView = chromeHost
+        // `tabID` and `slot` stay unset, which is what keeps a drag here from
+        // ever arming a pane rearrange.
+        let foldBarHost = PaneChromeDragHostView(
+            rootView: PaneFoldBarView(viewModel: chromeViewModel),
+            showsGrabCursor: false
+        )
+        foldBarHost.focusReceiver = content
+        // The bar is controls end to end, so every hit stays with SwiftUI.
+        // SwiftUI answers the hosting view itself along the slider's track,
+        // and handing that to this payload-less host would drop the drag.
+        // Presses in gaps between controls do not focus the pane. Posture
+        // buttons and slider release focus it through `onFold`.
+        foldBarHost.interactiveOverride = { _, _ in true }
+        foldBarHost.translatesAutoresizingMaskIntoConstraints = false
         let wrapper = SimulatorPaneWrapperView(frame: .zero)
         wrapper.inputTarget = content
         wrapper.translatesAutoresizingMaskIntoConstraints = false
         wrapper.addSubview(chromeHost)
         wrapper.addSubview(content)
+        wrapper.addSubview(foldBarHost)
         // Bezel sits between the wrapper and the Metal content
         // view. The Metal view's clearColor is (0,0,0,0), so its
         // letterbox region is transparent and the bezel paints
@@ -514,13 +515,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // a drag starts so the user drags a translucent miniature of
         // the whole pane.
         chromeHost.snapshotSource = wrapper
-        // Starts at the title-row height; `syncChromeHeight()` adds the fold
-        // bar's height when a foldable pane shows one. The host's intrinsic
-        // content size matches because SwiftUI sizes to its actual content.
-        let chromeHeightConstraint = chromeHost.heightAnchor.constraint(
-            equalToConstant: Self.chromeHeight(forFamily: viewModel.family)
-        )
-        chromeHeightToWrapper = chromeHeightConstraint
+        // The fold bar starts collapsed; `syncChromeHeight()` opens it when a
+        // foldable pane shows one.
+        let foldBarHeight = foldBarHost.heightAnchor.constraint(equalToConstant: 0)
+        foldBarHeightConstraint = foldBarHeight
         let contentTrailing = content.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
         contentTrailingToWrapperEdge = contentTrailing
         NSLayoutConstraint.activate(
@@ -528,11 +526,15 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             chromeHost.topAnchor.constraint(equalTo: wrapper.topAnchor),
             chromeHost.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
             chromeHost.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
-            chromeHeightConstraint,
+            chromeHost.heightAnchor.constraint(equalToConstant: PaneChromeRibbonFit.chromeRowHeight),
             content.topAnchor.constraint(equalTo: chromeHost.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
             contentTrailing,
-            content.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor)
+            content.bottomAnchor.constraint(equalTo: foldBarHost.topAnchor),
+            foldBarHost.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
+            foldBarHost.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
+            foldBarHost.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor),
+            foldBarHeight
             ]
             )
         view = wrapper
@@ -1009,7 +1011,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     func currentChromeHeight() -> CGFloat {
         Self.chromeHeight(
             forFamily: viewModel.family,
-            foldBarVisible: chromeViewModel.capabilities.fold && chromeViewModel.foldControlVisible
+            foldBarVisible: chromeViewModel.showsFoldBar
         )
     }
 
@@ -1043,16 +1045,16 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         return FoldCreaseGeometry.crease(degrees: degrees)
     }
 
-    /// Resize the chrome strip to whatever rows it is drawing now.
+    /// Open or collapse the fold bar's host to match whether it is drawn.
     ///
-    /// The SwiftUI chrome sizes itself to its content, but the constraint
-    /// reserving the strip does not, so showing the fold bar without this
-    /// leaves the second row drawn over the top of the device picture.
+    /// The SwiftUI bar sizes itself to its content, but the constraint
+    /// reserving it does not, so showing the bar without this leaves it with
+    /// no height to draw in.
     func syncChromeHeight() {
-        let height = currentChromeHeight()
-        guard let constraint = chromeHeightToWrapper, constraint.constant != height else { return }
+        let height = chromeViewModel.showsFoldBar ? PaneChromeRibbonFit.foldBarHeight : 0
+        guard let constraint = foldBarHeightConstraint, constraint.constant != height else { return }
         constraint.constant = height
-        // The strip and the picture divide one pane, so a row appearing takes
+        // The bar and the picture divide one pane, so the bar appearing takes
         // its height from the picture. A preset pinning that picture to real
         // points or pixels stops being true the moment it does, and the
         // divider does not move on its own, so replay the preset against the
@@ -1406,7 +1408,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         wrapper.addSubview(panel)
         let topConstraint = panel.topAnchor.constraint(equalTo: chrome.bottomAnchor)
         let trailingConstraint = panel.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
-        let bottomConstraint = panel.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor)
+        let bottomConstraint = panel.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         // Width is high-priority but not required so panes narrower than
         // 240pt don't trip Auto Layout. The content's nonnegative-width
         // floor takes precedence; the panel just shrinks below ideal.

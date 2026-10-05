@@ -16,7 +16,9 @@ import SwiftUI
 /// returns the specific subview, not the bare host, so we forward
 /// it through unchanged. Only hits that resolve to `self` (= the
 /// hosting view itself, i.e. nobody interactive wanted them) get
-/// redirected to the wrapper.
+/// redirected to the wrapper. `PaneChromeHitDecision` holds the
+/// choice, including the `interactiveOverride` check that runs whether
+/// SwiftUI answered `self` or nothing.
 @MainActor
 final class PaneChromeHostingView<Content: View>: NSHostingView<Content> {
     /// Region that keeps its hits even where SwiftUI reports nothing
@@ -32,16 +34,37 @@ final class PaneChromeHostingView<Content: View>: NSHostingView<Content> {
     /// the ribbon. Bounds arrive as a parameter so the closure never has to
     /// capture the view.
     ///
-    /// Left nil by every other chrome, which keeps the plain pass-through.
+    /// The fold bar's host claims its whole row the same way, because its
+    /// slider track is another region SwiftUI answers `self` for. Left nil by
+    /// every other chrome, which keeps the plain pass-through.
     var interactiveOverride: ((NSPoint, CGRect) -> Bool)?
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let result = super.hitTest(point)
-        guard result === self else { return result }
-        let local = convert(point, from: superview)
-        if interactiveOverride?(local, bounds) == true {
-            return self
+        let answer: PaneChromeHitDecision.SwiftUIAnswer
+        if result == nil {
+            answer = .none
+        } else if result === self {
+            answer = .host
+        } else {
+            answer = .subview
         }
-        return superview
+        let outcome = PaneChromeHitDecision.resolve(
+            swiftUI: answer,
+            overrideClaims: interactiveOverride?(convert(point, from: superview), bounds) == true
+        )
+        switch outcome {
+        case .forward:
+            return result
+
+        case .claim:
+            return self
+
+        case .passThrough:
+            return superview
+
+        case .decline:
+            return nil
+        }
     }
 }
