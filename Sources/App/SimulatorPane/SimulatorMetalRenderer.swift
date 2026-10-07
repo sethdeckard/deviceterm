@@ -50,13 +50,14 @@ final class SimulatorMetalRenderer {
         /// `(ndcX, ndcY, u, v)`, the projected position and the texture
         /// coordinate before the orientation rotation is applied.
         var positionUV: SIMD4<Float>
-        /// `(localX, localY, shade, w)`. `local` is the corner's position in
-        /// the *flat* picture, in pixels from its centre, which is what the
+        /// `(localX, localY, w, 0)`. `local` is the corner's position in the
+        /// *flat* picture, in pixels from its centre, which is what the
         /// rounded-screen SDF measures so the corners follow the bend. `w` is
         /// the clip-space divisor: a bent half is a trapezoid on screen, and
         /// without a real `w` the rasterizer interpolates its texture affinely
-        /// and the picture warps across the fold.
-        var localShade: SIMD4<Float>
+        /// and the picture warps across the fold. The last lane pads the
+        /// field to 16 bytes.
+        var localW: SIMD4<Float>
     }
 
     /// Concurrent queue for the off-by-default post-completion trace scans,
@@ -108,20 +109,22 @@ final class SimulatorMetalRenderer {
         let alongNdc = vertical ? ndc.y : ndc.x
         let acrossPixels = (vertical ? screen.x : screen.y) / 2
         let alongPixels = (vertical ? screen.y : screen.x) / 2
-        let outerAcross = acrossNdc * Float(crease.outerAcross)
-        let creaseAlong = alongNdc * Float(crease.creaseAlong)
-        // The crease's clip divisor. The outer edges lie in the screen plane
-        // and divide by one; the crease sits behind them, which is what makes
-        // it the shorter edge.
-        let creaseW = Float(1 / crease.creaseAlong)
+        let scale = Float(crease.scale)
+        let outerAcross = acrossNdc * Float(crease.outerAcross) * scale
+        let outerAlong = alongNdc * Float(crease.outerAlong) * scale
+        let creaseAlong = alongNdc * scale
+        // The crease's clip divisor, relative to the outer edges' one. The
+        // crease sits behind them by the edges' magnification, which is what
+        // makes it the shorter edge.
+        let creaseW = Float(crease.outerAlong)
 
         /// One corner, in the crease's axes. `across` is -1 on the leading
         /// half's outer edge, 0 on the crease itself, +1 on the trailing
         /// half's; `along` is -1 or +1 down the crease.
-        func corner(across: Float, along: Float, shade: Float) -> CreaseVertex {
+        func corner(across: Float, along: Float) -> CreaseVertex {
             let onCrease = across == 0
             let acrossNdcPosition = across * outerAcross
-            let alongNdcPosition = along * (onCrease ? creaseAlong : alongNdc)
+            let alongNdcPosition = along * (onCrease ? creaseAlong : outerAlong)
             let position = vertical
                 ? SIMD2<Float>(acrossNdcPosition, alongNdcPosition)
                 : SIMD2<Float>(alongNdcPosition, acrossNdcPosition)
@@ -136,22 +139,19 @@ final class SimulatorMetalRenderer {
             let uvPoint = SIMD2<Float>((unit.x + 1) / 2, (1 - unit.y) / 2)
             return CreaseVertex(
                 positionUV: SIMD4<Float>(position.x, position.y, uvPoint.x, uvPoint.y),
-                localShade: SIMD4<Float>(
-                    local.x, local.y, shade, onCrease ? creaseW : 1
-                )
+                localW: SIMD4<Float>(local.x, local.y, onCrease ? creaseW : 1, 0)
             )
         }
 
-        func half(outerSide: Float, shade: Float) -> [CreaseVertex] {
-            let outerLow = corner(across: outerSide, along: -1, shade: shade)
-            let outerHigh = corner(across: outerSide, along: 1, shade: shade)
-            let creaseLow = corner(across: 0, along: -1, shade: shade)
-            let creaseHigh = corner(across: 0, along: 1, shade: shade)
+        func half(outerSide: Float) -> [CreaseVertex] {
+            let outerLow = corner(across: outerSide, along: -1)
+            let outerHigh = corner(across: outerSide, along: 1)
+            let creaseLow = corner(across: 0, along: -1)
+            let creaseHigh = corner(across: 0, along: 1)
             return [outerLow, outerHigh, creaseLow, outerHigh, creaseHigh, creaseLow]
         }
 
-        return half(outerSide: -1, shade: Float(crease.leadingShade))
-            + half(outerSide: 1, shade: Float(crease.trailingShade))
+        return half(outerSide: -1) + half(outerSide: 1)
     }
 
     /// Render `surface` into `view`'s current drawable. `orientation`
@@ -288,9 +288,25 @@ final class SimulatorMetalRenderer {
             index: 0
         )
         if let (shape, _) = bent {
+            let vertical = FoldCreaseGeometry.creaseRunsVertically(in: orientation)
+            // The same fit the bezel and the input path apply, measured in
+            // drawable pixels rather than points. It is a ratio, so the unit
+            // does not change it.
+            let fitted = FoldCreaseGeometry.fitted(
+                shape,
+                picture: CGRect(
+                    x: (viewW - screenW) / 2,
+                    y: (viewH - screenH) / 2,
+                    width: screenW,
+                    height: screenH
+                ),
+                margin: insetPx,
+                within: CGRect(x: 0, y: 0, width: viewW, height: viewH),
+                vertical: vertical
+            )
             var vertices = Self.creaseVertices(
-                crease: shape,
-                vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation),
+                crease: fitted,
+                vertical: vertical,
                 ndc: SIMD2<Float>(ndcW, ndcH),
                 screen: SIMD2<Float>(Float(screenW), Float(screenH))
             )
@@ -445,12 +461,11 @@ final class SimulatorMetalRenderer {
         // divided out: without it the rasterizer interpolates each trapezoid's
         // texture affinely and the picture slides across the fold.
         let creaseSource = """
-        struct CVertex { float4 positionUV; float4 localShade; };
+        struct CVertex { float4 positionUV; float4 localW; };
         struct COut {
             float4 position [[position]];
             float2 uv;
             float2 local;
-            float shade;
         };
         vertex COut vcrease(uint vid [[vertex_id]],
                             constant Params& p [[buffer(0)]],
@@ -461,12 +476,11 @@ final class SimulatorMetalRenderer {
                 float2(p.uvRotation.x, p.uvRotation.z),
                 float2(p.uvRotation.y, p.uvRotation.w)
             );
-            float w = v.localShade.w;
+            float w = v.localW.z;
             COut o;
             o.position = float4(v.positionUV.xy * w, 0, w);
             o.uv = rot * centered + float2(0.5, 0.5);
-            o.local = v.localShade.xy;
-            o.shade = v.localShade.z;
+            o.local = v.localW.xy;
             return o;
         }
         fragment float4 fcrease(COut in [[stage_in]],
@@ -489,8 +503,7 @@ final class SimulatorMetalRenderer {
                     discard_fragment();
                 }
             }
-            float4 colour = tex.sample(s, in.uv);
-            return float4(colour.rgb * in.shade, colour.a);
+            return tex.sample(s, in.uv);
         }
         """
         do {

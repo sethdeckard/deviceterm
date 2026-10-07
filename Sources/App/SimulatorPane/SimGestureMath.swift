@@ -99,19 +99,26 @@ enum SimGestureMath {
             orientation: orientation,
             displayInset: displayInset
         ) else { return nil }
-        guard rect.contains(viewPoint) else { return nil }
         let point = CGPoint(
             x: (viewPoint.x - rect.origin.x) / rect.width,
             y: (viewPoint.y - rect.origin.y) / rect.height
         )
-        guard let crease else { return point }
-        // A bent picture sits inside its flat rect, so containment above is no
-        // longer enough: the area the halves turned away from is inside the
-        // rect and off the screen. `flattened` is unbounded, so the test is
-        // here.
+        guard let crease else {
+            return rect.contains(viewPoint) ? point : nil
+        }
+        // A bent picture does not match its flat rect: the outer edges grow
+        // past it and the halves draw in from it across the crease. So the
+        // flat rect cannot decide containment; the flattened point can.
+        // `flattened` is unbounded, so the test is here.
         guard let flat = FoldCreaseGeometry.flattened(
             unitPoint: point,
-            crease: crease,
+            crease: fitted(
+                crease,
+                picture: rect,
+                viewSize: viewSize,
+                orientation: orientation,
+                displayInset: displayInset
+            ),
             vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation)
         ), (0...1).contains(flat.x), (0...1).contains(flat.y) else { return nil }
         return flat
@@ -155,9 +162,33 @@ enum SimGestureMath {
         // crossed the edge, which is where the edge gesture starts.
         return FoldCreaseGeometry.flattened(
             unitPoint: point,
-            crease: crease,
+            crease: fitted(
+                crease,
+                picture: rect,
+                viewSize: viewSize,
+                orientation: orientation,
+                displayInset: displayInset
+            ),
             vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation)
         ) ?? point
+    }
+
+    /// `crease` fitted to this view, with the inputs the renderer and the
+    /// bezel fit with, so a click is undone through the bend actually drawn.
+    private static func fitted(
+        _ crease: FoldCreaseGeometry.Crease,
+        picture: CGRect,
+        viewSize: CGSize,
+        orientation: Orientation,
+        displayInset: CGFloat
+    ) -> FoldCreaseGeometry.Crease {
+        FoldCreaseGeometry.fitted(
+            crease,
+            picture: picture,
+            margin: displayInset,
+            within: CGRect(origin: .zero, size: viewSize),
+            vertical: FoldCreaseGeometry.creaseRunsVertically(in: orientation)
+        )
     }
 
     /// Whether a displayed-space (oriented) unit-Y sits in the bottom-edge

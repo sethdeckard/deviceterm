@@ -368,17 +368,28 @@ final class SimulatorPaneWrapperView: NSView {
     /// it frames.
     ///
     /// One path with two subpaths rather than two layers: the bezel is a flat
-    /// dark fill, and the shading that makes the fold read is the picture's.
+    /// dark fill, and nothing on either half is shaded.
+    ///
+    /// Fitted with the same inputs the content view's renderer and input path
+    /// use, so the frame shrinks with the picture when the pane has no room
+    /// for the fold to grow.
     private func creasedBezelPath(
         layout: DeviceBezelLayout,
         imageRect: CGRect,
         crease: FoldCreaseGeometry.Crease
     ) -> CGPath {
         let vertical = FoldCreaseGeometry.creaseRunsVertically(in: bezelContext.orientation)
+        let fitted = FoldCreaseGeometry.fitted(
+            crease,
+            picture: imageRect,
+            margin: DeviceBezelLayoutMath.maxBezelInset(family: bezelContext.family),
+            within: bezelView.bounds,
+            vertical: vertical
+        )
         let halves = FoldCreaseGeometry.halves(
             of: layout.bezelRect,
             foldedAbout: imageRect,
-            crease: crease,
+            crease: fitted,
             vertical: vertical
         )
         let radii = layout.cornerRadii

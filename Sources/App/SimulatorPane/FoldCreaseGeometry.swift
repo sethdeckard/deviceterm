@@ -6,10 +6,16 @@ import DaemonProtocol
 /// How a foldable's picture bends at the hinge.
 ///
 /// The panel that spans the hinge is two flat halves joined along the crease.
-/// Bending it lays the outer edges in the screen plane and pushes the crease
-/// away from the viewer, the way an open book sits with its spine at the back,
+/// Bending it keeps the crease in the screen plane and swings the outer edges
+/// toward the viewer, the way an open book sits with its spine at the back,
 /// followed by a perspective projection: the halves stay rectangles in space
-/// and become trapezoids on screen, pinched in at the crease.
+/// and become trapezoids on screen, taller at the outer edges than at the
+/// crease. That is Device Hub's camera, measured off its window at three hinge
+/// angles: the crease keeps its flat height and the outer edges grow, so a
+/// folded device draws larger than a flat one.
+///
+/// Nothing is shaded. Device Hub leaves both halves at their flat brightness
+/// at every angle, and the perspective alone reads as the fold.
 ///
 /// Everything here is dimensionless, expressed as a fraction of the flat
 /// picture's half-extents, so the renderer can scale it into normalized device
@@ -20,28 +26,26 @@ enum FoldCreaseGeometry {
     /// A bent picture, as fractions of the flat one.
     struct Crease: Equatable {
         /// Where each half's outer edge sits, measured across the crease as a
-        /// fraction of the flat half-extent. `1` is flat; smaller values are
-        /// the half turning away.
+        /// fraction of the flat half-extent, before `scale`. `1` is flat.
         ///
-        /// The outer edges stay in the screen plane, so this is the turn alone
-        /// with no perspective in it.
+        /// The turn draws the edge inward and the perspective pushes it back
+        /// out, because the edge has come toward the viewer.
         let outerAcross: Double
-        /// The crease's half-extent along itself, as a fraction of the flat
-        /// one. `1` is flat; smaller values are the perspective taper that
-        /// makes the receding crease shorter than the outer edges, which is
-        /// what reads as the picture folding away from the viewer rather than
-        /// toward them.
-        let creaseAlong: Double
-        /// Brightness multiplier for the half on the low side of the across
-        /// axis, which is the one turned toward the light.
-        let leadingShade: Double
-        /// Brightness multiplier for the half on the high side, turned away.
-        let trailingShade: Double
+        /// The outer edges' half-extent along the crease, as a fraction of the
+        /// flat one, before `scale`. Above `1` because the edges are nearer
+        /// the viewer than the crease is. The crease itself stays at `1`.
+        let outerAlong: Double
         /// How far each half is turned off the screen plane, in radians.
         /// Kept because the projection has to be undone as well as applied:
         /// a click lands on the bent picture and the guest is owed the point
         /// that pixel came from.
         let turn: Double
+        /// Uniform scale the whole bent picture is drawn at, about the flat
+        /// picture's centre.
+        ///
+        /// `1` is Device Hub's size. `fitted` lowers it when the grown edges
+        /// would otherwise run past the view, so a fold never clips.
+        var scale: Double = 1
     }
 
     /// A bent half's four corners, in the coordinate space of the rect it was
@@ -60,27 +64,16 @@ enum FoldCreaseGeometry {
     /// quad every other device draws.
     static let flatDegrees: Double = 179
 
-    /// How far the viewer sits from the picture, as a multiple of the flat
-    /// picture's half-extent across the crease.
+    /// How far the viewer sits from the crease, as a multiple of the flat
+    /// picture's half-extent across it.
     ///
     /// Expressing the distance in those units is what makes the projection
     /// dimensionless: the perspective divide then depends on the hinge angle
     /// alone, so a pane of any size and aspect bends by the same fractions.
     /// Larger values flatten the effect toward an orthographic bend. Fitted to
-    /// the taper Device Hub draws at the same hinge angles, so a pane and
-    /// Device Hub sitting side by side bend by the same amount.
-    private static let viewerDistance: Double = 6
-
-    /// How far the light sits off the screen normal, toward the leading half.
-    ///
-    /// This is the whole reason a crease reads as a fold rather than as a
-    /// trapezoid: the two halves turn away from the viewer by the same angle,
-    /// so nothing but their brightness distinguishes them.
-    private static let lightAngle: Double = 20 * .pi / 180
-
-    /// How dark the half turned furthest from the light is allowed to go.
-    /// Short of black, so a steeply folded panel still shows its picture.
-    private static let minimumShade: Double = 0.35
+    /// what Device Hub draws, so a pane and Device Hub sitting side by side
+    /// bend by the same amount.
+    private static let viewerDistance: Double = 9.6
 
     /// The crease at `degrees`, or nil when the hinge is straight enough that
     /// the picture is flat and the caller should draw it whole.
@@ -94,30 +87,71 @@ enum FoldCreaseGeometry {
         // Each half turns by half the shortfall from straight, so the two meet
         // at the hinge angle and the picture stays symmetric about the crease.
         let turn = ((180 - degrees) / 2) * .pi / 180
-        // The perspective divide, from the crease's depth behind the outer
-        // edges.
-        let foreshortening = viewerDistance / (viewerDistance + sin(turn))
+        // The perspective divide at the outer edges, which sit in front of
+        // the crease by the turn.
+        let growth = viewerDistance / (viewerDistance - sin(turn))
         return Crease(
-            outerAcross: cos(turn),
-            creaseAlong: foreshortening,
-            leadingShade: shade(turnedBy: -turn),
-            trailingShade: shade(turnedBy: turn),
+            outerAcross: cos(turn) * growth,
+            outerAlong: growth,
             turn: turn
         )
+    }
+
+    /// Recomputes `crease.scale` as the largest value from 0 through 1 that
+    /// fits the bent picture and its bezel margin inside `bounds`.
+    ///
+    /// `picture` is the flat picture's rect, the fold's frame of reference.
+    /// `margin` is the frame reserved around it on every side, which is what
+    /// keeps the bent bezel in view as well as the picture. Never raises the
+    /// scale past `1`: a pane with room to spare draws Device Hub's size, and
+    /// only a pane without it draws smaller.
+    ///
+    /// Everything that draws or reads the bent picture has to call this with
+    /// the same inputs, or the picture, its frame, and the point a click
+    /// lands on disagree.
+    static func fitted(
+        _ crease: Crease,
+        picture: CGRect,
+        margin: CGFloat,
+        within bounds: CGRect,
+        vertical: Bool
+    ) -> Crease {
+        var unscaled = crease
+        unscaled.scale = 1
+        let frame = picture.insetBy(dx: -margin, dy: -margin)
+        let bent = halves(of: frame, foldedAbout: picture, crease: unscaled, vertical: vertical)
+        let corners = [bent.leading, bent.trailing].flatMap {
+            [$0.outerLow, $0.outerHigh, $0.creaseHigh, $0.creaseLow]
+        }
+        let centre = CGPoint(x: picture.midX, y: picture.midY)
+        // The largest scale about the centre that keeps every corner short of
+        // the bound on its side.
+        var scale = 1.0
+        for corner in corners {
+            let offsetX = corner.x - centre.x
+            let offsetY = corner.y - centre.y
+            if offsetX > 0 { scale = min(scale, Double((bounds.maxX - centre.x) / offsetX)) }
+            if offsetX < 0 { scale = min(scale, Double((bounds.minX - centre.x) / offsetX)) }
+            if offsetY > 0 { scale = min(scale, Double((bounds.maxY - centre.y) / offsetY)) }
+            if offsetY < 0 { scale = min(scale, Double((bounds.minY - centre.y) / offsetY)) }
+        }
+        unscaled.scale = max(scale, 0)
+        return unscaled
     }
 
     /// Where a flat point lands once the panel bends.
     ///
     /// `screen` is the picture's flat rect, which is the fold's frame of
-    /// reference: the crease runs down its middle and its own edges are the
-    /// ones that stay in the screen plane. `point` may sit outside it. The
-    /// bezel does, and it is on the same rigid half, so it keeps going on that
-    /// half's plane and comes *toward* the viewer past the screen's edge.
+    /// reference: the crease runs down its middle and stays in the screen
+    /// plane, and its own edges are where each half's turn is measured to.
+    /// `point` may sit outside it. The bezel does, and it is on the same rigid
+    /// half, so it keeps going on that half's plane and comes further toward
+    /// the viewer past the screen's edge.
     ///
     /// Projecting the bezel through the screen's frame rather than its own is
-    /// what keeps the two aligned. Bending a larger rect by the same fractions
-    /// insets it by proportionally more, which closes the gap between frame
-    /// and picture at the outer edges while leaving it open at the crease.
+    /// what keeps the two aligned. Bending a larger rect about its own centre
+    /// would put the same place on the half at a different depth, and the
+    /// frame would drift off what it frames.
     static func projected(
         _ point: CGPoint,
         in screen: CGRect,
@@ -129,12 +163,12 @@ enum FoldCreaseGeometry {
         guard acrossHalf > 0 else { return point }
         let acrossOffset = vertical ? point.x - centre.x : point.y - centre.y
         let alongOffset = vertical ? point.y - centre.y : point.x - centre.x
-        // Depth behind the plane the outer edges lie in: deepest at the crease,
-        // zero at the screen's edge, and negative past it.
-        let depth = sin(crease.turn) * (1 - abs(acrossOffset / acrossHalf))
-        let divisor = viewerDistance + depth
+        // Distance toward the viewer from the crease's plane: none at the
+        // crease, the full turn at the screen's edge, and more past it.
+        let forward = sin(crease.turn) * abs(acrossOffset / acrossHalf)
+        let divisor = viewerDistance - forward
         guard divisor > 0 else { return point }
-        let scale = viewerDistance / divisor
+        let scale = viewerDistance / divisor * crease.scale
         let across = acrossOffset * cos(crease.turn) * scale
         let along = alongOffset * scale
         return vertical
@@ -199,41 +233,35 @@ enum FoldCreaseGeometry {
     ///
     /// Input has to make this trip because the rendered picture is what the
     /// user aimed at. Without it a tap near a bent edge reaches the guest
-    /// short of where it landed, by exactly the foreshortening.
+    /// away from where it landed, by exactly the perspective.
     static func flattened(
         unitPoint: CGPoint,
         crease: Crease,
         vertical: Bool
     ) -> CGPoint? {
         // Recast as signed fractions of the half-extents, which is the space
-        // the projection was derived in.
-        let across = ((vertical ? unitPoint.x : unitPoint.y) - 0.5) * 2
-        let along = ((vertical ? unitPoint.y : unitPoint.x) - 0.5) * 2
+        // the projection was derived in, with the fit's scale taken back out.
+        guard crease.scale > 0 else { return nil }
+        let across = ((vertical ? unitPoint.x : unitPoint.y) - 0.5) * 2 / crease.scale
+        let along = ((vertical ? unitPoint.y : unitPoint.x) - 0.5) * 2 / crease.scale
         let turn = crease.turn
         // Inverting the projection for the flat across-fraction `u`, measured
-        // from the crease out. A point at `u` sits at depth `sin(turn)·(1 - u)`
-        // behind the outer edges, so both the scale and the position depend on
-        // it and the two have to be solved together.
+        // from the crease out. A point at `u` sits `sin(turn)·u` in front of
+        // the crease, so both the scale and the position depend on it and the
+        // two have to be solved together.
         let magnitude = abs(across)
         let denominator = viewerDistance * cos(turn) + magnitude * sin(turn)
         guard denominator > 0 else { return nil }
-        let unsigned = magnitude * (viewerDistance + sin(turn)) / denominator
+        let unsigned = magnitude * viewerDistance / denominator
         let flatAcross = across < 0 ? -unsigned : unsigned
-        // The along axis is foreshortened by the depth at *this* point across,
-        // which is the crease's at the crease and none at all at the edge.
-        let depth = viewerDistance + sin(turn) * (1 - unsigned)
-        guard depth > 0 else { return nil }
-        let flatAlong = along * depth / viewerDistance
+        // The along axis is magnified by how far forward *this* point across
+        // sits, which is nothing at the crease and the most at the edge.
+        let divisor = viewerDistance - sin(turn) * unsigned
+        guard divisor > 0 else { return nil }
+        let flatAlong = along * divisor / viewerDistance
         return vertical
             ? CGPoint(x: flatAcross / 2 + 0.5, y: flatAlong / 2 + 0.5)
             : CGPoint(x: flatAlong / 2 + 0.5, y: flatAcross / 2 + 0.5)
-    }
-
-    /// Lambert shading for a half turned `turn` off the screen plane,
-    /// normalized so a flat picture is unshaded.
-    private static func shade(turnedBy turn: Double) -> Double {
-        let lit = cos(turn + lightAngle) / cos(lightAngle)
-        return min(1, max(minimumShade, lit))
     }
 
     /// Whether the crease runs down the displayed picture rather than across

@@ -445,6 +445,19 @@ struct SimGestureMathCreaseTests {
     private let view = CGSize(width: 2_853, height: 2_007)
     private let orientation = Orientation.landscapeLeft
 
+    /// The fold as this view draws it. The picture fills the view, so there
+    /// is no room for the outer edges to grow and the fit draws it smaller.
+    private func shown(_ crease: FoldCreaseGeometry.Crease) -> FoldCreaseGeometry.Crease {
+        let rect = CGRect(origin: .zero, size: view)
+        return FoldCreaseGeometry.fitted(crease, picture: rect, margin: 0, within: rect, vertical: true)
+    }
+
+    /// Where the drawn leading outer edge sits, in view points.
+    private func leadingEdge(_ crease: FoldCreaseGeometry.Crease) -> CGFloat {
+        let fit = shown(crease)
+        return view.width * (0.5 - CGFloat(fit.outerAcross * fit.scale) / 2)
+    }
+
     private func normalized(
         x: CGFloat,
         crease: FoldCreaseGeometry.Crease?
@@ -462,7 +475,7 @@ struct SimGestureMathCreaseTests {
     @Test
     func aTapOnTheBentEdgeReachesTheEdgeOfTheGuestScreen() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
-        let edge = view.width * (0.5 - CGFloat(crease.outerAcross) / 2)
+        let edge = leadingEdge(crease)
         let bent = try #require(normalized(x: edge, crease: crease))
         #expect(abs(bent.x) < 1e-6)
         // The same click read flat lands well inside the guest's screen, which
@@ -483,10 +496,36 @@ struct SimGestureMathCreaseTests {
     func aTapInTheAreaTheFoldVacatedIsNotOnTheScreen() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
         // Inside the pane's picture rect, outside the bent picture.
-        let vacated = view.width * (0.5 - CGFloat(crease.outerAcross) / 2) / 2
+        let vacated = leadingEdge(crease) / 2
         #expect(normalized(x: vacated, crease: crease) == nil)
         // Without the fold that same point is ordinary screen.
         #expect(normalized(x: vacated, crease: nil) != nil)
+    }
+
+    /// With room to grow, the outer edges reach past the flat picture, and a
+    /// tap there is on the guest's screen even though the flat rect never
+    /// covered it.
+    @Test
+    func aTapOnTheEdgeGrownPastTheFlatRectLands() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
+        // Taller than the picture, so the letterbox leaves room above and
+        // below it for the fold to grow into.
+        let tall = CGSize(width: view.width, height: view.height + 400)
+        let top = (tall.height - view.height) / 2
+        let edgeX = view.width * (0.5 - CGFloat(crease.outerAcross) / 2)
+        // Above the flat picture's top, but under the grown edge's top.
+        let grownTop = tall.height / 2 - CGFloat(crease.outerAlong) * view.height / 2
+        let y = (grownTop + top) / 2
+        #expect(y < top)
+        let point = SimGestureMath.normalizedPoint(
+            viewPoint: CGPoint(x: edgeX + 4, y: y),
+            viewSize: tall,
+            surfaceSize: surface,
+            orientation: orientation,
+            displayInset: 0,
+            crease: crease
+        )
+        #expect(point != nil)
     }
 
     @Test
@@ -513,10 +552,18 @@ struct SimGestureMathCreaseBoundsTests {
     private let surface = CGSize(width: 2_007, height: 2_853)
     private let view = CGSize(width: 2_853, height: 2_007)
 
+    /// Halfway between the view's edge and the drawn leading outer edge: inside
+    /// the flat picture, outside the bent one.
+    private func vacatedX(_ crease: FoldCreaseGeometry.Crease) -> CGFloat {
+        let rect = CGRect(origin: .zero, size: view)
+        let fit = FoldCreaseGeometry.fitted(crease, picture: rect, margin: 0, within: rect, vertical: true)
+        return view.width * (0.5 - CGFloat(fit.outerAcross * fit.scale) / 2) / 2
+    }
+
     @Test
     func theStrictPathRejectsWhatTheFoldTurnedAwayFrom() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
-        let vacated = view.width * (0.5 - CGFloat(crease.outerAcross) / 2) / 2
+        let vacated = vacatedX(crease)
         #expect(
             SimGestureMath.normalizedPoint(
                 viewPoint: CGPoint(x: vacated, y: view.height / 2),
@@ -532,7 +579,7 @@ struct SimGestureMathCreaseBoundsTests {
     @Test
     func theExtendedPathCarriesThatSamePointOffScreen() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: FoldPosture.book.degrees))
-        let vacated = view.width * (0.5 - CGFloat(crease.outerAcross) / 2) / 2
+        let vacated = vacatedX(crease)
         let point = try #require(
             SimGestureMath.extendedNormalizedPoint(
                 viewPoint: CGPoint(x: vacated, y: view.height / 2),

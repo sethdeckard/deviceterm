@@ -32,24 +32,28 @@ struct FoldCreaseGeometryTests {
     }
 
     @Test
-    func aBentHingeNarrowsThePictureAndPinchesItAtTheCrease() throws {
+    func aBentHingeNarrowsThePictureAndGrowsItsOuterEdges() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: 90))
         #expect(crease.outerAcross < 1)
-        // The crease is the edge that recedes, so it is the short one. Getting
-        // this the wrong way round draws the device from behind: a tent
-        // pointing at the viewer rather than a book opening toward them.
-        #expect(crease.creaseAlong < 1)
+        // The outer edges come toward the viewer, so they are the long ones.
+        // Getting this the wrong way round draws the device from behind: a
+        // tent pointing at the viewer rather than a book opening toward them.
+        #expect(crease.outerAlong > 1)
+        #expect(crease.scale == 1)
     }
 
-    @Test("the taper matches what Device Hub draws", arguments: [
-        (84.4, 0.890), (102.2, 0.905), (124.7, 0.928)
+    /// Measured off Device Hub's window at three hinge angles read back with
+    /// `devicectl`. Both ratios are independent of how large the window was
+    /// drawn: the taper is the crease's height over the outer edges', and the
+    /// width is the picture's width over the crease's height, relative to the
+    /// same ratio flat.
+    @Test("the bend matches what Device Hub draws", arguments: [
+        (130.0, 0.955, 0.949), (88.6, 0.927, 0.756), (47.5, 0.906, 0.4475)
     ])
-    func taperMatchesTheReferenceRenderer(degrees: Double, expected: Double) throws {
-        // Pins the perspective strength. The bend is cosmetic, so the tolerance
-        // is generous; what it guards is a change to `viewerDistance` silently
-        // drifting the pane away from the renderer it sits beside.
+    func bendMatchesTheReferenceRenderer(degrees: Double, taper: Double, width: Double) throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: degrees))
-        #expect(abs(crease.creaseAlong - expected) < 0.02)
+        #expect(abs(1 / crease.outerAlong - taper) < 0.01)
+        #expect(abs(crease.outerAcross - width) < 0.01)
     }
 
     @Test
@@ -61,40 +65,22 @@ struct FoldCreaseGeometryTests {
         #expect(bent.outerAcross > steep.outerAcross)
     }
 
-    /// Without this the two halves are mirror-image trapezoids of identical
-    /// colour, which reads as a picture squeezed from both sides rather than
-    /// as a fold.
-    @Test
-    func theHalfTurnedTowardTheLightIsBrighter() throws {
-        let crease = try #require(FoldCreaseGeometry.crease(degrees: book))
-        #expect(crease.leadingShade > crease.trailingShade)
-        #expect(crease.trailingShade > 0)
-        #expect(crease.leadingShade <= 1)
-    }
-
-    @Test
-    func aSteeperFoldDarkensTheHalfTurnedAway() throws {
-        let bent = try #require(FoldCreaseGeometry.crease(degrees: book))
-        let steep = try #require(FoldCreaseGeometry.crease(degrees: 60))
-        #expect(steep.trailingShade < bent.trailingShade)
-    }
-
     // MARK: - Halves
 
     @Test
-    func aVerticalCreaseKeepsFullHeightAtTheOuterEdges() throws {
+    func aVerticalCreaseKeepsFullHeightAtTheCrease() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: book))
         let halves = FoldCreaseGeometry.halves(of: rect, foldedAbout: rect, crease: crease, vertical: true)
-        // The crease stays on the rect's centre line and pulls in vertically,
-        // because it is the edge that recedes.
+        // The crease stays in the screen plane, so it keeps the rect's full
+        // height on the rect's centre line.
         #expect(halves.leading.creaseLow.x == rect.midX)
         #expect(halves.trailing.creaseLow.x == rect.midX)
-        #expect(halves.leading.creaseLow.y > rect.minY)
-        #expect(halves.leading.creaseHigh.y < rect.maxY)
-        // The outer edges sit in the screen plane, so they keep the rect's
-        // full height and only move inward.
-        #expect(halves.leading.outerLow.y == rect.minY)
-        #expect(halves.leading.outerHigh.y == rect.maxY)
+        #expect(abs(halves.leading.creaseLow.y - rect.minY) < 1e-9)
+        #expect(abs(halves.leading.creaseHigh.y - rect.maxY) < 1e-9)
+        // The outer edges come toward the viewer, so they grow past the rect
+        // vertically while the turn draws them inward.
+        #expect(halves.leading.outerLow.y < rect.minY)
+        #expect(halves.leading.outerHigh.y > rect.maxY)
         #expect(halves.leading.outerLow.x > rect.minX)
         #expect(halves.trailing.outerLow.x < rect.maxX)
     }
@@ -104,9 +90,9 @@ struct FoldCreaseGeometryTests {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: book))
         let halves = FoldCreaseGeometry.halves(of: rect, foldedAbout: rect, crease: crease, vertical: false)
         #expect(halves.leading.creaseLow.y == rect.midY)
-        #expect(halves.leading.creaseLow.x > rect.minX)
-        #expect(halves.leading.creaseHigh.x < rect.maxX)
-        #expect(halves.leading.outerLow.x == rect.minX)
+        #expect(abs(halves.leading.creaseLow.x - rect.minX) < 1e-9)
+        #expect(abs(halves.leading.creaseHigh.x - rect.maxX) < 1e-9)
+        #expect(halves.leading.outerLow.x < rect.minX)
         #expect(halves.leading.outerLow.y > rect.minY)
     }
 
@@ -118,7 +104,7 @@ struct FoldCreaseGeometryTests {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: 178.9))
         let halves = FoldCreaseGeometry.halves(of: rect, foldedAbout: rect, crease: crease, vertical: true)
         #expect(abs(halves.leading.outerLow.x - rect.minX) < 0.5)
-        #expect(abs(halves.leading.creaseLow.y - rect.minY) < 0.5)
+        #expect(abs(halves.leading.outerLow.y - rect.minY) < 0.5)
     }
 
     // MARK: - Undoing the bend
@@ -159,8 +145,10 @@ struct FoldCreaseGeometryTests {
     func theBentEdgeSitsWellInsideWhereTheFlatEdgeWas() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: book))
         // Guards the test above against passing because the projection is a
-        // no-op: at `book` the edge has to have moved a long way.
-        #expect(leadingOuterEdge(crease).x > 0.05)
+        // no-op. At `book` the turn draws the edge in by about 4% of the
+        // width, less than the turn alone would because the perspective
+        // pushes it back out.
+        #expect(leadingOuterEdge(crease).x > 0.03)
     }
 
     @Test
@@ -178,16 +166,35 @@ struct FoldCreaseGeometryTests {
     }
 
     @Test
-    func theTaperIsUndoneAlongTheCreaseToo() throws {
+    func theGrowthIsUndoneAlongTheEdgeToo() throws {
         let crease = try #require(FoldCreaseGeometry.crease(degrees: book))
-        // The top of the crease, which the perspective pulled inward from the
-        // picture's own top edge.
-        let corner = CGPoint(x: 0.5, y: 0.5 - crease.creaseAlong / 2)
+        // The top of the leading outer edge, which the perspective pushed
+        // outward past the picture's own top edge.
+        let corner = CGPoint(x: 0.5 - crease.outerAcross / 2, y: 0.5 - crease.outerAlong / 2)
         let flat = try #require(
             FoldCreaseGeometry.flattened(unitPoint: corner, crease: crease, vertical: true)
         )
-        #expect(abs(flat.x - 0.5) < 1e-9)
+        #expect(abs(flat.x) < 1e-6)
         #expect(abs(flat.y) < 1e-6)
+    }
+
+    /// Undoing a scaled fold has to take the scale back out, or a pane drawn
+    /// smaller than Device Hub misses every tap toward the edges.
+    @Test("a drawn point flattens back to where it came from", arguments: [
+        (true, 1.0), (true, 0.9), (false, 1.0), (false, 0.85)
+    ])
+    func projectionRoundTrips(vertical: Bool, scale: Double) throws {
+        var crease = try #require(FoldCreaseGeometry.crease(degrees: 70))
+        crease.scale = scale
+        let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
+        for flat in [CGPoint(x: 0.2, y: 0.3), CGPoint(x: 0.85, y: 0.6), CGPoint(x: 0.5, y: 0.05)] {
+            let drawn = FoldCreaseGeometry.projected(flat, in: unit, crease: crease, vertical: vertical)
+            let back = try #require(
+                FoldCreaseGeometry.flattened(unitPoint: drawn, crease: crease, vertical: vertical)
+            )
+            #expect(abs(back.x - flat.x) < 1e-9)
+            #expect(abs(back.y - flat.y) < 1e-9)
+        }
     }
 
     @Test
@@ -230,19 +237,17 @@ struct FoldCreaseBezelAlignmentTests {
         try #require(FoldCreaseGeometry.crease(degrees: 100))
     }
 
-    /// The invariant that separates the two models. The picture's own edge
-    /// lies in the screen plane, so a point there is at zero depth and keeps
-    /// its position along the crease whatever the hinge is doing. Bending the
-    /// frame about its own wider centre puts that same place at a depth it
-    /// does not have, and shrinks it.
+    /// With scale 1, points on the crease retain their flat positions,
+    /// including the bezel's endpoints.
     @Test
-    func nothingAtThePicturesEdgeIsForeshortened() throws {
+    func nothingOnTheCreaseIsMagnified() throws {
         let shape = try crease()
         let bezel = screen.insetBy(dx: -inset, dy: -inset)
-        let onTheEdge = CGPoint(x: screen.minX, y: bezel.minY)
+        let onTheCrease = CGPoint(x: screen.midX, y: bezel.minY)
         let bent = FoldCreaseGeometry.projected(
-            onTheEdge, in: screen, crease: shape, vertical: true
+            onTheCrease, in: screen, crease: shape, vertical: true
         )
+        #expect(abs(bent.x - screen.midX) < 1e-9)
         #expect(abs(bent.y - bezel.minY) < 1e-9)
     }
 
@@ -253,9 +258,12 @@ struct FoldCreaseBezelAlignmentTests {
         let bent = FoldCreaseGeometry.projected(
             corner, in: screen, crease: shape, vertical: true
         )
-        // At the edge the only change is the turn, with no perspective in it.
-        #expect(abs(bent.y - screen.minY) < 1e-9)
-        #expect(abs((bent.x - screen.midX) / (screen.minX - screen.midX) - cos(shape.turn)) < 1e-9)
+        // The picture's corner lands exactly where the crease's own fractions
+        // put the outer edge, which is what the renderer draws to.
+        let along = (bent.y - screen.midY) / (screen.minY - screen.midY)
+        let across = (bent.x - screen.midX) / (screen.minX - screen.midX)
+        #expect(abs(along - shape.outerAlong) < 1e-9)
+        #expect(abs(across - shape.outerAcross) < 1e-9)
     }
 
     @Test
@@ -273,10 +281,8 @@ struct FoldCreaseBezelAlignmentTests {
         #expect(frame.leading.outerHigh.y > picture.leading.outerHigh.y)
         #expect(frame.leading.creaseLow.y < picture.leading.creaseLow.y)
         #expect(frame.leading.creaseHigh.y > picture.leading.creaseHigh.y)
-        // Past the picture's edge the half keeps going and comes toward the
-        // viewer, so the frame's outer corner is magnified outward rather than
-        // sitting flat. A frame bent about its own centre puts that corner at
-        // zero depth and leaves it exactly on the flat rect.
+        // Using the picture's half-width places the bezel's outer corner
+        // farther toward the viewer than the picture's edge.
         #expect(frame.leading.outerLow.y < bezel.minY - 0.01)
         #expect(frame.leading.outerHigh.y > bezel.maxY + 0.01)
     }
@@ -296,6 +302,10 @@ struct FoldCreaseBezelAlignmentTests {
 /// Coordinates either side of the picture's edge, which the off-screen gesture
 /// path depends on being continuous.
 struct FoldCreaseOffScreenContinuityTests {
+    /// Where the crease meets the picture's lower edge. The crease keeps its
+    /// flat length, so that is the flat edge itself.
+    private let creaseEnd = 1.0
+
     private func crease() throws -> FoldCreaseGeometry.Crease {
         try #require(FoldCreaseGeometry.crease(degrees: 90))
     }
@@ -313,11 +323,11 @@ struct FoldCreaseOffScreenContinuityTests {
     @Test
     func leavingThePictureAtTheCreaseKeepsGoingPastOne() throws {
         let shape = try crease()
-        let atEdge = try #require(flattened(CGPoint(x: 0.5, y: 0.5 + shape.creaseAlong / 2), shape))
+        let atEdge = try #require(flattened(CGPoint(x: 0.5, y: creaseEnd), shape))
         #expect(abs(atEdge.y - 1) < 1e-9)
         // A hair further out must read further out, not snap back.
         let justPast = try #require(
-            flattened(CGPoint(x: 0.5, y: 0.5 + shape.creaseAlong / 2 + 0.004), shape)
+            flattened(CGPoint(x: 0.5, y: creaseEnd + 0.004), shape)
         )
         #expect(justPast.y > 1)
     }
@@ -327,7 +337,7 @@ struct FoldCreaseOffScreenContinuityTests {
         let shape = try crease()
         var previous = -Double.infinity
         for step in 0...12 {
-            let y = 0.5 + shape.creaseAlong / 2 - 0.02 + Double(step) * 0.005
+            let y = creaseEnd - 0.02 + Double(step) * 0.005
             let flat = try #require(flattened(CGPoint(x: 0.5, y: y), shape))
             #expect(flat.y > previous)
             previous = flat.y
@@ -343,5 +353,70 @@ struct FoldCreaseOffScreenContinuityTests {
             flattened(CGPoint(x: 0.5 - shape.outerAcross / 2 - 0.01, y: 0.5), shape)
         )
         #expect(justPast.x < 0)
+    }
+}
+
+/// The fold drawn as large as Device Hub draws it where the view has room, and
+/// no larger than the view where it does not.
+struct FoldCreaseFitTests {
+    /// A landscape picture with its bezel margin, the shape a Fit Screen pane
+    /// gives an open Duo.
+    private let picture = CGRect(x: 18, y: 18, width: 600, height: 420)
+    private let margin: CGFloat = 18
+
+    private func corners(of crease: FoldCreaseGeometry.Crease) -> [CGPoint] {
+        let frame = picture.insetBy(dx: -margin, dy: -margin)
+        let bent = FoldCreaseGeometry.halves(
+            of: frame, foldedAbout: picture, crease: crease, vertical: true
+        )
+        return [bent.leading, bent.trailing].flatMap {
+            [$0.outerLow, $0.outerHigh, $0.creaseHigh, $0.creaseLow]
+        }
+    }
+
+    @Test
+    func aViewWithRoomDrawsDeviceHubsSize() throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: 60))
+        let roomy = picture.insetBy(dx: -margin, dy: -margin).insetBy(dx: 0, dy: -200)
+        let fitted = FoldCreaseGeometry.fitted(
+            crease, picture: picture, margin: margin, within: roomy, vertical: true
+        )
+        #expect(fitted.scale == 1)
+    }
+
+    /// A Fit Screen pane, where the flat frame already touches the view. The
+    /// grown edges have nowhere to go, so the whole fold draws smaller.
+    @Test("a full view shrinks the fold until it fits", arguments: [150.0, 120.0, 60.0, 10.0])
+    func aFullViewShrinksTheFoldUntilItFits(degrees: Double) throws {
+        let crease = try #require(FoldCreaseGeometry.crease(degrees: degrees))
+        let bounds = picture.insetBy(dx: -margin, dy: -margin)
+        let fitted = FoldCreaseGeometry.fitted(
+            crease, picture: picture, margin: margin, within: bounds, vertical: true
+        )
+        #expect(fitted.scale < 1)
+        for corner in corners(of: fitted) {
+            #expect(bounds.insetBy(dx: -1e-9, dy: -1e-9).contains(corner))
+        }
+        // As large as fits, not merely small enough: some corner touches.
+        let touching = corners(of: fitted).contains {
+            abs($0.y - bounds.minY) < 1e-6 || abs($0.y - bounds.maxY) < 1e-6
+        }
+        #expect(touching)
+    }
+
+    /// A scale left on the crease by an earlier fit does not carry over: each
+    /// fit starts again from Device Hub's size.
+    @Test
+    func aStaleScaleDoesNotCarryOver() throws {
+        var crease = try #require(FoldCreaseGeometry.crease(degrees: 90))
+        crease.scale = 0.5
+        let fitted = FoldCreaseGeometry.fitted(
+            crease,
+            picture: picture,
+            margin: margin,
+            within: picture.insetBy(dx: -900, dy: -900),
+            vertical: true
+        )
+        #expect(fitted.scale == 1)
     }
 }
