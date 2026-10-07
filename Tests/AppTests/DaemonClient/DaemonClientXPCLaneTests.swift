@@ -291,6 +291,63 @@ struct DaemonClientXPCLaneTests {
         }
     }
 
+    @Test
+    func aPaneStreamDroppedWithoutBeingIteratedDrainsItsSubscription() async throws {
+        let controlPeer = LaneReplyPeer()
+        let panePeer = LaneReplyPeer()
+        controlPeer.start()
+        panePeer.start()
+        defer {
+            controlPeer.stop()
+            panePeer.stop()
+        }
+
+        let client = DaemonClient()
+        await client.xpcConnectionForTesting().connectWithTestPeer(controlPeer.clientPeer)
+        await client.paneXPCConnectionForTesting().connectWithTestPeer(panePeer.clientPeer)
+        _ = try await client.createSession(label: nil, name: nil, role: .agent)
+
+        // The stream is released here without a single pull, so no
+        // cancellation handler inside `next()` ever runs.
+        _ = try await client.subscribePane(paneId: UUID().uuidString)
+
+        #expect(await poll { panePeer.receivedMethods.contains(.paneSurfaceDrain) })
+        await client.disconnect()
+    }
+
+    /// A consumer that takes one event and returns from its loop without
+    /// calling `next()` again still drains its subscription. The pane view
+    /// model leaves this way when its task is cancelled or superseded.
+    @Test
+    func aConsumerThatLeavesAfterAnEventDrainsItsSubscription() async throws {
+        let controlPeer = LaneReplyPeer()
+        let panePeer = LaneReplyPeer()
+        controlPeer.start()
+        panePeer.start()
+        defer {
+            controlPeer.stop()
+            panePeer.stop()
+        }
+
+        let client = DaemonClient()
+        await client.xpcConnectionForTesting().connectWithTestPeer(controlPeer.clientPeer)
+        await client.paneXPCConnectionForTesting().connectWithTestPeer(panePeer.clientPeer)
+        _ = try await client.createSession(label: nil, name: nil, role: .agent)
+
+        let paneId = UUID().uuidString
+        let consumer = Task {
+            let stream = try await client.subscribePane(paneId: paneId)
+            for await _ in stream { return true }
+            return false
+        }
+        #expect(await poll { panePeer.receivedMethods.contains(.paneSubscribe) })
+        panePeer.pushStateChanged(paneId: paneId)
+
+        #expect(try await consumer.value)
+        #expect(await poll { panePeer.receivedMethods.contains(.paneSurfaceDrain) })
+        await client.disconnect()
+    }
+
     private func poll(
         _ timeout: TimeInterval = 2,
         condition: () async -> Bool
@@ -326,6 +383,7 @@ private final class LaneReplyPeer: @unchecked Sendable {
     private let stateQueue = DispatchQueue(label: "com.deviceterm.tests.xpc-lane-peer")
     private var storedMethods: [RPCMethod] = []
     private var storedAuthenticatedSessionIds: [String] = []
+    private var lastSubscribe: (requestId: UInt32, peer: xpc_connection_t)?
 
     var receivedMethods: [RPCMethod] {
         stateQueue.sync { storedMethods }
@@ -382,19 +440,41 @@ private final class LaneReplyPeer: @unchecked Sendable {
         xpc_connection_cancel(listener)
     }
 
+    /// Push a `state.changed` event on the most recent pane subscription.
+    func pushStateChanged(paneId: String) {
+        guard let subscribe = stateQueue.sync(execute: { lastSubscribe }),
+            let params = try? JSONEncoder().encode(StateChangedEvent(paneId: paneId, state: .rendering))
+        else { return }
+        let envelope = RPCEnvelope(
+            id: subscribe.requestId,
+            type: .event,
+            method: PaneEventName.stateChanged.rawValue,
+            body: .params(params)
+        )
+        send(envelope, to: subscribe.peer)
+    }
+
     private func handle(_ message: xpc_object_t, on peer: xpc_connection_t) {
         guard xpc_get_type(message) == XPC_TYPE_DICTIONARY else { return }
         var length = 0
         guard let pointer = xpc_dictionary_get_data(message, XPCWireKey.data, &length),
             length > 0,
             let envelope = try? RPCEnvelope.decode(Data(bytes: pointer, count: length)),
-            let requestId = envelope.id,
             let methodName = envelope.method,
             let method = RPCMethod(rawValue: methodName)
         else { return }
+        // A notification carries no id and gets no reply, but is still
+        // recorded, so a test can see a drain arrive.
+        guard let requestId = envelope.id else {
+            stateQueue.sync { storedMethods.append(method) }
+            return
+        }
 
         let shouldWait = stateQueue.sync {
             storedMethods.append(method)
+            if method == .paneSubscribe {
+                lastSubscribe = (requestId, peer)
+            }
             if method == .sessionAuthenticate,
                 case let .params(data) = envelope.body,
                 let params = try? JSONDecoder().decode(
@@ -472,7 +552,10 @@ private final class LaneReplyPeer: @unchecked Sendable {
         body: RPCEnvelope.Body,
         to peer: xpc_connection_t
     ) {
-        let envelope = RPCEnvelope(id: id, type: .response, method: nil, body: body)
+        send(RPCEnvelope(id: id, type: .response, method: nil, body: body), to: peer)
+    }
+
+    private func send(_ envelope: RPCEnvelope, to peer: xpc_connection_t) {
         guard let responseData = try? envelope.encode() else { return }
         let reply = xpc_dictionary_create(nil, nil, 0)
         xpc_dictionary_set_string(reply, XPCWireKey.type, XPCWireKey.rpcValue)

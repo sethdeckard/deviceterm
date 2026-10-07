@@ -102,6 +102,21 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         case raw(continuation: AsyncStream<(String, Data)>.Continuation)
     }
 
+    /// Ends a pane subscription once its stream is released.
+    ///
+    /// The stream's `unfolding` closure holds this, so `deinit` runs when the
+    /// stream and its iterator are both gone, however the consumer left: a
+    /// return from inside its loop, a superseded generation, or never pulling
+    /// at all. None of those calls `next()` again, so the stream's own
+    /// `onCancel` can't see them.
+    private final class PaneConsumerRelease: Sendable {
+        private let end: @Sendable () -> Void
+
+        init(_ end: @escaping @Sendable () -> Void) { self.end = end }
+
+        deinit { end() }
+    }
+
     /// What the transport will carry once a definite wire-version mismatch is
     /// being handled.
     ///
@@ -661,15 +676,22 @@ actor XPCDaemonConnection: DaemonRequestTransport {
         // Consumer-pulled stream: it pulls from `state`, so while the
         // @MainActor VM is stalled surfaces coalesce to the newest while
         // control events queue losslessly (FIFO, no configured bound). The
-        // VM stopping its iteration (pane closed) cancels the pull, which
-        // sends the drain by request id.
+        // VM stopping its iteration, however it stops, sends the drain by
+        // request id.
         let state = PaneSubscriptionState(paneId: paneId)
+        let release = PaneConsumerRelease { [weak self] in
+            Task { await self?.paneConsumerEnded(envelopeId: envelopeId) }
+        }
         let stream = AsyncStream<PaneEvent>(
-            unfolding: { await self.nextPaneEvent(envelopeId: envelopeId) },
-            // Cleanup on the stream's OWN cancellation boundary, so it fires
-            // even when a pull returns via the fast path (no suspension) and
-            // the consumer is then cancelled. A per-pull cancellation
-            // handler would miss that. Idempotent with any teardown path.
+            unfolding: { [release] in
+                _ = release
+                return await self.nextPaneEvent(envelopeId: envelopeId)
+            },
+            // Runs only from inside `next()`: when the consumer is cancelled
+            // while a pull is parked, or pulls again after being cancelled. A
+            // consumer that leaves its loop without pulling again is caught
+            // instead by `release` when the stream is freed. Both end in
+            // `paneConsumerEnded`, which is idempotent with every teardown path.
             onCancel: {
                 Task { await self.paneConsumerEnded(envelopeId: envelopeId) }
             }
