@@ -13,7 +13,7 @@ import CoreGraphics
 /// silently teach the prediction to lie.
 ///
 /// Why predict at all: the ribbon's contents are incompressible (fixed
-/// 22pt buttons, a `.fixedSize()` size-preset menu), so SwiftUI layout
+/// 24pt buttons, a `.fixedSize()` size-preset menu), so SwiftUI layout
 /// cannot report that the ribbon does not fit. Handed a row narrower than
 /// the ribbon's ideal width it overruns the chrome instead, pushing the
 /// grip and badge past the leading edge. `widestFittingStop` is what keeps
@@ -39,7 +39,7 @@ enum PaneChromeRibbonFit {
     /// Height of the fold bar a foldable pane shows under its device picture.
     ///
     /// Taller than `chromeRowHeight` because it carries a slider, whose thumb
-    /// needs more room than a 22pt button. Read by the SwiftUI row that draws
+    /// needs more room than a 24pt button. Read by the SwiftUI row that draws
     /// it and by the constraint the pane view controller sizes its host
     /// with, so the strip drawn and the strip reserved are one number.
     static let foldBarHeight: CGFloat = 32
@@ -66,12 +66,17 @@ enum PaneChromeRibbonFit {
 
     /// Inset on each end of the ribbon capsule.
     static let ribbonHorizontalPadding: CGFloat = 8
+    /// Inset above and below the ribbon capsule's contents.
+    static let ribbonVerticalPadding: CGFloat = 2
     /// Gap between the ribbon's three regions (chevron, contents, ⋯).
     static let ribbonItemSpacing: CGFloat = 6
     /// Gap between individual action buttons inside the ribbon.
-    static let contentItemSpacing: CGFloat = 4
+    static let contentItemSpacing: CGFloat = 6
     /// Square frame every ribbon action button and the ⋯ overflow use.
-    static let controlButtonWidth: CGFloat = 22
+    ///
+    /// With `ribbonVerticalPadding` above and below, this fills the chrome
+    /// row exactly, the largest press target the row can hold.
+    static let controlButtonWidth: CGFloat = 24
     /// The size-preset menu, wider than a plain button so the borderless
     /// menu's disclosure has room.
     static let sizePresetWidth: CGFloat = 28
@@ -107,13 +112,12 @@ enum PaneChromeRibbonFit {
     /// the chevron glyph, which starts after the capsule inset, widened by
     /// `chevronHitSlop` at each end.
     ///
-    /// Three surfaces resolve the handle from this one range: the SwiftUI
-    /// gesture target's width, the hover zone that picks the resize cursor, and
-    /// the AppKit hit-test override that withholds the column from the
-    /// pane-drag host. A range rather than a width because the override needs
-    /// both edges: explicit edges keep the zone it withholds aligned with the
-    /// gesture target, which sits centered on the glyph and so cannot cover a
-    /// zone measured from the capsule's leading edge.
+    /// Two surfaces resolve the handle from this one range: the SwiftUI
+    /// gesture target's width and the hover zone that picks the resize cursor.
+    /// A range rather than a width because the hover zone needs both edges:
+    /// explicit edges keep it aligned with the gesture target, which sits
+    /// centered on the glyph and so cannot cover a zone measured from the
+    /// capsule's leading edge.
     static var chevronHandleZone: ClosedRange<CGFloat> {
         let start = ribbonHorizontalPadding - chevronHitSlop
         return start...(ribbonHorizontalPadding + chevronWidth + chevronHitSlop)
@@ -180,8 +184,8 @@ enum PaneChromeRibbonFit {
     /// padding, the chevron, the viewport, and the trailing ⋯ overflow.
     ///
     /// The SwiftUI layout and the AppKit hit-test override both locate
-    /// the handle from this, so the two cannot disagree about where the
-    /// ribbon starts.
+    /// the ribbon from this, so the two cannot disagree about where it
+    /// starts.
     static func ribbonWidth(contentWidth: CGFloat) -> CGFloat {
         ribbonHorizontalPadding * 2
             + chevronWidth
@@ -193,6 +197,21 @@ enum PaneChromeRibbonFit {
     /// Ribbon capsule width at reveal `stop`.
     static func ribbonWidth(stop: Int) -> CGFloat {
         ribbonWidth(contentWidth: contentWidth(stop: stop))
+    }
+
+    /// Whether a point in a chrome row `rowWidth` wide falls on the ribbon
+    /// capsule drawn at reveal `stop`, which keeps every press there away
+    /// from the pane-drag host.
+    ///
+    /// The whole capsule rather than just its controls: SwiftUI answers the
+    /// hosting view itself in the gaps between buttons and at their edges, and
+    /// a press handed from there to the drag host lifts the pane after a few
+    /// points of jitter instead of pressing the button the user aimed at. The
+    /// capsule is flush with the row's trailing edge, so its extent is the
+    /// ribbon's width measured back from there. The chrome region before it
+    /// remains draggable.
+    static func ribbonClaims(x: CGFloat, rowWidth: CGFloat, stop: Int) -> Bool {
+        x >= rowWidth - ribbonWidth(stop: stop)
     }
 
     /// How many of the row's actions reveal at `stop`.

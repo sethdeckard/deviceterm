@@ -360,7 +360,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Uniform across device families otherwise. Hardware buttons never earn
     /// a row of their own; they live further up the ribbon's reveal ladder
     /// and in the ⋯ menu. The hinge is the exception because it is
-    /// continuous, and a slider does not fit a 22pt slot.
+    /// continuous, and a slider does not fit a 24pt slot.
     ///
     /// The numbers come from `PaneChromeRibbonFit`, which the SwiftUI rows
     /// and the ribbon's resize handle also read, so the strip reserved cannot
@@ -443,22 +443,17 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // content view via `inputTarget`, which calls back through
         // SimulatorInputDelegate and lights up the focus border.
         chromeHost.focusReceiver = content
-        // Keep the ribbon's resize handle out of the pane-drag path. The
-        // handle is gesture-driven rather than a `Button`, so SwiftUI reports
-        // nothing interactive under it and the host would otherwise treat a
-        // drag there as the start of a pane rearrange. The zone comes from the
-        // same `PaneChromeRibbonFit.chevronHandleZone` the gesture target is
-        // sized from, so the region this withholds and the region that can act
-        // on it are the same span.
+        // Keep the whole ribbon out of the pane-drag path; the chrome region
+        // before it remains draggable. SwiftUI reports nothing interactive
+        // under the gesture-driven resize handle, in the gaps between buttons,
+        // or at their edges, and the host would treat a press there as the
+        // start of a pane rearrange.
         chromeHost.interactiveOverride = { [chromeViewModel] point, bounds in
-            let content = PaneChromeRibbonFit.contentWidth(
+            PaneChromeRibbonFit.ribbonClaims(
+                x: point.x,
+                rowWidth: bounds.width,
                 stop: chromeViewModel.ribbonRenderedStop
             )
-            let ribbonLeadingEdge = bounds.width
-                - PaneChromeRibbonFit.ribbonWidth(contentWidth: content)
-            let zone = PaneChromeRibbonFit.chevronHandleZone
-            return point.x >= ribbonLeadingEdge + zone.lowerBound
-                && point.x <= ribbonLeadingEdge + zone.upperBound
         }
         chromeHost.translatesAutoresizingMaskIntoConstraints = false
         chromeHostView = chromeHost

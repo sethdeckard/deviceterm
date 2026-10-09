@@ -416,6 +416,72 @@ struct PaneChromeRibbonFitTests {
         #expect(PaneChromeRibbonFit.handleTrailingGap > 0)
     }
 
+    // A press anywhere on the capsule stays with SwiftUI, and the chrome
+    // region before it remains draggable. Checked at stop 0 (hot action),
+    // stop 1 (size menu alone), a middle stop, and the full row.
+    @Test("the ribbon claims its whole capsule", arguments: [0, 1, 5, 12])
+    func theRibbonClaimsItsWholeCapsule(stop: Int) {
+        let rowWidth: CGFloat = 900
+        let leadingEdge = rowWidth - PaneChromeRibbonFit.ribbonWidth(stop: stop)
+        let viewportStart = leadingEdge
+            + PaneChromeRibbonFit.ribbonHorizontalPadding
+            + PaneChromeRibbonFit.chevronWidth
+            + PaneChromeRibbonFit.ribbonItemSpacing
+        let claimed: [CGFloat] = [
+            // The capsule's leading edge and the resize handle's zone.
+            leadingEdge,
+            leadingEdge + PaneChromeRibbonFit.chevronHandleZone.lowerBound,
+            leadingEdge + PaneChromeRibbonFit.chevronHandleZone.upperBound,
+            // Half a gap past the first button slot: after the first action
+            // from stop 2 up, inside the size menu at stop 1, and in the gap
+            // before the ⋯ overflow at stop 0.
+            viewportStart + PaneChromeRibbonFit.controlButtonWidth
+                + PaneChromeRibbonFit.contentItemSpacing / 2,
+            // The ⋯ overflow and the row's trailing edge.
+            rowWidth - PaneChromeRibbonFit.controlButtonWidth / 2,
+            rowWidth
+        ]
+        for x in claimed {
+            #expect(
+                PaneChromeRibbonFit.ribbonClaims(x: x, rowWidth: rowWidth, stop: stop),
+                "x=\(x) unclaimed"
+            )
+        }
+        let unclaimed: [CGFloat] = [
+            // The grip, the title, and the point just ahead of the capsule.
+            PaneChromeRibbonFit.leadingPadding,
+            PaneChromeRibbonFit.pinnedLeadingWidth,
+            leadingEdge - 0.5
+        ]
+        for x in unclaimed {
+            #expect(
+                !PaneChromeRibbonFit.ribbonClaims(x: x, rowWidth: rowWidth, stop: stop),
+                "x=\(x) claimed"
+            )
+        }
+    }
+
+    @Test
+    func theClaimFollowsTheRenderedStop() {
+        // The override reads the rendered stop on every hit, so a point just
+        // ahead of a narrow ribbon belongs to the ribbon once it widens.
+        let rowWidth: CGFloat = 900
+        let x = rowWidth - PaneChromeRibbonFit.ribbonWidth(stop: 2) - 1
+        #expect(!PaneChromeRibbonFit.ribbonClaims(x: x, rowWidth: rowWidth, stop: 2))
+        #expect(PaneChromeRibbonFit.ribbonClaims(x: x, rowWidth: rowWidth, stop: 3))
+    }
+
+    @Test
+    func theButtonsFillTheRibbonRow() {
+        // A button any taller would overrun the row, any shorter wastes
+        // press target.
+        #expect(
+            PaneChromeRibbonFit.controlButtonWidth
+                + PaneChromeRibbonFit.ribbonVerticalPadding * 2
+                == PaneChromeRibbonFit.chromeRowHeight
+        )
+    }
+
     /// Capsule width at the top of the ladder, which is the ribbon showing
     /// every one of `actionCount` actions plus the size-preset menu.
     private func widestRibbonWidth(actionCount: Int) -> CGFloat {

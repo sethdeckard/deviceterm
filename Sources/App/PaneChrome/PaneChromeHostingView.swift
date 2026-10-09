@@ -27,12 +27,12 @@ final class PaneChromeHostingView<Content: View>: NSHostingView<Content> {
     /// delivers, together with this view's bounds, and answers whether the hit
     /// belongs to SwiftUI.
     ///
-    /// The sim ribbon's resize handle needs this because it is driven by a
-    /// gesture rather than a `Button`, and `super.hitTest` answers `self` for
-    /// a gesture-only view, so the pass-through below would hand the handle's
-    /// drag to the pane-rearrange host and lift the pane instead of resizing
-    /// the ribbon. Bounds arrive as a parameter so the closure never has to
-    /// capture the view.
+    /// The sim ribbon needs this because `super.hitTest` answers `self` for
+    /// its gesture-driven resize handle, the gaps between its buttons, and
+    /// their edges, so the pass-through below would hand a press there to the
+    /// pane-rearrange host and lift the pane instead of resizing the ribbon or
+    /// pressing the button. The ribbon claims its whole capsule. Bounds arrive
+    /// as a parameter so the closure never has to capture the view.
     ///
     /// The fold bar's host claims its whole row the same way, because its
     /// slider track is another region SwiftUI answers `self` for. Left nil by

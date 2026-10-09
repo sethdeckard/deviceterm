@@ -173,7 +173,7 @@ struct PaneChromeOverlay: View {
             )
         }
         .padding(.horizontal, PaneChromeRibbonFit.ribbonHorizontalPadding)
-        .padding(.vertical, 2)
+        .padding(.vertical, PaneChromeRibbonFit.ribbonVerticalPadding)
         .background(
             UnevenRoundedRectangle(
                 topLeadingRadius: 14,
@@ -221,7 +221,7 @@ struct PaneChromeOverlay: View {
             .foregroundStyle(.secondary)
             .overlay {
                 // Spans the row's full height on purpose. The AppKit hit-test
-                // override withholds this whole column from the pane-drag host
+                // override withholds the whole ribbon from the pane-drag host
                 // on x alone, so a target only as tall as the glyph would
                 // leave a band near the row's edges where the drag is refused
                 // and the gesture never offered it either.
@@ -458,11 +458,16 @@ struct PaneChromeOverlay: View {
 
     /// Shared shape for the ribbon's buttons and the ⋯ overflow.
     /// Tint optional so callers can mark hot or stateful buttons with
-    /// the theme color. Use `.borderless` to preserve action delivery
-    /// and provide the default press highlight.
-    /// `contentShape` covers the whole 22×22 frame so taps in the
+    /// the theme color. `PaneChromeControlButtonStyle` draws the press,
+    /// which `.borderless` barely shows on a bare symbol.
+    /// `contentShape` covers the whole square frame so taps in the
     /// gaps of thin SF symbol strokes still register. Shared with
     /// `PaneFoldBarView`, whose posture buttons match the ribbon's.
+    ///
+    /// A custom style is pure SwiftUI, so its hits answer the hosting view
+    /// rather than a subview. Both hosts that use it claim those hits for
+    /// SwiftUI (`PaneChromeRibbonFit.ribbonClaims`, and the fold bar's
+    /// claim-everything override), which is what delivers the action.
     static func chromeControlButton(
         systemImage: String,
         help: String,
@@ -478,7 +483,7 @@ struct PaneChromeOverlay: View {
                 )
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(PaneChromeControlButtonStyle())
         .help(help)
     }
 
