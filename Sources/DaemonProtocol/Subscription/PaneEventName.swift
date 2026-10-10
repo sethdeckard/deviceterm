@@ -17,4 +17,7 @@ public enum PaneEventName: String, Sendable, Equatable, CaseIterable {
     /// own observation of the device, so a fold made outside DeviceTerm
     /// reaches subscribers too.
     case hingeChanged = "hinge.changed"
+    /// The panel a foldable device's pane is showing changed. Published from
+    /// the display's own binding, so it needs no hinge reading.
+    case panelChanged = "panel.changed"
 }

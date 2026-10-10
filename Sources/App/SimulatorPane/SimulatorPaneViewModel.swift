@@ -141,6 +141,10 @@ final class SimulatorPaneViewModel {
     /// path the hinge took, so the same angle occurs with either panel
     /// showing.
     private(set) var confirmedPanelSpansHinge = false
+    /// The id of the panel this pane is showing, the value `simctl io
+    /// --display` accepts. Nil until the daemon names one, which is never on
+    /// a device with one panel.
+    private(set) var confirmedPanelScreenID: UInt32?
 
     // Infrastructure, not observable state. Kept out of the registrar so
     // changes don't trigger renders and `deinit` can touch the task.
@@ -392,6 +396,10 @@ final class SimulatorPaneViewModel {
                 confirmedHingeDegrees = change.degrees
             }
             confirmedPanelSpansHinge = change.spansHinge
+
+        case let .panelChanged(change):
+            confirmedPanelSpansHinge = change.spansHinge
+            confirmedPanelScreenID = change.screenID
         }
     }
 

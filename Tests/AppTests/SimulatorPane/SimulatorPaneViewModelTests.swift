@@ -787,6 +787,30 @@ struct SimulatorPaneViewModelTests {
         #expect(viewModel.confirmedPanelSpansHinge == false)
     }
 
+    @Test("the panel event names the panel on show without any hinge angle")
+    func panelChangedEventDrivesThePanelAndItsScreen() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.start()
+        await settle()
+        #expect(viewModel.confirmedPanelScreenID == nil)
+        fake.lastPaneEventContinuation?.yield(
+            .panelChanged(PanelChangedEvent(paneId: "p1", screenID: 3, spansHinge: true))
+        )
+        await settle()
+        #expect(viewModel.confirmedPanelSpansHinge)
+        #expect(viewModel.confirmedPanelScreenID == 3)
+        #expect(viewModel.confirmedHingeDegrees == nil)
+
+        // Folding shut moves the pane onto the cover panel.
+        fake.lastPaneEventContinuation?.yield(
+            .panelChanged(PanelChangedEvent(paneId: "p1", screenID: 1, spansHinge: false))
+        )
+        await settle()
+        #expect(viewModel.confirmedPanelSpansHinge == false)
+        #expect(viewModel.confirmedPanelScreenID == 1)
+    }
+
     @Test("an out-of-range angle still updates which panel is on show")
     func anOutOfRangeAngleStillUpdatesThePanel() async {
         let fake = FakeDaemonClient()

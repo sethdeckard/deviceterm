@@ -51,4 +51,16 @@ public enum PaneEvent: Sendable {
         degrees: Double,
         spansHinge: Bool
         )
+    /// A foldable device's pane moved onto another panel.
+    ///
+    /// Carries the panel's identity and shape, so a subscriber can draw the
+    /// right panel and capture from it. Published from the display's own
+    /// binding rather than with a hinge reading, so it arrives even when the
+    /// hinge cannot be read. A device with one panel never emits.
+    case panelChanged(
+        paneId:
+        UUID,
+        screenID: UInt32,
+        spansHinge: Bool
+        )
 }

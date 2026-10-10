@@ -9,15 +9,16 @@ import Foundation
 /// A pane publishes `surfaceChanged` at the display's rate and `hingeChanged`
 /// at the device's sampling rate while a fold is under way. A consumer that
 /// falls behind therefore accumulates those two and almost nothing else, so
-/// this keeps **at most one** of each pending per subscriber and lets lifecycle
-/// and orientation events queue in full. Losing a `shutdown` to make room for a
-/// frame notice would trade a bounded queue for a pane that never learns it
-/// died, and only the newest angle is worth anything anyway.
+/// this keeps **at most one** of each pending per subscriber and lets
+/// lifecycle, orientation, and panel events queue in full. Losing a
+/// `shutdown` to make room for a frame notice would trade a bounded queue for
+/// a pane that never learns it died, and only the newest angle is worth
+/// anything anyway.
 ///
-/// The lossless queue has no cap. Its producers are lifecycle transitions and
-/// rotations, which arrive at human rates; the fast lanes are the ones that
-/// needed bounding, and each is bounded at one. `EventBroker` is left unbounded
-/// for the same reason.
+/// The lossless queue has no cap. Its producers are lifecycle transitions,
+/// rotations, and panel swaps, which arrive at human rates; the fast lanes
+/// are the ones that needed bounding, and each is bounded at one.
+/// `EventBroker` is left unbounded for the same reason.
 ///
 /// **Conflation must not reorder.** A newer surface notice drops the pending
 /// one and takes a place at the back, keeping frames behind every event that
@@ -99,7 +100,7 @@ final class ConflatingEventChannel: @unchecked Sendable {
             pendingHingeIndex = queue.count
             queue.append(event)
 
-        case .stateChanged, .orientationChanged:
+        case .stateChanged, .orientationChanged, .panelChanged:
             queue.append(event)
             noteTerminal(event)
         }

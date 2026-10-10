@@ -24,4 +24,5 @@ enum PaneEvent: Sendable {
     case stateChanged(StateChangedEvent)
     case orientationChanged(OrientationChangedEvent)
     case hingeChanged(HingeChangedEvent)
+    case panelChanged(PanelChangedEvent)
 }

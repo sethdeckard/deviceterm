@@ -35,6 +35,38 @@ func surfaceObservationPreservesEventsCoalescedWithAcknowledgement() throws {
 }
 
 @Test
+func surfaceObservationWaitsThroughAPanelEvent() throws {
+    // A foldable pane replays its panel on subscribe. That says nothing about
+    // a surface arriving, so the wait carries on to the frame behind it.
+    var sockets: [Int32] = [-1, -1]
+    try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+    defer { UDSClientSocket.close(sockets[1]) }
+    _ = fcntl(sockets[0], F_SETFL, O_NONBLOCK)
+    let observation = UDSSurfaceObservation(fd: sockets[0], paneId: "PANE")
+    defer { observation.close() }
+    let ack = RPCEnvelope(
+        id: 1,
+        type: .response,
+        method: nil,
+        body: .result(try JSONEncoder().encode(PaneSubscribeAck(success: true, subscriptionToken: nil)))
+    )
+    let panel = RPCEnvelope(
+        id: 1,
+        type: .event,
+        method: PaneEventName.panelChanged.rawValue,
+        body: .params(try JSONEncoder().encode(PanelChangedEvent(paneId: "PANE", screenID: 3, spansHinge: true)))
+    )
+    try UDSClientSocket.writeAll(
+        fd: sockets[1],
+        data: RPCFraming.encode(try ack.encode())
+            + RPCFraming.encode(try panel.encode())
+            + surfaceEventFrame(sequence: 7)
+    )
+    try observation.readAcknowledgement(deadline: Date().addingTimeInterval(1))
+    #expect(try observation.latestSequence() == 7)
+}
+
+@Test
 func surfaceObservationReportsClosedPeer() throws {
     var sockets: [Int32] = [-1, -1]
     try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)

@@ -1379,17 +1379,13 @@ func aPanelSwapRepublishesTheAngleItSettledAt() async throws {
     // stops, so the panel routinely changes with the angle already settled.
     // Nothing would republish on its own, and a pane left on the previous
     // panel's shape draws a cover panel bent or an inner panel flat.
-    let coordinator = PaneCoordinator()
-    let pane = try await coordinator.createMockPane(
-        udid: "hinge-panel-swap",
-        sessionId: UUID(),
-        backend: MockDeviceBackend()
-    )
+    let foldable = try await makeFoldablePane(udid: "hinge-panel-swap")
+    let (coordinator, pane) = (foldable.coordinator, foldable.pane)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
 
     let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
     // The angle does not move; only the panel under it does.
-    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var published: [(Double, Bool)] = []
     for await event in stream {
@@ -1408,17 +1404,13 @@ func aPanelThatHasNotChangedIsNotRepublished() async throws {
     // The backend signals on registration as well as on every fold, so a pane
     // routinely reads a binding that has not moved. Passing that through to
     // subscribers would put a redundant event on the wire each time.
-    let coordinator = PaneCoordinator()
-    let pane = try await coordinator.createMockPane(
-        udid: "hinge-panel-steady",
-        sessionId: UUID(),
-        backend: MockDeviceBackend()
-    )
-    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    let foldable = try await makeFoldablePane(udid: "hinge-panel-steady")
+    let (coordinator, pane) = (foldable.coordinator, foldable.pane)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
 
     let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
-    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var published: [Double] = []
     for await event in stream {
@@ -1432,13 +1424,9 @@ func aPanelLearnedBeforeAnyAngleIsCarriedIntoTheFirstReading() async throws {
     // The display resolves its panel during bootstrap, which is earlier than
     // the hinge monitor's first line. That panel has to survive the wait, or
     // the first angle published claims a flat cover panel on an open device.
-    let coordinator = PaneCoordinator()
-    let pane = try await coordinator.createMockPane(
-        udid: "hinge-panel-first",
-        sessionId: UUID(),
-        backend: MockDeviceBackend()
-    )
-    await coordinator.notePanelChange(paneId: pane.paneId, spansHinge: true)
+    let foldable = try await makeFoldablePane(udid: "hinge-panel-first")
+    let (coordinator, pane) = (foldable.coordinator, foldable.pane)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
 
     let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 95)
@@ -1459,13 +1447,8 @@ func thePanelIsReadOnArrivalRatherThanCarriedWithTheNotice() async throws {
     // after a newer one, leaving the pane on a panel it has already left; the
     // coordinator reads the binding on arrival instead, so the last pass
     // settles on what is true now.
-    let coordinator = PaneCoordinator()
-    let backend = MockDeviceBackend()
-    let pane = try await coordinator.createMockPane(
-        udid: "hinge-panel-read",
-        sessionId: UUID(),
-        backend: backend
-    )
+    let foldable = try await makeFoldablePane(udid: "hinge-panel-read")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
     let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
     // The binding moves onto the hinge-spanning panel, then is announced.
@@ -1477,6 +1460,119 @@ func thePanelIsReadOnArrivalRatherThanCarriedWithTheNotice() async throws {
         if case let .hingeChanged(_, _, spans) = event { published.append(spans) }
     }
     #expect(published.last == true)
+}
+
+/// The Duo's inner panel, the one the hinge runs through.
+private let innerPanel = BoundPanel(screenID: 3, spansHinge: true)
+
+/// A pane on a two-panel device, with the coordinator and backend behind it.
+private struct FoldablePane {
+    let coordinator: PaneCoordinator
+    let pane: PaneCreateResult
+    let backend: MockDeviceBackend
+}
+
+/// A pane on a two-panel device, whose hinge reader never spawns anything.
+private func makeFoldablePane(udid: String) async throws -> FoldablePane {
+    var capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
+    capabilities.fold = true
+    let coordinator = PaneCoordinator()
+    await coordinator.setHingeReaderTestLaunch { _, _ in SilentHingeReader() }
+    let backend = MockDeviceBackend(capabilities: capabilities)
+    let pane = try await coordinator.createMockPane(udid: udid, sessionId: UUID(), backend: backend)
+    return FoldablePane(coordinator: coordinator, pane: pane, backend: backend)
+}
+
+/// A hinge reader that never reports, so a foldable test pane sits idle.
+private final class SilentHingeReader: HingeMonitorProcess, @unchecked Sendable {
+    func onOutput(_ handler: @escaping @Sendable (Data) -> Void) {}
+    func onExit(_ handler: @escaping @Sendable () -> Void) {}
+    func terminate() {}
+}
+
+/// Every `panelChanged` a stream carried, as `(screenID, spansHinge)`.
+private func publishedPanels(_ stream: PaneEventStream) async -> [(UInt32, Bool)] {
+    var panels: [(UInt32, Bool)] = []
+    for await event in stream {
+        if case let .panelChanged(_, screenID, spansHinge) = event { panels.append((screenID, spansHinge)) }
+    }
+    return panels
+}
+
+@Test
+func aFoldablePanePublishesItsPanelWithNoHingeAngle() async throws {
+    // The hinge can be unreadable. The panel still has to reach the GUI, or a
+    // pane on the inner panel draws the cover's shape for its whole life.
+    let foldable = try await makeFoldablePane(udid: "panel-no-angle")
+    let (coordinator, pane) = (foldable.coordinator, foldable.pane)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    let panels = await publishedPanels(stream)
+    #expect(panels.last?.0 == 3)
+    #expect(panels.last?.1 == true)
+}
+
+@Test
+func aLateSubscriberIsToldThePanel() async throws {
+    // The display binds its panel during bootstrap, before any GUI subscribes.
+    let foldable = try await makeFoldablePane(udid: "panel-replay")
+    let (coordinator, pane) = (foldable.coordinator, foldable.pane)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    let panels = await publishedPanels(stream)
+    #expect(panels.count == 1)
+    #expect(panels.first?.0 == 3)
+    #expect(panels.first?.1 == true)
+}
+
+@Test
+func anUnchangedPanelIsPublishedOnce() async throws {
+    // The backend signals on registration as well as on every fold, so the
+    // same binding routinely arrives twice.
+    let foldable = try await makeFoldablePane(udid: "panel-steady")
+    let (coordinator, pane) = (foldable.coordinator, foldable.pane)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    let panels = await publishedPanels(stream)
+    #expect(panels.filter { $0.0 == 3 }.count == 1)
+}
+
+@Test
+func aSinglePanelPanePublishesNoPanel() async throws {
+    // A device with one panel has nothing to name, and a screen id there would
+    // send every capture to an explicit display it does not need.
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "panel-single",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: BoundPanel(screenID: 1, spansHinge: false))
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    #expect(await publishedPanels(stream).isEmpty)
+}
+
+@Test("a panel's screen id reaches the wire, and zero is omitted", arguments: [
+    (UInt32(3), UInt32?.some(3)),
+    (UInt32(0), UInt32?.none)
+])
+func aPanelEventEncodesItsScreenID(screenID: UInt32, expected: UInt32?) throws {
+    let envelope = try #require(
+        encodeSubscriptionEvent(
+            .panelChanged(paneId: UUID(), screenID: screenID, spansHinge: true),
+            paneId: "p1"
+        )
+    )
+    #expect(envelope.method == PaneEventName.panelChanged.rawValue)
+    let decoded = try JSONDecoder().decode(PanelChangedEvent.self, from: envelope.params)
+    #expect(decoded.screenID == expected)
+    #expect(decoded.spansHinge)
 }
 
 @Test

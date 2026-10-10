@@ -610,12 +610,13 @@ extensions; `DaemonProtocol` never links `CoreSimulatorBridge`.
 **Streaming model.** Server-streamed events reuse the request's `id` for every
 event frame. The client distinguishes a final `res` from a streaming `evt` by
 `type`. `app.commands` uses the control peer; every pane subscription uses the
-pane peer. A pane stream is consumer-pulled: `state.changed` and
-`orientation.changed` queue losslessly in order, while `surface.changed` and
-`hinge.changed` are each held latest-only in a slot of their own. A stalled
-consumer therefore coalesces to the newest frame and the newest angle without
-evicting a lifecycle event. Those two slots are bounded; the lossless events
-have no configured queue bound and drain as the consumer pulls.
+pane peer. A pane stream is consumer-pulled: `state.changed`,
+`orientation.changed`, and `panel.changed` queue losslessly in order, while
+`surface.changed` and `hinge.changed` are each held latest-only in a slot of
+their own. A stalled consumer therefore coalesces to the newest frame and the
+newest angle without evicting a lifecycle event. Those two slots are bounded;
+the lossless events have no configured queue bound and drain as the consumer
+pulls.
 
 **Reconnect / resubscribe.** Each pane's `SimulatorPaneViewModel` owns its
 subscription retry loop. When the pane connection drops, the transport finishes
@@ -2607,7 +2608,18 @@ Events are correlated to the subscription's request-envelope id:
   already reached. The daemon tells the panels apart by extent, the one that
   spans the hinge being the one that unfolds, so `false` also covers a device
   whose panels it could not size. A peer that predates the field omits it,
-  where it decodes as `false`.
+  where it decodes as `false`. A subscriber that needs the panel without
+  waiting for an angle reads `panel.changed`.
+- `panel.changed`: `{paneId, screenID?, spansHinge}`, the panel a foldable
+  device's pane is showing. `screenID` is the value `simctl io --display`
+  accepts; it's omitted when the display reports no screen properties. Sent
+  only for a device advertising the `fold` capability. Replayed to each new
+  subscriber when a panel has been observed, and sent whenever the observed
+  panel changes.
+
+  It comes from the display's own binding rather than the hinge reader, so it
+  arrives even when the hinge can't be read. Use it, not `hinge.changed`, to
+  decide which panel's shape to draw.
 
 A frame subscriber receives the current surface when one exists. Each new
 simulator frame subscriber also requests a fresh capture, even if another

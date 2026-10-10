@@ -180,11 +180,14 @@ public actor PaneCoordinator {
         /// The device suppresses sub-degree movement itself, but a restarted
         /// monitor re-reports the current angle on its first line.
         var observedHingeDegrees: Double?
+        /// The panel this pane is showing, as last read from the backend. Nil
+        /// until the display has bound one.
+        var observedPanel: BoundPanel?
         /// Whether the panel this pane is showing spans the hinge, so a
         /// subscriber knows whether the picture bends. False until the
         /// backend says otherwise, which is the right answer for every
         /// single-panel device.
-        var observedPanelSpansHinge = false
+        var observedPanelSpansHinge: Bool { observedPanel?.spansHinge ?? false }
         /// What drives this pane's frames + input. A `SimDeviceBackend`
         /// wrapping the CoreSimulator bridge handles for a sim pane; a
         /// physical-device backend otherwise. Held for the pane's life
@@ -809,6 +812,9 @@ public actor PaneCoordinator {
     /// Test-only seam captured when a pane creates its pump. Always nil in
     /// production.
     private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
+    /// Test-only launcher for a foldable pane's hinge reader, so a test pane
+    /// never spawns `devicectl`. Nil in production, which keeps the real one.
+    private var hingeReaderTestLaunch: (@Sendable (String, [String]) -> HingeMonitorProcess?)?
 
     /// Whether any create attempt is unsettled: an admitted slot, which is
     /// taken before backend acquisition and given back only at publication or
@@ -904,6 +910,13 @@ public actor PaneCoordinator {
         _ hook: @escaping @Sendable (SurfacePumpTestPoint) async -> Void
     ) {
         surfacePumpTestHook = hook
+    }
+
+    /// Test-only: install the hinge reader launcher above.
+    func setHingeReaderTestLaunch(
+        _ launch: @escaping @Sendable (String, [String]) -> HingeMonitorProcess?
+    ) {
+        hingeReaderTestLaunch = launch
     }
 
     // MARK: - Create
@@ -1814,6 +1827,14 @@ public actor PaneCoordinator {
         channel.send(
             .orientationChanged(paneId: paneId, orientation: record.presentationOrientation)
         )
+        // And the panel, for the same reason: a subscriber that missed the
+        // last swap would draw the other panel's shape. Only a foldable has a
+        // panel worth naming.
+        if record.capabilities.fold, let panel = record.observedPanel {
+            channel.send(
+                .panelChanged(paneId: paneId, screenID: panel.screenID, spansHinge: panel.spansHinge)
+            )
+        }
         // And the hinge, for the same reason. The monitor reads the device's
         // current angle as its first line, which routinely lands before the
         // GUI has subscribed, so without this replay a foldable pane shows its
@@ -2980,10 +3001,14 @@ public actor PaneCoordinator {
     /// panel count, so this asks the same question the fold verb does.
     private func startHingeMonitorIfFoldable(record: Record, paneId: UUID) {
         guard record.capabilities.fold else { return }
-        let monitor = HingeMonitor(udid: record.target.key) { [weak self] degrees in
-            guard let self else { return }
-            Task { await self.publishHinge(paneId: paneId, degrees: degrees) }
-        }
+        let monitor = HingeMonitor(
+            udid: record.target.key,
+            onAngle: { [weak self] degrees in
+                guard let self else { return }
+                Task { await self.publishHinge(paneId: paneId, degrees: degrees) }
+            },
+            launch: hingeReaderTestLaunch
+        )
         record.hingeMonitor = monitor
         monitor.start()
     }
@@ -3012,7 +3037,7 @@ public actor PaneCoordinator {
     /// without a display lane to raise the notice.
     func refreshBoundPanel(paneId: UUID) {
         guard let backend = panes[paneId]?.backend else { return }
-        notePanelChange(paneId: paneId, spansHinge: backend.currentBoundPanel().spansHinge)
+        notePanelChange(paneId: paneId, panel: backend.currentBoundPanel())
     }
 
     /// Hand a hinge reading to this pane's subscribers.
@@ -3025,47 +3050,45 @@ public actor PaneCoordinator {
     /// Internal rather than private so a daemon test can hand the pane a
     /// reading without starting a monitor against a device that is not there.
     func publishHinge(paneId: UUID, degrees: Double) {
-        guard let record = panes[paneId] else { return }
-        publishHinge(
-            record: record,
-            paneId: paneId,
-            degrees: degrees,
-            spansHinge: record.observedPanelSpansHinge
-        )
+        guard let record = panes[paneId], record.observedHingeDegrees != degrees else { return }
+        record.observedHingeDegrees = degrees
+        sendHinge(record: record, paneId: paneId, degrees: degrees)
     }
 
     /// Record which panel the pane is now showing, and tell its subscribers.
     ///
+    /// Published as soon as the display binds, without waiting for a hinge
+    /// reading, so a pane draws the right panel's shape even when the hinge
+    /// cannot be read. A single-panel device publishes nothing.
+    ///
     /// A fold moves the lit panel a few hundred milliseconds after the hinge
     /// stops, so the panel routinely changes with the angle already settled.
-    /// Without this the pane would keep the previous panel's shape until
-    /// someone moved the hinge again.
-    ///
-    /// Nothing is published before the first angle has been read: there is no
-    /// angle to carry, and the subscribe replay covers a pane that reaches one
-    /// later.
-    func notePanelChange(paneId: UUID, spansHinge: Bool) {
-        guard let record = panes[paneId] else { return }
-        guard let degrees = record.observedHingeDegrees else {
-            record.observedPanelSpansHinge = spansHinge
-            return
-        }
-        publishHinge(record: record, paneId: paneId, degrees: degrees, spansHinge: spansHinge)
-    }
-
-    private func publishHinge(
-        record: Record,
-        paneId: UUID,
-        degrees: Double,
-        spansHinge: Bool
-    ) {
-        guard record.observedHingeDegrees != degrees
-            || record.observedPanelSpansHinge != spansHinge else { return }
-        record.observedHingeDegrees = degrees
-        record.observedPanelSpansHinge = spansHinge
+    /// When `spansHinge` changes and an angle has been read, that angle is
+    /// republished with the new shape, so a subscriber reading only
+    /// `hinge.changed` follows the swap too.
+    func notePanelChange(paneId: UUID, panel: BoundPanel) {
+        guard let record = panes[paneId], record.observedPanel != panel else { return }
+        let spansHingeMoved = record.observedPanelSpansHinge != panel.spansHinge
+        record.observedPanel = panel
+        guard record.capabilities.fold else { return }
         for subscriber in record.subscribers.values {
             subscriber.channel.send(
-                .hingeChanged(paneId: paneId, degrees: degrees, spansHinge: spansHinge)
+                .panelChanged(paneId: paneId, screenID: panel.screenID, spansHinge: panel.spansHinge)
+            )
+        }
+        if spansHingeMoved, let degrees = record.observedHingeDegrees {
+            sendHinge(record: record, paneId: paneId, degrees: degrees)
+        }
+    }
+
+    private func sendHinge(record: Record, paneId: UUID, degrees: Double) {
+        for subscriber in record.subscribers.values {
+            subscriber.channel.send(
+                .hingeChanged(
+                    paneId: paneId,
+                    degrees: degrees,
+                    spansHinge: record.observedPanelSpansHinge
+                )
             )
         }
     }

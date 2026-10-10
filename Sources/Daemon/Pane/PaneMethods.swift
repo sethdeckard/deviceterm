@@ -1249,8 +1249,9 @@ public enum PaneMethods {
 /// Render one pane event as its wire envelope, or nil if it cannot be encoded.
 ///
 /// A free function so the mapping closure stays `Sendable`: a `JSONEncoder`
-/// captured from the enclosing scope would not be.
-private func encodeSubscriptionEvent(
+/// captured from the enclosing scope would not be. Internal rather than
+/// private so a daemon test can check the wire shape of an event.
+func encodeSubscriptionEvent(
     _ event: PaneEvent,
     paneId: String
 ) -> MethodRegistry.SubscriptionEvent? {
@@ -1290,6 +1291,19 @@ private func encodeSubscriptionEvent(
         guard let encoded = try? encoder.encode(payload) else { return nil }
         return MethodRegistry.SubscriptionEvent(
             method: PaneEventName.hingeChanged.rawValue,
+            params: encoded
+        )
+
+    case let .panelChanged(_, screenID, spansHinge):
+        // Zero is the bridge's "no screen properties", not a panel.
+        let payload = PanelChangedEvent(
+            paneId: paneId,
+            screenID: screenID == 0 ? nil : screenID,
+            spansHinge: spansHinge
+        )
+        guard let encoded = try? encoder.encode(payload) else { return nil }
+        return MethodRegistry.SubscriptionEvent(
+            method: PaneEventName.panelChanged.rawValue,
             params: encoded
         )
     }
