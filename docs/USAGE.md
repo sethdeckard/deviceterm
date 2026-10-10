@@ -472,8 +472,9 @@ keyboard to send keys and text.
 On a Simulator, hold Option while dragging to create a two-finger pinch or
 rotation. Drag upward from the bottom edge to send the system edge gesture.
 
-On a watchOS pane, scroll over the display or drag on the bezel to turn the
-Digital Crown.
+On a watchOS pane, scroll over the display or drag the crown on the frame's
+right edge up or down to turn the Digital Crown. Click the crown to press it.
+Drag the frame away from the crown to swipe.
 
 On a foldable Simulator pane, a fold bar sits under the device picture:
 Fold Closed, Fold to Book, Unfold, and a slider for any angle between them.

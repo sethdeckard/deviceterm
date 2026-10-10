@@ -55,7 +55,7 @@ interact with it:
 - click or drag for touch and swipe;
 - hold Option while dragging for a two-finger pinch or rotation;
 - type into the focused device pane; and
-- scroll or drag the watch bezel to turn the Digital Crown.
+- scroll or drag the watch crown to turn the Digital Crown.
 
 Commands that DeviceTerm does not observe continue to behave exactly as Apple's
 tools define them. A Simulator booted from Xcode, Simulator.app, Device Hub, or

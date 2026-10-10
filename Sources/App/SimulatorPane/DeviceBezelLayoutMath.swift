@@ -53,54 +53,67 @@ enum DeviceBezelLayoutMath {
         let bottom: CGFloat
     }
 
-    /// Phone, pad and watch geometry is derived from ratios of the screen
-    /// rather than taken from a device, so each is symmetric and each
-    /// family's numbers only claim to look plausible.
+    /// A phone, measured off the alpha channel of `Bezel-iPhone-18`'s
+    /// iPhone 18 Pro in Apple Design Resources. Its screen is 1206x2622,
+    /// the iPhone 17 Pro's, and each ratio is a thickness in device pixels
+    /// over that width.
+    ///
+    /// Apple keeps a family's frame the same number of pixels thick at every
+    /// size, so a larger model's frame is a smaller fraction of its screen.
+    /// One model stands for the family; the Pro Max reads about a tenth
+    /// thinner.
     private static let phoneProfile = Profile(
-        portraitLeft: 0.045,
-        portraitRight: 0.045,
-        portraitTop: 0.045,
-        portraitBottom: 0.045,
+        portraitLeft: 47 / 1_206,
+        portraitRight: 47 / 1_206,
+        portraitTop: 47 / 1_206,
+        portraitBottom: 47 / 1_206,
         insetRange: 8...16,
         screenCorners: DeviceBezelLayout.Corners(
-            topLeft: 0.15,
-            topRight: 0.15,
-            bottomLeft: 0.15,
-            bottomRight: 0.15
+            topLeft: 183 / 1_206,
+            topRight: 183 / 1_206,
+            bottomLeft: 183 / 1_206,
+            bottomRight: 183 / 1_206
         ),
         screenCornerRange: 12...64
     )
 
+    /// An iPad, from `Bezel-iPad-Pro-(M5)`'s 11-inch model, over its
+    /// 1668-pixel width. The 13-inch has the same frame in pixels, so it
+    /// reads about a fifth thinner.
     private static let padProfile = Profile(
-        portraitLeft: 0.035,
-        portraitRight: 0.035,
-        portraitTop: 0.035,
-        portraitBottom: 0.035,
+        portraitLeft: 91 / 1_668,
+        portraitRight: 91 / 1_668,
+        portraitTop: 90 / 1_668,
+        portraitBottom: 90 / 1_668,
         insetRange: 8...18,
         screenCorners: DeviceBezelLayout.Corners(
-            topLeft: 0.025,
-            topRight: 0.025,
-            bottomLeft: 0.025,
-            bottomRight: 0.025
+            topLeft: 62 / 1_668,
+            topRight: 62 / 1_668,
+            bottomLeft: 62 / 1_668,
+            bottomRight: 62 / 1_668
         ),
-        screenCornerRange: 4...12
+        screenCornerRange: 4...40
     )
 
-    /// Watch carries a noticeably thicker frame and a much larger corner
-    /// radius, close to a squircle.
+    /// A watch, from `Bezel-Apple-Watch-Series-11-2025`'s 46mm case, over its
+    /// 416-pixel width. The 42mm matches it to within a pixel in proportion.
+    ///
+    /// Thicker at the sides than at the ends. The art draws the band over
+    /// the case's top and bottom, so those two are read off where the case's
+    /// rim meets the band rather than off the alpha channel.
     private static let watchProfile = Profile(
-        portraitLeft: 0.075,
-        portraitRight: 0.075,
-        portraitTop: 0.075,
-        portraitBottom: 0.075,
+        portraitLeft: 40.5 / 416,
+        portraitRight: 40.5 / 416,
+        portraitTop: 37 / 416,
+        portraitBottom: 37 / 416,
         insetRange: 10...24,
         screenCorners: DeviceBezelLayout.Corners(
-            topLeft: 0.17,
-            topRight: 0.17,
-            bottomLeft: 0.17,
-            bottomRight: 0.17
+            topLeft: 108.6 / 416,
+            topRight: 108.6 / 416,
+            bottomLeft: 108.6 / 416,
+            bottomRight: 108.6 / 416
         ),
-        screenCornerRange: 8...40
+        screenCornerRange: 8...80
     )
 
     /// A foldable's cover panel, measured off the alpha channel of
@@ -201,6 +214,11 @@ enum DeviceBezelLayoutMath {
     /// One scalar, and the thickest edge rather than any particular one:
     /// the reserve stays symmetric and the body is drawn asymmetrically
     /// inside it, which is what an off-centre display looks like anyway.
+    ///
+    /// A watch also reserves its crown's protrusion past the frame at the
+    /// thickest side, because the bezel layer masks to its bounds and the
+    /// crown stands proud of the case. Rounded up to a whole point, so a
+    /// crown at exactly that size cannot overshoot it by a rounding error.
     static func maxBezelInset(family: DeviceFamily) -> CGFloat {
         switch family {
         case .tv:
@@ -213,7 +231,8 @@ enum DeviceBezelLayoutMath {
             return 18
 
         case .watch:
-            return 24
+            let side = watchProfile.insetRange.upperBound
+            return (side + crownWidth(inset: side) / 2).rounded(.up)
         }
     }
 
@@ -414,24 +433,30 @@ enum DeviceBezelLayoutMath {
 
     // MARK: - Helpers
 
-    /// The crown bump sits on the right edge, vertically centered, sized
-    /// for an easy click target.
+    /// The crown bump, straddling the right edge of the frame, placed and
+    /// sized from the same watch art as `watchProfile`.
+    ///
+    /// Its centre sits 28% of the way down the screen and it is 18% of the
+    /// screen's height tall. Half its width stands proud of the case, as the
+    /// art's crown does, by 59% of the side's thickness.
     private static func crownRect(
         imageRect: CGRect,
         bezelRect: CGRect,
         inset: CGFloat
     ) -> CGRect {
         let width = crownWidth(inset: inset)
-        let height = imageRect.height * 0.22
+        let height = imageRect.height * 91 / 496
         return CGRect(
             x: bezelRect.maxX - width / 2,
-            y: imageRect.midY - height / 2,
+            y: imageRect.minY + imageRect.height * 0.28 - height / 2,
             width: width,
             height: height
         )
     }
 
+    /// Twice the crown's protrusion past the case, which the art puts at 24
+    /// pixels against a 40.5-pixel side.
     private static func crownWidth(inset: CGFloat) -> CGFloat {
-        max(8, min(14, inset * 0.85))
+        2 * inset * 24 / 40.5
     }
 }

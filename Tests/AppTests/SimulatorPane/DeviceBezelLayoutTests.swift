@@ -10,18 +10,17 @@ import Testing
 /// its own assertion shape:
 ///
 ///   - phone → bezel rect insetting `imageRect`, no crown.
-///   - pad → thinner bezel rect, no crown.
+///   - pad → thicker bezel rect, no crown.
 ///   - watch → bezel + crown rect on the trailing (right) edge.
 ///   - tv → layout is nil (no bezel painted; letterbox stays as-is).
 ///   - unknown → falls back to the phone style.
 ///
-/// A foldable's two panels have their own geometry, measured off Apple's
-/// `Bezel-iPhone-Duo` design resource rather than derived from a ratio, and
-/// `FoldableBezelLayoutTests` pins those numbers: the frame's thickness on
-/// each edge of the device and the rounding of each panel's display. Those
-/// are the only numbers here that claim to describe a real device, so the
-/// assertions scale the device-pixel measurements to the test panel's size
-/// in points.
+/// Every family's numbers are measured off Apple's bezel design resources.
+/// `MeasuredBezelLayoutTests` pins the phone, pad and watch ones, and
+/// `FoldableBezelLayoutTests` pins a foldable's two panels: the frame's
+/// thickness on each edge of the device and the rounding of each display.
+/// Those assertions scale the device-pixel measurements to the test panel's
+/// size in points.
 ///
 /// The thicknesses and radii scale with the smaller imageRect dimension and
 /// are clamped to a reasonable range; these tests pin the boundary behavior
@@ -53,14 +52,14 @@ struct DeviceBezelLayoutTests {
             DeviceBezelLayoutMath.layout(family: .pad, imageRect: screenRect)
         )
         #expect(layout.crownRect == nil)
-        // Pad bezel is thinner than phone, asserted via comparison
-        // on the same image rect.
+        // Apple draws an iPad's frame thicker than a phone's, relative to the
+        // screen, asserted via comparison on the same image rect.
         let phone = try #require(
             DeviceBezelLayoutMath.layout(family: .phone, imageRect: screenRect)
         )
         let phoneInset = screenRect.minX - phone.bezelRect.minX
         let padInset = screenRect.minX - layout.bezelRect.minX
-        #expect(padInset < phoneInset)
+        #expect(padInset > phoneInset)
     }
 
     @Test
@@ -72,8 +71,8 @@ struct DeviceBezelLayoutTests {
         // Crown straddles the bezel's right edge, so midX matches
         // the bezel's max x.
         #expect(abs(crown.midX - layout.bezelRect.maxX) < 1e-6)
-        // Vertically centered on the image rect.
-        #expect(abs(crown.midY - screenRect.midY) < 1e-6)
+        // Above centre, 28% of the way down the screen, where the art puts it.
+        #expect(abs(crown.midY - (screenRect.minY + screenRect.height * 0.28)) < 1e-6)
         // Watch corner radius is large (squircle-ish), bigger
         // than phone's at the same screen size.
         let phone = try #require(
@@ -165,11 +164,14 @@ struct DeviceBezelLayoutTests {
                         panel: panel
                     )
                 )
+                // The crown stands proud of the frame, and the bezel layer
+                // masks it the same way, so it has to fit too.
+                let painted = layout.crownRect.map { layout.bezelRect.union($0) } ?? layout.bezelRect
                 let thickest = max(
-                    image.minX - layout.bezelRect.minX,
-                    layout.bezelRect.maxX - image.maxX,
-                    image.minY - layout.bezelRect.minY,
-                    layout.bezelRect.maxY - image.maxY
+                    image.minX - painted.minX,
+                    painted.maxX - image.maxX,
+                    image.minY - painted.minY,
+                    painted.maxY - image.maxY
                 )
                 #expect(thickest <= reserve)
             }
@@ -419,5 +421,54 @@ struct FoldableBezelLayoutTests {
             top: imageRect.minY - layout.bezelRect.minY,
             bottom: layout.bezelRect.maxY - imageRect.maxY
         )
+    }
+}
+
+/// Phone, pad and watch geometry measured from Apple's bezel design
+/// resources, with watch end thicknesses measured at the case/band boundary.
+///
+/// Each panel is sized so no point clamp bites, which leaves the frame at
+/// exactly the measured fraction of the screen's width.
+struct MeasuredBezelLayoutTests {
+    @Test("the frame and display rounding match the art", arguments: [
+        // family, panel width, side, end, corner, screen width in device px
+        (DeviceFamily.phone, 300.0, 47.0, 47.0, 183.0, 1_206.0),
+        (DeviceFamily.pad, 300.0, 91.0, 90.0, 62.0, 1_668.0),
+        (DeviceFamily.watch, 200.0, 40.5, 37.0, 108.6, 416.0)
+    ])
+    func frameMatchesTheArt(
+        family: DeviceFamily,
+        width: Double,
+        side: Double,
+        end: Double,
+        corner: Double,
+        screen: Double
+    ) throws {
+        let imageRect = CGRect(x: 0, y: 0, width: width, height: width * 1.3)
+        let layout = try #require(
+            DeviceBezelLayoutMath.layout(family: family, imageRect: imageRect)
+        )
+        #expect(abs((imageRect.minX - layout.bezelRect.minX) - side / screen * width) < 0.01)
+        #expect(abs((layout.bezelRect.maxX - imageRect.maxX) - side / screen * width) < 0.01)
+        #expect(abs((imageRect.minY - layout.bezelRect.minY) - end / screen * width) < 0.01)
+        #expect(abs((layout.bezelRect.maxY - imageRect.maxY) - end / screen * width) < 0.01)
+        #expect(abs(layout.screenCornerRadii.topLeft - corner / screen * width) < 0.01)
+        #expect(abs(layout.screenCornerRadii.bottomRight - corner / screen * width) < 0.01)
+    }
+
+    /// The crown's place and size come from the same art: centred 28% of the
+    /// way down the screen, 91 of its 496 pixels tall, and standing 24 pixels
+    /// proud of a 40.5-pixel side.
+    @Test
+    func theCrownMatchesTheArt() throws {
+        let imageRect = CGRect(x: 0, y: 0, width: 200, height: 200 * 496 / 416)
+        let layout = try #require(
+            DeviceBezelLayoutMath.layout(family: .watch, imageRect: imageRect)
+        )
+        let crown = try #require(layout.crownRect)
+        let side = layout.bezelRect.maxX - imageRect.maxX
+        #expect(abs(crown.midY - imageRect.height * 0.28) < 1e-6)
+        #expect(abs(crown.height - imageRect.height * 91 / 496) < 1e-6)
+        #expect(abs((crown.maxX - layout.bezelRect.maxX) - side * 24 / 40.5) < 1e-6)
     }
 }
