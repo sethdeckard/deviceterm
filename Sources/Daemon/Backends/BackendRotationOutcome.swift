@@ -9,7 +9,11 @@ import DaemonProtocol
 /// can settle the request inside the backend.
 enum BackendRotationOutcome: Sendable, Equatable {
     /// The command was sent; the coordinator must await display observation.
-    case dispatched(target: Orientation)
+    ///
+    /// `target` is the device orientation asked for and `display` the reading
+    /// that confirms it. They differ only on a foldable's inner panel, which
+    /// reads a quarter turn off the device.
+    case dispatched(target: Orientation, display: Orientation)
     /// The backend observed the requested orientation.
     case confirmed(target: Orientation, observed: Orientation)
     /// The backend observed a different result or exhausted its bounded work.

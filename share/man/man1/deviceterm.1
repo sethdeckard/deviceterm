@@ -115,7 +115,9 @@ directly. A Simulator confirms through its observed display orientation, and a
 physical device through the orientation returned by its control relay. Success
 reports targetOrientation and observedOrientation. An orientation-locked
 Simulator fails after the four-second confirmation deadline instead of
-returning a dispatch receipt.
+returning a dispatch receipt. On a foldable's inner panel the display reads a
+quarter turn off the device, so a confirmed receipt's observedOrientation
+differs from its targetOrientation there.
 .TP
 .B fold " " \fIclosed\fR|\fIbook\fR|\fIopen\fR|\fI0-180\fR
 Set the hinge angle of a foldable device.

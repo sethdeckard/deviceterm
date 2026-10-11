@@ -3,6 +3,7 @@
 import DaemonProtocol
 import IOSurface
 import Observation
+import os
 
 /// Presentation state + daemon I/O for one
 /// mirrored-device pane, sim or physical.
@@ -75,6 +76,8 @@ final class SimulatorPaneViewModel {
     /// stalls the sim's synchronous HID completion semaphore. Below the
     /// recognizer's movement threshold, so the finger reads as still.
     private static let touchKeepaliveJitter: CGFloat = 0.001
+    /// Where a rotation that came back short of confirmed is recorded.
+    private static let rotationLog = Logger(subsystem: "com.deviceterm", category: "rotation")
 
     let paneId: String
     /// The admission this pane was mounted from, echoed back on close so a
@@ -829,7 +832,8 @@ final class SimulatorPaneViewModel {
     /// than on the daemon's answer. The daemon decides whether display
     /// observation or a physical-device reply confirms the result. The GUI
     /// presents no separate rotation error; presentation still follows any
-    /// confirmed orientationChanged event.
+    /// confirmed orientationChanged event. A result short of confirmed is
+    /// logged, so a rotation that silently did nothing can be traced.
     private func sendRotation(_ target: RotationTarget) {
         guard capabilities.rotate else { return }
         pendingRotations.append(target)
@@ -846,7 +850,20 @@ final class SimulatorPaneViewModel {
                     self?.rotationTask = nil
                     return
                 }
-                try? await client.paneInputRotate(paneId: id, target: target)
+                do {
+                    let result = try await client.paneInputRotate(paneId: id, target: target)
+                    if !result.success {
+                        Self.rotationLog.notice(
+                            """
+                            rotate not confirmed: status=\(result.status.rawValue, privacy: .public) \
+                            target=\(result.targetOrientation?.rawValue ?? "nil", privacy: .public) \
+                            observed=\(result.observedOrientation?.rawValue ?? "nil", privacy: .public)
+                            """
+                        )
+                    }
+                } catch {
+                    Self.rotationLog.notice("rotate failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
     }

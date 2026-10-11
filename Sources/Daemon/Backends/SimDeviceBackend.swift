@@ -467,19 +467,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             guard inputGate.sync(execute: { generation == inputGeneration }) else {
                 throw DeviceBackendError.notActive
             }
-            let binary = try helper.helperBinary()
-            var exitStatus: Int32 = -1
-            try SimFoldControl.run(
-                binaryAtPath: binary,
+            try runFoldHelper(
+                helper,
                 onDevice: udid,
-                arguments: [String(degrees)],
-                exitStatus: &exitStatus
+                arguments: FoldHelperSource.hingeArguments(degrees: degrees),
+                failure: "the hinge helper"
             )
-            guard exitStatus == 0 else {
-                throw DeviceBackendError.foldCommandFailed(
-                    message: "the hinge helper exited \(exitStatus)"
-                )
-            }
         }
     }
 
@@ -675,31 +668,78 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     // A cleared generation fence reports `.dispatched`, never confirmation.
-    // The bridge rotates with a one-way GSEvent that carries no reply, so the
-    // coordinator waits for `startDisplayOrientation` to observe the target.
+    // Neither path carries a reply, so the coordinator waits for
+    // `startDisplayOrientation` to observe the display reading this returns.
+    //
+    // A foldable rotates through the guest helper instead of the bridge's
+    // GSEvent, which changes its device orientation without the UI following,
+    // and reads a quarter turn off on the inner panel. Which panel that is
+    // gets read once, before the send. A fold the daemon issues cancels a
+    // pending rotation and holds new ones until a panel change is observed or
+    // the settling timeout expires (`PaneCoordinator`).
+    // A fold made outside DeviceTerm while a rotation waits can confirm it
+    // falsely, because the fold moves the shared display reading before the
+    // daemon sees the panel change.
     func rotate(
         target: RotationTarget,
         confirmedOrientation: Orientation?,
         generation: UInt64
     ) async throws -> BackendRotationOutcome {
-        let orientation: Orientation
-        switch target {
-        case let .absolute(value):
-            orientation = value
+        let foldable = capabilities.fold
+        guard let resolution = FoldablePanelOrientation.resolve(
+            target,
+            confirmed: confirmedOrientation,
+            onInnerPanel: foldable && currentBoundPanel().spansHinge
+        ) else {
+            return .confirmationUnsupported(target: nil)
+        }
+        let orientation = resolution.device
+        let sent: Bool
+        if foldable {
+            let udid = self.udid
+            let helper = self.foldHelper
+            sent = try await inputWorkQueue.run { [self] in
+                try gatedSend(generation, counted: false) {
+                    try runFoldHelper(
+                        helper,
+                        onDevice: udid,
+                        arguments: FoldHelperSource.orientationArguments(orientation),
+                        failure: "the orientation helper"
+                    )
+                }
+            }
+        } else {
+            sent = try await inputWorkQueue.run { [self] in
+                try gatedSend(generation, counted: false) {
+                    guard let purpleClient else { throw DeviceBackendError.notActive }
+                    try purpleClient.rotate(to: orientation.bridgeValue)
+                }
+            }
+        }
+        return sent
+            ? .dispatched(target: orientation, display: resolution.display)
+            : .unavailable(target: orientation)
+    }
 
-        case let .relative(direction):
-            guard let confirmedOrientation else {
-                return .confirmationUnsupported(target: nil)
-            }
-            orientation = direction.applied(to: confirmedOrientation)
+    /// Run the guest helper with `arguments` and fail unless it exits zero.
+    /// `failure` names what it was asked to do, for the error.
+    private func runFoldHelper(
+        _ helper: FoldHelperBuilder,
+        onDevice udid: String,
+        arguments: [String],
+        failure: String
+    ) throws {
+        let binary = try helper.helperBinary()
+        var exitStatus: Int32 = -1
+        try SimFoldControl.run(
+            binaryAtPath: binary,
+            onDevice: udid,
+            arguments: arguments,
+            exitStatus: &exitStatus
+        )
+        guard exitStatus == 0 else {
+            throw DeviceBackendError.foldCommandFailed(message: "\(failure) exited \(exitStatus)")
         }
-        let sent = try await inputWorkQueue.run { [self] in
-            try gatedSend(generation, counted: false) {
-                guard let purpleClient else { throw DeviceBackendError.notActive }
-                try purpleClient.rotate(to: orientation.bridgeValue)
-            }
-        }
-        return sent ? .dispatched(target: orientation) : .unavailable(target: orientation)
     }
 
     // MARK: Accessibility

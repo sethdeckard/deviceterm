@@ -633,6 +633,14 @@ latest observed orientation. DeviceTerm waits up to four seconds for the
 display to reach the target; an orientation-locked app that leaves the display
 unchanged fails with `rotate.unconfirmed`.
 
+On a foldable Simulator such as the iPhone Duo, the inner panel shows the
+device a quarter turn off: a device held in portrait displays in landscape.
+`rotate` takes the device orientation, and the receipt's `observedOrientation`
+is the display's. On the inner panel, a confirmed receipt's
+`observedOrientation` differs from its `targetOrientation`. The cover's Home
+Screen never rotates, and Safari on the cover doesn't turn upside down, so
+those requests fail with `rotate.unconfirmed`.
+
 On a physical device, `left` and `right` are sent directly as relative
 operations. The relay returns the absolute orientation where the device landed,
 which becomes the pane's next coordinate-mapping orientation. Absolute requests

@@ -160,6 +160,11 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// `releaseFirstRotate()`, so a test can hold one rotation mid-flight and
     /// prove a second rotation's broadcast can't overtake it (ordering).
     var blockFirstRotate = false
+    /// Rotate as a foldable's inner panel reads: a quarter turn off the
+    /// device, through the real `FoldablePanelOrientation`.
+    var rotatesOnInnerPanel = false
+    /// Angles this backend was asked to fold to, in order.
+    private(set) var folds: [Double] = []
     private var rotateGate: CheckedContinuation<Void, Never>?
     private var rotateCount = 0
     private var firstRotateParked = false
@@ -418,14 +423,12 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         generation: UInt64
     ) async throws -> BackendRotationOutcome {
         rotationTargets.append(target)
-        let orientation: Orientation?
-        switch target {
-        case let .absolute(value):
-            orientation = value
-
-        case let .relative(direction):
-            orientation = confirmedOrientation.map(direction.applied(to:))
-        }
+        let resolution = FoldablePanelOrientation.resolve(
+            target,
+            confirmed: confirmedOrientation,
+            onInnerPanel: rotatesOnInnerPanel
+        )
+        let orientation = resolution?.device
         guard let orientation else { return .confirmationUnsupported(target: nil) }
         let shouldBlock: Bool = parkedLock.withLock {
             rotations.append(orientation)
@@ -455,7 +458,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
         switch rotationConfirmationSupport {
         case .displayObservation:
-            return .dispatched(target: orientation)
+            return .dispatched(target: orientation, display: resolution?.display ?? orientation)
 
         case .commandReply:
             return .confirmed(target: orientation, observed: orientation)
@@ -466,6 +469,10 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func rotateCrown(delta: Double, generation: UInt64) throws { crownDeltas.append(delta) }
+
+    func fold(toDegrees degrees: Double, generation: UInt64) throws {
+        folds.append(degrees)
+    }
 
     func accessibilityFrontmostTree() throws -> [String: Any] {
         onFrontmostTree?()
@@ -1307,6 +1314,174 @@ func aCommandedRotationThatMovesTheDisplayPublishesOnce() async throws {
         if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
     }
     #expect(orientations == [.portrait, .landscapeLeft])
+}
+
+@Test
+func anInnerPanelRotationConfirmsOnTheQuarterTurnReading() async throws {
+    // The inner panel reads the device orientation a quarter turn off, so a
+    // request for landscapeRight is confirmed by a portraitUpsideDown reading,
+    // and the receipt still names what was asked for.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    backend.rotatesOnInnerPanel = true
+    let pane = try await coordinator.createMockPane(udid: "inner-rotate", sessionId: UUID(), backend: backend)
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    }
+    while backend.rotations.isEmpty { await Task.yield() }
+    backend.emitDisplayOrientation(.portraitUpsideDown)
+    let result = try await rotation.value
+    #expect(result.status == .confirmed)
+    #expect(result.targetOrientation == .landscapeRight)
+    #expect(result.observedOrientation == .portraitUpsideDown)
+}
+
+@Test
+func anInnerPanelReadingThatMatchesTheRequestDoesNotConfirmIt() async throws {
+    // A reading equal to the device orientation asked for is a different
+    // device orientation on the inner panel, so it must not settle the wait.
+    let coordinator = PaneCoordinator(rotationConfirmationTimeoutNanoseconds: 200_000_000)
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    backend.rotatesOnInnerPanel = true
+    let pane = try await coordinator.createMockPane(udid: "inner-mismatch", sessionId: UUID(), backend: backend)
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    }
+    while backend.rotations.isEmpty { await Task.yield() }
+    backend.emitDisplayOrientation(.landscapeRight)
+    let result = try await rotation.value
+    #expect(result.status == .unconfirmed)
+}
+
+@Test
+func anInnerPanelRelativeRotationStepsTheDevice() async throws {
+    // The pane starts at a portrait reading, which on the inner panel is the
+    // device at landscapeLeft. Rotate Left turns the device on to
+    // portraitUpsideDown, read as landscapeLeft.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    backend.rotatesOnInnerPanel = true
+    let pane = try await coordinator.createMockPane(udid: "inner-relative", sessionId: UUID(), backend: backend)
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .relative(.left))
+    }
+    while backend.rotations.isEmpty { await Task.yield() }
+    #expect(backend.rotations == [.portraitUpsideDown])
+    backend.emitDisplayOrientation(.landscapeLeft)
+    let result = try await rotation.value
+    #expect(result.status == .confirmed)
+    #expect(result.targetOrientation == .portraitUpsideDown)
+}
+
+/// A foldable pane whose rotations confirm through display observation, so
+/// a test can watch a fold interact with a pending one.
+private func makeFoldableRotationPane(
+    udid: String,
+    timeoutNanoseconds: UInt64 = RotationConfirmationDeadline.observationNanoseconds
+) async throws -> FoldablePane {
+    var capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
+    capabilities.fold = true
+    let coordinator = PaneCoordinator(rotationConfirmationTimeoutNanoseconds: timeoutNanoseconds)
+    await coordinator.setHingeReaderTestLaunch { _, _ in SilentHingeReader() }
+    let backend = MockDeviceBackend(capabilities: capabilities, rotationConfirmationSupport: .displayObservation)
+    let pane = try await coordinator.createMockPane(udid: udid, sessionId: UUID(), backend: backend)
+    return FoldablePane(coordinator: coordinator, pane: pane, backend: backend)
+}
+
+@Test
+func aFoldCancelsAPendingRotation() async throws {
+    // A fold moves the shared display reading, so it could land on the value
+    // a waiting rotation expects and settle it without the device turning.
+    // The fold resolves the wait itself, well before the deadline.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-cancels", timeoutNanoseconds: 30_000_000_000)
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    let started = ContinuousClock.now
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    }
+    while backend.rotations.isEmpty { await Task.yield() }
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 0)
+    let result = try await rotation.value
+    #expect(result.status == .unconfirmed)
+    #expect(result.targetOrientation == .landscapeRight)
+    #expect(ContinuousClock.now - started < .seconds(5))
+}
+
+@Test
+func aRotationAdmittedWhileAFoldSettlesWaitsForThePanel() async throws {
+    // Read before the fold lands, the bound panel would be the one the fold
+    // is leaving, and the rotation would wait for the wrong reading.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-gate")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 180)
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(backend.rotations.isEmpty)
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: innerPanel)
+    while backend.rotations.isEmpty { await Task.yield() }
+    #expect(backend.rotations == [.landscapeLeft])
+    backend.emitDisplayOrientation(.landscapeLeft)
+    #expect(try await rotation.value.status == .confirmed)
+}
+
+@Test
+func aFoldThatKeepsItsPanelReleasesRotationsAfterTheSettle() async throws {
+    // A fold within one panel raises no panel change, so the gate opens on
+    // its timeout instead of holding rotations for good.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-timeout")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 120)
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
+    }
+    let deadline = ContinuousClock.now + .seconds(3)
+    while backend.rotations.isEmpty, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(backend.rotations == [.landscapeLeft])
+    backend.emitDisplayOrientation(.landscapeLeft)
+    #expect(try await rotation.value.status == .confirmed)
+}
+
+@Test
+func aFoldDuringARotationsDispatchStopsItConfirming() async throws {
+    // A rotation held inside the backend has no waiter for the fold to cancel
+    // yet. Once it resumes, the fold may already have moved the reading, so it
+    // must give up its confirmation rather than install a waiter.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-epoch", timeoutNanoseconds: 30_000_000_000)
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    backend.blockFirstRotate = true
+    let started = ContinuousClock.now
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    }
+    while !backend.firstRotateStarted { await Task.yield() }
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 0)
+    backend.releaseFirstRotate()
+    let result = try await rotation.value
+    #expect(result.status == .unconfirmed)
+    #expect(ContinuousClock.now - started < .seconds(5))
+}
+
+@Test
+func aFoldWaitsForTheFoldBeforeItToSettle() async throws {
+    // Overlapping folds would let the first one's panel change open the
+    // second one's gate, and a rotation would resolve against a panel the
+    // device is passing through.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-serial")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 0)
+    let second = Task {
+        try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 180)
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(backend.folds == [0])
+    // The first fold lands on the cover; only then does the second go out.
+    await coordinator.notePanelChange(paneId: pane.paneId, panel: BoundPanel(screenID: 1, spansHinge: false))
+    try await second.value
+    #expect(backend.folds == [0, 180])
 }
 
 @Test

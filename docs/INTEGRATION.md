@@ -994,6 +994,12 @@ instead of producing a receipt. At most two rotations may be outstanding on a
 pane; another request fails immediately as `rotate.unconfirmed` without
 dispatch, and may be retried after a slot opens.
 
+On a foldable's inner panel the display reads a quarter turn off the device.
+`targetOrientation` names the device orientation requested and
+`observedOrientation` the display's, so a confirmed receipt there carries two
+different values. A relative request steps the device orientation behind the
+latest confirmed display reading.
+
 On a physical device, `left` and `right` go directly to the relay. The reply
 supplies the absolute orientation where the device landed. An absolute request
 uses the same replies to converge on its target. A physical device turned by

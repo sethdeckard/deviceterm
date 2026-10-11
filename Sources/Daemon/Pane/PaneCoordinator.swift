@@ -76,19 +76,19 @@ public actor PaneCoordinator {
     /// One-shot completion state that chains a pane's operations of one
     /// kind in request order. Shared by the rotation and location chains;
     /// each `Record` keeps a separate tail per kind, so the two never
-    /// block each other.
+    /// block each other. A settling fold uses one as its gate too.
     ///
-    /// A plain holder: its `done`/`waiter` are read and written **only**
+    /// A plain holder: its `done`/`waiters` are read and written **only**
     /// through the coordinator's actor-isolated `awaitChainLink` /
     /// `signalChainLink`, so the `done` check and the continuation
     /// registration happen with no suspension between them and a signal can't
     /// slip in and drop the wakeup. The `@unchecked Sendable` is for storage in
-    /// the actor-isolated `Record`; there is no cross-thread access. A single
-    /// waiter suffices: each chain is linear (an operation awaits exactly its
-    /// immediate predecessor).
+    /// the actor-isolated `Record`; there is no cross-thread access. A chain
+    /// has one waiter, since each operation awaits exactly its immediate
+    /// predecessor, but a fold gate can hold a rotation and the next fold.
     private final class SerialChainLink: @unchecked Sendable {
         var done = false
-        var waiter: CheckedContinuation<Void, Never>?
+        var waiters: [CheckedContinuation<Void, Never>] = []
     }
 
     /// Per-pane mutable state. Class-backed so a pane's state can be passed
@@ -97,7 +97,11 @@ public actor PaneCoordinator {
     private final class Record: @unchecked Sendable {
         struct RotationConfirmationWaiter {
             let id: UInt64
+            /// The device orientation asked for, which the receipt reports.
             let target: Orientation
+            /// The display reading that confirms it. Equal to `target` except
+            /// on a foldable's inner panel.
+            let display: Orientation
             let continuation: CheckedContinuation<RotateResult, Never>
         }
 
@@ -282,6 +286,15 @@ public actor PaneCoordinator {
         /// serialization permits at most one waiter per pane.
         var nextRotationConfirmationID: UInt64 = 0
         var rotationConfirmationWaiter: RotationConfirmationWaiter?
+        /// Held while a fold this daemon issued settles, from just before the
+        /// hinge command until the next panel change or a bounded timeout.
+        /// A rotation waits here before it reads the bound panel, because a
+        /// fold moves the panel and the display reading a quarter turn.
+        var foldSettling: SerialChainLink?
+        /// Bumped by each fold this daemon issues. A rotation captures it
+        /// before dispatch and gives up its confirmation if a fold began
+        /// while it was being sent, since the fold can move the reading.
+        var foldEpoch: UInt64 = 0
         /// The latest orientation established by display observation or a
         /// physical-device command reply. Relative Simulator requests use this
         /// value as their base; physical-device requests do not.
@@ -694,6 +707,10 @@ public actor PaneCoordinator {
     /// CLI bounds its own response deadline by the same number; this name is
     /// the daemon-local spelling of it.
     public static let maxGestureDurationMs: Int = GestureDuration.maxMs
+    /// How long rotations wait after a fold that lights no other panel.
+    /// Longer than a panel swap takes, so a fold that does swap releases them
+    /// through its panel change first.
+    static let foldSettleNanoseconds: UInt64 = 1_000_000_000
 
     // The swipe-dwell cadence/jitter and the App-Switcher double-press gap
     // live with the gesture logic in `SimInputSynthesis`, their only user.
@@ -2976,13 +2993,13 @@ public actor PaneCoordinator {
     /// command reply can name the orientation the pane already holds.
     private func publishPresentationOrientation(record: Record, paneId: UUID, orientation: Orientation) {
         record.confirmedOrientation = orientation
-        if let waiter = record.rotationConfirmationWaiter, waiter.target == orientation {
+        if let waiter = record.rotationConfirmationWaiter, waiter.display == orientation {
             record.rotationConfirmationWaiter = nil
             waiter.continuation.resume(
                 returning: RotateResult(
                     success: true,
                     status: .confirmed,
-                    targetOrientation: orientation,
+                    targetOrientation: waiter.target,
                     observedOrientation: orientation
                 )
             )
@@ -3068,6 +3085,10 @@ public actor PaneCoordinator {
     /// `hinge.changed` follows the swap too.
     func notePanelChange(paneId: UUID, panel: BoundPanel) {
         guard let record = panes[paneId], record.observedPanel != panel else { return }
+        // A fold this daemon issued has landed on its panel.
+        if let settling = record.foldSettling {
+            endFoldSettling(record: record, settling: settling)
+        }
         let spansHingeMoved = record.observedPanelSpansHinge != panel.spansHinge
         record.observedPanel = panel
         guard record.capabilities.fold else { return }
@@ -3841,6 +3862,12 @@ public actor PaneCoordinator {
         record.rotationTail = thisRotation
         defer { signalChainLink(thisRotation) }
         if let priorRotation { await awaitChainLink(priorRotation) }
+        // A fold this daemon issued may still be settling. Resolving against
+        // the panel before it lands would wait for the wrong reading. The next
+        // fold can install its gate before this wakes, so check again.
+        while let settling = record.foldSettling, !settling.done {
+            await awaitChainLink(settling)
+        }
         if input.backend.rotationConfirmationSupport == .displayObservation {
             guard record.observingDisplayOrientation else {
                 return RotateResult(
@@ -3851,6 +3878,7 @@ public actor PaneCoordinator {
                 )
             }
         }
+        let foldEpoch = record.foldEpoch
         let outcome = try await SimInputSynthesis.rotate(
             backend: input.backend,
             paneId: paneId,
@@ -3859,8 +3887,23 @@ public actor PaneCoordinator {
             confirmedOrientation: record.confirmedOrientation
         )
         switch outcome {
-        case let .dispatched(target):
-            return await waitForRotationConfirmation(record: record, paneId: paneId, target: target)
+        case let .dispatched(target, display):
+            // A fold that began while this was being sent can move the reading
+            // onto the one this rotation waits for, so it cannot confirm.
+            guard record.foldEpoch == foldEpoch else {
+                return RotateResult(
+                    success: false,
+                    status: .unconfirmed,
+                    targetOrientation: target,
+                    observedOrientation: record.confirmedOrientation
+                )
+            }
+            return await waitForRotationConfirmation(
+                record: record,
+                paneId: paneId,
+                target: target,
+                display: display
+            )
 
         case let .confirmed(target, observed):
             record.confirmedOrientation = observed
@@ -3909,17 +3952,21 @@ public actor PaneCoordinator {
         }
     }
 
+    /// Wait for the display to read `display`, and report `target`, the
+    /// device orientation asked for. The two differ only on a foldable's
+    /// inner panel.
     private func waitForRotationConfirmation(
         record: Record,
         paneId: UUID,
-        target: Orientation
+        target: Orientation,
+        display: Orientation
     ) async -> RotateResult {
-        if record.confirmedOrientation == target {
+        if record.confirmedOrientation == display {
             return RotateResult(
                 success: true,
                 status: .confirmed,
                 targetOrientation: target,
-                observedOrientation: target
+                observedOrientation: display
             )
         }
         record.nextRotationConfirmationID &+= 1
@@ -3928,6 +3975,7 @@ public actor PaneCoordinator {
             record.rotationConfirmationWaiter = Record.RotationConfirmationWaiter(
                 id: confirmationID,
                 target: target,
+                display: display,
                 continuation: continuation
             )
             Task { [weak self] in
@@ -3968,17 +4016,18 @@ public actor PaneCoordinator {
     /// actor-isolated) cannot interleave, so the wakeup is never lost.
     private func awaitChainLink(_ link: SerialChainLink) async {
         if link.done { return }
-        await withCheckedContinuation { link.waiter = $0 }
+        await withCheckedContinuation { link.waiters.append($0) }
     }
 
-    /// Mark `link` done and resume the next rotation waiting on it. Idempotent,
-    /// so the rotate `defer` can call it on every exit path (success, skip,
+    /// Mark `link` done and resume everything waiting on it. Idempotent, so
+    /// the rotate `defer` can call it on every exit path (success, skip,
     /// throw) without wedging the chain.
     private func signalChainLink(_ link: SerialChainLink) {
         guard !link.done else { return }
         link.done = true
-        link.waiter?.resume()
-        link.waiter = nil
+        let waiters = link.waiters
+        link.waiters = []
+        for waiter in waiters { waiter.resume() }
     }
 
     func crown(paneId: UUID, as principal: PaneAccessPrincipal, delta: Double, durationMs: Int) async throws {
@@ -4013,8 +4062,31 @@ public actor PaneCoordinator {
             supporting: \.fold,
             operation: .fold
         )
+        // One fold at a time, through settling: a panel change from an earlier
+        // fold must not open this fold's gate. A newer fold can queue here too,
+        // so check again after each wait.
+        while let earlier = input.record.foldSettling, !earlier.done {
+            await awaitChainLink(earlier)
+        }
+        // A fold moves the shared display reading, so a rotation waiting for
+        // its reading, or still being sent, could be settled by the fold rather
+        // than by the device turning. Cancel the one waiting, mark the one in
+        // flight, and hold new rotations until a panel change is observed or
+        // the settling timeout expires.
+        input.record.foldEpoch &+= 1
+        cancelPendingRotation(record: input.record)
+        let settling = beginFoldSettling(record: input.record)
+        var dispatched = false
+        defer {
+            if dispatched {
+                scheduleFoldSettlingTimeout(paneId: paneId, settling: settling)
+            } else {
+                endFoldSettling(record: input.record, settling: settling)
+            }
+        }
         do {
             try await input.backend.fold(toDegrees: degrees, generation: input.generation)
+            dispatched = true
         } catch let error as DeviceBackendError {
             throw PaneError.mapBackendError(error, paneId: paneId, operation: .fold)
         } catch {
@@ -4027,6 +4099,56 @@ public actor PaneCoordinator {
                 message: BridgeMessage.unwrap(error)
             )
         }
+    }
+
+    /// Resolve a rotation still waiting for its reading as unconfirmed.
+    private func cancelPendingRotation(record: Record) {
+        guard let waiter = record.rotationConfirmationWaiter else { return }
+        record.rotationConfirmationWaiter = nil
+        waiter.continuation.resume(
+            returning: RotateResult(
+                success: false,
+                status: .unconfirmed,
+                targetOrientation: waiter.target,
+                observedOrientation: record.confirmedOrientation
+            )
+        )
+    }
+
+    /// Hold rotations until a panel change is observed or the settling
+    /// timeout expires. Folds are serialized through settling, so no earlier
+    /// gate is still held.
+    private func beginFoldSettling(record: Record) -> SerialChainLink {
+        let settling = SerialChainLink()
+        record.foldSettling = settling
+        return settling
+    }
+
+    /// Release `settling`, and stop holding rotations if it is still the
+    /// pane's current gate.
+    private func endFoldSettling(record: Record, settling: SerialChainLink) {
+        if record.foldSettling === settling { record.foldSettling = nil }
+        signalChainLink(settling)
+    }
+
+    /// Release `settling` after `foldSettleNanoseconds` if no panel change
+    /// has. A fold that keeps the same panel lit raises no panel change.
+    ///
+    /// A swap that arrives later than this has outlived its fold's gate, and
+    /// would open the next fold's. The measured swap is well inside it.
+    private func scheduleFoldSettlingTimeout(paneId: UUID, settling: SerialChainLink) {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.foldSettleNanoseconds)
+            await self?.endFoldSettling(paneId: paneId, settling: settling)
+        }
+    }
+
+    private func endFoldSettling(paneId: UUID, settling: SerialChainLink) {
+        guard let record = panes[paneId] else {
+            signalChainLink(settling)
+            return
+        }
+        endFoldSettling(record: record, settling: settling)
     }
 
     // MARK: - Accessibility

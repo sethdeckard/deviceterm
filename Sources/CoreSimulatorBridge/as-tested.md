@@ -188,6 +188,19 @@ approaches ruled out.
   outcomes through the existing `SimScreen.uiOrientation` observation. An
   orientation-locked app leaves that observation unchanged, so the command
   reports an unconfirmed outcome.
+- **A foldable ignores the GSEvent rotate.** On the iPhone Duo it changes the
+  device orientation (`devicectl device orientation get` reports it), but the
+  UI doesn't re-lay out until the next fold. Device Hub rotates a Duo through
+  `CoreDevicePopCoreDeviceExtension`, which posts a vendor HID event on page
+  `0xFF61` usage `0x5B` (the hinge's usage) carrying an `IOCFSerialize`d
+  `{provider: com.apple.Virtualization.VirtualMachines, source:
+  orientation-picker-control, type: enum, value}`, with `value` one of
+  `portrait`, `pud`, `landscape-left`, `landscape-right`. The fold helper sends
+  the same payload, and the UI follows at once. Measured on two boots: with the
+  cover lit, `uiOrientation` equals the device orientation; with the inner
+  panel lit, it reads a quarter turn clockwise (a device in portrait reads
+  `landscapeRight`). A `pud` request with Safari in front on the cover changed
+  nothing.
 - **Relative Simulator requests use the latest confirmed presented
   orientation.** This avoids a command-only base drifting from the screen, but
   does not turn display orientation into proof of physical attitude.

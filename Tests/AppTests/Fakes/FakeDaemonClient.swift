@@ -1140,7 +1140,7 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         paneInputCalls.append((.paneInputText, paneId))
     }
 
-    func paneInputRotate(paneId: String, target: RotationTarget) async {
+    func paneInputRotate(paneId: String, target: RotationTarget) async -> RotateResult {
         paneInputCalls.append((.paneInputRotate, paneId))
         rotateCalls.append(RotateCall(paneId: paneId, target: target))
         if holdRotateCalls {
@@ -1148,6 +1148,12 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
                 rotateContinuations.append(continuation)
             }
         }
+        return RotateResult(
+            success: true,
+            status: .confirmed,
+            targetOrientation: target.orientation,
+            observedOrientation: target.orientation
+        )
     }
 
     func releaseNextRotateCall() {

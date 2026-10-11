@@ -1801,7 +1801,8 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     }
 
     /// Set device orientation, absolutely or by one relative step.
-    func paneInputRotate(paneId: String, target: RotationTarget) async throws {
+    @discardableResult
+    func paneInputRotate(paneId: String, target: RotationTarget) async throws -> RotateResult {
         let params = try JSONEncoder().encode(RotateParams(paneId: paneId, target: target))
         while true {
             try Task.checkCancellation()
@@ -1810,7 +1811,7 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
             guard !result.success,
                 result.status == .unconfirmed,
                 result.reason == .queueFull else {
-                return
+                return result
             }
             try await Task.sleep(nanoseconds: Self.rotationBackpressureRetryNanoseconds)
         }

@@ -2185,6 +2185,22 @@ matches, because display orientation is not proof of device attitude. A missing
 display observer reports `confirmationUnsupported`; a display that does not
 reach the target reports `unconfirmed` with the last observation and deadline.
 
+A foldable Simulator rotates through the guest helper instead of the PurpleHID
+GSEvent, which changes a foldable's device orientation without its UI
+following. The helper posts the hinge's vendor HID event with Device Hub's
+`orientation-picker-control` payload. The daemon resolves the request against
+the bound panel, since the cover reads the device orientation unchanged and the
+inner panel reads it a quarter turn clockwise. It waits for that reading, and a
+relative request steps from the device orientation behind the confirmed
+reading.
+
+A fold issued by DeviceTerm resolves a waiting rotation as unconfirmed. A
+rotation still being dispatched finishes dispatch but cannot confirm if a fold
+began meanwhile. The fold holds new rotations and the next fold until the
+panel changes or a second passes. A fold made outside DeviceTerm while a
+rotation waits can confirm it falsely, because the fold moves the shared
+reading before the daemon sees the panel change.
+
 A physical device sends relative requests directly to the relay, without
 resolving them through daemon state. The relay reply supplies the absolute
 orientation where the device landed. Absolute requests establish the current

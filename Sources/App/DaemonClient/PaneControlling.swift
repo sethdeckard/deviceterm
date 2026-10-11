@@ -101,9 +101,10 @@ protocol PaneControlling: AnyObject {
     ) async throws
     func paneInputText(paneId: String, text: String) async throws
     /// `pane.input.rotate`: rotate to an absolute orientation, or one relative
-    /// 90° step. The call waits for the daemon's result; this GUI-facing API
-    /// retries queue backpressure and otherwise does not expose the result status.
-    func paneInputRotate(paneId: String, target: RotationTarget) async throws
+    /// 90° step. The call waits for the daemon's result, retries queue
+    /// backpressure, and returns the result it settles on.
+    @discardableResult
+    func paneInputRotate(paneId: String, target: RotationTarget) async throws -> RotateResult
     /// `pane.input.crown`: watchOS Digital Crown rotation. `delta` is
     /// in the bridge's raw crown unit (~1 unit per detent); positive
     /// is forward/down. `durationMs == 0` sends the whole rotation
