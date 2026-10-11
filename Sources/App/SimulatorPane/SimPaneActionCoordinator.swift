@@ -394,13 +394,15 @@ final class SimPaneActionCoordinator {
                 )
             }
         }
-        paneVC.onScreenshot = { [weak self] in
+        paneVC.onScreenshot = { [weak self, weak paneVC] in
             guard let self else { return }
+            let display = paneVC?.litPanelScreenID
             Task { @MainActor in
                 let path = self.screenshotDestination(for: displayName)
                 do {
                     try await SimulatorShellOut.captureScreenshot(
                         udid: udid,
+                        display: display,
                         to: path
                     )
                     // Reveal the new file in Finder. The user picked
@@ -427,6 +429,7 @@ final class SimPaneActionCoordinator {
             do {
                 let process = try SimulatorShellOut.startRecording(
                     udid: udid,
+                    display: paneVC.litPanelScreenID,
                     to: path
                 )
                 paneVC.recordingProcess = process

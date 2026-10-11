@@ -495,6 +495,10 @@ While the panel the hinge runs through is the one lit, the picture bends at the
 crease to match the angle and the device frame bends with it. The cover panel
 sits outside the fold, so it stays flat whatever the angle.
 
+On a foldable, **Screenshot** and **Record Screen** capture the panel the pane
+is showing. A recording stays on its starting panel. Set the fold posture
+before recording; switching panels during recording can produce black frames.
+
 On a Simulator pane, the **Device** menu offers buttons, rotation, the hinge
 on a foldable, reboot, shutdown, erase, screenshots, screen recording, app
 installation, location simulation, and Simulator.app or Finder access. On a

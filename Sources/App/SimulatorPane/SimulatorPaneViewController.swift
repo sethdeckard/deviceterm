@@ -55,6 +55,11 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// VM itself.
     var currentState: SimulatorPaneState { viewModel.state }
     var currentOrientation: Orientation { viewModel.currentOrientation }
+    /// The last panel id reported by the daemon, used for `simctl io
+    /// --display`. Nil until reported, and always nil on single-panel
+    /// devices. Captures pass it so they record what the pane shows rather
+    /// than whichever panel `simctl` defaults to.
+    var litPanelScreenID: UInt32? { viewModel.confirmedPanelScreenID }
 
     private let viewModel: SimulatorPaneViewModel
     /// SwiftUI chrome overlay state (title strip, status badge, focus

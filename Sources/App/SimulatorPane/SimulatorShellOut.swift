@@ -52,10 +52,30 @@ enum SimulatorShellOut {
     /// `xcrun simctl io <udid> screenshot <path>`: write a PNG of
     /// the current sim frame to `path`. Same off-pool discipline
     /// as `eraseContent`; throws on non-zero exit.
-    static func captureScreenshot(udid: String, to path: String) async throws {
+    ///
+    /// `display` names the panel on a foldable. Without it `simctl` picks a
+    /// panel by its own rule, which on a two-panel device is often the dark
+    /// one.
+    static func captureScreenshot(udid: String, display: UInt32?, to path: String) async throws {
         try await runOffPool(
-            arguments: ["simctl", "io", udid, "screenshot", path]
+            arguments: screenshotArguments(udid: udid, display: display, path: path)
         )
+    }
+
+    /// The `xcrun` arguments for `captureScreenshot`.
+    static func screenshotArguments(udid: String, display: UInt32?, path: String) -> [String] {
+        ["simctl", "io", udid, "screenshot"] + displayArguments(display) + [path]
+    }
+
+    /// The `xcrun` arguments for `startRecording`.
+    static func recordingArguments(udid: String, display: UInt32?, path: String) -> [String] {
+        ["simctl", "io", udid, "recordVideo"] + displayArguments(display) + [path]
+    }
+
+    /// Emits `--display=<id>` when supplied; otherwise leaves display
+    /// selection to `simctl`.
+    private static func displayArguments(_ display: UInt32?) -> [String] {
+        display.map { ["--display=\($0)"] } ?? []
     }
 
     /// `xcrun simctl install <udid> <path>`: install a built .app
@@ -77,10 +97,13 @@ enum SimulatorShellOut {
     /// interrupted (SIGINT). Throws on launch failure; the long-lived
     /// recording itself runs asynchronously in the child process. The
     /// caller is responsible for stopping it via `stopRecording(_:)`.
-    static func startRecording(udid: String, to path: String) throws -> Process {
+    ///
+    /// `display` names the panel on a foldable, as for `captureScreenshot`.
+    /// The recording stays on that panel if the device folds part way.
+    static func startRecording(udid: String, display: UInt32?, to path: String) throws -> Process {
         let process = Process()
         process.launchPath = "/usr/bin/xcrun"
-        process.arguments = ["simctl", "io", udid, "recordVideo", path]
+        process.arguments = recordingArguments(udid: udid, display: display, path: path)
         // Route both streams to /dev/null rather than `Pipe()`, because a
         // Pipe whose reader nobody drains deadlocks the writer once
         // its kernel buffer (64KB on macOS) fills. simctl io
