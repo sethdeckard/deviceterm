@@ -5,10 +5,10 @@ import os
 
 /// Watches one foldable device's hinge and reports every angle it settles on.
 ///
-/// Reads from whichever source the host supports (`HingeReaderSource`):
-/// `xcrun devicectl device motion hinge-angle` where the installed `devicectl`
-/// has it, and otherwise the guest helper's `watch` mode, spawned with
-/// `xcrun simctl spawn`. Both:
+/// Reads with the guest helper's `watch` mode, spawned with
+/// `xcrun simctl spawn`, and falls back to
+/// `xcrun devicectl device motion hinge-angle` when the guest reader cannot
+/// run (`HingeReaderSource`). Both:
 ///
 /// - print an initial angle on start, so an attach needs no separate
 ///   one-shot read: `devicectl` always, and the guest reader when a valid
@@ -20,7 +20,15 @@ import os
 ///
 /// An exit is therefore always unexpected, and a monitor still wanted replaces
 /// the reader. Failures back off: a host where the reader cannot run would
-/// otherwise relaunch it every few seconds for the life of the pane.
+/// otherwise relaunch it every few seconds for the life of the monitor.
+///
+/// Silence is not a failure. The guest reader prints nothing until the device
+/// has a valid hinge event, and an idle hinge prints nothing either. The guest
+/// reader counts as unable to run when its helper cannot be built, or after
+/// `guestFailureLimit` failures in a row with no reading between them. The
+/// monitor then switches to `devicectl` for the rest of its life, if the
+/// installed `devicectl` has the command. Otherwise it keeps retrying the
+/// guest reader.
 ///
 /// `devicectl` has one more quirk. `--session-timeout` bounds its monitoring
 /// window but leaves the process alive and silent afterwards, so that window is
@@ -32,8 +40,8 @@ import os
 /// another tab are seen the same way.
 ///
 /// `@unchecked Sendable`: the serial queue protects `process`, `buffer`,
-/// `stopped`, `failures` and `generation`, and serializes start, restart and
-/// stop within this instance.
+/// `stopped`, `failures`, `source` and `generation`, and serializes start,
+/// restart and stop within this instance.
 final class HingeMonitor: @unchecked Sendable {
     /// How long each `devicectl` monitoring window runs. The command accepts a
     /// day, which makes a replacement a rarity rather than routine
@@ -49,6 +57,10 @@ final class HingeMonitor: @unchecked Sendable {
     /// good later is picked up again within a few minutes.
     static let defaultMaximumRestartDelay: TimeInterval = 300
 
+    /// Failures in a row, with no reading between them, after which the guest
+    /// reader counts as unable to run on this device.
+    static let guestFailureLimit = 3
+
     /// The locale handed to the reader when the daemon's own environment
     /// carries none.
     ///
@@ -58,7 +70,7 @@ final class HingeMonitor: @unchecked Sendable {
 
     private let udid: String
     private let onAngle: @Sendable (Double) -> Void
-    private let source: HingeReaderSource?
+    private let devicectlAvailable: @Sendable () -> Bool
     private let sessionSeconds: Int
     private let restartDelay: TimeInterval
     private let maximumRestartDelay: TimeInterval
@@ -73,6 +85,9 @@ final class HingeMonitor: @unchecked Sendable {
     private var stopped = false
     /// Failed launches and exits since the last reading, which set the backoff.
     private var failures = 0
+    /// The reader in use. Starts as the guest helper and moves to `devicectl`
+    /// at most once.
+    private var source: HingeReaderSource
     /// Bumped on every spawn, so a window timer scheduled for a reader that has
     /// since been replaced does nothing when it fires.
     private var generation: UInt64 = 0
@@ -80,8 +95,12 @@ final class HingeMonitor: @unchecked Sendable {
     /// - Parameters:
     ///   - udid: the device to watch.
     ///   - onAngle: called with each valid reading, on the monitor's queue.
-    ///   - source: where to read from. Nil asks the installed `devicectl`
-    ///     (`HingeReaderSource.installed`), once, at the first spawn.
+    ///   - source: the reader to start with. Injected so a test can drive the
+    ///     `devicectl` reader directly.
+    ///   - devicectlAvailable: whether the fallback exists, asked only when the
+    ///     guest reader cannot run. Defaults to the installed `devicectl`
+    ///     (`HingeReaderSource.devicectlAvailable`). Injected so a test does
+    ///     not run `xcrun`.
     ///   - sessionSeconds: length of each `devicectl` monitoring window.
     ///     Injected so a test does not wait out a day.
     ///   - restartDelay: pause before the first retry. Injected so a test does
@@ -94,7 +113,8 @@ final class HingeMonitor: @unchecked Sendable {
     init(
         udid: String,
         onAngle: @escaping @Sendable (Double) -> Void,
-        source: HingeReaderSource? = nil,
+        source: HingeReaderSource = .guestHelper,
+        devicectlAvailable: (@Sendable () -> Bool)? = nil,
         sessionSeconds: Int = HingeMonitor.defaultSessionSeconds,
         restartDelay: TimeInterval = HingeMonitor.defaultRestartDelay,
         maximumRestartDelay: TimeInterval = HingeMonitor.defaultMaximumRestartDelay,
@@ -104,6 +124,7 @@ final class HingeMonitor: @unchecked Sendable {
         self.udid = udid
         self.onAngle = onAngle
         self.source = source
+        self.devicectlAvailable = devicectlAvailable ?? { HingeReaderSource.devicectlAvailable }
         self.sessionSeconds = sessionSeconds
         self.restartDelay = restartDelay
         self.maximumRestartDelay = maximumRestartDelay
@@ -209,7 +230,7 @@ final class HingeMonitor: @unchecked Sendable {
                 let helper = try helperBinary()
                 return ["simctl", "spawn", udid, helper] + FoldHelperSource.watchArguments
             } catch {
-                fail("hinge reader could not be built: \(error.localizedDescription)")
+                fail("hinge reader could not be built: \(error.localizedDescription)", guestCannotRun: true)
                 return nil
             }
         }
@@ -217,7 +238,6 @@ final class HingeMonitor: @unchecked Sendable {
 
     /// Spawn a reader and wire its output. Callers hold the queue.
     private func spawn() {
-        let source = self.source ?? HingeReaderSource.installed
         guard let arguments = readerArguments(for: source) else { return }
         generation &+= 1
         let spawnedGeneration = generation
@@ -258,10 +278,25 @@ final class HingeMonitor: @unchecked Sendable {
         }
     }
 
-    /// Count a failure, log it with the wait it earns, and retry after that
-    /// wait. Callers hold the queue.
-    private func fail(_ reason: String) {
+    /// Count a failure and retry: on `devicectl` at once when the guest reader
+    /// cannot run and the fallback exists, and otherwise after the wait the
+    /// failure earns. Callers hold the queue.
+    ///
+    /// - Parameter guestCannotRun: the failure alone shows the guest reader
+    ///   cannot run here, without waiting for `guestFailureLimit`.
+    private func fail(_ reason: String, guestCannotRun: Bool = false) {
         failures += 1
+        if source == .guestHelper,
+            guestCannotRun || failures >= Self.guestFailureLimit,
+            devicectlAvailable() {
+            DiagnosticLog.attach.notice(
+                "\(reason, privacy: .public) for \(self.udid, privacy: .public); switching to devicectl"
+            )
+            source = .devicectl
+            failures = 0
+            retry(after: 0)
+            return
+        }
         let delay = Self.restartDelay(afterFailures: failures, base: restartDelay, maximum: maximumRestartDelay)
         DiagnosticLog.attach.notice(
             """
@@ -269,6 +304,12 @@ final class HingeMonitor: @unchecked Sendable {
             retrying in \(Int(delay.rounded()), privacy: .public)s
             """
         )
+        retry(after: delay)
+    }
+
+    /// Spawn a reader after `delay`, unless the monitor has stopped or has a
+    /// reader by then. Callers hold the queue.
+    private func retry(after delay: TimeInterval) {
         queue.asyncAfter(deadline: .now() + delay) { [self] in
             guard !stopped, process == nil else { return }
             spawn()

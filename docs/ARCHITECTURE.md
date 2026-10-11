@@ -2659,15 +2659,22 @@ A frame subscriber receives the current surface when one exists. Each new
 simulator frame subscriber also requests a fresh capture, even if another
 subscriber already keeps capture active.
 
-The daemon reads the hinge with `devicectl device motion hinge-angle` where
-the installed `devicectl` has it, one child process per attached foldable. The
-Xcode 27.1 RC's `devicectl` ships without the `device motion` group. Where it's
-missing, the daemon reads the hinge inside the guest instead: the helper's
-`watch` mode, run with `xcrun simctl spawn`, which reports the hinge event from
-CoreMotion's `CoreMotion_DeviceStateRelay_Crane` service. The daemon checks
-`devicectl` once per daemon, when it starts its first reader. `devicectl` prints
-the current angle on start, and the guest reader does when a valid current
-hinge event is available; both then report each change.
+The daemon reads the hinge inside the guest, one child process per attached
+foldable: the helper's `watch` mode, run with `xcrun simctl spawn`, which
+reports the hinge event from CoreMotion's `CoreMotion_DeviceStateRelay_Crane`
+service. It prints the current angle on start when the device has a valid hinge
+event, then one line per change. Until then it prints nothing, so a silent
+reader isn't treated as a failure.
+
+If the guest reader can't run, the daemon reads that pane's hinge with
+`devicectl device motion hinge-angle` instead, for the remaining lifetime of
+that hinge monitor. Reattaching the pane starts with the guest reader again.
+The guest reader can't run when its helper won't build, or when it fails 3
+times in a row with no reading in between. The fallback needs a `devicectl`
+that has the `device motion` group, which the Xcode 27.1 RC's lacks. The daemon
+checks for it once, the first time a pane needs it, and without it keeps
+retrying the guest reader. `devicectl` prints the current angle on start, then
+each change.
 
 The daemon owns the reader's lifetime and stops it when the pane's backend
 comes down. Terminating the `simctl spawn` ends the guest process with it. A

@@ -8,7 +8,8 @@ import Testing
 /// device is touched and no helper is built.
 ///
 /// The reader never exits on its own, so an exit is unexpected and a monitor
-/// still wanted replaces it, backing off while it keeps failing; a
+/// still wanted replaces it, backing off while it keeps failing; a guest
+/// reader that cannot run gives way to `devicectl` where that exists; a
 /// `devicectl` window ends without an exit or any output, so it has to be
 /// timed; and output arrives in chunks that ignore line boundaries, so a
 /// reading split across two reads still has to parse.
@@ -87,6 +88,7 @@ struct HingeMonitorTests {
             udid: "U",
             onAngle: { _ in },
             source: .guestHelper,
+            devicectlAvailable: { false },
             restartDelay: 0.01,
             helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
@@ -239,6 +241,7 @@ struct HingeMonitorTests {
             udid: "U",
             onAngle: { _ in },
             source: .guestHelper,
+            devicectlAvailable: { false },
             restartDelay: 0.01,
             helperBinary: {
                 if attempts.bump() == 1 { throw CocoaError(.fileNoSuchFile) }
@@ -269,6 +272,7 @@ struct HingeMonitorTests {
             udid: "U",
             onAngle: { _ in },
             source: .guestHelper,
+            devicectlAvailable: { false },
             restartDelay: 0.01,
             helperBinary: { "/test/fold-helper" },
             launch: { _, _ in
@@ -280,6 +284,194 @@ struct HingeMonitorTests {
         monitor.start()
         #expect(await readers.reachesCount(1))
         #expect(attempts.value() >= 2)
+        monitor.stop()
+    }
+
+    @Test("a monitor starts on the guest reader without asking devicectl")
+    func startsOnTheGuestReader() async throws {
+        let calls = Calls()
+        let asked = Counter()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            devicectlAvailable: {
+                _ = asked.bump()
+                return true
+            },
+            restartDelay: 0.01,
+            helperBinary: { "/cache/fold-helper" },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        let reader = try #require(await readers.first())
+        reader.emit(Self.validLine)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(calls.all().first?.1 == ["simctl", "spawn", "U1", "/cache/fold-helper", "watch"])
+        // A working guest reader never needs the fallback, so the probe, a
+        // process of its own, is never run.
+        #expect(asked.value() == 0)
+        monitor.stop()
+    }
+
+    @Test("a helper that cannot be built gives way to devicectl at once")
+    func anUnbuildableHelperFallsBackToDevicectl() async throws {
+        let calls = Calls()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            devicectlAvailable: { true },
+            sessionSeconds: 600,
+            restartDelay: 60,
+            helperBinary: { throw CocoaError(.fileNoSuchFile) },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        // The restart delay is a minute, so a reader here means the switch did
+        // not wait out a backoff.
+        _ = try #require(await readers.first())
+        #expect(calls.all().first?.1 == [
+            "devicectl", "device", "motion", "hinge-angle", "--device", "U1", "--session-timeout", "600"
+        ])
+        monitor.stop()
+    }
+
+    @Test("a guest reader that keeps exiting gives way to devicectl")
+    func repeatedGuestExitsFallBackToDevicectl() async {
+        let calls = Calls()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            devicectlAvailable: { true },
+            restartDelay: 0.01,
+            helperBinary: { "/cache/fold-helper" },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        for index in 0..<HingeMonitor.guestFailureLimit {
+            #expect(await readers.reachesCount(index + 1))
+            readers.at(index)?.finish()
+        }
+        #expect(await readers.reachesCount(HingeMonitor.guestFailureLimit + 1))
+        let launched = calls.all().map(\.1.first)
+        #expect(launched == Array(repeating: "simctl", count: HingeMonitor.guestFailureLimit) + ["devicectl"])
+        monitor.stop()
+    }
+
+    @Test("a reading between exits keeps the monitor on the guest reader")
+    func aReadingResetsTheFallbackCount() async throws {
+        let calls = Calls()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            devicectlAvailable: { true },
+            restartDelay: 0.01,
+            helperBinary: { "/cache/fold-helper" },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        // One short of the limit, a reading, then one short again: never the
+        // limit in a row, so the reader that works keeps its place.
+        let exits = HingeMonitor.guestFailureLimit - 1
+        for index in 0..<(exits * 2) {
+            #expect(await readers.reachesCount(index + 1))
+            if index == exits {
+                readers.at(index)?.emit(Self.validLine)
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            readers.at(index)?.finish()
+        }
+        #expect(await readers.reachesCount(exits * 2 + 1))
+        #expect(calls.all().allSatisfy { $0.1.first == "simctl" })
+        monitor.stop()
+    }
+
+    @Test("a guest reader that cannot run stays in use without devicectl")
+    func noFallbackKeepsRetryingTheGuest() async {
+        let calls = Calls()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            devicectlAvailable: { false },
+            restartDelay: 0.01,
+            maximumRestartDelay: 0.01,
+            helperBinary: { "/cache/fold-helper" },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        let attempts = HingeMonitor.guestFailureLimit + 1
+        for index in 0..<attempts {
+            #expect(await readers.reachesCount(index + 1))
+            readers.at(index)?.finish()
+        }
+        #expect(await readers.reachesCount(attempts + 1))
+        #expect(calls.all().allSatisfy { $0.1.first == "simctl" })
+        monitor.stop()
+    }
+
+    @Test("a silent guest reader is not a failure")
+    func silenceNeverFallsBack() async throws {
+        let asked = Counter()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            devicectlAvailable: {
+                _ = asked.bump()
+                return true
+            },
+            restartDelay: 0.01,
+            helperBinary: { "/cache/fold-helper" },
+            launch: { _, _ in readers.make() }
+        )
+        monitor.start()
+        // No reading and no exit: a device with no hinge event yet, or an
+        // idle hinge. The reader is listening, not broken.
+        _ = try #require(await readers.first())
+        try await Task.sleep(nanoseconds: 150_000_000)
+        #expect(readers.count() == 1)
+        #expect(asked.value() == 0)
+        monitor.stop()
+    }
+
+    @Test("a guest reader is not replaced on a timer")
+    func theGuestReaderHasNoWindow() async throws {
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U",
+            onAngle: { _ in },
+            devicectlAvailable: { false },
+            sessionSeconds: 0,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
+            launch: { _, _ in readers.make() }
+        )
+        monitor.start()
+        let first = try #require(await readers.first())
+        // The window is `devicectl`'s quirk. A zero window would replace a
+        // guest reader at once if it applied there too.
+        try await Task.sleep(nanoseconds: 150_000_000)
+        #expect(readers.count() == 1)
+        #expect(!first.wasTerminated())
         monitor.stop()
     }
 }
@@ -329,6 +521,13 @@ private final class Readers: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return made.count
+    }
+
+    /// The reader made `index`-th, counting from zero.
+    func at(_ index: Int) -> FakeHingeProcess? {
+        lock.lock()
+        defer { lock.unlock() }
+        return made.indices.contains(index) ? made[index] : nil
     }
 
     func first() async -> FakeHingeProcess? {
@@ -441,6 +640,12 @@ private final class Calls: @unchecked Sendable {
         defer { lock.unlock() }
         return calls.first
     }
+
+    func all() -> [(String, [String])] {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
 }
 
 /// The environment the hinge reader runs in.
@@ -474,20 +679,21 @@ struct HingeReaderEnvironmentTests {
     }
 }
 
-/// Which reader a host gets, from what its `devicectl` says about itself.
+/// Whether a host has the `devicectl` fallback, from what its `devicectl`
+/// says about itself.
 struct HingeReaderSourceTests {
     @Test
-    func aDevicectlWithTheMotionGroupIsUsed() {
+    func aDevicectlWithTheMotionGroupIsAFallback() {
         let help = "OVERVIEW: Monitor device motion.\n\nSUBCOMMANDS:\n  hinge-angle   Monitor the hinge angle."
-        #expect(HingeReaderSource.detect(helpOutput: help) == .devicectl)
+        #expect(HingeReaderSource.devicectlHasHingeAngle(helpOutput: help))
     }
 
     @Test
-    func aDevicectlWithoutItFallsBackToTheGuest() {
+    func aDevicectlWithoutItIsNot() {
         // What the Xcode 27.1 RC's `devicectl` prints for `device motion
         // --help`: the `device` help, since it has no `motion` group.
         let help = "OVERVIEW: Commands to interact with devices.\n\nSUBCOMMANDS:\n"
             + "  orientation   Control device orientation."
-        #expect(HingeReaderSource.detect(helpOutput: help) == .guestHelper)
+        #expect(!HingeReaderSource.devicectlHasHingeAngle(helpOutput: help))
     }
 }

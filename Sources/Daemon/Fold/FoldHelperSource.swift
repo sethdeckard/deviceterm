@@ -32,8 +32,7 @@ import DaemonProtocol
 /// `CoreMotion_DeviceStateRelay_Crane` service emits a hinge event (IOHIDEvent
 /// type 44, the angle at field index 1) on every change, whoever made it, and
 /// answers a copy of its current one. A monitor client reads both with no
-/// entitlement. This is the fallback for a host whose `devicectl` lacks
-/// `device motion hinge-angle`, as the Xcode 27.1 RC's does
+/// entitlement. This is the hinge reader every monitor starts with
 /// (`HingeReaderSource`).
 ///
 /// **The payload must be an IOKit OSSerialize archive**, which is what

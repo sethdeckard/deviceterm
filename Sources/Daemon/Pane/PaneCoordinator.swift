@@ -2835,7 +2835,7 @@ public actor PaneCoordinator {
     private func shutDownBackendAsync(for record: Record) async {
         // Stopped first and unconditionally. It is a child process, not part
         // of the backend, so an early return on a nil backend would leave a
-        // `devicectl` running for a pane that no longer exists.
+        // hinge reader running for a pane that no longer exists.
         record.hingeMonitor?.stop()
         record.hingeMonitor = nil
         guard let backend = record.backend else { return }
@@ -3059,14 +3059,18 @@ public actor PaneCoordinator {
         guard record.capabilities.fold else { return }
         let testLaunch = hingeReaderTestLaunch
         var testHelper: (@Sendable () throws -> String)?
-        if testLaunch != nil { testHelper = { @Sendable in "/test/fold-helper" } }
+        var testDevicectl: (@Sendable () -> Bool)?
+        if testLaunch != nil {
+            testHelper = { @Sendable in "/test/fold-helper" }
+            testDevicectl = { @Sendable in false }
+        }
         let monitor = HingeMonitor(
             udid: record.target.key,
             onAngle: { [weak self] degrees in
                 guard let self else { return }
                 Task { await self.publishHinge(paneId: paneId, degrees: degrees) }
             },
-            source: testLaunch == nil ? nil : .guestHelper,
+            devicectlAvailable: testDevicectl,
             helperBinary: testHelper,
             launch: testLaunch
         )
