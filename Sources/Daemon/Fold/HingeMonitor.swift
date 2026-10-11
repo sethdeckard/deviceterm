@@ -5,45 +5,49 @@ import os
 
 /// Watches one foldable device's hinge and reports every angle it settles on.
 ///
-/// `xcrun devicectl device motion hinge-angle` is the only reader available.
-/// CoreSimulator exposes no hinge property, and the guest helper that *drives*
-/// the hinge links only the dispatch side of IOHIDEventSystem. Measured
-/// against a booted Duo, that command:
+/// Reads from whichever source the host supports (`HingeReaderSource`):
+/// `xcrun devicectl device motion hinge-angle` where the installed `devicectl`
+/// has it, and otherwise the guest helper's `watch` mode, spawned with
+/// `xcrun simctl spawn`. Both:
 ///
-/// - prints the device's current angle immediately on start, so an attach
-///   needs no separate one-shot read;
-/// - prints one line per change after that, sampling at 10 Hz and suppressing
-///   anything under a degree, so an idle device costs nothing;
-/// - never exits on its own. `--session-timeout` bounds the monitoring window
-///   but leaves the process alive afterwards, and only the global `--timeout`
-///   terminates it, non-zero. This owns the process lifetime instead: no
-///   `--timeout`, and `stop()` terminates it.
+/// - print an initial angle on start, so an attach needs no separate
+///   one-shot read: `devicectl` always, and the guest reader when a valid
+///   current hinge event is available;
+/// - print one line per change after that, so an idle device costs nothing;
+/// - never exit on its own. This owns the process lifetime: `stop()`
+///   terminates it, and terminating the `simctl spawn` ends the guest process
+///   with it.
 ///
-/// Two consequences. An exit is always unexpected, so a monitor still wanted
-/// replaces the reader rather than concluding anything from it. And the window
-/// ending is invisible: the process stays up and simply stops printing, so the
-/// window is timed here and the reader replaced when it elapses. Without that a
-/// pane open longer than the window would quietly stop tracking.
+/// An exit is therefore always unexpected, and a monitor still wanted replaces
+/// the reader. Failures back off: a host where the reader cannot run would
+/// otherwise relaunch it every few seconds for the life of the pane.
+///
+/// `devicectl` has one more quirk. `--session-timeout` bounds its monitoring
+/// window but leaves the process alive and silent afterwards, so that window is
+/// timed here and the reader replaced when it elapses. Without that a pane open
+/// longer than the window would quietly stop tracking.
 ///
 /// This is how a fold made outside DeviceTerm becomes visible. Nothing the
 /// daemon dispatches is involved, so Device Hub and `deviceterm fold` in
 /// another tab are seen the same way.
 ///
-/// `@unchecked Sendable`: the serial queue protects `process`, `buffer` and
-/// `stopped`, and serializes start, restart and stop within this instance.
+/// `@unchecked Sendable`: the serial queue protects `process`, `buffer`,
+/// `stopped`, `failures` and `generation`, and serializes start, restart and
+/// stop within this instance.
 final class HingeMonitor: @unchecked Sendable {
-    /// How long each monitoring window runs. The command accepts a day, which
-    /// makes a replacement a rarity rather than routine housekeeping; the 60s
-    /// default would respawn every minute for the life of a pane.
+    /// How long each `devicectl` monitoring window runs. The command accepts a
+    /// day, which makes a replacement a rarity rather than routine
+    /// housekeeping; the 60s default would respawn every minute for the life
+    /// of a pane.
     static let defaultSessionSeconds = 86_400
 
-    /// Pause before retrying a failed launch or an unexpected exit. A window
-    /// elapsing replaces the reader immediately and does not wait this out.
-    ///
-    /// Long enough that a host where the reader cannot run at all retries at a
-    /// readable pace rather than spinning. It retries indefinitely, so the
-    /// diagnostic below is the only sign of such a host.
-    static let defaultRestartDelay: DispatchTimeInterval = .seconds(2)
+    /// Pause before the first retry of a failed launch or an unexpected exit.
+    /// Each further failure without a reading doubles it.
+    static let defaultRestartDelay: TimeInterval = 2
+
+    /// The longest the backoff waits between attempts, so a reader that comes
+    /// good later is picked up again within a few minutes.
+    static let defaultMaximumRestartDelay: TimeInterval = 300
 
     /// The locale handed to the reader when the daemon's own environment
     /// carries none.
@@ -54,8 +58,11 @@ final class HingeMonitor: @unchecked Sendable {
 
     private let udid: String
     private let onAngle: @Sendable (Double) -> Void
+    private let source: HingeReaderSource?
     private let sessionSeconds: Int
-    private let restartDelay: DispatchTimeInterval
+    private let restartDelay: TimeInterval
+    private let maximumRestartDelay: TimeInterval
+    private let helperBinary: @Sendable () throws -> String
     private let launch: @Sendable (String, [String]) -> HingeMonitorProcess?
     private let queue: DispatchQueue
     private var process: HingeMonitorProcess?
@@ -64,6 +71,8 @@ final class HingeMonitor: @unchecked Sendable {
     /// otherwise parse as two unusable halves.
     private var buffer = Data()
     private var stopped = false
+    /// Failed launches and exits since the last reading, which set the backoff.
+    private var failures = 0
     /// Bumped on every spawn, so a window timer scheduled for a reader that has
     /// since been replaced does nothing when it fires.
     private var generation: UInt64 = 0
@@ -71,35 +80,52 @@ final class HingeMonitor: @unchecked Sendable {
     /// - Parameters:
     ///   - udid: the device to watch.
     ///   - onAngle: called with each valid reading, on the monitor's queue.
-    ///   - sessionSeconds: length of each monitoring window. Injected so a
-    ///     test does not wait out a day.
-    ///   - restartDelay: pause before respawning. Injected so a test does not
-    ///     wait out the production one.
+    ///   - source: where to read from. Nil asks the installed `devicectl`
+    ///     (`HingeReaderSource.installed`), once, at the first spawn.
+    ///   - sessionSeconds: length of each `devicectl` monitoring window.
+    ///     Injected so a test does not wait out a day.
+    ///   - restartDelay: pause before the first retry. Injected so a test does
+    ///     not wait out the production one.
+    ///   - maximumRestartDelay: the backoff's ceiling.
+    ///   - helperBinary: the guest helper's path, building it if needed.
+    ///     Injected so a test does not compile anything.
     ///   - launch: spawns the reader. Injected so tests drive the parse and the
-    ///     restart without a real `devicectl`.
+    ///     restart without a real device.
     init(
         udid: String,
         onAngle: @escaping @Sendable (Double) -> Void,
+        source: HingeReaderSource? = nil,
         sessionSeconds: Int = HingeMonitor.defaultSessionSeconds,
-        restartDelay: DispatchTimeInterval = HingeMonitor.defaultRestartDelay,
+        restartDelay: TimeInterval = HingeMonitor.defaultRestartDelay,
+        maximumRestartDelay: TimeInterval = HingeMonitor.defaultMaximumRestartDelay,
+        helperBinary: (@Sendable () throws -> String)? = nil,
         launch: (@Sendable (String, [String]) -> HingeMonitorProcess?)? = nil
     ) {
         self.udid = udid
         self.onAngle = onAngle
+        self.source = source
         self.sessionSeconds = sessionSeconds
         self.restartDelay = restartDelay
-        self.launch = launch ?? HingeMonitor.launchDevicectl
+        self.maximumRestartDelay = maximumRestartDelay
+        if let helperBinary {
+            self.helperBinary = helperBinary
+        } else {
+            let builder = FoldHelperBuilder()
+            self.helperBinary = { try builder.helperBinary() }
+        }
+        self.launch = launch ?? HingeMonitor.launchReader
         self.queue = DispatchQueue(label: "com.deviceterm.daemon.hinge-monitor.\(udid)")
     }
 
     /// The environment the reader runs in.
     ///
-    /// **`LANG` decides whether the reader streams at all.** Without it
+    /// **`LANG` decides whether `devicectl` streams at all.** Without it
     /// `devicectl` block-buffers its stdout, and since this reader never exits
     /// the buffer is never flushed: a pane sees nothing for its whole life,
     /// however far the hinge moves. With it, each line arrives as it is
     /// printed. launchd starts the daemon with no `LANG`, so inheriting the
-    /// environment unchanged is what silence looks like.
+    /// environment unchanged is what silence looks like. The guest helper
+    /// flushes each line itself and is indifferent to it.
     ///
     /// An existing `LANG` is left alone, so the operator's locale still
     /// decides how the reader formats what it prints. The parse handles either
@@ -114,11 +140,23 @@ final class HingeMonitor: @unchecked Sendable {
         return prepared
     }
 
+    /// The wait before the next attempt after `failures` failures in a row:
+    /// `base`, doubled for each failure after the first, up to `maximum`.
+    static func restartDelay(
+        afterFailures failures: Int,
+        base: TimeInterval,
+        maximum: TimeInterval
+    ) -> TimeInterval {
+        let doublings = Double(max(0, min(failures - 1, 32)))
+        return min(base * pow(2, doublings), maximum)
+    }
+
     /// Spawn the real reader, streaming its stdout.
     ///
-    /// stdout, not stderr, and no `--json-output`: with that flag these lines
-    /// move to stderr and stdout carries the exit document instead.
-    private static func launchDevicectl(
+    /// stdout, not stderr, and no `--json-output`: with that flag `devicectl`
+    /// moves these lines to stderr and stdout carries the exit document
+    /// instead.
+    private static func launchReader(
         _ executable: String,
         _ arguments: [String]
     ) -> HingeMonitorProcess? {
@@ -155,26 +193,40 @@ final class HingeMonitor: @unchecked Sendable {
         }
     }
 
+    /// The reader's arguments for `xcrun`, or nil when the guest helper cannot
+    /// be built. Callers hold the queue.
+    private func readerArguments(for source: HingeReaderSource) -> [String]? {
+        switch source {
+        case .devicectl:
+            return [
+                "devicectl", "device", "motion", "hinge-angle",
+                "--device", udid,
+                "--session-timeout", String(sessionSeconds)
+            ]
+
+        case .guestHelper:
+            do {
+                let helper = try helperBinary()
+                return ["simctl", "spawn", udid, helper] + FoldHelperSource.watchArguments
+            } catch {
+                fail("hinge reader could not be built: \(error.localizedDescription)")
+                return nil
+            }
+        }
+    }
+
     /// Spawn a reader and wire its output. Callers hold the queue.
     private func spawn() {
-        let arguments = [
-            "devicectl", "device", "motion", "hinge-angle",
-            "--device", udid,
-            "--session-timeout", String(sessionSeconds)
-        ]
+        let source = self.source ?? HingeReaderSource.installed
+        guard let arguments = readerArguments(for: source) else { return }
         generation &+= 1
         let spawnedGeneration = generation
         guard let spawned = launch("/usr/bin/xcrun", arguments) else {
-            // Retried indefinitely, so say so once per attempt: a host whose
-            // `devicectl` cannot run would otherwise respawn silently for the
-            // life of the pane, and a hinge that never moves looks the same as
-            // a device nobody folded.
-            DiagnosticLog.attach.notice("hinge reader failed to launch for \(self.udid, privacy: .public)")
-            scheduleRestart()
+            fail("hinge reader failed to launch")
             return
         }
         process = spawned
-        scheduleWindowRefresh(for: spawnedGeneration)
+        if source == .devicectl { scheduleWindowRefresh(for: spawnedGeneration) }
         spawned.onOutput { [weak self] chunk in
             guard let self else { return }
             self.queue.async { self.consume(chunk) }
@@ -185,17 +237,14 @@ final class HingeMonitor: @unchecked Sendable {
                 guard !self.stopped else { return }
                 // Always unexpected, since this reader does not exit on its
                 // own. A pane that still wants an angle needs another one.
-                DiagnosticLog.attach.notice(
-                    "hinge reader exited for \(self.udid, privacy: .public); replacing it"
-                )
                 self.process = nil
                 self.buffer = Data()
-                self.scheduleRestart()
+                self.fail("hinge reader exited")
             }
         }
     }
 
-    /// Replace the reader when its monitoring window elapses.
+    /// Replace a `devicectl` reader when its monitoring window elapses.
     ///
     /// The window ending produces no exit and no output, so nothing else would
     /// notice. Callers hold the queue.
@@ -209,9 +258,18 @@ final class HingeMonitor: @unchecked Sendable {
         }
     }
 
-    /// Callers hold the queue.
-    private func scheduleRestart() {
-        queue.asyncAfter(deadline: .now() + restartDelay) { [self] in
+    /// Count a failure, log it with the wait it earns, and retry after that
+    /// wait. Callers hold the queue.
+    private func fail(_ reason: String) {
+        failures += 1
+        let delay = Self.restartDelay(afterFailures: failures, base: restartDelay, maximum: maximumRestartDelay)
+        DiagnosticLog.attach.notice(
+            """
+            \(reason, privacy: .public) for \(self.udid, privacy: .public); \
+            retrying in \(Int(delay.rounded()), privacy: .public)s
+            """
+        )
+        queue.asyncAfter(deadline: .now() + delay) { [self] in
             guard !stopped, process == nil else { return }
             spawn()
         }
@@ -233,6 +291,8 @@ final class HingeMonitor: @unchecked Sendable {
             guard let text = String(data: line, encoding: .utf8),
                 let degrees = HingeReading.degrees(fromLine: text)
             else { continue }
+            // A valid reading resets the retry backoff.
+            failures = 0
             onAngle(degrees)
         }
     }

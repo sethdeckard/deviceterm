@@ -2641,18 +2641,22 @@ A frame subscriber receives the current surface when one exists. Each new
 simulator frame subscriber also requests a fresh capture, even if another
 subscriber already keeps capture active.
 
-The daemon reads the hinge through a long-lived `devicectl device motion
-hinge-angle`, one child process per attached foldable. CoreSimulator exposes no
-hinge property, and the guest helper that drives the hinge links only the
-dispatch half of IOHIDEventSystem, so this is the reader available. It prints
-the current angle on start, which is what saves an attach from needing a
-separate read.
+The daemon reads the hinge with `devicectl device motion hinge-angle` where
+the installed `devicectl` has it, one child process per attached foldable. The
+Xcode 27.1 RC's `devicectl` ships without the `device motion` group. Where it's
+missing, the daemon reads the hinge inside the guest instead: the helper's
+`watch` mode, run with `xcrun simctl spawn`, which reports the hinge event from
+CoreMotion's `CoreMotion_DeviceStateRelay_Crane` service. The daemon checks
+`devicectl` once per daemon, when it starts its first reader. `devicectl` prints
+the current angle on start, and the guest reader does when a valid current
+hinge event is available; both then report each change.
 
-The daemon owns the process lifetime. An exit does notify it, and it replaces
-the reader when one arrives, but the monitoring window ends with no notification
-at all, so the daemon times that window and schedules the replacement itself. It
-also stops the reader when the pane's backend comes down. An exit is therefore
-always unexpected, since the reader does not end on its own.
+The daemon owns the reader's lifetime and stops it when the pane's backend
+comes down. Terminating the `simctl spawn` ends the guest process with it. A
+reader doesn't end on its own, so an exit is unexpected. The daemon replaces it
+after 2 seconds, doubling the wait up to 5 minutes while it keeps failing
+without a reading. `devicectl`'s monitoring window also ends silently, so the
+daemon times that window and replaces the reader when it elapses.
 
 The initial ack returns a `subscriptionToken` on every XPC subscription,
 including `frames: false`. A frame subscription registers that token for

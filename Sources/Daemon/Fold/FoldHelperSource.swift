@@ -3,7 +3,7 @@
 import DaemonProtocol
 
 /// The guest-side program that sets a foldable simulator's hinge angle and
-/// its orientation.
+/// its orientation, and watches the hinge.
 ///
 /// Held as source rather than as a built artifact because it has to run
 /// *inside* the simulator: it links the guest's IOKit and is an
@@ -28,16 +28,29 @@ import DaemonProtocol
 /// Hub rotates one through this usage instead, with an
 /// `orientation-picker-control` payload, and the UI follows at once.
 ///
+/// **Reading the hinge happens in the guest too.** CoreMotion's
+/// `CoreMotion_DeviceStateRelay_Crane` service emits a hinge event (IOHIDEvent
+/// type 44, the angle at field index 1) on every change, whoever made it, and
+/// answers a copy of its current one. A monitor client reads both with no
+/// entitlement. This is the fallback for a host whose `devicectl` lacks
+/// `device motion hinge-angle`, as the Xcode 27.1 RC's does
+/// (`HingeReaderSource`).
+///
 /// **The payload must be an IOKit OSSerialize archive**, which is what
 /// `IOCFSerialize` produces. A property-list serialization of the same
 /// dictionary is accepted by every call on this path and then silently
 /// ignored, so a mistake here looks like a working no-op rather than an
 /// error.
 enum FoldHelperSource {
-    /// `usage: fold-helper hinge <angle>` (degrees in `0...180`) or
-    /// `fold-helper orientation <portrait|pud|landscape-left|landscape-right>`.
-    /// Prints nothing on success and a diagnostic on failure; the exit status
-    /// is what the daemon reads.
+    /// `usage: fold-helper hinge <angle>` (degrees in `0...180`),
+    /// `fold-helper orientation <portrait|pud|landscape-left|landscape-right>`,
+    /// or `fold-helper watch`.
+    ///
+    /// `hinge` and `orientation` print nothing on success and a diagnostic on
+    /// failure; the exit status is what the daemon reads. `watch` prints
+    /// `angle <degrees>` for the current angle when a valid current hinge event
+    /// is available, then once per valid hinge event, and runs until it is
+    /// terminated or its output goes away.
     static let code = #"""
     // SPDX-License-Identifier: GPL-3.0-or-later
     // Guest-side hinge and orientation control for a foldable iOS simulator.
@@ -50,6 +63,10 @@ enum FoldHelperSource {
 
     typedef struct __IOHIDEvent *IOHIDEventRef;
     typedef struct __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
+    typedef struct __IOHIDServiceClient *IOHIDServiceClientRef;
+    typedef void (*IOHIDEventCallback)(
+        void *target, void *refcon, IOHIDServiceClientRef service,
+        IOHIDEventRef event);
 
     extern IOHIDEventSystemClientRef IOHIDEventSystemClientCreateWithType(
         CFAllocatorRef allocator, int type, CFDictionaryRef attributes);
@@ -60,6 +77,19 @@ enum FoldHelperSource {
     extern void IOHIDEventSystemClientDispatchEvent(
         IOHIDEventSystemClientRef client, IOHIDEventRef event);
     extern CFDataRef IOCFSerialize(CFTypeRef object, CFOptionFlags options);
+    extern CFArrayRef IOHIDEventSystemClientCopyServices(
+        IOHIDEventSystemClientRef client);
+    extern IOHIDEventRef IOHIDServiceClientCopyEvent(
+        IOHIDServiceClientRef service, int64_t type, IOHIDEventRef matching,
+        uint64_t options);
+    extern void IOHIDEventSystemClientScheduleWithRunLoop(
+        IOHIDEventSystemClientRef client, CFRunLoopRef runLoop,
+        CFStringRef mode);
+    extern void IOHIDEventSystemClientRegisterEventCallback(
+        IOHIDEventSystemClientRef client, IOHIDEventCallback callback,
+        void *target, void *refcon);
+    extern uint32_t IOHIDEventGetType(IOHIDEventRef event);
+    extern double IOHIDEventGetFloatValue(IOHIDEventRef event, uint32_t field);
 
     // The virtualized driver's own vendor usage, shared by both controls.
     static const uint32_t kControlUsagePage = 0xFF61;
@@ -67,12 +97,19 @@ enum FoldHelperSource {
     // IOHIDEventSystemClientTypeSimple: no entitlement, and enough to
     // dispatch.
     static const int kClientTypeSimple = 4;
+    // IOHIDEventSystemClientTypeMonitor: sees every service's events, and
+    // needs no entitlement in the simulator.
+    static const int kClientTypeMonitor = 1;
+    // The hinge event CoreMotion's Crane service emits, and its angle field.
+    static const uint32_t kHingeEventType = 44;
+    static const uint32_t kHingeAngleField = (kHingeEventType << 16) | 1;
 
     static int usage(void) {
         fprintf(stderr,
             "usage: fold-helper hinge <angle 0-180>\n"
             "       fold-helper orientation "
-            "<portrait|pud|landscape-left|landscape-right>\n");
+            "<portrait|pud|landscape-left|landscape-right>\n"
+            "       fold-helper watch\n");
         return 64;
     }
 
@@ -146,13 +183,65 @@ enum FoldHelperSource {
             CFSTR("orientation-picker-control"), CFSTR("enum"), value));
     }
 
+    // Print a hinge event's angle. A value the daemon could not use is
+    // skipped here rather than sent.
+    static void printAngle(IOHIDEventRef event) {
+        double degrees = IOHIDEventGetFloatValue(event, kHingeAngleField);
+        if (!(degrees >= 0.0 && degrees <= 180.0)) return;
+        printf("angle %.1f\n", degrees);
+        fflush(stdout);
+    }
+
+    static void hingeEvent(
+        void *target, void *refcon, IOHIDServiceClientRef service,
+        IOHIDEventRef event) {
+        if (IOHIDEventGetType(event) == kHingeEventType) printAngle(event);
+    }
+
+    // Report the current angle, then every change, until terminated. A write
+    // after the daemon has gone raises SIGPIPE, which ends this too.
+    //
+    // Subscribe before taking the snapshot. Events are delivered only once the
+    // run loop runs, after the snapshot is printed, so a change in between
+    // arrives after it rather than being lost.
+    static int watch(void) {
+        IOHIDEventSystemClientRef client =
+            IOHIDEventSystemClientCreateWithType(NULL, kClientTypeMonitor, NULL);
+        if (!client) {
+            fprintf(stderr, "no HID event system client\n");
+            return 70;
+        }
+        IOHIDEventSystemClientScheduleWithRunLoop(
+            client, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+        IOHIDEventSystemClientRegisterEventCallback(client, hingeEvent, NULL, NULL);
+        CFArrayRef services = IOHIDEventSystemClientCopyServices(client);
+        if (services) {
+            for (CFIndex i = 0; i < CFArrayGetCount(services); i++) {
+                IOHIDServiceClientRef service =
+                    (IOHIDServiceClientRef)CFArrayGetValueAtIndex(services, i);
+                IOHIDEventRef current =
+                    IOHIDServiceClientCopyEvent(service, kHingeEventType, NULL, 0);
+                if (current && IOHIDEventGetType(current) == kHingeEventType) {
+                    printAngle(current);
+                    break;
+                }
+            }
+        }
+        CFRunLoopRun();
+        return 0;
+    }
+
     int main(int argc, char **argv) {
+        if (argc == 2 && strcmp(argv[1], "watch") == 0) return watch();
         if (argc != 3) return usage();
         if (strcmp(argv[1], "hinge") == 0) return hinge(argv[2]);
         if (strcmp(argv[1], "orientation") == 0) return orientation(argv[2]);
         return usage();
     }
     """#
+
+    /// Arguments that watch the hinge, printing `angle <degrees>` lines.
+    static let watchArguments = ["watch"]
 
     /// Arguments that set the hinge to `degrees`.
     static func hingeArguments(degrees: Double) -> [String] {

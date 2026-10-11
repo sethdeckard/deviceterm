@@ -830,7 +830,8 @@ public actor PaneCoordinator {
     /// production.
     private var surfacePumpTestHook: (@Sendable (SurfacePumpTestPoint) async -> Void)?
     /// Test-only launcher for a foldable pane's hinge reader, so a test pane
-    /// never spawns `devicectl`. Nil in production, which keeps the real one.
+    /// never spawns or builds the guest helper. Nil in production, which keeps
+    /// the real one.
     private var hingeReaderTestLaunch: (@Sendable (String, [String]) -> HingeMonitorProcess?)?
 
     /// Whether any create attempt is unsettled: an admitted slot, which is
@@ -3018,13 +3019,18 @@ public actor PaneCoordinator {
     /// panel count, so this asks the same question the fold verb does.
     private func startHingeMonitorIfFoldable(record: Record, paneId: UUID) {
         guard record.capabilities.fold else { return }
+        let testLaunch = hingeReaderTestLaunch
+        var testHelper: (@Sendable () throws -> String)?
+        if testLaunch != nil { testHelper = { @Sendable in "/test/fold-helper" } }
         let monitor = HingeMonitor(
             udid: record.target.key,
             onAngle: { [weak self] degrees in
                 guard let self else { return }
                 Task { await self.publishHinge(paneId: paneId, degrees: degrees) }
             },
-            launch: hingeReaderTestLaunch
+            source: testLaunch == nil ? nil : .guestHelper,
+            helperBinary: testHelper,
+            launch: testLaunch
         )
         record.hingeMonitor = monitor
         monitor.start()

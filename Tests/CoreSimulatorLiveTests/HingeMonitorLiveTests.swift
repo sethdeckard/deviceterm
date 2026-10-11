@@ -7,9 +7,11 @@ import Foundation
 import Testing
 
 // The hinge reader against a real device. Part of the deliberate
-// `make test-live` track, and the only automated check that `HingeMonitor`
-// parses what `devicectl` actually prints: `HingeMonitorTests` drives a fake
-// reader, so a format change would leave it green.
+// `make test-live` track, and the only automated check that the reader this
+// host gets (`HingeReaderSource.installed`: `devicectl`, or the guest helper
+// where `devicectl` lacks the command) reads the hinge at all.
+// `HingeMonitorTests` drives a fake reader, so a format change would leave it
+// green.
 //
 // What this cannot cover is the point of the feature, which is a fold made in
 // Device Hub moving the slider on screen. That stays a hand-check.
@@ -37,7 +39,7 @@ func theMonitorReportsAHingeItDidNotDrive() async throws {
     // before anything moves.
     #expect(
         await readings.settles(),
-        "the monitor read nothing at all; `devicectl` output may have changed shape"
+        "the monitor read nothing at all from \(HingeReaderSource.installed); its output may have changed"
     )
 
     // Two angles, so a pass cannot come from the device already sitting where

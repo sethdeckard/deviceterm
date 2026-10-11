@@ -24,27 +24,31 @@ private func bootedDeviceIsFoldable() -> Bool {
     return SimDisplayHandle.deviceHasMultiplePanels(udid: booted.udid)
 }
 
-/// The hinge angle `devicectl` reports, or nil when it reports none. Read
-/// through Apple's own tool rather than our own path, so a fold that only
-/// looked like it landed cannot pass.
-private func reportedHingeAngle(udid: String) -> Double? {
+/// The hinge angle the guest reports, or nil when it reports none. Read from
+/// CoreMotion's hinge state through the helper's `watch` mode, which prints
+/// the current angle first, so a fold that only looked like it landed cannot
+/// pass.
+private func reportedHingeAngle(udid: String) throws -> Double? {
+    let helper = try FoldHelperBuilder().helperBinary()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-    process.arguments = [
-        "devicectl", "device", "motion", "hinge-angle", "--device", udid, "--timeout", "5"
-    ]
+    process.arguments = ["simctl", "spawn", udid, helper] + FoldHelperSource.watchArguments
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
+    // `watch` runs until stopped, and may print nothing at all, so wait for
+    // its first whole line with a real deadline rather than a blocking read.
+    let firstLine = DispatchSemaphore(value: 0)
+    let output = OutputBuffer()
+    pipe.fileHandleForReading.readabilityHandler = { handle in
+        if output.append(handle.availableData) { firstLine.signal() }
+    }
     guard (try? process.run()) != nil else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    let text = String(data: data, encoding: .utf8) ?? ""
-    // "• +0.000s : Angle:130.0°  Mech:130.0° …"
-    guard let line = text.split(separator: "\n").first(where: { $0.contains("Angle:") }),
-        let after = line.range(of: "Angle:") else { return nil }
-    let digits = line[after.upperBound...].prefix { $0.isNumber || $0 == "." || $0 == " " }
-    return Double(digits.trimmingCharacters(in: .whitespaces))
+    _ = firstLine.wait(timeout: .now() + 5)
+    pipe.fileHandleForReading.readabilityHandler = nil
+    process.terminate()
+    let text = String(data: output.data(), encoding: .utf8) ?? ""
+    return text.split(separator: "\n").lazy.compactMap { HingeReading.degrees(fromLine: String($0)) }.first
 }
 
 @Test
@@ -85,8 +89,8 @@ func foldingMovesTheHingeToTheRequestedAngle() async throws {
         )
         try await Task.sleep(nanoseconds: 2_000_000_000)
         let reported = try #require(
-            reportedHingeAngle(udid: booted.udid),
-            "devicectl reported no hinge angle"
+            try reportedHingeAngle(udid: booted.udid),
+            "the guest reported no hinge angle"
         )
         #expect(reported == angle, "asked for \(angle), device reports \(reported)")
     }
@@ -263,4 +267,24 @@ private func tapEachPosture(
         }
     }
     return missed
+}
+
+/// Bytes read from the helper, appended off the reader's queue.
+private final class OutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes = Data()
+
+    /// Append `chunk`, and report whether a whole line has arrived.
+    func append(_ chunk: Data) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        bytes += chunk
+        return bytes.contains(UInt8(ascii: "\n"))
+    }
+
+    func data() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return bytes
+    }
 }

@@ -3,11 +3,13 @@
 import DaemonProtocol
 import Foundation
 
-/// One line of `devicectl device motion hinge-angle` output, parsed.
+/// One line of hinge reader output, parsed.
 ///
 /// Split from `HingeMonitor` so the parse is testable without spawning
-/// anything. The shape it reads is, with the angle's own field unpadded on a
-/// three-digit value:
+/// anything. Two readers print two shapes (`HingeReaderSource`).
+///
+/// `devicectl device motion hinge-angle`, with the angle's own field unpadded
+/// on a three-digit value:
 ///
 /// ```
 /// • +3.973s : Angle: 30.0°  Mech: 30.0°  Velocity:+0.0°/s  AngleValid:Y  …
@@ -18,23 +20,39 @@ import Foundation
 /// document when the command exits and moves these lines to stderr. There is
 /// no machine-readable form of the live stream, so this is the contract
 /// available, and it is Apple's to change.
+///
+/// The guest helper's `watch` mode, whose format is DeviceTerm's own
+/// (`FoldHelperSource`):
+///
+/// ```
+/// angle 180.0
+/// ```
 enum HingeReading {
     /// The angle this line reports, or nil when it carries none.
     ///
     /// Nil on `AngleValid:N`, which the device emits for a reading it does not
     /// stand behind, and nil outside `0...180`. Both would otherwise reach a
     /// slider and a renderer as a number.
-    ///
-    /// `AngleValid:` cannot be mistaken for `Angle:` here, because the literal
-    /// searched for ends in the colon and that field's name does not.
     static func degrees(fromLine line: String) -> Double? {
-        guard line.contains("AngleValid:Y") else { return nil }
-        guard let marker = line.range(of: "Angle:") else { return nil }
+        let degrees = line.hasPrefix("angle ") ? helperDegrees(line) : devicectlDegrees(line)
+        guard let degrees, FoldPosture.degreeRange.contains(degrees) else { return nil }
+        return degrees
+    }
+
+    /// A `watch` line: exactly `angle <degrees>`.
+    private static func helperDegrees(_ line: String) -> Double? {
+        let fields = line.split(separator: " ")
+        guard fields.count == 2 else { return nil }
+        return Double(fields[1])
+    }
+
+    /// A `devicectl` line. `AngleValid:` cannot be mistaken for `Angle:`
+    /// here, because the literal searched for ends in the colon and that
+    /// field's name does not.
+    private static func devicectlDegrees(_ line: String) -> Double? {
+        guard line.contains("AngleValid:Y"), let marker = line.range(of: "Angle:") else { return nil }
         let rest = line[marker.upperBound...]
         let digits = rest.drop { $0 == " " }.prefix { $0.isNumber || $0 == "." || $0 == "-" }
-        guard let degrees = Double(digits), FoldPosture.degreeRange.contains(degrees) else {
-            return nil
-        }
-        return degrees
+        return Double(digits)
     }
 }

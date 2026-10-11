@@ -5,16 +5,15 @@ import Foundation
 import Testing
 
 /// `HingeMonitor`'s process handling, driven through a fake reader so no
-/// `devicectl` is spawned.
+/// device is touched and no helper is built.
 ///
-/// The behaviours here are the ones the measured contract forces: the reader
-/// never exits on its own, so an exit is unexpected and a monitor still wanted
-/// replaces it; the monitoring window ends without an exit or any output, so it
-/// has to be timed; and output arrives in chunks that ignore line boundaries,
-/// so a reading split across two reads still has to parse.
+/// The reader never exits on its own, so an exit is unexpected and a monitor
+/// still wanted replaces it, backing off while it keeps failing; a
+/// `devicectl` window ends without an exit or any output, so it has to be
+/// timed; and output arrives in chunks that ignore line boundaries, so a
+/// reading split across two reads still has to parse.
 struct HingeMonitorTests {
-    private static let validLine =
-        "• +1.000s : Angle: 42.0°  Mech: 42.0°  Velocity:+0.0°/s  AngleValid:Y  Range:0-180°\n"
+    private static let validLine = "angle 42.0\n"
 
     @Test("reports every angle in the stream")
     func reportsAngles() async throws {
@@ -23,7 +22,9 @@ struct HingeMonitorTests {
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { collected.append($0) },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
         )
         monitor.start()
@@ -40,7 +41,9 @@ struct HingeMonitorTests {
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { collected.append($0) },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
         )
         monitor.start()
@@ -48,32 +51,9 @@ struct HingeMonitorTests {
         // The pipe splits wherever it likes. Halving mid-number is the case
         // that would otherwise parse as two unusable fragments.
         let line = Self.validLine
-        let cut = line.index(line.startIndex, offsetBy: 22)
+        let cut = line.index(line.startIndex, offsetBy: 8)
         reader.emit(String(line[line.startIndex..<cut]))
         reader.emit(String(line[cut...]))
-        #expect(await collected.reaches([42.0]))
-        monitor.stop()
-    }
-
-    @Test("a chunk cut inside a multi-byte character still parses")
-    func reassemblesASplitMultiByteCharacter() async throws {
-        let collected = Collected()
-        let readers = Readers()
-        let monitor = HingeMonitor(
-            udid: "U",
-            onAngle: { collected.append($0) },
-            restartDelay: .milliseconds(10),
-            launch: { _, _ in readers.make() }
-        )
-        monitor.start()
-        let reader = try #require(await readers.first())
-        // `°` is two bytes and `•` is three. Cutting between the bytes of one
-        // is what a decode-per-chunk drops, taking the reading with it.
-        let bytes = Data(Self.validLine.utf8)
-        let degreeSign = Data("°".utf8)
-        let inside = try #require(bytes.firstIndex(of: degreeSign[degreeSign.startIndex]))
-        reader.emit(bytes[bytes.startIndex...inside])
-        reader.emit(bytes[bytes.index(after: inside)...])
         #expect(await collected.reaches([42.0]))
         monitor.stop()
     }
@@ -85,7 +65,9 @@ struct HingeMonitorTests {
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { collected.append($0) },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
         )
         monitor.start()
@@ -104,7 +86,9 @@ struct HingeMonitorTests {
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { _ in },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
         )
         monitor.start()
@@ -116,32 +100,15 @@ struct HingeMonitorTests {
         monitor.stop()
     }
 
-    @Test("the reader is replaced when its window elapses")
-    func replacesTheReaderWhenTheWindowEnds() async throws {
-        let readers = Readers()
-        let monitor = HingeMonitor(
-            udid: "U",
-            onAngle: { _ in },
-            sessionSeconds: 0,
-            restartDelay: .milliseconds(10),
-            launch: { _, _ in readers.make() }
-        )
-        monitor.start()
-        let first = try #require(await readers.first())
-        // The window ending produces no exit and no output, so without a timer
-        // the stream goes quiet and nothing notices.
-        #expect(await readers.reachesCount(2))
-        #expect(first.wasTerminated())
-        monitor.stop()
-    }
-
     @Test("a stopped monitor never spawns again")
     func doesNotRestartAfterStop() async throws {
         let readers = Readers()
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { _ in },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
         )
         monitor.start()
@@ -159,7 +126,9 @@ struct HingeMonitorTests {
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { _ in },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in readers.make() }
         )
         monitor.start()
@@ -170,6 +139,128 @@ struct HingeMonitorTests {
         monitor.stop()
     }
 
+    @Test("the reader is the guest helper's watch mode, through simctl")
+    func spawnsTheGuestWatcher() async throws {
+        let calls = Calls()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/cache/fold-helper" },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        _ = try #require(await readers.first())
+        #expect(calls.first()?.0 == "/usr/bin/xcrun")
+        #expect(calls.first()?.1 == ["simctl", "spawn", "U1", "/cache/fold-helper", "watch"])
+        monitor.stop()
+    }
+
+    @Test("a devicectl host reads through devicectl device motion")
+    func spawnsDevicectlWhereItHasTheCommand() async throws {
+        let calls = Calls()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U1",
+            onAngle: { _ in },
+            source: .devicectl,
+            sessionSeconds: 600,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
+            launch: { executable, arguments in
+                calls.record(executable, arguments)
+                return readers.make()
+            }
+        )
+        monitor.start()
+        _ = try #require(await readers.first())
+        #expect(calls.first()?.1 == [
+            "devicectl", "device", "motion", "hinge-angle", "--device", "U1", "--session-timeout", "600"
+        ])
+        monitor.stop()
+    }
+
+    @Test("a devicectl reader is replaced when its window elapses")
+    func replacesTheDevicectlReaderWhenTheWindowEnds() async throws {
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U",
+            onAngle: { _ in },
+            source: .devicectl,
+            sessionSeconds: 0,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
+            launch: { _, _ in readers.make() }
+        )
+        monitor.start()
+        let first = try #require(await readers.first())
+        // The window ending produces no exit and no output, so without a timer
+        // the stream goes quiet and nothing notices.
+        #expect(await readers.reachesCount(2))
+        #expect(first.wasTerminated())
+        monitor.stop()
+    }
+
+    @Test("a devicectl line cut inside a multi-byte character still parses")
+    func reassemblesASplitMultiByteCharacter() async throws {
+        let collected = Collected()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U",
+            onAngle: { collected.append($0) },
+            source: .devicectl,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
+            launch: { _, _ in readers.make() }
+        )
+        monitor.start()
+        let reader = try #require(await readers.first())
+        // `°` is two bytes and `•` is three. Cutting between the bytes of one
+        // is what a decode-per-chunk drops, taking the reading with it.
+        let bytes = Data("• +1.000s : Angle: 42.0°  Mech: 42.0°  AngleValid:Y\n".utf8)
+        let degreeSign = Data("°".utf8)
+        let inside = try #require(bytes.firstIndex(of: degreeSign[degreeSign.startIndex]))
+        reader.emit(bytes[bytes.startIndex...inside])
+        reader.emit(bytes[bytes.index(after: inside)...])
+        #expect(await collected.reaches([42.0]))
+        monitor.stop()
+    }
+
+    @Test("a helper that cannot be built is retried")
+    func retriesAnUnbuildableHelper() async {
+        let attempts = Counter()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U",
+            onAngle: { _ in },
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: {
+                if attempts.bump() == 1 { throw CocoaError(.fileNoSuchFile) }
+                return "/test/fold-helper"
+            },
+            launch: { _, _ in readers.make() }
+        )
+        monitor.start()
+        #expect(await readers.reachesCount(1))
+        #expect(attempts.value() >= 2)
+        monitor.stop()
+    }
+
+    @Test("retries back off while the reader keeps failing", arguments: [
+        (1, 2.0), (2, 4.0), (3, 8.0), (8, 256.0), (9, 300.0), (40, 300.0)
+    ])
+    func retriesBackOff(failures: Int, expected: TimeInterval) {
+        // A reader that cannot run would otherwise relaunch every couple of
+        // seconds for the life of the pane.
+        #expect(HingeMonitor.restartDelay(afterFailures: failures, base: 2, maximum: 300) == expected)
+    }
+
     @Test("a launch that fails is retried")
     func retriesAFailedLaunch() async {
         let attempts = Counter()
@@ -177,7 +268,9 @@ struct HingeMonitorTests {
         let monitor = HingeMonitor(
             udid: "U",
             onAngle: { _ in },
-            restartDelay: .milliseconds(10),
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
             launch: { _, _ in
                 // Fails once, then succeeds: a failed launch has to be retried
                 // rather than given up on.
@@ -297,8 +390,7 @@ private final class FakeHingeProcess: HingeMonitorProcess, @unchecked Sendable {
         handler?(data)
     }
 
-    /// End the stream the way a reader dying unexpectedly does. A session
-    /// window elapsing is not this: it leaves the process running.
+    /// End the stream the way a reader dying unexpectedly does.
     func finish() {
         lock.lock()
         let handler = exit
@@ -333,11 +425,29 @@ private final class Counter: @unchecked Sendable {
     }
 }
 
+/// Launches the monitor asked for, as (executable, arguments).
+private final class Calls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [(String, [String])] = []
+
+    func record(_ executable: String, _ arguments: [String]) {
+        lock.lock()
+        calls.append((executable, arguments))
+        lock.unlock()
+    }
+
+    func first() -> (String, [String])? {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls.first
+    }
+}
+
 /// The environment the hinge reader runs in.
 ///
-/// `LANG` is the difference between a reader that streams and one that is
-/// silent for the life of a pane, so it gets its own coverage rather than
-/// riding along with the parse.
+/// `LANG` is the difference between a `devicectl` reader that streams and one
+/// that is silent for the life of a pane, so it gets its own coverage rather
+/// than riding along with the parse.
 struct HingeReaderEnvironmentTests {
     @Test
     func aMissingLocaleIsSuppliedSoTheReaderStreams() {
@@ -361,5 +471,23 @@ struct HingeReaderEnvironmentTests {
         // A non-UTF-8 locale parses fine but drops the degree signs, so the
         // one supplied deliberately is not that.
         #expect(HingeMonitor.readerLocale.hasSuffix("UTF-8"))
+    }
+}
+
+/// Which reader a host gets, from what its `devicectl` says about itself.
+struct HingeReaderSourceTests {
+    @Test
+    func aDevicectlWithTheMotionGroupIsUsed() {
+        let help = "OVERVIEW: Monitor device motion.\n\nSUBCOMMANDS:\n  hinge-angle   Monitor the hinge angle."
+        #expect(HingeReaderSource.detect(helpOutput: help) == .devicectl)
+    }
+
+    @Test
+    func aDevicectlWithoutItFallsBackToTheGuest() {
+        // What the Xcode 27.1 RC's `devicectl` prints for `device motion
+        // --help`: the `device` help, since it has no `motion` group.
+        let help = "OVERVIEW: Commands to interact with devices.\n\nSUBCOMMANDS:\n"
+            + "  orientation   Control device orientation."
+        #expect(HingeReaderSource.detect(helpOutput: help) == .guestHelper)
     }
 }

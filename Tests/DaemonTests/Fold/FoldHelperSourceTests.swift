@@ -11,6 +11,12 @@ struct FoldHelperSourceTests {
         #expect(FoldHelperSource.hingeArguments(degrees: 95) == ["hinge", "95.0"])
     }
 
+    @Test
+    func theWatchModeIsTheHelpersOwn() {
+        #expect(FoldHelperSource.watchArguments == ["watch"])
+        #expect(FoldHelperSource.code.contains("strcmp(argv[1], \"watch\")"))
+    }
+
     @Test("each device orientation sends Device Hub's value", arguments: [
         (Orientation.portrait, "portrait"),
         (.portraitUpsideDown, "pud"),

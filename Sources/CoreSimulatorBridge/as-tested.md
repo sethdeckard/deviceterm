@@ -81,7 +81,7 @@ in the active Xcode before its machine-wide fallbacks.
 | protocol           | `SimScreenProperties`                                                | `SimDisplayHandle`    | Snapshot vended by `screenProperties`; carries `uiOrientation`. |
 | protocol method    | `-<SimScreen> screenProperties`                                      | `SimDisplayHandle`    | Bounded one-shot read; seeds a pane's display orientation and is re-read inside every change callback. |
 | protocol method    | `-<SimScreen> registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:` | `SimDisplayHandle` | Push channel for orientation. **All three blocks must be non-nil**: CoreSimulator invokes them unconditionally, so a nil frame callback dereferences NULL and takes the simulator down. |
-| method             | `-[SimDevice spawnAsyncWithPath:options:terminationQueue:terminationHandler:completionQueue:completionHandler:]` | `SimFoldControl`      | Runs the guest-side hinge program. The async form, not `spawnWithPath:`: the vendored header types that one's termination handler as taking no arguments, while this one declares the real `void (^)(int)` the exit status arrives in. `stdout`/`stderr` in `options` are **file descriptors**; a path string is read as a descriptor and aborts the process. |
+| method             | `-[SimDevice spawnAsyncWithPath:options:terminationQueue:terminationHandler:completionQueue:completionHandler:]` | `SimFoldControl`      | Runs the guest-side helper's hinge and orientation commands. The hinge watcher uses simctl spawn. The async form, not `spawnWithPath:`: the vendored header types that one's termination handler as taking no arguments, while this one declares the real `void (^)(int)` the exit status arrives in. `stdout`/`stderr` in `options` are **file descriptors**; a path string is read as a descriptor and aborts the process. |
 | protocol method    | `-<SimScreen> unregisterScreenCallbacksWithUUID:`                    | `SimDisplayHandle`    | Teardown counterpart; called on `stopOrientation` and `stop`.  |
 | protocol method    | `-<SimScreenProperties> uiOrientation`                               | `SimDisplayHandle`    | The presented orientation, as a `UIInterfaceOrientation`. Mapped to device-orientation vocabulary in the bridge, **swapping the landscape pair** (see the orientation findings below). On a foldable it tracks the *device*, not the panel: both panels report the same value. |
 | protocol method    | `-<SimScreenProperties> screenID`                                    | `SimDisplayHandle`    | Small integer panel id, the same one `simctl io --display` accepts. Recorded as `boundScreenID` so a pane can name the panel it mirrors. |
@@ -287,6 +287,16 @@ and 0 on the inner; with the inner lit, the same produced 3 on the inner and 0
 on the cover, and launching Settings produced 83 on the inner and 0 on the
 cover. **An idle device delivers nothing on either panel**, which is why
 content is needed for the first bind and traffic cannot do it alone.
+
+**The guest can read the hinge.** The Xcode 27.1 RC's `devicectl` (CoreDevice
+651.13.5) ships without the `device motion` group, although CoreDevice still
+contains the hinge action. The guest's
+`CoreMotion_DeviceStateRelay_Crane` HID service emits IOHIDEvent type 44 on
+every hinge change: the angle is field index 1, the mechanical angle is index
+2, and the state is index 4 (2 while open). `IOHIDServiceClientCopyEvent(service,
+44, …)` returns the current one. A monitor-type event system client (type 1)
+reads both with no entitlement. Terminating the host's `simctl spawn` with
+SIGTERM ends the guest process.
 
 **A fold announces itself through `propertiesChangedCallback`, on both
 panels.** Screen callbacks registered on each panel independently both fired
