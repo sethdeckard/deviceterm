@@ -102,7 +102,9 @@ public actor DaemonFootprintMonitor {
                     surfaceAllocationFailures: pools.allocationFailures,
                     surfaceSlotsAllocated: pools.slotsAllocated,
                     delinquentSightings: pools.delinquentObserved,
-                    inputSubmissions: await paneCoordinator.inputSubmissionsTotal()
+                    inputSubmissions: await paneCoordinator.inputSubmissionsTotal(),
+                    inputStalls: await paneCoordinator.inputStallsTotal(),
+                    laneShuts: await paneCoordinator.laneShutsTotal()
                 )
             },
             breakdown: { MemoryBreakdownReader.read().lines() },

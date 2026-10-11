@@ -84,6 +84,22 @@ actor ContactLane {
         let fence: GestureFence
     }
 
+    /// A change in whether the lane admits, reported so a refusal the caller
+    /// can't see still reaches the log.
+    enum HealthEvent: Equatable, Sendable {
+        /// A contact may still be down, so nothing new is admitted.
+        case shut
+        /// A release landed and the lane admits again. `attempts` counts the
+        /// recovery results processed for this episode: the failed release
+        /// that shut the lane, when one did, and the release that landed.
+        case reopened(attempts: Int, duration: Duration)
+        /// A close or a transfer took the contact over while the lane was
+        /// shut, so it stopped trying without a release having landed.
+        /// `attempts` counts as for `reopened`, and leaves out a release still
+        /// in flight at the handoff.
+        case abandoned(attempts: Int, duration: Duration)
+    }
+
     /// What a woken waiter receives: the identity of the lease it now holds.
     /// The `Lease` itself stays inside the actor, since it is mutable state the
     /// lane owns.
@@ -165,6 +181,9 @@ actor ContactLane {
     /// the lane, and its terminal `up` may or may not have landed. `nil` means
     /// "release whatever is still down", which the backend tracks.
     private let recoverContact: @Sendable (LiveContact?, UInt64) async -> Bool
+    /// Told each time the lane shuts or reopens. Called on the lane's own
+    /// executor, so it must not wait on anything.
+    private let onHealth: @Sendable (HealthEvent) -> Void
 
     private var current: Lease?
     /// Live arrivals jump ahead of queued composites, because a human drag must
@@ -180,7 +199,18 @@ actor ContactLane {
     /// Set when a contact recovery reported failure. The backend may still be
     /// holding a finger down, so nothing new is admitted until a retry lands.
     private var unrecovered = false
+    /// When the lane last shut, nil while it admits. Kept apart from
+    /// `unrecovered` so a shut that a close or transfer ends still reports how
+    /// long it lasted.
+    private var shutSince: ContinuousClock.Instant?
+    /// Recovery results processed since the lane last shut, the failed
+    /// release that shut it included. See `HealthEvent.reopened`.
+    private var shutAttempts = 0
     private var closed = false
+
+    /// How many times this lane has shut over its life. Read by the daemon's
+    /// periodic self-check.
+    private(set) var shutEpisodes = 0
 
     /// Whether a gesture is currently holding the lane, which is what tells the
     /// coordinator a close has to defer its cleanup.
@@ -192,9 +222,11 @@ actor ContactLane {
 
     init(
         pacer: any GesturePacing = SystemGesturePacer(),
+        onHealth: @escaping @Sendable (HealthEvent) -> Void = { _ in },
         recoverContact: @escaping @Sendable (LiveContact?, UInt64) async -> Bool
     ) {
         self.pacer = pacer
+        self.onHealth = onHealth
         self.recoverContact = recoverContact
     }
 
@@ -294,7 +326,7 @@ actor ContactLane {
             finish(id)
             return
         }
-        unrecovered = true
+        markUnrecovered()
         lease.lastAdmitted = pacer.now()
         armExpiry(for: id)
     }
@@ -313,7 +345,7 @@ actor ContactLane {
             // so nothing else took the lane over a contact that might still be
             // down. The pane's teardown owns that contact now, and it makes one
             // more attempt to free it before the backend goes away.
-            unrecovered = false
+            markRecovered(abandoned: true)
             current = nil
             expiry?.cancel()
             expiry = nil
@@ -336,7 +368,7 @@ actor ContactLane {
     func transfer() {
         // The backend quiesce that follows invalidates the holder's sends and
         // frees whatever is down, so a failed recovery stops mattering.
-        unrecovered = false
+        markRecovered(abandoned: true)
         cancelWaiters()
         current?.fence.requestPreempt()
         current = nil
@@ -492,7 +524,7 @@ actor ContactLane {
                 // A close landed while this attempt was in flight. Its teardown
                 // owns the contact now and is the thing that frees it, so
                 // holding the lease would block the very work that recovers it.
-                unrecovered = false
+                markRecovered(abandoned: true)
                 finish(id)
                 return
             }
@@ -501,12 +533,40 @@ actor ContactLane {
             // interleaving this whole type exists to prevent, so the lane stays
             // shut and keeps trying. It reopens if a later attempt lands, and a
             // close or a transfer clears it either way.
-            unrecovered = true
+            markUnrecovered()
+            shutAttempts += 1
             stillHeld.lastAdmitted = pacer.now()
             armExpiry(for: id)
             return
         }
-        unrecovered = false
+        if shutSince != nil { shutAttempts += 1 }
+        markRecovered(abandoned: false)
         finish(id)
+    }
+
+    /// Stop admitting until a release lands, reporting the shut only on the
+    /// transition so a lane that keeps failing doesn't report it again.
+    private func markUnrecovered() {
+        unrecovered = true
+        guard shutSince == nil else { return }
+        shutSince = pacer.now()
+        shutAttempts = 0
+        shutEpisodes += 1
+        onHealth(.shut)
+    }
+
+    /// Clear the unrecovered state and report the episode's outcome.
+    /// `abandoned` marks a handoff to a close or a transfer; a closed lane
+    /// remains closed. Reports only if the lane was shut.
+    private func markRecovered(abandoned: Bool) {
+        unrecovered = false
+        guard let since = shutSince else { return }
+        shutSince = nil
+        let duration = pacer.now() - since
+        onHealth(
+            abandoned
+                ? .abandoned(attempts: shutAttempts, duration: duration)
+                : .reopened(attempts: shutAttempts, duration: duration)
+        )
     }
 }

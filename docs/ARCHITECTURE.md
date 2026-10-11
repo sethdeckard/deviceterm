@@ -757,10 +757,28 @@ Returning without error is not delivery. A simulator's HID transport reports
 success for a port the guest has stopped servicing, so a count that climbs
 while the guest shows no effect is what this field is there to show.
 
+Two more counters follow it. `inputStalls` counts the times a simulator's HID
+sends stopped completing within the bridge's one-second wait, one episode per
+run of timeouts. A timeout means the completion missed that deadline. The send
+isn't cancelled and may complete later, so delivery is unknown.
+
+`laneShuts` counts the times a pane's contact lane shut because a contact it
+was releasing might still be down. A shut lane refuses new touches on that pane
+until a release lands. The GUI drops that refusal without showing it; a CLI
+caller gets `input lane refused the gesture`. Both counters are cumulative per
+pane, and a pane that closes takes its counts with it.
+
+The `input` category of `com.deviceterm.daemon` logs the edges behind both
+counters: a stall beginning and ending, a lane shutting, reopening, or being
+handed off to a close or a transfer, and a detach that has to retry its
+release. Each line names the pane by its short id and logs at notice level.
+Nothing is logged per send, so a pane stalled under a held finger writes one
+line when the stall begins and one when it ends, not one a second.
+
 The logical depths and counters come from existing actor state; the process
 footprint is queried at sampling time. No per-frame work is added, though
-sampling does take the pane coordinator's actor, and each pane's pool actor,
-briefly once a minute.
+sampling does take the pane coordinator's actor, each pane's pool actor, and
+each pane's contact lane, briefly once a minute.
 
 The line logs at notice level, because info records don't survive `log show`
 without `--info`, and a sample nobody can retrieve afterwards is the gap this

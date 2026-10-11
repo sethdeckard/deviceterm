@@ -68,6 +68,15 @@ struct DaemonFootprintSample: Sendable, Equatable {
     /// swallowed before the relay returns. A count that climbs while the
     /// guest shows no effect is what this is for.
     var inputSubmissions = 0
+    /// Stall episodes in the simulators' HID transport, summed across every
+    /// pane: runs of sends that missed the bridge's one-second completion
+    /// wait. Cumulative per backend like `inputSubmissions`. A timed-out send
+    /// is not cancelled and may complete later; delivery is unknown.
+    var inputStalls = 0
+    /// Times a contact lane shut because a contact it was releasing may still
+    /// be down, summed across every pane. While shut, the lane refuses new
+    /// contact on that pane. Cumulative per pane.
+    var laneShuts = 0
 
     /// The single-line payload the logger emits. Formatted here rather than at
     /// the log call so a test can assert on the same string the log carries.
@@ -87,6 +96,8 @@ struct DaemonFootprintSample: Sendable, Equatable {
             + "surfaceAllocFailures=\(surfaceAllocationFailures) "
             + "surfaceSlots=\(surfaceSlotsAllocated) "
             + "delinquentSightings=\(delinquentSightings) "
-            + "inputSends=\(inputSubmissions)"
+            + "inputSends=\(inputSubmissions) "
+            + "inputStalls=\(inputStalls) "
+            + "laneShuts=\(laneShuts)"
     }
 }

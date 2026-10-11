@@ -495,3 +495,99 @@ func aGestureFailingBeforeCloseAlsoHandsTheContactOver() async {
     #expect(await lane.hasActiveComposite == false)
     await lane.awaitIdle()
 }
+
+// MARK: - Health reporting
+
+/// The shut and reopen edges a lane reports, in order.
+private final class HealthRecorder: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.deviceterm.tests.health-recorder")
+    private var recorded: [ContactLane.HealthEvent] = []
+
+    var events: [ContactLane.HealthEvent] {
+        queue.sync { recorded }
+    }
+
+    func record(_ event: ContactLane.HealthEvent) {
+        queue.sync { recorded.append(event) }
+    }
+}
+
+private func makeReportingLane(
+    pacer: any GesturePacing,
+    recorder: ReleaseRecorder,
+    health: HealthRecorder
+) -> ContactLane {
+    ContactLane(
+        pacer: pacer,
+        onHealth: { health.record($0) },
+        recoverContact: { contact, _ in recorder.record(contact) }
+    )
+}
+
+@Test
+func aLaneThatShutsReportsTheShutOnceAndTheReopenWithItsAttempts() async {
+    let recorder = ReleaseRecorder()
+    let health = HealthRecorder()
+    let lane = makeReportingLane(pacer: FakeGesturePacer(), recorder: recorder, health: health)
+    let holder = await lane.admitComposite(preemptible: true, generation: 0)
+    recorder.failNext(1)
+    await lane.releaseAfterFailure(holder?.id ?? 0)
+    var admitted: ContactLane.CompositeTicket?
+    for _ in 0..<1_000 where admitted == nil {
+        admitted = await lane.admitComposite(preemptible: true, generation: 0)
+        if admitted == nil { await Task.yield() }
+    }
+    #expect(admitted != nil)
+    let events = health.events
+    #expect(events.first == .shut)
+    #expect(events.count == 2)
+    // One release failed and the next landed.
+    if case let .reopened(attempts, _)? = events.last {
+        #expect(attempts == 2)
+    } else {
+        Issue.record("expected a reopen, got \(events)")
+    }
+    #expect(await lane.shutEpisodes == 1)
+}
+
+@Test
+func aLaneThatKeepsFailingReportsOneShutAndThenItsHandoff() async {
+    let recorder = ReleaseRecorder()
+    let health = HealthRecorder()
+    let lane = makeReportingLane(pacer: FakeGesturePacer(), recorder: recorder, health: health)
+    let holder = await lane.admitComposite(preemptible: true, generation: 0)
+    recorder.failNext(1_000)
+    await lane.releaseAfterFailure(holder?.id ?? 0)
+    for _ in 0..<200 {
+        await Task.yield()
+    }
+    // Retries don't repeat the shut.
+    #expect(health.events == [.shut])
+    await lane.close()
+    let events = health.events
+    #expect(events.count == 2)
+    if case let .abandoned(attempts, _)? = events.last {
+        // The close can land while one release is still in flight, and that
+        // one is never counted because its outcome arrives after the handoff.
+        let tried = recorder.all.count
+        #expect(attempts > 0)
+        #expect(attempts == tried || attempts == tried - 1)
+    } else {
+        Issue.record("expected a handoff, got \(events)")
+    }
+    #expect(await lane.shutEpisodes == 1)
+}
+
+@Test
+func anExpiryWhoseReleaseLandsReportsNothing() async {
+    let recorder = ReleaseRecorder()
+    let health = HealthRecorder()
+    let lane = makeReportingLane(pacer: FakeGesturePacer(), recorder: recorder, health: health)
+    _ = await lane.admitLive(phase: .down, contact: .plain(.zero), generation: 0)
+    for _ in 0..<1_000 where recorder.recorded.isEmpty {
+        await Task.yield()
+    }
+    #expect(recorder.recorded == [.plain(.zero)])
+    #expect(health.events.isEmpty)
+    #expect(await lane.shutEpisodes == 0)
+}

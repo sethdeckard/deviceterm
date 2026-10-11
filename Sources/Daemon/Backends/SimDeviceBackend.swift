@@ -28,6 +28,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     private static let defaultPoolSlots = 6
+    /// `SimHIDClient.m`'s error domain and its `CSBHIDClientErrorSendTimeout`.
+    private static let hidErrorDomain = "CoreSimulatorBridge.SimHIDClient"
+    private static let hidSendTimeoutCode = 49
 
     /// The CoreSimulator UDID: needed for the lazy AX-client lookup.
     private let udid: String
@@ -100,6 +103,11 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Not delivery: the transport reports success for a port the guest has
     /// stopped servicing.
     private var inputSubmissions = 0
+    /// Whether HID sends are completing in time. Under `inputGate`.
+    private var stallTracker = InputStallTracker()
+    /// Told when the HID transport starts or stops stalling. Set under
+    /// `inputGate`, called outside it.
+    private var onInputStall: (@Sendable (InputStallTracker.Transition) -> Void)?
     /// The contact currently held down, if any (see `HeldTouch`).
     private var heldTouch: HeldTouch?
     /// The panel `heldTouch` went down on, as the screen id its sends were
@@ -173,6 +181,14 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         return holding ? heldOn : bound
     }
 
+    /// Whether `error` is the bridge giving up on a send's completion, as
+    /// opposed to the send failing. Matched on domain and code, which
+    /// `SimHIDClient.m` defines, rather than on the message text.
+    static func isSendTimeout(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == hidErrorDomain && error.code == hidSendTimeoutCode
+    }
+
     // MARK: Ownership-transfer input fence
 
     func currentInputGeneration() -> UInt64 { inputGate.sync { inputGeneration } }
@@ -182,6 +198,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func inputSubmissionCount() -> Int { inputGate.sync { inputSubmissions } }
+
+    func inputStallCount() -> Int { inputGate.sync { stallTracker.episodes } }
+
+    func observeInputStall(_ handler: @escaping @Sendable (InputStallTracker.Transition) -> Void) {
+        inputGate.sync { onInputStall = handler }
+    }
 
     func quiesceInputForTransfer() async -> Bool {
         await inputWorkQueue.run { [self] in
@@ -212,21 +234,21 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         var allReleased = true
         switch held {
         case let .single(point)?:
-            if accepted({ try hid.tapUp(at: point) }) {
+            if accepted("tapUp", { try hid.tapUp(at: point) }) {
                 inputGate.sync { heldTouch = nil }
             } else {
                 allReleased = false
             }
 
         case let .edge(point, edge)?:
-            if accepted({ try hid.edgeTouchUp(at: point, edge: edge) }) {
+            if accepted("edgeTouchUp", { try hid.edgeTouchUp(at: point, edge: edge) }) {
                 inputGate.sync { heldTouch = nil }
             } else {
                 allReleased = false
             }
 
         case let .twoFinger(finger1, finger2)?:
-            if accepted({ try hid.twoFingerUp(f1: finger1, f2: finger2) }) {
+            if accepted("twoFingerUp", { try hid.twoFingerUp(f1: finger1, f2: finger2) }) {
                 inputGate.sync { heldTouch = nil }
             } else {
                 allReleased = false
@@ -236,7 +258,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             break
         }
         for usage in keys {
-            if accepted({ try hid.keyUp(keyCode: usage) }) { inputGate.sync { _ = heldKeys.remove(usage) } } else {
+            if accepted("keyUp", { try hid.keyUp(keyCode: usage) }) {
+                inputGate.sync { _ = heldKeys.remove(usage) }
+            } else {
                 allReleased = false
             }
         }
@@ -248,7 +272,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // Clear on a confirmed release; else keep it uncertain and block.
         let buttons = inputGate.sync { uncertainButtons }
         for button in buttons {
-            guard accepted({ try hid.releaseHardwareButton(button.bridgeValue) }) else {
+            guard accepted("releaseHardwareButton", { try hid.releaseHardwareButton(button.bridgeValue) }) else {
                 allReleased = false
                 continue
             }
@@ -284,13 +308,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // silently forgotten.
         switch held {
         case let .single(point):
-            guard accepted({ try hid.tapUp(at: point) }) else { return false }
+            guard accepted("tapUp", { try hid.tapUp(at: point) }) else { return false }
 
         case let .edge(point, edge):
-            guard accepted({ try hid.edgeTouchUp(at: point, edge: edge) }) else { return false }
+            guard accepted("edgeTouchUp", { try hid.edgeTouchUp(at: point, edge: edge) }) else { return false }
 
         case let .twoFinger(finger1, finger2):
-            guard accepted({ try hid.twoFingerUp(f1: finger1, f2: finger2) }) else { return false }
+            guard accepted("twoFingerUp", { try hid.twoFingerUp(f1: finger1, f2: finger2) }) else { return false }
         }
         inputGate.sync { heldTouch = nil }
         return true
@@ -310,16 +334,25 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// A send that completes without throwing increments
     /// `inputSubmissionCount()` unless `counted` is false. Rotation opts out
     /// because the coordinator checks its observed orientation separately.
+    ///
+    /// `operation` names a HID send for stall tracking. Rotation passes nil:
+    /// it goes through Purple or the fold helper, so its outcome says nothing
+    /// about the HID transport.
     @discardableResult
     private func gatedSend(
         _ generation: UInt64,
+        _ operation: String?,
         counted: Bool = true,
         _ body: () throws -> Void
     ) throws -> Bool {
         guard inputGate.sync(execute: { generation == inputGeneration }) else {
             return false
         }
-        try body()
+        if let operation {
+            try trackingStall(operation, body)
+        } else {
+            try body()
+        }
         if counted { inputGate.sync { inputSubmissions += 1 } }
         return true
     }
@@ -328,10 +361,39 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// counting it when it did. The quiesce and held-contact paths send
     /// through here so the footprint count covers every such send, not only
     /// the ones a caller issued.
-    private func accepted(_ send: () throws -> Void) -> Bool {
-        guard (try? send()) != nil else { return false }
+    private func accepted(_ operation: String, _ send: () throws -> Void) -> Bool {
+        guard (try? trackingStall(operation, send)) != nil else { return false }
         inputGate.sync { inputSubmissions += 1 }
         return true
+    }
+
+    /// Run one HID send and fold its outcome into the stall tracker. Only a
+    /// missed completion wait counts as a stall; any other error leaves the
+    /// tracker as it was, because it says nothing about whether sends are
+    /// completing.
+    private func trackingStall(_ operation: String, _ send: () throws -> Void) throws {
+        let transition: InputStallTracker.Transition?
+        do {
+            try send()
+            transition = inputGate.sync {
+                stallTracker.noteCompleted(operation: operation, at: .now)
+            }
+        } catch {
+            if Self.isSendTimeout(error) {
+                let began = inputGate.sync {
+                    stallTracker.noteTimeout(operation: operation, at: .now)
+                }
+                reportStall(began)
+            }
+            throw error
+        }
+        reportStall(transition)
+    }
+
+    private func reportStall(_ transition: InputStallTracker.Transition?) {
+        guard let transition else { return }
+        let observer = inputGate.sync { onInputStall }
+        observer?(transition)
     }
 
     // MARK: Frames
@@ -524,7 +586,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func tapDown(at point: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().tapDown(at: point) }) {
+            if try gatedSend(generation, "tapDown", { try requireHID().tapDown(at: point) }) {
                 hold(.single(point))
             }
         }
@@ -532,7 +594,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func tapUp(at point: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().tapUp(at: point) }) {
+            if try gatedSend(generation, "tapUp", { try requireHID().tapUp(at: point) }) {
                 inputGate.sync { heldTouch = nil }
             }
         }
@@ -540,7 +602,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().edgeTouchDown(at: point, edge: edge) }) {
+            if try gatedSend(generation, "edgeTouchDown", { try requireHID().edgeTouchDown(at: point, edge: edge) }) {
                 hold(.edge(point, edge))
             }
         }
@@ -548,7 +610,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().edgeTouchMove(at: point, edge: edge) }) {
+            if try gatedSend(generation, "edgeTouchMove", { try requireHID().edgeTouchMove(at: point, edge: edge) }) {
                 hold(.edge(point, edge))
             }
         }
@@ -556,7 +618,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().edgeTouchUp(at: point, edge: edge) }) {
+            if try gatedSend(generation, "edgeTouchUp", { try requireHID().edgeTouchUp(at: point, edge: edge) }) {
                 inputGate.sync { heldTouch = nil }
             }
         }
@@ -564,7 +626,10 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().twoFingerDown(f1: finger1, f2: finger2) }) {
+            let sent = try gatedSend(generation, "twoFingerDown") {
+                try requireHID().twoFingerDown(f1: finger1, f2: finger2)
+            }
+            if sent {
                 hold(.twoFinger(finger1, finger2))
             }
         }
@@ -572,7 +637,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, { try requireHID().twoFingerUp(f1: finger1, f2: finger2) }) {
+            if try gatedSend(generation, "twoFingerUp", { try requireHID().twoFingerUp(f1: finger1, f2: finger2) }) {
                 inputGate.sync { heldTouch = nil }
             }
         }
@@ -621,13 +686,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     private func keyDownSynchronously(hidUsage: UInt32, generation: UInt64) throws {
-        if try gatedSend(generation, { try requireHID().keyDown(keyCode: hidUsage) }) {
+        if try gatedSend(generation, "keyDown", { try requireHID().keyDown(keyCode: hidUsage) }) {
             inputGate.sync { _ = heldKeys.insert(hidUsage) }
         }
     }
 
     private func keyUpSynchronously(hidUsage: UInt32, generation: UInt64) throws {
-        if try gatedSend(generation, { try requireHID().keyUp(keyCode: hidUsage) }) {
+        if try gatedSend(generation, "keyUp", { try requireHID().keyUp(keyCode: hidUsage) }) {
             inputGate.sync { _ = heldKeys.remove(hidUsage) }
         }
     }
@@ -653,7 +718,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // *failed* up-only release keeps the button uncertain and blocks the
         // transfer.
         do {
-            let sent = try gatedSend(generation) { try requireHID().pressHardwareButton(button.bridgeValue) }
+            let sent = try gatedSend(generation, "pressHardwareButton") {
+                try requireHID().pressHardwareButton(button.bridgeValue)
+            }
             if sent { inputGate.sync { uncertainButtons.removeAll { $0 == button } } }
         } catch {
             inputGate.sync { if !uncertainButtons.contains(button) { uncertainButtons.append(button) } }
@@ -663,7 +730,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func rotateCrown(delta: Double, generation: UInt64) async throws {
         _ = try await inputWorkQueue.run { [self] in
-            try gatedSend(generation) { try requireHID().rotateCrown(delta: delta) }
+            try gatedSend(generation, "rotateCrown") { try requireHID().rotateCrown(delta: delta) }
         }
     }
 
@@ -699,7 +766,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             let udid = self.udid
             let helper = self.foldHelper
             sent = try await inputWorkQueue.run { [self] in
-                try gatedSend(generation, counted: false) {
+                try gatedSend(generation, nil, counted: false) {
                     try runFoldHelper(
                         helper,
                         onDevice: udid,
@@ -710,7 +777,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             }
         } else {
             sent = try await inputWorkQueue.run { [self] in
-                try gatedSend(generation, counted: false) {
+                try gatedSend(generation, nil, counted: false) {
                     guard let purpleClient else { throw DeviceBackendError.notActive }
                     try purpleClient.rotate(to: orientation.bridgeValue)
                 }

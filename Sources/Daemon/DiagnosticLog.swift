@@ -4,13 +4,14 @@ import os
 
 /// The daemon's unified-logging channels, named once.
 ///
-/// Five categories, each answering a different question:
+/// Six categories, each answering a different question:
 ///
 ///   lifecycle  when did this daemon instance start, and why did it exit?
 ///   xpc        did one connection drop, or did the process go away?
 ///   attach     what was the daemon doing, and in which phase?
 ///   session    was a session torn down underneath a pane?
 ///   footprint  what was it holding, sampled on a fixed cadence?
+///   input      did a pane's input stop reaching its device, and why?
 ///
 /// Separate categories rather than one channel because they are read
 /// separately. `lifecycle` alone answers "did it restart". Correlating a pane
@@ -43,4 +44,10 @@ public enum DiagnosticLog {
     /// ceiling. `.notice` so abnormal growth can be diagnosed from `log show`
     /// without `--info`.
     public static let footprint = Logger(subsystem: subsystem, category: "footprint")
+
+    /// A pane's input transport stalling and recovering, and its contact lane
+    /// shutting and reopening. Transitions only, never one line per send, and
+    /// `.notice` so a pane whose input went dead can be explained from
+    /// `log show` without `--info`.
+    public static let input = Logger(subsystem: subsystem, category: "input")
 }

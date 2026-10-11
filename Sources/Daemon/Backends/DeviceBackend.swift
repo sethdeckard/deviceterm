@@ -315,6 +315,15 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// A requirement rather than extension-only for the same reason as
     /// `poolCounters()`: the coordinator holds `any DeviceBackend`.
     func inputSubmissionCount() -> Int
+    /// Stall episodes over this backend's life: runs of input sends that
+    /// missed their completion wait, each ended by a send that completed in
+    /// time. Read by the daemon's periodic self-check, never on an input path.
+    /// A requirement for the same reason as `inputSubmissionCount()`.
+    func inputStallCount() -> Int
+    /// Be told when this backend's input transport starts or stops stalling.
+    /// Called outside the backend's own locks, from whichever queue sent the
+    /// input, so a handler that needs an actor hops to it.
+    func observeInputStall(_ handler: @escaping @Sendable (InputStallTracker.Transition) -> Void)
 
     // MARK: Surface-lease overlay
     //
@@ -517,6 +526,9 @@ extension DeviceBackend {
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { true }
     // Default: a backend with no transport of its own sends nothing.
     func inputSubmissionCount() -> Int { 0 }
+    // Default: a backend whose sends report no completion wait never stalls.
+    func inputStallCount() -> Int { 0 }
+    func observeInputStall(_ handler: @escaping @Sendable (InputStallTracker.Transition) -> Void) {}
 
     // Default: backends without a cached accessibility bridge own nothing that
     // needs queue-ordered release.

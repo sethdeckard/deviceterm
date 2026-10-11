@@ -1562,6 +1562,7 @@ public actor PaneCoordinator {
         panes[paneId] = record
         startHingeMonitorIfFoldable(record: record, paneId: paneId)
         observeBoundPanel(record: record, paneId: paneId)
+        observeInputStall(record: record)
         // The one line that ties a pane to the backend it publishes on. The
         // acquisition number matches the acquirer's "backend built" line by
         // value, and the short id is what `pane show` prints, so a reader can
@@ -2021,6 +2022,25 @@ public actor PaneCoordinator {
         var total = 0
         for record in Array(panes.values) + Array(retiring.values) {
             total += record.backend?.inputSubmissionCount() ?? 0
+        }
+        return total
+    }
+
+    /// Input-transport stall episodes, summed the same way. A pane that closes
+    /// takes its count with it.
+    func inputStallsTotal() -> Int {
+        var total = 0
+        for record in Array(panes.values) + Array(retiring.values) {
+            total += record.backend?.inputStallCount() ?? 0
+        }
+        return total
+    }
+
+    /// Times a contact lane shut, summed the same way.
+    func laneShutsTotal() async -> Int {
+        var total = 0
+        for record in Array(panes.values) + Array(retiring.values) {
+            total += await record.contactLane?.shutEpisodes ?? 0
         }
         return total
     }
@@ -2763,13 +2783,31 @@ public actor PaneCoordinator {
         // release. The target stays reserved throughout, which is what actually
         // protects the next attach.
         if mode == .detach, let backend = record.backend {
+            var attempts = 0
             while await backend.releaseHeldContact() == false {
+                attempts += 1
+                if attempts == 1 {
+                    InputHealthLog.detachRelease(
+                        shortId: record.shortId,
+                        failedAttempts: attempts,
+                        finished: false,
+                        cancelled: false
+                    )
+                }
                 // A cancelled sleep returns at once, so without this the retry
                 // becomes a tight loop on the actor. Cancellation here means
                 // the daemon is going away, which takes the device state with
                 // it, so stop retrying and finish the teardown.
                 guard !Task.isCancelled else { break }
                 try? await Task.sleep(for: .milliseconds(ContactLane.liveExpiryMs))
+            }
+            if attempts > 0 {
+                InputHealthLog.detachRelease(
+                    shortId: record.shortId,
+                    failedAttempts: attempts,
+                    finished: true,
+                    cancelled: Task.isCancelled
+                )
             }
         }
         let surfacePump = record.teardownSurfacePump()
@@ -3036,6 +3074,12 @@ public actor PaneCoordinator {
         monitor.start()
     }
 
+    /// Log the edges of a stall in this pane's input transport.
+    private func observeInputStall(record: Record) {
+        let shortId = record.shortId
+        record.backend?.observeInputStall { InputHealthLog.stall($0, shortId: shortId) }
+    }
+
     /// Follow the panel this pane's display is mirroring.
     ///
     /// Registered after the display has bootstrapped, which the backend covers
@@ -3141,28 +3185,32 @@ public actor PaneCoordinator {
     /// ordered input queue before the lane admits the next gesture.
     private func lane(for record: Record, backend: any DeviceBackend) -> ContactLane {
         if let existing = record.contactLane { return existing }
-        let lane = ContactLane { contact, generation in
-            switch contact {
-            case let .plain(point):
-                return (try? await backend.tapUp(at: point, generation: generation)) != nil
+        let shortId = record.shortId
+        let lane = ContactLane(
+            onHealth: { InputHealthLog.lane($0, shortId: shortId) },
+            recoverContact: { contact, generation in
+                switch contact {
+                case let .plain(point):
+                    return (try? await backend.tapUp(at: point, generation: generation)) != nil
 
-            case let .edge(point, edge):
-                return (try? await backend.edgeTouchUp(at: point, edge: edge, generation: generation)) != nil
+                case let .edge(point, edge):
+                    return (try? await backend.edgeTouchUp(at: point, edge: edge, generation: generation)) != nil
 
-            case let .multi(finger1, finger2):
-                return (try? await backend.twoFingerUp(
-                    f1: finger1,
-                    f2: finger2,
-                    generation: generation
-                )) != nil
+                case let .multi(finger1, finger2):
+                    return (try? await backend.twoFingerUp(
+                        f1: finger1,
+                        f2: finger2,
+                        generation: generation
+                    )) != nil
 
-            case nil:
-                // A composite that failed partway. It never told the lane what
-                // it was holding, so the backend releases whatever it still
-                // has down, matched to that contact's own kind.
-                return await backend.releaseHeldContact()
+                case nil:
+                    // A composite that failed partway. It never told the lane what
+                    // it was holding, so the backend releases whatever it still
+                    // has down, matched to that contact's own kind.
+                    return await backend.releaseHeldContact()
+                }
             }
-        }
+        )
         record.contactLane = lane
         return lane
     }
