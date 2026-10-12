@@ -36,5 +36,10 @@ public enum DaemonProtocolInfo {
     /// a helper replacement would not know the name, so a foldable pane's
     /// hinge would stop tracking silently rather than the pairing being
     /// refused.
-    public static let wireVersion = "0.9.0"
+    ///
+    /// 0.10.0 raised from 0.9.0 for face up and face down. `pane.input.rotate`
+    /// takes `faceUp` and `faceDown` and answers with a `dispatched` status,
+    /// which an older peer would reject as an unknown orientation or fail to
+    /// decode.
+    public static let wireVersion = "0.10.0"
 }

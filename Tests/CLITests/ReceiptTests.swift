@@ -215,13 +215,15 @@ func rotateReceiptJSONShape() throws {
         shortId: "rt1234",
         orientation: "landscapeLeft",
         direction: nil,
+        status: "confirmed",
         targetOrientation: "landscapeLeft",
         observedOrientation: "landscapeLeft"
     )
     let json = try encode(receipt)
     let expected =
         #"{"observedOrientation":"landscapeLeft","ok":true,"orientation":"landscapeLeft","# +
-        #""paneId":"P","shortId":"rt1234","targetOrientation":"landscapeLeft","udid":"U"}"#
+        #""paneId":"P","shortId":"rt1234","status":"confirmed","targetOrientation":"landscapeLeft","# +
+        #""udid":"U"}"#
     #expect(json == expected)
 }
 
@@ -236,13 +238,35 @@ func relativeRotateReceiptReportsTheDirection() throws {
         shortId: "rt1234",
         orientation: nil,
         direction: "left",
+        status: "confirmed",
         targetOrientation: "portraitUpsideDown",
         observedOrientation: "portraitUpsideDown"
     )
     let json = try encode(receipt)
     let expected =
         #"{"direction":"left","observedOrientation":"portraitUpsideDown","ok":true,"paneId":"P","# +
-        #""shortId":"rt1234","targetOrientation":"portraitUpsideDown","udid":"U"}"#
+        #""shortId":"rt1234","status":"confirmed","targetOrientation":"portraitUpsideDown","udid":"U"}"#
+    #expect(json == expected)
+}
+
+@Test
+func dispatchedRotateReceiptOmitsTheObservation() throws {
+    // A Duo laid flat reports nothing back, so there is no observation to
+    // echo and `status` says why.
+    let receipt = Receipt.Rotate(
+        udid: "U",
+        paneId: "P",
+        shortId: "rt1234",
+        orientation: "faceUp",
+        direction: nil,
+        status: "dispatched",
+        targetOrientation: "faceUp",
+        observedOrientation: nil
+    )
+    let json = try encode(receipt)
+    let expected =
+        #"{"ok":true,"orientation":"faceUp","paneId":"P","shortId":"rt1234","status":"dispatched","# +
+        #""targetOrientation":"faceUp","udid":"U"}"#
     #expect(json == expected)
 }
 

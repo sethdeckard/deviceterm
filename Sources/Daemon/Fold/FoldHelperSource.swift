@@ -26,7 +26,9 @@ import DaemonProtocol
 /// PurpleHID orientation event every other simulator takes: the device
 /// orientation changes, but nothing re-lays out until the next fold. Device
 /// Hub rotates one through this usage instead, with an
-/// `orientation-picker-control` payload, and the UI follows at once.
+/// `orientation-picker-control` payload, and the UI follows at once. The same
+/// payload lays the device face up or face down, which changes the device
+/// orientation and leaves the UI where it was.
 ///
 /// **Reading the hinge happens in the guest too.** CoreMotion's
 /// `CoreMotion_DeviceStateRelay_Crane` service emits a hinge event (IOHIDEvent
@@ -42,8 +44,9 @@ import DaemonProtocol
 /// error.
 enum FoldHelperSource {
     /// `usage: fold-helper hinge <angle>` (degrees in `0...180`),
-    /// `fold-helper orientation <portrait|pud|landscape-left|landscape-right>`,
-    /// or `fold-helper watch`.
+    /// `fold-helper orientation
+    /// <portrait|pud|landscape-left|landscape-right|faceup|facedown>`, or
+    /// `fold-helper watch`.
     ///
     /// `hinge` and `orientation` print nothing on success and a diagnostic on
     /// failure; the exit status is what the daemon reads. `watch` prints
@@ -107,7 +110,7 @@ enum FoldHelperSource {
         fprintf(stderr,
             "usage: fold-helper hinge <angle 0-180>\n"
             "       fold-helper orientation "
-            "<portrait|pud|landscape-left|landscape-right>\n"
+            "<portrait|pud|landscape-left|landscape-right|faceup|facedown>\n"
             "       fold-helper watch\n");
         return 64;
     }
@@ -165,7 +168,8 @@ enum FoldHelperSource {
     static int orientation(const char *argument) {
         // The values Device Hub's own orientation control sends.
         const char *accepted[] = {
-            "portrait", "pud", "landscape-left", "landscape-right"
+            "portrait", "pud", "landscape-left", "landscape-right",
+            "faceup", "facedown"
         };
         int known = 0;
         for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); i++) {
@@ -250,6 +254,17 @@ enum FoldHelperSource {
     /// Arguments that set the device orientation to `orientation`.
     static func orientationArguments(_ orientation: Orientation) -> [String] {
         ["orientation", orientationValue(orientation)]
+    }
+
+    /// Arguments that lay the device `flat`.
+    static func orientationArguments(_ flat: FlatOrientation) -> [String] {
+        switch flat {
+        case .faceUp:
+            return ["orientation", "faceup"]
+
+        case .faceDown:
+            return ["orientation", "facedown"]
+        }
     }
 
     /// The payload value Device Hub's orientation control sends for each

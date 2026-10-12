@@ -753,6 +753,31 @@ enum SimInputSynthesis {
                 confirmedOrientation: confirmedOrientation,
                 generation: generation
             )
+        } catch let error as DeviceBackendError {
+            // The fold helper's failure carries its own reason, which
+            // `BridgeMessage.unwrap` would replace with a generic one.
+            throw PaneError.mapBackendError(error, paneId: paneId, operation: .rotate)
+        } catch {
+            throw PaneError.bridgeFailed(
+                paneId: paneId,
+                operation: .rotate,
+                message: BridgeMessage.unwrap(error)
+            )
+        }
+    }
+
+    /// Lay the device face up or face down, wrapping a backend failure the
+    /// way `rotate` does.
+    static func setFlatOrientation(
+        backend: any DeviceBackend,
+        paneId: UUID,
+        generation: UInt64,
+        flat: FlatOrientation
+    ) async throws -> BackendFlatOrientationOutcome {
+        do {
+            return try await backend.setFlatOrientation(flat, generation: generation)
+        } catch let error as DeviceBackendError {
+            throw PaneError.mapBackendError(error, paneId: paneId, operation: .rotate)
         } catch {
             throw PaneError.inputSendFailed(error, paneId: paneId, operation: .rotate)
         }

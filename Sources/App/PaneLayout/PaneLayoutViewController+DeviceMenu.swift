@@ -29,6 +29,10 @@ extension PaneLayoutViewController {
     @objc
     func rotateDeviceRight(_ sender: Any?) { targetedSimPane()?.rotateDeviceRight(sender) }
     @objc
+    func layDeviceFaceUp(_ sender: Any?) { targetedSimPane()?.layDeviceFaceUp(sender) }
+    @objc
+    func layDeviceFaceDown(_ sender: Any?) { targetedSimPane()?.layDeviceFaceDown(sender) }
+    @objc
     func applySimulatedLocation(_ sender: Any?) {
         targetedSimPane()?.applySimulatedLocation(sender)
     }

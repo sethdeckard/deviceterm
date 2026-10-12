@@ -149,7 +149,9 @@ extension HelpCatalog {
             summary: "Set device orientation",
             detail: """
               rotate <portrait|portrait-upside-down|landscape-left|landscape-right>
-                  Set device orientation and report success only after confirmation.
+                  Set device orientation. Rotation succeeds after confirmation,
+                  except flat requests on foldable Simulators, which succeed
+                  after dispatch.
                   Names match UIKit's UIDeviceOrientation; kebab-case
                   (canonical), snake_case, camelCase, and all lowercase are
                   all accepted.
@@ -161,12 +163,21 @@ extension HelpCatalog {
                   the relative operation directly.
                   Example: deviceterm rotate left
 
-              A Simulator confirms through its observed display orientation;
-              a physical device confirms through the orientation returned by
-              its control relay. Success reports `targetOrientation` and
-              `observedOrientation`. An orientation-locked Simulator fails
-              after the four-second confirmation deadline instead of
-              returning a dispatch receipt.
+              rotate <face-up|face-down>
+                  Lay the device flat. The interface keeps its orientation, so
+                  the pane doesn't turn. An ordinary Simulator confirms through
+                  the orientation `devicectl device orientation get` reports. A
+                  foldable Simulator reports nothing back, so success there is
+                  `status: dispatched`, with no observedOrientation. A physical
+                  device refuses.
+                  Example: deviceterm rotate face-up
+
+              For display rotations, a Simulator confirms through its observed
+              display orientation; a physical device confirms through the
+              orientation returned by its control relay. Success reports
+              `targetOrientation` and `observedOrientation`. An
+              orientation-locked Simulator fails after the four-second
+              confirmation deadline instead of returning a dispatch receipt.
             """
         ),
         HelpTopic(

@@ -840,9 +840,7 @@ func handleRotate(
     guard result.success else {
         return rotateFailureOutcome(result, requested: target)
     }
-    guard result.status == .confirmed,
-        let targetOrientation = result.targetOrientation,
-        let observedOrientation = result.observedOrientation else {
+    guard let settled = settledRotation(result, requested: target) else {
         throw CLIError.classified(
             code: .protocolInvalidResponse,
             message: "pane.input.rotate returned an invalid success result"
@@ -850,9 +848,12 @@ func handleRotate(
     }
     var fields: [(String, String)] = []
     if let orientation = target.orientation { fields.append(("orientation", orientation.rawValue)) }
+    if let flat = target.flatOrientation { fields.append(("orientation", flat.rawValue)) }
     if let direction = target.direction { fields.append(("direction", direction.rawValue)) }
-    fields.append(("targetOrientation", targetOrientation.rawValue))
-    fields.append(("observedOrientation", observedOrientation.rawValue))
+    fields.append(("targetOrientation", settled.target))
+    if let observed = settled.observed { fields.append(("observedOrientation", observed)) }
+    // Only a dispatched result says so: `ok` alone would read as confirmed.
+    if result.status == .dispatched { fields.append(("status", result.status.rawValue)) }
     switch output {
     case .human:
         return .stdout(
@@ -866,14 +867,44 @@ func handleRotate(
                     udid: resolved.udid,
                     paneId: resolved.paneId,
                     shortId: resolved.shortId,
-                    orientation: target.orientation?.rawValue,
+                    orientation: target.orientation?.rawValue ?? target.flatOrientation?.rawValue,
                     direction: target.direction?.rawValue,
-                    targetOrientation: targetOrientation.rawValue,
-                    observedOrientation: observedOrientation.rawValue
+                    status: result.status.rawValue,
+                    targetOrientation: settled.target,
+                    observedOrientation: settled.observed
                 )
             )
         )
     }
+}
+
+/// The target and observed orientation a successful rotate result reports,
+/// or nil when it is missing what its status promises.
+///
+/// A flat request reports in the flat fields and is confirmed or dispatched;
+/// any other is confirmed and reports both display orientations.
+private func settledRotation(
+    _ result: RotateResult,
+    requested: RotationTarget
+) -> (target: String, observed: String?)? {
+    if requested.flatOrientation != nil {
+        guard let target = result.targetFlatOrientation else { return nil }
+        switch result.status {
+        case .confirmed:
+            guard let observed = result.observedFlatOrientation else { return nil }
+            return (target.rawValue, observed.rawValue)
+
+        case .dispatched:
+            return (target.rawValue, nil)
+
+        case .unconfirmed, .confirmationUnsupported, .refused, .unavailable:
+            return nil
+        }
+    }
+    guard result.status == .confirmed,
+        let target = result.targetOrientation,
+        let observed = result.observedOrientation else { return nil }
+    return (target.rawValue, observed.rawValue)
 }
 
 private func rotateFailureOutcome(_ result: RotateResult, requested: RotationTarget) -> CommandOutcome {
@@ -896,9 +927,9 @@ private func rotateFailureOutcome(_ result: RotateResult, requested: RotationTar
         code = .paneUnavailable
         message = "the pane became unavailable before rotation confirmation"
 
-    case .confirmed:
+    case .confirmed, .dispatched:
         code = .protocolInvalidResponse
-        message = "pane.input.rotate returned a confirmed failure result"
+        message = "pane.input.rotate returned a \(result.status.rawValue) failure result"
     }
     return .failure(
         code: code,
@@ -910,9 +941,12 @@ private func rotateFailureOutcome(_ result: RotateResult, requested: RotationTar
 private func rotateFailureDetails(_ result: RotateResult, requested: RotationTarget) -> Data? {
     var details: [String: Any] = [:]
     if let orientation = requested.orientation { details["requestedOrientation"] = orientation.rawValue }
+    if let flat = requested.flatOrientation { details["requestedOrientation"] = flat.rawValue }
     if let direction = requested.direction { details["requestedDirection"] = direction.rawValue }
     if let target = result.targetOrientation { details["targetOrientation"] = target.rawValue }
     if let observed = result.observedOrientation { details["observedOrientation"] = observed.rawValue }
+    if let flat = result.targetFlatOrientation { details["targetFlatOrientation"] = flat.rawValue }
+    if let flat = result.observedFlatOrientation { details["observedFlatOrientation"] = flat.rawValue }
     if let deadlineMs = result.deadlineMs { details["deadlineMs"] = deadlineMs }
     if let reason = result.reason { details["reason"] = reason.rawValue }
     return try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys])

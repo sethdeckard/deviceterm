@@ -27,7 +27,8 @@ enum FoldablePanelOrientation {
     ///
     /// A relative step turns the *device*, so it starts from the device
     /// orientation behind `confirmed`, not from the reading itself. Nil for a
-    /// relative step with nothing confirmed to step from.
+    /// relative step with nothing confirmed to step from, and for a flat
+    /// target, which no display reading confirms.
     static func resolve(
         _ target: RotationTarget,
         confirmed: Orientation?,
@@ -41,6 +42,9 @@ enum FoldablePanelOrientation {
         case let .relative(direction):
             guard let confirmed else { return nil }
             device = direction.applied(to: self.device(forDisplay: confirmed, onInnerPanel: onInnerPanel))
+
+        case .flat:
+            return nil
         }
         return Resolution(device: device, display: display(forDevice: device, onInnerPanel: onInnerPanel))
     }

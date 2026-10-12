@@ -81,3 +81,50 @@ func queueBackpressureHasAMachineReadableReason() throws {
     #expect(decoded == result)
     #expect(decoded.reason == .queueFull)
 }
+
+@Test
+func dispatchedFlatResultHasStableWireShape() throws {
+    // A flat request leaves the display orientation alone, so the result
+    // keeps reporting it in `observedOrientation` beside the flat target.
+    let result = RotateResult(
+        success: true,
+        status: .dispatched,
+        targetOrientation: nil,
+        observedOrientation: .portrait,
+        targetFlatOrientation: .faceUp
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+
+    let data = try encoder.encode(result)
+    let json = try #require(String(data: data, encoding: .utf8))
+    let expected =
+        #"{"observedOrientation":"portrait","ok":true,"status":"dispatched","# +
+        #""targetFlatOrientation":"faceUp"}"#
+
+    #expect(json == expected)
+}
+
+@Test
+func confirmedFlatResultRoundTrips() throws {
+    let result = RotateResult(
+        success: true,
+        status: .confirmed,
+        targetOrientation: nil,
+        observedOrientation: .landscapeLeft,
+        targetFlatOrientation: .faceDown,
+        observedFlatOrientation: .faceDown
+    )
+
+    let data = try JSONEncoder().encode(result)
+    #expect(try JSONDecoder().decode(RotateResult.self, from: data) == result)
+}
+
+@Test
+func aResultWithoutFlatFieldsDecodesWithNone() throws {
+    // What every non-flat result looks like on the wire.
+    let json = #"{"ok":true,"status":"confirmed","targetOrientation":"portrait","observedOrientation":"portrait"}"#
+    let decoded = try JSONDecoder().decode(RotateResult.self, from: Data(json.utf8))
+    #expect(decoded.targetFlatOrientation == nil)
+    #expect(decoded.observedFlatOrientation == nil)
+}

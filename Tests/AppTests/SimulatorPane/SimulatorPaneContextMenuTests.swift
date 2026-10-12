@@ -44,6 +44,8 @@ struct SimulatorPaneContextMenuTests {
             "",  // separator
             "Rotate Left",
             "Rotate Right",
+            "Face Up",
+            "Face Down",
             "Location",
             "",  // separator
             "Reboot",

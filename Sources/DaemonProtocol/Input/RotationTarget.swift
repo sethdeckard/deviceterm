@@ -12,28 +12,42 @@ public enum RotationTarget: Sendable, Equatable {
     /// direction directly; a Simulator resolves it from confirmed display
     /// observation.
     case relative(RotationDirection)
+    /// Lay the device face up or face down. The interface keeps its
+    /// orientation, so nothing on the display confirms it.
+    case flat(FlatOrientation)
 
-    /// The absolute target, or nil when this is relative. Paired with
-    /// `direction` so projecting back onto the wire's two fields
-    /// happens one way, in one place.
+    /// The absolute target, or nil when this is relative or flat. Combined
+    /// with `flatOrientation` and `direction` by `RotateParams` to populate
+    /// exactly one wire field.
     public var orientation: Orientation? {
         switch self {
         case let .absolute(orientation):
             return orientation
 
-        case .relative:
+        case .relative, .flat:
             return nil
         }
     }
 
-    /// The requested direction, or nil when this is absolute.
+    /// The requested direction, or nil when this is absolute or flat.
     public var direction: RotationDirection? {
         switch self {
-        case .absolute:
+        case .absolute, .flat:
             return nil
 
         case let .relative(direction):
             return direction
+        }
+    }
+
+    /// The flat target, or nil when this is absolute or relative.
+    public var flatOrientation: FlatOrientation? {
+        switch self {
+        case .absolute, .relative:
+            return nil
+
+        case let .flat(flat):
+            return flat
         }
     }
 }

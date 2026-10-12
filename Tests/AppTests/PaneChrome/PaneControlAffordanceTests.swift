@@ -36,6 +36,7 @@ struct PaneControlAffordanceTests {
             .touch,
             .applePay,
             .rotate,
+            .layFlat,
             .capture,
             .accessibility,
             .simulatorHousekeeping
@@ -137,6 +138,20 @@ struct PaneControlAffordanceTests {
         ))
     }
 
+    @Test("face up and face down need a simulator that rotates")
+    func layFlatNeedsARotatingSimulator() {
+        // A physical device reports `rotate` for Rotate Left / Right, but its
+        // backend refuses a flat orientation.
+        #expect(!PaneControlAffordance.layFlat.isEnabled(
+            capabilities: deviceCaps, isPhysicalDevice: true, family: .unknown
+        ))
+        var caps = PaneCapabilities.simulator
+        caps.rotate = false
+        #expect(!PaneControlAffordance.layFlat.isEnabled(
+            capabilities: caps, isPhysicalDevice: false, family: .phone
+        ))
+    }
+
     @Test("button affordance follows the capability flag")
     func buttonAffordanceFollowsCapability() {
         var caps = deviceCaps
@@ -172,6 +187,12 @@ struct PaneControlAffordanceTests {
         #expect(PaneControlAffordance.forSelector(
             #selector(SimulatorPaneViewController.rotateDeviceLeft(_:))
         ) == .rotate)
+        #expect(PaneControlAffordance.forSelector(
+            #selector(SimulatorPaneViewController.layDeviceFaceUp(_:))
+        ) == .layFlat)
+        #expect(PaneControlAffordance.forSelector(
+            #selector(SimulatorPaneViewController.layDeviceFaceDown(_:))
+        ) == .layFlat)
         #expect(PaneControlAffordance.forSelector(
             #selector(SimulatorPaneViewController.pressDigitalCrown(_:))
         ) == .crown)

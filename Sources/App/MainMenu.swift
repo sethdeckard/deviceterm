@@ -299,6 +299,20 @@ func makeMainMenu() -> NSMenu {
     deviceMenu.addItem(.separator())
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceRotateLeft))
     deviceMenu.addItem(KeybindingCatalog.makeMenuItem(.deviceRotateRight))
+    let mFaceUp = NSMenuItem(
+        title: "Face Up",
+        action: #selector(SimulatorPaneViewController.layDeviceFaceUp(_:)),
+        keyEquivalent: ""
+    )
+    mFaceUp.image = .menuSymbol("arrow.up.square", describedAs: "Face Up")
+    deviceMenu.addItem(mFaceUp)
+    let mFaceDown = NSMenuItem(
+        title: "Face Down",
+        action: #selector(SimulatorPaneViewController.layDeviceFaceDown(_:)),
+        keyEquivalent: ""
+    )
+    mFaceDown.image = .menuSymbol("arrow.down.square", describedAs: "Face Down")
+    deviceMenu.addItem(mFaceDown)
     deviceMenu.addItem(.separator())
     let mReboot = NSMenuItem(
         title: "Reboot",

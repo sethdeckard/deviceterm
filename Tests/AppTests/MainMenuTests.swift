@@ -181,6 +181,8 @@ struct MainMenuTests {
             "",  // separator
             "Rotate Left",
             "Rotate Right",
+            "Face Up",
+            "Face Down",
             "",  // separator
             "Reboot",
             "Erase All Content and Settings…",
@@ -522,6 +524,8 @@ struct MainMenuTests {
             ("Apple Pay", #selector(SimulatorPaneViewController.pressHardwareApplePay(_:))),
             ("Rotate Left", #selector(SimulatorPaneViewController.rotateDeviceLeft(_:))),
             ("Rotate Right", #selector(SimulatorPaneViewController.rotateDeviceRight(_:))),
+            ("Face Up", #selector(SimulatorPaneViewController.layDeviceFaceUp(_:))),
+            ("Face Down", #selector(SimulatorPaneViewController.layDeviceFaceDown(_:))),
             ("Reboot", #selector(SimulatorPaneViewController.rebootDevice(_:))),
             (
                 "Erase All Content and Settings…",

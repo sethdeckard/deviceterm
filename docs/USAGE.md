@@ -596,6 +596,7 @@ deviceterm key 0x30 up
 deviceterm text "hello world"
 deviceterm rotate landscape-left
 deviceterm rotate left
+deviceterm rotate face-up
 ```
 
 `button` accepts:
@@ -625,7 +626,14 @@ or a relative direction:
 left | right
 ```
 
-`rotate` returns success only after DeviceTerm confirms the requested outcome.
+or a flat orientation:
+
+```text
+face-up | face-down
+```
+
+Rotation succeeds after confirmation, except flat requests on foldable
+Simulators, which succeed after dispatch.
 
 On a Simulator, confirmation comes from the display observation that also
 drives rendering and coordinate mapping. Relative rotations start from the
@@ -640,6 +648,15 @@ is the display's. On the inner panel, a confirmed receipt's
 `observedOrientation` differs from its `targetOrientation`. The cover's Home
 Screen never rotates, and Safari on the cover doesn't turn upside down, so
 those requests fail with `rotate.unconfirmed`.
+
+`face-up` and `face-down` lay the device flat. The interface keeps its
+orientation, so the pane doesn't turn and the display can't confirm it. On an
+ordinary Simulator, DeviceTerm sets it with `devicectl device orientation set`
+and confirms with `get`, which reports the new value at once. On a foldable
+Simulator, DeviceTerm sends Device Hub's payload, and nothing reports back
+promptly, so the command succeeds with `status: dispatched` once the request is
+sent. A physical device refuses both. **Device ▸ Face Up** and **Face Down**,
+and the same items in the pane's context menu, send the same requests.
 
 On a physical device, `left` and `right` are sent directly as relative
 operations. The relay returns the absolute orientation where the device landed,

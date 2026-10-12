@@ -33,6 +33,9 @@ enum DeviceBackendError: Error {
     /// differ in what the operator can do: a toolchain that cannot build it,
     /// or a guest that refused it.
     case foldCommandFailed(message: String)
+    /// `devicectl device orientation`, which lays an ordinary Simulator flat,
+    /// failed or wrote nothing readable. Carries `devicectl`'s own reason.
+    case orientationCommandFailed(message: String)
     /// Lazy location acquisition permanently failed for this backend.
     /// Carries the first failure's message so a retry classifies the
     /// same way the original did, as `accessibilityUnavailable` does.

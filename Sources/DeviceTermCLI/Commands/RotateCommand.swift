@@ -12,12 +12,12 @@ struct RotateCommand: CLICommandConvertible {
         commandName: "rotate",
         abstract: "Set device orientation",
         usage: "deviceterm rotate <portrait|portrait-upside-down|landscape-left"
-            + "|landscape-right|left|right> [--pane <ref>]",
+            + "|landscape-right|face-up|face-down|left|right> [--pane <ref>]",
         discussion: HelpText.page(forTopic: "rotate") ?? ""
     )
 
     @Argument(
-        help: "Absolute orientation, or the direction to turn.",
+        help: "Absolute orientation, face-up or face-down, or the direction to turn.",
         completion: .list(Completions.rotateValues)
     )
     var target: String
@@ -31,7 +31,7 @@ struct RotateCommand: CLICommandConvertible {
                 message:
                 "usage: deviceterm rotate "
                 + "<portrait|portrait-upside-down|landscape-left|landscape-right"
-                + "|left|right> "
+                + "|face-up|face-down|left|right> "
                 + "[--pane <ref>]"
                 )
         }

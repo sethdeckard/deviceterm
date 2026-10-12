@@ -4,7 +4,7 @@
 import DaemonProtocol
 import Testing
 
-/// The guest helper's two modes, and the payload values the daemon sends it.
+/// The guest helper's modes, and the payload values the daemon sends it.
 struct FoldHelperSourceTests {
     @Test
     func theHingeModeCarriesTheAngle() {
@@ -32,6 +32,16 @@ struct FoldHelperSourceTests {
         // The C program checks its argument against its own list. A value the
         // Swift side sends but the list lacks would fail every rotation to it.
         let value = try #require(FoldHelperSource.orientationArguments(orientation).last)
+        #expect(FoldHelperSource.code.contains("\"\(value)\""))
+    }
+
+    @Test("each flat orientation sends Device Hub's value", arguments: [
+        (FlatOrientation.faceUp, "faceup"),
+        (.faceDown, "facedown")
+    ])
+    func theOrientationModeLaysTheDeviceFlat(flat: FlatOrientation, value: String) {
+        #expect(FoldHelperSource.orientationArguments(flat) == ["orientation", value])
+        // The C program's own list has to carry it too, or the helper refuses.
         #expect(FoldHelperSource.code.contains("\"\(value)\""))
     }
 }

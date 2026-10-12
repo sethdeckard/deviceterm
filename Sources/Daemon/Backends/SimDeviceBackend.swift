@@ -162,6 +162,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// source and toolchain, so a second backend finds the first one's
     /// binary already on disk.
     private let foldHelper: FoldHelperBuilder
+    /// Lays an ordinary Simulator flat, which neither the PurpleHID event nor
+    /// the foldable's vendor payload can do.
+    private let deviceCtlOrientation = DeviceCtlOrientation()
 
     init(
         udid: String,
@@ -953,6 +956,44 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         return sent
             ? .dispatched(target: orientation, display: resolution.display)
             : .unavailable(target: orientation)
+    }
+
+    /// Lay the device face up or face down.
+    ///
+    /// A foldable takes the guest helper's orientation payload, as its
+    /// rotations do. Nothing reports a foldable's flat orientation back
+    /// promptly (`devicectl device orientation get` answers one request
+    /// behind), so that path ends `.dispatched`. Any other Simulator ignores
+    /// the payload and takes `devicectl device orientation set`, whose `get`
+    /// reads the new value at once, so that path is confirmed or not.
+    func setFlatOrientation(_ flat: FlatOrientation, generation: UInt64) async throws
+        -> BackendFlatOrientationOutcome {
+        let udid = self.udid
+        if capabilities.fold {
+            let helper = self.foldHelper
+            let sent = try await inputWorkQueue.run { [self] in
+                try gatedSend(generation, nil, counted: false) {
+                    try runFoldHelper(
+                        helper,
+                        onDevice: udid,
+                        arguments: FoldHelperSource.orientationArguments(flat),
+                        failure: "the orientation helper"
+                    )
+                }
+            }
+            return sent ? .dispatched : .unavailable
+        }
+        let deviceCtl = self.deviceCtlOrientation
+        let attempt = try await inputWorkQueue.run { [self] () throws -> (sent: Bool, reported: String?) in
+            var reported: String?
+            let sent = try gatedSend(generation, nil, counted: false) {
+                reported = try deviceCtl.set(flat, deviceId: udid)
+            }
+            return (sent, reported)
+        }
+        guard attempt.sent else { return .unavailable }
+        if attempt.reported == flat.rawValue { return .confirmed }
+        return .unconfirmed(observed: attempt.reported.flatMap(FlatOrientation.init(rawValue:)))
     }
 
     /// Run the guest helper with `arguments` and fail unless it exits zero.

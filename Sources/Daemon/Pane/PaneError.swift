@@ -312,9 +312,9 @@ public enum PaneError: Error, Equatable, Sendable {
             // treatment `accessibilityUnavailable` gets.
             return .bridgeFailed(paneId: paneId, operation: .locationAcquire, message: message)
 
-        case let .foldCommandFailed(message):
+        case let .foldCommandFailed(message), let .orientationCommandFailed(message):
             // Reports the verb the caller invoked: the failure is in running
-            // the fold, not in acquiring anything.
+            // the command, not in acquiring anything.
             return .bridgeFailed(paneId: paneId, operation: operation, message: message)
 
         case let .locationCommandFailed(message):

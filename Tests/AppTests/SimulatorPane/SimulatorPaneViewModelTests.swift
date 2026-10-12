@@ -677,6 +677,19 @@ struct SimulatorPaneViewModelTests {
     }
 
     @Test
+    func layFlatForwardsTheFlatOrientationAndLeavesThePaneAlone() async {
+        // Face up and face down turn nothing on the display, so the pane
+        // keeps the orientation it had.
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.layFlat(.faceUp)
+        viewModel.layFlat(.faceDown)
+        await settle()
+        #expect(fake.rotateCalls.map(\.target) == [.flat(.faceUp), .flat(.faceDown)])
+        #expect(viewModel.currentOrientation == .portrait)
+    }
+
+    @Test
     func quickRotationsWaitForEarlierGUIIntents() async {
         let fake = FakeDaemonClient()
         fake.holdRotateCalls = true

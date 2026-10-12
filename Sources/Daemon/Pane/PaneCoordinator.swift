@@ -3878,14 +3878,16 @@ public actor PaneCoordinator {
                 success: false,
                 status: .unavailable,
                 targetOrientation: target.orientation,
-                observedOrientation: nil
+                observedOrientation: nil,
+                targetFlatOrientation: target.flatOrientation
             )
         } catch PaneError.unsupportedOperation {
             return RotateResult(
                 success: false,
                 status: .refused,
                 targetOrientation: target.orientation,
-                observedOrientation: nil
+                observedOrientation: nil,
+                targetFlatOrientation: target.flatOrientation
             )
         }
         // Serialize this pane's rotations end-to-end so their broadcasts stay
@@ -3901,6 +3903,7 @@ public actor PaneCoordinator {
                 status: .unconfirmed,
                 targetOrientation: target.orientation,
                 observedOrientation: record.confirmedOrientation,
+                targetFlatOrientation: target.flatOrientation,
                 reason: .queueFull
             )
         }
@@ -3916,6 +3919,9 @@ public actor PaneCoordinator {
         // fold can install its gate before this wakes, so check again.
         while let settling = record.foldSettling, !settling.done {
             await awaitChainLink(settling)
+        }
+        if let flat = target.flatOrientation {
+            return try await setFlatOrientation(flat, input: input, paneId: paneId)
         }
         if input.backend.rotationConfirmationSupport == .displayObservation {
             guard record.observingDisplayOrientation else {
@@ -3999,6 +4005,52 @@ public actor PaneCoordinator {
                 observedOrientation: record.confirmedOrientation
             )
         }
+    }
+
+    /// Lay the device flat and report what the backend could establish.
+    ///
+    /// Nothing on the display changes, so this neither waits on the display
+    /// observer nor touches presentation. `observedOrientation` carries the
+    /// display orientation the pane is still showing.
+    private func setFlatOrientation(
+        _ flat: FlatOrientation,
+        input: AuthorizedInput,
+        paneId: UUID
+    ) async throws -> RotateResult {
+        let outcome = try await SimInputSynthesis.setFlatOrientation(
+            backend: input.backend,
+            paneId: paneId,
+            generation: input.generation,
+            flat: flat
+        )
+        let status: RotateResult.Status
+        var observed: FlatOrientation?
+        switch outcome {
+        case .confirmed:
+            status = .confirmed
+            observed = flat
+
+        case .dispatched:
+            status = .dispatched
+
+        case let .unconfirmed(reported):
+            status = .unconfirmed
+            observed = reported
+
+        case .refused:
+            status = .refused
+
+        case .unavailable:
+            status = .unavailable
+        }
+        return RotateResult(
+            success: status == .confirmed || status == .dispatched,
+            status: status,
+            targetOrientation: nil,
+            observedOrientation: input.record.confirmedOrientation,
+            targetFlatOrientation: flat,
+            observedFlatOrientation: observed
+        )
     }
 
     /// Wait for the display to read `display`, and report `target`, the

@@ -15,8 +15,8 @@
 public struct RotateParams: Codable, Sendable {
     public let paneId: String
     /// One of `portrait`, `portraitUpsideDown`, `landscapeLeft`,
-    /// `landscapeRight`. Names match UIKit's `UIDeviceOrientation`. Nil
-    /// on a relative request.
+    /// `landscapeRight`, `faceUp`, `faceDown`. Names match UIKit's
+    /// `UIDeviceOrientation`. Nil on a relative request.
     public let orientation: String?
     /// `left` or `right`. Nil on an absolute request.
     public let direction: String?
@@ -25,7 +25,7 @@ public struct RotateParams: Codable, Sendable {
     /// set both fields or neither.
     public init(paneId: String, target: RotationTarget) {
         self.paneId = paneId
-        orientation = target.orientation?.rawValue
+        orientation = target.orientation?.rawValue ?? target.flatOrientation?.rawValue
         direction = target.direction?.rawValue
     }
 

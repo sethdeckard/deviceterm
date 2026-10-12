@@ -937,13 +937,17 @@ public enum PaneMethods {
     static func rotationTarget(_ params: RotateParams) throws -> RotationTarget {
         switch (params.orientation, params.direction) {
         case let (rawOrientation?, nil):
-            guard let orientation = Orientation(rawValue: rawOrientation) else {
-                throw RPCMethodError.invalidParams(
-                    "orientation must be one of: "
-                    + Orientation.allCases.map(\.rawValue).joined(separator: ", ")
-                )
+            if let orientation = Orientation(rawValue: rawOrientation) {
+                return .absolute(orientation)
             }
-            return .absolute(orientation)
+            if let flat = FlatOrientation(rawValue: rawOrientation) {
+                return .flat(flat)
+            }
+            throw RPCMethodError.invalidParams(
+                "orientation must be one of: "
+                + (Orientation.allCases.map(\.rawValue) + FlatOrientation.allCases.map(\.rawValue))
+                    .joined(separator: ", ")
+            )
 
         case let (nil, rawDirection?):
             guard let direction = RotationDirection(rawValue: rawDirection) else {

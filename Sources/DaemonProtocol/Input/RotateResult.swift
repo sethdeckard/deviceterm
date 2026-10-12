@@ -2,14 +2,22 @@
 
 /// The daemon's outcome for one `pane.input.rotate` request.
 ///
-/// `ok` is true only for `confirmed`. Optional orientations let failures
-/// report as much as the backend observed without inventing a value, and
-/// `deadlineMs` appears only when the daemon's confirmation wait expired.
+/// `ok` is true for `confirmed` and `dispatched`. Optional orientations let
+/// failures report as much as the backend observed without inventing a value,
+/// and `deadlineMs` appears only when the daemon's confirmation wait expired.
+///
+/// A flat request reports in `targetFlatOrientation` and
+/// `observedFlatOrientation`, leaving the two display orientations to say what
+/// the interface shows.
 public struct RotateResult: Codable, Sendable, Equatable {
     /// How the rotation request settled.
     public enum Status: String, Codable, Sendable, Equatable {
         /// The backend observed the requested absolute target.
         case confirmed
+        /// The request was sent and nothing can observe its outcome. Only a
+        /// flat request settles this way, where the device has no reading of
+        /// its own to confirm against.
+        case dispatched
         /// The request was not admitted, expired, or observed a non-target result.
         case unconfirmed
         /// The daemon or backend cannot observe a rotation outcome.
@@ -32,6 +40,8 @@ public struct RotateResult: Codable, Sendable, Equatable {
         case status
         case targetOrientation
         case observedOrientation
+        case targetFlatOrientation
+        case observedFlatOrientation
         case deadlineMs
         case reason
     }
@@ -42,6 +52,11 @@ public struct RotateResult: Codable, Sendable, Equatable {
     public let targetOrientation: Orientation?
     /// The last orientation the backend confirmed, when available.
     public let observedOrientation: Orientation?
+    /// The flat orientation a flat request asked for.
+    public let targetFlatOrientation: FlatOrientation?
+    /// The flat orientation the device reported after a flat request, when
+    /// it reports one.
+    public let observedFlatOrientation: FlatOrientation?
     /// The expired confirmation deadline in milliseconds, when applicable.
     public let deadlineMs: Int?
     /// A command-specific refinement of the status, when one applies.
@@ -52,6 +67,8 @@ public struct RotateResult: Codable, Sendable, Equatable {
         status: Status,
         targetOrientation: Orientation?,
         observedOrientation: Orientation?,
+        targetFlatOrientation: FlatOrientation? = nil,
+        observedFlatOrientation: FlatOrientation? = nil,
         deadlineMs: Int? = nil,
         reason: Reason? = nil
     ) {
@@ -59,6 +76,8 @@ public struct RotateResult: Codable, Sendable, Equatable {
         self.status = status
         self.targetOrientation = targetOrientation
         self.observedOrientation = observedOrientation
+        self.targetFlatOrientation = targetFlatOrientation
+        self.observedFlatOrientation = observedFlatOrientation
         self.deadlineMs = deadlineMs
         self.reason = reason
     }

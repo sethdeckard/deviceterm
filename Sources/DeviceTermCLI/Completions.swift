@@ -77,6 +77,8 @@ public enum Completions {
         "portrait-upside-down",
         "landscape-left",
         "landscape-right",
+        "face-up",
+        "face-down",
         "left",
         "right"
     ]

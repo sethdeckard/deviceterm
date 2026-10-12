@@ -36,6 +36,9 @@ enum PaneControlAffordance: Equatable {
     case applePay
     /// Device orientation Rotate Left / Right (`capabilities.rotate`).
     case rotate
+    /// Face Up / Face Down, simulator-only. A physical device's backend
+    /// refuses them, though it reports `rotate` for Rotate Left / Right.
+    case layFlat
     /// Watch Digital Crown: `capabilities.crown` AND a watch family. The
     /// daemon advertises crown for a watch-family sim only and a device
     /// reports crown:false, so the family check covers a daemon that
@@ -75,6 +78,10 @@ enum PaneControlAffordance: Equatable {
     private static let rotateSelectors: Set<Selector> = [
         #selector(SimulatorPaneViewController.rotateDeviceLeft(_:)),
         #selector(SimulatorPaneViewController.rotateDeviceRight(_:))
+    ]
+    private static let layFlatSelectors: Set<Selector> = [
+        #selector(SimulatorPaneViewController.layDeviceFaceUp(_:)),
+        #selector(SimulatorPaneViewController.layDeviceFaceDown(_:))
     ]
     private static let crownSelectors: Set<Selector> = [
         #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
@@ -123,6 +130,7 @@ enum PaneControlAffordance: Equatable {
             return .applePay
         }
         if rotateSelectors.contains(action) { return .rotate }
+        if layFlatSelectors.contains(action) { return .layFlat }
         if crownSelectors.contains(action) { return .crown }
         if foldSelectors.contains(action) { return .fold }
         if captureSelectors.contains(action) { return .capture }
@@ -202,6 +210,9 @@ enum PaneControlAffordance: Equatable {
 
         case .rotate:
             return capabilities.rotate
+
+        case .layFlat:
+            return !isPhysicalDevice && capabilities.rotate
 
         case .crown:
             return capabilities.crown && family == .watch

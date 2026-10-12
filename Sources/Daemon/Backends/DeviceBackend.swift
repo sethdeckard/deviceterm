@@ -206,6 +206,14 @@ protocol DeviceBackend: AnyObject, Sendable {
         confirmedOrientation: Orientation?,
         generation: UInt64
     ) async throws -> BackendRotationOutcome
+    /// Lay the device face up or face down.
+    ///
+    /// Only the CoreSimulator backend implements this; the default refuses.
+    /// `generation` fences it like every other device-directed call. The
+    /// CoreSimulator implementation returns `.unavailable` for a stale
+    /// generation without reaching the device; the default always refuses.
+    func setFlatOrientation(_ flat: FlatOrientation, generation: UInt64) async throws
+        -> BackendFlatOrientationOutcome
     func rotateCrown(delta: Double, generation: UInt64) async throws
 
     /// Put a foldable device's hinge at `degrees`.
@@ -418,6 +426,12 @@ extension DeviceBackend {
     /// only for a device that vends a second panel.
     func fold(toDegrees degrees: Double, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedFold
+    }
+
+    /// Default: refused. A physical device has no flat orientation to set
+    /// from the Mac.
+    func setFlatOrientation(_ flat: FlatOrientation, generation: UInt64) -> BackendFlatOrientationOutcome {
+        .refused
     }
     // swiftlint:enable async_without_await
 

@@ -146,6 +146,14 @@ func paneRotateRejectsUnknownOrientation() async throws {
         (
             RotateParams(paneId: "p1", orientation: nil, direction: "right"),
             RotationTarget.relative(.right)
+        ),
+        (
+            RotateParams(paneId: "p1", orientation: "faceUp", direction: nil),
+            RotationTarget.flat(.faceUp)
+        ),
+        (
+            RotateParams(paneId: "p1", orientation: "faceDown", direction: nil),
+            RotationTarget.flat(.faceDown)
         )
     ]
 )
@@ -157,6 +165,15 @@ func rotationTargetResolvesEachForm(params: RotateParams, expected: RotationTarg
 func rotationTargetRejectsAnUnknownDirection() {
     let params = RotateParams(paneId: "p1", orientation: nil, direction: "widdershins")
     #expect(throws: RPCMethodError.invalidParams("direction must be one of: left, right")) {
+        try PaneMethods.rotationTarget(params)
+    }
+}
+
+@Test
+func rotationTargetNamesEveryOrientationWhenOneIsUnknown() {
+    let params = RotateParams(paneId: "p1", orientation: "sideways", direction: nil)
+    let accepted = "portrait, portraitUpsideDown, landscapeLeft, landscapeRight, faceUp, faceDown"
+    #expect(throws: RPCMethodError.invalidParams("orientation must be one of: \(accepted)")) {
         try PaneMethods.rotationTarget(params)
     }
 }

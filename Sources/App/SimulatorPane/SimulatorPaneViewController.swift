@@ -1111,6 +1111,16 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         viewModel.rotateRight()
     }
 
+    @objc
+    func layDeviceFaceUp(_ sender: Any?) {
+        viewModel.layFlat(.faceUp)
+    }
+
+    @objc
+    func layDeviceFaceDown(_ sender: Any?) {
+        viewModel.layFlat(.faceDown)
+    }
+
     /// Device ▸ Location: apply the `SimulatedLocation` the chosen row
     /// carries in its `representedObject`.
     ///

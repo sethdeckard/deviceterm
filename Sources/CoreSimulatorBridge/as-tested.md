@@ -195,12 +195,17 @@ approaches ruled out.
   `0xFF61` usage `0x5B` (the hinge's usage) carrying an `IOCFSerialize`d
   `{provider: com.apple.Virtualization.VirtualMachines, source:
   orientation-picker-control, type: enum, value}`, with `value` one of
-  `portrait`, `pud`, `landscape-left`, `landscape-right`. The fold helper sends
+  `portrait`, `pud`, `landscape-left`, `landscape-right`, `faceup`,
+  `facedown`. The fold helper sends
   the same payload, and the UI follows at once. Measured on two boots: with the
   cover lit, `uiOrientation` equals the device orientation; with the inner
   panel lit, it reads a quarter turn clockwise (a device in portrait reads
   `landscapeRight`). A `pud` request with Safari in front on the cover changed
-  nothing.
+  nothing. `faceup` and `facedown` change the device orientation and leave
+  `uiOrientation` alone, and `devicectl device orientation get` reports them
+  one request late on the Duo. An ordinary Simulator ignores the whole payload,
+  but takes `devicectl device orientation set faceUp`, after which `get` reports
+  `faceUp` at once (iPhone 18 Pro, CoreDevice 651.13.5).
 - **Relative Simulator requests use the latest confirmed presented
   orientation.** This avoids a command-only base drifting from the screen, but
   does not turn display orientation into proof of physical attitude.

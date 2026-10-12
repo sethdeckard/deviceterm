@@ -127,16 +127,19 @@ extension CLICommands {
             + "`ax tree` frames are in points, so pass `normalizedCenter`"
     }
 
-    /// Resolve `rotate`'s single positional to a direction or an
-    /// absolute orientation, nil when it is neither. Both go through the
-    /// shared enum-argument normalization, which for the single-word
-    /// directions amounts to accepting any capitalization.
+    /// Resolve `rotate`'s single positional to a direction, an absolute
+    /// orientation, or a flat one, nil when it is none of them. All go
+    /// through the shared enum-argument normalization, which for the
+    /// single-word directions amounts to accepting any capitalization.
     static func parseRotationTarget(_ raw: String) -> RotationTarget? {
         if let direction = parseEnumArg(raw, as: RotationDirection.self) {
             return .relative(direction)
         }
         if let orientation = parseEnumArg(raw, as: Orientation.self) {
             return .absolute(orientation)
+        }
+        if let flat = parseEnumArg(raw, as: FlatOrientation.self) {
+            return .flat(flat)
         }
         return nil
     }

@@ -101,8 +101,9 @@ kVK virtual key code (decimal or 0x-hex). Discrete events.
 .B text " " \fIstring\fR
 Type an ASCII string.
 .TP
-.B rotate " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR|\fIleft\fR|\fIright\fR
-Set device orientation and report success only after confirmation. Orientation names
+.B rotate " " \fIportrait\fR|\fIportrait-upside-down\fR|\fIlandscape-left\fR|\fIlandscape-right\fR|\fIface-up\fR|\fIface-down\fR|\fIleft\fR|\fIright\fR
+Set device orientation. Rotation succeeds after confirmation, except flat
+requests on foldable Simulators, which succeed after dispatch. Orientation names
 match UIKit's UIDeviceOrientation, in the same spellings
 .B button
 accepts.
@@ -118,6 +119,13 @@ Simulator fails after the four-second confirmation deadline instead of
 returning a dispatch receipt. On a foldable's inner panel the display reads a
 quarter turn off the device, so a confirmed receipt's observedOrientation
 differs from its targetOrientation there.
+.I face-up
+and
+.I face-down
+lay the device flat without turning the interface. An ordinary Simulator
+confirms through devicectl's reported orientation; a foldable Simulator reports
+nothing back, so its receipt has status dispatched and no observedOrientation.
+A physical device refuses them.
 .TP
 .B fold " " \fIclosed\fR|\fIbook\fR|\fIopen\fR|\fI0-180\fR
 Set the hinge angle of a foldable device.

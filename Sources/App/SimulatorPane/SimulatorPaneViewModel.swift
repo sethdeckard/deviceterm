@@ -825,6 +825,10 @@ final class SimulatorPaneViewModel {
     /// Rotate 90° clockwise, matching Apple's Device > Rotate Right.
     func rotateRight() { sendRotation(.relative(.right)) }
 
+    /// Lay the device face up or face down. The interface keeps its
+    /// orientation, so the pane doesn't turn.
+    func layFlat(_ flat: FlatOrientation) { sendRotation(.flat(flat)) }
+
     /// Ask the daemon to rotate, and don't touch `currentOrientation`.
     /// `orientationChanged` carries the confirmed presentation value.
     ///
@@ -856,7 +860,11 @@ final class SimulatorPaneViewModel {
                         Self.rotationLog.notice(
                             """
                             rotate not confirmed: status=\(result.status.rawValue, privacy: .public) \
-                            target=\(result.targetOrientation?.rawValue ?? "nil", privacy: .public) \
+                            target=\(
+                                result.targetOrientation?.rawValue
+                                    ?? result.targetFlatOrientation?.rawValue ?? "nil",
+                                privacy: .public
+                            ) \
                             observed=\(result.observedOrientation?.rawValue ?? "nil", privacy: .public)
                             """
                         )

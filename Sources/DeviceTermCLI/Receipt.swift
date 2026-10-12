@@ -146,14 +146,19 @@ public enum Receipt {
         public let paneId: String
         public let shortId: String?
         /// Exactly one of `orientation` / `direction` is present,
-        /// echoing the form the command was given. The confirmed absolute
-        /// outcome is reported separately below.
+        /// echoing the form the command was given. The outcome is reported
+        /// separately below.
         public let orientation: String?
         public let direction: String?
-        /// The absolute orientation the daemon resolved the request to.
+        /// `confirmed`, or `dispatched` for a face-up or face-down request
+        /// on a device that cannot report one back.
+        public let status: String
+        /// The absolute orientation the daemon resolved the request to, or
+        /// the flat one asked for.
         public let targetOrientation: String
-        /// The orientation that confirmed the request.
-        public let observedOrientation: String
+        /// The orientation that confirmed the request. Absent when
+        /// `status` is `dispatched`.
+        public let observedOrientation: String?
     }
 
     public struct Fold: Encodable, Sendable {

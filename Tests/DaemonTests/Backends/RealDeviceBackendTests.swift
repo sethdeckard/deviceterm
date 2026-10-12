@@ -344,6 +344,16 @@ func supportedButtonsEnqueueWhileApplePayAndCrownStayUnsupported() {
 }
 
 @Test
+func aPhysicalDeviceRefusesAFlatOrientation() async throws {
+    // Even one that rotates: nothing from the Mac lays real hardware flat.
+    let relay = FakeRelay(support: full)
+    // Through the protocol, as the coordinator calls it.
+    let device: any DeviceBackend = RealDeviceBackend(deviceId: "test-device", feed: FakeFeed(), device: relay)
+    #expect(try await device.setFlatOrientation(.faceUp, generation: 1) == .refused)
+    #expect(await relay.performed().isEmpty)
+}
+
+@Test
 func rotatePerformsWhenSupportedElseThrows() async {
     await #expect(throws: Never.self) {
         _ = try await backend(full).rotate(

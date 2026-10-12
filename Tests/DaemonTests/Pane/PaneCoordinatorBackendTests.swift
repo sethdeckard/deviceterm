@@ -198,6 +198,11 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     private let unconfirmedRotationObservation: Orientation?
     let rotationConfirmationSupport: RotationConfirmationSupport
     private(set) var rotationTargets: [RotationTarget] = []
+    /// What `setFlatOrientation` answers.
+    var flatOutcome: BackendFlatOrientationOutcome = .refused
+    /// Thrown by `setFlatOrientation` and `rotate` instead of answering.
+    var inputError: (any Error)?
+    private(set) var flatRequests: [FlatOrientation] = []
 
     /// A simulator-like backend routes a synthetic edge swipe to the system
     /// recognizer; a device-like one (`edgeUnsupported`) can't, so it takes
@@ -417,12 +422,20 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
         openAppSwitcherCalls += 1
     }
 
+    func setFlatOrientation(_ flat: FlatOrientation, generation: UInt64) throws
+        -> BackendFlatOrientationOutcome {
+        flatRequests.append(flat)
+        if let inputError { throw inputError }
+        return flatOutcome
+    }
+
     func rotate(
         target: RotationTarget,
         confirmedOrientation: Orientation?,
         generation: UInt64
     ) async throws -> BackendRotationOutcome {
         rotationTargets.append(target)
+        if let inputError { throw inputError }
         let resolution = FoldablePanelOrientation.resolve(
             target,
             confirmed: confirmedOrientation,
@@ -3685,4 +3698,85 @@ func terminalRetireIsIdempotent() async throws {
     let next = try #require(await iterator.next())
     #expect(next.type == DaemonEventType.deviceBooted)
     #expect(next.udid == "sentinel")
+}
+
+// MARK: - Face up and face down
+
+@Test("a flat request reports what the backend established", arguments: [
+    (BackendFlatOrientationOutcome.dispatched, RotateResult.Status.dispatched, true, FlatOrientation?.none),
+    (.confirmed, .confirmed, true, .faceUp),
+    (.unconfirmed(observed: .faceDown), .unconfirmed, false, .faceDown),
+    (.unconfirmed(observed: nil), .unconfirmed, false, nil),
+    (.refused, .refused, false, nil),
+    (.unavailable, .unavailable, false, nil)
+])
+func aFlatRequestReportsTheBackendsOutcome(
+    outcome: BackendFlatOrientationOutcome,
+    status: RotateResult.Status,
+    success: Bool,
+    observed: FlatOrientation?
+) async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    backend.flatOutcome = outcome
+    let pane = try await coordinator.createMockPane(udid: "flat-\(status)", sessionId: UUID(), backend: backend)
+
+    let result = try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .flat(.faceUp))
+
+    #expect(backend.flatRequests == [.faceUp])
+    #expect(result.status == status)
+    #expect(result.success == success)
+    #expect(result.targetFlatOrientation == .faceUp)
+    #expect(result.observedFlatOrientation == observed)
+    // A flat request names no display orientation as its target, and the
+    // display one it reports is what the pane still shows.
+    #expect(result.targetOrientation == nil)
+    #expect(result.observedOrientation == .portrait)
+}
+
+@Test
+func aFlatRequestNeitherRotatesNorWaitsOnTheDisplay() async throws {
+    // Display observation is unavailable here, which refuses any rotation
+    // as `confirmationUnsupported`. A flat request has nothing on the display
+    // to wait for, so it is sent anyway, and the pane's orientation is left
+    // alone.
+    let coordinator = PaneCoordinator(rotationConfirmationTimeoutNanoseconds: 10_000_000)
+    let backend = MockDeviceBackend(rotationConfirmationSupport: .displayObservation)
+    backend.displayOrientationAvailable = false
+    backend.flatOutcome = .dispatched
+    let pane = try await coordinator.createMockPane(udid: "flat-display", sessionId: UUID(), backend: backend)
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+
+    let result = try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .flat(.faceDown))
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+
+    #expect(result.status == .dispatched)
+    #expect(backend.flatRequests == [.faceDown])
+    #expect(backend.rotations.isEmpty)
+    var orientations: [Orientation] = []
+    for await event in stream {
+        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+    }
+    #expect(orientations.count <= 1, "only the subscribe replay, if any")
+}
+
+@Test("a command failure keeps its reason", arguments: [
+    RotationTarget.flat(.faceUp),
+    .absolute(.landscapeLeft)
+])
+func aRotateCommandFailureKeepsItsReason(target: RotationTarget) async throws {
+    // `devicectl`'s reason for a flat request, the fold helper's for a Duo
+    // rotation. Unwrapped as an NSError either would read as a generic
+    // failure, telling the operator nothing they can act on.
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend()
+    let message = "exited 1: not supported"
+    backend.inputError = target.flatOrientation == nil
+        ? DeviceBackendError.foldCommandFailed(message: message)
+        : DeviceBackendError.orientationCommandFailed(message: message)
+    let pane = try await coordinator.createMockPane(udid: "rotate-reason", sessionId: UUID(), backend: backend)
+
+    await #expect(throws: PaneError.bridgeFailed(paneId: pane.paneId, operation: .rotate, message: message)) {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: target)
+    }
 }

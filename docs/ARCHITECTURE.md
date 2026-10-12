@@ -2189,17 +2189,19 @@ the daemon translates it to the USB HID usage code Indigo expects (see
 #### `pane.input.rotate`
 
 - Params: `{paneId, orientation}` or `{paneId, direction}`
-- Result: `{ok, status, targetOrientation?, observedOrientation?, deadlineMs?, reason?}`
+- Result: `{ok, status, targetOrientation?, observedOrientation?, targetFlatOrientation?,
+  observedFlatOrientation?, deadlineMs?, reason?}`
 - Scope: session
 
-`orientation` is `portrait`, `portraitUpsideDown`, `landscapeLeft`, or
-`landscapeRight`. `direction` is `left` or `right`. Exactly one of the two is
+`orientation` is `portrait`, `portraitUpsideDown`, `landscapeLeft`,
+`landscapeRight`, `faceUp`, or `faceDown`. `direction` is `left` or `right`. Exactly one of the two is
 required; both or neither is `invalidParams`, because a request carrying both
 gives no way to tell which the daemon would honor.
 
-`status` is `confirmed`, `unconfirmed`, `confirmationUnsupported`, `refused`,
-or `unavailable`. Only `confirmed` carries `ok: true`. A confirmed result also
-carries the absolute `targetOrientation` and `observedOrientation`.
+`status` is `confirmed`, `dispatched`, `unconfirmed`,
+`confirmationUnsupported`, `refused`, or `unavailable`. `confirmed` and
+`dispatched` carry `ok: true`. A confirmed display rotation also carries the
+absolute `targetOrientation` and `observedOrientation`.
 
 `reason` is optional. `queueFull` is the only current value; it accompanies
 `unconfirmed` when the pane already has two rotations outstanding.
@@ -2232,6 +2234,17 @@ began meanwhile. The fold holds new rotations and the next fold until the
 panel changes or a second passes. A fold made outside DeviceTerm while a
 rotation waits can confirm it falsely, because the fold moves the shared
 reading before the daemon sees the panel change.
+
+`faceUp` and `faceDown` lay the device flat and report in
+`targetFlatOrientation` and `observedFlatOrientation`. `observedOrientation`
+keeps reporting the display orientation, which a flat request doesn't change,
+so the request neither waits on the display observer nor touches presentation.
+It still serializes with the pane's rotations. An ordinary Simulator runs
+`devicectl device orientation set`, then `get`, and is `confirmed` when `get`
+reports the target. A foldable Simulator sends the guest helper's `faceup` or
+`facedown` payload and reports `dispatched`, because `devicectl device
+orientation get` answers one request behind there. A physical device's backend
+refuses.
 
 A physical device sends relative requests directly to the relay, without
 resolving them through daemon state. The relay reply supplies the absolute

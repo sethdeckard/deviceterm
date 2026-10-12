@@ -672,6 +672,47 @@ func parseRotateAcceptsAlternateSpellings(_ spelling: String) {
     )
 }
 
+/// `rotate` takes face-up and face-down on the same positional, with the
+/// same spellings the display orientations accept.
+@Test(
+    "rotate accepts a flat orientation",
+    arguments: [
+        ("face-up", FlatOrientation.faceUp),
+        ("face_up", .faceUp),
+        ("faceup", .faceUp),
+        ("faceUp", .faceUp),
+        ("FACE-UP", .faceUp),
+        ("face-down", .faceDown),
+        ("faceDown", .faceDown)
+    ]
+)
+func parseRotateAcceptsAFlatOrientation(_ spelling: String, expected: FlatOrientation) {
+    #expect(
+        CLICommands.parse(["deviceterm", "rotate", spelling])
+        == .rotate(pane: nil, target: .flat(expected))
+    )
+}
+
+@Test
+func parseRotateFlatTakesThePaneOption() {
+    #expect(
+        CLICommands.parse(["deviceterm", "rotate", "face-down", "--pane", "sh1"])
+        == .rotate(pane: "sh1", target: .flat(.faceDown))
+    )
+}
+
+@Test
+func parseRotateUsageListsTheFlatOrientations() throws {
+    guard case let .usage(message) = CLICommands.parse(
+        ["deviceterm", "rotate", "face-sideways"]
+    ) else {
+        Issue.record("an unknown flat spelling should be .usage")
+        return
+    }
+    let text = try #require(message)
+    #expect(text.contains("|face-up|face-down|"))
+}
+
 /// `button` mirrors the same parse normalization for its multi-word
 /// HardwareButton cases.
 @Test(

@@ -155,6 +155,20 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
     iRotateRight.image = .menuSymbol("rotate.right", describedAs: "Rotate Right")
     KeybindingCatalog.applyChord(.deviceRotateRight, to: iRotateRight)
     menu.addItem(iRotateRight)
+    let iFaceUp = NSMenuItem(
+        title: "Face Up",
+        action: #selector(SimulatorPaneViewController.layDeviceFaceUp(_:)),
+        keyEquivalent: ""
+    )
+    iFaceUp.image = .menuSymbol("arrow.up.square", describedAs: "Face Up")
+    menu.addItem(iFaceUp)
+    let iFaceDown = NSMenuItem(
+        title: "Face Down",
+        action: #selector(SimulatorPaneViewController.layDeviceFaceDown(_:)),
+        keyEquivalent: ""
+    )
+    iFaceDown.image = .menuSymbol("arrow.down.square", describedAs: "Face Down")
+    menu.addItem(iFaceDown)
     menu.addItem(makeLocationMenuItem())
 
     menu.addItem(.separator())

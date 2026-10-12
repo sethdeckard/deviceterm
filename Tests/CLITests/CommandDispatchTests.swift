@@ -663,3 +663,156 @@ func sessionShowHumanRendersTheGrantAsWords() {
         ) == "session       (no authenticated session)\nrole          (none)\nautomation    not granted\n"
     )
 }
+
+// MARK: - rotate face-up / face-down
+
+private func rotateOutcome(
+    _ result: RotateResult,
+    target: RotationTarget,
+    output: OutputMode
+) throws -> (CommandOutcome, FakeTransport) {
+    let fake = FakeTransport(responses: [try oneDevicePaneResponse(), try encoded(result)])
+    let outcome = try handleRotate(
+        pane: nil,
+        target: target,
+        transport: fake,
+        output: output,
+        creds: testCredentials
+    )
+    return (outcome, fake)
+}
+
+@Test
+func rotateFaceUpSendsTheFlatOrientation() throws {
+    let result = RotateResult(
+        success: true,
+        status: .dispatched,
+        targetOrientation: nil,
+        observedOrientation: .portrait,
+        targetFlatOrientation: .faceUp
+    )
+    let (_, fake) = try rotateOutcome(result, target: .flat(.faceUp), output: .human)
+
+    #expect(fake.sent.map(\.method) == [RPCMethod.paneDeviceList.rawValue, RPCMethod.paneInputRotate.rawValue])
+    guard case let .params(body) = try #require(fake.sent.last).body else {
+        Issue.record("the rotate request carried no params")
+        return
+    }
+    let params = try JSONDecoder().decode(RotateParams.self, from: body)
+    #expect(params.orientation == "faceUp")
+    #expect(params.direction == nil)
+}
+
+@Test
+func aDispatchedFlatRotateSucceedsAndSaysSo() throws {
+    let result = RotateResult(
+        success: true,
+        status: .dispatched,
+        targetOrientation: nil,
+        observedOrientation: .portrait,
+        targetFlatOrientation: .faceUp
+    )
+    let (human, _) = try rotateOutcome(result, target: .flat(.faceUp), output: .human)
+    let (json, _) = try rotateOutcome(result, target: .flat(.faceUp), output: .json)
+
+    #expect(human == .stdout(
+        "ok udid=U1 pane=sh1 orientation=faceUp targetOrientation=faceUp status=dispatched\n"
+    ))
+    #expect(json == .stdout(try encodeJSONReceipt(Receipt.Rotate(
+        udid: "U1",
+        paneId: "p1",
+        shortId: "sh1",
+        orientation: "faceUp",
+        direction: nil,
+        status: "dispatched",
+        targetOrientation: "faceUp",
+        observedOrientation: nil
+    ))))
+}
+
+@Test
+func aConfirmedFlatRotateReportsTheObservedFlatOrientation() throws {
+    let result = RotateResult(
+        success: true,
+        status: .confirmed,
+        targetOrientation: nil,
+        observedOrientation: .portrait,
+        targetFlatOrientation: .faceDown,
+        observedFlatOrientation: .faceDown
+    )
+    let (human, _) = try rotateOutcome(result, target: .flat(.faceDown), output: .human)
+
+    #expect(human == .stdout(
+        "ok udid=U1 pane=sh1 orientation=faceDown targetOrientation=faceDown observedOrientation=faceDown\n"
+    ))
+}
+
+@Test
+func aConfirmedFlatRotateWithoutAnObservationIsAProtocolFailure() throws {
+    let result = RotateResult(
+        success: true,
+        status: .confirmed,
+        targetOrientation: nil,
+        observedOrientation: .portrait,
+        targetFlatOrientation: .faceDown
+    )
+    #expect {
+        _ = try rotateOutcome(result, target: .flat(.faceDown), output: .human)
+    } throws: { error in
+        guard case let CLIError.classified(code, _) = error else { return false }
+        return code == .protocolInvalidResponse
+    }
+}
+
+@Test
+func aDispatchedDisplayRotateIsAProtocolFailure() throws {
+    // Only a flat request settles as dispatched. A display rotation that
+    // claims it has skipped the confirmation the receipt promises.
+    let result = RotateResult(
+        success: true,
+        status: .dispatched,
+        targetOrientation: .landscapeLeft,
+        observedOrientation: nil
+    )
+    #expect {
+        _ = try rotateOutcome(result, target: .absolute(.landscapeLeft), output: .human)
+    } throws: { error in
+        guard case let CLIError.classified(code, _) = error else { return false }
+        return code == .protocolInvalidResponse
+    }
+}
+
+@Test
+func anUnconfirmedFlatRotateCarriesBothFlatFieldsInItsDetails() throws {
+    let result = RotateResult(
+        success: false,
+        status: .unconfirmed,
+        targetOrientation: nil,
+        observedOrientation: .portrait,
+        targetFlatOrientation: .faceUp,
+        observedFlatOrientation: .faceDown
+    )
+    let (outcome, _) = try rotateOutcome(result, target: .flat(.faceUp), output: .json)
+
+    let failure = try #require(outcome.failure)
+    #expect(failure.code == .rotateUnconfirmed)
+    let details = try #require(failure.details)
+    let fields = try #require(try JSONSerialization.jsonObject(with: details) as? [String: String])
+    #expect(fields["requestedOrientation"] == "faceUp")
+    #expect(fields["targetFlatOrientation"] == "faceUp")
+    #expect(fields["observedFlatOrientation"] == "faceDown")
+}
+
+@Test
+func aRefusedFlatRotateIsInputRefused() throws {
+    // What a physical device answers.
+    let result = RotateResult(
+        success: false,
+        status: .refused,
+        targetOrientation: nil,
+        observedOrientation: nil,
+        targetFlatOrientation: .faceUp
+    )
+    let (outcome, _) = try rotateOutcome(result, target: .flat(.faceUp), output: .human)
+    #expect(outcome.failure?.code == .inputRefused)
+}

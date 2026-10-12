@@ -72,7 +72,11 @@ struct DevicePaneAffordanceGateTests {
             #selector(SimulatorPaneViewController.recordPane(_:)),
             #selector(SimulatorPaneViewController.pressHardwareApplePay(_:)),
             #selector(SimulatorPaneViewController.pressDigitalCrown(_:)),
-            #selector(SimulatorPaneViewController.toggleAxInspector(_:))
+            #selector(SimulatorPaneViewController.toggleAxInspector(_:)),
+            // The device reports `rotate`, but its backend refuses a flat
+            // orientation.
+            #selector(SimulatorPaneViewController.layDeviceFaceUp(_:)),
+            #selector(SimulatorPaneViewController.layDeviceFaceDown(_:))
         ] {
             #expect(
                 !viewController.validateUserInterfaceItem(menuItem(selector)),
@@ -111,7 +115,9 @@ struct DevicePaneAffordanceGateTests {
             #selector(SimulatorPaneViewController.eraseAllContent(_:)),
             #selector(SimulatorPaneViewController.openInSimulatorApp(_:)),
             #selector(SimulatorPaneViewController.pressHardwareApplePay(_:)),
-            #selector(SimulatorPaneViewController.screenshotPane(_:))
+            #selector(SimulatorPaneViewController.screenshotPane(_:)),
+            #selector(SimulatorPaneViewController.layDeviceFaceUp(_:)),
+            #selector(SimulatorPaneViewController.layDeviceFaceDown(_:))
         ] {
             #expect(
                 viewController.validateUserInterfaceItem(menuItem(selector)),

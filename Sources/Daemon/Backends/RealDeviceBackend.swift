@@ -416,6 +416,11 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
                 return .unconfirmed(target: targetOrientation, observed: observed)
             }
             return .confirmed(target: targetOrientation, observed: targetOrientation)
+
+        case .flat:
+            // The coordinator routes a flat target to `setFlatOrientation`,
+            // which this backend refuses, so one never arrives here.
+            return .refused(target: nil)
         }
     }
 

@@ -61,3 +61,22 @@ func rawInitializerPreservesTheCombinationsTheHandlerRejects() throws {
     let neither = RotateParams(paneId: "p1", orientation: nil, direction: nil)
     #expect(try encoded(neither) == #"{"paneId":"p1"}"#)
 }
+
+@Test("a flat target rides the orientation field", arguments: [
+    (FlatOrientation.faceUp, "faceUp"),
+    (.faceDown, "faceDown")
+])
+func flatRotateEncodesOrientationOnly(flat: FlatOrientation, wire: String) throws {
+    let json = try encoded(RotateParams(paneId: "p1", target: .flat(flat)))
+    #expect(json == #"{"orientation":"\#(wire)","paneId":"p1"}"#)
+}
+
+@Test
+func flatTargetProjectsOnlyItsFlatOrientation() {
+    let target = RotationTarget.flat(.faceDown)
+    #expect(target.flatOrientation == .faceDown)
+    #expect(target.orientation == nil)
+    #expect(target.direction == nil)
+    #expect(RotationTarget.absolute(.portrait).flatOrientation == nil)
+    #expect(RotationTarget.relative(.left).flatOrientation == nil)
+}

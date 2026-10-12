@@ -355,7 +355,7 @@ their panes unless the caller owns that protected tab.
 | `dump-config --json` | Configuration report | Local | Configuration file parsed | Stable-additive |
 | `tap`, `swipe`, `app-switcher`, `long-press`, `pinch` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `button`, `key`, `text`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
-| `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed | Stable-additive |
+| `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed, or a flat request dispatched | Stable-additive |
 | `fold` with `--json` | Input receipt | Session | Daemon completed the fold dispatch call | Stable-additive |
 | `wait pane <state>` with `--json` | Wait receipt | Session | Named pane state observed before the deadline | Stable-additive |
 | `wait ax` with `--json` | Wait receipt | Session | The requested accessibility condition, present or absent, observed before the deadline | Stable-additive |
@@ -964,13 +964,15 @@ The command adds these fields:
 | `button` | `button` |
 | `key` | `keyCode`, `down` |
 | `text` | `bytes` |
-| `rotate` | `orientation?`, `direction?` (exactly one), `targetOrientation`, `observedOrientation` |
+| `rotate` | `orientation?`, `direction?` (exactly one), `status`, `targetOrientation`, `observedOrientation?` |
 | `crown` | `delta`, `velocity?`, `durationMs?` |
 
 A `rotate` receipt carries `orientation` when the command named one, and
 `direction` when it named `left` or `right`. `targetOrientation` is the
-absolute target DeviceTerm resolved, and `observedOrientation` is the
-orientation that confirmed it. Both are required on success.
+absolute target DeviceTerm resolved, or the flat orientation asked for.
+`status` is `confirmed`, or `dispatched` for a flat request on a device that
+can't report one back. `observedOrientation` is the orientation that confirmed
+the request, present whenever `status` is `confirmed`.
 
 Example relative rotate receipt:
 
@@ -981,6 +983,7 @@ Example relative rotate receipt:
   "ok": true,
   "paneId": "f3a61c00-3f4b-44f0-8898-18544176a338",
   "shortId": "phn001",
+  "status": "confirmed",
   "targetOrientation": "landscapeLeft",
   "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6"
 }
@@ -1000,6 +1003,12 @@ On a foldable's inner panel the display reads a quarter turn off the device.
 different values. A relative request steps the device orientation behind the
 latest confirmed display reading.
 
+A `face-up` or `face-down` request leaves the display orientation alone. An
+ordinary Simulator confirms it with the orientation `devicectl` reports. A
+foldable Simulator offers nothing to confirm against, so a sent request reports
+`status: dispatched` with no `observedOrientation`. A physical device refuses
+it as `input.refused`.
+
 On a physical device, `left` and `right` go directly to the relay. The reply
 supplies the absolute orientation where the device landed. An absolute request
 uses the same replies to converge on its target. A physical device turned by
@@ -1016,8 +1025,8 @@ Rotate can fail with these outcomes. All exit with status 1:
 | `session.unauthorized` | Session authority was revoked | No for the current authority |
 
 `rotate.unconfirmed` details may contain `requestedOrientation` or
-`requestedDirection`, `targetOrientation`, `observedOrientation`, `deadlineMs`,
-and `reason`.
+`requestedDirection`, `targetOrientation`, `observedOrientation`,
+`targetFlatOrientation`, `observedFlatOrientation`, `deadlineMs`, and `reason`.
 
 `reason` is `queueFull` when two rotations are already outstanding for the
 pane. The daemon did not dispatch the request. Retry after one finishes. Other
@@ -1066,7 +1075,7 @@ ignores that option; the key is omitted when the option is absent.
 An input receipt confirms that the daemon completed its dispatch call. It does
 not confirm that the target application handled the input or that the screen
 changed. Rotate is the exception: its receipt additionally confirms the
-orientation observation described above.
+orientation observation described above, except for a dispatched flat request.
 
 ### Workspace Receipts
 
