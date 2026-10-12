@@ -1550,6 +1550,14 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
                                 continuation.yield(.panelChanged(event))
                             }
 
+                        case .inputChanged:
+                            if let event = try? JSONDecoder().decode(
+                                InputChangedEvent.self,
+                                from: data
+                            ) {
+                                continuation.yield(.inputChanged(event))
+                            }
+
                         case nil:
                             break
                         }

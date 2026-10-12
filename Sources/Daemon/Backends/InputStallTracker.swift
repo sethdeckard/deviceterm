@@ -22,6 +22,18 @@ struct InputStallTracker: Equatable {
     private var stalledSince: ContinuousClock.Instant?
     private var timeouts = 0
     private var refused = 0
+    /// Bumped by every timeout, so a drain observed for an older one can't
+    /// end a refusal a newer timeout started.
+    private var drainToken: UInt64 = 0
+
+    /// Whether the bridge is refusing input now: a send timed out and the
+    /// client hasn't drained since.
+    ///
+    /// Kept apart from the logged stall, which ends at the next send that
+    /// completes in time. A pane nobody touches sends nothing, so that end
+    /// could be a long way off, while the refusal ends when the guest takes
+    /// what was queued.
+    private(set) var isRefusing = false
 
     /// Stall episodes over this tracker's life.
     private(set) var episodes = 0
@@ -40,6 +52,23 @@ struct InputStallTracker: Equatable {
         refused = 0
         episodes += 1
         return .began(operation: operation)
+    }
+
+    /// Mark the bridge as refusing after a timeout. Returns the token the
+    /// matching drain has to present, and whether this began the refusal.
+    mutating func beginRefusing() -> (token: UInt64, began: Bool) {
+        drainToken &+= 1
+        let began = !isRefusing
+        isRefusing = true
+        return (drainToken, began)
+    }
+
+    /// The client's sends drained. Ends the refusal if no timeout has come
+    /// since the one that issued `token`, and reports whether it did.
+    mutating func noteDrained(token: UInt64) -> Bool {
+        guard isRefusing, token == drainToken else { return false }
+        isRefusing = false
+        return true
     }
 
     /// Record a send the bridge refused because an earlier one hadn't

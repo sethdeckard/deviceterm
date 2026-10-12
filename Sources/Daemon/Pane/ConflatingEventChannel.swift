@@ -10,13 +10,15 @@ import Foundation
 /// at the device's sampling rate while a fold is under way. A consumer that
 /// falls behind therefore accumulates those two and almost nothing else, so
 /// this keeps **at most one** of each pending per subscriber and lets
-/// lifecycle, orientation, and panel events queue in full. Losing a
+/// lifecycle, orientation, panel, and input-state events queue in full. Losing a
 /// `shutdown` to make room for a frame notice would trade a bounded queue for
 /// a pane that never learns it died, and only the newest angle is worth
 /// anything anyway.
 ///
 /// The lossless queue has no cap. Its producers are lifecycle transitions,
-/// rotations, and panel swaps, which arrive at human rates; the fast lanes
+/// rotations, panel swaps, and input stalls starting or clearing, which arrive
+/// at human rates or slower (a stall takes a missed one-second wait to begin);
+/// the fast lanes
 /// are the ones that needed bounding, and each is bounded at one.
 /// `EventBroker` is left unbounded for the same reason.
 ///
@@ -100,7 +102,7 @@ final class ConflatingEventChannel: @unchecked Sendable {
             pendingHingeIndex = queue.count
             queue.append(event)
 
-        case .stateChanged, .orientationChanged, .panelChanged:
+        case .stateChanged, .orientationChanged, .panelChanged, .inputChanged:
             queue.append(event)
             noteTerminal(event)
         }

@@ -281,6 +281,10 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     [self.ledger whenSettledOnQueue:self.sendQueue handler:completionHandler];
 }
 
+- (void)whenSendsDrainWithHandler:(void (^)(void))handler {
+    [self.ledger whenDrainedOnQueue:self.sendQueue handler:handler];
+}
+
 - (NSUInteger)outstandingSendCount {
     return self.ledger.outstandingSendCount;
 }

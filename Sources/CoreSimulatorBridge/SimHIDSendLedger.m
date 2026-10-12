@@ -12,6 +12,7 @@ NSErrorDomain const CSBHIDClientErrorDomain = @"CoreSimulatorBridge.SimHIDClient
 @property (nonatomic, strong) NSMutableSet<NSNumber *> *abandoned;
 @property (nonatomic, strong, nullable) NSError *lateError;
 @property (nonatomic, strong) NSMutableArray<void (^)(NSError * _Nullable)> *settleHandlers;
+@property (nonatomic, strong) NSMutableArray<void (^)(void)> *drainHandlers;
 @end
 
 @implementation SimHIDSendLedger
@@ -24,6 +25,7 @@ NSErrorDomain const CSBHIDClientErrorDomain = @"CoreSimulatorBridge.SimHIDClient
         _outstanding = [NSMutableSet set];
         _abandoned = [NSMutableSet set];
         _settleHandlers = [NSMutableArray array];
+        _drainHandlers = [NSMutableArray array];
     }
     return self;
 }
@@ -74,6 +76,7 @@ NSErrorDomain const CSBHIDClientErrorDomain = @"CoreSimulatorBridge.SimHIDClient
 
 - (void)completeTicket:(uint64_t)ticket error:(NSError *)error {
     __block NSArray<void (^)(NSError *)> *ready = nil;
+    __block NSArray<void (^)(void)> *drained = nil;
     __block NSError *late = nil;
     dispatch_sync(self.stateQueue, ^{
         NSNumber *key = @(ticket);
@@ -89,8 +92,28 @@ NSErrorDomain const CSBHIDClientErrorDomain = @"CoreSimulatorBridge.SimHIDClient
             late = self.lateError;
             self.lateError = nil;
         }
+        if (self.outstanding.count == 0 && self.drainHandlers.count > 0) {
+            drained = [self.drainHandlers copy];
+            [self.drainHandlers removeAllObjects];
+        }
     });
     for (void (^fire)(NSError *) in ready) fire(late);
+    for (void (^fire)(void) in drained) fire();
+}
+
+- (void)whenDrainedOnQueue:(dispatch_queue_t)queue handler:(void (^)(void))handler {
+    void (^fire)(void) = ^{
+        dispatch_async(queue, handler);
+    };
+    __block BOOL drainedNow = NO;
+    dispatch_sync(self.stateQueue, ^{
+        if (self.outstanding.count > 0) {
+            [self.drainHandlers addObject:fire];
+            return;
+        }
+        drainedNow = YES;
+    });
+    if (drainedNow) fire();
 }
 
 - (void)whenSettledOnQueue:(dispatch_queue_t)queue

@@ -611,9 +611,9 @@ extensions; `DaemonProtocol` never links `CoreSimulatorBridge`.
 event frame. The client distinguishes a final `res` from a streaming `evt` by
 `type`. `app.commands` uses the control peer; every pane subscription uses the
 pane peer. A pane stream is consumer-pulled: `state.changed`,
-`orientation.changed`, and `panel.changed` queue losslessly in order, while
-`surface.changed` and `hinge.changed` are each held latest-only in a slot of
-their own. A stalled consumer therefore coalesces to the newest frame and the
+`orientation.changed`, `panel.changed`, and `input.changed` queue losslessly in
+order, while `surface.changed` and `hinge.changed` are each held latest-only in
+a slot of their own. A stalled consumer therefore coalesces to the newest frame and the
 newest angle without evicting a lifecycle event. Those two slots are bounded;
 the lossless events have no configured queue bound and drain as the consumer
 pulls.
@@ -2681,6 +2681,21 @@ Events are correlated to the subscription's request-envelope id:
   It comes from the display's own binding rather than the hinge reader, so it
   arrives even when the hinge can't be read. Use it, not `hinge.changed`, to
   decide which panel's shape to draw.
+- `input.changed`: `{paneId, state}`, whether the pane's input is reaching its
+  device. `state` is one of:
+  - `ok`: nothing is refusing input.
+  - `stalled`: the simulator's HID transport is refusing input because an
+    earlier send hasn't completed. It clears once the client's sends drain.
+  - `recovering`: the contact lane is refusing new contact while it releases
+    one that may still be down.
+
+  Sent whenever the state changes. A physical device's transport never stalls,
+  so its panes report only `ok` and `recovering`.
+
+  Replayed to a new subscriber only when the state isn't `ok`, so treat every
+  subscribe as starting from `ok`. That's deliberate: an older CLI waiting on a
+  surface treats an event name it doesn't know as an error, and replaying `ok`
+  would hit every pane during a half-applied update.
 
 A frame subscriber receives the current surface when one exists. Each new
 simulator frame subscriber also requests a fresh capture, even if another

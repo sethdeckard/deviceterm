@@ -800,6 +800,40 @@ struct SimulatorPaneViewModelTests {
         #expect(viewModel.confirmedPanelSpansHinge == false)
     }
 
+    @Test
+    func theInputEventDrivesTheInputHealth() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.start()
+        await settle()
+        #expect(viewModel.inputHealth == .ok)
+        fake.lastPaneEventContinuation?.yield(.inputChanged(InputChangedEvent(paneId: "p1", state: .stalled)))
+        await settle()
+        #expect(viewModel.inputHealth == .stalled)
+        fake.lastPaneEventContinuation?.yield(.inputChanged(InputChangedEvent(paneId: "p1", state: .ok)))
+        await settle()
+        #expect(viewModel.inputHealth == .ok)
+    }
+
+    @Test
+    func whileInputIsRefusedOnlyThePressAndLiftAreSent() async {
+        // A move would only be refused too, and a held finger would send one
+        // every 33 ms for as long as it stays down.
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake)
+        viewModel.start()
+        await settle()
+        fake.lastPaneEventContinuation?.yield(.inputChanged(InputChangedEvent(paneId: "p1", state: .stalled)))
+        await settle()
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.5), phase: .down, isEdgeGesture: false)
+        for step in 1...4 {
+            viewModel.touch(at: CGPoint(x: 0.5, y: 0.5 - CGFloat(step) * 0.01), phase: .move, isEdgeGesture: false)
+        }
+        viewModel.touch(at: CGPoint(x: 0.5, y: 0.4), phase: .lift, isEdgeGesture: false)
+        await settle()
+        #expect(fake.touchCalls.map(\.phase) == [.down, .lift])
+    }
+
     @Test("the panel event names the panel on show without any hinge angle")
     func panelChangedEventDrivesThePanelAndItsScreen() async {
         let fake = FakeDaemonClient()

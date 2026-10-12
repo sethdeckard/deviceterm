@@ -107,10 +107,10 @@ final class UDSSurfaceObservation: CLISurfaceObservation {
                     throw CLIError.paneUnavailable("pane stopped rendering while waiting for its surface")
                 }
 
-            case .orientationChanged, .hingeChanged, .panelChanged:
+            case .orientationChanged, .hingeChanged, .panelChanged, .inputChanged:
                 // This wait is about a surface arriving. None of the
-                // orientation, the hinge, or the panel tells it anything, and
-                // none is a reason to stop waiting.
+                // orientation, the hinge, the panel, or the input state tells
+                // it anything, and none is a reason to stop waiting.
                 break
 
             case nil:

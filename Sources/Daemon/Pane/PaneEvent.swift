@@ -63,4 +63,14 @@ public enum PaneEvent: Sendable {
         screenID: UInt32,
         spansHinge: Bool
         )
+    /// Whether the pane's input is reaching its device changed.
+    ///
+    /// Worked out from the backend's transport and the pane's contact lane
+    /// when either reports a change, so a refusal the caller never sees, such
+    /// as the GUI dropping a lane refusal, still reaches the pane.
+    case inputChanged(
+        paneId:
+        UUID,
+        health: InputHealth
+        )
 }

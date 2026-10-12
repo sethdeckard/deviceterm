@@ -149,6 +149,11 @@ final class SimulatorPaneViewModel {
     /// a device with one panel.
     private(set) var confirmedPanelScreenID: UInt32?
 
+    /// Whether this pane's input is reaching its device, as the daemon's
+    /// `input.changed` event last reported. Reset to `.ok` on every new
+    /// subscription, because the daemon replays only a state that isn't.
+    private(set) var inputHealth = InputHealth.ok
+
     // Infrastructure, not observable state. Kept out of the registrar so
     // changes don't trigger renders and `deinit` can touch the task.
     @ObservationIgnored private let daemonClient: any PaneControlling & PaneSubscribing
@@ -307,6 +312,9 @@ final class SimulatorPaneViewModel {
                     // never touches `self`; the task holds only a weak
                     // reference across this await.
                     stream = try await client.subscribePane(paneId: id, frames: frames)
+                    // A refusal this subscription doesn't report is over; one
+                    // it does report is replayed next on the stream.
+                    self?.inputHealth = .ok
                 } catch {
                     if Task.isCancelled { return }
                     // A connection failure (a transport error, usually the
@@ -403,6 +411,9 @@ final class SimulatorPaneViewModel {
         case let .panelChanged(change):
             confirmedPanelSpansHinge = change.spansHinge
             confirmedPanelScreenID = change.screenID
+
+        case let .inputChanged(change):
+            inputHealth = change.state
         }
     }
 
@@ -588,6 +599,13 @@ final class SimulatorPaneViewModel {
     /// position goes out and the ones it overwrote are dropped rather than
     /// queued.
     private func drainPendingTouchMoves() async {
+        // While input is refused, a move would only be refused too, and the
+        // keepalive would send one every 33 ms for as long as the finger is
+        // held. Drop it; the lift carries its own position.
+        guard inputHealth == .ok else {
+            pendingTouchMove = nil
+            return
+        }
         while pumpContactOpen, let pending = pendingTouchMove, pending.gesture == pumpGesture {
             pendingTouchMove = nil
             await deliverTouch(pending.point, phase: .move)
@@ -595,6 +613,11 @@ final class SimulatorPaneViewModel {
     }
 
     private func drainPendingMultitouchMoves() async {
+        // See `drainPendingTouchMoves`.
+        guard inputHealth == .ok else {
+            pendingMultitouchMove = nil
+            return
+        }
         while pumpMultitouchOpen,
             let move = pendingMultitouchMove,
             move.gesture == pumpMultitouchGesture {

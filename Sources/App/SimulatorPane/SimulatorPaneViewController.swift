@@ -851,6 +851,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // Observation will re-render the SwiftUI body when these
         // change; assigning identical values is a no-op for tracking.
         chromeViewModel.simState = state
+        chromeViewModel.inputHealth = viewModel.inputHealth
         chromeViewModel.recordingActive = recordingProcess != nil
         // Pixel dimensions come from the live IOSurface. The daemon's attach
         // response may have shipped nil pixelWidth/pixelHeight when the

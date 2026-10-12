@@ -187,6 +187,12 @@ public actor PaneCoordinator {
         /// The panel this pane is showing, as last read from the backend. Nil
         /// until the display has bound one.
         var observedPanel: BoundPanel?
+        /// Whether this pane's input is reaching its device, as last
+        /// published to subscribers.
+        var inputHealth = InputHealth.ok
+        /// Bumped by each `refreshInputHealth`, so a refresh that resumes
+        /// after a newer one started doesn't publish what it read.
+        var inputHealthRefresh: UInt64 = 0
         /// Whether the panel this pane is showing spans the hinge, so a
         /// subscriber knows whether the picture bends. False until the
         /// backend says otherwise, which is the right answer for every
@@ -1846,6 +1852,13 @@ public actor PaneCoordinator {
         channel.send(
             .orientationChanged(paneId: paneId, orientation: record.presentationOrientation)
         )
+        // And the input state, when anything is refusing input. A subscriber
+        // starts from `ok`, so replaying that would tell it nothing, and an
+        // older CLI waiting on a surface treats an event name it doesn't know
+        // as an error.
+        if record.inputHealth != .ok {
+            channel.send(.inputChanged(paneId: paneId, health: record.inputHealth))
+        }
         // And the panel, for the same reason: a subscriber that missed the
         // last swap would draw the other panel's shape. Only a foldable has a
         // panel worth naming.
@@ -3084,7 +3097,46 @@ public actor PaneCoordinator {
     /// Log the edges of a stall in this pane's input transport.
     private func observeInputStall(record: Record) {
         let shortId = record.shortId
+        let paneId = record.id
         record.backend?.observeInputStall { InputHealthLog.stall($0, shortId: shortId) }
+        record.backend?.observeInputRefusal { [weak self] in
+            guard let self else { return }
+            Task { await self.refreshInputHealth(paneId: paneId) }
+        }
+    }
+
+    /// Work out whether this pane's input is reaching its device and publish
+    /// it if that changed.
+    ///
+    /// Read on arrival, from the backend and the lane, rather than carried by
+    /// the notice: two notices hop onto this actor as separate tasks and can
+    /// arrive in either order, and applying a value sampled at the first one
+    /// after the second would leave the pane showing a state it has left.
+    ///
+    /// Internal rather than private so a daemon test can drive it without a
+    /// transport to stall.
+    func refreshInputHealth(paneId: UUID) async {
+        guard let record = panes[paneId], let backend = record.backend else { return }
+        record.inputHealthRefresh &+= 1
+        let refresh = record.inputHealthRefresh
+        let laneShut = await record.contactLane?.isShut ?? false
+        // The lane read suspended, so the pane may have closed meanwhile, and a
+        // newer refresh may have started. That one read later and publishes;
+        // a lane change after its read starts another.
+        guard panes[paneId] === record, record.inputHealthRefresh == refresh else { return }
+        let health: InputHealth
+        if backend.isInputRefusing() {
+            health = .stalled
+        } else if laneShut {
+            health = .recovering
+        } else {
+            health = .ok
+        }
+        guard record.inputHealth != health else { return }
+        record.inputHealth = health
+        for subscriber in record.subscribers.values {
+            subscriber.channel.send(.inputChanged(paneId: paneId, health: health))
+        }
     }
 
     /// Follow the panel this pane's display is mirroring.
@@ -3200,8 +3252,13 @@ public actor PaneCoordinator {
     private func lane(for record: Record, backend: any DeviceBackend) -> ContactLane {
         if let existing = record.contactLane { return existing }
         let shortId = record.shortId
+        let paneId = record.id
         let lane = ContactLane(
-            onHealth: { InputHealthLog.lane($0, shortId: shortId) },
+            onHealth: { [weak self] event in
+                InputHealthLog.lane(event, shortId: shortId)
+                guard let self else { return }
+                Task { await self.refreshInputHealth(paneId: paneId) }
+            },
             recoverContact: { _, _, wait in
                 await backend.releaseHeldContact(settling: wait == .settled)
             }

@@ -229,6 +229,10 @@ actor ContactLane {
     /// periodic self-check.
     private(set) var shutEpisodes = 0
 
+    /// Whether the lane is refusing new contact while a release it couldn't
+    /// confirm is retried.
+    var isShut: Bool { unrecovered }
+
     /// Whether a gesture is currently holding the lane, which is what tells the
     /// coordinator a close has to defer its cleanup.
     var hasActiveComposite: Bool {

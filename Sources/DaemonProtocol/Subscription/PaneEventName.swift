@@ -20,4 +20,8 @@ public enum PaneEventName: String, Sendable, Equatable, CaseIterable {
     /// The panel a foldable device's pane is showing changed. Published from
     /// the display's own binding, so it needs no hinge reading.
     case panelChanged = "panel.changed"
+    /// Whether the pane's input is reaching its device. Published from the
+    /// daemon's own view of its transport and contact lane, so a stall that
+    /// would otherwise only show as dead input is visible.
+    case inputChanged = "input.changed"
 }

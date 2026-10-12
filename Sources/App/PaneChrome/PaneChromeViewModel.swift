@@ -46,6 +46,11 @@ final class PaneChromeViewModel {
     /// every `render()` pass.
     var simState: SimulatorPaneState
 
+    /// Whether the pane's input is reaching its device. Mirrored from
+    /// `SimulatorPaneViewModel.inputHealth` on every `render()` pass, and
+    /// shown on the badge while the pane is rendering.
+    var inputHealth = InputHealth.ok
+
     /// Coarse device family, which drives toolbar layout. Phone / pad
     /// surface the full button row (home / lock / side / Siri /
     /// pay / rotate); watch surfaces crown press + side; tv +

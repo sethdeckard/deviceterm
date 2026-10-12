@@ -338,6 +338,12 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// Called outside the backend's own locks, from whichever queue sent the
     /// input, so a handler that needs an actor hops to it.
     func observeInputStall(_ handler: @escaping @Sendable (InputStallTracker.Transition) -> Void)
+    /// Whether this backend's input transport is refusing input now.
+    func isInputRefusing() -> Bool
+    /// Be told when `isInputRefusing()` may have changed. Carries nothing:
+    /// notices can reach an actor out of order, so the caller reads the
+    /// current answer from its own isolation.
+    func observeInputRefusal(_ handler: @escaping @Sendable () -> Void)
 
     // MARK: Surface-lease overlay
     //
@@ -549,6 +555,8 @@ extension DeviceBackend {
     // Default: a backend whose sends report no completion wait never stalls.
     func inputStallCount() -> Int { 0 }
     func observeInputStall(_ handler: @escaping @Sendable (InputStallTracker.Transition) -> Void) {}
+    func isInputRefusing() -> Bool { false }
+    func observeInputRefusal(_ handler: @escaping @Sendable () -> Void) {}
 
     // Default: backends without a cached accessibility bridge own nothing that
     // needs queue-ordered release.

@@ -81,6 +81,12 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
 - (void)whenSendsSettleWithCompletionHandler:(void (^)(NSError * _Nullable error))completionHandler
     NS_SWIFT_NAME(whenSendsSettle(completionHandler:));
 
+/// Call `handler` on this client's send queue once no send is outstanding.
+/// Reports no error and consumes none, for a caller that only needs to know
+/// the sends drained.
+- (void)whenSendsDrainWithHandler:(void (^)(void))handler
+    NS_SWIFT_NAME(whenSendsDrain(handler:));
+
 // MARK: Single-finger touch
 //
 // A press-and-hold is `tapDown` + nothing else; the touch stays down

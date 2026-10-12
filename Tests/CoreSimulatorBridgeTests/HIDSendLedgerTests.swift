@@ -139,3 +139,16 @@ func abandoningACompletedTicketChangesNothingAndSaysSo() throws {
     #expect(SettleProbe(ledger).wait().error == nil)
     _ = try admit(ledger)
 }
+
+@Test
+func watchingForADrainLeavesTheLateErrorForTheSettle() throws {
+    let ledger = SimHIDSendLedger()
+    let ticket = try admit(ledger)
+    ledger.abandonWait(forTicket: ticket)
+    let drained = DispatchSemaphore(value: 0)
+    ledger.whenDrained(on: DispatchQueue.global()) { drained.signal() }
+    ledger.complete(ticket: ticket, error: NSError(domain: "test", code: 3))
+    #expect(drained.wait(timeout: .now() + 5) == .success)
+    // The recovery registering after the drain still hears the failure.
+    #expect(SettleProbe(ledger).wait().error?.code == 3)
+}

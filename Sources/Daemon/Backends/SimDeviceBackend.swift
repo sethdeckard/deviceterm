@@ -131,6 +131,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Told when the HID transport starts or stops stalling. Set under
     /// `inputGate`, called outside it.
     private var onInputStall: (@Sendable (InputStallTracker.Transition) -> Void)?
+    /// Told when the transport starts or stops refusing input. Set under
+    /// `inputGate`, called outside it.
+    private var onInputRefusal: (@Sendable () -> Void)?
     /// The contact currently held down, if any (see `HeldTouch`). A down that
     /// timed out counts, since it may still land.
     private var heldTouch: HeldTouch?
@@ -250,6 +253,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func observeInputStall(_ handler: @escaping @Sendable (InputStallTracker.Transition) -> Void) {
         inputGate.sync { onInputStall = handler }
+    }
+
+    func isInputRefusing() -> Bool { inputGate.sync { stallTracker.isRefusing } }
+
+    func observeInputRefusal(_ handler: @escaping @Sendable () -> Void) {
+        inputGate.sync { onInputRefusal = handler }
     }
 
     func quiesceInputForTransfer() async -> Bool {
@@ -515,16 +524,38 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             }
         } catch {
             if Self.isSendTimeout(error) {
-                let began = inputGate.sync {
-                    stallTracker.noteTimeout(operation: operation, at: .now)
+                let (began, refusal) = inputGate.sync {
+                    (stallTracker.noteTimeout(operation: operation, at: .now), stallTracker.beginRefusing())
                 }
                 reportStall(began)
+                if refusal.began { reportRefusal() }
+                watchForDrain(token: refusal.token)
             } else if Self.isTransportStalled(error) {
                 inputGate.sync { stallTracker.noteRefused() }
             }
             throw error
         }
         reportStall(transition)
+    }
+
+    /// End the refusal once the client's sends drain, unless a later timeout
+    /// has started a newer one by then.
+    ///
+    /// Watches for the drain without the settle API, which consumes the error
+    /// a late send reported: taking it here would leave a recovery waiting on
+    /// that release to hear success.
+    private func watchForDrain(token: UInt64) {
+        guard let hidClient else { return }
+        hidClient.whenSendsDrain { [weak self] in
+            guard let self else { return }
+            let ended = inputGate.sync { stallTracker.noteDrained(token: token) }
+            if ended { reportRefusal() }
+        }
+    }
+
+    private func reportRefusal() {
+        let observer = inputGate.sync { onInputRefusal }
+        observer?()
     }
 
     private func reportStall(_ transition: InputStallTracker.Transition?) {

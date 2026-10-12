@@ -307,7 +307,7 @@ struct PaneChromeOverlay: View {
 
     private var badgeAndTitle: some View {
         HStack(spacing: PaneChromeRibbonFit.badgeTitleSpacing) {
-            StatusBadgeView(state: viewModel.simState)
+            StatusBadgeView(state: viewModel.simState, inputHealth: viewModel.inputHealth)
                 .frame(
                     width: PaneChromeRibbonFit.badgeSize,
                     height: PaneChromeRibbonFit.badgeSize
@@ -759,7 +759,7 @@ private extension PaneChromeOverlay {
     /// state. Mirrors the four `SimulatorPaneState` cases:
     ///
     ///   .booting → spinning ProgressView, tinted with `themeTint`.
-    ///   .rendering → solid green dot.
+    ///   .rendering → solid green dot, or orange while input is refused.
     ///   .shutdown → solid gray dot.
     ///   .failed → solid red dot.
     ///
@@ -767,6 +767,7 @@ private extension PaneChromeOverlay {
     /// shape.
     struct StatusBadgeView: View {
         let state: SimulatorPaneState
+        let inputHealth: InputHealth
 
         var body: some View {
             switch state {
@@ -780,13 +781,37 @@ private extension PaneChromeOverlay {
                     .tint(PaneChromeOverlay.themeTint)
 
             case .rendering:
-                Circle().fill(.green)
+                if let explanation = Self.refusalExplanation(inputHealth) {
+                    // Without this the pane looks healthy while every touch
+                    // is dropped, and restarting the helper, the obvious move,
+                    // doesn't help when the simulator itself stopped taking
+                    // input.
+                    Circle().fill(.orange)
+                        .help(explanation)
+                        .accessibilityLabel(explanation)
+                } else {
+                    Circle().fill(.green)
+                }
 
             case .shutdown:
                 Circle().fill(.gray)
 
             case .failed:
                 Circle().fill(.red)
+            }
+        }
+
+        static func refusalExplanation(_ health: InputHealth) -> String? {
+            switch health {
+            case .ok:
+                return nil
+
+            case .stalled:
+                return "This simulator isn't accepting input: an earlier send hasn't completed. "
+                    + "Restarting the helper won't help if the simulator itself has stopped taking input."
+
+            case .recovering:
+                return "Input is paused while a touch that may still be down is released."
             }
         }
     }

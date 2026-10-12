@@ -214,6 +214,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// routing tests want, so this only matters to a test that wants a paced
     /// gesture to stop mid-flight.
     var inputGenerationCurrent = true
+    /// What `isInputRefusing()` answers, standing in for a stalled transport.
+    var inputRefusing = false
     /// When true, `releaseHeldContact` reports the contact still down, the way
     /// a backend whose release send didn't land does.
     var failReleaseHeldContact = false
@@ -246,6 +248,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { inputGenerationCurrent }
 
     func releaseHeldContact(settling: Bool) -> Bool { !failReleaseHeldContact }
+    func isInputRefusing() -> Bool { inputRefusing }
 
     func currentBoundPanel() -> BoundPanel {
         BoundPanel(screenID: boundPanelSpansHinge ? 3 : 1, spansHinge: boundPanelSpansHinge)

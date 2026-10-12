@@ -1074,6 +1074,13 @@ actor XPCDaemonConnection: DaemonRequestTransport {
                     ) else { return }
                     deliverLifecycle(state, .panelChanged(evt))
 
+                case .inputChanged:
+                    guard let evt = try? JSONDecoder().decode(
+                        InputChangedEvent.self,
+                        from: data
+                    ) else { return }
+                    deliverLifecycle(state, .inputChanged(evt))
+
                 case nil:
                     return
                 }

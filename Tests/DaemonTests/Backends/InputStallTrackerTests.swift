@@ -63,6 +63,33 @@ func refusalsCountOnlyInsideAStall() {
     #expect(next == .ended(operation: "tapDown", duration: .seconds(1), timeouts: 1, refused: 0))
 }
 
+@Test
+func aDrainEndsTheRefusalItsTimeoutStarted() {
+    var tracker = InputStallTracker()
+    let first = tracker.beginRefusing()
+    #expect(first.began)
+    #expect(tracker.isRefusing)
+    let ended = tracker.noteDrained(token: first.token)
+    #expect(ended)
+    #expect(!tracker.isRefusing)
+}
+
+@Test
+func aDrainFromBeforeANewerTimeoutLeavesTheRefusal() {
+    // The drain for the first timeout is delivered after a second one has
+    // started its own wait, which still has a send out.
+    var tracker = InputStallTracker()
+    let first = tracker.beginRefusing()
+    let second = tracker.beginRefusing()
+    #expect(!second.began)
+    let staleEnded = tracker.noteDrained(token: first.token)
+    #expect(!staleEnded)
+    #expect(tracker.isRefusing)
+    let currentEnded = tracker.noteDrained(token: second.token)
+    #expect(currentEnded)
+    #expect(!tracker.isRefusing)
+}
+
 @Test("only the bridge's send timeout counts as a stall", arguments: [
     ("CoreSimulatorBridge.SimHIDClient", 49, true),
     // A NULL build: nothing was sent, so it says nothing about whether sends complete.

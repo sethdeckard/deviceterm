@@ -1323,5 +1323,13 @@ func encodeSubscriptionEvent(
             method: PaneEventName.panelChanged.rawValue,
             params: encoded
         )
+
+    case let .inputChanged(_, health):
+        let payload = InputChangedEvent(paneId: paneId, state: health)
+        guard let encoded = try? encoder.encode(payload) else { return nil }
+        return MethodRegistry.SubscriptionEvent(
+            method: PaneEventName.inputChanged.rawValue,
+            params: encoded
+        )
     }
 }

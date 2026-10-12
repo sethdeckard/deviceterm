@@ -76,6 +76,14 @@ typedef NS_ENUM(NSInteger, CSBHIDClientError) {
                    handler:(void (^)(NSError * _Nullable lateError))handler
     NS_SWIFT_NAME(whenSettled(on:handler:));
 
+/// Call `handler` on `queue` once no send is outstanding, immediately if none
+/// is now. Unlike `whenSettledOnQueue:handler:` it reports no error and
+/// consumes none, so watching for a drain can't take a failure from the caller
+/// that needs it.
+- (void)whenDrainedOnQueue:(dispatch_queue_t)queue
+                   handler:(void (^)(void))handler
+    NS_SWIFT_NAME(whenDrained(on:handler:));
+
 @end
 
 NS_ASSUME_NONNULL_END
