@@ -11,6 +11,7 @@
 #import "SimDeviceNotifier.h"
 #import "SimDisplayHandle.h"
 #import "SimHIDClient.h"
+#import "SimHIDSendLedger.h"
 #import "SimPurpleHID.h"
 #import "SimAccessibility.h"
 #import "SimLocation.h"

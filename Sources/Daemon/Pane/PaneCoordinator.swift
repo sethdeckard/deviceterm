@@ -2710,7 +2710,7 @@ public actor PaneCoordinator {
             // No gesture in flight, so whatever is still down was left behind.
             // A detach leaves the device running, so it has to come up before
             // the target is handed on, and that retry must not block the ack.
-            needsDeferral = await backend.releaseHeldContact() == false
+            needsDeferral = await backend.releaseHeldContact(settling: false) == false
         }
         if needsDeferral {
             // Cleanup can't finish inline: either a gesture still holds the
@@ -2784,7 +2784,10 @@ public actor PaneCoordinator {
         // protects the next attach.
         if mode == .detach, let backend = record.backend {
             var attempts = 0
-            while await backend.releaseHeldContact() == false {
+            // Settling: a release that timed out is waited out here rather
+            // than sent again, which keeps the target reserved for as long as
+            // the guest takes to take it.
+            while await backend.releaseHeldContact(settling: true) == false {
                 attempts += 1
                 if attempts == 1 {
                     InputHealthLog.detachRelease(
@@ -3187,32 +3190,20 @@ public actor PaneCoordinator {
     /// lane gets a chance to free an abandoned contact, so a lookup would find
     /// nothing and silently drop the lift. Every release joins the backend's
     /// ordered input queue before the lane admits the next gesture.
+    ///
+    /// Recovery releases what the backend recorded as sent rather than the
+    /// contact the lane names. They agree whenever the lane's contact reached
+    /// the backend, and the backend also knows whether a release it already
+    /// sent is still pending, which is what keeps a recovery from queueing a
+    /// second release behind a stalled one. The lane's own record still
+    /// decides which lifts it admits.
     private func lane(for record: Record, backend: any DeviceBackend) -> ContactLane {
         if let existing = record.contactLane { return existing }
         let shortId = record.shortId
         let lane = ContactLane(
             onHealth: { InputHealthLog.lane($0, shortId: shortId) },
-            recoverContact: { contact, generation in
-                switch contact {
-                case let .plain(point):
-                    return (try? await backend.tapUp(at: point, generation: generation)) != nil
-
-                case let .edge(point, edge):
-                    return (try? await backend.edgeTouchUp(at: point, edge: edge, generation: generation)) != nil
-
-                case let .multi(finger1, finger2):
-                    return (try? await backend.twoFingerUp(
-                        f1: finger1,
-                        f2: finger2,
-                        generation: generation
-                    )) != nil
-
-                case nil:
-                    // A composite that failed partway. It never told the lane what
-                    // it was holding, so the backend releases whatever it still
-                    // has down, matched to that contact's own kind.
-                    return await backend.releaseHeldContact()
-                }
+            recoverContact: { _, _, wait in
+                await backend.releaseHeldContact(settling: wait == .settled)
             }
         )
         record.contactLane = lane

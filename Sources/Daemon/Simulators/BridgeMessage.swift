@@ -14,7 +14,8 @@ import Foundation
 /// verbose
 ///
 ///     Error Domain=CoreSimulatorBridge.SimHIDClient Code=49
-///     "HID send did not complete within 1s" UserInfo={}
+///     "HID send did not complete within 1s; it was not cancelled and may
+///     still complete" UserInfo={}
 ///
 /// shape, which buries the actual hint inside boilerplate the CLI then
 /// prints verbatim ("pane.tap: Error Domain=…"). This namespace unwraps

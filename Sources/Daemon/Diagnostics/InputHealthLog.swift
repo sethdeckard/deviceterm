@@ -20,13 +20,14 @@ enum InputHealthLog {
                 """
             )
 
-        case let .ended(operation, duration, timeouts):
+        case let .ended(operation, duration, timeouts, refused):
             DiagnosticLog.input.notice(
                 """
                 input stall ended: shortId=\(shortId, privacy: .public) \
                 op=\(operation, privacy: .public) \
                 durationMs=\(milliseconds(duration), privacy: .public) \
-                timeouts=\(timeouts, privacy: .public)
+                timeouts=\(timeouts, privacy: .public) \
+                refused=\(refused, privacy: .public)
                 """
             )
         }

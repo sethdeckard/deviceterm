@@ -14,12 +14,14 @@ struct InputStallTracker: Equatable {
         /// The first send to time out since sends were last completing.
         case began(operation: String)
         /// A send completed in time after a stall. `timeouts` counts the sends
-        /// that missed their wait during it.
-        case ended(operation: String, duration: Duration, timeouts: Int)
+        /// that missed their wait during it, and `refused` the ones the bridge
+        /// declined to send because an earlier one hadn't completed.
+        case ended(operation: String, duration: Duration, timeouts: Int, refused: Int)
     }
 
     private var stalledSince: ContinuousClock.Instant?
     private var timeouts = 0
+    private var refused = 0
 
     /// Stall episodes over this tracker's life.
     private(set) var episodes = 0
@@ -35,8 +37,17 @@ struct InputStallTracker: Equatable {
         guard stalledSince == nil else { return nil }
         stalledSince = now
         timeouts = 1
+        refused = 0
         episodes += 1
         return .began(operation: operation)
+    }
+
+    /// Record a send the bridge refused because an earlier one hadn't
+    /// completed. Counted only inside a stall, which is the only time the
+    /// bridge has anything outstanding to refuse behind.
+    mutating func noteRefused() {
+        guard stalledSince != nil else { return }
+        refused += 1
     }
 
     /// Record a send that completed in time.
@@ -46,6 +57,6 @@ struct InputStallTracker: Equatable {
     ) -> Transition? {
         guard let since = stalledSince else { return nil }
         stalledSince = nil
-        return .ended(operation: operation, duration: now - since, timeouts: timeouts)
+        return .ended(operation: operation, duration: now - since, timeouts: timeouts, refused: refused)
     }
 }

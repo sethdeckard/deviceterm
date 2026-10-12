@@ -169,6 +169,23 @@ public enum PaneError: Error, Equatable, Sendable {
         UUID,
         operation: PaneOperation
         )
+    /// The simulator's HID transport refused a send because an earlier one
+    /// hasn't completed. The refused send didn't go out, but a gesture made of
+    /// several sends may have sent its earlier ones first: a swipe can be
+    /// refused partway when a key or button on the same pane stalls the
+    /// transport between its samples. The earlier send is still queued and may
+    /// complete later, so the stall can clear on its own.
+    ///
+    /// Distinct from `bridgeFailed`, which covers sends that went out and
+    /// failed or timed out, and from `inputNotAdmitted`, which is the
+    /// contact lane refusing before anything reached the transport.
+    /// Retryable, though a retry during the same stall is refused the same
+    /// way.
+    case inputStalled(
+        paneId:
+        UUID,
+        operation: PaneOperation
+        )
     /// A gesture the lane admitted whose captured input generation went
     /// stale before it finished. An ownership transfer bumps that
     /// generation, and both backends then drop what carries the old one
@@ -250,6 +267,20 @@ public enum PaneError: Error, Equatable, Sendable {
         udid:
         String
         )
+
+    /// Classify an error an input send threw that isn't a
+    /// `DeviceBackendError`: a refused send becomes `inputStalled`, and
+    /// anything else `bridgeFailed`, carrying the bridge's own message.
+    static func inputSendFailed(
+        _ error: Error,
+        paneId: UUID,
+        operation: PaneOperation
+    ) -> PaneError {
+        if SimDeviceBackend.isTransportStalled(error) {
+            return .inputStalled(paneId: paneId, operation: operation)
+        }
+        return .bridgeFailed(paneId: paneId, operation: operation, message: BridgeMessage.unwrap(error))
+    }
 
     /// Translate a backend-level error into the wire-facing `PaneError`,
     /// adding the paneId context the backend doesn't carry. `operation` is

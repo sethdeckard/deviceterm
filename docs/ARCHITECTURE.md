@@ -1921,11 +1921,17 @@ them.
 
 The contact lane orders whole contact operations. Beneath it, each simulator
 pane has a serial input queue for HID and Purple bridge calls, including
-ownership-transfer quiesce. SimulatorKit waits synchronously for completion,
-so the caller awaits the queue while Swift's cooperative executor remains free.
-The queue preserves bridge-send order and lets quiesce wait out earlier sends
-before advancing the input generation. Another simulator uses a different
-queue.
+ownership-transfer quiesce. The bridge waits up to one second for each send's
+completion, so the caller awaits the queue while Swift's cooperative executor
+remains free. The queue preserves bridge-send order and lets quiesce wait out
+earlier sends before advancing the input generation. Another simulator uses a
+different queue.
+
+A send that misses that wait isn't cancelled; it may still complete, and
+delivery is unknown. Until it completes, the bridge refuses every send that
+isn't a release, and the verb fails saying the simulator isn't accepting input.
+The refused send didn't go out, though earlier sends of the same gesture may
+have. Releases still go out, queued behind the stalled send.
 
 A gesture that holds contact across suspensions takes the lane for its
 whole run; others queue. Live contact jumps that queue, because a human
@@ -1943,11 +1949,19 @@ Two live producers on one pane are not arbitrated. The second one's
 contact merges into the first's, which is what the HID layer would do
 anyway. Telling them apart needs a stream identity the wire doesn't carry.
 
-A live contact with no phase for two seconds is assumed abandoned and
-released. The GUI refreshes a held single-finger or edge contact every
+A live contact with no phase for two seconds is assumed abandoned, and the
+daemon releases it. The GUI refreshes a held single-finger or edge contact every
 33 ms, so an ordinary drag never approaches that. A stationary two-finger
 contact has no such keepalive, and neither does a client driving
 `pane.input.*` directly; both have to keep sending phases to hold longer.
+
+A release that times out is waited out rather than sent again, with no
+deadline, and no other gesture gets the lane until it completes.
+
+A pane that's closing skips that wait. Its release isn't held open for a
+stalled send, though queueing and reconnect retries can still take it past one
+second. A detach that still can't free the contact keeps trying
+in the background, and the target stays reserved until it does.
 
 The paced gestures (`tap`, `swipe`, `edgeSwipe`, `longPress`, `pinch`,
 `crown`) sleep to absolute deadlines rather than for per-step intervals,

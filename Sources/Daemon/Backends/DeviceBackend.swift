@@ -283,7 +283,13 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// `false` means the release itself failed, so the contact may still be
     /// down. The caller must not treat the device as free on that answer: a
     /// failed relay send is not proof the contact went away.
-    func releaseHeldContact() async -> Bool
+    ///
+    /// `settling` lets a backend whose release can time out without being
+    /// cancelled wait for it to complete, with no deadline, rather than
+    /// report false and have the caller send another. Pass false where the
+    /// caller can't afford an unbounded wait. A backend with no such release
+    /// ignores it.
+    func releaseHeldContact(settling: Bool) async -> Bool
 
     /// Open a fresh input generation so the new owner's input is admitted
     /// again. Called by the coordinator after the ownership flip, or on an
@@ -519,7 +525,7 @@ extension DeviceBackend {
     func quiesceInputForTransfer() async -> Bool { true }
     // Default: a backend with no held-contact tracking has nothing to free,
     // so it is trivially clean.
-    func releaseHeldContact() -> Bool { true }
+    func releaseHeldContact(settling: Bool) -> Bool { true }
     // swiftlint:enable async_without_await
     func resumeInput() {}
     func currentInputGeneration() -> UInt64 { 0 }

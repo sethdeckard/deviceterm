@@ -240,7 +240,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func isInputGenerationCurrent(_ generation: UInt64) -> Bool { inputGenerationCurrent }
 
-    func releaseHeldContact() -> Bool { !failReleaseHeldContact }
+    func releaseHeldContact(settling: Bool) -> Bool { !failReleaseHeldContact }
 
     func currentBoundPanel() -> BoundPanel {
         BoundPanel(screenID: boundPanelSpansHinge ? 3 : 1, spansHinge: boundPanelSpansHinge)

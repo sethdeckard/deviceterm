@@ -1335,8 +1335,9 @@ final class RealDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     /// Free a contact left down by a gesture that failed partway. See the
     /// `DeviceBackend` requirement: no generation bump, because nothing is
-    /// being transferred.
-    func releaseHeldContact() async -> Bool {
+    /// being transferred. `settling` is ignored: a relay send that fails is
+    /// done, so there is nothing to wait out.
+    func releaseHeldContact(settling: Bool) async -> Bool {
         let contact: TouchInput? = inputGate.sync { heldTouch }
         guard let contact else { return true }
         // Released with the held contact's own kind, so a system-gesture

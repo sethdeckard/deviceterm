@@ -21,16 +21,39 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// A contact still held down (nil once lifted), tracked with its kind
     /// so a transfer releases it correctly. Updated under `inputGate` as
     /// each send lands.
-    private enum HeldTouch {
+    private enum HeldTouch: Equatable {
         case single(CGPoint)
         case edge(CGPoint, Int)
         case twoFinger(CGPoint, CGPoint)
     }
 
+    /// How a release of the held contact went.
+    private enum ReleaseOutcome {
+        /// It completed in time, or there was nothing to release.
+        case landed
+        /// It timed out, now or on an earlier attempt. It was not cancelled and
+        /// may still complete, so it is waited out rather than sent again.
+        /// Carries the shared wait on that exact release, taken in the same
+        /// step that found it pending, so nothing that runs before the caller
+        /// resumes can swap in a wait for some other contact.
+        case pending(Task<Bool, Never>)
+        /// It failed outright and can be sent again.
+        case failed
+
+        var landed: Bool {
+            if case .landed = self { return true }
+            return false
+        }
+    }
+
+    /// How one send went, as far as the bridge can tell.
+    private enum SendResult {
+        case completed
+        case timedOut
+        case failed
+    }
+
     private static let defaultPoolSlots = 6
-    /// `SimHIDClient.m`'s error domain and its `CSBHIDClientErrorSendTimeout`.
-    private static let hidErrorDomain = "CoreSimulatorBridge.SimHIDClient"
-    private static let hidSendTimeoutCode = 49
 
     /// The CoreSimulator UDID: needed for the lazy AX-client lookup.
     private let udid: String
@@ -108,8 +131,19 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Told when the HID transport starts or stops stalling. Set under
     /// `inputGate`, called outside it.
     private var onInputStall: (@Sendable (InputStallTracker.Transition) -> Void)?
-    /// The contact currently held down, if any (see `HeldTouch`).
+    /// The contact currently held down, if any (see `HeldTouch`). A down that
+    /// timed out counts, since it may still land.
     private var heldTouch: HeldTouch?
+    /// Bumped by every `hold`, so work begun for one contact can tell a newer
+    /// one from it even when both went down at the same point.
+    private var heldEpoch: UInt64 = 0
+    /// The `heldEpoch` of a contact whose release timed out and hasn't been
+    /// seen to complete, or nil. Such a release is still queued in
+    /// SimulatorKit, so another would only queue behind it.
+    private var pendingReleaseEpoch: UInt64?
+    /// The one wait on that release's outcome. Every caller awaits the same
+    /// task, so a failure can't reach one caller and a clean answer another.
+    private var pendingSettle: Task<Bool, Never>?
     /// The panel `heldTouch` went down on, as the screen id its sends were
     /// addressed to. Meaningful only while a contact is held, and always
     /// written with it, so a fold mid-contact cannot split one contact across
@@ -182,11 +216,21 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     /// Whether `error` is the bridge giving up on a send's completion, as
-    /// opposed to the send failing. Matched on domain and code, which
-    /// `SimHIDClient.m` defines, rather than on the message text.
+    /// opposed to the send failing. Matched on domain and code rather than on
+    /// the message text.
     static func isSendTimeout(_ error: Error) -> Bool {
+        isHIDError(error, .sendTimeout)
+    }
+
+    /// Whether `error` is the bridge refusing a send because an earlier one
+    /// hadn't completed. Nothing was sent.
+    static func isTransportStalled(_ error: Error) -> Bool {
+        isHIDError(error, .transportStalled)
+    }
+
+    private static func isHIDError(_ error: Error, _ code: CSBHIDClientError) -> Bool {
         let error = error as NSError
-        return error.domain == hidErrorDomain && error.code == hidSendTimeoutCode
+        return error.domain == CSBHIDClientErrorDomain && error.code == code.rawValue
     }
 
     // MARK: Ownership-transfer input fence
@@ -232,30 +276,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // release landed so the coordinator can abort a transfer that can't
         // be made input-clean.
         var allReleased = true
-        switch held {
-        case let .single(point)?:
-            if accepted("tapUp", { try hid.tapUp(at: point) }) {
-                inputGate.sync { heldTouch = nil }
-            } else {
-                allReleased = false
-            }
-
-        case let .edge(point, edge)?:
-            if accepted("edgeTouchUp", { try hid.edgeTouchUp(at: point, edge: edge) }) {
-                inputGate.sync { heldTouch = nil }
-            } else {
-                allReleased = false
-            }
-
-        case let .twoFinger(finger1, finger2)?:
-            if accepted("twoFingerUp", { try hid.twoFingerUp(f1: finger1, f2: finger2) }) {
-                inputGate.sync { heldTouch = nil }
-            } else {
-                allReleased = false
-            }
-
-        case nil:
-            break
+        if let held, !sendTouchRelease(held, hid: hid).landed {
+            allReleased = false
         }
         for usage in keys {
             if accepted("keyUp", { try hid.keyUp(keyCode: usage) }) {
@@ -289,35 +311,135 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// the coordinator's, not the failed gesture's, and the gesture's own
     /// generation may already be stale.
     ///
-    func releaseHeldContact() async -> Bool {
-        await inputWorkQueue.run { [self] in
+    /// A release that times out is not sent again: it is still queued, and a
+    /// second one would queue behind it. With `settling`, this waits for every
+    /// outstanding send to complete and reports whether they did cleanly,
+    /// however long that takes. Without it, a pending release reports false at
+    /// once.
+    func releaseHeldContact(settling: Bool) async -> Bool {
+        let outcome = await inputWorkQueue.run { [self] in
             releaseHeldContactSynchronously()
+        }
+        switch outcome {
+        case .landed:
+            return true
+
+        case .failed:
+            return false
+
+        case let .pending(settle):
+            guard settling else { return false }
+            return await settle.value
         }
     }
 
-    private func releaseHeldContactSynchronously() -> Bool {
-        let held: HeldTouch? = inputGate.sync { heldTouch }
-        guard let held else { return true }
+    /// The shared wait on the release pending for `epoch`, started by the
+    /// first caller that finds it. Call on `inputWorkQueue`, under
+    /// `inputGate`.
+    ///
+    /// The settle observer is registered here rather than when the task first
+    /// runs. The bridge hands a late failure to whichever observer is waiting
+    /// when its sends drain, so an observer registered later could take a
+    /// failure belonging to a newer contact's release and leave that
+    /// release's own wait reporting success. Registered before this step
+    /// yields the input queue, observation begins for this pending release.
+    /// Later releases can still join the ledger and extend the wait until it
+    /// drains.
+    private func sharedSettle(epoch: UInt64) -> Task<Bool, Never> {
+        if let pendingSettle { return pendingSettle }
+        let (outcome, report) = AsyncStream<(any Error)?>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        if let hidClient {
+            hidClient.whenSendsSettle { error in
+                report.yield(error)
+                report.finish()
+            }
+        } else {
+            report.finish()
+        }
+        let task = Task { [self] in
+            var settled = false
+            var lateError: (any Error)?
+            for await error in outcome {
+                settled = true
+                lateError = error
+            }
+            return reconcilePendingRelease(epoch: epoch, settled: settled, lateError: lateError)
+        }
+        pendingSettle = task
+        return task
+    }
+
+    /// Reconcile the contact whose release was pending, once its sends have
+    /// settled.
+    ///
+    /// Fenced on `epoch` rather than on the contact's value: a new down at the
+    /// same point can complete before this runs, and clearing it would leave a
+    /// finger down that nothing knows to release. A moved epoch reports false
+    /// so the caller looks again at what is down now.
+    private func reconcilePendingRelease(epoch: UInt64, settled: Bool, lateError: (any Error)?) -> Bool {
+        inputGate.sync {
+            guard settled, heldEpoch == epoch else { return false }
+            pendingSettle = nil
+            // Cleared either way: after a failure the next attempt sends
+            // again, which is the one case worth sending again.
+            pendingReleaseEpoch = nil
+            guard lateError == nil else { return false }
+            heldTouch = nil
+            return true
+        }
+    }
+
+    private func releaseHeldContactSynchronously() -> ReleaseOutcome {
+        let (held, settle) = inputGate.sync { () -> (HeldTouch?, Task<Bool, Never>?) in
+            guard let epoch = pendingReleaseEpoch else { return (heldTouch, nil) }
+            return (heldTouch, sharedSettle(epoch: epoch))
+        }
+        guard let held else { return .landed }
         guard let hid = try? requireHID() else {
             // No HID client: the backend is torn down, so nothing is held on a
             // live device. Same reasoning as the quiesce.
-            inputGate.sync { heldTouch = nil }
-            return true
+            inputGate.sync {
+                heldTouch = nil
+                pendingReleaseEpoch = nil
+            }
+            return .landed
         }
-        // Cleared only once the release actually lands, so a failed one is not
-        // silently forgotten.
+        if let settle { return .pending(settle) }
+        return sendTouchRelease(held, hid: hid)
+    }
+
+    /// Send the release matching `held`'s kind, ungated. Cleared only once the
+    /// release completes, so a failed one is not silently forgotten.
+    private func sendTouchRelease(_ held: HeldTouch, hid: SimHIDClient) -> ReleaseOutcome {
+        let result: SendResult
         switch held {
         case let .single(point):
-            guard accepted("tapUp", { try hid.tapUp(at: point) }) else { return false }
+            result = attemptRelease("tapUp") { try hid.tapUp(at: point) }
 
         case let .edge(point, edge):
-            guard accepted("edgeTouchUp", { try hid.edgeTouchUp(at: point, edge: edge) }) else { return false }
+            result = attemptRelease("edgeTouchUp") { try hid.edgeTouchUp(at: point, edge: edge) }
 
         case let .twoFinger(finger1, finger2):
-            guard accepted("twoFingerUp", { try hid.twoFingerUp(f1: finger1, f2: finger2) }) else { return false }
+            result = attemptRelease("twoFingerUp") { try hid.twoFingerUp(f1: finger1, f2: finger2) }
         }
-        inputGate.sync { heldTouch = nil }
-        return true
+        switch result {
+        case .completed:
+            inputGate.sync {
+                if heldTouch == held { heldTouch = nil }
+                pendingReleaseEpoch = nil
+            }
+            return .landed
+
+        case .timedOut:
+            let settle = inputGate.sync { () -> Task<Bool, Never> in
+                pendingReleaseEpoch = heldEpoch
+                return sharedSettle(epoch: heldEpoch)
+            }
+            return .pending(settle)
+
+        case .failed:
+            return .failed
+        }
     }
 
     func resumeInput() {
@@ -362,9 +484,19 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// through here so the footprint count covers every such send, not only
     /// the ones a caller issued.
     private func accepted(_ operation: String, _ send: () throws -> Void) -> Bool {
-        guard (try? trackingStall(operation, send)) != nil else { return false }
+        if case .completed = attemptRelease(operation, send) { return true }
+        return false
+    }
+
+    /// `accepted`, telling a timeout apart from a failure.
+    private func attemptRelease(_ operation: String, _ send: () throws -> Void) -> SendResult {
+        do {
+            try trackingStall(operation, send)
+        } catch {
+            return Self.isSendTimeout(error) ? .timedOut : .failed
+        }
         inputGate.sync { inputSubmissions += 1 }
-        return true
+        return .completed
     }
 
     /// Run one HID send and fold its outcome into the stall tracker. Only a
@@ -384,6 +516,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
                     stallTracker.noteTimeout(operation: operation, at: .now)
                 }
                 reportStall(began)
+            } else if Self.isTransportStalled(error) {
+                inputGate.sync { stallTracker.noteRefused() }
             }
             throw error
         }
@@ -581,65 +715,98 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         inputGate.sync {
             heldTouch = touch
             heldTouchScreenID = screenID
+            // Sends go out in order, so any release still pending lands ahead
+            // of this contact and no longer describes what is down. A settle
+            // already waiting on it sees the epoch move and reconciles nothing.
+            heldEpoch &+= 1
+            pendingReleaseEpoch = nil
+            pendingSettle = nil
+        }
+    }
+
+    /// Send a touch that leaves `touch` down. It is recorded as held once the
+    /// send completes, and also when it times out, because a timed-out send
+    /// may still land.
+    private func sendHolding(
+        _ generation: UInt64,
+        _ operation: String,
+        _ touch: HeldTouch,
+        _ body: () throws -> Void
+    ) throws {
+        do {
+            if try gatedSend(generation, operation, body) { hold(touch) }
+        } catch {
+            if Self.isSendTimeout(error) { hold(touch) }
+            throw error
+        }
+    }
+
+    /// Send a touch release. The contact is cleared once it completes; a
+    /// timeout leaves it held with its release marked pending, so recovery
+    /// waits that release out instead of sending another.
+    private func sendReleasing(
+        _ generation: UInt64,
+        _ operation: String,
+        _ body: () throws -> Void
+    ) throws {
+        do {
+            if try gatedSend(generation, operation, body) {
+                inputGate.sync {
+                    heldTouch = nil
+                    pendingReleaseEpoch = nil
+                }
+            }
+        } catch {
+            if Self.isSendTimeout(error) { inputGate.sync { pendingReleaseEpoch = heldEpoch } }
+            throw error
         }
     }
 
     func tapDown(at point: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, "tapDown", { try requireHID().tapDown(at: point) }) {
-                hold(.single(point))
-            }
+            try sendHolding(generation, "tapDown", .single(point)) { try requireHID().tapDown(at: point) }
         }
     }
 
     func tapUp(at point: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, "tapUp", { try requireHID().tapUp(at: point) }) {
-                inputGate.sync { heldTouch = nil }
-            }
+            try sendReleasing(generation, "tapUp") { try requireHID().tapUp(at: point) }
         }
     }
 
     func edgeTouchDown(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, "edgeTouchDown", { try requireHID().edgeTouchDown(at: point, edge: edge) }) {
-                hold(.edge(point, edge))
+            try sendHolding(generation, "edgeTouchDown", .edge(point, edge)) {
+                try requireHID().edgeTouchDown(at: point, edge: edge)
             }
         }
     }
 
     func edgeTouchMove(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, "edgeTouchMove", { try requireHID().edgeTouchMove(at: point, edge: edge) }) {
-                hold(.edge(point, edge))
+            try sendHolding(generation, "edgeTouchMove", .edge(point, edge)) {
+                try requireHID().edgeTouchMove(at: point, edge: edge)
             }
         }
     }
 
     func edgeTouchUp(at point: CGPoint, edge: Int, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, "edgeTouchUp", { try requireHID().edgeTouchUp(at: point, edge: edge) }) {
-                inputGate.sync { heldTouch = nil }
-            }
+            try sendReleasing(generation, "edgeTouchUp") { try requireHID().edgeTouchUp(at: point, edge: edge) }
         }
     }
 
     func twoFingerDown(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            let sent = try gatedSend(generation, "twoFingerDown") {
+            try sendHolding(generation, "twoFingerDown", .twoFinger(finger1, finger2)) {
                 try requireHID().twoFingerDown(f1: finger1, f2: finger2)
-            }
-            if sent {
-                hold(.twoFinger(finger1, finger2))
             }
         }
     }
 
     func twoFingerUp(f1 finger1: CGPoint, f2 finger2: CGPoint, generation: UInt64) async throws {
         try await inputWorkQueue.run { [self] in
-            if try gatedSend(generation, "twoFingerUp", { try requireHID().twoFingerUp(f1: finger1, f2: finger2) }) {
-                inputGate.sync { heldTouch = nil }
-            }
+            try sendReleasing(generation, "twoFingerUp") { try requireHID().twoFingerUp(f1: finger1, f2: finger2) }
         }
     }
 

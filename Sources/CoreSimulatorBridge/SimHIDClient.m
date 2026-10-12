@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #import "SimHIDClient.h"
+#import "SimHIDSendLedger.h"
 #import "CoreSimulatorLoader.h"
 
 #import <CoreSimulator/SimServiceContext.h>
@@ -12,21 +13,6 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
-
-static NSString *const kCSBErrorDomain = @"CoreSimulatorBridge.SimHIDClient";
-
-typedef NS_ENUM(NSInteger, CSBHIDClientError) {
-    CSBHIDClientErrorCoreSimLoad     = 40,
-    CSBHIDClientErrorSimKitLoad      = 41,
-    CSBHIDClientErrorContext         = 42,
-    CSBHIDClientErrorDeviceSet       = 43,
-    CSBHIDClientErrorDeviceNotFound  = 44,
-    CSBHIDClientErrorLegacyClassMissing = 45,
-    CSBHIDClientErrorLegacyInitFailed   = 46,
-    CSBHIDClientErrorIndigoSymsMissing  = 47,
-    CSBHIDClientErrorNilMessage      = 48,
-    CSBHIDClientErrorSendTimeout     = 49,
-};
 
 // SimulatorKit-private Indigo helper signatures. The bridge calls these
 // via dlsym so we can fail-fast with a clear error if Apple renames or
@@ -73,6 +59,9 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
 @property (nonatomic, copy, readwrite) NSString *udid;
 @property (nonatomic, strong) SimDeviceLegacyClient *legacyClient;
 @property (nonatomic, strong) dispatch_queue_t sendQueue;
+/// Every send handed to SimulatorKit and not yet completed. Kept across a
+/// reconnect, since a send on the old client can still complete.
+@property (nonatomic, strong) SimHIDSendLedger *ledger;
 
 // dlsym'd at construction. All are non-NULL after a successful
 // `clientForUDID:` except `fnCrown`, which is optional (watchOS-only)
@@ -93,7 +82,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     Class ctxCls = NSClassFromString(@"SimServiceContext");
     if (!ctxCls) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain code:CSBHIDClientErrorContext userInfo:@{
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain code:CSBHIDClientErrorContext userInfo:@{
                 NSLocalizedDescriptionKey: @"SimServiceContext class not found",
             }];
         }
@@ -104,7 +93,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     SimServiceContext *ctx = [ctxCls sharedServiceContextForDeveloperDir:devDir error:&inner];
     if (!ctx) {
         if (error) {
-            *error = inner ?: [NSError errorWithDomain:kCSBErrorDomain
+            *error = inner ?: [NSError errorWithDomain:CSBHIDClientErrorDomain
                                                   code:CSBHIDClientErrorContext userInfo:@{
                 NSLocalizedDescriptionKey: @"sharedServiceContextForDeveloperDir failed",
             }];
@@ -114,7 +103,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     SimDeviceSet *set = [ctx defaultDeviceSetWithError:&inner];
     if (!set) {
         if (error) {
-            *error = inner ?: [NSError errorWithDomain:kCSBErrorDomain
+            *error = inner ?: [NSError errorWithDomain:CSBHIDClientErrorDomain
                                                   code:CSBHIDClientErrorDeviceSet userInfo:@{
                 NSLocalizedDescriptionKey: @"defaultDeviceSetWithError returned nil",
             }];
@@ -128,7 +117,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
         }
     }
     if (error) {
-        *error = [NSError errorWithDomain:kCSBErrorDomain
+        *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                      code:CSBHIDClientErrorDeviceNotFound
                                  userInfo:@{
             NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Device with UDID %@ not found", udid],
@@ -150,7 +139,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     Class legacyHIDClass = NSClassFromString(@"SimulatorKit.SimDeviceLegacyHIDClient");
     if (!legacyHIDClass) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorLegacyClassMissing
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"SimulatorKit.SimDeviceLegacyHIDClient not found",
@@ -163,7 +152,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     SimDeviceLegacyClient *legacy = [[legacyHIDClass alloc] initWithDevice:device error:&inner];
     if (!legacy) {
         if (error) {
-            *error = inner ?: [NSError errorWithDomain:kCSBErrorDomain
+            *error = inner ?: [NSError errorWithDomain:CSBHIDClientErrorDomain
                                                   code:CSBHIDClientErrorLegacyInitFailed
                                               userInfo:@{
                 NSLocalizedDescriptionKey: @"SimDeviceLegacyHIDClient init failed",
@@ -195,7 +184,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
         dlsym(RTLD_DEFAULT, "IndigoHIDMessageForDigitalCrownEvent");
     if (!fnButton || !fnKeyboard || !fnMouse || !fnHIDArbitrary) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorIndigoSymsMissing
                                      userInfo:@{
                 NSLocalizedDescriptionKey: [NSString stringWithFormat:
@@ -216,18 +205,26 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     client.fnHIDArbitrary = fnHIDArbitrary;
     client.fnCrown = fnCrown;
     client.sendQueue = dispatch_queue_create("deviceterm.hid.send", DISPATCH_QUEUE_SERIAL);
+    client.ledger = [SimHIDSendLedger new];
     return client;
 }
 
 #pragma mark Send helper
 
-/// Send an Indigo message and wait for completion (1s timeout). Returns
-/// NO + a timeout error if completion never fires. `freeWhenDone:YES`
-/// hands ownership of the message buffer to SimulatorKit.
-- (BOOL)_sendMessage:(IndigoMessage *)message error:(NSError **)error {
+/// Send an Indigo message and wait up to one second for its completion.
+/// `freeWhenDone:YES` hands ownership of the message buffer to SimulatorKit.
+///
+/// SimulatorKit queues every send behind the ones before it and sends with no
+/// timeout, so a late completion is not a failed send. Past the wait this
+/// returns a timeout error, and the send stays in the ledger until it does
+/// complete. Until then every send that isn't a release is refused rather than
+/// queued behind it, so input doesn't pile up to arrive late. A release is
+/// still sent: queued behind the stalled send, it lifts what is down once that
+/// send completes.
+- (BOOL)_sendMessage:(IndigoMessage *)message release:(BOOL)isRelease error:(NSError **)error {
     if (!message) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorNilMessage
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"Indigo message builder returned NULL",
@@ -235,6 +232,13 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
         }
         return NO;
     }
+    uint64_t ticket = 0;
+    if (![self.ledger admitSendAsRelease:isRelease ticket:&ticket error:error]) {
+        // Never handed to SimulatorKit, so the buffer is still ours.
+        free(message);
+        return NO;
+    }
+    SimHIDSendLedger *ledger = self.ledger;
     __block NSError *cbError = nil;
     dispatch_semaphore_t sema = dispatch_semaphore_create(0);
     [self.legacyClient sendWithMessage:message
@@ -242,16 +246,26 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
                        completionQueue:self.sendQueue
                             completion:^(NSError *e) {
         cbError = e;
+        [ledger completeTicket:ticket error:e];
         dispatch_semaphore_signal(sema);
     }];
     long timedOut = dispatch_semaphore_wait(sema,
         dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC));
+    if (timedOut != 0 && ![ledger abandonWaitForTicket:ticket]) {
+        // The completion ran between the deadline and the abandon, so this
+        // send's outcome is already in `cbError` and its signal is on the
+        // way. Collect both and report it like any completion; abandoning
+        // now would hand a failure to nobody.
+        dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+        timedOut = 0;
+    }
     if (timedOut != 0) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorSendTimeout
                                      userInfo:@{
-                NSLocalizedDescriptionKey: @"HID send did not complete within 1s",
+                NSLocalizedDescriptionKey: @"HID send did not complete within 1s; it was not cancelled "
+                                            "and may still complete",
             }];
         }
         return NO;
@@ -261,6 +275,14 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
         return NO;
     }
     return YES;
+}
+
+- (void)whenSendsSettleWithCompletionHandler:(void (^)(NSError * _Nullable))completionHandler {
+    [self.ledger whenSettledOnQueue:self.sendQueue handler:completionHandler];
+}
+
+- (NSUInteger)outstandingSendCount {
+    return self.ledger.outstandingSendCount;
 }
 
 #pragma mark Disconnect recovery
@@ -285,7 +307,7 @@ static BOOL CSBIsDeviceDisconnected(NSError *error) {
     Class legacyHIDClass = NSClassFromString(@"SimulatorKit.SimDeviceLegacyHIDClient");
     if (!legacyHIDClass) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorLegacyClassMissing
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"SimulatorKit.SimDeviceLegacyHIDClient not found",
@@ -297,7 +319,7 @@ static BOOL CSBIsDeviceDisconnected(NSError *error) {
     SimDeviceLegacyClient *legacy = [[legacyHIDClass alloc] initWithDevice:device error:&inner];
     if (!legacy) {
         if (error) {
-            *error = inner ?: [NSError errorWithDomain:kCSBErrorDomain
+            *error = inner ?: [NSError errorWithDomain:CSBHIDClientErrorDomain
                                                   code:CSBHIDClientErrorLegacyInitFailed
                                               userInfo:@{
                 NSLocalizedDescriptionKey: @"SimDeviceLegacyHIDClient reconnect failed",
@@ -314,7 +336,7 @@ static BOOL CSBIsDeviceDisconnected(NSError *error) {
 /// failure says nothing about the HID port.
 static BOOL CSBIsNilMessage(NSError *error) {
     return error != nil
-        && [error.domain isEqualToString:kCSBErrorDomain]
+        && [error.domain isEqualToString:CSBHIDClientErrorDomain]
         && error.code == CSBHIDClientErrorNilMessage;
 }
 
@@ -337,20 +359,21 @@ static BOOL CSBIsNilMessage(NSError *error) {
 /// the disconnect that prompted it would name a condition the reconnect
 /// was the response to, and hide the reason the response didn't land.
 - (BOOL)_sendBuiltMessage:(IndigoMessage *(NS_NOESCAPE ^)(void))builder
+                  release:(BOOL)isRelease
                     error:(NSError **)error {
     NSError *sendError = nil;
-    if ([self _sendMessage:builder() error:&sendError]) return YES;
+    if ([self _sendMessage:builder() release:isRelease error:&sendError]) return YES;
     if (CSBIsDeviceDisconnected(sendError)) {
         NSError *reconnectError = nil;
         if ([self _reconnectLegacyClientWithError:&reconnectError]) {
-            return [self _sendMessage:builder() error:error];
+            return [self _sendMessage:builder() release:isRelease error:error];
         }
         if (error) *error = reconnectError ?: sendError;
         return NO;
     }
     if (CSBIsNilMessage(sendError)) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorNilMessage
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"Indigo message builder returned NULL; nothing was sent. "
@@ -435,13 +458,13 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 - (BOOL)tapDownAtNormalizedPoint:(CGPoint)point error:(NSError **)error {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildTouchMessageAtRatio:point direction:ButtonEventTypeDown];
-    } error:error];
+    } release:NO error:error];
 }
 
 - (BOOL)tapUpAtNormalizedPoint:(CGPoint)point error:(NSError **)error {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildTouchMessageAtRatio:point direction:ButtonEventTypeUp];
-    } error:error];
+    } release:YES error:error];
 }
 
 #pragma mark Edge-tagged touch (system gestures: home / App Switcher)
@@ -489,7 +512,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 - (BOOL)edgeTouchDownAtNormalizedPoint:(CGPoint)point edge:(NSInteger)edge error:(NSError **)error {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x1 edge:(int)edge];
-    } error:error];
+    } release:NO error:error];
 }
 
 - (BOOL)edgeTouchMoveAtNormalizedPoint:(CGPoint)point edge:(NSInteger)edge error:(NSError **)error {
@@ -498,13 +521,13 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
     // type to offer: every one of them returns NULL.
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x1 edge:(int)edge];
-    } error:error];
+    } release:NO error:error];
 }
 
 - (BOOL)edgeTouchUpAtNormalizedPoint:(CGPoint)point edge:(NSInteger)edge error:(NSError **)error {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x2 edge:(int)edge];
-    } error:error];
+    } release:YES error:error];
 }
 
 + (BOOL)isEdgeTouchBuildableWithError:(NSError **)error {
@@ -513,7 +536,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
         dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
     if (!fn) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorIndigoSymsMissing
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"IndigoHIDMessageForMouseNSEvent is unavailable "
@@ -547,7 +570,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
         if (untagged) free(untagged);
         if (!built) {
             if (error) {
-                *error = [NSError errorWithDomain:kCSBErrorDomain
+                *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                              code:CSBHIDClientErrorNilMessage
                                          userInfo:@{
                     NSLocalizedDescriptionKey: [NSString stringWithFormat:
@@ -560,7 +583,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
         }
         if (!tagLanded) {
             if (error) {
-                *error = [NSError errorWithDomain:kCSBErrorDomain
+                *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                              code:CSBHIDClientErrorNilMessage
                                          userInfo:@{
                     NSLocalizedDescriptionKey: [NSString stringWithFormat:
@@ -611,7 +634,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
         return [self _buildTwoFingerTouchMessageAtRatio1:f1
                                                   ratio2:f2
                                                direction:ButtonEventTypeDown];
-    } error:error];
+    } release:NO error:error];
 }
 
 - (BOOL)twoFingerUpAtFinger1:(CGPoint)f1 finger2:(CGPoint)f2 error:(NSError **)error {
@@ -619,7 +642,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
         return [self _buildTwoFingerTouchMessageAtRatio1:f1
                                                   ratio2:f2
                                                direction:ButtonEventTypeUp];
-    } error:error];
+    } release:YES error:error];
 }
 
 #pragma mark Keyboard
@@ -627,13 +650,13 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 - (BOOL)keyDownWithKeyCode:(unsigned int)keyCode error:(NSError **)error {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnKeyboard((int)keyCode, ButtonEventTypeDown);
-    } error:error];
+    } release:NO error:error];
 }
 
 - (BOOL)keyUpWithKeyCode:(unsigned int)keyCode error:(NSError **)error {
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnKeyboard((int)keyCode, ButtonEventTypeUp);
-    } error:error];
+    } release:YES error:error];
 }
 
 #pragma mark Hardware buttons
@@ -685,13 +708,13 @@ static const int kCSBVoiceCommandUsage = 0xCF;
     BOOL ok = [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnHIDArbitrary(ButtonEventTargetHardware, kCSBConsumerUsagePage,
                                    kCSBVoiceCommandUsage, ButtonEventTypeDown);
-    } error:error];
+    } release:NO error:error];
     if (!ok) return NO;
     usleep(50000);  // 50ms between down and up, matching the other buttons.
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnHIDArbitrary(ButtonEventTargetHardware, kCSBConsumerUsagePage,
                                    kCSBVoiceCommandUsage, ButtonEventTypeUp);
-    } error:error];
+    } release:YES error:error];
 }
 
 - (BOOL)pressHardwareButton:(CSBHardwareButton)button error:(NSError **)error {
@@ -701,12 +724,12 @@ static const int kCSBVoiceCommandUsage = 0xCF;
     int source = [SimHIDClient _indigoSourceForButton:button];
     BOOL ok = [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnButton(source, ButtonEventTypeDown, ButtonEventTargetHardware);
-    } error:error];
+    } release:NO error:error];
     if (!ok) return NO;
     usleep(50000);  // 50ms between down and up, matching idb's timing.
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnButton(source, ButtonEventTypeUp, ButtonEventTargetHardware);
-    } error:error];
+    } release:YES error:error];
 }
 
 - (BOOL)releaseHardwareButton:(CSBHardwareButton)button error:(NSError **)error {
@@ -718,12 +741,12 @@ static const int kCSBVoiceCommandUsage = 0xCF;
         return [self _sendBuiltMessage:^IndigoMessage *{
             return self.fnHIDArbitrary(ButtonEventTargetHardware, kCSBConsumerUsagePage,
                                        kCSBVoiceCommandUsage, ButtonEventTypeUp);
-        } error:error];
+        } release:YES error:error];
     }
     int source = [SimHIDClient _indigoSourceForButton:button];
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnButton(source, ButtonEventTypeUp, ButtonEventTargetHardware);
-    } error:error];
+    } release:YES error:error];
 }
 
 #pragma mark Digital Crown
@@ -741,7 +764,7 @@ static const int kCSBVoiceCommandUsage = 0xCF;
 - (BOOL)rotateCrownByDelta:(double)delta error:(NSError **)error {
     if (!self.fnCrown) {
         if (error) {
-            *error = [NSError errorWithDomain:kCSBErrorDomain
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
                                          code:CSBHIDClientErrorIndigoSymsMissing
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"IndigoHIDMessageForDigitalCrownEvent is "
@@ -753,7 +776,7 @@ static const int kCSBVoiceCommandUsage = 0xCF;
     }
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnCrown(delta);
-    } error:error];
+    } release:NO error:error];
 }
 
 @end

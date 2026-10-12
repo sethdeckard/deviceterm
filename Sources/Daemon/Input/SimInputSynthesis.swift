@@ -109,11 +109,7 @@ enum SimInputSynthesis {
                 try await backend.tapUp(at: point, generation: generation)
             }
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .tap,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .tap)
         }
     }
 
@@ -139,11 +135,7 @@ enum SimInputSynthesis {
                 try await backend.tapUp(at: point, generation: generation)
             }
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .touch,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .touch)
         }
     }
 
@@ -183,11 +175,7 @@ enum SimInputSynthesis {
         } catch let error as DeviceBackendError {
             throw PaneError.mapBackendError(error, paneId: paneId, operation: .edgeTouch)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .edgeTouch,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .edgeTouch)
         }
     }
 
@@ -287,11 +275,7 @@ enum SimInputSynthesis {
             )
             try await backend.tapUp(at: end, generation: generation)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .swipe,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .swipe)
         }
         return PaneCoordinator.SwipeOutcome(steps: emitted, durationMs: timing.totalMs)
     }
@@ -412,11 +396,7 @@ enum SimInputSynthesis {
             }
             try await backend.edgeTouchUp(at: end, edge: edge, generation: generation)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .edgeSwipe,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .edgeSwipe)
         }
     }
 
@@ -444,11 +424,7 @@ enum SimInputSynthesis {
                 pacer: pacer
             )
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .edgeSwipe,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .edgeSwipe)
         }
     }
 
@@ -475,11 +451,7 @@ enum SimInputSynthesis {
             guard Self.checkpoint(backend: backend, generation: generation, fence: fence) == .proceed else { return }
             try await backend.pressHardwareButton(.home, generation: generation)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .edgeSwipe,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .edgeSwipe)
         }
     }
 
@@ -591,11 +563,7 @@ enum SimInputSynthesis {
                 try await backend.tapUp(at: point, generation: generation)
             }
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .longPress,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .longPress)
         }
     }
 
@@ -619,11 +587,7 @@ enum SimInputSynthesis {
                 try await backend.keyUp(hidUsage: hid, generation: generation)
             }
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .key(down: down),
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .key(down: down))
         }
     }
 
@@ -636,11 +600,7 @@ enum SimInputSynthesis {
         do {
             try await backend.pressHardwareButton(button, generation: generation)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .button(button),
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .button(button))
         }
     }
 
@@ -705,11 +665,7 @@ enum SimInputSynthesis {
             }
             try await backend.twoFingerUp(f1: endF1, f2: endF2, generation: generation)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .pinch,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .pinch)
         }
     }
 
@@ -743,11 +699,7 @@ enum SimInputSynthesis {
                 try await backend.twoFingerUp(f1: points[0], f2: points[1], generation: generation)
             }
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .multitouch,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .multitouch)
         }
     }
 
@@ -781,11 +733,7 @@ enum SimInputSynthesis {
         do {
             try await backend.typeKeystrokes(keystrokes, generation: generation)
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .text,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .text)
         }
     }
 
@@ -806,11 +754,7 @@ enum SimInputSynthesis {
                 generation: generation
             )
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .rotate,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .rotate)
         }
     }
 
@@ -872,11 +816,7 @@ enum SimInputSynthesis {
                 emitted = due
             }
         } catch {
-            throw PaneError.bridgeFailed(
-                paneId: paneId,
-                operation: .crown,
-                message: BridgeMessage.unwrap(error)
-            )
+            throw PaneError.inputSendFailed(error, paneId: paneId, operation: .crown)
         }
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import CoreGraphics
+import CoreSimulatorBridge
 @testable import Daemon
 import DaemonProtocol
 import Foundation
@@ -288,4 +289,51 @@ func aRefusedGestureIsRetryableAndNamesTheVerbOnTheWire() {
 func aRefusedGestureLogsItsVerbWithoutIdentifiers() {
     let kind = PaneError.inputNotAdmitted(paneId: UUID(), operation: .pinch).diagnosticKind
     #expect(kind == "input-not-admitted:pinch")
+}
+
+// MARK: - Stalled transport
+
+private func hidError(_ code: CSBHIDClientError, _ message: String) -> NSError {
+    NSError(
+        domain: CSBHIDClientErrorDomain,
+        code: code.rawValue,
+        userInfo: [NSLocalizedDescriptionKey: message]
+    )
+}
+
+@Test
+func aSendTheBridgeRefusedReportsAStall() {
+    let paneId = UUID()
+    let refused = hidError(.transportStalled, "HID transport stalled")
+    #expect(
+        PaneError.inputSendFailed(refused, paneId: paneId, operation: .tap)
+            == .inputStalled(paneId: paneId, operation: .tap)
+    )
+}
+
+@Test
+func aSendThatTimedOutStaysABridgeFailure() {
+    // It went out, so "nothing was sent" would be false; the bridge's own
+    // message says what is known.
+    let paneId = UUID()
+    let timedOut = hidError(.sendTimeout, "HID send did not complete within 1s")
+    #expect(
+        PaneError.inputSendFailed(timedOut, paneId: paneId, operation: .touch)
+            == .bridgeFailed(paneId: paneId, operation: .touch, message: "HID send did not complete within 1s")
+    )
+}
+
+@Test
+func aStalledSendNamesTheRefusalWithoutClaimingNothingWasSent() {
+    let mapped = PaneMethods.mapPaneError(.inputStalled(paneId: UUID(), operation: .swipe))
+    #expect(mapped.code == RPCErrorCode.serverError)
+    #expect(mapped.message.contains("pane.swipe"))
+    #expect(mapped.message.contains("a send was refused"))
+    // A swipe refused partway has already sent its earlier samples, so the
+    // message can't speak for the whole gesture.
+    #expect(!mapped.message.contains("nothing was sent"))
+    #expect(
+        PaneError.inputStalled(paneId: UUID(), operation: .swipe).diagnosticKind
+            == "input-stalled:swipe"
+    )
 }

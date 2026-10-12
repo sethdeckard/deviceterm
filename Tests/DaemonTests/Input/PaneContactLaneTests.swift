@@ -48,7 +48,7 @@ private func makeLane(
     pacer: any GesturePacing = SystemGesturePacer(),
     recorder: ReleaseRecorder = ReleaseRecorder()
 ) -> ContactLane {
-    ContactLane(pacer: pacer) { contact, _ in recorder.record(contact) }
+    ContactLane(pacer: pacer) { contact, _, _ in recorder.record(contact) }
 }
 
 // MARK: - Composites take turns
@@ -520,7 +520,7 @@ private func makeReportingLane(
     ContactLane(
         pacer: pacer,
         onHealth: { health.record($0) },
-        recoverContact: { contact, _ in recorder.record(contact) }
+        recoverContact: { contact, _, _ in recorder.record(contact) }
     )
 }
 
@@ -590,4 +590,102 @@ func anExpiryWhoseReleaseLandsReportsNothing() async {
     #expect(recorder.recorded == [.plain(.zero)])
     #expect(health.events.isEmpty)
     #expect(await lane.shutEpisodes == 0)
+}
+
+// MARK: - Recovery waits
+
+/// A recovery the test completes by hand, standing in for a release that
+/// timed out and is still queued behind a stalled send.
+private final class RecoveryGate: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.deviceterm.tests.recovery-gate")
+    private var waits: [ContactLane.RecoveryWait] = []
+    private var pending: [CheckedContinuation<Bool, Never>] = []
+
+    var recordedWaits: [ContactLane.RecoveryWait] {
+        queue.sync { waits }
+    }
+
+    var pendingCount: Int {
+        queue.sync { pending.count }
+    }
+
+    func recover(_ wait: ContactLane.RecoveryWait) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            queue.sync {
+                waits.append(wait)
+                pending.append(continuation)
+            }
+        }
+    }
+
+    /// Complete every recovery in flight with `result`.
+    func finish(_ result: Bool) {
+        let ready = queue.sync {
+            let ready = pending
+            pending.removeAll()
+            return ready
+        }
+        for continuation in ready {
+            continuation.resume(returning: result)
+        }
+    }
+
+    func waitForPending(_ count: Int) async {
+        for _ in 0..<10_000 where pendingCount < count {
+            await Task.yield()
+        }
+    }
+}
+
+private func makeGatedLane(pacer: any GesturePacing, gate: RecoveryGate) -> ContactLane {
+    ContactLane(pacer: pacer) { _, _, wait in await gate.recover(wait) }
+}
+
+@Test
+func anExpiryWaitsOutItsReleaseInsteadOfSendingAnother() async {
+    let gate = RecoveryGate()
+    let lane = makeGatedLane(pacer: FakeGesturePacer(), gate: gate)
+    _ = await lane.admitLive(phase: .down, contact: .plain(.zero), generation: 0)
+    await gate.waitForPending(1)
+    for _ in 0..<200 {
+        await Task.yield()
+    }
+    // One release, waited on until it completes; nothing re-sent meanwhile.
+    #expect(gate.recordedWaits == [.settled])
+    #expect(await lane.admitLive(phase: .down, contact: .plain(.zero), generation: 0).send)
+    gate.finish(true)
+}
+
+@Test
+func aCloseRecoversWithABoundedWait() async {
+    let gate = RecoveryGate()
+    // The real pacer, so the expiry can't fire inside the test.
+    let lane = makeGatedLane(pacer: SystemGesturePacer(), gate: gate)
+    _ = await lane.admitLive(phase: .down, contact: .plain(.zero), generation: 0)
+    let closing = Task { await lane.close() }
+    await gate.waitForPending(1)
+    // Teardown is waiting behind this release, so it must not wait forever.
+    #expect(gate.recordedWaits == [.bounded])
+    gate.finish(true)
+    await closing.value
+}
+
+@Test
+func aContactRefreshedWhileItsReleaseIsOutKeepsTheLane() async {
+    let gate = RecoveryGate()
+    let lane = makeGatedLane(pacer: FakeGesturePacer(), gate: gate)
+    _ = await lane.admitLive(phase: .down, contact: .plain(.zero), generation: 0)
+    await gate.waitForPending(1)
+    // The user presses again while the expiry's release is still out.
+    _ = await lane.admitLive(phase: .move, contact: .plain(.zero), generation: 0)
+    gate.finish(true)
+    for _ in 0..<200 {
+        await Task.yield()
+    }
+    // The lease survived the old release landing, so the new contact's lift
+    // is still admitted against it rather than dropped as a leftover.
+    let lift = await lane.admitLive(phase: .lift, contact: .plain(.zero), generation: 0)
+    #expect(lift.send)
+    #expect(lift.releaseAfterSend != nil)
+    gate.finish(true)
 }

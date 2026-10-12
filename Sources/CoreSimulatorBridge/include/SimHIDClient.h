@@ -17,6 +17,7 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import "SimHIDSendLedger.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -57,6 +58,28 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
 /// the named panel. Keys, buttons and the crown address no panel and ignore
 /// it.
 @property (atomic, assign) unsigned int touchScreenID;
+
+// MARK: Send completion
+//
+// Every send below waits up to one second for SimulatorKit's completion and
+// fails with `CSBHIDClientErrorSendTimeout` past that. The send is not
+// cancelled: SimulatorKit sends in order with no timeout of its own, so it may
+// still complete, and delivery is unknown. While one is outstanding, every
+// send that isn't a release fails with `CSBHIDClientErrorTransportStalled`
+// without being sent. Releases (`tapUp`, `edgeTouchUp`, `twoFingerUp`,
+// `keyUp`, `releaseHardwareButton`, and the up half of a press) still go out.
+
+/// Sends handed to SimulatorKit whose completion hasn't arrived yet,
+/// including ones whose wait has already timed out.
+@property (nonatomic, readonly) NSUInteger outstandingSendCount;
+
+/// Call `completionHandler` on this client's send queue once no send is
+/// outstanding. Reports the first unreported error a send returned after its
+/// wait had timed out, or nil if none remains. Reporting consumes the error;
+/// handlers waiting together receive the same result. Waits with no deadline:
+/// if the guest never takes its input, this never fires.
+- (void)whenSendsSettleWithCompletionHandler:(void (^)(NSError * _Nullable error))completionHandler
+    NS_SWIFT_NAME(whenSendsSettle(completionHandler:));
 
 // MARK: Single-finger touch
 //

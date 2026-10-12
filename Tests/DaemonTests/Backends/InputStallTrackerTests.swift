@@ -25,7 +25,7 @@ func aCompletedSendEndsTheStallWithItsDurationAndTimeouts() {
     _ = tracker.noteTimeout(operation: "tapDown", at: origin)
     _ = tracker.noteTimeout(operation: "tapUp", at: origin + .seconds(1))
     let ended = tracker.noteCompleted(operation: "tapDown", at: origin + .seconds(5))
-    #expect(ended == .ended(operation: "tapDown", duration: .seconds(5), timeouts: 2))
+    #expect(ended == .ended(operation: "tapDown", duration: .seconds(5), timeouts: 2, refused: 0))
     #expect(!tracker.isStalled)
 }
 
@@ -44,8 +44,23 @@ func eachStallCountsAsItsOwnEpisodeWithItsOwnTimeouts() {
     _ = tracker.noteCompleted(operation: "tapDown", at: origin + .seconds(2))
     #expect(tracker.noteTimeout(operation: "keyDown", at: origin + .seconds(3)) == .began(operation: "keyDown"))
     let ended = tracker.noteCompleted(operation: "keyUp", at: origin + .seconds(4))
-    #expect(ended == .ended(operation: "keyUp", duration: .seconds(1), timeouts: 1))
+    #expect(ended == .ended(operation: "keyUp", duration: .seconds(1), timeouts: 1, refused: 0))
     #expect(tracker.episodes == 2)
+}
+
+@Test
+func refusalsCountOnlyInsideAStall() {
+    var tracker = InputStallTracker()
+    tracker.noteRefused()
+    _ = tracker.noteTimeout(operation: "tapDown", at: origin)
+    tracker.noteRefused()
+    tracker.noteRefused()
+    let ended = tracker.noteCompleted(operation: "tapUp", at: origin + .seconds(3))
+    #expect(ended == .ended(operation: "tapUp", duration: .seconds(3), timeouts: 1, refused: 2))
+    // A new stall starts its own count.
+    _ = tracker.noteTimeout(operation: "tapDown", at: origin + .seconds(4))
+    let next = tracker.noteCompleted(operation: "tapDown", at: origin + .seconds(5))
+    #expect(next == .ended(operation: "tapDown", duration: .seconds(1), timeouts: 1, refused: 0))
 }
 
 @Test("only the bridge's send timeout counts as a stall", arguments: [

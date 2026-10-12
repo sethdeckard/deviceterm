@@ -100,6 +100,19 @@ actor ContactLane {
         case abandoned(attempts: Int, duration: Duration)
     }
 
+    /// How long a recovery may wait for its release to complete.
+    enum RecoveryWait: Equatable, Sendable {
+        /// Skips the unbounded settle wait. Queueing and reconnect retries can
+        /// still take the release call past one second. A close uses it,
+        /// because the pane's teardown is waiting behind it.
+        case bounded
+        /// Until the release completes, however long that takes. The expiry
+        /// uses it: it retains the lease while recovery waits, so live phases
+        /// may refresh that lease but queued gestures can't take it, and
+        /// sending another release would only queue behind the first.
+        case settled
+    }
+
     /// What a woken waiter receives: the identity of the lease it now holds.
     /// The `Lease` itself stays inside the actor, since it is mutable state the
     /// lane owns.
@@ -115,6 +128,10 @@ actor ContactLane {
         let fence: GestureFence
         var lastLive: LiveContact?
         var lastAdmitted: ContinuousClock.Instant
+        /// Live phases admitted against this lease. An expiry compares it
+        /// across its recovery to tell whether a contact went down again
+        /// while the release was out.
+        var liveRefreshes = 0
         /// Set once a preempt has been requested, so a second live arrival
         /// doesn't raise the fence again or queue a redundant expiry.
         var releasing = false
@@ -180,7 +197,7 @@ actor ContactLane {
     /// composite that failed partway does not: it never reported its points to
     /// the lane, and its terminal `up` may or may not have landed. `nil` means
     /// "release whatever is still down", which the backend tracks.
-    private let recoverContact: @Sendable (LiveContact?, UInt64) async -> Bool
+    private let recoverContact: @Sendable (LiveContact?, UInt64, RecoveryWait) async -> Bool
     /// Told each time the lane shuts or reopens. Called on the lane's own
     /// executor, so it must not wait on anything.
     private let onHealth: @Sendable (HealthEvent) -> Void
@@ -223,7 +240,7 @@ actor ContactLane {
     init(
         pacer: any GesturePacing = SystemGesturePacer(),
         onHealth: @escaping @Sendable (HealthEvent) -> Void = { _ in },
-        recoverContact: @escaping @Sendable (LiveContact?, UInt64) async -> Bool
+        recoverContact: @escaping @Sendable (LiveContact?, UInt64, RecoveryWait) async -> Bool
     ) {
         self.pacer = pacer
         self.onHealth = onHealth
@@ -280,6 +297,7 @@ actor ContactLane {
         if let lease = current, lease.role == .live {
             lease.lastLive = contact
             lease.lastAdmitted = pacer.now()
+            lease.liveRefreshes += 1
             armExpiry(for: lease.id)
             return .pass
         }
@@ -353,7 +371,7 @@ actor ContactLane {
             return
         }
         if let lease = current, lease.role == .live {
-            await recover(lease)
+            await recover(lease, waiting: .bounded)
             current = nil
             expiry?.cancel()
             expiry = nil
@@ -486,12 +504,11 @@ actor ContactLane {
         }
     }
 
-    /// Free whatever this lease was holding. Synchronous for a live lease so a
-    /// close's lift is ordered ahead of the backend teardown; a failed
-    /// composite has to ask the backend, which suspends.
+    /// Free whatever this lease was holding. Awaited, so a close's lift is
+    /// ordered ahead of the backend teardown.
     @discardableResult
-    private func recover(_ lease: Lease) async -> Bool {
-        await recoverContact(lease.lastLive, lease.generation)
+    private func recover(_ lease: Lease, waiting wait: RecoveryWait) async -> Bool {
+        await recoverContact(lease.lastLive, lease.generation, wait)
     }
 
     /// Arm (or re-arm) the expiry for `id`.
@@ -517,8 +534,13 @@ actor ContactLane {
         // Free the contact *before* handing the lane on. The recovery suspends
         // for a composite, so re-check the lease is still the current one
         // afterwards: a transfer or close can land in that window.
-        let recovered = await recover(lease)
+        let refreshes = lease.liveRefreshes
+        let recovered = await recover(lease, waiting: .settled)
         guard let stillHeld = current, stillHeld.id == id else { return }
+        // A live phase refreshed the lease while the release was out, so a
+        // contact is down again, and its own expiry is already armed. Handing
+        // the lane on here would put the next gesture on top of it.
+        guard stillHeld.liveRefreshes == refreshes else { return }
         guard recovered else {
             guard !closed else {
                 // A close landed while this attempt was in flight. Its teardown

@@ -1159,6 +1159,19 @@ public enum PaneMethods {
                 message: "pane.\(operation.label): input lane refused the gesture; nothing was sent, retry"
             )
 
+        case let .inputStalled(_, operation):
+            // The transport refused a send rather than queue it behind one
+            // that hasn't completed. Only that send is known not to have gone
+            // out; a multi-send gesture may have sent earlier ones. So the
+            // message makes no claim about the whole operation.
+            // `serverError`: the request was well-formed, and a retry can
+            // succeed once the stall clears.
+            return RPCMethodError(
+                code: RPCErrorCode.serverError,
+                message: "pane.\(operation.label): the simulator isn't accepting input; "
+                    + "a send was refused because an earlier one hasn't completed"
+            )
+
         case let .inputSuperseded(_, operation):
             // A transfer barrier made the gesture's captured generation
             // stale. The message claims neither outcome it cannot support:

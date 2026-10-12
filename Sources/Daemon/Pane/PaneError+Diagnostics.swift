@@ -104,6 +104,9 @@ extension PaneError {
         case let .inputNotAdmitted(_, operation):
             return "input-not-admitted:\(operation.label)"
 
+        case let .inputStalled(_, operation):
+            return "input-stalled:\(operation.label)"
+
         case let .inputSuperseded(_, operation):
             return "input-superseded:\(operation.label)"
 
