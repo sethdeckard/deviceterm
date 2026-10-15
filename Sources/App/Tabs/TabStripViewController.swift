@@ -812,6 +812,10 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         tabContentByID[tabID]?.orientation(for: slot)
     }
 
+    func pixelSize(for slot: PaneSlot, inTab tabID: TabID) -> (width: Int, height: Int)? {
+        tabContentByID[tabID]?.pixelSize(for: slot)
+    }
+
     /// Repair an orphaned first responder in the selected tab, if it
     /// has one. Driven by `AppDelegate` when this strip's window takes
     /// key. Resolving through `tabListVM.selectedTab` rather than

@@ -55,6 +55,15 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// VM itself.
     var currentState: SimulatorPaneState { viewModel.state }
     var currentOrientation: Orientation { viewModel.currentOrientation }
+    /// The latest known pixel dimensions, updated from received surfaces as
+    /// the active panel changes. Nil when either dimension is missing or
+    /// nonpositive.
+    var currentPixelSize: (width: Int, height: Int)? {
+        guard let width = chromeViewModel.devicePixelWidth,
+            let height = chromeViewModel.devicePixelHeight,
+            width > 0, height > 0 else { return nil }
+        return (width, height)
+    }
     /// The last panel id reported by the daemon, used for `simctl io
     /// --display`. Nil until reported, and always nil on single-panel
     /// devices. Captures pass it so they record what the pane shows rather

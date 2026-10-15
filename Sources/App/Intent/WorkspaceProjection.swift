@@ -200,6 +200,13 @@ final class WorkspaceProjection {
 
         case let .simulator(pane):
             let capabilities = pane.capabilities ?? .missingBlockFallback
+            // The attach response's size is a snapshot, which a fold makes
+            // stale, so the pane's latest known size wins when it has one.
+            let liveSize = actionDelegate?.panePixelSize(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                slot: resolved.slot
+            )
             return WorkspacePane(
                 id: pane.paneId,
                 shortId: pane.shortId ?? fallbackShortID(pane.paneId),
@@ -225,14 +232,21 @@ final class WorkspaceProjection {
                         tab: resolved.tabID,
                         slot: resolved.slot
                     ),
-                    pixelWidth: pane.pixelWidth,
-                    pixelHeight: pane.pixelHeight,
+                    pixelWidth: liveSize?.width ?? pane.pixelWidth,
+                    pixelHeight: liveSize?.height ?? pane.pixelHeight,
                     capabilities: pane.capabilities
                 )
             )
 
         case let .device(pane):
             let capabilities = pane.capabilities ?? .missingBlockFallback
+            // The attach response's size is a snapshot, which a fold makes
+            // stale, so the pane's latest known size wins when it has one.
+            let liveSize = actionDelegate?.panePixelSize(
+                window: resolved.windowID,
+                tab: resolved.tabID,
+                slot: resolved.slot
+            )
             return WorkspacePane(
                 id: pane.paneId,
                 shortId: pane.shortId ?? fallbackShortID(pane.paneId),
@@ -258,8 +272,8 @@ final class WorkspaceProjection {
                         tab: resolved.tabID,
                         slot: resolved.slot
                     ),
-                    pixelWidth: pane.pixelWidth,
-                    pixelHeight: pane.pixelHeight,
+                    pixelWidth: liveSize?.width ?? pane.pixelWidth,
+                    pixelHeight: liveSize?.height ?? pane.pixelHeight,
                     capabilities: pane.capabilities
                 )
             )

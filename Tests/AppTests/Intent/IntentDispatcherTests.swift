@@ -73,6 +73,84 @@ struct IntentDispatcherTests {
     }
 
     @Test
+    func paneProjectionReportsTheSizeOfTheFramesOnScreen() async {
+        // Attached on the cover, then folded open: the attach response's size
+        // is the cover's, and the frames now come from the inner panel.
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            panes: [
+                SimPaneState(
+                    paneId: "P1",
+                    udid: "U-duo",
+                    displayName: "iPhone Duo",
+                    family: "phone",
+                    pixelWidth: 1_398,
+                    pixelHeight: 2_034
+                )
+            ],
+            devicePanes: [
+                DevicePaneState(
+                    paneId: "P-device",
+                    deviceId: "D-1",
+                    displayName: "iPhone",
+                    family: "phone",
+                    pixelWidth: 1_179,
+                    pixelHeight: 2_556
+                )
+            ]
+        )
+        harness.delegate.pixelSizes[.sim(udid: "U-duo")] = (2_007, 2_853)
+        harness.delegate.pixelSizes[.device(deviceId: "D-1")] = (2_556, 1_179)
+
+        let simulator = await harness.dispatcher.dispatch(.workspacePaneShow("P1"), origin: .inProcess)
+        let device = await harness.dispatcher.dispatch(.workspacePaneShow("P-device"), origin: .inProcess)
+
+        guard case let .data(.workspacePane(simulatorPane)) = simulator,
+            case let .data(.workspacePane(devicePane)) = device else {
+            Issue.record("expected two panes; got \(simulator) and \(device)")
+            return
+        }
+        #expect(simulatorPane.simulator?.pixelWidth == 2_007)
+        #expect(simulatorPane.simulator?.pixelHeight == 2_853)
+        #expect(devicePane.device?.pixelWidth == 2_556)
+        #expect(devicePane.device?.pixelHeight == 1_179)
+    }
+
+    @Test
+    func paneProjectionFallsBackToTheAttachSizeBeforeAFrame() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            panes: [
+                SimPaneState(
+                    paneId: "P1",
+                    udid: "U-duo",
+                    displayName: "iPhone Duo",
+                    family: "phone",
+                    pixelWidth: 1_398,
+                    pixelHeight: 2_034
+                )
+            ]
+        )
+
+        let result = await harness.dispatcher.dispatch(.workspacePaneShow("P1"), origin: .inProcess)
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.simulator?.pixelWidth == 1_398)
+        #expect(pane.simulator?.pixelHeight == 2_034)
+    }
+
+    @Test
     func workspacePaneRenameCommitsGUIAndDaemonNamesTogether() async {
         let harness = makeHarness()
         let pane = SimPaneState(
@@ -1324,6 +1402,12 @@ private final class RecordingActionDelegate: IntentActionDelegate {
     var captureResult = ""
     var captureError: IntentError?
     var moveImplementation: ((TabID, WindowID, WindowID, Int) -> Void)?
+    /// Stands in for the size of the frame each device pane is drawing.
+    var pixelSizes: [PaneSlot: (width: Int, height: Int)] = [:]
+
+    func panePixelSize(window: WindowID, tab: TabID, slot: PaneSlot) -> (width: Int, height: Int)? {
+        pixelSizes[slot]
+    }
 
     func renameTab(window: WindowID, tab: TabID, to name: String?) {}
 

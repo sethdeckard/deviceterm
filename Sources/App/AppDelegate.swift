@@ -2122,6 +2122,10 @@ extension AppDelegate: IntentActionDelegate {
         strip(for: windowID)?.orientation(for: slot, inTab: tabID)
     }
 
+    func panePixelSize(window windowID: WindowID, tab tabID: TabID, slot: PaneSlot) -> (width: Int, height: Int)? {
+        strip(for: windowID)?.pixelSize(for: slot, inTab: tabID)
+    }
+
     func raiseWindow(_ windowID: WindowID) {
         // No live controller for the id: the window is closing, or it
         // was just added and reconcile hasn't built one yet. Silent

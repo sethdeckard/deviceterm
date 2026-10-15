@@ -62,6 +62,13 @@ protocol IntentActionDelegate: AnyObject {
     func focusedPane(window: WindowID, tab: TabID) -> PaneSlot?
     func paneLifecycle(window: WindowID, tab: TabID, slot: PaneSlot) -> PaneLifecycle?
     func paneOrientation(window: WindowID, tab: TabID, slot: PaneSlot) -> Orientation?
+    /// The latest known pixel dimensions, initially from the attach response
+    /// and updated from received surfaces. Nil when valid dimensions are
+    /// unavailable.
+    ///
+    /// Live, unlike the attach response's size on the pane state: a fold
+    /// moves a foldable onto a panel of a different size.
+    func panePixelSize(window: WindowID, tab: TabID, slot: PaneSlot) -> (width: Int, height: Int)?
 
     /// Relocate a live tab into a different window at `atIndex`. The
     /// Router can't do this (it has no AppKit access to move the tab's
@@ -98,4 +105,5 @@ extension IntentActionDelegate {
     func focusedPane(window: WindowID, tab: TabID) -> PaneSlot? { nil }
     func paneLifecycle(window: WindowID, tab: TabID, slot: PaneSlot) -> PaneLifecycle? { nil }
     func paneOrientation(window: WindowID, tab: TabID, slot: PaneSlot) -> Orientation? { nil }
+    func panePixelSize(window: WindowID, tab: TabID, slot: PaneSlot) -> (width: Int, height: Int)? { nil }
 }

@@ -637,6 +637,19 @@ final class TabContentViewController: NSViewController {
         }
     }
 
+    func pixelSize(for slot: PaneSlot) -> (width: Int, height: Int)? {
+        switch slot {
+        case let .sim(udid):
+            simPaneVCByUDID[udid]?.currentPixelSize
+
+        case let .device(deviceId):
+            devicePaneVCByID[deviceId]?.currentPixelSize
+
+        case .terminal, .pending:
+            nil
+        }
+    }
+
     // MARK: - Lifecycle
 
     /// Called by TabStripViewController when reconcile drops this VC. Removes
