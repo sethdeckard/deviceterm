@@ -16,10 +16,14 @@ import Metal
 /// producer's next render into it.
 ///
 /// Textures are cached per surface, because the simulator's framebuffer is one
-/// stable surface and slots persist within a pool epoch. A cached texture
-/// keeps its surface alive, so the cache drops every entry whose size differs
-/// from the latest destination's (a rotation) and evicts the least recently
-/// used beyond `cacheCapacity`.
+/// stable surface and slots persist within a pool epoch. The cache is keyed by
+/// IOSurface ID rather than by ref, because a surface can reach the blitter
+/// through a new ref object on every read, as CoreSimulator's framebuffer does.
+/// An ID can't alias another surface while it's cached: the cached texture
+/// keeps its surface alive, so the ID isn't free for reuse until the entry is
+/// gone. That same retention is why the cache drops every entry whose size
+/// differs from the latest destination's (a rotation) and evicts the least
+/// recently used beyond `cacheCapacity`.
 ///
 /// `@unchecked Sendable`: `device` and `commandQueue` are thread-safe Metal
 /// objects, and `textures` and `useClock` are touched only on `queue`.
@@ -44,7 +48,7 @@ final class SurfaceBlitter: @unchecked Sendable {
     private let commandQueue: any MTLCommandQueue
     private let queue = DispatchQueue(label: "com.deviceterm.surface-blit", qos: .userInteractive)
     private let cacheCapacity: Int
-    private var textures: [ObjectIdentifier: CachedTexture] = [:]
+    private var textures: [IOSurfaceID: CachedTexture] = [:]
     private var useClock: UInt64 = 0
 
     /// How many textures the cache holds.
@@ -154,7 +158,7 @@ private extension SurfaceBlitter {
     /// The cached texture for `surface`, made on first use.
     func texture(for surface: IOSurfaceRef) -> (any MTLTexture)? {
         useClock += 1
-        let key = ObjectIdentifier(surface)
+        let key = IOSurfaceGetID(surface)
         if let cached = textures[key] {
             textures[key]?.lastUse = useClock
             return cached.texture

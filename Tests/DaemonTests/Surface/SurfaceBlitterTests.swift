@@ -149,3 +149,34 @@ func aBlitReportsTheBytesTheCPUCopyWouldForMismatchedStrides() async throws {
     #expect(blitted == copied)
     #expect(visibleRows(blitTarget) == visibleRows(wide))
 }
+
+/// Another ref object for the same surface, or nil when none of the
+/// lookup routes returns a distinct object.
+private func secondRef(to surface: IOSurfaceRef) -> IOSurfaceRef? {
+    if let looked = IOSurfaceLookup(IOSurfaceGetID(surface)), looked !== surface { return looked }
+    let port = IOSurfaceCreateMachPort(surface)
+    defer { mach_port_deallocate(mach_task_self_, port) }
+    if let fromPort = IOSurfaceLookupFromMachPort(port), fromPort !== surface { return fromPort }
+    if let fromXPC = IOSurfaceLookupFromXPCObject(IOSurfaceCreateXPCObject(surface)), fromXPC !== surface {
+        return fromXPC
+    }
+    return nil
+}
+
+/// A surface reaching the blitter through a second ref object, as a
+/// simulator's framebuffer does on every read, reuses the texture its first
+/// ref built.
+@Test(.enabled(if: metalAvailable))
+func aSecondRefToTheSameSurfaceReusesItsTexture() async throws {
+    let blitter = try #require(SurfaceBlitter(cacheCapacity: 4))
+    let source = try bgraSurface(width: 16, height: 16)
+    let destination = try bgraSurface(width: 16, height: 16)
+    fillPattern(source)
+    _ = try #require(await blitter.blit(from: source, to: destination).bytes)
+    #expect(blitter.cachedTextureCount == 2)
+
+    let sameSource = RetainedSurface(try #require(source.withRef(secondRef(to:))))
+    _ = try #require(await blitter.blit(from: sameSource, to: destination).bytes)
+    #expect(blitter.cachedTextureCount == 2)
+    #expect(visibleRows(destination) == visibleRows(source))
+}
