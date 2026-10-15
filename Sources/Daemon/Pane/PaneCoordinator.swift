@@ -297,6 +297,11 @@ public actor PaneCoordinator {
         /// A rotation waits here before it reads the bound panel, because a
         /// fold moves the panel and the display reading a quarter turn.
         var foldSettling: SerialChainLink?
+        /// Whether a panel change may end `foldSettling`. False for a gate
+        /// that replaced an earlier fold's unfinished one, because that
+        /// earlier fold's panel change can still arrive and must not open
+        /// this fold's gate; such a gate ends on its timeout only.
+        var foldSettlingEndsOnPanelChange = true
         /// Bumped by each fold this daemon issues. A rotation captures it
         /// before dispatch and gives up its confirmation if a fold began
         /// while it was being sent, since the fold can move the reading.
@@ -713,9 +718,10 @@ public actor PaneCoordinator {
     /// CLI bounds its own response deadline by the same number; this name is
     /// the daemon-local spelling of it.
     public static let maxGestureDurationMs: Int = GestureDuration.maxMs
-    /// How long rotations wait after a fold that lights no other panel.
-    /// Longer than a panel swap takes, so a fold that does swap releases them
-    /// through its panel change first.
+    /// How long rotations wait after a fold that lights no other panel, or
+    /// after a fold that replaced an earlier one's gate. Longer than a panel
+    /// swap takes, so a lone fold that does swap releases them through its
+    /// panel change first.
     static let foldSettleNanoseconds: UInt64 = 1_000_000_000
 
     // The swipe-dwell cadence/jitter and the App-Switcher double-press gap
@@ -3195,7 +3201,7 @@ public actor PaneCoordinator {
     func notePanelChange(paneId: UUID, panel: BoundPanel) {
         guard let record = panes[paneId], record.observedPanel != panel else { return }
         // A fold this daemon issued has landed on its panel.
-        if let settling = record.foldSettling {
+        if let settling = record.foldSettling, record.foldSettlingEndsOnPanelChange {
             endFoldSettling(record: record, settling: settling)
         }
         let spansHingeMoved = record.observedPanelSpansHinge != panel.spansHinge
@@ -4220,23 +4226,24 @@ public actor PaneCoordinator {
             supporting: \.fold,
             operation: .fold
         )
-        // One fold at a time, through settling: a panel change from an earlier
-        // fold must not open this fold's gate. A newer fold can queue here too,
-        // so check again after each wait.
-        while let earlier = input.record.foldSettling, !earlier.done {
-            await awaitChainLink(earlier)
-        }
         // A fold moves the shared display reading, so a rotation waiting for
         // its reading, or still being sent, could be settled by the fold rather
         // than by the device turning. Cancel the one waiting, mark the one in
         // flight, and hold new rotations until a panel change is observed or
         // the settling timeout expires.
+        //
+        // A fold does not wait for the one before it to settle: a dragged
+        // hinge sends folds back to back, and waiting out each settle would
+        // pace the drag at one fold a second. It replaces that fold's gate
+        // instead.
         input.record.foldEpoch &+= 1
         cancelPendingRotation(record: input.record)
-        let settling = beginFoldSettling(record: input.record)
+        let (settling, replaced) = beginFoldSettling(record: input.record)
         var dispatched = false
         defer {
-            if dispatched {
+            // A replacing fold that failed still holds rotations for the
+            // fold it replaced, whose effect may yet be landing.
+            if dispatched || replaced {
                 scheduleFoldSettlingTimeout(paneId: paneId, settling: settling)
             } else {
                 endFoldSettling(record: input.record, settling: settling)
@@ -4274,12 +4281,20 @@ public actor PaneCoordinator {
     }
 
     /// Hold rotations until a panel change is observed or the settling
-    /// timeout expires. Folds are serialized through settling, so no earlier
-    /// gate is still held.
-    private func beginFoldSettling(record: Record) -> SerialChainLink {
+    /// timeout expires, replacing any gate an earlier fold still holds.
+    ///
+    /// A replacing gate ends on its timeout only: the earlier fold's panel
+    /// change can still arrive, and it describes that fold, not this one. The
+    /// earlier gate is signalled after the new one is installed, so a rotation
+    /// waiting on it wakes to find this gate and waits again. `replaced` says
+    /// whether an unfinished gate was taken over.
+    private func beginFoldSettling(record: Record) -> (settling: SerialChainLink, replaced: Bool) {
+        let earlier = record.foldSettling.flatMap { $0.done ? nil : $0 }
         let settling = SerialChainLink()
         record.foldSettling = settling
-        return settling
+        record.foldSettlingEndsOnPanelChange = earlier == nil
+        if let earlier { signalChainLink(earlier) }
+        return (settling, earlier != nil)
     }
 
     /// Release `settling`, and stop holding rotations if it is still the

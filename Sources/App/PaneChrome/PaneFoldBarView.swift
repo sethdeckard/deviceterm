@@ -27,11 +27,11 @@ struct PaneFoldBarView: View {
 
     /// The postures and the slider.
     ///
-    /// The slider sends on release, never while dragging. Each fold spawns a
-    /// guest helper the daemon waits on, serialized behind the pane's input
-    /// queue, so a drag that sent per tick would enqueue a few hundred of
-    /// them and the hinge would still be catching up long after the pointer
-    /// stopped.
+    /// The slider sends while it's dragged as well as on release, so the
+    /// device follows the thumb. That's affordable because the pane sends at
+    /// most one fold at a time, coalescing intermediate angles while
+    /// preserving turning points and the final angle (see
+    /// `SimulatorPaneViewModel.fold(toDegrees:)`).
     private var bar: some View {
         HStack(spacing: PaneChromeRibbonFit.contentItemSpacing) {
             ForEach(FoldPosture.allCases, id: \.self) { posture in
@@ -46,7 +46,10 @@ struct PaneFoldBarView: View {
             Slider(
                 value: Binding(
                     get: { viewModel.foldDegrees },
-                    set: { viewModel.foldDegrees = $0 }
+                    set: { degrees in
+                        viewModel.foldDegrees = degrees
+                        if viewModel.foldSliderIsTracking { viewModel.onFold(degrees) }
+                    }
                 ),
                 in: FoldPosture.degreeRange,
                 onEditingChanged: { editing in

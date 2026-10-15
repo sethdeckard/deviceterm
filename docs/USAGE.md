@@ -486,10 +486,15 @@ The bar appears on its own the first time a pane reports that it folds. The
 fold button in the title row hides it again, which gives the picture back
 the height.
 
-The slider shows the angle the device is at and sends a new one when you let
-go. It follows the hinge the rest of the time, so a fold from Device Hub or
-from `deviceterm fold` in another tab moves it; while you are dragging it, your
-drag owns it.
+The slider shows the angle the device is at, and dragging it folds the
+device as you go. The picture bends with the thumb right away; the device
+follows a step behind, because each fold takes a moment. DeviceTerm sends one
+fold at a time, skipping intermediate angles but preserving changes in
+direction. The angle you let go at is the last one sent.
+
+The slider follows the hinge the rest of the time, so a fold from Device Hub
+or from `deviceterm fold` in another tab moves it. While you're dragging it,
+your drag owns it.
 
 While the panel the hinge runs through is the one lit, the picture bends at the
 crease to match the angle and the device frame bends with it. The cover panel

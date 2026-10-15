@@ -2230,10 +2230,13 @@ reading.
 
 A fold issued by DeviceTerm resolves a waiting rotation as unconfirmed. A
 rotation still being dispatched finishes dispatch but cannot confirm if a fold
-began meanwhile. The fold holds new rotations and the next fold until the
-panel changes or a second passes. A fold made outside DeviceTerm while a
-rotation waits can confirm it falsely, because the fold moves the shared
-reading before the daemon sees the panel change.
+began meanwhile. The fold holds new rotations until the panel changes or a
+second passes. A fold doesn't wait for the one before it to settle. It takes
+over that fold's hold instead, and a hold taken over that way ignores panel
+changes and lasts its full second, because the earlier fold's panel change can
+still arrive. A fold made outside DeviceTerm while a rotation waits can confirm
+it falsely, because the fold moves the shared reading before the daemon sees
+the panel change.
 
 `faceUp` and `faceDown` lay the device flat and report in
 `targetFlatOrientation` and `observedFlatOrientation`. `observedOrientation`

@@ -616,6 +616,126 @@ struct SimulatorPaneViewModelTests {
         #expect(fake.foldCalls == [.init(paneId: "p1", degrees: 120)])
     }
 
+    /// A dragged slider asks for a fold on every tick, and each fold takes a
+    /// guest process launch. Sending them all would queue hundreds of folds
+    /// behind the pane's touches.
+    @Test("a burst of folds sends one at a time and ends on the newest")
+    func foldsCoalesceToTheNewest() async {
+        let fake = FakeDaemonClient()
+        fake.holdFoldCalls = true
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: 10)
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        viewModel.fold(toDegrees: 20)
+        viewModel.fold(toDegrees: 30)
+        viewModel.fold(toDegrees: 40)
+        await settle()
+        // The first is still in flight, and nothing was sent beside it.
+        #expect(fake.foldCalls.map(\.degrees) == [10])
+        #expect(viewModel.isSendingFold)
+        fake.releaseNextFoldCall()
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        // Only the newest of the three waiting went next.
+        #expect(fake.foldCalls.map(\.degrees) == [10, 40])
+        #expect(fake.waitingFoldCallCount == 1)
+        fake.releaseNextFoldCall()
+        for _ in 0..<200 where viewModel.isSendingFold { await Task.yield() }
+        #expect(fake.foldCalls.map(\.degrees) == [10, 40])
+        #expect(!viewModel.isSendingFold)
+    }
+
+    /// The lit panel depends on the hinge's path: 100, 105, 60 keeps the inner
+    /// panel where 100 straight to 60 switches to the cover. Coalescing must
+    /// not drop the turn, or send timing would decide the panel.
+    @Test("a fold that turns back keeps the turning point")
+    func foldsKeepTurningPoints() async {
+        let fake = FakeDaemonClient()
+        fake.holdFoldCalls = true
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: 100)
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        viewModel.fold(toDegrees: 103)
+        viewModel.fold(toDegrees: 105)
+        viewModel.fold(toDegrees: 80)
+        viewModel.fold(toDegrees: 60)
+        for _ in 0..<3 {
+            fake.releaseNextFoldCall()
+            for _ in 0..<200 where fake.waitingFoldCallCount == 0 && viewModel.isSendingFold {
+                await Task.yield()
+            }
+        }
+        #expect(fake.foldCalls.map(\.degrees) == [100, 105, 60])
+    }
+
+    /// A slow turn back moves less than the tolerance between samples, so the
+    /// retreat has to count from the furthest angle reached.
+    @Test("a gradual turn back keeps the turning point")
+    func foldsKeepAGradualTurningPoint() async {
+        let fake = FakeDaemonClient()
+        fake.holdFoldCalls = true
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: 100)
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        for degrees in stride(from: 101.0, through: 105.0, by: 1) {
+            viewModel.fold(toDegrees: degrees)
+        }
+        for degrees in stride(from: 104.0, through: 60.0, by: -1) {
+            viewModel.fold(toDegrees: degrees)
+        }
+        for _ in 0..<3 {
+            fake.releaseNextFoldCall()
+            for _ in 0..<200 where fake.waitingFoldCallCount == 0 && viewModel.isSendingFold {
+                await Task.yield()
+            }
+        }
+        #expect(fake.foldCalls.map(\.degrees) == [100, 105, 60])
+    }
+
+    /// A fold can return between the turn and the request that would commit
+    /// it. The extreme still has to go out, or send timing decides the panel.
+    @Test("a turn survives a fold returning before it is committed")
+    func foldsKeepATurnAcrossADrain() async {
+        let fake = FakeDaemonClient()
+        fake.holdFoldCalls = true
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: 100)
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        viewModel.fold(toDegrees: 105)
+        viewModel.fold(toDegrees: 104)
+        // The fold in flight returns now, with the turn not yet committed.
+        fake.releaseNextFoldCall()
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        for degrees in stride(from: 103.0, through: 60.0, by: -1) {
+            viewModel.fold(toDegrees: degrees)
+        }
+        for _ in 0..<2 {
+            fake.releaseNextFoldCall()
+            for _ in 0..<200 where fake.waitingFoldCallCount == 0 && viewModel.isSendingFold {
+                await Task.yield()
+            }
+        }
+        #expect(fake.foldCalls.map(\.degrees) == [100, 105, 60])
+    }
+
+    @Test("a turn back smaller than a hand's jitter is not a turning point")
+    func foldJitterIsNotATurn() async {
+        let fake = FakeDaemonClient()
+        fake.holdFoldCalls = true
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.fold(toDegrees: 100)
+        for _ in 0..<200 where fake.waitingFoldCallCount == 0 { await Task.yield() }
+        viewModel.fold(toDegrees: 110)
+        viewModel.fold(toDegrees: 109)
+        viewModel.fold(toDegrees: 120)
+        for _ in 0..<2 {
+            fake.releaseNextFoldCall()
+            for _ in 0..<200 where fake.waitingFoldCallCount == 0 && viewModel.isSendingFold {
+                await Task.yield()
+            }
+        }
+        #expect(fake.foldCalls.map(\.degrees) == [100, 120])
+    }
+
     @Test("a pane that cannot fold sends nothing")
     func foldIsDroppedWithoutTheCapability() async {
         let fake = FakeDaemonClient()

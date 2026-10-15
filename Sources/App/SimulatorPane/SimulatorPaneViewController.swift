@@ -64,6 +64,15 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             width > 0, height > 0 else { return nil }
         return (width, height)
     }
+    /// Whether the slider's angle stands in for the device's: while it's
+    /// dragged, and while the folds it sent are still going out.
+    ///
+    /// Both reads happen on every pass, so `render()` stays observing each.
+    private var previewsSlider: Bool {
+        let tracking = chromeViewModel.foldSliderIsTracking
+        let sending = viewModel.isSendingFold
+        return tracking || sending
+    }
     /// The last panel id reported by the daemon, used for `simctl io
     /// --display`. Nil until reported, and always nil on single-panel
     /// devices. Captures pass it so they record what the pane shows rather
@@ -1028,11 +1037,13 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Move the fold slider onto the angle the daemon observed.
     ///
     /// Skipped while the user is dragging the slider, because their drag owns
-    /// the value until they let go. Skipped before the daemon has
-    /// reported anything, which leaves the seeded value in place rather than
-    /// claiming a reading nobody made.
+    /// the value until they let go, and while the folds that drag sent are
+    /// still going out, because readings taken then describe a hinge that's
+    /// still moving and would pull the thumb back. Skipped before the daemon
+    /// has reported anything, which leaves the seeded value in place rather
+    /// than claiming a reading nobody made.
     private func adoptConfirmedHinge() {
-        guard !chromeViewModel.foldSliderIsTracking,
+        guard !previewsSlider,
             let degrees = viewModel.confirmedHingeDegrees,
             chromeViewModel.foldDegrees != degrees
         else { return }
@@ -1046,12 +1057,18 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// angle alone cannot tell the two apart: which panel is lit depends on
     /// the path the hinge took rather than where it stopped.
     ///
+    /// While the slider is being dragged, and until the folds it sent have
+    /// gone out, the bend follows the slider rather than the readings, so the
+    /// picture moves with the thumb instead of waiting for the device. The
+    /// panel gate still comes from the device either way.
+    ///
     /// Internal rather than private so a test can read the gate without a
     /// Metal device and a rendered frame.
     func currentCrease() -> FoldCreaseGeometry.Crease? {
-        guard viewModel.confirmedPanelSpansHinge,
-            let degrees = viewModel.confirmedHingeDegrees
-        else { return nil }
+        let degrees = previewsSlider
+            ? chromeViewModel.foldDegrees
+            : viewModel.confirmedHingeDegrees
+        guard viewModel.confirmedPanelSpansHinge, let degrees else { return nil }
         return FoldCreaseGeometry.crease(degrees: degrees)
     }
 

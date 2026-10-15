@@ -401,6 +401,31 @@ struct SimulatorPaneCreaseGateTests {
         #expect(viewController.currentCrease() == nil)
     }
 
+    @Test("a dragged slider bends the picture before the device moves")
+    func theBendFollowsTheSliderWhileDragged() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        viewController.chromeViewModel.foldDegrees = 7
+        await drive(viewController, fake, degrees: 120, spansHinge: true)
+        viewController.chromeViewModel.foldSliderIsTracking = true
+        viewController.chromeViewModel.foldDegrees = 60
+        #expect(viewController.currentCrease() == FoldCreaseGeometry.crease(degrees: 60))
+        // Letting go, with no fold still going out, hands the bend back to
+        // the device's reading.
+        viewController.chromeViewModel.foldSliderIsTracking = false
+        #expect(viewController.currentCrease() == FoldCreaseGeometry.crease(degrees: 120))
+    }
+
+    @Test("a dragged slider never bends the cover panel")
+    func theSliderCannotBendTheCoverPanel() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await drive(viewController, fake, degrees: 120, spansHinge: false)
+        viewController.chromeViewModel.foldSliderIsTracking = true
+        viewController.chromeViewModel.foldDegrees = 60
+        #expect(viewController.currentCrease() == nil)
+    }
+
     @Test("an open device is flat even on the panel that bends")
     func aFlatHingeDoesNotCrease() async {
         let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()

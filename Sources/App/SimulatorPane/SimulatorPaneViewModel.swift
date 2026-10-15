@@ -78,6 +78,9 @@ final class SimulatorPaneViewModel {
     private static let touchKeepaliveJitter: CGFloat = 0.001
     /// Where a rotation that came back short of confirmed is recorded.
     private static let rotationLog = Logger(subsystem: "com.deviceterm", category: "rotation")
+    /// How far the hinge must come back before it counts as a turn rather
+    /// than a hand's jitter.
+    private static let foldTurnToleranceDegrees = 2.0
 
     let paneId: String
     /// The admission this pane was mounted from, echoed back on close so a
@@ -148,6 +151,13 @@ final class SimulatorPaneViewModel {
     /// --display` accepts. Nil until the daemon names one, which is never on
     /// a device with one panel.
     private(set) var confirmedPanelScreenID: UInt32?
+    /// Whether a fold this pane asked for is still on its way to the device,
+    /// or another is queued behind it.
+    ///
+    /// Observable because the pane keeps drawing the slider's angle rather
+    /// than the device's readings until the last fold has gone out: readings
+    /// taken mid-drag describe a hinge that's still moving.
+    private(set) var isSendingFold = false
 
     /// Whether this pane's input is reaching its device, as the daemon's
     /// `input.changed` event last reported. Reset to `.ok` on every new
@@ -162,6 +172,15 @@ final class SimulatorPaneViewModel {
     /// preserves click order while each RPC handles bounded daemon backpressure.
     @ObservationIgnored private var pendingRotations: [RotationTarget] = []
     @ObservationIgnored private var rotationTask: Task<Void, Never>?
+    /// Fold angles not yet sent, in order: the turning points of the drag so
+    /// far, then the newest angle. See `fold(toDegrees:)`.
+    @ObservationIgnored private var pendingFolds: [Double] = []
+    /// The angle the last fold sent, which the first waiting angle's
+    /// direction is measured from.
+    @ObservationIgnored private var lastSentFoldDegrees: Double?
+    /// The furthest angle the current run of waiting folds has reached in its
+    /// direction: the turning point a retreat from it would commit.
+    @ObservationIgnored private var foldRunExtreme: Double?
     /// The pending move, tagged with the gesture that produced it.
     ///
     /// A slot shared across gestures is worse than no slot: a `down` for the
@@ -924,20 +943,88 @@ final class SimulatorPaneViewModel {
 
     /// Set a foldable device's hinge angle, `0` shut and `180` flat.
     ///
-    /// Nothing is written optimistically. The lit panel follows the hinge on
-    /// the device's own schedule and is path-dependent rather than a function
-    /// of the angle, so the pane re-binds when the daemon reports the swap
-    /// instead of when the request goes out.
+    /// At most one fold is in flight, and the rest wait in order. A request
+    /// that continues in the same direction replaces the newest waiting angle,
+    /// so a dragged slider sends as fast as the device takes folds and always
+    /// ends on the angle it was released at. A request that turns back leaves
+    /// the waiting angle where it is, as a turning point, and waits behind it.
+    ///
+    /// The turning points are kept because the lit panel depends on the path
+    /// the hinge takes: going 100, 105, 60 keeps the inner panel lit where
+    /// 100 straight to 60 switches to the cover. Dropping a turning point
+    /// would let send timing decide which panel a drag ends on. A retreat
+    /// counts from the furthest angle the run reached, not from the previous
+    /// request, so a slow turn back is caught; a retreat smaller than
+    /// `foldTurnToleranceDegrees` in total is jitter, not a turning point.
+    ///
+    /// Nothing about the panel is written optimistically. The lit panel
+    /// follows the hinge on the device's own schedule, so the pane re-binds
+    /// when the daemon reports the swap instead of when the request goes out.
     func fold(toDegrees degrees: Double) {
         guard capabilities.fold else { return }
-        let id = paneId
-        let client = daemonClient
-        let clamped = min(
+        enqueueFold(min(
             FoldPosture.degreeRange.upperBound,
             max(FoldPosture.degreeRange.lowerBound, degrees)
-        )
-        Task { @MainActor in
-            try? await client.paneInputFold(paneId: id, degrees: clamped)
+        ))
+        guard !isSendingFold else { return }
+        isSendingFold = true
+        let id = paneId
+        let client = daemonClient
+        Task { @MainActor [weak self] in
+            while let self, let next = self.nextFold() {
+                self.lastSentFoldDegrees = next
+                try? await client.paneInputFold(paneId: id, degrees: next)
+            }
+            self?.isSendingFold = false
+        }
+    }
+
+    /// The next angle to send, or nil when nothing is waiting.
+    ///
+    /// A run that went further than the angle now ending it sends its extreme
+    /// first, and keeps that angle waiting as the start of the next run.
+    /// Otherwise a fold returning between a turn and the request that would
+    /// commit it would send the angle short of the turn, and the next request
+    /// would start a run that never knew the extreme.
+    private func nextFold() -> Double? {
+        guard let first = pendingFolds.first else { return nil }
+        if pendingFolds.count == 1, let extreme = foldRunExtreme, extreme != first {
+            foldRunExtreme = first
+            return extreme
+        }
+        return pendingFolds.removeFirst()
+    }
+
+    /// Add `degrees` to the waiting folds, keeping turning points.
+    ///
+    /// The newest waiting angle moves with each request; `foldRunExtreme`
+    /// remembers how far the run got. Once a request has come back from that
+    /// extreme by the tolerance, the extreme becomes a waiting angle of its
+    /// own and a new run starts from the request.
+    private func enqueueFold(_ degrees: Double) {
+        guard !pendingFolds.isEmpty, let extreme = foldRunExtreme else {
+            pendingFolds.append(degrees)
+            foldRunExtreme = degrees
+            return
+        }
+        let last = pendingFolds.count - 1
+        // Where the run started: the turning point before it, or the angle
+        // last sent. With neither, the run has no direction yet.
+        let base = last > 0 ? pendingFolds[last - 1] : lastSentFoldDegrees ?? extreme
+        let heading = extreme - base
+        let step = degrees - extreme
+        if heading == 0 || heading * step > 0 {
+            // Further along the run, or the run's first move.
+            pendingFolds[last] = degrees
+            foldRunExtreme = degrees
+        } else if abs(step) >= Self.foldTurnToleranceDegrees {
+            // A turn: keep the extreme, and start a new run from here.
+            pendingFolds[last] = extreme
+            pendingFolds.append(degrees)
+            foldRunExtreme = degrees
+        } else {
+            // Back within the tolerance: jitter, so the extreme stands.
+            pendingFolds[last] = degrees
         }
     }
 

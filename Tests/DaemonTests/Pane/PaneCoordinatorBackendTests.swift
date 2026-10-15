@@ -1482,22 +1482,41 @@ func aFoldDuringARotationsDispatchStopsItConfirming() async throws {
 }
 
 @Test
-func aFoldWaitsForTheFoldBeforeItToSettle() async throws {
-    // Overlapping folds would let the first one's panel change open the
-    // second one's gate, and a rotation would resolve against a panel the
-    // device is passing through.
-    let foldable = try await makeFoldableRotationPane(udid: "fold-serial")
+func aFoldDoesNotWaitForTheFoldBeforeItToSettle() async throws {
+    // A dragged hinge sends folds back to back. Waiting out each one's settle
+    // would pace the drag at one fold a second.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-replace")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    let started = ContinuousClock.now
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 60)
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 120)
+    #expect(backend.folds == [60, 120])
+    #expect(ContinuousClock.now - started < .milliseconds(500))
+}
+
+@Test
+func aReplacingFoldsGateIgnoresTheEarlierFoldsPanelChange() async throws {
+    // The first fold's panel change can land after the second fold went out.
+    // It describes the first fold, so it must not release a rotation that
+    // would then resolve against a panel the device is passing through.
+    let foldable = try await makeFoldableRotationPane(udid: "fold-replace-gate")
     let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
     try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 0)
-    let second = Task {
-        try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 180)
+    try await coordinator.fold(paneId: pane.paneId, as: .guiPeer, degrees: 180)
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeLeft))
     }
-    try await Task.sleep(for: .milliseconds(200))
-    #expect(backend.folds == [0])
-    // The first fold lands on the cover; only then does the second go out.
     await coordinator.notePanelChange(paneId: pane.paneId, panel: BoundPanel(screenID: 1, spansHinge: false))
-    try await second.value
-    #expect(backend.folds == [0, 180])
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(backend.rotations.isEmpty)
+    // The replacing gate still opens, on its own timeout.
+    let deadline = ContinuousClock.now + .seconds(3)
+    while backend.rotations.isEmpty, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(backend.rotations == [.landscapeLeft])
+    backend.emitDisplayOrientation(.landscapeLeft)
+    #expect(try await rotation.value.status == .confirmed)
 }
 
 @Test

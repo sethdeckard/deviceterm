@@ -251,6 +251,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     var setDisplayTitleFailures: [Error?] = []
     private(set) var crownCalls: [CrownCall] = []
     private(set) var foldCalls: [FoldCall] = []
+    /// When true, each recorded fold waits until the test releases it.
+    var holdFoldCalls = false
+    private var foldContinuations: [CheckedContinuation<Void, Never>] = []
+    var waitingFoldCallCount: Int { foldContinuations.count }
     private(set) var buttonCalls: [ButtonCall] = []
     private(set) var rotateCalls: [RotateCall] = []
     /// When true, each recorded rotate waits until the test releases it.
@@ -1161,9 +1165,19 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         rotateContinuations.removeFirst().resume()
     }
 
-    func paneInputFold(paneId: String, degrees: Double) {
+    func paneInputFold(paneId: String, degrees: Double) async {
         paneInputCalls.append((.paneInputFold, paneId))
         foldCalls.append(FoldCall(paneId: paneId, degrees: degrees))
+        if holdFoldCalls {
+            await withCheckedContinuation { continuation in
+                foldContinuations.append(continuation)
+            }
+        }
+    }
+
+    func releaseNextFoldCall() {
+        guard !foldContinuations.isEmpty else { return }
+        foldContinuations.removeFirst().resume()
     }
 
     func paneInputCrown(paneId: String, delta: Double, durationMs: Int) {
