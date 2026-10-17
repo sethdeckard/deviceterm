@@ -599,11 +599,13 @@ Terminal pane:
   "current": true,
   "focused": true,
   "capabilities": ["sendInput", "captureText"],
+  "frame": { "x": 0, "y": 0, "width": 640, "height": 800 },
   "terminal": {
     "sessionId": "550e8400-e29b-41d4-a716-446655440000",
     "title": "vim Login.swift",
     "tty": "/dev/ttys004",
-    "cwd": "/Users/example/project"
+    "cwd": "/Users/example/project",
+    "foregroundProcess": "vim"
   }
 }
 ```
@@ -672,6 +674,25 @@ must select among the session leader's children, more than one qualifying child
 also causes omission. The enclosing workspace command still succeeds. It never
 substitutes the startup directory or the shell's OSC 7 title state.
 
+#### Terminal Foreground Process
+
+`terminal.foregroundProcess` is the kernel's name for the process in the
+terminal's foreground, such as `zsh` at a prompt or `vim` while it runs. It has
+the same gate as `cwd`: it appears only when the caller holds a live automation
+grant. Without one, the command still succeeds and leaves the field out.
+
+The value is the short name the kernel records, not the command line, and it
+can be truncated. A program can rename itself, so the value is whatever name it
+chose. Claude Code, for example, reports its version number.
+
+It names the leader of the terminal's foreground process group. In a pipeline
+that's normally the first command. If that command exits while the rest of the
+pipeline is still running, the field disappears.
+
+DeviceTerm also leaves it out when the process can't be read, as with a
+root-owned `sudo`, and when the process is no longer on this terminal by the
+time it is read.
+
 Simulator pane:
 
 ```jsonc
@@ -683,6 +704,7 @@ Simulator pane:
   "current": false,
   "focused": false,
   "capabilities": ["touch", "key", "text", "button", "rotate", "accessibility"],
+  "frame": { "x": 641, "y": 0, "width": 639, "height": 800 },
   "simulator": {
     "udid": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
     "displayName": "iPhone 17 Pro",
@@ -723,8 +745,27 @@ how `tabId` already reports that state. Both can also be absent from raw JSON
 during an interrupted update, for the reason given under
 [Terminal Title](#terminal-title).
 
+#### Pane Frame
+
+`frame` is the pane's slot in its tab's split layout: `{x, y, width, height}`
+in whole points, measured from the top-left corner of the tab's pane area.
+Terminal, Simulator, and physical-device rows all carry it, so one tab's frames
+cover its whole layout. A device pane's frame is its slot, not the letterboxed
+screen drawn inside it.
+
+Compare frames only within one tab, usually as proportions. Nothing relates one
+tab's points to another's. `frame` needs no automation grant.
+
+A tab that isn't on screen reports the frames from when it was last shown, even
+if the window has been resized since. A pane that has never been laid out, such
+as one in a tab that has never been on screen, has no `frame`.
+
+No event signals a frame change. Read the listing again to follow a divider
+drag or a window resize.
+
 The common fields `id`, `shortId`, `kind`, `tabId`, `current`,
-`focused`, and `capabilities` are required; `name` is optional. Exactly
+`focused`, and `capabilities` are required; `name` is optional, and so is
+`frame`. Exactly
 one of `terminal`, `simulator`, or `device` is present according to
 `kind`. `tabTitle` and `windowId` are required on every row.
 Current workspace capabilities are `sendInput`, `captureText`,
@@ -733,7 +774,7 @@ Current workspace capabilities are `sendInput`, `captureText`,
 rather than infer support from `kind`.
 
 Inside `terminal`, `sessionId` and `title` are present on every row a current
-GUI projects; `tty` and `cwd` are optional.
+GUI projects; `tty`, `cwd`, and `foregroundProcess` are optional.
 
 A terminal pane's `id` is its `sessionId`. That identity is available as
 soon as `tab open` or `pane split` commits session creation; it does not

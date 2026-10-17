@@ -152,6 +152,7 @@ func workspaceTerminalPaneDecodesWithoutATitle() throws {
     #expect(terminal.title == WorkspacePane.Terminal.defaultTitle)
     #expect(terminal.tty == nil)
     #expect(terminal.cwd == "/project")
+    #expect(terminal.foregroundProcess == nil)
 }
 
 /// A pane built before the tab-context fields existed still decodes, for the
@@ -164,6 +165,37 @@ func workspacePaneDecodesWithoutTabContext() throws {
     #expect(pane.tabId == "T1")
     #expect(pane.tabTitle == WorkspacePane.unknownContext)
     #expect(pane.windowId == WorkspacePane.unknownContext)
+    #expect(pane.frame == nil)
+}
+
+/// The frame sits on the pane, for every kind, and the foreground process on
+/// the terminal object beside `cwd`.
+@Test
+func workspacePaneFrameAndForegroundProcessJSONContract() throws {
+    let pane = WorkspacePane(
+        id: contractPane.id,
+        shortId: contractPane.shortId,
+        name: contractPane.name,
+        kind: .terminal,
+        tabId: contractPane.tabId,
+        tabTitle: contractPane.tabTitle,
+        windowId: contractPane.windowId,
+        current: contractPane.current,
+        focused: contractPane.focused,
+        capabilities: contractPane.capabilities,
+        frame: WorkspacePaneFrame(x: 0, y: 0, width: 640, height: 800),
+        terminal: .init(
+            sessionId: contractPane.id,
+            title: "vim Login.swift",
+            tty: "/dev/ttys003",
+            cwd: "/project",
+            foregroundProcess: "vim"
+        )
+    )
+    let encoded = try workspaceJSON(pane)
+    #expect(encoded.contains(#""frame":{"height":800,"width":640,"x":0,"y":0}"#))
+    #expect(encoded.contains(#""foregroundProcess":"vim""#))
+    #expect(try JSONDecoder().decode(WorkspacePane.self, from: Data(encoded.utf8)) == pane)
 }
 
 @Test

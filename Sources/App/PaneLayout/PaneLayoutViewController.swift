@@ -986,6 +986,17 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
         }
         return frames
     }
+
+    /// `slotFrames()` with y measured down from the root view's top edge,
+    /// which is how the workspace projection publishes pane frames.
+    ///
+    /// Empty before the view loads, so that a listing never forces a load
+    /// ahead of the owning tab's own `viewDidLoad`.
+    func topLeftSlotFrames() -> [PaneSlot: CGRect] {
+        guard isViewLoaded else { return [:] }
+        let height = view.bounds.height
+        return slotFrames().mapValues { PaneFrameMath.topLeft($0, inHeight: height) }
+    }
 }
 
 extension PaneLayoutViewController: NSSplitViewDelegate {

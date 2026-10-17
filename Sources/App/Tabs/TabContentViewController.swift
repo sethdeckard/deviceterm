@@ -587,12 +587,16 @@ final class TabContentViewController: NSViewController {
 
     func terminalFacts(
         for terminalID: TerminalPaneID,
-        includeWorkingDirectory: Bool
+        includeProcessFacts: Bool
     ) -> TerminalPaneFacts? {
-        terminalVCByID[terminalID]?.currentFacts(includeWorkingDirectory: includeWorkingDirectory)
+        terminalVCByID[terminalID]?.currentFacts(includeProcessFacts: includeProcessFacts)
     }
 
     func focusedPane() -> PaneSlot? { splitVC.focusedSlot() }
+
+    /// Each pane's slot in this tab's layout, from the top-left of the pane
+    /// area. A tab that is not on screen reports the frames of its last layout.
+    func paneFrames() -> [PaneSlot: CGRect] { splitVC.topLeftSlotFrames() }
 
     func lifecycle(for slot: PaneSlot) -> PaneLifecycle? {
         let state: SimulatorPaneState?

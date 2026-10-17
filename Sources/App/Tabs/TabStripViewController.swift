@@ -792,16 +792,20 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
     func terminalFacts(
         for terminalID: TerminalPaneID,
         inTab tabID: TabID,
-        includeWorkingDirectory: Bool
+        includeProcessFacts: Bool
     ) -> TerminalPaneFacts? {
         tabContentByID[tabID]?.terminalFacts(
             for: terminalID,
-            includeWorkingDirectory: includeWorkingDirectory
+            includeProcessFacts: includeProcessFacts
         )
     }
 
     func focusedPane(inTab tabID: TabID) -> PaneSlot? {
         tabContentByID[tabID]?.focusedPane()
+    }
+
+    func paneFrames(inTab tabID: TabID) -> [PaneSlot: CGRect]? {
+        tabContentByID[tabID]?.paneFrames()
     }
 
     func lifecycle(for slot: PaneSlot, inTab tabID: TabID) -> PaneLifecycle? {

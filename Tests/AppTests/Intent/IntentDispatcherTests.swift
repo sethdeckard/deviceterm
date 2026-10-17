@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 @testable import App
+import CoreGraphics
 import DaemonProtocol
 import Testing
 
@@ -909,6 +910,106 @@ struct IntentDispatcherTests {
         #expect(allPanes.allSatisfy { !$0.windowId.isEmpty && !$0.tabTitle.isEmpty })
     }
 
+    /// Every pane kind carries its slot frame, and a slot the layout never
+    /// gave any area reports none rather than a zero rectangle.
+    @Test
+    func paneListReportsEachPanesFrame() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            panes: [
+                SimPaneState(paneId: "P-sim", udid: "U-1", displayName: "iPhone", family: "phone")
+            ],
+            devicePanes: [
+                DevicePaneState(paneId: "P-device", deviceId: "D-1", displayName: "iPad", family: "pad")
+            ]
+        )
+        harness.delegate.frames[TabID(value: 1)] = [
+            .terminal(TerminalPaneID(value: 1)): CGRect(x: 0, y: 0, width: 640, height: 800),
+            .sim(udid: "U-1"): CGRect(x: 641, y: 0, width: 639, height: 400),
+            .device(deviceId: "D-1"): .zero
+        ]
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil, all: false),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: false)
+        )
+
+        guard case let .data(.workspacePanes(panes)) = result else {
+            Issue.record("expected workspace panes; got \(result)")
+            return
+        }
+        let byKind = Dictionary(uniqueKeysWithValues: panes.map { ($0.kind, $0.frame) })
+        #expect(byKind[.terminal] == WorkspacePaneFrame(x: 0, y: 0, width: 640, height: 800))
+        #expect(byKind[.simulator] == WorkspacePaneFrame(x: 641, y: 0, width: 639, height: 400))
+        #expect(byKind[.device] == .some(nil))
+    }
+
+    /// A workspace-wide listing reads each tab's frames once, not once per
+    /// pane, and a tab with no laid-out frames still lists its panes.
+    @Test
+    func paneListAllReadsFramesOncePerTab() async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A",
+            panes: [
+                SimPaneState(paneId: "P-sim", udid: "U-1", displayName: "iPhone", family: "phone")
+            ]
+        )
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 2),
+            tabID: TabID(value: 2),
+            sessionId: "S-B"
+        )
+        harness.delegate.frames[TabID(value: 1)] = [
+            .terminal(TerminalPaneID(value: 1)): CGRect(x: 0, y: 0, width: 320, height: 200),
+            .sim(udid: "U-1"): CGRect(x: 320, y: 0, width: 320, height: 200)
+        ]
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneList(tab: nil, all: true),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: true)
+        )
+
+        guard case let .data(.workspacePanes(panes)) = result else {
+            Issue.record("expected workspace panes; got \(result)")
+            return
+        }
+        #expect(harness.delegate.frameReads == [TabID(value: 1), TabID(value: 2)])
+        #expect(panes.map(\.frame?.x) == [0, 320, nil])
+    }
+
+    /// The foreground process rides the working directory's grant gate.
+    @Test("foreground process follows the automation grant", arguments: [true, false])
+    func paneProjectionGatesForegroundProcessOnTheGrant(granted: Bool) async {
+        let harness = makeHarness()
+        appendTab(
+            harness.workspace,
+            windowID: WindowID(value: 1),
+            tabID: TabID(value: 1),
+            sessionId: "S-A"
+        )
+        harness.delegate.foregroundProcesses[TerminalPaneID(value: 1)] = "vim"
+
+        let result = await harness.dispatcher.dispatch(
+            .workspacePaneShow(nil),
+            origin: .external(sessionID: "S-A", hasAutomationGrant: granted)
+        )
+
+        guard case let .data(.workspacePane(pane)) = result else {
+            Issue.record("expected workspace pane; got \(result)")
+            return
+        }
+        #expect(pane.terminal?.foregroundProcess == (granted ? "vim" : nil))
+    }
+
     /// `--all` widens the listing, never the visibility rule: a foreign
     /// protected tab's panes stay out of it.
     @Test
@@ -1370,7 +1471,7 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         let window: WindowID
         let tab: TabID
         let terminal: TerminalPaneID
-        let includeWorkingDirectory: Bool
+        let includeProcessFacts: Bool
     }
 
     private(set) var sendInputs: [SendInput] = []
@@ -1385,12 +1486,13 @@ private final class RecordingActionDelegate: IntentActionDelegate {
     /// the directory" is a property of the request rather than of the call
     /// happening at all.
     var workingDirectoryReads: [WorkingDirectoryRead] {
-        factsReads.filter(\.includeWorkingDirectory).map {
+        factsReads.filter(\.includeProcessFacts).map {
             WorkingDirectoryRead(window: $0.window, tab: $0.tab, terminal: $0.terminal)
         }
     }
 
     var workingDirectories: [TerminalPaneID: String] = [:]
+    var foregroundProcesses: [TerminalPaneID: String] = [:]
     var oscTitles: [TerminalPaneID: String] = [:]
     var oscWorkingDirectories: [TerminalPaneID: String] = [:]
     var ttys: [TerminalPaneID: String] = [:]
@@ -1404,9 +1506,18 @@ private final class RecordingActionDelegate: IntentActionDelegate {
     var moveImplementation: ((TabID, WindowID, WindowID, Int) -> Void)?
     /// Stands in for the size of the frame each device pane is drawing.
     var pixelSizes: [PaneSlot: (width: Int, height: Int)] = [:]
+    /// Stands in for each tab's laid-out slot frames, already top-left origin.
+    var frames: [TabID: [PaneSlot: CGRect]] = [:]
+    /// Every tab whose frames the projection asked for, in order.
+    private(set) var frameReads: [TabID] = []
 
     func panePixelSize(window: WindowID, tab: TabID, slot: PaneSlot) -> (width: Int, height: Int)? {
         pixelSizes[slot]
+    }
+
+    func paneFrames(window: WindowID, tab: TabID) -> [PaneSlot: CGRect]? {
+        frameReads.append(tab)
+        return frames[tab]
     }
 
     func renameTab(window: WindowID, tab: TabID, to name: String?) {}
@@ -1475,21 +1586,22 @@ private final class RecordingActionDelegate: IntentActionDelegate {
         window: WindowID,
         tab: TabID,
         terminal: TerminalPaneID,
-        includeWorkingDirectory: Bool
+        includeProcessFacts: Bool
     ) -> TerminalPaneFacts? {
         factsReads.append(
             .init(
                 window: window,
                 tab: tab,
                 terminal: terminal,
-                includeWorkingDirectory: includeWorkingDirectory
+                includeProcessFacts: includeProcessFacts
             )
         )
         return TerminalPaneFacts(
             oscTitle: oscTitles[terminal],
             oscWorkingDirectory: oscWorkingDirectories[terminal],
             tty: ttys[terminal],
-            cwd: includeWorkingDirectory ? workingDirectories[terminal] : nil,
+            cwd: includeProcessFacts ? workingDirectories[terminal] : nil,
+            foregroundProcess: includeProcessFacts ? foregroundProcesses[terminal] : nil,
             foregroundPid: nil
         )
     }

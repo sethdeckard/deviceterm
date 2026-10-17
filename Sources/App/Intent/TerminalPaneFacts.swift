@@ -3,8 +3,8 @@
 /// Live per-terminal values the AppKit controller tree owns, read in one hop
 /// for one projection pass.
 ///
-/// These arrive together because they share a source: `tty` and `cwd` both
-/// come from a single `terminalIdentity()` read, and splitting them would pay
+/// These arrive together because they share a source: `tty`, `cwd`, and
+/// `foregroundProcess` all come from a single `terminalIdentity()` read, and splitting them would pay
 /// for that read twice per terminal on a path the collection projections
 /// already run once per pane. The two OSC fields are retained state on the
 /// terminal's view controller and cost nothing.
@@ -33,6 +33,10 @@ struct TerminalPaneFacts: Equatable, Sendable {
     /// authority to read it, when identity cannot be verified, or when no
     /// unambiguous candidate resolves.
     let cwd: String?
+    /// Kernel name of the PTY's foreground process, gated with `cwd`. Nil when
+    /// the projection does not request it, when the process is unreadable (a
+    /// root-owned `sudo`), or when it no longer sits on this terminal.
+    let foregroundProcess: String?
     /// The PTY's foreground process id, from the same `terminalIdentity()`
     /// read as `tty`. Lets supervision compare the foreground process with
     /// the terminal's own shell; it identifies neither the shell nor any

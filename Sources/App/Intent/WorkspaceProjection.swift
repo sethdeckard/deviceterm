@@ -146,10 +146,25 @@ final class WorkspaceProjection {
         return nil
     }
 
+    /// Project one pane, reading its tab's frames for it alone. A walk over a
+    /// whole tab reads the frames once and passes them to the overload below.
     func project(
         _ resolved: ResolvedWorkspacePane,
         includeTerminalCWD: Bool
     ) -> WorkspacePane {
+        project(
+            resolved,
+            includeTerminalCWD: includeTerminalCWD,
+            frames: paneFrames(window: resolved.windowID, tab: resolved.tabID)
+        )
+    }
+
+    private func project(
+        _ resolved: ResolvedWorkspacePane,
+        includeTerminalCWD: Bool,
+        frames: [PaneSlot: WorkspacePaneFrame]
+    ) -> WorkspacePane {
+        let frame = frames[resolved.slot]
         let focused = actionDelegate?.focusedPane(
             window: resolved.windowID,
             tab: resolved.tabID
@@ -165,15 +180,15 @@ final class WorkspaceProjection {
         }
         switch resolved.state {
         case let .terminal(terminal):
-            // One hop for the label, the tty, and the directory. Only the
-            // directory is grant-scoped, so the gate rides in as a parameter
-            // rather than suppressing the whole read: a caller without a grant
-            // still gets a title and a tty.
+            // One hop for the label, the tty, the directory, and the
+            // foreground process. Only the last two are grant-scoped, so the
+            // gate rides in as a parameter rather than suppressing the whole
+            // read: a caller without a grant still gets a title and a tty.
             let facts = actionDelegate?.terminalFacts(
                 window: resolved.windowID,
                 tab: resolved.tabID,
                 terminal: terminal.id,
-                includeWorkingDirectory: includeTerminalCWD && origin.readsTerminalWorkingDirectory
+                includeProcessFacts: includeTerminalCWD && origin.readsTerminalWorkingDirectory
             )
             return WorkspacePane(
                 id: terminal.sessionId,
@@ -186,6 +201,7 @@ final class WorkspaceProjection {
                 current: origin.sessionID == terminal.sessionId,
                 focused: focused,
                 capabilities: [.sendInput, .captureText],
+                frame: frame,
                 terminal: .init(
                     sessionId: terminal.sessionId,
                     title: PaneTitleDecision.title(
@@ -194,7 +210,8 @@ final class WorkspaceProjection {
                         oscWorkingDirectory: facts?.oscWorkingDirectory
                     ),
                     tty: facts?.tty,
-                    cwd: facts?.cwd
+                    cwd: facts?.cwd,
+                    foregroundProcess: facts?.foregroundProcess
                 )
             )
 
@@ -218,6 +235,7 @@ final class WorkspaceProjection {
                 current: currentSlot(in: resolved.tabID) == resolved.slot,
                 focused: focused,
                 capabilities: workspaceCapabilities(capabilities),
+                frame: frame,
                 simulator: .init(
                     udid: pane.udid,
                     displayName: pane.displayName,
@@ -258,6 +276,7 @@ final class WorkspaceProjection {
                 current: currentSlot(in: resolved.tabID) == resolved.slot,
                 focused: focused,
                 capabilities: workspaceCapabilities(capabilities),
+                frame: frame,
                 device: .init(
                     deviceId: pane.deviceId,
                     displayName: pane.displayName,
@@ -342,11 +361,18 @@ final class WorkspaceProjection {
         includeTerminalCWD: Bool
     ) -> [WorkspacePane] {
         guard resolved.tab.lifecycle == .ready else { return [] }
+        let frames = paneFrames(window: resolved.windowID, tab: resolved.tabID)
         return PaneTreeOps.leavesInOrder(resolved.tab.paneTree).compactMap { slot in
             resolvedPane(slot, in: resolved).map {
-                project($0, includeTerminalCWD: includeTerminalCWD)
+                project($0, includeTerminalCWD: includeTerminalCWD, frames: frames)
             }
         }
+    }
+
+    /// One tab's published pane frames, dropping any slot without area.
+    private func paneFrames(window: WindowID, tab: TabID) -> [PaneSlot: WorkspacePaneFrame] {
+        (actionDelegate?.paneFrames(window: window, tab: tab) ?? [:])
+            .compactMapValues(PaneFrameMath.wholePoints)
     }
 
     private func resolvedPane(_ slot: PaneSlot, in tab: ResolvedTab) -> ResolvedWorkspacePane? {

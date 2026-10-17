@@ -47,19 +47,27 @@ protocol IntentActionDelegate: AnyObject {
 
     /// Live presentation values owned by the AppKit controller tree.
     func tabDisplayTitle(window: WindowID, tab: TabID) -> String?
-    /// One terminal's live label, tty, and working directory, read together.
+    /// One terminal's live label, tty, working directory, and foreground
+    /// process, read together.
     ///
-    /// `includeWorkingDirectory` gates only `TerminalPaneFacts.cwd`, which is
-    /// the sole grant-scoped field here; the caller owns that decision and this
-    /// hop does not re-derive it. Passing false also skips the kernel read that
-    /// produces it, which is the expensive half.
+    /// `includeProcessFacts` gates only `TerminalPaneFacts.cwd` and
+    /// `foregroundProcess`, the grant-scoped fields here; the caller owns that
+    /// decision and this hop does not re-derive it. Passing false also skips
+    /// the kernel reads that produce them, which are the expensive half.
     func terminalFacts(
         window: WindowID,
         tab: TabID,
         terminal: TerminalPaneID,
-        includeWorkingDirectory: Bool
+        includeProcessFacts: Bool
     ) -> TerminalPaneFacts?
     func focusedPane(window: WindowID, tab: TabID) -> PaneSlot?
+    /// Every pane's slot frame in one tab, in points from the top-left of the
+    /// tab's pane area. Read once per tab, because one layout pass produces
+    /// them all. A tab that is not on screen reports its last layout's frames.
+    /// One whose view has not loaded reports none, and a slot that has not
+    /// been laid out reports a zero-area rectangle. Nil when no live
+    /// controller holds the tab.
+    func paneFrames(window: WindowID, tab: TabID) -> [PaneSlot: CGRect]?
     func paneLifecycle(window: WindowID, tab: TabID, slot: PaneSlot) -> PaneLifecycle?
     func paneOrientation(window: WindowID, tab: TabID, slot: PaneSlot) -> Orientation?
     /// The latest known pixel dimensions, initially from the attach response
@@ -100,9 +108,10 @@ extension IntentActionDelegate {
         window: WindowID,
         tab: TabID,
         terminal: TerminalPaneID,
-        includeWorkingDirectory: Bool
+        includeProcessFacts: Bool
     ) -> TerminalPaneFacts? { nil }
     func focusedPane(window: WindowID, tab: TabID) -> PaneSlot? { nil }
+    func paneFrames(window: WindowID, tab: TabID) -> [PaneSlot: CGRect]? { nil }
     func paneLifecycle(window: WindowID, tab: TabID, slot: PaneSlot) -> PaneLifecycle? { nil }
     func paneOrientation(window: WindowID, tab: TabID, slot: PaneSlot) -> Orientation? { nil }
     func panePixelSize(window: WindowID, tab: TabID, slot: PaneSlot) -> (width: Int, height: Int)? { nil }

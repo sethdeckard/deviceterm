@@ -18,12 +18,25 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         /// is unsupported, so retry rather than falling back permanently.
         public let tty: String?
         public let cwd: String?
+        /// Kernel name of the terminal's foreground process, e.g. `zsh` or
+        /// `vim`. Shares `cwd`'s automation-grant gate but is read on its own,
+        /// so either can be absent while the other is present. A program can
+        /// rename itself, so this is whatever name it chose. Absent whenever
+        /// the process cannot be read or no longer sits on this terminal.
+        public let foregroundProcess: String?
 
-        public init(sessionId: String, title: String, tty: String?, cwd: String?) {
+        public init(
+            sessionId: String,
+            title: String,
+            tty: String?,
+            cwd: String?,
+            foregroundProcess: String? = nil
+        ) {
             self.sessionId = sessionId
             self.title = title
             self.tty = tty
             self.cwd = cwd
+            self.foregroundProcess = foregroundProcess
         }
 
         /// `title` is required, but it arrived without a `wireVersion` bump,
@@ -48,6 +61,7 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? Self.defaultTitle
             tty = try container.decodeIfPresent(String.self, forKey: .tty)
             cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+            foregroundProcess = try container.decodeIfPresent(String.self, forKey: .foregroundProcess)
         }
     }
 
@@ -138,6 +152,9 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
     public let current: Bool
     public let focused: Bool
     public let capabilities: [WorkspacePaneCapability]
+    /// The pane's slot in its tab's split layout. Nil when the GUI has no laid
+    /// out frame for it, such as a background tab that has never been shown.
+    public let frame: WorkspacePaneFrame?
     public let terminal: Terminal?
     public let simulator: Simulator?
     public let device: Device?
@@ -153,6 +170,7 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         current: Bool,
         focused: Bool,
         capabilities: [WorkspacePaneCapability],
+        frame: WorkspacePaneFrame? = nil,
         terminal: Terminal? = nil,
         simulator: Simulator? = nil,
         device: Device? = nil
@@ -167,6 +185,7 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         self.current = current
         self.focused = focused
         self.capabilities = capabilities
+        self.frame = frame
         self.terminal = terminal
         self.simulator = simulator
         self.device = device
@@ -195,6 +214,7 @@ public struct WorkspacePane: Codable, Sendable, Equatable {
         current = try container.decode(Bool.self, forKey: .current)
         focused = try container.decode(Bool.self, forKey: .focused)
         capabilities = try container.decode([WorkspacePaneCapability].self, forKey: .capabilities)
+        frame = try container.decodeIfPresent(WorkspacePaneFrame.self, forKey: .frame)
         terminal = try container.decodeIfPresent(Terminal.self, forKey: .terminal)
         simulator = try container.decodeIfPresent(Simulator.self, forKey: .simulator)
         device = try container.decodeIfPresent(Device.self, forKey: .device)

@@ -534,34 +534,41 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         return try surface.readScreenText(format: format)
     }
 
-    /// This terminal's live label, tty, and working directory.
+    /// This terminal's live label, tty, working directory, and foreground
+    /// process.
     ///
     /// Identity is read once and afresh, so a replaced process can never leave
     /// a cached directory behind and the tty always describes the surface as it
-    /// is now. A detached surface reports no identity, which zeroes `tty` and
-    /// `cwd` while leaving the retained OSC fields intact: the label survives
-    /// what the kernel facts do not.
+    /// is now. A detached surface reports no identity, which zeroes `tty`,
+    /// `cwd`, and `foregroundProcess` while leaving the retained OSC fields
+    /// intact: the label survives what the kernel facts do not.
     ///
-    /// `cwd` is nil unless `includeWorkingDirectory`, and nil again when fresh
-    /// anchor facts or a safe candidate cannot be read. After anchor
-    /// derivation, the resolver may use an unambiguous same-user shell when the
-    /// foreground candidate becomes unusable.
-    func currentFacts(includeWorkingDirectory: Bool) -> TerminalPaneFacts {
+    /// `cwd` and `foregroundProcess` are nil unless `includeProcessFacts`.
+    /// `cwd` is nil again when fresh anchor facts or a safe candidate cannot be
+    /// read. After anchor derivation, the resolver may use an unambiguous
+    /// same-user shell when the foreground candidate becomes unusable.
+    func currentFacts(includeProcessFacts: Bool) -> TerminalPaneFacts {
         let identity = surface?.terminalIdentity()
-        let cwd: String? = if includeWorkingDirectory, let identity {
+        let processIdentity = includeProcessFacts ? identity : nil
+        let cwd: String? = processIdentity.flatMap { identity in
             DefaultTerminalProbe.derive(
                 foregroundPid: identity.foregroundPid,
                 ttyName: identity.ttyName
             )
             .flatMap(TerminalWorkingDirectory.resolve(for:))
-        } else {
-            nil
+        }
+        let foregroundProcess = processIdentity.flatMap { identity in
+            TerminalForegroundProcess.name(
+                foregroundPid: identity.foregroundPid,
+                ttyName: identity.ttyName
+            )
         }
         return TerminalPaneFacts(
             oscTitle: lastOSCTitle,
             oscWorkingDirectory: lastWorkingDirectory,
             tty: identity?.ttyName,
             cwd: cwd,
+            foregroundProcess: foregroundProcess,
             foregroundPid: identity?.foregroundPid
         )
     }

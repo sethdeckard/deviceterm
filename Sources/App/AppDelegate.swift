@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                         window: window.id,
                         tab: tabID,
                         terminal: tab.primaryTerminal.id,
-                        includeWorkingDirectory: false
+                        includeProcessFacts: false
                     ),
                     let pid = facts.foregroundPid,
                     let tty = facts.tty
@@ -2101,17 +2101,21 @@ extension AppDelegate: IntentActionDelegate {
         window windowID: WindowID,
         tab tabID: TabID,
         terminal terminalID: TerminalPaneID,
-        includeWorkingDirectory: Bool
+        includeProcessFacts: Bool
     ) -> TerminalPaneFacts? {
         strip(for: windowID)?.terminalFacts(
             for: terminalID,
             inTab: tabID,
-            includeWorkingDirectory: includeWorkingDirectory
+            includeProcessFacts: includeProcessFacts
         )
     }
 
     func focusedPane(window windowID: WindowID, tab tabID: TabID) -> PaneSlot? {
         strip(for: windowID)?.focusedPane(inTab: tabID)
+    }
+
+    func paneFrames(window windowID: WindowID, tab tabID: TabID) -> [PaneSlot: CGRect]? {
+        strip(for: windowID)?.paneFrames(inTab: tabID)
     }
 
     func paneLifecycle(window windowID: WindowID, tab tabID: TabID, slot: PaneSlot) -> PaneLifecycle? {
