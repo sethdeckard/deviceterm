@@ -194,6 +194,11 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
             .flatMap(Int.init) ?? Self.defaultPoolSlots
         let pool = LeasedSurfacePool(slotCount: slotCount, recordHoldAges: sink != nil)
         self.pool = pool
+        // Only a two-panel device has a lit panel to read.
+        let displays = DeviceCtlDisplays()
+        let activePanelReader: (@Sendable () -> DeviceCtlDisplays.ActivePanel)? = capabilities.fold
+            ? { @Sendable in displays.activePanel(deviceId: udid) }
+            : nil
         self.display = SimDisplayLane(
             handle: displayHandle,
             pool: pool,
@@ -203,7 +208,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
                     sink: sink,
                     signposter: OSSignposter(subsystem: DiagnosticLog.subsystem, category: "mirror")
                 )
-            }
+            },
+            activePanelReader: activePanelReader
         )
     }
 
@@ -641,6 +647,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         }
     }
 
+    func noteHingeMoved() { display.followFold() }
+
     func stopFrames() { display.stopFrames() }
 
     func setFrameDemand(_ demanded: Bool) { display.setFrameDemand(demanded) }
@@ -704,6 +712,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
                 failure: "the hinge helper"
             )
         }
+        // Without waiting for the hinge reader to see the new angle, which
+        // can lag the helper by a read.
+        noteHingeMoved()
     }
 
     func pixelDimensions() -> (Int?, Int?) { display.pixelDimensions() }

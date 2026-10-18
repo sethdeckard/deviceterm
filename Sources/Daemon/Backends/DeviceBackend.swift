@@ -97,6 +97,11 @@ protocol DeviceBackend: AnyObject, Sendable {
 
     /// The panel the display is mirroring now.
     func currentBoundPanel() -> BoundPanel
+
+    /// Be told the hinge moved, by a fold this daemon sent or one read off
+    /// the device. A backend whose panel can move starts looking for the
+    /// panel the fold lit. The default does nothing, having one panel.
+    func noteHingeMoved()
     /// Tear the backend down without holding the caller's executor.
     ///
     /// Callers that must not block on teardown use this: simulator shutdown
@@ -456,6 +461,9 @@ extension DeviceBackend {
     func currentBoundPanel() -> BoundPanel {
         BoundPanel(screenID: 0, spansHinge: false)
     }
+
+    /// Default: nothing to follow, for the same reason.
+    func noteHingeMoved() {}
 
     /// Sequential default: starts frames before orientation observation, so a
     /// synchronous first-frame callback arrives before observation is

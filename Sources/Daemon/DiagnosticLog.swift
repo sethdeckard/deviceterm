@@ -50,4 +50,12 @@ public enum DiagnosticLog {
     /// `.notice` so a pane whose input went dead can be explained from
     /// `log show` without `--info`.
     public static let input = Logger(subsystem: subsystem, category: "input")
+
+    /// A foldable's display following its lit panel: the panel the first bind
+    /// chose, each read of which panel iOS has lit, each rebind and whether it
+    /// took, and each hand-over to the content search. Logs each active-panel
+    /// read and search transition, but not each framebuffer poll, and
+    /// `.notice` so a pane stuck on the dark panel can be explained from
+    /// `log show` without `--info`.
+    public static let panel = Logger(subsystem: subsystem, category: "panel")
 }

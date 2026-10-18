@@ -316,6 +316,21 @@ and the new one sampled lit after 246 ms and 507 ms. So a single content sample
 taken when the event arrives reports no change, and a consumer following a fold
 has to keep asking across that window rather than reading once.
 
+**A panel with something on it fades out over about a second, and `devicectl`
+names the new panel before the fade ends.** Measured on 2026-10-15 (macOS
+26.7.1, Xcode 27.1 RC, iOS 27.1) with fast folds 120 → 35, 35 → 120 and
+120 → 70: `devicectl device info displays` reported the new panel
+`active: true` on its first read after each fold returned, within about
+0.3 s of the fold, while both panels still read `backlightState: activeOn`.
+The old panel kept non-black pixels until its fade ended, so a content check
+on it waits out the fade and then draws black.
+
+`SimDisplayLane` follows the `active` flag: it rebinds through
+`rebindToScreenID:` as soon as `devicectl` names another panel, and falls
+back to the content search when `devicectl` can't answer. Each read is a
+process and takes about 0.5 s. Nothing in-process carries the same answer,
+because `backlight.state` is fixed per panel (table above).
+
 **Accessibility hit-testing addresses a panel, and display `0` is the cover
 panel rather than whichever one is lit.** Taking one settled tree and
 hit-testing the centres of eight of its own elements, varying only the

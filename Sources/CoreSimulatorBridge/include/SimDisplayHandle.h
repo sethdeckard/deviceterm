@@ -229,8 +229,9 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 ///
 /// **Nothing half-moved.** If either registration fails on the new panel the
 /// binding goes back to the old one and this returns NO. Moving without
-/// screen callbacks would leave the handle unable to notice any later fold,
-/// which is worse than a blank pane a repeat call can still fix. Re-applying
+/// screen callbacks would leave orientation and screen-properties changes
+/// unobserved on the bound panel, which is worse than a blank pane a repeat
+/// call can still fix. Re-applying
 /// the old panel's registrations is best effort: those results are not
 /// checked, so a rollback can leave the handle bound to a panel it is no
 /// longer registered on.
@@ -246,6 +247,21 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// on any reading that isn't an unambiguous swap, and when the move could not
 /// be completed.
 - (BOOL)rebindToLitPanel;
+
+/// Move the binding to the panel whose `SimScreenProperties.screenID` is
+/// `screenID`, whatever either panel's framebuffer shows.
+///
+/// For a caller that knows which panel iOS has lit from outside the
+/// framebuffers. `rebindToLitPanel` waits for the bound panel to read black,
+/// which a fading panel doesn't until its fade ends; this doesn't wait. The
+/// move itself is `rebindToLitPanel`'s: the same registrations, the same
+/// rollback, the same first-frame seed, the same repair of screen
+/// observation first.
+///
+/// Returns NO when the handle isn't started, when `screenID` is 0 or already
+/// bound, when no single sized candidate has that id, and when the move could
+/// not be completed.
+- (BOOL)rebindToScreenID:(unsigned int)screenID NS_SWIFT_NAME(rebind(toScreenID:));
 
 /// Whether the bound panel's framebuffer shows content, by the same coarse
 /// sample `rebindToLitPanel` reads.

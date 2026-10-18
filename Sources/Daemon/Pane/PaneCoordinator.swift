@@ -3184,6 +3184,8 @@ public actor PaneCoordinator {
     func publishHinge(paneId: UUID, degrees: Double) {
         guard let record = panes[paneId], record.observedHingeDegrees != degrees else { return }
         record.observedHingeDegrees = degrees
+        // Covers a fold made outside this daemon, such as from Device Hub.
+        record.backend?.noteHingeMoved()
         sendHinge(record: record, paneId: paneId, degrees: degrees)
     }
 
@@ -3207,6 +3209,12 @@ public actor PaneCoordinator {
         let spansHingeMoved = record.observedPanelSpansHinge != panel.spansHinge
         record.observedPanel = panel
         guard record.capabilities.fold else { return }
+        DiagnosticLog.panel.notice(
+            """
+            published screen \(panel.screenID, privacy: .public), \
+            spans hinge \(panel.spansHinge, privacy: .public)
+            """
+        )
         for subscriber in record.subscribers.values {
             subscriber.channel.send(
                 .panelChanged(paneId: paneId, screenID: panel.screenID, spansHinge: panel.spansHinge)

@@ -52,9 +52,10 @@ typedef NS_ENUM(NSInteger, CSBDisplayHandleError) {
 /// Panel identity. `screenID` is the small integer `simctl io --display`
 /// accepts; `uniqueId` is stable for a panel across a fold. A foldable
 /// vends one display descriptor per panel, and these are what tell them
-/// apart. The measured `displayClass`, `powerState` and `uiOrientation`
-/// values do not: they are equal on both panels, and `uiOrientation`
-/// tracks the device rather than the panel.
+/// apart. The measured `displayClass`, `powerState`, `uiOrientation` and
+/// `backlight.state` values do not: they are equal on both panels or fixed
+/// whichever is lit, and `uiOrientation` tracks the device rather than the
+/// panel.
 @property (nonatomic, readonly) unsigned int screenID;
 @property (nonatomic, readonly, nullable) NSString *uniqueId;
 @end
@@ -572,7 +573,40 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
         lit = candidate;
     }
     if (!lit) return NO;
+    return [self _moveBindingFrom:current to:lit among:sized];
+}
 
+- (BOOL)rebindToScreenID:(unsigned int)screenID {
+    if (!self.running) return NO;
+    // The same repair `rebindToLitPanel` makes before it looks for a swap.
+    if (self.screenCallbackQueue && !self.screenCallbackUUID) {
+        [self _registerScreenCallbacksWithError:NULL];
+    }
+    id<SimDisplayIOSurfaceRenderable> current = self.renderable;
+    if (!current || screenID == 0 || screenID == self.boundScreenID) return NO;
+    NSArray<id<SimDisplayIOSurfaceRenderable>> *sized =
+        CSBSizedCandidates([self _candidatesWithError:NULL]);
+    id<SimDisplayIOSurfaceRenderable> target = nil;
+    for (id<SimDisplayIOSurfaceRenderable> candidate in sized) {
+        id<CSBSimScreenProperties> props = CSBPropertiesForCandidate(candidate);
+        unsigned int candidateID = 0;
+        @try {
+            candidateID = props.screenID;
+        } @catch (NSException *e) {}
+        if (candidateID != screenID) continue;
+        // Two candidates claiming one screen is not a device this knows.
+        if (target) return NO;
+        target = candidate;
+    }
+    if (!target) return NO;
+    return [self _moveBindingFrom:current to:target among:sized];
+}
+
+/// Move registrations from `current` to `lit`, rolling back if registration
+/// fails. Seed the first frame when frames are active.
+- (BOOL)_moveBindingFrom:(id<SimDisplayIOSurfaceRenderable>)current
+                      to:(id<SimDisplayIOSurfaceRenderable>)lit
+                   among:(NSArray<id<SimDisplayIOSurfaceRenderable>> *)sized {
     // Whether the caller *wants* observation, which is not the same as having
     // it: `screenCallbackUUID` goes nil on a registration that failed, and
     // reading intent from it would let the next attempt quietly decide
@@ -586,18 +620,15 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
     self.renderable = lit;
     [self _recordBoundPanelFor:lit among:sized];
     BOOL bound = self.framesPaused || [self _registerSurfaceCallbacksOn:lit];
-    // Orientation observation has to move with the binding. Screen callbacks
-    // are the only thing that makes a later fold noticeable, so a handle that
-    // kept the new panel without them would show the right picture now and
-    // never follow another fold.
+    // Move screen observation with the binding so orientation and
+    // screen-properties changes continue to arrive from the bound panel.
     if (bound && wantsScreenCallbacks) {
         bound = [self _registerScreenCallbacksWithError:NULL];
         if (!bound) [self _unregisterSurfaceCallbacksOn:lit];
     }
     if (!bound) {
-        // Put it back on the panel that was working. That panel is dark, so
-        // the pane stays blank, but the caller is polling and its remaining
-        // attempts check again for a swap. Re-applying the old panel's
+        // Restore the previous binding. Its panel may be dark or fading; the
+        // caller's remaining attempts can retry the swap. Re-applying the old panel's
         // registrations is best effort, and only missing screen observation
         // is retried later. Staying on the new panel half-registered would
         // instead leave the pane correct and stuck.

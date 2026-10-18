@@ -30,26 +30,7 @@ struct DeviceCtlOrientation: Sendable {
     }
 
     private static let productionRunner: Runner = { arguments, jsonPath in
-        defer { try? FileManager.default.removeItem(atPath: jsonPath) }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        let errPipe = Pipe()
-        process.standardError = errPipe
-        do {
-            try process.run()
-        } catch {
-            return DeviceCtlRun(status: -1, json: nil, stderr: "\(error)")
-        }
-        // Drain stderr before waiting, so a full pipe cannot deadlock it.
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return DeviceCtlRun(
-            status: process.terminationStatus,
-            json: FileManager.default.contents(atPath: jsonPath),
-            stderr: String(data: errData, encoding: .utf8) ?? ""
-        )
+        DeviceCtlRun.spawn(arguments: arguments, jsonPath: jsonPath)
     }
 
     private let run: Runner

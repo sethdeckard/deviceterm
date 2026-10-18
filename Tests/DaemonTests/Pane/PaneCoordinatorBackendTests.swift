@@ -63,6 +63,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// rather than before it.
     var onFrontmostTree: (@Sendable () -> Void)?
     private(set) var openAppSwitcherCalls = 0
+    private(set) var hingeMovedNotes = 0
     /// The `IndigoHIDEdge` value each `openAppSwitcher` call carried, so a test
     /// can assert the device swipe rotates with the pane's orientation.
     private(set) var openAppSwitcherEdges: [Int] = []
@@ -253,6 +254,8 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     func currentBoundPanel() -> BoundPanel {
         BoundPanel(screenID: boundPanelSpansHinge ? 3 : 1, spansHinge: boundPanelSpansHinge)
     }
+
+    func noteHingeMoved() { hingeMovedNotes += 1 }
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
@@ -1562,6 +1565,20 @@ func aLateSubscriberIsToldTheHingeAngle() async throws {
         if case let .hingeChanged(_, degrees, _) = event { replayed.append(degrees) }
     }
     #expect(replayed == [137])
+}
+
+@Test
+func aReadHingeAngleSendsTheBackendLookingForItsPanel() async throws {
+    // A fold made in Device Hub reaches the daemon only as a reading, and
+    // the bound panel going dark raises too few screen-properties changes
+    // to start the search on its own. A repeated reading is not a move.
+    let backend = MockDeviceBackend()
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(udid: "hinge-follow", sessionId: UUID(), backend: backend)
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
+    await coordinator.publishHinge(paneId: pane.paneId, degrees: 60)
+    #expect(backend.hingeMovedNotes == 2)
 }
 
 @Test
