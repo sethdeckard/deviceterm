@@ -75,6 +75,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Whether the bound panel spans the hinge, updated under `inputGate`
     /// alongside `boundScreenID` because the same lane callback writes both.
     private var boundPanelSpansHinge = false
+    /// The hinge-spanning panel's pixel size, written with `boundScreenID`.
+    private var spanningPanelWidth = 0
+    private var spanningPanelHeight = 0
     /// Told whenever the bound panel moves. Set under `inputGate`, read there
     /// and called outside it, so a handler that hops to an actor never runs
     /// with the gate held.
@@ -622,6 +625,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         let observer = inputGate.sync { () -> (@Sendable () -> Void)? in
             boundScreenID = panel.screenID
             boundPanelSpansHinge = panel.spansHinge
+            spanningPanelWidth = panel.spanningPanelWidth
+            spanningPanelHeight = panel.spanningPanelHeight
             return onBoundPanel
         }
         observer?()
@@ -643,7 +648,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func currentBoundPanel() -> BoundPanel {
         inputGate.sync {
-            BoundPanel(screenID: boundScreenID, spansHinge: boundPanelSpansHinge)
+            BoundPanel(
+                screenID: boundScreenID,
+                spansHinge: boundPanelSpansHinge,
+                spanningPanelWidth: spanningPanelWidth,
+                spanningPanelHeight: spanningPanelHeight
+            )
         }
     }
 

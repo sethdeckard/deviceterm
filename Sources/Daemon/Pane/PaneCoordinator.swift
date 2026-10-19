@@ -1870,7 +1870,7 @@ public actor PaneCoordinator {
         // panel worth naming.
         if record.capabilities.fold, let panel = record.observedPanel {
             channel.send(
-                .panelChanged(paneId: paneId, screenID: panel.screenID, spansHinge: panel.spansHinge)
+                .panelChanged(paneId: paneId, panel: panel)
             )
         }
         // And the hinge, for the same reason. The monitor reads the device's
@@ -3217,7 +3217,7 @@ public actor PaneCoordinator {
         )
         for subscriber in record.subscribers.values {
             subscriber.channel.send(
-                .panelChanged(paneId: paneId, screenID: panel.screenID, spansHinge: panel.spansHinge)
+                .panelChanged(paneId: paneId, panel: panel)
             )
         }
         if spansHingeMoved, let degrees = record.observedHingeDegrees {

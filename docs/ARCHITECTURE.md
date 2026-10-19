@@ -2674,16 +2674,24 @@ Events are correlated to the subscription's request-envelope id:
   whose panels it could not size. A peer that predates the field omits it,
   where it decodes as `false`. A subscriber that needs the panel without
   waiting for an angle reads `panel.changed`.
-- `panel.changed`: `{paneId, screenID?, spansHinge}`, the panel a foldable
-  device's pane is showing. `screenID` is the value `simctl io --display`
-  accepts; it's omitted when the display reports no screen properties. Sent
-  only for a device advertising the `fold` capability. Replayed to each new
-  subscriber when a panel has been observed, and sent whenever the observed
-  panel changes.
+- `panel.changed`: `{paneId, screenID?, spansHinge, spanningPanelWidth?,
+  spanningPanelHeight?}`, the panel a foldable device's pane is showing.
+  `screenID` is the value `simctl io --display` accepts; it's omitted when the
+  display reports no screen properties. Sent only for a device advertising the
+  `fold` capability. Replayed to each new subscriber when a panel has been
+  observed, and sent whenever the observed panel changes.
 
   It comes from the display's own binding rather than the hinge reader, so it
   arrives even when the hinge can't be read. Use it, not `hinge.changed`, to
-  decide which panel's shape to draw.
+  know which panel is showing.
+
+  `spanningPanelWidth` and `spanningPanelHeight` are the pixel size of the
+  panel the hinge runs through, whichever panel is showing. They arrive
+  together or not at all: they're omitted when the daemon can't size the
+  panels, and by a peer that predates them. Fit that size to draw both panels
+  at one scale. To decide which shape to draw a frame in, compare the frame's
+  size with it, and fall back to `spansHinge` when the fields are absent: a
+  frame can arrive before the `panel.changed` that names its panel.
 - `input.changed`: `{paneId, state}`, whether the pane's input is reaching its
   device. `state` is one of:
   - `ok`: nothing is refusing input.

@@ -978,6 +978,34 @@ struct SimulatorPaneViewModelTests {
         #expect(viewModel.confirmedPanelScreenID == 1)
     }
 
+    @Test("the spanning panel's size is kept across events that omit it")
+    func spanningPanelSizeIsKept() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.foldableCapabilities)
+        viewModel.start()
+        await settle()
+        #expect(viewModel.spanningPanelSize == nil)
+        fake.lastPaneEventContinuation?.yield(
+            .panelChanged(
+                PanelChangedEvent(
+                    paneId: "p1",
+                    screenID: 1,
+                    spansHinge: false,
+                    spanningPanelWidth: 2_007,
+                    spanningPanelHeight: 2_853
+                )
+            )
+        )
+        await settle()
+        #expect(viewModel.spanningPanelSize == CGSize(width: 2_007, height: 2_853))
+        // An older daemon's event carries no size; what was learned stands.
+        fake.lastPaneEventContinuation?.yield(
+            .panelChanged(PanelChangedEvent(paneId: "p1", screenID: 3, spansHinge: true))
+        )
+        await settle()
+        #expect(viewModel.spanningPanelSize == CGSize(width: 2_007, height: 2_853))
+    }
+
     @Test("an out-of-range angle still updates which panel is on show")
     func anOutOfRangeAngleStillUpdatesThePanel() async {
         let fake = FakeDaemonClient()

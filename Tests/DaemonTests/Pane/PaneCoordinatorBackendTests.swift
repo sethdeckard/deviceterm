@@ -1721,7 +1721,7 @@ private final class SilentHingeReader: HingeMonitorProcess, @unchecked Sendable 
 private func publishedPanels(_ stream: PaneEventStream) async -> [(UInt32, Bool)] {
     var panels: [(UInt32, Bool)] = []
     for await event in stream {
-        if case let .panelChanged(_, screenID, spansHinge) = event { panels.append((screenID, spansHinge)) }
+        if case let .panelChanged(_, panel) = event { panels.append((panel.screenID, panel.spansHinge)) }
     }
     return panels
 }
@@ -1792,7 +1792,7 @@ func aSinglePanelPanePublishesNoPanel() async throws {
 func aPanelEventEncodesItsScreenID(screenID: UInt32, expected: UInt32?) throws {
     let envelope = try #require(
         encodeSubscriptionEvent(
-            .panelChanged(paneId: UUID(), screenID: screenID, spansHinge: true),
+            .panelChanged(paneId: UUID(), panel: BoundPanel(screenID: screenID, spansHinge: true)),
             paneId: "p1"
         )
     )
@@ -1800,6 +1800,35 @@ func aPanelEventEncodesItsScreenID(screenID: UInt32, expected: UInt32?) throws {
     let decoded = try JSONDecoder().decode(PanelChangedEvent.self, from: envelope.params)
     #expect(decoded.screenID == expected)
     #expect(decoded.spansHinge)
+}
+
+@Test("the spanning panel's size reaches the wire only when both sides are known", arguments: [
+    (2_007, 2_853, Int?.some(2_007), Int?.some(2_853)),
+    (0, 0, Int?.none, Int?.none),
+    (2_007, 0, Int?.none, Int?.none)
+])
+func aPanelEventEncodesTheSpanningPanelSize(
+    width: Int,
+    height: Int,
+    expectedWidth: Int?,
+    expectedHeight: Int?
+) throws {
+    let panel = BoundPanel(screenID: 1, spansHinge: false, spanningPanelWidth: width, spanningPanelHeight: height)
+    let envelope = try #require(encodeSubscriptionEvent(.panelChanged(paneId: UUID(), panel: panel), paneId: "p1"))
+    let decoded = try JSONDecoder().decode(PanelChangedEvent.self, from: envelope.params)
+    #expect(decoded.spanningPanelWidth == expectedWidth)
+    #expect(decoded.spanningPanelHeight == expectedHeight)
+}
+
+@Test
+func aPanelEventFromAnOlderDaemonDecodesWithoutASize() throws {
+    // An older daemon sends no size fields; the event still has to decode, or
+    // the GUI drops it and draws the other panel's shape.
+    let json = Data(#"{"paneId":"p1","screenID":3,"spansHinge":true}"#.utf8)
+    let decoded = try JSONDecoder().decode(PanelChangedEvent.self, from: json)
+    #expect(decoded.screenID == 3)
+    #expect(decoded.spanningPanelWidth == nil)
+    #expect(decoded.spanningPanelHeight == nil)
 }
 
 @Test

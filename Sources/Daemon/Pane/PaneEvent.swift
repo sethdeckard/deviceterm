@@ -57,12 +57,7 @@ public enum PaneEvent: Sendable {
     /// right panel and capture from it. Published from the display's own
     /// binding rather than with a hinge reading, so it arrives even when the
     /// hinge cannot be read. A device with one panel never emits.
-    case panelChanged(
-        paneId:
-        UUID,
-        screenID: UInt32,
-        spansHinge: Bool
-        )
+    case panelChanged(paneId: UUID, panel: BoundPanel)
     /// Whether the pane's input is reaching its device changed.
     ///
     /// Worked out from the backend's transport and the pane's contact lane

@@ -35,11 +35,18 @@ enum SimGestureMath {
     /// `viewSize` coordinate space, so the bezel can paint a
     /// `displayInset`-wide strip around the screen without
     /// overflowing the pane.
+    ///
+    /// `referenceSize`, in the same native pixels as `surfaceSize`, is the
+    /// picture the scale is fitted to when it isn't the one being drawn. A
+    /// foldable passes the panel that spans the hinge, so its cover is drawn
+    /// at the inner panel's pixel scale, as the device holds them, rather
+    /// than blown up to fill the same box. Nil fits the surface itself.
     static func imageRect(
         viewSize: CGSize,
         surfaceSize: CGSize,
         orientation: Orientation = .portrait,
-        displayInset: CGFloat = 0
+        displayInset: CGFloat = 0,
+        referenceSize: CGSize? = nil
     ) -> CGRect? {
         guard surfaceSize.width > 0, surfaceSize.height > 0,
             viewSize.width > 0, viewSize.height > 0 else { return nil }
@@ -50,20 +57,18 @@ enum SimGestureMath {
         // rotated quad on screen.
         let isLandscape = orientation == .landscapeLeft
             || orientation == .landscapeRight
-        let effectiveSurface = isLandscape
-            ? CGSize(width: surfaceSize.height, height: surfaceSize.width)
-            : surfaceSize
-        let imageAspect = effectiveSurface.width / effectiveSurface.height
-        let usableAspect = usableWidth / usableHeight
-        let screenWidth: CGFloat
-        let screenHeight: CGFloat
-        if usableAspect > imageAspect {
-            screenHeight = usableHeight
-            screenWidth = usableHeight * imageAspect
-        } else {
-            screenWidth = usableWidth
-            screenHeight = usableWidth / imageAspect
+        func displayed(_ size: CGSize) -> CGSize {
+            isLandscape ? CGSize(width: size.height, height: size.width) : size
         }
+        let effectiveSurface = displayed(surfaceSize)
+        let reference = referenceSize.flatMap { $0.width > 0 && $0.height > 0 ? displayed($0) : nil }
+            ?? effectiveSurface
+        // Points per native pixel, from fitting the reference; the surface is
+        // drawn at that scale, which is a plain aspect fit when it is the
+        // reference.
+        let scale = min(usableWidth / reference.width, usableHeight / reference.height)
+        let screenWidth = effectiveSurface.width * scale
+        let screenHeight = effectiveSurface.height * scale
         return CGRect(
             x: (viewSize.width - screenWidth) / 2,
             y: (viewSize.height - screenHeight) / 2,
@@ -91,13 +96,15 @@ enum SimGestureMath {
         surfaceSize: CGSize,
         orientation: Orientation = .portrait,
         displayInset: CGFloat = 0,
-        crease: FoldCreaseGeometry.Crease? = nil
+        crease: FoldCreaseGeometry.Crease? = nil,
+        referenceSize: CGSize? = nil
     ) -> CGPoint? {
         guard let rect = imageRect(
             viewSize: viewSize,
             surfaceSize: surfaceSize,
             orientation: orientation,
-            displayInset: displayInset
+            displayInset: displayInset,
+            referenceSize: referenceSize
         ) else { return nil }
         let point = CGPoint(
             x: (viewPoint.x - rect.origin.x) / rect.width,
@@ -143,13 +150,15 @@ enum SimGestureMath {
         surfaceSize: CGSize,
         orientation: Orientation = .portrait,
         displayInset: CGFloat = 0,
-        crease: FoldCreaseGeometry.Crease? = nil
+        crease: FoldCreaseGeometry.Crease? = nil,
+        referenceSize: CGSize? = nil
     ) -> CGPoint? {
         guard let rect = imageRect(
             viewSize: viewSize,
             surfaceSize: surfaceSize,
             orientation: orientation,
-            displayInset: displayInset
+            displayInset: displayInset,
+            referenceSize: referenceSize
         ) else { return nil }
         let point = CGPoint(
             x: (viewPoint.x - rect.origin.x) / rect.width,

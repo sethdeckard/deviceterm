@@ -426,6 +426,32 @@ struct SimulatorPaneCreaseGateTests {
         #expect(viewController.currentCrease() == nil)
     }
 
+    @Test("a foldable uses the spanning panel size as its fit reference")
+    func theFitReferenceHoldsAcrossAPanelSwitch() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await Task.yield()
+        let inner = CGSize(width: 2_007, height: 2_853)
+        for (screenID, spansHinge) in [(UInt32(3), true), (UInt32(1), false)] {
+            fake.lastPaneEventContinuation?.yield(
+                .panelChanged(
+                    PanelChangedEvent(
+                        paneId: "p1",
+                        screenID: screenID,
+                        spansHinge: spansHinge,
+                        spanningPanelWidth: Int(inner.width),
+                        spanningPanelHeight: Int(inner.height)
+                    )
+                )
+            )
+            for _ in 0..<200 where viewController.fitReferenceSize != inner {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            // The same reference on either panel.
+            #expect(viewController.fitReferenceSize == inner)
+        }
+    }
+
     @Test("an open device is flat even on the panel that bends")
     func aFlatHingeDoesNotCrease() async {
         let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()

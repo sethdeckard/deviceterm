@@ -48,6 +48,10 @@ final class SimulatorPaneWrapperView: NSView {
         var spansHinge = false
         /// How far that fold is bent, or nil when the panel is flat.
         var crease: FoldCreaseGeometry.Crease?
+        /// The picture the scale is fitted to, when it isn't the surface on
+        /// show, as `SimGestureMath.imageRect` takes it. Must match what the
+        /// content view draws with, or the frame sits off the picture.
+        var fitReferenceSize: CGSize?
     }
 
     /// The input-target subview that should actually own first-
@@ -220,7 +224,8 @@ final class SimulatorPaneWrapperView: NSView {
             viewSize: bezelView.bounds.size,
             surfaceSize: bezelContext.surfaceSize,
             orientation: bezelContext.orientation,
-            displayInset: inset
+            displayInset: inset,
+            referenceSize: bezelContext.fitReferenceSize
         )
     }
 
@@ -316,7 +321,8 @@ final class SimulatorPaneWrapperView: NSView {
             viewSize: bezelView.bounds.size,
             surfaceSize: bezelContext.surfaceSize,
             orientation: bezelContext.orientation,
-            displayInset: inset
+            displayInset: inset,
+            referenceSize: bezelContext.fitReferenceSize
         ),
             let layout = DeviceBezelLayoutMath.layout(
                 family: bezelContext.family,

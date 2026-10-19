@@ -14,10 +14,25 @@ public struct PanelChangedEvent: Codable, Sendable, Equatable {
     /// Whether the panel is the one the hinge runs through, so its picture
     /// bends as the angle changes. False for a foldable's cover panel.
     public let spansHinge: Bool
+    /// The pixel size of the panel that spans the hinge, whichever panel is
+    /// showing, so a subscriber can draw both panels at one scale and tell
+    /// which panel a frame came from by its size. Both present or both
+    /// absent: absent when the daemon can't size the panels. Optional so
+    /// events from peers that omit these fields still decode.
+    public let spanningPanelWidth: Int?
+    public let spanningPanelHeight: Int?
 
-    public init(paneId: String, screenID: UInt32?, spansHinge: Bool) {
+    public init(
+        paneId: String,
+        screenID: UInt32?,
+        spansHinge: Bool,
+        spanningPanelWidth: Int? = nil,
+        spanningPanelHeight: Int? = nil
+    ) {
         self.paneId = paneId
         self.screenID = screenID
         self.spansHinge = spansHinge
+        self.spanningPanelWidth = spanningPanelWidth
+        self.spanningPanelHeight = spanningPanelHeight
     }
 }

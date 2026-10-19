@@ -214,17 +214,36 @@ static NSArray<id<SimDisplayIOSurfaceRenderable>> *CSBSizedCandidates(NSArray *c
     return sized;
 }
 
-/// A candidate's framebuffer area in square pixels, or 0 when it vends no
-/// usable size. Extent is what tells a foldable's two panels apart.
-static CGFloat CSBCandidateArea(id candidate) {
+/// A candidate's framebuffer size in pixels, or `CGSizeZero` when it vends
+/// no usable size.
+static CGSize CSBCandidateSize(id candidate) {
     CGSize size = CGSizeZero;
     @try {
         if ([candidate respondsToSelector:@selector(displaySize)]) {
             size = [candidate displaySize];
         }
     } @catch (NSException *e) {}
-    if (size.width <= 0 || size.height <= 0) return 0;
+    if (size.width <= 0 || size.height <= 0) return CGSizeZero;
+    return size;
+}
+
+/// A candidate's framebuffer area in square pixels, or 0 when it vends no
+/// usable size. Extent is what tells a foldable's two panels apart.
+static CGFloat CSBCandidateArea(id candidate) {
+    CGSize size = CSBCandidateSize(candidate);
     return size.width * size.height;
+}
+
+/// The size of the largest candidate in `sized`, or `CGSizeZero` when there
+/// is only one: a single-panel device has no panel spanning a hinge.
+static CGSize CSBSpanningPanelSize(NSArray<id<SimDisplayIOSurfaceRenderable>> *sized) {
+    if (sized.count <= 1) return CGSizeZero;
+    CGSize largest = CGSizeZero;
+    for (id candidate in sized) {
+        CGSize size = CSBCandidateSize(candidate);
+        if (size.width * size.height > largest.width * largest.height) largest = size;
+    }
+    return largest;
 }
 
 /// Whether `candidate` has the greatest area in `sized`.
@@ -253,6 +272,7 @@ static BOOL CSBIsLargestCandidate(
 @property (nonatomic, copy, readwrite, nullable) NSString *boundScreenUniqueId;
 @property (nonatomic, assign, readwrite) BOOL hasMultiplePanels;
 @property (nonatomic, assign, readwrite) BOOL boundPanelIsLargest;
+@property (nonatomic, assign, readwrite) CGSize spanningPanelSize;
 /// Delivery queue for the screen callbacks, held so a rebind can re-register
 /// them on the new panel without the caller registering again.
 @property (nonatomic, strong, nullable) dispatch_queue_t screenCallbackQueue;
@@ -514,6 +534,7 @@ static BOOL CSBIsLargestCandidate(
 - (void)_recordBoundPanelFor:(nullable id)candidate
                        among:(NSArray<id<SimDisplayIOSurfaceRenderable>> *)sized {
     self.boundPanelIsLargest = CSBIsLargestCandidate(candidate, sized);
+    self.spanningPanelSize = CSBSpanningPanelSize(sized);
     id<CSBSimScreenProperties> props = CSBPropertiesForCandidate(candidate);
     if (!props) {
         self.boundScreenID = 0;

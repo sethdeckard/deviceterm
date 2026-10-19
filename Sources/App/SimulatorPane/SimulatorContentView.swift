@@ -90,6 +90,10 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// How the picture bends at the hinge, or nil when it is flat. Only a
     /// foldable showing the panel the hinge runs through ever sets it.
     private var crease: FoldCreaseGeometry.Crease?
+    /// The picture the scale is fitted to, when it isn't the surface being
+    /// drawn: a foldable's hinge-spanning panel, so both panels draw at one
+    /// pixel scale. Nil fits the surface itself.
+    private(set) var fitReferenceSize: CGSize?
     private var dragStart: CGPoint?
     private var dragStartTime: Date?
     private var liveTouchActive = false
@@ -277,6 +281,14 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         requestRedraw()
     }
 
+    /// Push the picture the scale is fitted to, nil to fit the surface
+    /// itself. Only a changed value requests a draw.
+    func setFitReference(_ size: CGSize?) {
+        guard size != fitReferenceSize else { return }
+        fitReferenceSize = size
+        requestRedraw()
+    }
+
     // MARK: MTKViewDelegate
 
     func draw(in view: MTKView) {
@@ -295,7 +307,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             screenCorners: screenCorners,
             crease: crease,
             in: view,
-            trace: trace
+            trace: trace,
+            referenceSize: fitReferenceSize
         )
         if installed { pendingTraceSequence = nil }
     }
@@ -403,7 +416,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             surfaceSize: surfaceSize,
             orientation: orientation,
             displayInset: displayInset,
-            crease: crease
+            crease: crease,
+            referenceSize: fitReferenceSize
         ) {
             dragStart = normalized
             dragStartTime = Date()
@@ -425,7 +439,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 surfaceSize: surfaceSize,
                 orientation: orientation,
                 displayInset: displayInset,
-                crease: crease
+                crease: crease,
+                referenceSize: fitReferenceSize
             )
         else { return }
         dragStart = extended
@@ -449,7 +464,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 surfaceSize: surfaceSize,
                 orientation: orientation,
                 displayInset: displayInset,
-                crease: crease
+                crease: crease,
+                referenceSize: fitReferenceSize
             )
         else { return false }
         return SimGestureMath.isInBottomEdgeBand(orientedY: displayed.y)
@@ -729,7 +745,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             viewSize: bounds.size,
             surfaceSize: surfaceSize,
             orientation: orientation,
-            displayInset: displayInset
+            displayInset: displayInset,
+            referenceSize: fitReferenceSize
         ) else {
             multitouchOverlayLayer.isHidden = true
             return
@@ -773,7 +790,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             surfaceSize: surfaceSize,
             orientation: orientation,
             displayInset: displayInset,
-            crease: crease
+            crease: crease,
+            referenceSize: fitReferenceSize
         ) {
             return inScreen
         }
@@ -784,7 +802,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 surfaceSize: surfaceSize,
                 orientation: orientation,
                 displayInset: displayInset,
-                crease: crease
+                crease: crease,
+                referenceSize: fitReferenceSize
             ) {
             return extended
         }
@@ -824,7 +843,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             surfaceSize: surfaceSize,
             orientation: orientation,
             displayInset: displayInset,
-            crease: crease
+            crease: crease,
+            referenceSize: fitReferenceSize
         )
         else { return }
         gestureCenter = center

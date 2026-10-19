@@ -126,7 +126,13 @@ final class SimDisplayLane: @unchecked Sendable {
     /// Read the bound panel's identity and shape in one trip, so a fold
     /// cannot land between the two reads.
     private static func boundPanel(of handle: SimDisplayHandle) -> BoundPanel {
-        BoundPanel(screenID: handle.boundScreenID, spansHinge: handle.boundPanelIsLargest)
+        let spanning = handle.spanningPanelSize
+        return BoundPanel(
+            screenID: handle.boundScreenID,
+            spansHinge: handle.boundPanelIsLargest,
+            spanningPanelWidth: Int(spanning.width),
+            spanningPanelHeight: Int(spanning.height)
+        )
     }
 
     // MARK: - Bootstrap

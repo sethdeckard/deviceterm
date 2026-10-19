@@ -78,6 +78,23 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// devices. Captures pass it so they record what the pane shows rather
     /// than whichever panel `simctl` defaults to.
     var litPanelScreenID: UInt32? { viewModel.confirmedPanelScreenID }
+    /// The picture the scale is fitted to: a foldable's hinge-spanning panel,
+    /// so its cover is drawn at the inner panel's pixel scale as the device
+    /// holds them, and the pane doesn't change size between panels. Nil fits
+    /// the surface on show.
+    var fitReferenceSize: CGSize? {
+        viewModel.capabilities.fold ? viewModel.spanningPanelSize : nil
+    }
+    /// Whether the frame on show is the hinge-spanning panel's, read off the
+    /// frame's own size where that's known (see `FoldablePanelShape`), so the
+    /// shape it's drawn in always matches the picture.
+    var drawnPanelSpansHinge: Bool {
+        FoldablePanelShape.spansHinge(
+            surfaceSize: contentView?.surfaceSize ?? .zero,
+            spanningPanelSize: viewModel.spanningPanelSize,
+            reported: viewModel.confirmedPanelSpansHinge
+        )
+    }
 
     private let viewModel: SimulatorPaneViewModel
     /// SwiftUI chrome overlay state (title strip, status badge, focus
@@ -140,6 +157,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// families default to Fit Screen so a phone/pad/tv fills any
     /// reasonable pane bounds.
     private var lastAppliedPreset: SimSizePreset = .fitScreen
+    /// The fit reference the pane was last sized against, so a reference
+    /// that arrives or changes afterwards can resize it.
+    private var sizedFitReference: CGSize?
     /// The preset the pane state arrived carrying, so a pane whose view
     /// controller was rebuilt keeps the sizing the user chose instead of
     /// falling back to the family default. Nil when the pane state carries
@@ -847,6 +867,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         let orientation = viewModel.currentOrientation
         contentView?.applyFrame(lease: lease, traceSequence: viewModel.currentSurfaceSequence)
         contentView?.setOrientation(orientation)
+        contentView?.setFitReference(fitReferenceSize)
         adoptConfirmedHinge()
         let crease = currentCrease()
         contentView?.setCrease(crease)
@@ -860,8 +881,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
                 surfaceSize: content.surfaceSize,
                 orientation: viewModel.currentOrientation,
                 foldable: viewModel.capabilities.fold,
-                spansHinge: viewModel.confirmedPanelSpansHinge,
-                crease: crease
+                spansHinge: drawnPanelSpansHinge,
+                crease: crease,
+                fitReferenceSize: fitReferenceSize
             )
         }
         // Mirror VM state + record status into the chrome's view
@@ -896,6 +918,18 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             view.window != nil {
             pendingAutoFit = false
             applySizePreset(lastAppliedPreset)
+        }
+        // The attach response seeds the pane with whichever panel was lit,
+        // so on a closed foldable the auto-fit above can size it to the cover
+        // before `panel.changed` brings the spanning panel. The picture then
+        // fits to the larger panel inside a pane sized for the smaller one,
+        // so replay the preset against the reference once it lands or moves.
+        let reference = fitReferenceSize
+        if reference != sizedFitReference, view.window != nil {
+            sizedFitReference = reference
+            if !pendingAutoFit, reference != nil {
+                applySizePreset(lastAppliedPreset)
+            }
         }
         if state != lastNotifiedState {
             lastNotifiedState = state
@@ -1068,7 +1102,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         let degrees = previewsSlider
             ? chromeViewModel.foldDegrees
             : viewModel.confirmedHingeDegrees
-        guard viewModel.confirmedPanelSpansHinge, let degrees else { return nil }
+        guard drawnPanelSpansHinge, let degrees else { return nil }
         return FoldCreaseGeometry.crease(degrees: degrees)
     }
 
@@ -1386,9 +1420,13 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             lastAppliedPreset = preset
             onSizePresetChange?(preset)
         }
+        // A foldable sizes to its hinge-spanning panel whichever panel is on
+        // show, so a preset holds across a fold instead of fitting the cover
+        // and the inner panel to different pane sizes.
+        let sized = fitReferenceSize
         let device = SimDeviceMetrics(
-            pixelWidth: chromeViewModel.devicePixelWidth ?? 0,
-            pixelHeight: chromeViewModel.devicePixelHeight ?? 0,
+            pixelWidth: sized.map { Int($0.width) } ?? chromeViewModel.devicePixelWidth ?? 0,
+            pixelHeight: sized.map { Int($0.height) } ?? chromeViewModel.devicePixelHeight ?? 0,
             family: DeviceFamily(wire: viewModel.family)
         )
         // Ask the owning layout controller to size this pane by walking
@@ -1557,7 +1595,8 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             viewSize: content.bounds.size,
             surfaceSize: content.surfaceSize,
             orientation: viewModel.currentOrientation,
-            displayInset: content.displayInset
+            displayInset: content.displayInset,
+            referenceSize: content.fitReferenceSize
         ) else { return }
         axQueryInFlight = true
         let paneId = viewModel.paneId

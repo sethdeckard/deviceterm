@@ -1311,12 +1311,16 @@ func encodeSubscriptionEvent(
             params: encoded
         )
 
-    case let .panelChanged(_, screenID, spansHinge):
-        // Zero is the bridge's "no screen properties", not a panel.
+    case let .panelChanged(_, panel):
+        // Zero is the bridge's "no screen properties", not a panel, and the
+        // bridge's "no size known" for the spanning panel.
+        let spanningKnown = panel.spanningPanelWidth > 0 && panel.spanningPanelHeight > 0
         let payload = PanelChangedEvent(
             paneId: paneId,
-            screenID: screenID == 0 ? nil : screenID,
-            spansHinge: spansHinge
+            screenID: panel.screenID == 0 ? nil : panel.screenID,
+            spansHinge: panel.spansHinge,
+            spanningPanelWidth: spanningKnown ? panel.spanningPanelWidth : nil,
+            spanningPanelHeight: spanningKnown ? panel.spanningPanelHeight : nil
         )
         guard let encoded = try? encoder.encode(payload) else { return nil }
         return MethodRegistry.SubscriptionEvent(

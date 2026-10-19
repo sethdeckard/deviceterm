@@ -431,6 +431,48 @@ struct SimGestureMathTests {
     }
 }
 
+/// A reference size scales the picture by what fits the reference, so a
+/// foldable's cover draws at its inner panel's pixel scale.
+struct SimGestureMathReferenceTests {
+    private let view = CGSize(width: 1_000, height: 1_000)
+    private let inner = CGSize(width: 2_007, height: 2_853)
+    private let cover = CGSize(width: 1_398, height: 2_034)
+
+    @Test("fitting to the surface itself is the plain aspect fit")
+    func referenceOfItselfIsThePlainFit() {
+        let plain = SimGestureMath.imageRect(viewSize: view, surfaceSize: inner, displayInset: 18)
+        let referenced = SimGestureMath.imageRect(
+            viewSize: view, surfaceSize: inner, displayInset: 18, referenceSize: inner
+        )
+        #expect(plain == referenced)
+    }
+
+    @Test("the cover draws at the inner panel's scale, centred", arguments: [Orientation.portrait, .landscapeLeft])
+    func coverAtInnerScale(orientation: Orientation) throws {
+        let innerRect = try #require(
+            SimGestureMath.imageRect(viewSize: view, surfaceSize: inner, orientation: orientation, displayInset: 18)
+        )
+        let coverRect = try #require(
+            SimGestureMath.imageRect(
+                viewSize: view, surfaceSize: cover, orientation: orientation, displayInset: 18, referenceSize: inner
+            )
+        )
+        // One scale: points per native pixel match on both panels.
+        let landscape = orientation == .landscapeLeft
+        let innerScale = innerRect.height / (landscape ? inner.width : inner.height)
+        let coverScale = coverRect.height / (landscape ? cover.width : cover.height)
+        #expect(abs(innerScale - coverScale) < 1e-9)
+        #expect(abs(coverRect.midX - view.width / 2) < 1e-9)
+        #expect(abs(coverRect.midY - view.height / 2) < 1e-9)
+    }
+
+    @Test("an unusable reference falls back to fitting the surface")
+    func zeroReferenceFallsBack() {
+        let plain = SimGestureMath.imageRect(viewSize: view, surfaceSize: cover)
+        #expect(SimGestureMath.imageRect(viewSize: view, surfaceSize: cover, referenceSize: .zero) == plain)
+    }
+}
+
 /// Input against a creased picture.
 ///
 /// The renderer bends the picture and the user aims at what they see, so the

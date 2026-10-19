@@ -188,6 +188,15 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// `boundScreenID` is, so it follows a fold.
 @property (nonatomic, readonly) BOOL boundPanelIsLargest;
 
+/// The pixel size of the largest sized candidate, the panel that spans the
+/// hinge, whichever panel is bound.
+///
+/// Read from the same candidates as `boundPanelIsLargest`, in the same
+/// units as `displaySize`, so a caller can tell which panel a frame came
+/// from by its size and draw the other panel at the same scale. `CGSizeZero`
+/// on a single-panel device and before a renderable is resolved.
+@property (nonatomic, readonly) CGSize spanningPanelSize;
+
 /// Whether a booted device vends more than one sized display candidate,
 /// answered without binding one.
 ///

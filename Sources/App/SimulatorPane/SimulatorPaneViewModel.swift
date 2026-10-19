@@ -151,6 +151,11 @@ final class SimulatorPaneViewModel {
     /// --display` accepts. Nil until the daemon names one, which is never on
     /// a device with one panel.
     private(set) var confirmedPanelScreenID: UInt32?
+    /// The pixel size of a foldable's hinge-spanning panel, whichever panel
+    /// is showing, as the daemon reports it. Nil until reported, and from a
+    /// daemon that predates the field. Kept across later events that omit it,
+    /// since a panel's size doesn't change.
+    private(set) var spanningPanelSize: CGSize?
     /// Whether a fold this pane asked for is still on its way to the device,
     /// or another is queued behind it.
     ///
@@ -430,6 +435,10 @@ final class SimulatorPaneViewModel {
         case let .panelChanged(change):
             confirmedPanelSpansHinge = change.spansHinge
             confirmedPanelScreenID = change.screenID
+            if let width = change.spanningPanelWidth, let height = change.spanningPanelHeight,
+                width > 0, height > 0 {
+                spanningPanelSize = CGSize(width: width, height: height)
+            }
 
         case let .inputChanged(change):
             inputHealth = change.state

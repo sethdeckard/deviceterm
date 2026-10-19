@@ -161,7 +161,9 @@ final class SimulatorMetalRenderer {
     /// yet, presents an empty drawable so the view doesn't show garbage
     /// on the first frames. Returns whether a supplied `trace` was
     /// installed (i.e. this draw reached commit), so the caller only
-    /// retires a frame's trace once it is actually armed.
+    /// retires a frame's trace once it is actually armed. `referenceSize` is
+    /// the picture the scale is fitted to, as `SimGestureMath.imageRect` takes
+    /// it.
     func render(
         lease: SurfaceLease?,
         orientation: Orientation,
@@ -169,7 +171,8 @@ final class SimulatorMetalRenderer {
         screenCorners: DeviceBezelLayout.Corners,
         crease: FoldCreaseGeometry.Crease?,
         in view: MTKView,
-        trace: SurfaceConsumerTrace? = nil
+        trace: SurfaceConsumerTrace? = nil,
+        referenceSize: CGSize? = nil
     ) -> Bool {
         guard let drawable = view.currentDrawable,
             let descriptor = view.currentRenderPassDescriptor,
@@ -206,43 +209,28 @@ final class SimulatorMetalRenderer {
             iosurface: surface,
             plane: 0
         ) else { return false }
-        let texW = CGFloat(texDesc.width)
-        let texH = CGFloat(texDesc.height)
         let viewW = max(1, view.drawableSize.width)
         let viewH = max(1, view.drawableSize.height)
-        // Effective texture aspect: landscape orientations swap
-        // width/height because CoreSimulator keeps delivering the
-        // surface at portrait pixel dimensions even when the device
-        // is rotated. The shader's UV rotation makes the rendered
-        // content upright; aspect fitting against the swapped
-        // dimensions keeps the quad shaped like the rotated content
-        // rather than letterboxing landscape into a portrait box.
-        let isLandscape = orientation == .landscapeLeft
-            || orientation == .landscapeRight
-        let effectiveTexW = isLandscape ? texH : texW
-        let effectiveTexH = isLandscape ? texW : texH
-        let texAspect = effectiveTexW / effectiveTexH
-        // Reserve `displayInset`pt on each side for the wrapper's
-        // bezel, converting points → drawable pixels via the view's
-        // backing scale so the inset is consistent regardless of
-        // Retina factor. Shrink the usable rect, aspect-fit inside
-        // it, then re-express the screen rect as NDC against the
-        // full drawableSize so the freed margin becomes
-        // transparent letterbox (bezel paints through it).
+        // Reserve `displayInset`pt on each side for the wrapper's bezel,
+        // converting points to drawable pixels via the view's backing scale
+        // so the inset is consistent regardless of Retina factor. The fit is
+        // `SimGestureMath.imageRect`'s, run in drawable pixels, so the picture
+        // lands exactly where input and the bezel compute it; the freed margin
+        // becomes transparent letterbox the bezel paints through. Landscape
+        // fits against swapped dimensions there, because CoreSimulator keeps
+        // delivering the surface at portrait size and the shader's UV
+        // rotation turns it upright.
         let backing = max(1, view.window?.backingScaleFactor ?? 2)
         let insetPx = displayInset * backing
-        let usableW = max(1, viewW - 2 * insetPx)
-        let usableH = max(1, viewH - 2 * insetPx)
-        let usableAspect = usableW / usableH
-        let screenW: CGFloat
-        let screenH: CGFloat
-        if usableAspect > texAspect {
-            screenH = usableH
-            screenW = usableH * texAspect
-        } else {
-            screenW = usableW
-            screenH = usableW / texAspect
-        }
+        guard let screenRect = SimGestureMath.imageRect(
+            viewSize: CGSize(width: viewW, height: viewH),
+            surfaceSize: CGSize(width: texDesc.width, height: texDesc.height),
+            orientation: orientation,
+            displayInset: insetPx,
+            referenceSize: referenceSize
+        ) else { return false }
+        let screenW = screenRect.width
+        let screenH = screenRect.height
         let ndcW = Float(screenW / viewW)
         let ndcH = Float(screenH / viewH)
         // Screen-corner radii in pixels for the fragment shader's SDF
