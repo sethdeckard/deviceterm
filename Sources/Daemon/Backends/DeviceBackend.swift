@@ -102,6 +102,12 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// the device. A backend whose panel can move starts looking for the
     /// panel the fold lit. The default does nothing, having one panel.
     func noteHingeMoved()
+
+    /// The device's physical orientation, as opposed to the orientation its
+    /// interface shows, for a backend that can read it. A foldable is drawn in
+    /// device space, so its pane needs this even while an app holds the
+    /// interface still. Nil when it can't be read; the default reads nothing.
+    func readDeviceOrientation() async -> Orientation?
     /// Tear the backend down without holding the caller's executor.
     ///
     /// Callers that must not block on teardown use this: simulator shutdown
@@ -464,6 +470,9 @@ extension DeviceBackend {
 
     /// Default: nothing to follow, for the same reason.
     func noteHingeMoved() {}
+
+    /// Default: unreadable. Only a foldable is drawn in device space.
+    func readDeviceOrientation() async -> Orientation? { nil }
 
     /// Sequential default: starts frames before orientation observation, so a
     /// synchronous first-frame callback arrives before observation is

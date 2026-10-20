@@ -80,6 +80,20 @@ func theGetPayloadReportsTheDeviceOrientation() throws {
 }
 
 @Test
+func theGetPayloadReportsTheUprightOrientationWhileFlat() throws {
+    // The fixture lies face up; the upright orientation it was last in stands.
+    #expect(DeviceCtlOrientation.uprightOrientation(fromJSON: try loadFixture()) == .portrait)
+}
+
+@Test("an upright orientation that isn't one of the four reads as nothing", arguments: [
+    #"{"result":{"deviceOrientation":"faceUp"}}"#,
+    #"{"result":{"deviceOrientation":"faceUp","deviceOrientationNonFlat":"unknown"}}"#
+])
+func anUnusableUprightOrientationReadsAsNothing(json: String) {
+    #expect(DeviceCtlOrientation.uprightOrientation(fromJSON: Data(json.utf8)) == nil)
+}
+
+@Test
 func aPayloadWithoutTheFieldReportsNothing() {
     #expect(DeviceCtlOrientation.deviceOrientation(fromJSON: Data(#"{"result":{}}"#.utf8)) == nil)
 }

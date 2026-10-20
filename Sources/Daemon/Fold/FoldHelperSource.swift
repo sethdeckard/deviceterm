@@ -51,8 +51,10 @@ enum FoldHelperSource {
     /// `hinge` and `orientation` print nothing on success and a diagnostic on
     /// failure; the exit status is what the daemon reads. `watch` prints
     /// `angle <degrees>` for the current angle when a valid current hinge event
-    /// is available, then once per valid hinge event, and runs until it is
-    /// terminated or its output goes away.
+    /// is available, then once per valid hinge event, and
+    /// `orientation <value>` for each orientation control event, in the
+    /// values `orientation` takes, and runs until it is terminated or its
+    /// output goes away.
     static let code = #"""
     // SPDX-License-Identifier: GPL-3.0-or-later
     // Guest-side hinge and orientation control for a foldable iOS simulator.
@@ -92,6 +94,11 @@ enum FoldHelperSource {
         void *target, void *refcon);
     extern uint32_t IOHIDEventGetType(IOHIDEventRef event);
     extern double IOHIDEventGetFloatValue(IOHIDEventRef event, uint32_t field);
+    extern CFIndex IOHIDEventGetIntegerValue(IOHIDEventRef event, uint32_t field);
+    extern uint8_t *IOHIDEventGetDataValue(IOHIDEventRef event, uint32_t field);
+    extern CFTypeRef IOCFUnserializeBinary(
+        const char *buffer, size_t bufferSize, CFAllocatorRef allocator,
+        CFOptionFlags options, CFStringRef *errorString);
 
     // The virtualized driver's own vendor usage, shared by both controls.
     static const uint32_t kControlUsagePage = 0xFF61;
@@ -105,6 +112,13 @@ enum FoldHelperSource {
     // The hinge event CoreMotion's Crane service emits, and its angle field.
     static const uint32_t kHingeEventType = 44;
     static const uint32_t kHingeAngleField = (kHingeEventType << 16) | 1;
+    // A vendor-defined event, and its usage page, usage, data length and data
+    // fields: how both controls, Device Hub's and this helper's, arrive.
+    static const uint32_t kVendorEventType = 1;
+    static const uint32_t kVendorUsagePageField = (kVendorEventType << 16) | 0;
+    static const uint32_t kVendorUsageField = (kVendorEventType << 16) | 1;
+    static const uint32_t kVendorDataLengthField = (kVendorEventType << 16) | 3;
+    static const uint32_t kVendorDataField = (kVendorEventType << 16) | 4;
 
     static int usage(void) {
         fprintf(stderr,
@@ -195,10 +209,39 @@ enum FoldHelperSource {
         fflush(stdout);
     }
 
+    // Print the orientation an orientation-picker-control event turns the
+    // device to, whoever sent it: Device Hub's rotate control, or this
+    // helper's. A rotation of a closed foldable changes nothing else the
+    // daemon can see, because the cover's Home Screen doesn't rotate.
+    static void printOrientation(IOHIDEventRef event) {
+        if (IOHIDEventGetIntegerValue(event, kVendorUsagePageField) != kControlUsagePage) return;
+        if (IOHIDEventGetIntegerValue(event, kVendorUsageField) != kControlUsage) return;
+        CFIndex length = IOHIDEventGetIntegerValue(event, kVendorDataLengthField);
+        uint8_t *data = IOHIDEventGetDataValue(event, kVendorDataField);
+        if (!data || length <= 0) return;
+        CFTypeRef payload = IOCFUnserializeBinary(
+            (const char *)data, (size_t)length, NULL, 0, NULL);
+        if (!payload) return;
+        if (CFGetTypeID(payload) == CFDictionaryGetTypeID()) {
+            CFTypeRef source = CFDictionaryGetValue(payload, CFSTR("source"));
+            CFTypeRef value = CFDictionaryGetValue(payload, CFSTR("value"));
+            char name[32];
+            if (source && CFEqual(source, CFSTR("orientation-picker-control"))
+                && value && CFGetTypeID(value) == CFStringGetTypeID()
+                && CFStringGetCString(value, name, sizeof name, kCFStringEncodingUTF8)) {
+                printf("orientation %s\n", name);
+                fflush(stdout);
+            }
+        }
+        CFRelease(payload);
+    }
+
     static void hingeEvent(
         void *target, void *refcon, IOHIDServiceClientRef service,
         IOHIDEventRef event) {
-        if (IOHIDEventGetType(event) == kHingeEventType) printAngle(event);
+        uint32_t type = IOHIDEventGetType(event);
+        if (type == kHingeEventType) printAngle(event);
+        if (type == kVendorEventType) printOrientation(event);
     }
 
     // Report the current angle, then every change, until terminated. A write
@@ -265,6 +308,12 @@ enum FoldHelperSource {
         case .faceDown:
             return ["orientation", "facedown"]
         }
+    }
+
+    /// The device orientation an `orientation` value names. Nil for a flat
+    /// value and anything unrecognized.
+    static func orientation(fromValue value: String) -> Orientation? {
+        Orientation.allCases.first { orientationValue($0) == value }
     }
 
     /// The payload value Device Hub's orientation control sends for each

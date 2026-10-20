@@ -1290,10 +1290,11 @@ func encodeSubscriptionEvent(
             params: encoded
         )
 
-    case let .orientationChanged(_, orientation):
+    case let .orientationChanged(_, orientation, deviceOrientation):
         let payload = OrientationChangedEvent(
             paneId: paneId,
-            orientation: orientation.rawValue
+            orientation: orientation.rawValue,
+            deviceOrientation: deviceOrientation?.rawValue
         )
         guard let encoded = try? encoder.encode(payload) else { return nil }
         return MethodRegistry.SubscriptionEvent(

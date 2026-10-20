@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import DaemonProtocol
-
 /// How a foldable's device orientation reads on the panel it is showing.
 ///
 /// Both panels report one display orientation. With the cover lit it equals
@@ -13,14 +11,19 @@ import DaemonProtocol
 /// reading, so `resolve` answers both: the device orientation to send and the
 /// reading to wait for. Anywhere but a foldable's inner panel the two are the
 /// same.
-enum FoldablePanelOrientation {
+public enum FoldablePanelOrientation {
     /// What a rotation request asks the device for, and the reading that
     /// confirms it.
-    struct Resolution: Equatable {
+    public struct Resolution: Equatable, Sendable {
         /// The device orientation to send.
-        let device: Orientation
+        public let device: Orientation
         /// The display reading that confirms it.
-        let display: Orientation
+        public let display: Orientation
+
+        public init(device: Orientation, display: Orientation) {
+            self.device = device
+            self.display = display
+        }
     }
 
     /// Resolve `target` against the last confirmed display reading.
@@ -29,7 +32,7 @@ enum FoldablePanelOrientation {
     /// orientation behind `confirmed`, not from the reading itself. Nil for a
     /// relative step with nothing confirmed to step from, and for a flat
     /// target, which no display reading confirms.
-    static func resolve(
+    public static func resolve(
         _ target: RotationTarget,
         confirmed: Orientation?,
         onInnerPanel: Bool
@@ -50,7 +53,7 @@ enum FoldablePanelOrientation {
     }
 
     /// The display reading a device orientation produces.
-    static func display(forDevice device: Orientation, onInnerPanel: Bool) -> Orientation {
+    public static func display(forDevice device: Orientation, onInnerPanel: Bool) -> Orientation {
         guard onInnerPanel else { return device }
         switch device {
         case .portrait:
@@ -68,7 +71,7 @@ enum FoldablePanelOrientation {
     }
 
     /// The device orientation behind a display reading.
-    static func device(forDisplay display: Orientation, onInnerPanel: Bool) -> Orientation {
+    public static func device(forDisplay display: Orientation, onInnerPanel: Bool) -> Orientation {
         guard onInnerPanel else { return display }
         switch display {
         case .landscapeRight:

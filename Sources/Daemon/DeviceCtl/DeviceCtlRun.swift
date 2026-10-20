@@ -15,8 +15,11 @@ struct DeviceCtlRun: Sendable {
     /// `--json-output` file at `jsonPath` and then removing it.
     ///
     /// Blocks for the whole run, so callers keep it off the cooperative pool
-    /// and off any queue frames depend on.
-    static func spawn(arguments: [String], jsonPath: String) -> DeviceCtlRun {
+    /// and off any queue frames depend on. With `timeout`, a run still going
+    /// after that many seconds is terminated and reports a nonzero status:
+    /// right after a simulator boots, some `devicectl` commands wait minutes
+    /// for CoreDevice before answering.
+    static func spawn(arguments: [String], jsonPath: String, timeout: TimeInterval? = nil) -> DeviceCtlRun {
         defer { try? FileManager.default.removeItem(atPath: jsonPath) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
@@ -29,6 +32,13 @@ struct DeviceCtlRun: Sendable {
         } catch {
             return DeviceCtlRun(status: -1, json: nil, stderr: "\(error)")
         }
+        // `xcrun` execs `devicectl` in place, so terminating it ends the run.
+        let deadline = timeout.map { seconds in
+            let item = DispatchWorkItem { process.terminate() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: item)
+            return item
+        }
+        defer { deadline?.cancel() }
         // Drain stderr before waiting, so a full pipe cannot deadlock it.
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

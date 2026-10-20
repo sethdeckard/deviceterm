@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-@testable import Daemon
 import DaemonProtocol
 import Testing
 

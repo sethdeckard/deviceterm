@@ -26,19 +26,22 @@ public enum PaneEvent: Sendable {
         UUID,
         state: PaneLifecycle
         )
-    /// The pane's presentation orientation changed, so subscribers
-    /// re-render, re-fit the bezel, and re-map input against it.
+    /// The pane's presentation orientation, or a foldable's device
+    /// orientation, changed, so subscribers re-render, re-fit the bezel, and
+    /// re-map input against it.
     ///
-    /// A presentation event, not a command receipt. A Simulator emits from
+    /// Emitted when the presentation orientation or a foldable's device
+    /// orientation changes. A Simulator's presentation orientation comes from
     /// display observation, including a rotation from outside DeviceTerm, and
-    /// stays silent when an orientation-locked app leaves the framebuffer in
-    /// place. A physical device emits from a valid rotation reply, including a
-    /// non-target observation, so an external rotation remains invisible.
-    case orientationChanged(
-        paneId:
-        UUID,
-        orientation: Orientation
-        )
+    /// stays put when an orientation-locked app leaves the framebuffer in
+    /// place. A physical device's comes from a valid rotation reply, including
+    /// a non-target observation, so an external rotation remains invisible.
+    ///
+    /// `deviceOrientation` is a foldable's physical orientation, which its
+    /// pane is drawn in. It can come from a backend read, a guest control
+    /// event, or a dispatched rotation. Nil until the daemon has observed or
+    /// commanded an orientation, and for every other device.
+    case orientationChanged(paneId: UUID, orientation: Orientation, deviceOrientation: Orientation?)
     /// A foldable device's hinge moved, in degrees, `0` shut and `180` flat.
     ///
     /// An observation rather than a command receipt: the daemon watches the

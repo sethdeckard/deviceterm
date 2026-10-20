@@ -35,6 +35,30 @@ struct HingeMonitorTests {
         monitor.stop()
     }
 
+    @Test("reports each orientation the reader prints, apart from the angles")
+    func reportsOrientations() async throws {
+        // A closed foldable's rotation changes nothing else the daemon can
+        // see, so these lines are its only word of one.
+        let angles = Collected()
+        let orientations = CollectedOrientations()
+        let readers = Readers()
+        let monitor = HingeMonitor(
+            udid: "U",
+            onAngle: { angles.append($0) },
+            onOrientation: { orientations.append($0) },
+            source: .guestHelper,
+            restartDelay: 0.01,
+            helperBinary: { "/test/fold-helper" },
+            launch: { _, _ in readers.make() }
+        )
+        monitor.start()
+        let reader = try #require(await readers.first())
+        reader.emit("orientation landscape-right\nangle 0.0\norientation pud\norientation faceup\n")
+        #expect(await orientations.reaches([.landscapeRight, .portraitUpsideDown]))
+        #expect(await angles.reaches([0.0]))
+        monitor.stop()
+    }
+
     @Test("a reading split across two reads still parses")
     func reassemblesASplitLine() async throws {
         let collected = Collected()
@@ -695,5 +719,30 @@ struct HingeReaderSourceTests {
         let help = "OVERVIEW: Commands to interact with devices.\n\nSUBCOMMANDS:\n"
             + "  orientation   Control device orientation."
         #expect(!HingeReaderSource.devicectlHasHingeAngle(helpOutput: help))
+    }
+}
+
+private final class CollectedOrientations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var orientations: [Orientation] = []
+
+    func append(_ orientation: Orientation) {
+        lock.lock()
+        orientations.append(orientation)
+        lock.unlock()
+    }
+
+    func values() -> [Orientation] {
+        lock.lock()
+        defer { lock.unlock() }
+        return orientations
+    }
+
+    func reaches(_ expected: [Orientation]) async -> Bool {
+        for _ in 0..<200 {
+            if values() == expected { return true }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        return false
     }
 }

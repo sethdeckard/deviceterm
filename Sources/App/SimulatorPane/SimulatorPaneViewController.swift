@@ -3,9 +3,12 @@
 import AppKit
 import DaemonProtocol
 import IOSurface
+import os
 import class SwiftUI.NSHostingController
 import class SwiftUI.NSHostingView
 import UniformTypeIdentifiers
+
+private let panelLog = Logger(subsystem: "com.deviceterm", category: "panel")
 
 /// The AppKit view glue for one
 /// attached simulator or physical-device pane. Thin shell over the decomposed
@@ -85,6 +88,22 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     var fitReferenceSize: CGSize? {
         viewModel.capabilities.fold ? viewModel.spanningPanelSize : nil
     }
+    /// The orientation the picture is drawn in. A foldable is drawn in device
+    /// space: each panel at the orientation it holds for the way the device
+    /// is turned, as Device Hub draws it, so a Home Screen that doesn't rotate
+    /// lies on its side with the device and a fold can't move the crease's
+    /// axis. Everything else, and a foldable whose device orientation isn't
+    /// known yet, is drawn in the presentation orientation.
+    var drawnOrientation: Orientation {
+        let presentation = viewModel.currentOrientation
+        guard viewModel.capabilities.fold, let device = viewModel.currentDeviceOrientation else {
+            return presentation
+        }
+        return FoldablePanelOrientation.display(forDevice: device, onInnerPanel: drawnPanelSpansHinge)
+    }
+    /// The orientation the last render handed the picture. Internal so a test
+    /// can check what was drawn rather than what would be drawn now.
+    var contentOrientation: Orientation? { contentView?.orientation }
     /// Whether the frame on show is the hinge-spanning panel's, read off the
     /// frame's own size where that's known (see `FoldablePanelShape`), so the
     /// shape it's drawn in always matches the picture.
@@ -160,6 +179,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// The fit reference the pane was last sized against, so a reference
     /// that arrives or changes afterwards can resize it.
     private var sizedFitReference: CGSize?
+    /// The last foldable draw state written to the `panel` log, so only a
+    /// change is logged.
+    private var loggedDrawState: String?
     /// The preset the pane state arrived carrying, so a pane whose view
     /// controller was rebuilt keeps the sizing the user chose instead of
     /// falling back to the family default. Nil when the pane state carries
@@ -792,16 +814,19 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
 
     // MARK: - SimulatorInputDelegate → VM intents
 
+    // Points arrive in the space the picture is drawn in, and go out in the
+    // one the pane presents; see `presented(_:)`.
+
     func simulatorPaneDidTap(at point: CGPoint) {
-        viewModel.tap(at: point)
+        viewModel.tap(at: presented(point))
     }
 
     func simulatorPaneDidTouch(at point: CGPoint, phase: TouchPhase, isEdgeGesture: Bool) {
-        viewModel.touch(at: point, phase: phase, isEdgeGesture: isEdgeGesture)
+        viewModel.touch(at: presented(point), phase: phase, isEdgeGesture: isEdgeGesture)
     }
 
     func simulatorPaneDidSwipe(from start: CGPoint, to end: CGPoint, durationMs: Int) {
-        viewModel.swipe(from: start, to: end, durationMs: durationMs)
+        viewModel.swipe(from: presented(start), to: presented(end), durationMs: durationMs)
     }
 
     func simulatorPaneDidPinch(
@@ -812,10 +837,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         durationMs: Int
     ) {
         viewModel.pinch(
-            fromF1: fromF1,
-            fromF2: fromF2,
-            toF1: toF1,
-            toF2: toF2,
+            fromF1: presented(fromF1),
+            fromF2: presented(fromF2),
+            toF1: presented(toF1),
+            toF2: presented(toF2),
             durationMs: durationMs
         )
     }
@@ -825,7 +850,31 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         finger1: CGPoint,
         finger2: CGPoint
     ) {
-        viewModel.multitouch(phase: phase, finger1: finger1, finger2: finger2)
+        viewModel.multitouch(phase: phase, finger1: presented(finger1), finger2: presented(finger2))
+    }
+
+    /// Write what a foldable pane is drawing to the `panel` log when it
+    /// changes: the frame's size, which panel that size and the daemon say it
+    /// is, and the orientations it's drawn and presented in. Lines up with
+    /// the daemon's `panel` category to explain a frame drawn wrong.
+    private func logDrawStateIfChanged(orientation: Orientation) {
+        guard viewModel.capabilities.fold else { return }
+        let size = contentView?.surfaceSize ?? .zero
+        let device = viewModel.currentDeviceOrientation?.rawValue ?? "unknown"
+        let state = """
+            frame \(Int(size.width))x\(Int(size.height)) spans \(drawnPanelSpansHinge) \
+            (reported \(viewModel.confirmedPanelSpansHinge)), drawn \(orientation.rawValue), \
+            presented \(viewModel.currentOrientation.rawValue), device \(device)
+            """
+        guard state != loggedDrawState else { return }
+        loggedDrawState = state
+        panelLog.notice("\(state, privacy: .public)")
+    }
+
+    /// A point in the drawn picture's displayed space, re-expressed in the
+    /// presentation orientation the daemon maps input through.
+    private func presented(_ point: CGPoint) -> CGPoint {
+        SimGestureMath.presentedPoint(point, drawnIn: drawnOrientation, presentedIn: viewModel.currentOrientation)
     }
 
     func simulatorPaneKeyDown(keyCode: UInt16) {
@@ -864,9 +913,12 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     private func render() {
         let state = viewModel.state
         let lease = viewModel.currentSurface
-        let orientation = viewModel.currentOrientation
         contentView?.applyFrame(lease: lease, traceSequence: viewModel.currentSurfaceSequence)
+        // After the frame, whose size says which panel it is: read before, a
+        // swap's first frame would be turned for the panel it replaced.
+        let orientation = drawnOrientation
         contentView?.setOrientation(orientation)
+        contentView?.presentationOrientation = viewModel.currentOrientation
         contentView?.setFitReference(fitReferenceSize)
         adoptConfirmedHinge()
         let crease = currentCrease()
@@ -879,7 +931,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             wrapper.bezelContext = SimulatorPaneWrapperView.BezelContext(
                 family: DeviceFamily(wire: viewModel.family),
                 surfaceSize: content.surfaceSize,
-                orientation: viewModel.currentOrientation,
+                orientation: orientation,
                 foldable: viewModel.capabilities.fold,
                 spansHinge: drawnPanelSpansHinge,
                 crease: crease,
@@ -924,6 +976,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // before `panel.changed` brings the spanning panel. The picture then
         // fits to the larger panel inside a pane sized for the smaller one,
         // so replay the preset against the reference once it lands or moves.
+        logDrawStateIfChanged(orientation: orientation)
         let reference = fitReferenceSize
         if reference != sizedFitReference, view.window != nil {
             sizedFitReference = reference
@@ -1440,7 +1493,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
                     preset,
                     forSimPane: self,
                     device: device,
-                    orientation: viewModel.currentOrientation,
+                    orientation: drawnOrientation,
                     chromeHeight: currentChromeHeight()
                 )
                 return
@@ -1594,19 +1647,21 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             viewPoint: viewPoint,
             viewSize: content.bounds.size,
             surfaceSize: content.surfaceSize,
-            orientation: viewModel.currentOrientation,
+            orientation: drawnOrientation,
             displayInset: content.displayInset,
             referenceSize: content.fitReferenceSize
         ) else { return }
         axQueryInFlight = true
+        // The tree reports in the interface's displayed space, like input.
+        let point = presented(normalized)
         let paneId = viewModel.paneId
         let client = axDaemonClient
         Task { @MainActor [weak self] in
             defer { self?.axQueryInFlight = false }
             let summary = try? await client.paneAxPoint(
                 paneId: paneId,
-                x: normalized.x,
-                y: normalized.y
+                x: point.x,
+                y: point.y
             )
             self?.chromeViewModel.axInspectorLabel = summary
             // Mirror into the AX side panel's view model so the

@@ -2648,12 +2648,22 @@ Events are correlated to the subscription's request-envelope id:
 - `surface.changed`: `{paneId, sequence}`, sent only when `frames` is true.
   XPC pairs it with a side-band surface payload for the same
   `(paneId, sequence)`; UDS carries the JSON event only.
-- `orientation.changed`: `{paneId, orientation}`, carrying the pane's
-  confirmed presentation orientation. A Simulator publishes its observed
-  display orientation. A physical device publishes any valid orientation
-  returned by a DeviceTerm rotation, including a non-target result. Replayed
-  once at subscribe and sent again whenever it changes. A pane that has neither
-  been read nor rotated replays `portrait`.
+- `orientation.changed`: `{paneId, orientation, deviceOrientation?}`, carrying
+  the pane's confirmed presentation orientation. A Simulator publishes its
+  observed display orientation. A physical device publishes any valid
+  orientation returned by a DeviceTerm rotation, including a non-target result.
+  Replayed once at subscribe and sent again whenever either orientation
+  changes. A pane that has neither been read nor rotated replays `portrait`.
+
+  `deviceOrientation` is a foldable's physical orientation: the way the
+  device itself is turned, whatever its interface shows. A foldable's pane is
+  drawn in it, each panel at the orientation it holds for that device
+  orientation, so a Home Screen that doesn't rotate turns with the device as
+  it does in Device Hub. Input still goes out in the presentation
+  orientation's displayed space; a client drawing in device space converts its
+  points back first. The field is absent until the daemon has learned the
+  orientation, and for every other device, and a peer that predates it omits
+  it.
 - `hinge.changed`: `{paneId, degrees, spansHinge}`, a foldable device's hinge
   angle, `0` shut and `180` flat, and whether the panel on show is the one the
   hinge runs through. An observation of the device rather than a receipt for

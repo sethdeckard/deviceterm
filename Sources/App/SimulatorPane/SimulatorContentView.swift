@@ -67,7 +67,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// content look upright). Owner pushes updates via
     /// `setOrientation(_:)` whenever the VM's `currentOrientation`
     /// changes.
-    private var orientation: Orientation = .portrait
+    private(set) var orientation: Orientation = .portrait
     /// Margin (in points) reserved on each side of this view for
     /// the wrapper's bezel layer to paint into. The shader's
     /// aspect-fit shrinks the rendered screen by `2 × displayInset`
@@ -94,6 +94,9 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// drawn: a foldable's hinge-spanning panel, so both panels draw at one
     /// pixel scale. Nil fits the surface itself.
     private(set) var fitReferenceSize: CGSize?
+    /// The orientation input goes out in, when the picture is drawn in
+    /// another (a foldable drawn in device space). Nil means the two agree.
+    var presentationOrientation: Orientation?
     private var dragStart: CGPoint?
     private var dragStartTime: Date?
     private var liveTouchActive = false
@@ -468,7 +471,14 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
                 referenceSize: fitReferenceSize
             )
         else { return false }
-        return SimGestureMath.isInBottomEdgeBand(orientedY: displayed.y)
+        // The band is the interface's bottom edge, so test it where input goes
+        // out rather than in the picture's own turn.
+        let presented = SimGestureMath.presentedPoint(
+            displayed,
+            drawnIn: orientation,
+            presentedIn: presentationOrientation ?? orientation
+        )
+        return SimGestureMath.isInBottomEdgeBand(orientedY: presented.y)
     }
 
     /// Arm the stationary-hold timer for a press that landed on-screen at

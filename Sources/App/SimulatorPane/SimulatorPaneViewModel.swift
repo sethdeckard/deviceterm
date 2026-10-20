@@ -130,6 +130,11 @@ final class SimulatorPaneViewModel {
     /// hand remains invisible. Drives render counter-rotation, the bezel, and
     /// input mapping.
     private(set) var currentOrientation: Orientation = .portrait
+    /// A foldable's physical orientation, from the same event: the way the
+    /// device itself is turned, which a foldable's pane is drawn in. Nil
+    /// until the daemon has observed or commanded an orientation, and for
+    /// every other device.
+    private(set) var currentDeviceOrientation: Orientation?
 
     /// The hinge angle the daemon last observed on this device, in degrees,
     /// `0` shut and `180` flat. Nil until the daemon reports one, which is
@@ -422,6 +427,9 @@ final class SimulatorPaneViewModel {
             // value is ignored.
             if let orientation = Orientation(rawValue: change.orientation) {
                 currentOrientation = orientation
+            }
+            if let raw = change.deviceOrientation, let device = Orientation(rawValue: raw) {
+                currentDeviceOrientation = device
             }
 
         case let .hingeChanged(change):

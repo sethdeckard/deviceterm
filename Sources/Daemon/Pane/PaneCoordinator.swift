@@ -187,6 +187,12 @@ public actor PaneCoordinator {
         /// The panel this pane is showing, as last read from the backend. Nil
         /// until the display has bound one.
         var observedPanel: BoundPanel?
+        /// A foldable's physical orientation, which its pane is drawn in.
+        /// Nil until observed or commanded, and for every other device.
+        var deviceOrientation: Orientation?
+        /// Bumped by each device-orientation read, so only the latest one
+        /// started applies when reads finish out of order.
+        var deviceOrientationReadSerial: UInt64 = 0
         /// Whether this pane's input is reaching its device, as last
         /// published to subscribers.
         var inputHealth = InputHealth.ok
@@ -723,6 +729,11 @@ public actor PaneCoordinator {
     /// swap takes, so a lone fold that does swap releases them through its
     /// panel change first.
     static let foldSettleNanoseconds: UInt64 = 1_000_000_000
+    /// Reads tried while a foldable's orientation is still unknown: up to 30
+    /// reads, with a ten-second pause after each failed attempt, which
+    /// outlasts the wait after a boot.
+    static let deviceOrientationReadAttempts = 30
+    static let deviceOrientationRetryNanoseconds: UInt64 = 10_000_000_000
 
     // The swipe-dwell cadence/jitter and the App-Switcher double-press gap
     // live with the gesture logic in `SimInputSynthesis`, their only user.
@@ -1856,7 +1867,11 @@ public actor PaneCoordinator {
         // performed command where it isn't. Before the first seed,
         // observation, or command it is the `.portrait` assumption.
         channel.send(
-            .orientationChanged(paneId: paneId, orientation: record.presentationOrientation)
+            .orientationChanged(
+                paneId: paneId,
+                orientation: record.presentationOrientation,
+                deviceOrientation: record.deviceOrientation
+            )
         )
         // And the input state, when anything is refusing input. A subscriber
         // starts from `ok`, so replaying that would tell it nothing, and an
@@ -3067,9 +3082,96 @@ public actor PaneCoordinator {
         }
         guard record.presentationOrientation != orientation else { return }
         record.presentationOrientation = orientation
+        sendOrientation(record: record, paneId: paneId)
+        // The interface turning is the cue a foldable may have turned too.
+        refreshDeviceOrientation(record: record, paneId: paneId)
+    }
+
+    private func sendOrientation(record: Record, paneId: UUID) {
         for subscriber in record.subscribers.values {
-            subscriber.channel.send(.orientationChanged(paneId: paneId, orientation: orientation))
+            subscriber.channel.send(
+                .orientationChanged(
+                    paneId: paneId,
+                    orientation: record.presentationOrientation,
+                    deviceOrientation: record.deviceOrientation
+                )
+            )
         }
+    }
+
+    /// Record a foldable's physical orientation and tell subscribers, which
+    /// draw the pane in it. Deduplicated, so a read that finds nothing new
+    /// sends nothing.
+    ///
+    /// Internal rather than private so a daemon test can set it without a
+    /// device to read.
+    ///
+    /// A rotation recorded here is newer than any read still in flight, so it
+    /// retires them: one finishing later would put the older orientation back.
+    func noteDeviceOrientation(paneId: UUID, orientation: Orientation) {
+        guard let record = panes[paneId], record.capabilities.fold else { return }
+        record.deviceOrientationReadSerial &+= 1
+        recordDeviceOrientation(record: record, paneId: paneId, orientation: orientation)
+    }
+
+    private func recordDeviceOrientation(record: Record, paneId: UUID, orientation: Orientation) {
+        guard record.deviceOrientation != orientation else { return }
+        record.deviceOrientation = orientation
+        sendOrientation(record: record, paneId: paneId)
+    }
+
+    /// Read a foldable's physical orientation from its backend and apply it,
+    /// unless a later read has started meanwhile.
+    ///
+    /// Read whenever something suggests the device may have turned: the
+    /// pane attaching, the interface turning, the lit panel moving. The
+    /// interface alone can't stand in for it, since an app or a Home Screen
+    /// that doesn't rotate leaves it still while the device turns.
+    ///
+    /// Rotations themselves arrive from the hinge reader as they happen; this
+    /// is what establishes the orientation before any. A read that finds
+    /// nothing while none is known is tried again later, since right after a
+    /// boot `devicectl` doesn't answer for minutes.
+    private func refreshDeviceOrientation(record: Record, paneId: UUID, attempt: Int = 1) {
+        guard record.capabilities.fold, let backend = record.backend else { return }
+        record.deviceOrientationReadSerial &+= 1
+        let serial = record.deviceOrientationReadSerial
+        Task { [weak self] in
+            let orientation = await backend.readDeviceOrientation()
+            await self?.applyDeviceOrientationRead(
+                paneId: paneId,
+                serial: serial,
+                orientation: orientation,
+                attempt: attempt
+            )
+        }
+    }
+
+    /// A pane's physical orientation as last read or commanded. Internal so a
+    /// daemon test can wait for an asynchronous read to land.
+    func deviceOrientation(paneId: UUID) -> Orientation? {
+        panes[paneId]?.deviceOrientation
+    }
+
+    private func applyDeviceOrientationRead(paneId: UUID, serial: UInt64, orientation: Orientation?, attempt: Int) {
+        guard let record = panes[paneId], record.deviceOrientationReadSerial == serial else { return }
+        guard let orientation else {
+            guard record.deviceOrientation == nil, attempt < Self.deviceOrientationReadAttempts else { return }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.deviceOrientationRetryNanoseconds)
+                await self?.retryDeviceOrientationRead(paneId: paneId, serial: serial, attempt: attempt + 1)
+            }
+            return
+        }
+        recordDeviceOrientation(record: record, paneId: paneId, orientation: orientation)
+    }
+
+    /// Try a failed read again, unless another read has started or a
+    /// rotation has filled the orientation in meanwhile.
+    private func retryDeviceOrientationRead(paneId: UUID, serial: UInt64, attempt: Int) {
+        guard let record = panes[paneId], record.deviceOrientationReadSerial == serial,
+            record.deviceOrientation == nil else { return }
+        refreshDeviceOrientation(record: record, paneId: paneId, attempt: attempt)
     }
 
     /// Begin watching a foldable's hinge, and publish what it reads.
@@ -3091,6 +3193,12 @@ public actor PaneCoordinator {
             onAngle: { [weak self] degrees in
                 guard let self else { return }
                 Task { await self.publishHinge(paneId: paneId, degrees: degrees) }
+            },
+            // Every rotation, from Device Hub as much as from here, which the
+            // interface alone can't show: the cover's Home Screen doesn't turn.
+            onOrientation: { [weak self] orientation in
+                guard let self else { return }
+                Task { await self.noteDeviceOrientation(paneId: paneId, orientation: orientation) }
             },
             devicectlAvailable: testDevicectl,
             helperBinary: testHelper,
@@ -3209,6 +3317,7 @@ public actor PaneCoordinator {
         let spansHingeMoved = record.observedPanelSpansHinge != panel.spansHinge
         record.observedPanel = panel
         guard record.capabilities.fold else { return }
+        refreshDeviceOrientation(record: record, paneId: paneId)
         DiagnosticLog.panel.notice(
             """
             published screen \(panel.screenID, privacy: .public), \
@@ -4014,6 +4123,9 @@ public actor PaneCoordinator {
         )
         switch outcome {
         case let .dispatched(target, display):
+            // On a foldable the target is the device orientation the helper
+            // sent, which is what the pane is drawn in.
+            noteDeviceOrientation(paneId: paneId, orientation: target)
             // A fold that began while this was being sent can move the reading
             // onto the one this rotation waits for, so it cannot confirm.
             guard record.foldEpoch == foldEpoch else {

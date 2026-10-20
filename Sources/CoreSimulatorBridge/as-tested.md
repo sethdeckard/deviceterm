@@ -206,6 +206,19 @@ approaches ruled out.
   one request late on the Duo. An ordinary Simulator ignores the whole payload,
   but takes `devicectl device orientation set faceUp`, after which `get` reports
   `faceUp` at once (iPhone 18 Pro, CoreDevice 651.13.5).
+- **The guest sees every orientation control event, whoever sends it.** A HID
+  monitor client inside the Duo receives Device Hub's
+  `orientation-picker-control` events, one per press, with the target in
+  `value` (rotate right from portrait steps `landscape-right`, `pud`,
+  `landscape-left`, `portrait`), and `IOCFUnserializeBinary` reads the payload
+  back. Each press is followed by a page `0xFF0C` usage `0x22` event and a
+  hinge event at the unchanged angle. Rotating the closed Duo changes no
+  `uiOrientation`, since the cover's Home Screen doesn't rotate, so these
+  events are the only sign of it.
+- **`devicectl` right after a boot.** `device orientation get` blocked for 212 s
+  on a freshly booted Duo, then answered in 0.09 s. `device info displays`
+  answered, but briefly reported the inner panel `active` with the hinge shut
+  before the cover lit (iOS 27.1).
 - **Relative Simulator requests use the latest confirmed presented
   orientation.** This avoids a command-only base drifting from the screen, but
   does not turn display orientation into proof of physical attitude.

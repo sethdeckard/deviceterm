@@ -64,6 +64,12 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     var onFrontmostTree: (@Sendable () -> Void)?
     private(set) var openAppSwitcherCalls = 0
     private(set) var hingeMovedNotes = 0
+    /// What `readDeviceOrientation()` answers.
+    var deviceOrientationReading: Orientation?
+    /// Holds each device-orientation read until `releaseDeviceOrientationRead()`.
+    var holdDeviceOrientationReads = false
+    private(set) var deviceOrientationReadParked = false
+    private var heldDeviceOrientationRead: CheckedContinuation<Void, Never>?
     /// The `IndigoHIDEdge` value each `openAppSwitcher` call carried, so a test
     /// can assert the device swipe rotates with the pane's orientation.
     private(set) var openAppSwitcherEdges: [Int] = []
@@ -256,6 +262,21 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func noteHingeMoved() { hingeMovedNotes += 1 }
+
+    func readDeviceOrientation() async -> Orientation? {
+        if holdDeviceOrientationReads {
+            await withCheckedContinuation { continuation in
+                heldDeviceOrientationRead = continuation
+                deviceOrientationReadParked = true
+            }
+        }
+        return deviceOrientationReading
+    }
+
+    func releaseDeviceOrientationRead() {
+        heldDeviceOrientationRead?.resume()
+        heldDeviceOrientationRead = nil
+    }
 
     func startFrames(
         onFrame: @escaping @Sendable (PublishedSurface) -> Void,
@@ -1269,7 +1290,7 @@ func aCommandedRotationPublishesNothingByItself() async throws {
         await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
         var orientations: [Orientation] = []
         for await event in stream {
-            if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+            if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
         }
         #expect(orientations.first == .portrait) // the replay
         return Array(orientations.dropFirst())
@@ -1303,7 +1324,7 @@ func anObservedDisplayRotationPublishesOrientationChanged() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations == [.portrait, .landscapeLeft, .portraitUpsideDown])
 }
@@ -1330,7 +1351,7 @@ func aCommandedRotationThatMovesTheDisplayPublishesOnce() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations == [.portrait, .landscapeLeft])
 }
@@ -1538,7 +1559,7 @@ func aDisplayWithNoOrientationSourceStillRenders() async throws {
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var replayed: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { replayed.append(orientation) }
     }
     #expect(replayed == [.portrait])
 }
@@ -1565,6 +1586,104 @@ func aLateSubscriberIsToldTheHingeAngle() async throws {
         if case let .hingeChanged(_, degrees, _) = event { replayed.append(degrees) }
     }
     #expect(replayed == [137])
+}
+
+@Test
+func aFoldablePublishesTheDeviceOrientationItReads() async throws {
+    // A foldable is drawn in device space, and the interface can't stand in for
+    // it: a Home Screen that doesn't rotate stays put while the device turns.
+    let foldable = try await makeFoldablePane(udid: "device-orientation-read")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    backend.deviceOrientationReading = .landscapeLeft
+    await coordinator.refreshBoundPanel(paneId: pane.paneId)
+    for _ in 0..<200 where await coordinator.deviceOrientation(paneId: pane.paneId) == nil {
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    let (subscriptionId, stream) = try await coordinator.subscribe(paneId: pane.paneId, as: .guiPeer)
+    await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
+    var devices: [Orientation?] = []
+    for await event in stream {
+        if case let .orientationChanged(_, _, device) = event { devices.append(device) }
+    }
+    // Replayed with the presentation orientation to a new subscriber.
+    #expect(devices == [.landscapeLeft])
+}
+
+@Test
+func aFoldableRotationRecordsTheDeviceOrientationItSent() async throws {
+    // The target the helper sends is the device orientation, whatever the
+    // inner panel's quarter-turned reading confirms it with.
+    var capabilities = DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
+    capabilities.fold = true
+    let coordinator = PaneCoordinator()
+    await coordinator.setHingeReaderTestLaunch { _, _ in SilentHingeReader() }
+    let backend = MockDeviceBackend(capabilities: capabilities, rotationConfirmationSupport: .displayObservation)
+    backend.rotatesOnInnerPanel = true
+    let pane = try await coordinator.createMockPane(
+        udid: "device-orientation-rotate",
+        sessionId: UUID(),
+        backend: backend
+    )
+    let rotation = Task {
+        try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: .absolute(.landscapeRight))
+    }
+    while backend.rotations.isEmpty { await Task.yield() }
+    backend.emitDisplayOrientation(.portraitUpsideDown)
+    _ = try await rotation.value
+    #expect(await coordinator.deviceOrientation(paneId: pane.paneId) == .landscapeRight)
+}
+
+@Test
+func aRotationRetiresAReadStillInFlight() async throws {
+    // The read started before the rotation, so what it finds is older; letting
+    // it land afterward would turn the pane back.
+    let foldable = try await makeFoldablePane(udid: "device-orientation-stale")
+    let (coordinator, pane, backend) = (foldable.coordinator, foldable.pane, foldable.backend)
+    backend.deviceOrientationReading = .portrait
+    backend.holdDeviceOrientationReads = true
+    await coordinator.refreshBoundPanel(paneId: pane.paneId)
+    for _ in 0..<200 where !backend.deviceOrientationReadParked {
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await coordinator.noteDeviceOrientation(paneId: pane.paneId, orientation: .landscapeLeft)
+    backend.releaseDeviceOrientationRead()
+    try? await Task.sleep(nanoseconds: 50_000_000)
+    #expect(await coordinator.deviceOrientation(paneId: pane.paneId) == .landscapeLeft)
+}
+
+@Test
+func aSinglePanelDeviceKeepsNoDeviceOrientation() async throws {
+    let coordinator = PaneCoordinator()
+    let pane = try await coordinator.createMockPane(
+        udid: "device-orientation-phone",
+        sessionId: UUID(),
+        backend: MockDeviceBackend()
+    )
+    await coordinator.noteDeviceOrientation(paneId: pane.paneId, orientation: .landscapeLeft)
+    #expect(await coordinator.deviceOrientation(paneId: pane.paneId) == nil)
+}
+
+@Test("an orientation event carries the device orientation only when known", arguments: [
+    (Orientation?.some(.landscapeLeft), String?.some("landscapeLeft")),
+    (Orientation?.none, String?.none)
+])
+func anOrientationEventEncodesTheDeviceOrientation(device: Orientation?, expected: String?) throws {
+    let envelope = try #require(
+        encodeSubscriptionEvent(
+            .orientationChanged(paneId: UUID(), orientation: .portrait, deviceOrientation: device),
+            paneId: "p1"
+        )
+    )
+    let decoded = try JSONDecoder().decode(OrientationChangedEvent.self, from: envelope.params)
+    #expect(decoded.orientation == "portrait")
+    #expect(decoded.deviceOrientation == expected)
+}
+
+@Test
+func anOrientationEventFromAnOlderDaemonDecodesWithoutADeviceOrientation() throws {
+    let json = Data(#"{"paneId":"p1","orientation":"landscapeLeft"}"#.utf8)
+    let decoded = try JSONDecoder().decode(OrientationChangedEvent.self, from: json)
+    #expect(decoded.deviceOrientation == nil)
 }
 
 @Test
@@ -1847,7 +1966,7 @@ func aPaneWithNoDisplaySourceStillTurnsOnACommand() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations == [.portrait, .landscapeLeft])
 }
@@ -1867,7 +1986,7 @@ func aPaneWithNoDisplaySourceStaysPutForAnUnperformedRotation() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations == [.portrait])
 }
@@ -1901,7 +2020,7 @@ func anUnconfirmedPhysicalRotationAdoptsItsValidObservation() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(result.status == .unconfirmed)
     #expect(result.observedOrientation == .landscapeRight)
@@ -2087,7 +2206,7 @@ func subscribeReplaysTheDisplaysOrientation() async throws {
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var replayed: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { replayed.append(orientation) }
     }
     #expect(replayed == [.landscapeRight])
 }
@@ -2147,7 +2266,7 @@ func aParkedReaderIsWokenByTheNextPaneEvent() async throws {
     let received = Task { () -> [Orientation] in
         var seen: [Orientation] = []
         for await event in stream {
-            if case let .orientationChanged(_, orientation) = event {
+            if case let .orientationChanged(_, orientation, _) = event {
                 seen.append(orientation)
                 if seen.count == 2 { return seen }
             }
@@ -2292,7 +2411,7 @@ func attachSeedsTheDisplayOrientationBeforeAnySubscriber() async throws {
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var replayed: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { replayed.append(orientation) }
     }
     #expect(replayed == [.landscapeLeft])
 }
@@ -2338,7 +2457,7 @@ func aDisplayCallbackInFlightPastTeardownIsDropped() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     // Only the subscribe-time replay; the late delivery published nothing.
     #expect(orientations == [.portrait])
@@ -2369,7 +2488,7 @@ func orientationObservationSurvivesAnOwnershipEpochBump() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations == [.portrait, .landscapeRight])
 }
@@ -2394,7 +2513,7 @@ func rapidDisplayRotationsSettleOnTheNewestValue() async throws {
 
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations.last == .landscapeRight)
 }
@@ -2426,7 +2545,7 @@ func subscribeReplaysPortraitForAPaneNothingHasRotated() async throws {
     await coordinator.unsubscribe(paneId: pane.paneId, subscriptionId: subscriptionId)
     var replayed: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { replayed.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { replayed.append(orientation) }
     }
     #expect(replayed == [.portrait])
 }
@@ -2967,7 +3086,7 @@ func edgeTouchLatchesItsTagAcrossAMidDragRotation() async throws {
     }
     var turned = false
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event, orientation == .landscapeLeft {
+        if case let .orientationChanged(_, orientation, _) = event, orientation == .landscapeLeft {
             turned = true
             break
         }
@@ -3050,7 +3169,7 @@ func lockedInterfaceTakesRotateWithoutTurningThePane() async throws {
     await coordinator.unsubscribe(paneId: result.paneId, subscriptionId: subscriptionId)
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event {
+        if case let .orientationChanged(_, orientation, _) = event {
             orientations.append(orientation)
         }
     }
@@ -3823,7 +3942,7 @@ func aFlatRequestNeitherRotatesNorWaitsOnTheDisplay() async throws {
     #expect(backend.rotations.isEmpty)
     var orientations: [Orientation] = []
     for await event in stream {
-        if case let .orientationChanged(_, orientation) = event { orientations.append(orientation) }
+        if case let .orientationChanged(_, orientation, _) = event { orientations.append(orientation) }
     }
     #expect(orientations.count <= 1, "only the subscribe replay, if any")
 }

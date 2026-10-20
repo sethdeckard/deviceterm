@@ -27,11 +27,19 @@ struct DeviceCtlOrientation: Sendable {
 
     private struct Reading: Decodable {
         let deviceOrientation: String
+        /// The last of the four upright orientations, which `get` keeps
+        /// reporting while the device lies flat. Absent from `set`.
+        let deviceOrientationNonFlat: String?
     }
 
     private static let productionRunner: Runner = { arguments, jsonPath in
-        DeviceCtlRun.spawn(arguments: arguments, jsonPath: jsonPath)
+        DeviceCtlRun.spawn(arguments: arguments, jsonPath: jsonPath, timeout: commandTimeout)
     }
+
+    /// How long a command may take. A warm `get` answers in a tenth of a
+    /// second; right after a boot it can wait minutes, and a read that long is
+    /// worth less than one retried later.
+    static let commandTimeout: TimeInterval = 5
 
     private let run: Runner
 
@@ -64,6 +72,15 @@ struct DeviceCtlOrientation: Sendable {
         try? JSONDecoder().decode(Output.self, from: data).result.deviceOrientation
     }
 
+    /// The upright orientation a `get` payload reports, whether or not the
+    /// device is lying flat. Nil when it's absent or not one of the four.
+    static func uprightOrientation(fromJSON data: Data) -> Orientation? {
+        guard let name = try? JSONDecoder().decode(Output.self, from: data).result.deviceOrientationNonFlat else {
+            return nil
+        }
+        return Orientation(rawValue: name)
+    }
+
     private static func temporaryPath() -> String {
         NSTemporaryDirectory()
             + "deviceterm-devicectl-orientation-\(ProcessInfo.processInfo.processIdentifier)-"
@@ -89,6 +106,16 @@ struct DeviceCtlOrientation: Sendable {
             )
         }
         return reported
+    }
+
+    /// The device's upright orientation, its physical attitude rather than
+    /// the orientation the interface shows. Nil when `devicectl` fails or
+    /// reports none of the four. Blocks for a process run.
+    func uprightOrientation(deviceId: String) -> Orientation? {
+        let path = Self.temporaryPath()
+        guard let json = try? invoke(Self.getArguments(deviceId: deviceId, jsonPath: path), jsonPath: path, what: "get")
+        else { return nil }
+        return Self.uprightOrientation(fromJSON: json)
     }
 
     @discardableResult

@@ -70,6 +70,7 @@ final class HingeMonitor: @unchecked Sendable {
 
     private let udid: String
     private let onAngle: @Sendable (Double) -> Void
+    private let onOrientation: (@Sendable (Orientation) -> Void)?
     private let devicectlAvailable: @Sendable () -> Bool
     private let sessionSeconds: Int
     private let restartDelay: TimeInterval
@@ -95,6 +96,8 @@ final class HingeMonitor: @unchecked Sendable {
     /// - Parameters:
     ///   - udid: the device to watch.
     ///   - onAngle: called with each valid reading, on the monitor's queue.
+    ///   - onOrientation: called with each device orientation the reader
+    ///     reports, on the monitor's queue. Only the guest reader reports one.
     ///   - source: the reader to start with. Injected so a test can drive the
     ///     `devicectl` reader directly.
     ///   - devicectlAvailable: whether the fallback exists, asked only when the
@@ -113,6 +116,7 @@ final class HingeMonitor: @unchecked Sendable {
     init(
         udid: String,
         onAngle: @escaping @Sendable (Double) -> Void,
+        onOrientation: (@Sendable (Orientation) -> Void)? = nil,
         source: HingeReaderSource = .guestHelper,
         devicectlAvailable: (@Sendable () -> Bool)? = nil,
         sessionSeconds: Int = HingeMonitor.defaultSessionSeconds,
@@ -123,6 +127,7 @@ final class HingeMonitor: @unchecked Sendable {
     ) {
         self.udid = udid
         self.onAngle = onAngle
+        self.onOrientation = onOrientation
         self.source = source
         self.devicectlAvailable = devicectlAvailable ?? { HingeReaderSource.devicectlAvailable }
         self.sessionSeconds = sessionSeconds
@@ -316,8 +321,8 @@ final class HingeMonitor: @unchecked Sendable {
         }
     }
 
-    /// Split a chunk into whole lines and report every angle in them. Callers
-    /// hold the queue.
+    /// Split a chunk into whole lines and report every angle and orientation
+    /// in them. Callers hold the queue.
     ///
     /// Split on the newline byte before decoding. A newline cannot occur inside
     /// a UTF-8 multi-byte sequence, so a line boundary found this way is always
@@ -329,9 +334,12 @@ final class HingeMonitor: @unchecked Sendable {
         while let end = buffer.firstIndex(of: newline) {
             let line = buffer[buffer.startIndex..<end]
             buffer = buffer[buffer.index(after: end)...]
-            guard let text = String(data: line, encoding: .utf8),
-                let degrees = HingeReading.degrees(fromLine: text)
-            else { continue }
+            guard let text = String(data: line, encoding: .utf8) else { continue }
+            if let orientation = HingeReading.orientation(fromLine: text) {
+                onOrientation?(orientation)
+                continue
+            }
+            guard let degrees = HingeReading.degrees(fromLine: text) else { continue }
             // A valid reading resets the retry backoff.
             failures = 0
             onAngle(degrees)

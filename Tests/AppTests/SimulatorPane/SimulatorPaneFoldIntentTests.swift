@@ -3,6 +3,7 @@
 @testable import App
 import AppKit
 import DaemonProtocol
+import IOSurface
 import Testing
 
 /// Every fold surface goes through one intent on the view controller.
@@ -459,5 +460,124 @@ struct SimulatorPaneCreaseGateTests {
         viewController.chromeViewModel.foldDegrees = 7
         await drive(viewController, fake, degrees: 180, spansHinge: true)
         #expect(viewController.currentCrease() == nil)
+    }
+}
+
+/// A foldable pane draws in device space: each panel at the orientation it
+/// holds for the way the device is turned.
+@MainActor
+struct SimulatorPaneDeviceSpaceTests {
+    private func send(_ fake: FakeDaemonClient, _ event: PaneEvent) async {
+        await Task.yield()
+        fake.lastPaneEventContinuation?.yield(event)
+    }
+
+    private func orientation(_ presented: Orientation, device: Orientation?) -> PaneEvent {
+        .orientationChanged(
+            OrientationChangedEvent(
+                paneId: "p1",
+                orientation: presented.rawValue,
+                deviceOrientation: device?.rawValue
+            )
+        )
+    }
+
+    private func panel(spansHinge: Bool) -> PaneEvent {
+        .panelChanged(PanelChangedEvent(paneId: "p1", screenID: spansHinge ? 3 : 1, spansHinge: spansHinge))
+    }
+
+    private func settle(_ viewController: SimulatorPaneViewController, until done: () -> Bool) async {
+        for _ in 0..<200 where !done() {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    @Test("a turned cover is drawn turned while its interface stays upright")
+    func theCoverTurnsWithTheDevice() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await send(fake, panel(spansHinge: false))
+        await send(fake, orientation(.portrait, device: .landscapeLeft))
+        await settle(viewController) { viewController.drawnOrientation == .landscapeLeft }
+        #expect(viewController.drawnOrientation == .landscapeLeft)
+        #expect(viewController.currentOrientation == .portrait)
+    }
+
+    @Test("the inner panel is drawn a quarter turn from the device", arguments: Orientation.allCases)
+    func theInnerPanelTakesTheQuarterTurn(device: Orientation) async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        let expected = FoldablePanelOrientation.display(forDevice: device, onInnerPanel: true)
+        await send(fake, panel(spansHinge: true))
+        await send(fake, orientation(.portrait, device: device))
+        await settle(viewController) { viewController.drawnOrientation == expected }
+        #expect(viewController.drawnOrientation == expected)
+    }
+
+    @Test("closing the inner panel moves the interface but not the crease")
+    func aFoldCannotMoveTheCreaseAxis() async {
+        // Closing a portrait device changes the interface reading from
+        // landscapeRight to portrait while the inner panel is still shown. Drawn from the
+        // reading, the crease would swing a quarter; drawn from the device, it
+        // stays where the hinge is.
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await send(fake, panel(spansHinge: true))
+        await send(fake, orientation(.landscapeRight, device: .portrait))
+        await settle(viewController) { viewController.drawnOrientation == .landscapeRight }
+        let before = FoldCreaseGeometry.creaseRunsVertically(in: viewController.drawnOrientation)
+        await send(fake, orientation(.portrait, device: .portrait))
+        await settle(viewController) { viewController.currentOrientation == .portrait }
+        #expect(FoldCreaseGeometry.creaseRunsVertically(in: viewController.drawnOrientation) == before)
+    }
+
+    @Test("a swap's first frame is turned for its own panel")
+    func theFirstFrameOfASwapTakesItsOwnPanelsTurn() async throws {
+        // The daemon still names the cover when the inner panel's first frame
+        // lands. The frame's size says inner, and the turn it's drawn at has
+        // to come from that, in the same render that adopts it.
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await send(
+            fake,
+            .panelChanged(
+                PanelChangedEvent(
+                    paneId: "p1",
+                    screenID: 1,
+                    spansHinge: false,
+                    spanningPanelWidth: 8,
+                    spanningPanelHeight: 12
+                )
+            )
+        )
+        await send(fake, orientation(.portrait, device: .portrait))
+        let props: [String: Any] = [
+            kIOSurfaceWidth as String: 8,
+            kIOSurfaceHeight as String: 12,
+            kIOSurfaceBytesPerElement as String: 4,
+            kIOSurfacePixelFormat as String: 0x42_47_52_41
+        ]
+        let surface = try #require(IOSurfaceCreate(props as CFDictionary))
+        let lease = SurfaceLease(
+            surface: surface,
+            paneId: "p1",
+            subscriptionToken: UUID(),
+            leaseEpoch: 0,
+            generation: 0,
+            onRelease: nil
+        )
+        await send(fake, .surfaceChanged(SurfaceChangedEvent(paneId: "p1", sequence: 1), lease))
+        await settle(viewController) { viewController.contentOrientation == .landscapeRight }
+        #expect(viewController.contentOrientation == .landscapeRight)
+    }
+
+    @Test("an unknown device orientation draws the presentation orientation")
+    func noDeviceOrientationFallsBack() async {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await send(fake, panel(spansHinge: false))
+        await send(fake, orientation(.landscapeLeft, device: nil))
+        await settle(viewController) { viewController.currentOrientation == .landscapeLeft }
+        #expect(viewController.drawnOrientation == .landscapeLeft)
     }
 }

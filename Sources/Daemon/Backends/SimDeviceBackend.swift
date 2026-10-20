@@ -171,6 +171,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Lays an ordinary Simulator flat, which neither the PurpleHID event nor
     /// the foldable's vendor payload can do.
     private let deviceCtlOrientation = DeviceCtlOrientation()
+    /// Runs device-orientation reads, which block for a process run, off the
+    /// input queue so a read never waits behind a gesture or holds one up.
+    private let deviceOrientationQueue = BlockingWorkQueue(label: "com.deviceterm.sim.device-orientation")
 
     init(
         udid: String,
@@ -658,6 +661,13 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func noteHingeMoved() { display.followFold() }
+
+    func readDeviceOrientation() async -> Orientation? {
+        guard capabilities.fold else { return nil }
+        let udid = self.udid
+        let reader = deviceCtlOrientation
+        return await deviceOrientationQueue.run { reader.uprightOrientation(deviceId: udid) }
+    }
 
     func stopFrames() { display.stopFrames() }
 

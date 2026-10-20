@@ -76,4 +76,24 @@ struct HingeReadingTests {
         let reversed = "• +1.0s : AngleValid:Y  Angle: 77.0°"
         #expect(HingeReading.degrees(fromLine: reversed) == 77.0)
     }
+
+    @Test("reads the device orientation out of a guest watch line", arguments: [
+        ("orientation portrait", Orientation?.some(.portrait)),
+        ("orientation pud", .portraitUpsideDown),
+        ("orientation landscape-left", .landscapeLeft),
+        ("orientation landscape-right", .landscapeRight),
+        ("orientation faceup", nil),
+        ("orientation facedown", nil),
+        ("orientation", nil),
+        ("orientation sideways", nil),
+        ("angle 30.0", nil)
+    ])
+    func parsesOrientationLines(line: String, expected: Orientation?) {
+        #expect(HingeReading.orientation(fromLine: line) == expected)
+    }
+
+    @Test("an orientation line is not an angle")
+    func anOrientationLineIsNotAnAngle() {
+        #expect(HingeReading.degrees(fromLine: "orientation landscape-left") == nil)
+    }
 }

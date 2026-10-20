@@ -473,6 +473,37 @@ struct SimGestureMathReferenceTests {
     }
 }
 
+/// A point re-expressed from the orientation a picture is drawn in to the one
+/// the pane presents keeps the native pixel it covers.
+struct SimGestureMathPresentedPointTests {
+    @Test("the same orientation leaves a point alone", arguments: Orientation.allCases)
+    func sameOrientationIsIdentity(orientation: Orientation) {
+        let point = CGPoint(x: 0.2, y: 1.03)
+        #expect(SimGestureMath.presentedPoint(point, drawnIn: orientation, presentedIn: orientation) == point)
+    }
+
+    @Test("a re-expressed point lands on the native pixel it was drawn over", arguments: Orientation.allCases)
+    func keepsTheNativePixel(drawn: Orientation) {
+        let point = CGPoint(x: 0.3, y: 0.85)
+        let native = drawn.surfacePoint(displayedX: point.x, displayedY: point.y)
+        for presented in Orientation.allCases {
+            let sent = SimGestureMath.presentedPoint(point, drawnIn: drawn, presentedIn: presented)
+            let landed = presented.surfacePoint(displayedX: sent.x, displayedY: sent.y)
+            #expect(abs(landed.x - native.x) < 1e-12)
+            #expect(abs(landed.y - native.y) < 1e-12)
+        }
+    }
+
+    /// The cover drawn on its side while its Home Screen stays upright: a tap
+    /// on the drawn top-left corner is the interface's top-right.
+    @Test
+    func aTurnedCoverMapsToItsUprightInterface() {
+        let sent = SimGestureMath.presentedPoint(.zero, drawnIn: .landscapeLeft, presentedIn: .portrait)
+        #expect(abs(sent.x - 1) < 1e-12)
+        #expect(abs(sent.y - 0) < 1e-12)
+    }
+}
+
 /// Input against a creased picture.
 ///
 /// The renderer bends the picture and the user aims at what they see, so the

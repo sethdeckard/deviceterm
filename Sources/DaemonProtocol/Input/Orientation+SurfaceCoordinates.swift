@@ -26,10 +26,14 @@
 /// Portrait is the identity, so nothing about an unrotated device
 /// changes.
 ///
-/// The daemon is the only caller. This lives beside `Orientation` rather
-/// than in the daemon because the wire types whose coordinates it governs
-/// are defined here, so the contract and the conversion that implements
-/// it stay together. Clients stop at displayed space and never convert.
+/// This lives beside `Orientation` rather than in the daemon because the
+/// wire types whose coordinates it governs are defined here, so the
+/// contract and the conversion that implements it stay together. The
+/// daemon converts to native space. A client sends displayed space, and
+/// converts only when it draws a picture turned some other way than the
+/// presentation orientation (a foldable drawn in device space): it takes
+/// its point to native space through the orientation it drew in, then back
+/// out through the presentation orientation with `displayedPoint`.
 public extension Orientation {
     /// Convert a point in displayed space to the device's native
     /// portrait surface space.
@@ -55,6 +59,25 @@ public extension Orientation {
         // Displayed top-left (0, 0) is the native bottom-left (0, 1).
         case .landscapeRight:
             return (y, 1 - x)
+        }
+    }
+
+    /// Convert a point in the device's native portrait surface space to
+    /// displayed space: the inverse of `surfacePoint(displayedX:displayedY:)`,
+    /// unclamped like it.
+    func displayedPoint(surfaceX x: Double, surfaceY y: Double) -> (x: Double, y: Double) {
+        switch self {
+        case .portrait:
+            return (x, y)
+
+        case .landscapeLeft:
+            return (y, 1 - x)
+
+        case .portraitUpsideDown:
+            return (1 - x, 1 - y)
+
+        case .landscapeRight:
+            return (1 - y, x)
         }
     }
 }

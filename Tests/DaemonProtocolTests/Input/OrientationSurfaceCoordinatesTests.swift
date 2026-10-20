@@ -78,4 +78,28 @@ struct OrientationSurfaceCoordinatesTests {
         #expect(abs(below.y - 0.5) < 1e-9)
         #expect(below.x < 0, "the off-screen coordinate was clamped into range")
     }
+
+    @Test("displayedPoint undoes surfacePoint, off-screen points included", arguments: Orientation.allCases)
+    func displayedPointInvertsSurfacePoint(orientation: Orientation) {
+        for (x, y) in [(0.0, 0.0), (0.25, 0.75), (1.0, 0.0), (0.5, 1.02), (-0.1, 0.4)] {
+            let surface = orientation.surfacePoint(displayedX: x, displayedY: y)
+            let back = orientation.displayedPoint(surfaceX: surface.x, surfaceY: surface.y)
+            #expect(abs(back.x - x) < 1e-12)
+            #expect(abs(back.y - y) < 1e-12)
+        }
+    }
+
+    /// A picture drawn turned one way and a pane presenting another: going out
+    /// through the drawn orientation and back through the presented one lands
+    /// on the same native pixel the drawn point covers, for every pair.
+    @Test("a point re-expressed between orientations keeps its native pixel", arguments: Orientation.allCases)
+    func reexpressedPointKeepsItsNativePixel(drawn: Orientation) {
+        for presented in Orientation.allCases {
+            let native = drawn.surfacePoint(displayedX: 0.3, displayedY: 0.8)
+            let sent = presented.displayedPoint(surfaceX: native.x, surfaceY: native.y)
+            let landed = presented.surfacePoint(displayedX: sent.x, displayedY: sent.y)
+            #expect(abs(landed.x - native.x) < 1e-12)
+            #expect(abs(landed.y - native.y) < 1e-12)
+        }
+    }
 }

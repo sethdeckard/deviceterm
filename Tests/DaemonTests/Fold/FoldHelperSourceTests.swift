@@ -35,6 +35,12 @@ struct FoldHelperSourceTests {
         #expect(FoldHelperSource.code.contains("\"\(value)\""))
     }
 
+    @Test("an orientation the helper reports reads back as the one it sends", arguments: Orientation.allCases)
+    func reportedValuesRoundTrip(orientation: Orientation) throws {
+        let value = try #require(FoldHelperSource.orientationArguments(orientation).last)
+        #expect(FoldHelperSource.orientation(fromValue: value) == orientation)
+    }
+
     @Test("each flat orientation sends Device Hub's value", arguments: [
         (FlatOrientation.faceUp, "faceup"),
         (.faceDown, "facedown")

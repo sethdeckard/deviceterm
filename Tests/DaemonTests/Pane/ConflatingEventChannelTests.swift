@@ -134,7 +134,7 @@ struct ConflatingEventChannelTests {
             channel.send(.surfaceChanged(paneId: paneId, sequence: sequence))
         }
         channel.send(.stateChanged(paneId: paneId, state: .rendering))
-        channel.send(.orientationChanged(paneId: paneId, orientation: .landscapeLeft))
+        channel.send(.orientationChanged(paneId: paneId, orientation: .landscapeLeft, deviceOrientation: nil))
         let events = drain(channel)
         #expect(states(events) == [.booting, .rendering])
         #expect(sequences(events) == [50])
@@ -148,7 +148,7 @@ struct ConflatingEventChannelTests {
         // framebuffer against the previous orientation.
         let channel = ConflatingEventChannel()
         channel.send(.surfaceChanged(paneId: paneId, sequence: 1))
-        channel.send(.orientationChanged(paneId: paneId, orientation: .landscapeLeft))
+        channel.send(.orientationChanged(paneId: paneId, orientation: .landscapeLeft, deviceOrientation: nil))
         channel.send(.surfaceChanged(paneId: paneId, sequence: 2))
         let events = drain(channel)
         guard events.count == 2 else {
@@ -168,7 +168,7 @@ struct ConflatingEventChannelTests {
         // wrong orientation.
         let channel = ConflatingEventChannel()
         channel.send(.stateChanged(paneId: paneId, state: .rendering))
-        channel.send(.orientationChanged(paneId: paneId, orientation: .landscapeRight))
+        channel.send(.orientationChanged(paneId: paneId, orientation: .landscapeRight, deviceOrientation: nil))
         channel.send(.surfaceChanged(paneId: paneId, sequence: 7))
         let events = drain(channel)
         #expect(events.count == 3)
@@ -218,7 +218,7 @@ struct ConflatingEventChannelTests {
         let channel = ConflatingEventChannel()
         for step in UInt64(1) ... 20 {
             channel.send(.surfaceChanged(paneId: paneId, sequence: step))
-            channel.send(.orientationChanged(paneId: paneId, orientation: .portrait))
+            channel.send(.orientationChanged(paneId: paneId, orientation: .portrait, deviceOrientation: nil))
         }
         #expect(channel.pendingCount == 21)
         let events = drain(channel)

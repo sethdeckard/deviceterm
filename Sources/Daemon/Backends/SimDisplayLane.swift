@@ -79,6 +79,9 @@ final class SimDisplayLane: @unchecked Sendable {
     /// Where orientation changes go, kept so a held one can be let out later.
     /// Owned by `queue`.
     private var orientationSink: (@Sendable (Orientation) -> Void)?
+    /// Looks for the lit panel again at `ActivePanelSearch.settleCheckSeconds`
+    /// after the first bind. Owned by `queue`.
+    private var settleTask: Task<Void, Never>?
     /// The bound panel was moved to before it had drawn, and no frame with
     /// content has been asked for since. Lane state rather than a search's, so
     /// a search that replaces another inherits it, and any of them discharges
@@ -166,9 +169,11 @@ final class SimDisplayLane: @unchecked Sendable {
             let observing = startOrientationLocked(onChange: onOrientation)
             // The first binding is a guess on a two-panel device: the picker
             // reads content, and at boot neither panel may have drawn yet, so
-            // it can land on the dark one. Nothing else checks it until a
-            // fold, so search once now as a fold would.
+            // it can land on the dark one. Search now as a fold would, and
+            // again over the next minute, since a boot can move the lit panel
+            // after that with no fold to prompt a look.
             searchForPanelSwap()
+            startSettleChecksLocked()
             let dimensions = pixelDimensionsLocked()
             return DisplayBootstrap(
                 pixelWidth: dimensions.0,
@@ -282,6 +287,8 @@ final class SimDisplayLane: @unchecked Sendable {
             // shutdown is what cancels that.
             panelSwapTask?.cancel()
             panelSwapTask = nil
+            settleTask?.cancel()
+            settleTask = nil
             panelSwapGeneration &+= 1
             followingActivePanel = false
             activePanelDirty = false
@@ -459,6 +466,22 @@ final class SimDisplayLane: @unchecked Sendable {
         heldOrientation = nil
         DiagnosticLog.panel.notice("orientation released: \(orientation.rawValue, privacy: .public)")
         orientationSink?(orientation)
+    }
+
+    /// Look for the lit panel again at each of
+    /// `ActivePanelSearch.settleCheckSeconds`. On the lane's queue.
+    private func startSettleChecksLocked() {
+        guard let handle, handle.hasMultiplePanels else { return }
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
+            var elapsed: UInt64 = 0
+            for seconds in ActivePanelSearch.settleCheckSeconds {
+                try? await Task.sleep(nanoseconds: (seconds - elapsed) * 1_000_000_000)
+                elapsed = seconds
+                guard !Task.isCancelled, let self else { return }
+                self.followFold()
+            }
+        }
     }
 
     // MARK: - Following a fold
@@ -841,6 +864,8 @@ final class SimDisplayLane: @unchecked Sendable {
         invalidateFrameRun()
         panelSwapTask?.cancel()
         panelSwapTask = nil
+        settleTask?.cancel()
+        settleTask = nil
         panelSwapGeneration &+= 1
         followingActivePanel = false
         activePanelDirty = false

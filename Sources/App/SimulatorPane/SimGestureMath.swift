@@ -200,6 +200,26 @@ enum SimGestureMath {
         )
     }
 
+    /// Re-express a displayed-space point from the orientation a picture was
+    /// drawn in to the orientation the pane presents, which is the space
+    /// input goes out in.
+    ///
+    /// The two differ only for a foldable drawn in device space while its
+    /// interface holds another orientation (a Home Screen that doesn't
+    /// rotate). The point keeps the native pixel it covers, so the daemon's
+    /// conversion through the presentation orientation lands where the user
+    /// aimed. Unclamped, like both halves.
+    static func presentedPoint(
+        _ point: CGPoint,
+        drawnIn drawn: Orientation,
+        presentedIn presented: Orientation
+    ) -> CGPoint {
+        guard drawn != presented else { return point }
+        let native = drawn.surfacePoint(displayedX: Double(point.x), displayedY: Double(point.y))
+        let out = presented.displayedPoint(surfaceX: native.x, surfaceY: native.y)
+        return CGPoint(x: out.x, y: out.y)
+    }
+
     /// Whether a displayed-space (oriented) unit-Y sits in the bottom-edge
     /// band that arms the home / App-Switcher system gesture. `orientedY`
     /// is the `y` from `extendedNormalizedPoint`.

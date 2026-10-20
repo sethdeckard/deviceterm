@@ -29,6 +29,12 @@ enum ActivePanelSearch {
     /// and an idle device sends no frame callbacks when it does, so without
     /// asking the pane keeps the black frame it got at the move.
     static let litRefreshIntervalNanoseconds: UInt64 = 100_000_000
+
+    /// When, in seconds after the display first binds, the lane looks for the
+    /// lit panel again. A boot moves it with no fold to follow: iOS can light
+    /// the inner panel first and the cover a while later, and nothing else
+    /// prompts a look once the hinge is still.
+    static let settleCheckSeconds: [UInt64] = [3, 8, 15, 30, 60]
     static let litRefreshAttempts = 30
 
     /// The next step after `reads` reads, the last of which said `reading`,

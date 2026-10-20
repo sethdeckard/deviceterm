@@ -26,7 +26,11 @@ import Foundation
 ///
 /// ```
 /// angle 180.0
+/// orientation landscape-right
 /// ```
+///
+/// The second shape is the device orientation an orientation control event
+/// turned it to, which only the guest helper reports.
 enum HingeReading {
     /// The angle this line reports, or nil when it carries none.
     ///
@@ -37,6 +41,16 @@ enum HingeReading {
         let degrees = line.hasPrefix("angle ") ? helperDegrees(line) : devicectlDegrees(line)
         guard let degrees, FoldPosture.degreeRange.contains(degrees) else { return nil }
         return degrees
+    }
+
+    /// The device orientation a `watch` line reports, or nil when it carries
+    /// none: exactly `orientation <value>`, in the values the helper's
+    /// `orientation` command takes. A flat value is nil, since the pane is
+    /// drawn in the upright orientation the device was last in.
+    static func orientation(fromLine line: String) -> Orientation? {
+        let fields = line.split(separator: " ")
+        guard fields.count == 2, fields[0] == "orientation" else { return nil }
+        return FoldHelperSource.orientation(fromValue: String(fields[1]))
     }
 
     /// A `watch` line: exactly `angle <degrees>`.
