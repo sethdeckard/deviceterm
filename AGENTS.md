@@ -194,9 +194,12 @@ filesystem is the truth.
 |---|---|
 | `make build` | `swift build` (debug) |
 | `make bundle` | build the debug `DeviceTerm.app` bundle |
-| `make run` | build + relaunch this checkout's `DeviceTerm.app`; refuses (BUSY) if another checkout's instance is running |
+| `make run` | build + relaunch this checkout's `DeviceTerm.app`; refuses (BUSY) if another checkout's instance is running, or another checkout holds the dev seat |
 | `make run-default` | `run`, but the app ignores your Ghostty config and shows the default theme |
 | `make kill-daemon` | stop this checkout's app and embedded daemon; never touches another worktree's |
+| `make bless` | give this checkout the dev seat (see below); asks for confirmation on the terminal |
+| `make unbless` | end the dev seat, whichever checkout holds it; asks on the terminal |
+| `make seat` | show which checkout holds the dev seat |
 | `make daemon` | build the `deviceterm-daemon` target |
 | `make cli` | build `deviceterm-cli` |
 | `make shim` | build `deviceterm-shim` |
@@ -264,11 +267,17 @@ unseen by it. Rerun the harness track once the smoke has finished.
 | `test-live` | the simulator fleet, which the track shuts down for a clean slate | `lock:sim` |
 | `test-device-live` | the one connected device and its CoreDevice tunnel | `lock:device` |
 | `test-uitest`, `uitest-run`, `uitest-bundle`, `uitest-stop` | the TCC-granted harness at `~/Applications/DeviceTermUITestHarness.app` and the GUI it drives | `lock:uitest`, held across every mutation; `test-uitest` also refuses a foreign app at startup, and the harness fails any single request whose target snapshot is ambiguous |
+| `run`, `test-live`, `test-device-live`, `test-uitest`, `uitest-run`, `uitest-bundle`, and `uitest-stop`, while a seat stands | the dev seat: the one checkout the user reserved these for | `scripts/dev-seat.sh`; in every other checkout, `run` and the `sim`, `device`, and `uitest` locks refuse with BUSY, whether or not the seat's app is running |
 | `publish` | the shared tap checkout (`DEVICETERM_TAP_DIR`, default `../homebrew-tap`) and the GitHub release; `release` itself writes only this checkout's `release/` | none; coordinate by hand |
 
 Locks are directories at `/tmp/deviceterm.<uid>.<track>.lock`, per-user and
 cross-checkout rather than machine-wide. Contention fails fast; there is no
 wait mode. Inspect one with `./scripts/exclusive-lock.sh status <track>`.
+
+The dev seat is a reservation, not a lock. The user gives it to one
+checkout with `make bless`, and nothing reclaims it. It lives at
+`/tmp/deviceterm.<uid>.seat`, so it outlasts relaunches and ends at
+reboot. Inspect it with `make seat`.
 
 When the main checkout contains `.env.release`, new worktrees inherit it
 through `post-checkout`, once `make hooks` has been run there. See
@@ -283,7 +292,8 @@ exiting 2, so the prefix is the stable signal, not the exit code.
 
 BUSY means something else holds the resource right now: another
 checkout's app or track run, an installed `/Applications/DeviceTerm.app`,
-or a second run from this same checkout. A reclaimable lock is reclaimed
+a second run from this same checkout, or a dev seat the user gave another
+checkout. A reclaimable lock is reclaimed
 automatically, so a refusal is not a leftover you can ignore.
 
 **Seeing a BUSY line means stop and report it.** Do not kill the named
@@ -292,6 +302,13 @@ looking for a force flag; none exists. The one exception is a block
 carrying a `fix:` line, which reports a dead owner whose process group
 could not be verified, the single state that cannot clear itself. Even
 then, acting on it is the operator's call.
+
+A block whose first line reads `resource=seat` means the user reserved
+the resource for another checkout. Never run `make bless` or
+`make unbless`, and never touch the seat directory. Both targets ask on
+the terminal and refuse without one, but a pseudo-terminal can answer
+that question. The prompt keeps the seat the user's by convention, not by
+enforcement.
 
 The instance guard reads process state through `pgrep`, which a sandboxed
 shell can be denied. It treats an empty enumeration as "cannot see" rather

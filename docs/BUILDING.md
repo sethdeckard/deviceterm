@@ -214,6 +214,27 @@ acquire time, and its BUSY block carries a `fix:` line naming the
 directory to remove. Confirm no track is running in any checkout before
 you remove it.
 
+**One checkout can reserve the rest.** `make bless` gives the checkout
+you run it in the dev seat: sole use of `make run`, the live tracks, and
+the UI harness. While the seat stands, those refuse in every other
+checkout with a BUSY block naming it, even when the seat's app isn't
+running. Building, testing, and `make verify` stay parallel-safe.
+
+```sh
+make bless     # asks for confirmation
+make seat      # shows who holds it
+make unbless   # asks too
+```
+
+`make bless` and `make unbless` ask for confirmation on the terminal and
+refuse without one. That takes a controlling terminal, not a person:
+anything that supplies a pseudo-terminal can answer, so keeping the seat
+yours is a convention agents follow. Blessing a second checkout moves the
+seat.
+
+Nothing reclaims the seat. It lives at `/tmp/deviceterm.<uid>.seat`, so
+it ends only with `make unbless` or a reboot.
+
 `make release` writes into its own checkout's `release/`. `make publish`
 pushes to the shared tap checkout (`$DEVICETERM_TAP_DIR`, default
 `../homebrew-tap`) and creates the GitHub release. Nothing guards those,

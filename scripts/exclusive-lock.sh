@@ -46,6 +46,12 @@
 #                                  traps stay idempotent
 #   status  <track>                print the holder (exit 0) or "free"
 #                                  (exit 1)
+#
+# `--lock-root <dir>` and `--seat-dir <dir>`, before the subcommand, move
+# the lock namespace and the dev seat it consults, for verify.sh's
+# self-test. They are flags rather than environment variables because the
+# track scripts never pass them, so nothing in a caller's shell can move
+# the locks a real track takes.
 
 set -euo pipefail
 
@@ -63,12 +69,21 @@ usage() {
     exit 64
 }
 
+lock_root=/tmp
+seat_args=()
+while :; do
+    case "${1:-}" in
+        --lock-root) [ -n "${2:-}" ] || usage; lock_root="$2"; shift 2 ;;
+        --seat-dir)  [ -n "${2:-}" ] || usage; seat_args=(--seat-dir "$2"); shift 2 ;;
+        *) break ;;
+    esac
+done
 cmd="${1:-}"
 track="${2:-}"
 case "$track" in
     ''|*[!A-Za-z0-9._-]*) usage ;;
 esac
-lock="/tmp/deviceterm.$(id -u).${track}.lock"
+lock="$lock_root/deviceterm.$(id -u).${track}.lock"
 recover="$lock.recover"
 # A recovery mutex whose owner cannot be identified at all (killed
 # between its mkdir and its holder write, a window of microseconds) has
@@ -244,6 +259,12 @@ clear_orphan_recovery_mutex() {
 
 acquire() {
     holder_pid="$1"
+    # The tracks that drive shared hardware, or launch the app, are the dev
+    # seat's while one is held (scripts/dev-seat.sh). Checked before the
+    # mkdir, so a refusal never touches the lock.
+    case "$track" in
+        sim|device|uitest) scripts/dev-seat.sh ${seat_args[@]+"${seat_args[@]}"} check "lock:$track" ;;
+    esac
     if mkdir "$lock" 2>/dev/null; then
         write_holder "$holder_pid"
         exit 0

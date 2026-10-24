@@ -16,6 +16,7 @@ SHELL := /usr/bin/env bash
 
 .PHONY: help \
         build bundle run run-default kill-daemon daemon cli shim probe \
+        bless unbless seat \
         help-book \
         run-libghostty-harness \
         uitest uitest-bundle uitest-run uitest-stop \
@@ -42,6 +43,10 @@ help:
 	@echo "  make run-default Like run, ignoring your Ghostty config"
 	@echo "                   (sets DEVICETERM_IGNORE_GHOSTTY_CONFIG=1)"
 	@echo "  make kill-daemon Stop this checkout's app + daemon"
+	@echo "  make bless       Give this checkout the dev seat: sole use of"
+	@echo "                   run, the live tracks, and the UI harness (asks)"
+	@echo "  make unbless     End the dev seat (asks)"
+	@echo "  make seat        Show which checkout holds the dev seat"
 	@echo "  make test        Unit tests"
 	@echo "  make lint        SwiftLint --strict"
 	@echo "  make verify      Single-command gate (body grows as code lands)"
@@ -121,16 +126,31 @@ kill-daemon:
 # before `open` (so the next demand-launch execs the fresh daemon). A
 # foreign instance — another worktree's build or /Applications — makes the
 # guard refuse with a BUSY block instead of killing it: quit that instance
-# from its own checkout; there is no force flag.
+# from its own checkout; there is no force flag. While the user has given
+# the dev seat to another checkout, the seat check refuses first.
 run: bundle
 	@if [ -d Sources/App ]; then \
 	    test -x .build/debug/DeviceTerm.app/Contents/MacOS/deviceterm \
 	      || { echo "make run: bundle missing or incomplete" >&2; exit 1; }; \
+	    ./scripts/dev-seat.sh check "make run" || exit $$?; \
 	    ./scripts/instance-guard.sh ensure-clear || exit $$?; \
 	    open .build/debug/DeviceTerm.app; \
 	else \
 	    echo "make run: Sources/App/ does not exist — skipping"; \
 	fi
+
+# The dev seat (scripts/dev-seat.sh): one checkout the user has blessed
+# with sole use of `run`, the live tracks, and the UI harness. Each asks
+# for confirmation on the terminal; leaving them to the user is a
+# convention agents follow, since a pseudo-terminal can answer too.
+bless:
+	@./scripts/dev-seat.sh bless
+
+unbless:
+	@./scripts/dev-seat.sh unbless
+
+seat:
+	@./scripts/dev-seat.sh status || true
 
 # `run`, but the app ignores the user's Ghostty config and renders the
 # default theme. Delegates so the bundle build and instance guard stay

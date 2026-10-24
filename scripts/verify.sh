@@ -324,6 +324,90 @@ else
     skip "instance-guard self-test (no scripts/instance-guard.sh)"
 fi
 
+# Dev-seat self-test, against a throwaway seat directory and lock root so
+# neither a real seat nor a real track's lock is read or touched. Pins the
+# refusals: a seat held by another checkout turns `check` and the track
+# locks into BUSY with exit 75 before any lock is taken, while no seat and
+# our own seat both pass. Blessing must refuse without a controlling
+# terminal: the run is moved to a new session first, since verify itself
+# usually has one. A confirmation answered after the
+# seat moved must change nothing; `script` supplies the terminal for that,
+# and the seat is moved once the question is showing.
+if [ -x scripts/dev-seat.sh ]; then
+    ds_dir=$(mktemp -d "/tmp/deviceterm-seat-selftest.XXXXXX")
+    ds_locks="$ds_dir/locks"
+    mkdir "$ds_locks"
+    ds() { ./scripts/dev-seat.sh --seat-dir "$ds_dir/seat" "$@"; }
+    ds_hold() { mkdir -p "$ds_dir/seat"; printf '%s\n%s\n' "$1" "$2" > "$ds_dir/seat/holder"; }
+    ds_holder() { sed -n 1p "$ds_dir/seat/holder" 2>/dev/null || true; }
+    ds check "make run" 2>/dev/null \
+        || fail "dev-seat: no seat refused 'make run'"
+    ds_hold /nonexistent/other-checkout selftest
+    set +e
+    ds_out=$(ds check "make run" 2>&1)
+    ds_rc=$?
+    set -e
+    [ "$ds_rc" -eq 75 ] || fail "dev-seat: foreign seat check exited $ds_rc, want 75"
+    echo "$ds_out" | grep -qE '^deviceterm-make: BUSY: resource=seat pid=- holder=/nonexistent/other-checkout$' \
+        || fail "dev-seat: BUSY line 1 missing or its key order drifted"
+    set +e
+    ./scripts/exclusive-lock.sh --lock-root "$ds_locks" --seat-dir "$ds_dir/seat" \
+        acquire sim $$ >/dev/null 2>&1
+    ds_rc=$?
+    set -e
+    [ "$ds_rc" -eq 75 ] || fail "dev-seat: lock:sim under a foreign seat exited $ds_rc, want 75"
+    [ -z "$(ls -A "$ds_locks")" ] || fail "dev-seat: a refused lock:sim acquire left a lock behind"
+    set +e
+    perl -MPOSIX -e 'if (my $p = fork) { waitpid($p, 0); exit($? >> 8) }
+                     POSIX::setsid(); exec @ARGV or exit 127' \
+        ./scripts/dev-seat.sh --seat-dir "$ds_dir/seat" bless </dev/null >/dev/null 2>&1
+    ds_rc=$?
+    set -e
+    [ "$ds_rc" -eq 1 ] || fail "dev-seat: bless without a terminal exited $ds_rc, want 1"
+    [ "$(ds_holder)" = /nonexistent/other-checkout ] \
+        || fail "dev-seat: bless without a terminal moved the seat"
+    # Answer "y" once the question shows, after moving the seat elsewhere.
+    ds_stale() {
+        ds_ts="$ds_dir/typescript"
+        rm -f "$ds_ts"
+        set +e
+        {
+            for _ in $(seq 1 100); do
+                grep -q 'y/N' "$ds_ts" 2>/dev/null && break
+                sleep 0.1
+            done
+            ds_hold "$1" moved
+            echo y
+            sleep 1
+        } | script -q "$ds_ts" ./scripts/dev-seat.sh --seat-dir "$ds_dir/seat" "$2" >/dev/null 2>&1
+        ds_rc=$?
+        set -e
+    }
+    ds_stale /nonexistent/third-checkout bless
+    [ "$ds_rc" -eq 1 ] && [ "$(ds_holder)" = /nonexistent/third-checkout ] \
+        || fail "dev-seat: a stale bless confirmation changed the seat (exit $ds_rc)"
+    ds_stale /nonexistent/fourth-checkout unbless
+    [ "$ds_rc" -eq 1 ] && [ "$(ds_holder)" = /nonexistent/fourth-checkout ] \
+        || fail "dev-seat: a stale unbless confirmation changed the seat (exit $ds_rc)"
+    # A change already under way holds the mutate lock: a confirmed bless
+    # refuses with BUSY and leaves the seat alone. With it free, the same
+    # answer moves the seat here.
+    ./scripts/exclusive-lock.sh --lock-root "$ds_dir/seat" acquire mutate $$
+    ds_stale /nonexistent/fifth-checkout bless
+    ./scripts/exclusive-lock.sh --lock-root "$ds_dir/seat" release mutate $$
+    [ "$ds_rc" -eq 75 ] && [ "$(ds_holder)" = /nonexistent/fifth-checkout ] \
+        || fail "dev-seat: bless changed the seat past a held mutate lock (exit $ds_rc)"
+    ds_stale /nonexistent/fifth-checkout bless
+    [ "$ds_rc" -eq 0 ] && [ "$(ds_holder)" = "$(pwd -P)" ] \
+        || fail "dev-seat: a confirmed bless did not move the seat here (exit $ds_rc)"
+    ds check "make run" 2>/dev/null \
+        || fail "dev-seat: our own seat refused 'make run'"
+    rm -rf "$ds_dir"
+    ok "dev-seat self-test (BUSY format, foreign seat refuses, changes are serialized and checked)"
+else
+    skip "dev-seat self-test (no scripts/dev-seat.sh)"
+fi
+
 # ──────────────────────────────────────────────────────────────────────
 # Filesystem-gated
 # ──────────────────────────────────────────────────────────────────────
