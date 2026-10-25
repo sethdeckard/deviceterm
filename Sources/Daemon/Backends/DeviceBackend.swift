@@ -39,6 +39,10 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// The observation path that can settle a rotation request.
     var rotationConfirmationSupport: RotationConfirmationSupport { get }
 
+    /// Which transport carries this backend's touch, keyboard, and button
+    /// input, for the log. Nil for a backend with only one.
+    var inputTransportDescription: String? { get }
+
     // MARK: Frames
 
     /// Begin streaming frames. `onFrame` is invoked on the producer's
@@ -432,6 +436,8 @@ protocol DeviceBackend: AnyObject, Sendable {
 
 extension DeviceBackend {
     var rotationConfirmationSupport: RotationConfirmationSupport { .unsupported }
+
+    var inputTransportDescription: String? { nil }
 
     // Default: only the CoreSimulator backend routes a synthetic edge swipe
     // to the system recognizer. Physical devices fall back to the button

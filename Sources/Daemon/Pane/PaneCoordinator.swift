@@ -1599,10 +1599,12 @@ public actor PaneCoordinator {
             kind = "device"
         }
         let acquisition = acquired.acquisition.map(String.init) ?? "none"
+        let input = acquired.backend.inputTransportDescription ?? "only"
         DiagnosticLog.attach.notice(
             """
             pane published: shortId=\(record.shortId, privacy: .public) \
-            kind=\(kind, privacy: .public) acquisition=\(acquisition, privacy: .public)
+            kind=\(kind, privacy: .public) acquisition=\(acquisition, privacy: .public) \
+            input=\(input, privacy: .public)
             """
         )
         record.surfacePump = Task.detached { [weak self, paneId] in

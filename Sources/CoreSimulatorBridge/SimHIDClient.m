@@ -3,6 +3,8 @@
 #import "SimHIDClient.h"
 #import "SimHIDSendLedger.h"
 #import "CoreSimulatorLoader.h"
+#import "SimRemoteHIDChannel.h"
+#import "SimRemoteHIDMessages.h"
 
 #import <CoreSimulator/SimServiceContext.h>
 #import <CoreSimulator/SimDeviceSet.h>
@@ -72,6 +74,28 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
 @property (nonatomic, assign) CSBIndigoMessageForMouseEdgeFn    fnMouseEdge;
 @property (nonatomic, assign) CSBIndigoMessageForHIDArbitraryFn fnHIDArbitrary;
 @property (nonatomic, assign) CSBIndigoMessageForDigitalCrownFn fnCrown;
+
+// The simulator's HID daemon, when the client was given messages for it.
+@property (nonatomic, strong) SimDevice *device;
+@property (nonatomic, strong, nullable) id<CSBRemoteHIDMessageBuilding> remoteMessages;
+/// The anchored touch connection. Replaced, never reopened, when lost.
+@property (atomic, strong, nullable) SimRemoteHIDChannel *remoteTouch;
+/// The touchscreen service serving each display, as the anchor's reply
+/// listed them. Replaced with the connection.
+@property (atomic, copy) NSDictionary<NSString *, NSNumber *> *remoteTouchServices;
+@property (nonatomic, strong, nullable) SimRemoteHIDChannel *remoteButtons;
+/// Opened with the first key, since registering the keyboard is what tells
+/// the simulator a keyboard is attached.
+@property (nonatomic, strong, nullable) SimRemoteHIDChannel *remoteKeyboard;
+@property (nonatomic, assign) uint64_t remoteKeyboardServiceID;
+/// Why keys stay on the Indigo path, once registering the keyboard failed.
+@property (nonatomic, copy, nullable) NSString *remoteKeyboardFailure;
+/// Every HID usage held down, since a keyboard report carries the full set.
+@property (nonatomic, strong) NSMutableSet<NSNumber *> *pressedUsages;
+@property (atomic, copy, readwrite, nullable) NSString *remoteHIDUnavailableReason;
+/// When the daemon's connections were last tried, so a client attached
+/// before the daemon was reachable tries again without trying on every send.
+@property (nonatomic, assign) CFAbsoluteTime remoteAttemptTime;
 @end
 
 @implementation SimHIDClient
@@ -127,6 +151,12 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
 }
 
 + (nullable instancetype)clientForUDID:(NSString *)udid error:(NSError **)error {
+    return [self clientForUDID:udid remoteMessages:nil error:error];
+}
+
++ (nullable instancetype)clientForUDID:(NSString *)udid
+                        remoteMessages:(nullable id<CSBRemoteHIDMessageBuilding>)remoteMessages
+                                 error:(NSError **)error {
     if (![CoreSimulatorLoader loadWithError:error]) return nil;
     if (![CoreSimulatorLoader loadSimulatorKitWithError:error]) return nil;
 
@@ -206,21 +236,142 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     client.fnCrown = fnCrown;
     client.sendQueue = dispatch_queue_create("deviceterm.hid.send", DISPATCH_QUEUE_SERIAL);
     client.ledger = [SimHIDSendLedger new];
+    client.device = device;
+    client.pressedUsages = [NSMutableSet set];
+    if (remoteMessages) {
+        client.remoteMessages = remoteMessages;
+        [client _openRemoteChannels];
+    } else {
+        client.remoteHIDUnavailableReason = @"no messages for the simulator's HID daemon were supplied";
+    }
     return client;
+}
+
+#pragma mark Remote HID
+
+/// How long the daemon gets to answer an opening request. It builds the
+/// session's services before answering, which takes about half a second.
+static const NSTimeInterval kCSBRemoteRequestTimeout = 3.0;
+
+/// Open the touch and button connections. A touch connection that can't be
+/// anchored leaves every input on the Indigo path, with the reason kept.
+- (void)_openRemoteChannels {
+    self.remoteAttemptTime = CFAbsoluteTimeGetCurrent();
+    NSError *touchError = nil;
+    self.remoteTouch = [self _openAnchoredTouchChannelWithError:&touchError];
+    if (!self.remoteTouch) {
+        self.remoteHIDUnavailableReason = touchError.localizedDescription ?: @"the touch service could not be opened";
+        return;
+    }
+    self.remoteHIDUnavailableReason = nil;
+    self.remoteButtons = [SimRemoteHIDChannel channelForDevice:self.device
+                                                       service:self.remoteMessages.buttonServiceName
+                                                         error:NULL];
+}
+
+/// How long a client that couldn't reach the daemon waits before trying
+/// again. A simulator attached while booting may not have its services up.
+static const CFTimeInterval kCSBRemoteRetryInterval = 5.0;
+
+- (void)retryRemoteHIDIfDue {
+    if (!self.remoteMessages || self.remoteTouch) return;
+    if (CFAbsoluteTimeGetCurrent() - self.remoteAttemptTime < kCSBRemoteRetryInterval) return;
+    [self _openRemoteChannels];
+}
+
+- (nullable SimRemoteHIDChannel *)_openAnchoredTouchChannelWithError:(NSError **)error {
+    SimRemoteHIDChannel *channel = [SimRemoteHIDChannel channelForDevice:self.device
+                                                                 service:self.remoteMessages.touchServiceName
+                                                                   error:error];
+    if (!channel) return nil;
+    xpc_object_t reply = [channel sendRequest:[self.remoteMessages sessionAnchor]
+                                      timeout:kCSBRemoteRequestTimeout
+                                        error:error];
+    if (!reply) {
+        [channel invalidate];
+        return nil;
+    }
+    self.remoteTouchServices = [self.remoteMessages touchscreenServicesFromAnchorReply:reply];
+    return channel;
+}
+
+- (BOOL)sendsThroughRemoteHID {
+    return self.remoteTouch != nil;
+}
+
+/// The live touch connection, replacing a lost one, or nil when this client
+/// doesn't use one.
+- (nullable SimRemoteHIDChannel *)_liveRemoteTouchWithError:(NSError **)error {
+    SimRemoteHIDChannel *channel = self.remoteTouch;
+    if (!channel) return nil;
+    if (!channel.lost) return channel;
+    SimRemoteHIDChannel *replacement = [self _openAnchoredTouchChannelWithError:error];
+    if (replacement) self.remoteTouch = replacement;
+    return replacement;
+}
+
+/// The keyboard connection, registering the keyboard on first use. Nil, with
+/// the failure kept, once registration has failed: keys then stay on the
+/// Indigo path rather than paying the registration wait on every key.
+- (nullable SimRemoteHIDChannel *)_liveRemoteKeyboard {
+    if (!self.remoteTouch || self.remoteKeyboardFailure) return nil;
+    if (self.remoteKeyboard && !self.remoteKeyboard.lost) return self.remoteKeyboard;
+    NSError *error = nil;
+    SimRemoteHIDChannel *channel = [SimRemoteHIDChannel channelForDevice:self.device
+                                                                 service:self.remoteMessages.touchServiceName
+                                                                   error:&error];
+    xpc_object_t reply = channel ? [channel sendRequest:[self.remoteMessages keyboardRegistration]
+                                                timeout:kCSBRemoteRequestTimeout
+                                                  error:&error] : nil;
+    if (!reply) {
+        [channel invalidate];
+        self.remoteKeyboard = nil;
+        self.remoteKeyboardFailure = error.localizedDescription ?: @"the keyboard could not be registered";
+        return nil;
+    }
+    self.remoteKeyboardServiceID = [self.remoteMessages keyboardServiceIDFromReply:reply];
+    self.remoteKeyboard = channel;
+    return channel;
+}
+
+/// Send `message` over `channel` through the ledger, the same admission and
+/// one-second wait an Indigo send gets.
+- (BOOL)_sendRemote:(xpc_object_t)message
+            channel:(SimRemoteHIDChannel *)channel
+            release:(BOOL)isRelease
+              error:(NSError **)error {
+    dispatch_queue_t queue = self.sendQueue;
+    return [self _sendAdmitted:^(void (^complete)(NSError *)) {
+        [channel sendMessage:message completionQueue:queue completion:complete];
+    } release:isRelease error:error];
+}
+
+/// The touchscreen service a touch goes to: the one the daemon lists for the
+/// panel's display, or the one its screen id names, or the main one.
+- (uint64_t)_remoteTouchServiceID {
+    NSString *display = self.touchScreenUniqueID;
+    NSNumber *listed = display ? self.remoteTouchServices[display] : nil;
+    if (listed) return listed.unsignedLongLongValue;
+    return [self.remoteMessages touchscreenServiceIDForScreenID:self.touchScreenID];
+}
+
+/// Send a touch over the touch connection, replacing it once if it was lost.
+/// NO without an error when this client sends touches through Indigo.
+- (BOOL)_sendRemoteTouch:(xpc_object_t)message release:(BOOL)isRelease handled:(BOOL *)handled error:(NSError **)error {
+    *handled = NO;
+    if (!self.remoteTouch) return NO;
+    *handled = YES;
+    SimRemoteHIDChannel *channel = [self _liveRemoteTouchWithError:error];
+    if (!channel) return NO;
+    return [self _sendRemote:message channel:channel release:isRelease error:error];
 }
 
 #pragma mark Send helper
 
-/// Send an Indigo message and wait up to one second for its completion.
-/// `freeWhenDone:YES` hands ownership of the message buffer to SimulatorKit.
-///
-/// SimulatorKit queues every send behind the ones before it and sends with no
-/// timeout, so a late completion is not a failed send. Past the wait this
-/// returns a timeout error, and the send stays in the ledger until it does
-/// complete. Until then every send that isn't a release is refused rather than
-/// queued behind it, so input doesn't pile up to arrive late. A release is
-/// still sent: queued behind the stalled send, it lifts what is down once that
-/// send completes.
+/// Send an Indigo message through the ledger (see `_sendAdmitted:`).
+/// `freeWhenDone:YES` hands ownership of the message buffer to SimulatorKit,
+/// which queues every send behind the ones before it and sends with no
+/// timeout.
 - (BOOL)_sendMessage:(IndigoMessage *)message release:(BOOL)isRelease error:(NSError **)error {
     if (!message) {
         if (error) {
@@ -232,23 +383,41 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
         }
         return NO;
     }
+    __block BOOL submitted = NO;
+    SimDeviceLegacyClient *legacy = self.legacyClient;
+    dispatch_queue_t queue = self.sendQueue;
+    BOOL ok = [self _sendAdmitted:^(void (^complete)(NSError *)) {
+        submitted = YES;
+        [legacy sendWithMessage:message freeWhenDone:YES completionQueue:queue completion:complete];
+    } release:isRelease error:error];
+    // Never handed to SimulatorKit, so the buffer is still ours.
+    if (!submitted) free(message);
+    return ok;
+}
+
+/// Admit a send to the ledger, hand it to `submit`, and wait up to one second
+/// for the completion `submit` reports.
+///
+/// Neither transport cancels a send, so a late completion is not a failed
+/// send. Past the wait this returns a timeout error, and the send stays in the
+/// ledger until it does complete. Until then every send that isn't a release
+/// is refused rather than queued behind it, so input doesn't pile up to
+/// arrive late. A release is still sent: queued behind the stalled send, it
+/// lifts what is down once that send completes. `submit` is not called when
+/// the ledger refuses the send.
+- (BOOL)_sendAdmitted:(void (NS_NOESCAPE ^)(void (^complete)(NSError * _Nullable)))submit
+              release:(BOOL)isRelease
+                error:(NSError **)error {
     uint64_t ticket = 0;
-    if (![self.ledger admitSendAsRelease:isRelease ticket:&ticket error:error]) {
-        // Never handed to SimulatorKit, so the buffer is still ours.
-        free(message);
-        return NO;
-    }
+    if (![self.ledger admitSendAsRelease:isRelease ticket:&ticket error:error]) return NO;
     SimHIDSendLedger *ledger = self.ledger;
     __block NSError *cbError = nil;
     dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-    [self.legacyClient sendWithMessage:message
-                          freeWhenDone:YES
-                       completionQueue:self.sendQueue
-                            completion:^(NSError *e) {
+    submit(^(NSError *e) {
         cbError = e;
         [ledger completeTicket:ticket error:e];
         dispatch_semaphore_signal(sema);
-    }];
+    });
     long timedOut = dispatch_semaphore_wait(sema,
         dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC));
     if (timedOut != 0 && ![ledger abandonWaitForTicket:ticket]) {
@@ -460,12 +629,20 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 }
 
 - (BOOL)tapDownAtNormalizedPoint:(CGPoint)point error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteTouch:[self.remoteMessages touchWithContact:YES x:point.x y:point.y serviceID:[self _remoteTouchServiceID]]
+                               release:NO handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildTouchMessageAtRatio:point direction:ButtonEventTypeDown];
     } release:NO error:error];
 }
 
 - (BOOL)tapUpAtNormalizedPoint:(CGPoint)point error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteTouch:[self.remoteMessages touchWithContact:NO x:point.x y:point.y serviceID:[self _remoteTouchServiceID]]
+                               release:YES handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildTouchMessageAtRatio:point direction:ButtonEventTypeUp];
     } release:YES error:error];
@@ -513,7 +690,26 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
     return out;
 }
 
+/// Send an edge-tagged touch phase over the touch connection. NO with
+/// `handled` clear when touches go through Indigo.
+- (BOOL)_sendRemoteEdgeTouchAt:(CGPoint)point
+                          edge:(NSInteger)edge
+                       contact:(BOOL)contact
+                       handled:(BOOL *)handled
+                         error:(NSError **)error {
+    *handled = NO;
+    xpc_object_t message = [self.remoteMessages gestureTouchWithContact:contact
+                                                                      x:point.x
+                                                                      y:point.y
+                                                                   edge:edge
+                                                               serviceID:[self _remoteTouchServiceID]];
+    return [self _sendRemoteTouch:message release:!contact handled:handled error:error];
+}
+
 - (BOOL)edgeTouchDownAtNormalizedPoint:(CGPoint)point edge:(NSInteger)edge error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteEdgeTouchAt:point edge:edge contact:YES handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x1 edge:(int)edge];
     } release:NO error:error];
@@ -523,12 +719,18 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
     // A move is a re-down at the new point, the continued-contact convention
     // the plain-touch drag already relies on. The builder has no motion event
     // type to offer: every one of them returns NULL.
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteEdgeTouchAt:point edge:edge contact:YES handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x1 edge:(int)edge];
     } release:NO error:error];
 }
 
 - (BOOL)edgeTouchUpAtNormalizedPoint:(CGPoint)point edge:(NSInteger)edge error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteEdgeTouchAt:point edge:edge contact:NO handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildEdgeTouchMessageAtRatio:point eventType:0x2 edge:(int)edge];
     } release:YES error:error];
@@ -634,6 +836,11 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 }
 
 - (BOOL)twoFingerDownAtFinger1:(CGPoint)f1 finger2:(CGPoint)f2 error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteTouch:[self.remoteMessages twoFingerTouchWithContact:YES first:f1 second:f2
+                                                                             serviceID:[self _remoteTouchServiceID]]
+                               release:NO handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildTwoFingerTouchMessageAtRatio1:f1
                                                   ratio2:f2
@@ -642,6 +849,11 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 }
 
 - (BOOL)twoFingerUpAtFinger1:(CGPoint)f1 finger2:(CGPoint)f2 error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteTouch:[self.remoteMessages twoFingerTouchWithContact:NO first:f1 second:f2
+                                                                             serviceID:[self _remoteTouchServiceID]]
+                               release:YES handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return [self _buildTwoFingerTouchMessageAtRatio1:f1
                                                   ratio2:f2
@@ -651,13 +863,53 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 
 #pragma mark Keyboard
 
+/// Whether `error` is the wait on a send giving up, which means the send was
+/// handed to its transport and may still complete.
+static BOOL CSBIsSendTimeout(NSError *error) {
+    return [error.domain isEqualToString:CSBHIDClientErrorDomain] && error.code == CSBHIDClientErrorSendTimeout;
+}
+
+/// Send the keyboard report for the held set with `usage` added or removed.
+///
+/// A report carries the whole held set, and reports go out in order, so the
+/// set must describe the last report handed to the transport: that is the
+/// state the simulator ends up in. It changes when the report is submitted,
+/// including when the wait on it times out, because a timed-out report still
+/// lands. It stays as it was only when the report was never submitted. NO
+/// with `handled` clear when keys go through Indigo.
+- (BOOL)_sendRemoteKey:(unsigned int)usage down:(BOOL)down handled:(BOOL *)handled error:(NSError **)error {
+    *handled = NO;
+    SimRemoteHIDChannel *channel = [self _liveRemoteKeyboard];
+    if (!channel) return NO;
+    *handled = YES;
+    NSMutableSet<NSNumber *> *next = [self.pressedUsages mutableCopy];
+    if (down) {
+        [next addObject:@(usage)];
+    } else {
+        [next removeObject:@(usage)];
+    }
+    xpc_object_t report = [self.remoteMessages keyboardReportWithPressedUsages:next
+                                                                     serviceID:self.remoteKeyboardServiceID];
+    NSError *sendError = nil;
+    BOOL sent = [self _sendRemote:report channel:channel release:!down error:&sendError];
+    if (sent || CSBIsSendTimeout(sendError)) self.pressedUsages = next;
+    if (!sent && error) *error = sendError;
+    return sent;
+}
+
 - (BOOL)keyDownWithKeyCode:(unsigned int)keyCode error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteKey:keyCode down:YES handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnKeyboard((int)keyCode, ButtonEventTypeDown);
     } release:NO error:error];
 }
 
 - (BOOL)keyUpWithKeyCode:(unsigned int)keyCode error:(NSError **)error {
+    BOOL handled = NO;
+    BOOL sent = [self _sendRemoteKey:keyCode down:NO handled:&handled error:error];
+    if (handled) return sent;
     return [self _sendBuiltMessage:^IndigoMessage *{
         return self.fnKeyboard((int)keyCode, ButtonEventTypeUp);
     } release:YES error:error];
@@ -721,7 +973,37 @@ static const int kCSBVoiceCommandUsage = 0xCF;
     } release:YES error:error];
 }
 
+/// Send one phase of `button` over the button connection when the
+/// vocabulary has an event for it. NO with `handled` clear otherwise.
+- (BOOL)_sendRemoteButton:(CSBHardwareButton)button down:(BOOL)down handled:(BOOL *)handled error:(NSError **)error {
+    *handled = NO;
+    SimRemoteHIDChannel *channel = self.remoteButtons;
+    xpc_object_t event = [self.remoteMessages buttonEventForButton:button down:down];
+    if (!channel || !event) return NO;
+    *handled = YES;
+    if (channel.lost) {
+        SimRemoteHIDChannel *replacement = [SimRemoteHIDChannel channelForDevice:self.device
+                                                                         service:self.remoteMessages.buttonServiceName
+                                                                           error:error];
+        if (!replacement) return NO;
+        self.remoteButtons = replacement;
+        channel = replacement;
+    }
+    return [self _sendRemote:event channel:channel release:!down error:error];
+}
+
 - (BOOL)pressHardwareButton:(CSBHardwareButton)button error:(NSError **)error {
+    BOOL handled = NO;
+    NSInteger presses = MAX(1, [self.remoteMessages pressCountForButton:button]);
+    for (NSInteger press = 0; press < presses; press++) {
+        if (press > 0) usleep(100000);  // Within the double-press window.
+        BOOL pressed = [self _sendRemoteButton:button down:YES handled:&handled error:error];
+        if (!handled) break;
+        if (!pressed) return NO;
+        usleep(50000);  // 50ms between down and up, matching the Indigo path.
+        if (![self _sendRemoteButton:button down:NO handled:&handled error:error]) return NO;
+    }
+    if (handled) return YES;
     if (button == CSBHardwareButtonSiri) {
         return [self _pressVoiceCommandWithError:error];
     }
@@ -741,6 +1023,9 @@ static const int kCSBVoiceCommandUsage = 0xCF;
     // press+release composite may have left it stuck down, without the risk
     // a full re-press carries (firing a fresh action if the original failed
     // before down landed).
+    BOOL handled = NO;
+    BOOL released = [self _sendRemoteButton:button down:NO handled:&handled error:error];
+    if (handled) return released;
     if (button == CSBHardwareButtonSiri) {
         return [self _sendBuiltMessage:^IndigoMessage *{
             return self.fnHIDArbitrary(ButtonEventTargetHardware, kCSBConsumerUsagePage,

@@ -72,6 +72,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// under `inputGate`: the display lane writes it, and every accessibility
     /// call reads it before touching the client.
     private var boundScreenID: UInt32 = 0
+    /// The bound panel's display UUID, written with `boundScreenID`.
+    private var boundScreenUniqueID: String?
     /// Whether the bound panel spans the hinge, updated under `inputGate`
     /// alongside `boundScreenID` because the same lane callback writes both.
     private var boundPanelSpansHinge = false
@@ -100,8 +102,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// bootstrap, so the panel count is asked of the device directly rather
     /// than taken from the bound display.
     let capabilities: DeviceBackendCapabilities
-    // The simulator's synthetic HID carries the `IndigoHIDEdge` tag, so an
-    // edge swipe reaches SpringBoard's system-gesture recognizer directly.
+    // A synthetic edge swipe is tagged as a system gesture on either input
+    // transport (the `IndigoHIDEdge` tag, or the HID daemon's gesture
+    // trailer), so it reaches SpringBoard's recognizer directly.
     let supportsSystemEdgeGesture = true
     let rotationConfirmationSupport = RotationConfirmationSupport.displayObservation
 
@@ -155,6 +158,9 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// written with it, so a fold mid-contact cannot split one contact across
     /// two panels.
     private var heldTouchScreenID: UInt32 = 0
+    /// The held contact's panel's display UUID, written with
+    /// `heldTouchScreenID`.
+    private var heldTouchScreenUniqueID: String?
     private var heldKeys: Set<UInt32> = []
     /// Hardware buttons whose composite press+release *failed*: the up may
     /// not have landed (down without up), and the sim sends the pair as one
@@ -174,6 +180,12 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// Runs device-orientation reads, which block for a process run, off the
     /// input queue so a read never waits behind a gesture or holds one up.
     private let deviceOrientationQueue = BlockingWorkQueue(label: "com.deviceterm.sim.device-orientation")
+
+    var inputTransportDescription: String? {
+        guard let hidClient else { return nil }
+        if hidClient.sendsThroughRemoteHID { return "dtuhidd" }
+        return "indigo (\(hidClient.remoteHIDUnavailableReason ?? "reason unknown"))"
+    }
 
     init(
         udid: String,
@@ -229,7 +241,21 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// that panel even if a fold has moved the binding since. A single-panel
     /// device keeps the fixed target.
     static func touchScreenID(foldable: Bool, holding: Bool, heldOn: UInt32, bound: UInt32) -> UInt32 {
-        guard foldable else { return 0 }
+        touchPanel(foldable: foldable, holding: holding, heldOn: heldOn, bound: bound, unaddressed: 0)
+    }
+
+    /// The panel a touch send is addressed to, by whatever names a panel:
+    /// `unaddressed` on a single-panel device, the held contact's panel while
+    /// one is down, and the bound panel otherwise. One rule for every name,
+    /// so a screen id and the display UUID beside it never name two panels.
+    static func touchPanel<Panel>(
+        foldable: Bool,
+        holding: Bool,
+        heldOn: Panel,
+        bound: Panel,
+        unaddressed: Panel
+    ) -> Panel {
+        guard foldable else { return unaddressed }
         return holding ? heldOn : bound
     }
 
@@ -627,6 +653,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     private func noteBoundPanel(_ panel: BoundPanel) {
         let observer = inputGate.sync { () -> (@Sendable () -> Void)? in
             boundScreenID = panel.screenID
+            boundScreenUniqueID = panel.uniqueID
             boundPanelSpansHinge = panel.spansHinge
             spanningPanelWidth = panel.spanningPanelWidth
             spanningPanelHeight = panel.spanningPanelHeight
@@ -655,7 +682,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
                 screenID: boundScreenID,
                 spansHinge: boundPanelSpansHinge,
                 spanningPanelWidth: spanningPanelWidth,
-                spanningPanelHeight: spanningPanelHeight
+                spanningPanelHeight: spanningPanelHeight,
+                uniqueID: boundScreenUniqueID
             )
         }
     }
@@ -759,15 +787,30 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// See `touchScreenID(foldable:holding:heldOn:bound:)` for which panel.
     private func requireHID() throws -> SimHIDClient {
         guard let hidClient else { throw DeviceBackendError.notActive }
-        hidClient.touchScreenID = inputGate.sync {
-            Self.touchScreenID(
+        let (screenID, uniqueID) = inputGate.sync {
+            Self.touchPanel(
                 foldable: capabilities.fold,
                 holding: heldTouch != nil,
-                heldOn: heldTouchScreenID,
-                bound: boundScreenID
+                heldOn: (heldTouchScreenID, heldTouchScreenUniqueID),
+                bound: (boundScreenID, boundScreenUniqueID),
+                unaddressed: (UInt32(0), String?.none)
             )
         }
+        hidClient.touchScreenID = screenID
+        hidClient.touchScreenUniqueID = uniqueID
         return hidClient
+    }
+
+    /// Try the simulator's HID daemon again when this backend's input still
+    /// goes through Indigo and nothing is held down. Called before a new
+    /// contact, so a contact and its release never straddle the switch.
+    private func retryRemoteInputIfIdle() {
+        guard let hidClient, !hidClient.sendsThroughRemoteHID else { return }
+        guard inputGate.sync(execute: { heldTouch == nil && heldKeys.isEmpty }) else { return }
+        hidClient.retryRemoteHIDIfDue()
+        if hidClient.sendsThroughRemoteHID {
+            DiagnosticLog.input.notice("input moved to dtuhidd: udid=\(self.udid, privacy: .private)")
+        }
     }
 
     /// Record `touch` as held, on the panel the send that produced it went to.
@@ -777,9 +820,11 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
     /// after `requireHID` set that target for the send.
     private func hold(_ touch: HeldTouch) {
         let screenID = hidClient?.touchScreenID ?? 0
+        let uniqueID = hidClient?.touchScreenUniqueID
         inputGate.sync {
             heldTouch = touch
             heldTouchScreenID = screenID
+            heldTouchScreenUniqueID = uniqueID
             // Sends go out in order, so any release still pending lands ahead
             // of this contact and no longer describes what is down. A settle
             // already waiting on it sees the epoch move and reconciles nothing.
@@ -798,6 +843,7 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         _ touch: HeldTouch,
         _ body: () throws -> Void
     ) throws {
+        retryRemoteInputIfIdle()
         do {
             if try gatedSend(generation, operation, body) { hold(touch) }
         } catch {

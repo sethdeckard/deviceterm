@@ -86,6 +86,20 @@ anything. Section 4 covers it.
 
 Drive the phone from one app. Closing the other isn't required.
 
+## What contends on a simulator
+
+DeviceTerm sends a sim's touch, keys, and buttons through `dtuhidd`, the
+same daemon Device Hub drives, from its own session. During one overlap of
+about ten seconds, Device Hub drags and DeviceTerm taps both landed, every
+second, with no handoff.
+
+That was one short run with touch only. Keys and buttons from both apps at
+once are untested.
+
+On the Indigo fallback, Device Hub input can leave DeviceTerm sends
+reporting `ok` without affecting the simulator. Check the `pane published`
+log for `input=indigo`.
+
 ## Preconditions
 
 - Xcode 27 installed, for Device Hub itself. It lives at

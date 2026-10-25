@@ -92,6 +92,11 @@ NS_SWIFT_SENDABLE
 /// `SimDeviceType.name`.
 @property (nonatomic, copy, readonly) NSString *deviceTypeName;
 
+/// Whether the device type has a physical Home button, read from its
+/// profile's `HomeButtonType` capability (1 on a device with one). False
+/// when the profile doesn't say.
+@property (nonatomic, readonly) BOOL hasHomeButton;
+
 /// Live state read that re-fetches from `SimDevice.state` on each call.
 @property (nonatomic, readonly) CSBSimState state;
 

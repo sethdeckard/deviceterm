@@ -8,6 +8,14 @@ import Foundation
 /// and the request envelopes. Every device-protocol literal in this target lives
 /// here, private to it; nothing above the relay sees a selector or a report byte.
 enum HIDReports {
+    /// One contact in a touchscreen report: its state byte (touching bits
+    /// and identity), then its device-native position.
+    struct TouchscreenContact {
+        let state: UInt8
+        let x: UInt16
+        let y: UInt16
+    }
+
     // Feature selectors.
     static let touchAndKeyboardFeature = "com.apple.coredevice.feature.remote.universalhidservice"
     static let buttonFeature = "com.apple.coredevice.feature.remote.hid.button"
@@ -15,6 +23,7 @@ enum HIDReports {
 
     // Surface ids.
     static let mainTouchscreenServiceID: UInt64 = 257
+
     /// Default `_ServiceID` for the host-registered virtual keyboard. Bit 32
     /// marks it session-specific, the convention macOS uses for its mirrored
     /// peripherals.
@@ -25,6 +34,11 @@ enum HIDReports {
     private static let keyboardReportID: UInt8 = 0x01
     static let contactState: UInt8 = 0xC2
     static let releaseState: UInt8 = 0x02
+    /// The contacts a touchscreen report has room for, in the 37 bytes
+    /// between its header and its trailing fields.
+    private static let maximumContacts = 7
+    /// The identity of a second finger, beside the first's identity 2.
+    static let secondContactIdentity: UInt8 = 3
 
     /// HID descriptor for the virtual keyboard: report id 1 as a 240-key bitmap,
     /// six opaque bytes, two padding bytes, the exact layout `keyboardReport`
@@ -38,6 +52,16 @@ enum HIDReports {
         0x02, 0x95, 0x02,
         0x81, 0x03, 0xC0
     ]
+
+    // MARK: Surfaces
+    /// The touchscreen surface for a simulator's screen `screenID`, or the
+    /// main touchscreen for `0`. A simulator's HID daemon serves one
+    /// touchscreen per screen, at `0x100` plus the screen id, so the main one
+    /// is screen 1's. The daemon's own list of services, which names each
+    /// touchscreen's display, is the better answer when there is one.
+    static func touchscreenServiceID(screenID: UInt32) -> UInt64 {
+        screenID == 0 ? mainTouchscreenServiceID : 0x100 | UInt64(screenID)
+    }
 
     // MARK: Timestamps
 
@@ -58,10 +82,11 @@ enum HIDReports {
 
     // MARK: Report byte layouts
 
-    /// A 58-byte `mainTouchscreen` report (report id 0x09). `x`/`y` are the
-    /// device's uint16 normalised coordinates. A non-nil `trailer` fills report
-    /// bytes 50–57, marking the report for SpringBoard's edge-gesture recognizer;
-    /// a plain touch leaves that field zeroed so it only reaches the app.
+    /// A 58-byte `mainTouchscreen` report (report id 0x09) for one contact.
+    /// `x`/`y` are the device's uint16 normalised coordinates. A non-nil
+    /// `trailer` fills report bytes 50–57, marking the report for SpringBoard's
+    /// edge-gesture recognizer. A plain touch leaves the trailer zeroed;
+    /// top-edge system gestures also use this form.
     static func touchscreenReport(
         state: UInt8,
         x: UInt16,
@@ -69,14 +94,44 @@ enum HIDReports {
         timestamp: UInt64,
         trailer: [UInt8]? = nil
     ) -> [UInt8] {
-        var report: [UInt8] = [touchscreenReportID, 0x01, 0x05, state]
-        report.append(UInt8(x & 0xFF)); report.append(UInt8((x >> 8) & 0xFF))
-        report.append(UInt8(y & 0xFF)); report.append(UInt8((y >> 8) & 0xFF))
-        report.append(contentsOf: [UInt8](repeating: 0, count: 32))
+        touchscreenReport(
+            contacts: [TouchscreenContact(state: state, x: x, y: y)],
+            timestamp: timestamp,
+            trailer: trailer
+        )
+    }
+
+    /// A 58-byte touchscreen report carrying the first `maximumContacts`
+    /// contacts in `contacts`. The report has no room for more, so any past
+    /// that are dropped.
+    ///
+    /// Byte 1 counts the contacts carried, and each takes five bytes from byte 3: its
+    /// state, then x and y. A state's top two bits mark the contact touching
+    /// (`0xC0`) and its low six bits are the contact's identity, which keeps
+    /// it the same finger from one report to the next. A finger is lifted by
+    /// sending its identity with the touching bits clear.
+    static func touchscreenReport(
+        contacts: [TouchscreenContact],
+        timestamp: UInt64,
+        trailer: [UInt8]? = nil
+    ) -> [UInt8] {
+        let carried = contacts.prefix(maximumContacts)
+        var report: [UInt8] = [touchscreenReportID, UInt8(carried.count), 0x05]
+        for contact in carried {
+            report.append(contact.state)
+            report.append(UInt8(contact.x & 0xFF)); report.append(UInt8((contact.x >> 8) & 0xFF))
+            report.append(UInt8(contact.y & 0xFF)); report.append(UInt8((contact.y >> 8) & 0xFF))
+        }
+        report.append(contentsOf: [UInt8](repeating: 0, count: 40 - report.count))
         report.append(contentsOf: [0x02, 0x00, 0x00, 0x00])
         appendTimestamp(timestamp, to: &report)
         report.append(contentsOf: trailer ?? [UInt8](repeating: 0, count: 8))
         return report
+    }
+
+    /// The state of a contact with `identity`, touching or lifted.
+    static func contactState(identity: UInt8, touching: Bool) -> UInt8 {
+        (touching ? 0xC0 : 0x00) | (identity & 0x3F)
     }
 
     /// A 39-byte virtual-keyboard report (report id 0x01). `usages` is the full
@@ -114,6 +169,52 @@ enum HIDReports {
                 ]))
             ]))
         ])
+    }
+
+    /// A request for every HID service the session has, each with its
+    /// `_ServiceID` and, for a touchscreen, the `displayUUID` it serves.
+    static func connectedServicesRequest() -> DeviceObject {
+        .object([
+            ("featureIdentifier", .text(touchAndKeyboardFeature)),
+            ("messageType", .text("Request")),
+            ("payload", .object([("connectedServices", .object([]))]))
+        ])
+    }
+
+    /// The touchscreen service serving each display, keyed by display UUID,
+    /// from a `connectedServicesRequest` reply.
+    static func touchscreenServices(from reply: DeviceObject) -> [String: UInt64] {
+        guard case let .list(services)? = reply["connectedServices"] else { return [:] }
+        var byDisplay: [String: UInt64] = [:]
+        for service in services {
+            guard let display = service["displayUUID"]?.text, let id = service["_ServiceID"]?.unsigned else {
+                continue
+            }
+            byDisplay[display] = id
+        }
+        return byDisplay
+    }
+
+    /// The hardware-button event for one phase of `input`.
+    static func buttonEvent(_ input: ButtonInput) -> DeviceObject {
+        let (usagePage, usageCode) = buttonUsage(for: input.control)
+        return buttonEvent(state: input.phase == .press ? 1 : 2, usagePage: usagePage, usageCode: usageCode)
+    }
+
+    /// Consumer-page HID usage for a control. There is no separate side-button
+    /// case: on a Face-ID device the side button *is* the power button, so the
+    /// daemon folds both onto `.power` before the intent gets here.
+    static func buttonUsage(for control: ButtonInput.Control) -> (page: UInt16, code: UInt16) {
+        switch control {
+        case .home:
+            (0x0C, 0x40)
+
+        case .power:
+            (0x0C, 0x30)
+
+        case .assistant:
+            (0x0C, 0xCF)
+        }
     }
 
     /// One hardware-button event.

@@ -209,6 +209,17 @@ typedef NS_ENUM(NSInteger, CSBDeviceHandleError) {
     return self.device.deviceType.name ?: @"";
 }
 
+- (BOOL)hasHomeButton {
+    @try {
+        id nested = self.device.deviceType.capabilities[@"capabilities"];
+        if (![nested isKindOfClass:[NSDictionary class]]) return NO;
+        id type = ((NSDictionary *)nested)[@"HomeButtonType"];
+        return [type isKindOfClass:[NSNumber class]] && [type integerValue] == 1;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
 - (CSBSimState)state {
     return [SimDeviceHandle _normalizeState:self.device.state];
 }

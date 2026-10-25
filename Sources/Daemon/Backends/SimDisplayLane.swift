@@ -134,7 +134,8 @@ final class SimDisplayLane: @unchecked Sendable {
             screenID: handle.boundScreenID,
             spansHinge: handle.boundPanelIsLargest,
             spanningPanelWidth: Int(spanning.width),
-            spanningPanelHeight: Int(spanning.height)
+            spanningPanelHeight: Int(spanning.height),
+            uniqueID: handle.boundScreenUniqueId
         )
     }
 

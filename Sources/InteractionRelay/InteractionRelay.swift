@@ -225,26 +225,8 @@ package actor InteractionRelay: InteractionRelaying {
 
     nonisolated private func sendButton(_ input: ButtonInput) async throws -> InteractionOutcome {
         guard let buttonChannel else { return .acknowledged }
-        let (usagePage, usageCode) = usage(for: input.control)
-        let state: UInt64 = input.phase == .press ? 1 : 2
-        try await buttonChannel.emit(HIDReports.buttonEvent(state: state, usagePage: usagePage, usageCode: usageCode))
+        try await buttonChannel.emit(HIDReports.buttonEvent(input))
         return .acknowledged
-    }
-
-    /// Consumer-page HID usage for a control. There is no separate side-button
-    /// case: on a Face-ID device the side button *is* the power button, so the
-    /// daemon folds both onto `.power` before the intent gets here.
-    nonisolated private func usage(for control: ButtonInput.Control) -> (page: UInt16, code: UInt16) {
-        switch control {
-        case .home:
-            (0x0C, 0x40)
-
-        case .power:
-            (0x0C, 0x30)
-
-        case .assistant:
-            (0x0C, 0xCF)
-        }
     }
 
     // MARK: Rotation

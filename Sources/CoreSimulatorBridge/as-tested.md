@@ -11,8 +11,8 @@ revalidated for a new macOS or Xcode version.
 
 `make probe` checks every introspectable required symbol and exits non-zero
 with a structured list when one is missing. Two categories do not fail that
-gate: `PurpleWorkspacePort`, which cannot be introspected without a booted
-device, and rows explicitly marked optional.
+gate: Mach services in the simulator's bootstrap, which cannot be
+introspected without a booted device, and rows explicitly marked optional.
 
 ## Validation runs
 
@@ -58,6 +58,7 @@ in the active Xcode before its machine-wide fallbacks.
 | instance selector  | `-[SimDevice runtimeIdentifier]`                                     | `SimDeviceHandle`     | String fallback when `runtime` is nil.                         |
 | instance selector  | `-[SimDevice deviceType]`                                            | `SimDeviceHandle`     | Reachable device-type descriptor.                              |
 | instance selector  | `-[SimDevice deviceTypeIdentifier]`                                  | `SimDeviceHandle`     | String fallback when `deviceType` is nil.                      |
+| instance selector  | `-[SimDeviceType capabilities]`                                      | `SimDeviceHandle`     | Device-type profile. `capabilities.HomeButtonType` is 1 on a device with a physical Home button (every iPhone SE), 2 without one, 0 on a watch. Drives which button Apple Pay double-presses. |
 | instance selector  | `-[SimDevice bootWithOptions:error:]`                                | `SimDeviceHandle`     | Boot intent; returns when accepted, not when SpringBoard renders. |
 | instance selector  | `-[SimDevice shutdownWithError:]`                                    | `SimDeviceHandle`     | Synchronous shutdown.                                          |
 | instance selector  | `-[SimRuntime identifier]`                                           | `SimDeviceHandle`     | e.g. `com.apple.CoreSimulator.SimRuntime.iOS-26-4`.            |
@@ -95,8 +96,12 @@ in the active Xcode before its machine-wide fallbacks.
 | C symbol           | `IndigoHIDMessageForMouseNSEvent`                                    | `SimHIDClient`        | True prototype (from the framework's embedded type string): `IndigoMessage * (^)(CGPoint *p0, CGPoint *p1, IndigoHIDTarget target, NSEventType eventType, NSSize size, IndigoHIDEdge edge)`. Bound **twice**: (1) the legacy 5-arg `fnMouse` typedef `(…, int eventType, BOOL flag)` for plain touches, short by `NSSize`+`IndigoHIDEdge`, so it sends `edge = 0` with a garbage `NSSize`, harmless for taps/drags (ratio fields overwritten); (2) the full 6-arg `fnMouseEdge` typedef for the **edge-tagged system-gesture** path (home / App Switcher), where `IndigoHIDEdge` (bottom = 3, live-confirmed) routes the drag to SpringBoard. The builder accepts only the four down/up `NSEventType` values (`LeftMouseDown` 1, `LeftMouseUp` 2, and the right-button twins 3 and 4, which build byte-identical messages); **every motion type returns NULL** (`MouseMoved`, `LeftMouseDragged`, and the rest, through either prototype, whatever `NSSize` and `IndigoHIDEdge` accompany them), so a move is sent as a repeated down at the new point, the same continued-contact convention the plain-touch drag uses. `NSSize` is read only to scale the ratio fields, which the bridge overwrites, so zero is safe. `edge` lands in the **high bytes of `IndigoTouch.eventMask` (0x38)**, above the `IOHIDDigitizerEventMask` bits the untagged path also writes there; `field11` (0x6c) holds the `IndigoHIDTarget`. |
 | C symbol           | `IndigoHIDMessageForHIDArbitrary`                                    | `SimHIDClient`        | `IndigoMessage * (^)(int target, int usagePage, int usage, int op)` — builds an arbitrary-usage HID event. Used for Siri (Consumer page `0x0C` / usage `0xCF` "Voice Command"); arg order reverse-engineered vs. `IndigoHIDMessageForButton`. |
 | C symbol (optional) | `IndigoHIDMessageForDigitalCrownEvent`                             | `SimHIDClient`        | `IndigoMessage * (^)(double delta)` — builds a watchOS Digital Crown rotary event; signed `delta` is the rotation (sign = direction). **Optional / best-effort**: watchOS-only, absent on older SimulatorKit; the probe reports but does not fail on its absence, and only `rotateCrown(delta:)` requires it (other HID is unaffected). Single-`double` signature reverse-engineered + live-confirmed (see "Digital Crown (watchOS)" below). |
-| instance selector  | `-[SimDevice lookup:error:]`                                         | `SimPurpleHID`        | Look up a named Mach service in the simulator's bootstrap namespace; used to resolve `PurpleWorkspacePort`. |
+| instance selector  | `-[SimDevice lookup:error:]`                                         | `SimPurpleHID`        | Look up a named Mach service in the simulator's bootstrap namespace; used to resolve `PurpleWorkspacePort`. Also resolves `dtuhidd`'s services for `SimRemoteHIDChannel`. |
 | Mach service       | `PurpleWorkspacePort` (runtime-only)                                 | `SimPurpleHID`        | Sim-side Mach port that accepts GSEvent payloads (notably device-orientation messages). Existence verified at use time — the probe can't introspect bootstrap names without a booted device. |
+| C symbol (optional) | `xpc_endpoint_create_mach_port_4sim`                                | `SimRemoteHIDChannel` | libSystem SPI. Wraps a Mach port from the simulator's bootstrap as an XPC endpoint. Absent, every input goes through Indigo. |
+| C symbol (optional) | `xpc_connection_enable_sim2host_4sim`                               | `SimRemoteHIDChannel` | libSystem SPI. Marks the connection as host-to-simulator. Without it, `dtuhidd` drops the peer as soon as it activates. |
+| Mach service       | `com.apple.coredevice.feature.remote.universalhidservice` (runtime-only) | `SimRemoteHIDChannel` | `dtuhidd`'s touch and keyboard service. Same request vocabulary as a device's `universalhidservice`. |
+| Mach service       | `com.apple.coredevice.feature.remote.hid.button` (runtime-only)      | `SimRemoteHIDChannel` | `dtuhidd`'s hardware-button service; takes `IndigoButtonEvent`. |
 | instance selector  | `-[SimDevice availableLocationScenarios]`                            | `SimLocation`         | The runtime's built-in location "trips". **Declared as bare `id`** with no error out-param; the live-verified shape (Xcode 26.5 / iOS 26) is an `NSArray` of `NSDictionary`, each with `name` and `localizedName` (both `NSString`, identical for the four built-ins on an English host). The wrapper vends `name` — what `setLocationScenario:` consumes — and keeps string-array / dictionary-key fallbacks since the declared type guarantees nothing. **Requires a booted device**: shut down it returns an empty array, matching `xcrun simctl location <udid> list`, which prints only the table header. The four on this runtime are City Run, City Bicycle Ride, Freeway Drive, Apple. |
 | instance selector  | `-[SimDevice setLocationWithLatitude:andLongitude:error:]`           | `SimLocation`         | Pins the device to a fixed coordinate until cleared. |
 | instance selector  | `-[SimDevice setLocationScenario:error:]`                            | `SimLocation`         | Starts a named scenario from `availableLocationScenarios`. Playback runs sim-side; the call returns on acceptance, not completion. **Does not validate the name** — an unknown scenario is accepted silently with no error and no effect (live-verified). `simctl` appears to validate only because it checks the list client-side first. Callers must validate against `availableScenarios()` or a typo silently no-ops. |
@@ -262,6 +267,57 @@ constants survive review/rebase independent of any commit body.
   returned Home, Side opened Control Center. Sends route through
   `SimHIDClient`'s existing `_sendBuiltMessage:` (disconnect-recovery) path.
 
+## Simulator HID daemon (dtuhidd)
+
+- **When / where:** 2026-10-24 · Xcode 27.1 RC · iOS 27.0 iPhone 17 and
+  iPad Pro 11 (M5), iOS 26.5 and iOS 18.1 iPhones, watchOS 27.0, iOS 27.1
+  iPhone Duo.
+- **The gate.** The guest's `SimulatorHID.framework` (loaded by
+  backboardd) watches the notify state `com.apple.coredevice.dtuhidd.active`.
+  While it's set, `_locked_updateDTUHIDDAffectedServices` disconnects the
+  keyboard, MainScreenButtons, and ScreenTouchService services. Indigo
+  events to a disconnected service are dropped, and the send still
+  succeeds. `ensureServiceActiveForIndigoHIDData:` reconnects a service when
+  an Indigo event of the right kind reaches it, and marks it claimed. A
+  claimed service is then left alone in both directions. The crown's
+  DigitalDialService is never disconnected.
+- **Reaching dtuhidd.** Resolve the service with
+  `-[SimDevice lookup:error:]`, wrap the port with
+  `xpc_endpoint_create_mach_port_4sim`, connect with
+  `xpc_connection_create_from_endpoint`, then call
+  `xpc_connection_enable_sim2host_4sim`. This is what CoreDevice's
+  `SimulatorCoreDevicePlugin` does.
+- **The first message on a touch connection must be a request.**
+  `dtuhidd` keeps a session only once it has answered one. Otherwise it logs
+  "Event received for deallocated peer" after every message and rebuilds the
+  session's services, about half a second each time. The bridge sends
+  `connectedServices`, which changes nothing and lists every service with
+  its `_ServiceID` and, for a touchscreen, its `displayUUID`.
+- **Touch report (id 0x09).** Byte 1 counts the contacts, and each takes
+  five bytes from byte 3: state, then x and y. A state's top two bits mark
+  the contact touching, and its low six are the contact's identity
+  (backboardd's `pathIndex`). Two contacts with different identities in one
+  report are two fingers. Byte 2 is always `0x05`; its meaning is unknown.
+- **One touchscreen per screen.** Each serves one display, at `0x100` plus
+  the screen id; the main one is 257. A screen's `SimScreenProperties.uniqueId`
+  equals the `displayUUID` `dtuhidd` lists, which is how the bridge
+  addresses a foldable's panels.
+- **Top-edge swipes** need no gesture trailer. A plain contact from the top
+  opens Notification Center, and from the top right Control Center.
+- **Apple Pay.** The Indigo Apple Pay source never reaches SpringBoard on
+  iOS 27. Two side-button presses through `dtuhidd` do, logged as two
+  `C/30` button events. The Wallet sheet wasn't checked, because the test
+  sims had no cards.
+- **Device Hub at the same time.** Device Hub's input arrives through its own
+  session. During one roughly ten-second overlap, its drags and
+  DeviceTerm's once-a-second taps both landed, every second.
+- **Hazard.** An Indigo touch to a target SimulatorHID doesn't know trips an
+  assertion in `serviceForIndigoHIDData:` and crashes backboardd.
+- **How confirmed:** throwaway live tests and a standalone XPC client,
+  judged by backboardd's `new contact` and `digitizer:` debug lines,
+  SpringBoard's button log, accessibility reads, and screenshots. `lldb`
+  can't attach to the guest `dtuhidd`.
+
 ## Two-panel foldables (iPhone Duo)
 
 `com.apple.CoreSimulator.SimDeviceType.iPhone-Duo` (iPhone19,4, iOS 27.1+) is
@@ -416,3 +472,7 @@ attributing any change to input.
   0° → 130° → 0° round trip. The input and hit-test runs held the sim lock,
   because another checkout's `make test-live` shuts the fleet down and will
   otherwise pull the device out from under a measurement.
+
+Touches to a foldable now go to `dtuhidd`'s touchscreen for the bound
+panel's display UUID; see Simulator HID daemon. The screen-based Indigo
+target above remains the fallback when `dtuhidd` can't be reached.

@@ -236,13 +236,94 @@ func aSwipeFromALateClientScrollsTheGuest() throws {
         try? SimDeviceHandle.singleBootedDevice(),
         "no booted sim — run via `make test-live`"
     )
-    let client = try connectedClient(udid: booted.udid)
-    let accessibility = try SimAccessibility.client(forUDID: booted.udid)
+    try withHIDDaemon(active: false, udid: booted.udid) {
+        try swipeScrollsTheGuest(client: try connectedClient(udid: booted.udid), booted: booted)
+    }
+}
+
+/// Run `body` with the simulator's HID daemon marked `active` or not, then put
+/// the mark back as it was. Device Hub's use of the daemon sets the mark, which
+/// disconnects the services the Indigo path feeds, so each test pins the state
+/// it means to cover instead of inheriting one from whatever ran before.
+private func withHIDDaemon(active: Bool, udid: String, _ body: () throws -> Void) throws {
+    let key = "com.apple.coredevice.dtuhidd.active"
+    func notifyutil(_ arguments: [String]) throws -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "spawn", udid, "notifyutil"] + arguments
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        let text = String(bytes: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            throw NotifyStateFailure(arguments: arguments, status: process.terminationStatus)
+        }
+        return text
+    }
+    func value() throws -> String {
+        let reading = try notifyutil(["-g", key]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return reading.split(separator: " ").last.map(String.init) ?? ""
+    }
+    func set(_ value: String) throws {
+        _ = try notifyutil(["-s", key, value])
+        _ = try notifyutil(["-p", key])
+    }
+    let previous = try value()
+    try set(active ? "1" : "0")
+    defer {
+        do {
+            try set(previous.isEmpty ? "0" : previous)
+        } catch {
+            Issue.record("couldn't restore \(key) to \(previous): \(error)")
+        }
+    }
+    let established = try value()
+    try #require(established == (active ? "1" : "0"), "\(key) reads \(established) after setting it")
+    try body()
+}
+
+/// A `notifyutil` run in the simulator exited non-zero.
+private struct NotifyStateFailure: Error {
+    let arguments: [String]
+    let status: Int32
+}
+
+@Test(.enabled(if: bootedDeviceHasSettingsList()))
+func aSwipeThroughTheHIDDaemonScrollsTheGuest() throws {
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let hasHomeButton = (try? SimDeviceHandle.handle(forUDID: booted.udid))?.hasHomeButton ?? false
+    try withHIDDaemon(active: true, udid: booted.udid) {
+        let client = try SimHIDClient.client(
+            forUDID: booted.udid,
+            remoteMessages: SimRemoteHIDMessages(hasHomeButton: hasHomeButton)
+        )
+        try #require(
+            client.sendsThroughRemoteHID,
+            "the HID daemon was not reachable: \(client.remoteHIDUnavailableReason ?? "no reason given")"
+        )
+        try swipeScrollsTheGuest(client: client, booted: booted)
+    }
+}
+
+/// Swipe the Settings list through `client` and read the row at the
+/// swipe's column back over accessibility, which shares nothing with HID.
+private func swipeScrollsTheGuest(client: SimHIDClient, booted: CSBDeviceInfo) throws {
+    let udid = booted.udid
+    let accessibility = try SimAccessibility.client(forUDID: udid)
     // A foldable's fixed digitizer target reaches only one of its panels, and
     // which one varies from boot to boot, so address the lit panel as the
     // daemon does. Reads go to the same panel, so both halves judge one screen.
-    if SimDisplayHandle.deviceHasMultiplePanels(udid: booted.udid) {
-        let display = try SimDisplayHandle.handle(forUDID: booted.udid)
+    if SimDisplayHandle.deviceHasMultiplePanels(udid: udid) {
+        let display = try SimDisplayHandle.handle(forUDID: udid)
         try display.start { _ in }
         Thread.sleep(forTimeInterval: 0.5)
         client.touchScreenID = display.boundScreenID
@@ -256,7 +337,7 @@ func aSwipeFromALateClientScrollsTheGuest() throws {
     // swipe springs back without moving a row. Landscape makes it overflow.
     let orientation: Orientation = DeviceFamilyClassifier.classify(booted.deviceTypeIdentifier) == .pad
         ? .landscapeLeft : .portrait
-    let purple = try SimPurpleHID.client(forUDID: booted.udid)
+    let purple = try SimPurpleHID.client(forUDID: udid)
     if orientation != .portrait {
         try purple.rotate(to: orientation.bridgeValue)
         Thread.sleep(forTimeInterval: 3.0)
@@ -267,7 +348,7 @@ func aSwipeFromALateClientScrollsTheGuest() throws {
             Thread.sleep(forTimeInterval: 3.0)
         }
     }
-    let interface = try relaunchSettings(udid: booted.udid, accessibility: accessibility)
+    let interface = try relaunchSettings(udid: udid, accessibility: accessibility)
     if orientation != .portrait {
         try #require(interface.width > interface.height, "Settings never adopted landscape: \(interface)")
     }

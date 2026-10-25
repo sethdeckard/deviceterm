@@ -25,16 +25,21 @@ public struct BoundPanel: Equatable, Sendable {
     /// single-panel device.
     public let spanningPanelWidth: Int
     public let spanningPanelHeight: Int
+    /// The panel's stable identifier, the display UUID the simulator's HID
+    /// daemon names its touchscreens by. Nil when the proxy vends none.
+    public let uniqueID: String?
 
     public init(
         screenID: UInt32,
         spansHinge: Bool,
         spanningPanelWidth: Int = 0,
-        spanningPanelHeight: Int = 0
+        spanningPanelHeight: Int = 0,
+        uniqueID: String? = nil
     ) {
         self.screenID = screenID
         self.spansHinge = spansHinge
         self.spanningPanelWidth = spanningPanelWidth
         self.spanningPanelHeight = spanningPanelHeight
+        self.uniqueID = uniqueID
     }
 }

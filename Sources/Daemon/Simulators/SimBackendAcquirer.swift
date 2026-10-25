@@ -184,7 +184,10 @@ actor SimBackendAcquirer {
         // them before we record the pane.
         let hidClient: SimHIDClient
         do {
-            hidClient = try SimHIDClient.client(forUDID: normalized)
+            hidClient = try SimHIDClient.client(
+                forUDID: normalized,
+                remoteMessages: SimRemoteHIDMessages(hasHomeButton: handle?.hasHomeButton ?? false)
+            )
         } catch {
             throw PaneError.hidUnavailable(
                 udid: normalized,

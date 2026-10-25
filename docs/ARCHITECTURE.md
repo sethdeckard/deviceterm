@@ -2040,9 +2040,9 @@ ack can precede the guest seeing either report.
 - Result: `{ok}`
 - Scope: session
 
-The GUI live-drag path. `down` and `move` send continued Indigo contact
-(`tapDown`); `up` releases contact (`tapUp`). Coordinates may fall
-outside `[0, 1]` for bezel-origin edge gestures.
+The GUI live-drag path. `down` and `move` send continued contact
+(`tapDown`); `up` releases it (`tapUp`). Coordinates may fall outside
+`[0, 1]` for bezel-origin edge gestures.
 
 #### `pane.input.swipe`
 
@@ -3932,10 +3932,36 @@ authorization decision consults the reported directory.
 
 ### HID
 
-GUI translates `NSEvent` → normalized 0..1 coords → `pane.input.*` RPC →
-the daemon dispatches via `SimHIDClient` (Indigo wire format) for a sim
-pane, or as `InteractionRelay` reports for a physical device. Sub-16ms
-round-trip in practice.
+GUI translates `NSEvent` → normalized 0..1 coords → `pane.input.*` RPC → the
+daemon. A physical device gets `InteractionRelay` reports over its tunnel.
+Sub-16ms round-trip in practice.
+
+A sim pane sends the same reports to the simulator's own HID daemon,
+`dtuhidd`, the one Device Hub drives, over a local XPC connection
+(`SimRemoteHIDChannel`). That covers single- and two-finger touch, edge
+gestures, keys, and hardware buttons. The Digital Crown still goes through
+SimulatorKit's Indigo port, and so does all input to a sim whose `dtuhidd`
+can't be reached.
+
+The reason is Xcode 27's guest `SimulatorHID`. It disconnects the
+touchscreen, button, and keyboard services the Indigo port feeds whenever
+`dtuhidd` is active, which Device Hub's input makes it. The next Indigo
+event usually reconnects them. When it doesn't, input reports `ok` and goes
+nowhere, and nothing on the host can tell. `dtuhidd` itself is never
+disconnected.
+
+A pane that couldn't reach `dtuhidd` at attach tries again before a later
+touch, at most every five seconds and only with nothing held down. The
+`pane published` log line says which transport a pane got: `input=dtuhidd`,
+or `input=indigo (reason)`.
+
+The first key registers a virtual keyboard with `dtuhidd`, which tells the
+simulator a hardware keyboard is attached, so it hides the on-screen
+keyboard. Apple Pay is a double press of the side button, or of Home on a
+device with one.
+
+As with Indigo, a send completing means the message left the daemon, not
+that the guest acted on it.
 
 ## Per-terminal-session directory
 

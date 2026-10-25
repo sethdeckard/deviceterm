@@ -34,6 +34,9 @@ typedef NS_ENUM(NSInteger, CSBHIDClientError) {
     CSBHIDClientErrorSendTimeout        = 49,
     /// An earlier send has not completed, so this one was not sent.
     CSBHIDClientErrorTransportStalled   = 50,
+    /// The simulator's HID daemon could not be reached, or its connection
+    /// was lost.
+    CSBHIDClientErrorRemoteUnavailable  = 51,
 };
 
 /// Ticket-based bookkeeping for one client's sends. Thread-safe: every method

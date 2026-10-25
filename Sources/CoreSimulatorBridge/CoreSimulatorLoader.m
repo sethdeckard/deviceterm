@@ -521,6 +521,10 @@ static NSString *const kAXPFrameworkPath =
     // probe failure. `SimHIDClient` treats them the same way.
     NSArray<NSString *> *optionalCSymbols = @[
         @"IndigoHIDMessageForDigitalCrownEvent",  // watchOS Digital Crown rotation
+        // SimRemoteHIDChannel: reaching the simulator's HID daemon. Without
+        // them a client sends everything through Indigo.
+        @"xpc_endpoint_create_mach_port_4sim",
+        @"xpc_connection_enable_sim2host_4sim",
     ];
 
     NSMutableArray<NSString *> *ok = [NSMutableArray array];
