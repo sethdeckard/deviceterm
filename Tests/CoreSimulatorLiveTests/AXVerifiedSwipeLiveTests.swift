@@ -3,6 +3,7 @@
 import CoreGraphics
 import CoreSimulatorBridge
 @testable import Daemon
+import DaemonProtocol
 import Foundation
 import Testing
 
@@ -37,17 +38,40 @@ private func bootedDeviceHasSettingsList() -> Bool {
     }
 }
 
-/// The element under the screen center, keyed the way the sweep keys
-/// elements: role, identifier, label, and frame. Role and identifier alone
-/// are not enough, because the bridge omits an empty identifier and two
-/// static-text rows then read the same.
-private func centerSignature(_ accessibility: SimAccessibility, interface: CGSize) -> String {
-    let center = AXSweep.hitTestPoint(
-        displayed: CGPoint(x: 0.5, y: 0.5),
-        geometry: AXSweep.TreeGeometry(hitTest: interface, viewer: interface)
-    )
-    guard let element = try? accessibility.elementAtPoint(center) else { return "<none>" }
-    return AXSweep.dedupKey(element: element)
+/// A point read retains its diagnostic signature even when it is not a
+/// Settings navigation row. Detail-pane buttons are not scroll witnesses.
+private struct SettingsRowRead {
+    let signature: String
+    let frame: CGRect?
+}
+
+private func settingsRow(
+    _ accessibility: SimAccessibility, at point: CGPoint, interface: CGSize, orientation: Orientation
+) -> SettingsRowRead {
+    // Point queries address the native panel even when the returned row
+    // frames describe the landscape interface.
+    let native = orientation.surfacePoint(displayedX: point.x, displayedY: point.y)
+    let nativeSize = orientation == .portrait ? interface : CGSize(width: interface.height, height: interface.width)
+    let hit = CGPoint(x: native.x * nativeSize.width, y: native.y * nativeSize.height)
+    let displayed = CGPoint(x: point.x * interface.width, y: point.y * interface.height)
+    guard let element = try? accessibility.elementAtPoint(hit) else {
+        return SettingsRowRead(signature: "<none>", frame: nil)
+    }
+    let signature = AXSweep.dedupKey(element: element)
+    guard let identifier = element["identifier"] as? String,
+        identifier.hasPrefix("com.apple.settings."),
+        let frame = element["frame"] as? [String: Any],
+        let originX = frame["x"] as? Double, let originY = frame["y"] as? Double,
+        let width = frame["w"] as? Double, let height = frame["h"] as? Double,
+        [originX, originY, width, height].allSatisfy(\.isFinite),
+        width > 0, height > 0 else {
+        return SettingsRowRead(signature: signature, frame: nil)
+    }
+    let bounds = CGRect(x: originX, y: originY, width: width, height: height)
+    guard bounds.contains(displayed), bounds.midX > 0, bounds.midX < interface.width else {
+        return SettingsRowRead(signature: signature, frame: nil)
+    }
+    return SettingsRowRead(signature: signature, frame: bounds)
 }
 
 /// The first button in the frontmost tree, with its center in normalized
@@ -160,16 +184,46 @@ private func relaunchSettings(udid: String, accessibility: SimAccessibility) thr
     return try #require(interface, "Settings never became the frontmost app")
 }
 
-/// Poll until a Settings row is under the center, so a verdict is never
-/// about another screen or about an AX read that found nothing.
-private func settingsRowAtCenter(_ accessibility: SimAccessibility, interface: CGSize) -> String {
-    var signature = "<none>"
+/// Find the navigation column from point queries: on iPad the screen
+/// center belongs to the detail pane, and the tree can omit sidebar rows.
+private func settingsListPoint(
+    _ accessibility: SimAccessibility, interface: CGSize, orientation: Orientation
+) throws -> CGPoint {
+    var observations: [String] = []
     for attempt in 0..<20 {
-        signature = centerSignature(accessibility, interface: interface)
-        if signature.contains("com.apple.settings.") { break }
+        observations.removeAll()
+        for step in 1...19 {
+            let point = CGPoint(x: Double(step) * 0.05, y: 0.5)
+            let row = settingsRow(accessibility, at: point, interface: interface, orientation: orientation)
+            observations.append("\(point.x): \(row.signature)")
+            if let frame = row.frame {
+                return CGPoint(x: frame.midX / interface.width, y: point.y)
+            }
+        }
         if attempt < 19 { Thread.sleep(forTimeInterval: 0.5) }
     }
-    return signature
+    throw SettingsRowFailure(details: "no Settings navigation row: \(observations.joined(separator: "; "))")
+}
+
+private struct SettingsRowFailure: Error {
+    let details: String
+}
+
+/// Require two matching valid reads half a second apart to reduce launch-layout
+/// races. Keep the query point fixed when comparing signatures.
+private func settledSettingsRow(
+    _ accessibility: SimAccessibility, at point: CGPoint, interface: CGSize, orientation: Orientation
+) throws -> String {
+    var previous: String?
+    var signature = "<none>"
+    for attempt in 0..<20 {
+        let row = settingsRow(accessibility, at: point, interface: interface, orientation: orientation)
+        signature = row.signature
+        if row.frame != nil, signature == previous { return signature }
+        previous = row.frame == nil ? nil : signature
+        if attempt < 19 { Thread.sleep(forTimeInterval: 0.5) }
+    }
+    throw SettingsRowFailure(details: "no stable Settings row at \(point): \(signature)")
 }
 
 @Test(.enabled(if: bootedDeviceHasSettingsList()))
@@ -198,14 +252,36 @@ func aSwipeFromALateClientScrollsTheGuest() throws {
     try #require(waitForAXServer(accessibility, client: client), "the AX server never answered")
 
     dismissFirstBootAlert(client, accessibility: accessibility)
+    // The entire sidebar fits on a portrait iPad, so even a delivered
+    // swipe springs back without moving a row. Landscape makes it overflow.
+    let orientation: Orientation = DeviceFamilyClassifier.classify(booted.deviceTypeIdentifier) == .pad
+        ? .landscapeLeft : .portrait
+    let purple = try SimPurpleHID.client(forUDID: booted.udid)
+    if orientation != .portrait {
+        try purple.rotate(to: orientation.bridgeValue)
+        Thread.sleep(forTimeInterval: 3.0)
+    }
+    defer {
+        if orientation != .portrait {
+            try? purple.rotate(to: Orientation.portrait.bridgeValue)
+            Thread.sleep(forTimeInterval: 3.0)
+        }
+    }
     let interface = try relaunchSettings(udid: booted.udid, accessibility: accessibility)
-    let before = settingsRowAtCenter(accessibility, interface: interface)
-    try #require(before.contains("com.apple.settings."), "no Settings row under the center: \(before)")
+    if orientation != .portrait {
+        try #require(interface.width > interface.height, "Settings never adopted landscape: \(interface)")
+    }
+    let point = try settingsListPoint(accessibility, interface: interface, orientation: orientation)
+    let before = try settledSettingsRow(accessibility, at: point, interface: interface, orientation: orientation)
 
     // The daemon's own swipe shape: interpolated downs at ~60 Hz, a lift
     // at the end. `PaneCoordinator.swipe` paces a 300 ms gesture this way.
-    let start = CGPoint(x: 0.5, y: 0.70)
-    let end = CGPoint(x: 0.5, y: 0.40)
+    // Direct HID addresses the native portrait panel; AX returns frames in
+    // displayed coordinates. Convert the swipe using the daemon’s input mapping.
+    let nativeStart = orientation.surfacePoint(displayedX: point.x, displayedY: 0.70)
+    let nativeEnd = orientation.surfacePoint(displayedX: point.x, displayedY: 0.40)
+    let start = CGPoint(x: nativeStart.x, y: nativeStart.y)
+    let end = CGPoint(x: nativeEnd.x, y: nativeEnd.y)
     try client.tapDown(at: start)
     for step in 1...18 {
         Thread.sleep(forTimeInterval: 0.016)
@@ -217,13 +293,12 @@ func aSwipeFromALateClientScrollsTheGuest() throws {
     }
     try client.tapUp(at: end)
 
-    // Settle, then read the center back. The read must be a Settings row of
+    // Settle, then read the same point back. The read must be a Settings row of
     // its own: an AX read that failed or found nothing is not evidence the
     // list moved, and counting it as a change would pass a dead swipe. A
     // send that was accepted and discarded leaves the row identical, which
     // is the failure this test exists to catch.
     Thread.sleep(forTimeInterval: 1.5)
-    let after = settingsRowAtCenter(accessibility, interface: interface)
-    try #require(after.contains("com.apple.settings."), "no Settings row under the center after the swipe: \(after)")
-    #expect(after != before, "the swipe did not scroll the guest (before and after both \(before))")
+    let after = try settledSettingsRow(accessibility, at: point, interface: interface, orientation: orientation)
+    #expect(after != before, "the swipe did not scroll at \(point) (before: \(before); after: \(after))")
 }
