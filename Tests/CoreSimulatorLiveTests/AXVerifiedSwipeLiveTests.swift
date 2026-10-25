@@ -155,9 +155,12 @@ private struct SettingsLaunchFailure: Error {
 
 /// Relaunch Settings, so the swipe below starts from the top of a list
 /// long enough to scroll and specific enough to identify, and return its
-/// interface size from its own tree. Terminating an app that is not running
-/// is allowed to fail; the launch is not.
-private func relaunchSettings(udid: String, accessibility: SimAccessibility) throws -> CGSize {
+/// interface size from its own tree once its orientation matches
+/// `landscape`. Terminating an app that is not running is allowed to fail;
+/// the launch is not. A relaunched app can report its previous orientation's
+/// layout for seconds before it adopts the current one, so the first size
+/// read can be stale.
+private func relaunchSettings(udid: String, accessibility: SimAccessibility, landscape: Bool) throws -> CGSize {
     for (arguments, mustSucceed) in [
         (["terminate", udid, "com.apple.Preferences"], false),
         (["launch", udid, "com.apple.Preferences"], true)
@@ -175,13 +178,16 @@ private func relaunchSettings(udid: String, accessibility: SimAccessibility) thr
     }
     var interface: CGSize?
     for attempt in 0..<40 {
-        if let tree = try? accessibility.frontmostTree() {
-            interface = AXSweep.interfaceSize(fromTree: tree)
-        }
-        if interface != nil { break }
+        interface = (try? accessibility.frontmostTree()).flatMap { AXSweep.interfaceSize(fromTree: $0) }
+        if let interface, (interface.width > interface.height) == landscape { return interface }
         if attempt < 39 { Thread.sleep(forTimeInterval: 0.5) }
     }
-    return try #require(interface, "Settings never became the frontmost app")
+    let settled = try #require(interface, "Settings never became the frontmost app")
+    try #require(
+        (settled.width > settled.height) == landscape,
+        "Settings never adopted \(landscape ? "landscape" : "portrait"): \(settled)"
+    )
+    return settled
 }
 
 /// Find the navigation column from point queries: on iPad the screen
@@ -348,10 +354,9 @@ private func swipeScrollsTheGuest(client: SimHIDClient, booted: CSBDeviceInfo) t
             Thread.sleep(forTimeInterval: 3.0)
         }
     }
-    let interface = try relaunchSettings(udid: udid, accessibility: accessibility)
-    if orientation != .portrait {
-        try #require(interface.width > interface.height, "Settings never adopted landscape: \(interface)")
-    }
+    let interface = try relaunchSettings(
+        udid: udid, accessibility: accessibility, landscape: orientation != .portrait
+    )
     let point = try settingsListPoint(accessibility, interface: interface, orientation: orientation)
     let before = try settledSettingsRow(accessibility, at: point, interface: interface, orientation: orientation)
 
