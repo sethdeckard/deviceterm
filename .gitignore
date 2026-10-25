@@ -16,6 +16,9 @@ xcuserdata/
 Icon
 ._*
 
+# The dev seat's per-checkout files (make run, scripts/dev-seat.sh)
+.dev-seat/
+
 # Build artefacts
 *.dmg
 *.pkg

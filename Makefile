@@ -127,14 +127,22 @@ kill-daemon:
 # foreign instance — another worktree's build or /Applications — makes the
 # guard refuse with a BUSY block instead of killing it: quit that instance
 # from its own checkout; there is no force flag. While the user has given
-# the dev seat to another checkout, the seat check refuses first.
+# the dev seat to another checkout, the seat check refuses first. In the
+# seat's own checkout, a `.dev-seat/automation-programs` file replaces the
+# user's automation programs for this launch.
 run: bundle
 	@if [ -d Sources/App ]; then \
 	    test -x .build/debug/DeviceTerm.app/Contents/MacOS/deviceterm \
 	      || { echo "make run: bundle missing or incomplete" >&2; exit 1; }; \
 	    ./scripts/dev-seat.sh check "make run" || exit $$?; \
 	    ./scripts/instance-guard.sh ensure-clear || exit $$?; \
-	    open .build/debug/DeviceTerm.app; \
+	    if [ -f .dev-seat/automation-programs ] && ./scripts/dev-seat.sh holds; then \
+	        echo "make run: dev seat, starting .dev-seat/automation-programs"; \
+	        DEVICETERM_AUTOMATION_PROGRAMS="$$(pwd -P)/.dev-seat/automation-programs" \
+	            open .build/debug/DeviceTerm.app; \
+	    else \
+	        open .build/debug/DeviceTerm.app; \
+	    fi; \
 	else \
 	    echo "make run: Sources/App/ does not exist — skipping"; \
 	fi

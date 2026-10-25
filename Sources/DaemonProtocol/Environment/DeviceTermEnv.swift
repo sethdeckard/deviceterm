@@ -38,6 +38,14 @@ public enum DeviceTermEnv {
     /// is for discovery convenience only.
     public static let sessionRole = "DEVICETERM_SESSION_ROLE"
 
+    // MARK: App launch (development)
+
+    /// An absolute path the app reads its automation programs from instead
+    /// of `<config home>/deviceterm/automation-programs`. `make run` sets it
+    /// in the checkout holding the dev seat, when that checkout has a
+    /// `.dev-seat/automation-programs` file.
+    public static let automationPrograms = "DEVICETERM_AUTOMATION_PROGRAMS"
+
     // MARK: Device-surface pool (daemon-internal tuning + instrumentation)
 
     /// Ceiling on each surface pool's slot count, clamped to a documented

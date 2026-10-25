@@ -26,6 +26,7 @@
 #   bless             give the seat to this checkout (asks first)
 #   unbless           end the seat, whichever checkout holds it (asks first)
 #   status            print the seat's holder, or "free" (exit 1)
+#   holds             exit 0 if this checkout holds the seat, 1 otherwise
 #   check <resource>  exit 0 if this checkout may use <resource>; otherwise
 #                     print BUSY and exit 75
 #
@@ -51,7 +52,7 @@ fi
 root="$(pwd -P)"
 
 usage() {
-    echo "usage: dev-seat.sh [--seat-dir <dir>] bless|unbless|status" >&2
+    echo "usage: dev-seat.sh [--seat-dir <dir>] bless|unbless|status|holds" >&2
     echo "       dev-seat.sh [--seat-dir <dir>] check <resource>" >&2
     exit 64
 }
@@ -148,6 +149,11 @@ status_cmd() {
     fi
 }
 
+holds() {
+    read_seat
+    [ -n "$s_root" ] && [ "$s_root" = "$root" ]
+}
+
 check() {
     read_seat
     if [ -z "$s_root" ] || [ "$s_root" = "$root" ]; then
@@ -161,6 +167,7 @@ case "${1:-}" in
     bless)   bless ;;
     unbless) unbless ;;
     status)  status_cmd ;;
+    holds)   holds ;;
     check)   [ -n "${2:-}" ] || usage; check "$2" ;;
     *)       usage ;;
 esac

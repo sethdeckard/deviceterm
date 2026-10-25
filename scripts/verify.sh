@@ -402,6 +402,9 @@ if [ -x scripts/dev-seat.sh ]; then
         || fail "dev-seat: a confirmed bless did not move the seat here (exit $ds_rc)"
     ds check "make run" 2>/dev/null \
         || fail "dev-seat: our own seat refused 'make run'"
+    ds holds || fail "dev-seat: holds denied our own seat"
+    ds_hold /nonexistent/other-checkout selftest
+    ! ds holds || fail "dev-seat: holds claimed another checkout's seat"
     rm -rf "$ds_dir"
     ok "dev-seat self-test (BUSY format, foreign seat refuses, changes are serialized and checked)"
 else

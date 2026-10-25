@@ -48,3 +48,20 @@ func ignoresRelativeXDGConfigHome() {
     let expected = (NSHomeDirectory() as NSString).appendingPathComponent(".config")
     #expect(XDGPaths.configHome(environment: ["XDG_CONFIG_HOME": "relative/dir"]) == expected)
 }
+
+@Test
+func anAbsoluteAutomationProgramsPathReplacesTheConfigHomeOne() {
+    let env = [
+        "DEVICETERM_AUTOMATION_PROGRAMS": "/tmp/checkout/.dev-seat/automation-programs",
+        "XDG_CONFIG_HOME": "/tmp/xdgtest"
+    ]
+    #expect(XDGPaths.deviceTermAutomationPrograms(environment: env) == "/tmp/checkout/.dev-seat/automation-programs")
+    // Only that file moves; the rest of the config home stays put.
+    #expect(XDGPaths.deviceTermConfig(environment: env) == "/tmp/xdgtest/deviceterm/config")
+}
+
+@Test("an empty or relative automation-programs path is ignored", arguments: ["", "relative/automation-programs"])
+func anUnusableAutomationProgramsPathFallsBack(value: String) {
+    let env = ["DEVICETERM_AUTOMATION_PROGRAMS": value, "XDG_CONFIG_HOME": "/tmp/xdgtest"]
+    #expect(XDGPaths.deviceTermAutomationPrograms(environment: env) == "/tmp/xdgtest/deviceterm/automation-programs")
+}

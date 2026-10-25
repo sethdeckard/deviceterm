@@ -365,6 +365,16 @@ Unlike `config` and `locations`, DeviceTerm never writes this file.
 There is no reload either: edit it by hand, and the change takes effect
 at the next launch.
 
+**In the dev seat's checkout**, `make run` reads
+`.dev-seat/automation-programs` instead, when that file exists
+(`.dev-seat/` is git-ignored). It passes the file's absolute path to the
+app as `DEVICETERM_AUTOMATION_PROGRAMS`, and your own file is skipped for
+that launch. A relative `cwd` there resolves against `.dev-seat/`.
+
+Relaunching the app ends every tab, so a program in this file restarts
+with each `make run`. An agent that runs `make run` itself can't live in
+one of these tabs, because its own relaunch closes the tab it runs in.
+
 ## Shell completions + man page
 
 Shell completions install via the CLI itself: `deviceterm completions

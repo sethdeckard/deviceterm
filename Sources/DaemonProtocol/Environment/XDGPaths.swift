@@ -57,10 +57,20 @@ public enum XDGPaths {
     /// file is flat `key = value` over a closed set of single-valued keys and
     /// this list is repeating and structured. deviceterm only ever reads this
     /// one.
+    ///
+    /// `DEVICETERM_AUTOMATION_PROGRAMS` replaces the path outright when it
+    /// holds a non-empty absolute path (`DeviceTermEnv.automationPrograms`),
+    /// so a development launch can bring its own programs without moving the
+    /// rest of the config home. A relative or empty value is ignored, as for
+    /// `$XDG_CONFIG_HOME`.
     public static func deviceTermAutomationPrograms(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String {
-        (configHome(environment: environment) as NSString)
+        let override = environment[DeviceTermEnv.automationPrograms] ?? ""
+        if !override.isEmpty, (override as NSString).isAbsolutePath {
+            return override
+        }
+        return (configHome(environment: environment) as NSString)
             .appendingPathComponent("deviceterm/automation-programs")
     }
 
