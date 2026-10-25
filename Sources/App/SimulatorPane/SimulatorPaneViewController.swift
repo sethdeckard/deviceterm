@@ -903,6 +903,56 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         if !demanded { contentView?.applyFrame(lease: nil, traceSequence: nil) }
     }
 
+    /// Capture the frames this pane draws for `seconds`, bezel included, as
+    /// PNGs in `directory`, for a dev-seat snapshot request; a frame that
+    /// can't be read back is skipped. Reports through `completion` once every
+    /// frame taken is written or skipped, or at once when the pane can't take
+    /// one.
+    func captureSnapshot(
+        seconds: Double,
+        into directory: String,
+        completion: @escaping @Sendable (PaneSnapshotOutcome) -> Void
+    ) {
+        guard !isPhysicalDevice else {
+            completion(.refused("not a simulator pane"))
+            return
+        }
+        guard let content = contentView, let wrapper = wrapperView, content.window != nil else {
+            completion(.refused("the pane isn't on screen; select its tab first"))
+            return
+        }
+        let writer: PaneSnapshotWriter
+        do {
+            writer = try PaneSnapshotWriter(directory: directory)
+        } catch {
+            completion(.refused("could not create \(directory): \(error)"))
+            return
+        }
+        content.beginSnapshot(
+            SimulatorContentView.SnapshotBurst(
+                writer: writer,
+                seconds: seconds,
+                bezel: { [weak wrapper] size in wrapper?.bezelImage(pixelSize: size) },
+                state: { [weak self] in self?.snapshotState() ?? .unknown },
+                completion: completion
+            )
+        )
+    }
+
+    /// What the pane is drawing right now, for a snapshot frame.
+    private func snapshotState() -> PaneSnapshotFrame.State {
+        let size = contentView?.surfaceSize ?? .zero
+        return PaneSnapshotFrame.State(
+            hingeDegrees: previewsSlider ? chromeViewModel.foldDegrees : viewModel.confirmedHingeDegrees,
+            spansHinge: drawnPanelSpansHinge,
+            creased: currentCrease() != nil,
+            drawnOrientation: drawnOrientation.rawValue,
+            presentedOrientation: viewModel.currentOrientation.rawValue,
+            surfaceWidth: Int(size.width),
+            surfaceHeight: Int(size.height)
+        )
+    }
+
     // MARK: - Render
 
     /// Re-runs whenever the VM's observed state changes. Reads every

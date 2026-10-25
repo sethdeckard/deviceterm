@@ -789,6 +789,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
 
     func displayTitle(for tabID: TabID) -> String? { tabContentByID[tabID]?.displayTitle }
 
+    /// Every simulator pane in this window's tabs, on screen or not.
+    func simulatorPanes() -> [SimulatorPaneViewController] {
+        tabContentByID.values.flatMap(\.splitVC.simPanes)
+    }
+
     func terminalFacts(
         for terminalID: TerminalPaneID,
         inTab tabID: TabID,

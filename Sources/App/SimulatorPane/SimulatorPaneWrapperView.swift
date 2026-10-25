@@ -211,6 +211,36 @@ final class SimulatorPaneWrapperView: NSView {
         applyBezel()
     }
 
+    /// The bezel as drawn behind the picture right now, at `pixelSize`, for
+    /// a dev-seat snapshot. The bezel view has the content view's frame, so
+    /// the image lines up with the drawable pixel for pixel. Nil before the
+    /// layer exists or when the view has no size.
+    func bezelImage(pixelSize: CGSize) -> PaneSnapshotWriter.Image? {
+        guard let layer = bezelView.layer,
+            bezelView.bounds.width > 0, bezelView.bounds.height > 0,
+            pixelSize.width >= 1, pixelSize.height >= 1,
+            let context = CGContext(
+                data: nil,
+                width: Int(pixelSize.width),
+                height: Int(pixelSize.height),
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+            )
+        else { return nil }
+        context.scaleBy(
+            x: pixelSize.width / bezelView.bounds.width,
+            y: pixelSize.height / bezelView.bounds.height
+        )
+        // The view is flipped, so its layer draws top-down; a bitmap context
+        // runs bottom-up.
+        context.translateBy(x: 0, y: bezelView.bounds.height)
+        context.scaleBy(x: 1, y: -1)
+        layer.render(in: context)
+        return context.makeImage().map { PaneSnapshotWriter.Image(image: $0) }
+    }
+
     /// The screen rect inside the content (Metal) region. Uses
     /// the same letterbox math the shader does so the bezel sits
     /// exactly around the rendered screen. Includes the

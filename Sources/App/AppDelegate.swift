@@ -342,6 +342,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// `windowWillClose` so a Dock-icon reopen during a slow teardown
     /// sees the app as windowless and gets a fresh window.
     private var windowControllerByID: [WindowID: WindowController] = [:]
+    /// Answers pane snapshot requests, in the dev seat's debug build only;
+    /// nil everywhere else.
+    private var paneSnapshotWatcher: PaneSnapshotWatcher?
     /// Windows the user has closed but whose Router teardown is still in
     /// flight. Reconcile skips them so a still-present WindowState
     /// doesn't get a recreated WC before the Router removes it.
@@ -580,6 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                                 .openWindow(reattach: orphansToReattach)
                             )
                             await self.automationPrograms.start()
+                            self.startPaneSnapshotsIfSeat()
                         }
                     }
                 }
@@ -2234,6 +2238,36 @@ extension AppDelegate: TabTransferCoordinating {
 
     private func strip(for windowID: WindowID) -> TabStripViewController? {
         windowControllerByID[windowID]?.contentViewController as? TabStripViewController
+    }
+
+    /// Start answering pane snapshot requests when this is the dev seat's
+    /// debug build (`DevSeatDecision`). Anywhere else, nothing is watched.
+    private func startPaneSnapshotsIfSeat() {
+        let seat = DevSeatDecision.seatDirectory
+        let isSeat: @MainActor @Sendable () -> Bool = {
+            DevSeatDecision.isSeat(
+                executablePath: Bundle.main.executablePath,
+                holderRoot: DevSeatDecision.holderRoot(seatDirectory: seat)
+            )
+        }
+        guard paneSnapshotWatcher == nil, isSeat() else { return }
+        let watcher = PaneSnapshotWatcher(seatDirectory: seat, stillSeat: isSeat) { [weak self] request, answer in
+            let pane = self?.windowControllerByID.values
+                .compactMap { $0.contentViewController as? TabStripViewController }
+                .flatMap { $0.simulatorPanes() }
+                .first { request.names(udid: $0.udid) }
+            guard let pane else {
+                answer(.refused("no simulator pane shows \(request.udid)"))
+                return
+            }
+            pane.captureSnapshot(seconds: request.seconds, into: request.out, completion: answer)
+        }
+        do {
+            try watcher.start()
+            paneSnapshotWatcher = watcher
+        } catch {
+            registrationLog.error("pane snapshots: could not watch the seat: \(error, privacy: .public)")
+        }
     }
 }
 

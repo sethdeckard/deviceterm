@@ -20,6 +20,27 @@ import SurfaceTrace
 /// sees the daemon; it reports gestures through `SimulatorInputDelegate`
 /// and the VC forwards them to the view model.
 final class SimulatorContentView: MTKView, MTKViewDelegate {
+    /// A dev-seat snapshot burst: where its frames go, how long it runs, and
+    /// how to read what's around the picture at each frame.
+    struct SnapshotBurst {
+        let writer: PaneSnapshotWriter
+        let seconds: Double
+        /// The bezel drawn behind the picture, at a drawable size in pixels,
+        /// or nil when none is showing.
+        let bezel: @MainActor (CGSize) -> PaneSnapshotWriter.Image?
+        /// What the pane is drawing right now.
+        let state: @MainActor () -> PaneSnapshotFrame.State
+        let completion: @Sendable (PaneSnapshotOutcome) -> Void
+    }
+
+    /// A burst under way: the request, when it started, and how many frames
+    /// it has taken.
+    private struct RunningSnapshot {
+        let burst: SnapshotBurst
+        let started: CFTimeInterval
+        var taken = 0
+    }
+
     /// One detent = `crownDragDetentPoints` of vertical drag.
     /// Smaller = more sensitive. ~8pt feels close to the physical
     /// crown's click-stops.
@@ -151,6 +172,15 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// leaves the accumulator at 0 and `mouseUp` mis-fires a
     /// crown press in addition to the detent it already sent.
     private var crownDragMoved = false
+    /// The snapshot burst under way, nil the rest of the time. While one
+    /// runs, the view draws every display frame and keeps its drawable
+    /// readable.
+    private var snapshot: RunningSnapshot?
+    /// Drives a burst's frames; nil between bursts, which keeps the view
+    /// change-driven the rest of the time.
+    private var snapshotLink: CADisplayLink?
+    /// Whether a snapshot burst is under way.
+    var isTakingSnapshot: Bool { snapshot != nil }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -292,6 +322,76 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         requestRedraw()
     }
 
+    // MARK: Snapshot
+
+    /// Try to capture each frame drawn for `burst.seconds`, then report through
+    /// `burst.completion`. Refused while another burst runs.
+    ///
+    /// The display link only ticks while the view is on a screen, so a
+    /// deadline ends the burst too.
+    func beginSnapshot(_ burst: SnapshotBurst) {
+        guard snapshot == nil else {
+            burst.completion(.refused("a snapshot of this pane is already running"))
+            return
+        }
+        // Only a drawable that isn't framebuffer-only can be read back. The
+        // view's next drawable picks this up, so the first frame or two of a
+        // burst may come back unreadable and are skipped.
+        framebufferOnly = false
+        let started = CACurrentMediaTime()
+        snapshot = RunningSnapshot(burst: burst, started: started)
+        let link = displayLink(target: self, selector: #selector(snapshotTick))
+        link.add(to: .main, forMode: .common)
+        snapshotLink = link
+        DispatchQueue.main.asyncAfter(deadline: .now() + burst.seconds + 0.5) { [weak self] in
+            guard let self, self.snapshot?.started == started else { return }
+            self.endSnapshot()
+        }
+        requestRedraw()
+    }
+
+    @objc
+    private func snapshotTick(_ link: CADisplayLink) {
+        guard let snapshot else {
+            endSnapshot()
+            return
+        }
+        if CACurrentMediaTime() - snapshot.started >= snapshot.burst.seconds {
+            endSnapshot()
+            return
+        }
+        requestRedraw()
+    }
+
+    private func endSnapshot() {
+        snapshotLink?.invalidate()
+        snapshotLink = nil
+        guard let ending = snapshot else { return }
+        snapshot = nil
+        framebufferOnly = true
+        ending.burst.writer.finish(completion: ending.burst.completion)
+    }
+
+    /// The readback for the frame about to be drawn, when a burst is taking
+    /// it. The bezel and the pane's state are read now, on the main thread,
+    /// so they describe this frame rather than whatever is current once the
+    /// GPU is done.
+    private func snapshotReadback(drawableSize: CGSize) -> SimulatorFrameReadback? {
+        guard var running = snapshot else { return nil }
+        let index = running.taken
+        running.taken += 1
+        snapshot = running
+        let burst = running.burst
+        let seconds = CACurrentMediaTime() - running.started
+        let state = burst.state()
+        let bezel = burst.bezel(drawableSize)
+        let writer = burst.writer
+        writer.expectFrame()
+        return SimulatorFrameReadback { picture in
+            writer.deliver(index: index, seconds: seconds, state: state, picture: picture, bezel: bezel)
+        }
+    }
+
     // MARK: MTKViewDelegate
 
     func draw(in view: MTKView) {
@@ -303,6 +403,10 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         // tolerates that, and re-requesting a draw would spin while the
         // pool stayed full.
         let trace = peekConsumerTrace()
+        let readback = snapshotReadback(drawableSize: view.drawableSize)
+        // Whatever the render did, the frame promised to a snapshot is
+        // settled: a draw that never reached the readback delivers nothing.
+        defer { readback?.settleUnread() }
         let installed = renderer.render(
             lease: currentSurface,
             orientation: orientation,
@@ -311,7 +415,8 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             crease: crease,
             in: view,
             trace: trace,
-            referenceSize: fitReferenceSize
+            referenceSize: fitReferenceSize,
+            readback: readback
         )
         if installed { pendingTraceSequence = nil }
     }

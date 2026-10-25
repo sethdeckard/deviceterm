@@ -163,7 +163,9 @@ final class SimulatorMetalRenderer {
     /// installed (i.e. this draw reached commit), so the caller only
     /// retires a frame's trace once it is actually armed. `referenceSize` is
     /// the picture the scale is fitted to, as `SimGestureMath.imageRect` takes
-    /// it.
+    /// it. `readback`, set only during a dev-seat snapshot, copies the drawn
+    /// frame back out before it presents. A draw that returns before that
+    /// leaves it unsettled, for the caller to settle.
     func render(
         lease: SurfaceLease?,
         orientation: Orientation,
@@ -172,7 +174,8 @@ final class SimulatorMetalRenderer {
         crease: FoldCreaseGeometry.Crease?,
         in view: MTKView,
         trace: SurfaceConsumerTrace? = nil,
-        referenceSize: CGSize? = nil
+        referenceSize: CGSize? = nil,
+        readback: SimulatorFrameReadback? = nil
     ) -> Bool {
         guard let drawable = view.currentDrawable,
             let descriptor = view.currentRenderPassDescriptor,
@@ -308,6 +311,7 @@ final class SimulatorMetalRenderer {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
         enc.endEncoding()
+        readback?.encode(from: drawable.texture, into: commandBuffer)
         commandBuffer.present(drawable)
         // Off-by-default: once the command buffer reaches a terminal state,
         // stamp the completion time (the join timestamp), then
