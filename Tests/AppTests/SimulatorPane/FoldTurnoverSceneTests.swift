@@ -108,9 +108,10 @@ struct FoldTurnoverSceneTests {
     @Test("closed, the cover hides the inner half, leaning or not", arguments: [
         (CGSize(width: 2_400, height: 1_300), 0.0),
         (CGSize(width: 1_300, height: 2_400), 0.0),
-        // The widest the device is shown closed at, just short of opening.
-        (CGSize(width: 2_400, height: 1_300), FoldTurnover.opensAbove - 1),
-        (CGSize(width: 1_300, height: 2_400), FoldTurnover.opensAbove - 1)
+        // The furthest it leans: the pane clamps the hinge there, however
+        // far open a cover iOS kept lit is.
+        (CGSize(width: 2_400, height: 1_300), FoldTurnover.opensAbove),
+        (CGSize(width: 1_300, height: 2_400), FoldTurnover.opensAbove)
     ])
     func theClosedCoverHidesTheInnerHalf(drawable: CGSize, hingeDegrees: Double) throws {
         let scene = try #require(

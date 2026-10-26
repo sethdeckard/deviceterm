@@ -106,8 +106,9 @@ struct FoldTurnoverScene {
     /// One frame of a turnover, measured against a drawable: both panels'
     /// pictures as the pane draws them at rest, their frames, the pose for
     /// `elapsed` seconds in, and the fit. `closedHinge` is the hinge's angle,
-    /// in radians, that the closed end leans by (`FoldPose.closed(hinge:)`).
-    /// Nil when a size isn't usable.
+    /// in radians, that the closed end is posed from; it leans by
+    /// `FoldPose.closedLeanShare` of it (`FoldPose.closed(hinge:)`). Nil when a
+    /// size isn't usable.
     ///
     /// Both pictures are fitted to the inner panel as it's displayed, so the
     /// cover comes out at the inner panel's pixel scale whichever way each is

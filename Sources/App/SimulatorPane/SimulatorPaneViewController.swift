@@ -136,6 +136,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Whether the picture is drawn as the whole device posed. Internal so a
     /// test can read it without a Metal device and a rendered frame.
     var drawsPosedFold: Bool { contentView?.drawsPosedFold ?? false }
+    /// The clamped hinge angle, in radians, that the closed device is posed
+    /// from; it leans by `FoldPose.closedLeanShare` of it. Internal so a test
+    /// can read the clamp.
+    var posedClosedHinge: Double? { contentView?.posedFold?.closedHinge }
     /// Whether the frame on show is the hinge-spanning panel's, read off the
     /// frame's own size where that's known (see `FoldablePanelShape`), so the
     /// shape it's drawn in always matches the picture.
@@ -969,7 +973,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             SimulatorContentView.PosedFold(
                 closed: closed,
                 openTurn: max(0, (180 - openDegrees) / 2) * .pi / 180,
-                closedHinge: max(0, drawnHingeDegrees ?? 0) * .pi / 180,
+                // No further than the hinge shows the device closed by itself:
+                // past that it's closed only because iOS kept the cover lit,
+                // and the lean would outgrow the pose that hides the inner half.
+                closedHinge: min(max(0, drawnHingeDegrees ?? 0), FoldTurnover.opensAbove) * .pi / 180,
                 showsInnerFrame: innerLit,
                 innerOrientation: FoldablePanelOrientation.display(forDevice: device, onInnerPanel: true),
                 coverOrientation: FoldablePanelOrientation.display(forDevice: device, onInnerPanel: false),

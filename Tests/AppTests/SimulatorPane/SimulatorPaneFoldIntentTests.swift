@@ -635,6 +635,19 @@ struct SimulatorPaneDeviceSpaceTests {
         #expect(!viewController.drawsPosedFold)
     }
 
+    @Test("a cover iOS keeps lit far open leans no further than the hinge closes it")
+    func aLitCoverFarOpenLeansNoFurther() async throws {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await send(fake, panel(spansHinge: false, spanning: CGSize(width: 8, height: 12)))
+        await send(fake, orientation(.portrait, device: .portrait))
+        await send(fake, .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 95, spansHinge: false)))
+        await send(fake, try frame(width: 6, height: 9, sequence: 1))
+        await settle(viewController) { viewController.posedClosedHinge != nil }
+        let lean = try #require(viewController.posedClosedHinge)
+        #expect(abs(lean - FoldTurnover.opensAbove * .pi / 180) < 1e-9)
+    }
+
     @Test("an unknown device orientation draws the presentation orientation")
     func noDeviceOrientationFallsBack() async {
         let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()

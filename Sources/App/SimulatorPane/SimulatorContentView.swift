@@ -29,8 +29,9 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         var closed: Bool
         /// The open fold's turn, from the hinge's angle.
         var openTurn: Double
-        /// The hinge's angle in radians, which the device leans by while
-        /// it's shown closed (`FoldPose.closed(hinge:)`); `0` lies flat.
+        /// The hinge's angle in radians that the device is posed from while
+        /// it's shown closed, leaning by `FoldPose.closedLeanShare` of it
+        /// (`FoldPose.closed(hinge:)`); `0` lies flat.
         var closedHinge: Double = 0
         /// Whether the frame on show is the inner panel's rather than the
         /// cover's.
