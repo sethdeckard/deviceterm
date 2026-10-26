@@ -60,6 +60,18 @@ final class SimulatorMetalRenderer {
         var localW: SIMD4<Float>
     }
 
+    /// Per-quad constants for a turnover. Layout MUST match `TParams` in the
+    /// shader source, every field 16 bytes.
+    private struct TurnoverParams {
+        var uvRotation: SIMD4<Float>
+        /// `(halfAcross, halfAlong, hingeRadius, outerRadius)`, in pixels.
+        var box: SIMD4<Float>
+        /// The frame's colour, for a quad drawn solid.
+        var color: SIMD4<Float>
+        /// `(textured, 0, 0, 0)`: 1 samples the texture, 0 fills `color`.
+        var mode: SIMD4<Float>
+    }
+
     /// Concurrent queue for the off-by-default post-completion trace scans,
     /// so a delayed scan never runs on Metal's completion thread and delays
     /// overlap instead of serializing into a backlog.
@@ -75,12 +87,64 @@ final class SimulatorMetalRenderer {
     /// growing an unbounded backlog.
     nonisolated private static let traceInFlight = DispatchSemaphore(value: 32)
 
+    /// The turnover path. Positions arrive projected, as the creased path's do,
+    /// and each quad is rounded by its own box: `local` is the fragment's
+    /// place in its flat quad, across then along, so the hinge side and the
+    /// outer side can take different radii (a cover is round on one side and
+    /// nearly square on the other).
+    private static let turnoverSource = """
+    struct TParams {
+        float4 uvRotation;
+        float4 box;    // (halfAcross, halfAlong, hingeRadius, outerRadius)
+        float4 color;
+        float4 mode;   // (textured, _, _, _)
+    };
+    vertex COut vturn(uint vid [[vertex_id]],
+                      constant TParams& p [[buffer(0)]],
+                      constant CVertex *verts [[buffer(1)]]) {
+        CVertex v = verts[vid];
+        float2 centered = v.positionUV.zw - float2(0.5, 0.5);
+        float2x2 rot = float2x2(
+            float2(p.uvRotation.x, p.uvRotation.z),
+            float2(p.uvRotation.y, p.uvRotation.w)
+        );
+        float w = v.localW.z;
+        COut o;
+        o.position = float4(v.positionUV.xy * w, 0, w);
+        o.uv = rot * centered + float2(0.5, 0.5);
+        o.local = v.localW.xy;
+        return o;
+    }
+    fragment float4 fturn(COut in [[stage_in]],
+                          constant TParams& p [[buffer(0)]],
+                          texture2d<float> tex [[texture(0)]]) {
+        constexpr sampler s(address::clamp_to_edge, filter::linear);
+        float radius = (in.local.x < 0.0) ? p.box.z : p.box.w;
+        if (radius > 0.0) {
+            float2 q = abs(in.local) - p.box.xy + float2(radius);
+            float dist = min(max(q.x, q.y), 0.0) + length(max(q, float2(0))) - radius;
+            if (dist > 0.0) {
+                discard_fragment();
+            }
+        }
+        if (p.mode.x > 0.5) {
+            return tex.sample(s, in.uv);
+        }
+        return p.color;
+    }
+    """
+
     private let queue: MTLCommandQueue?
     private var pipelineState: MTLRenderPipelineState?
     /// Draws the two halves of a creased picture. Kept separate from
     /// `pipelineState` so a flat picture goes through the single-quad path
     /// whatever the fold is doing.
     private var creasePipelineState: MTLRenderPipelineState?
+    /// Draws a turnover's posed quads.
+    private var turnoverPipelineState: MTLRenderPipelineState?
+    /// Bound for a posed quad that samples nothing, since a fragment texture
+    /// is always bound. Made on first use.
+    private var blankTexture: MTLTexture?
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat) {
         queue = device.makeCommandQueue()
@@ -152,6 +216,16 @@ final class SimulatorMetalRenderer {
         }
 
         return half(outerSide: -1) + half(outerSide: 1)
+    }
+
+    private static func texture(for surface: IOSurfaceRef, device: MTLDevice) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor()
+        descriptor.pixelFormat = .bgra8Unorm
+        descriptor.width = IOSurfaceGetWidth(surface)
+        descriptor.height = IOSurfaceGetHeight(surface)
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .shared
+        return device.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0)
     }
 
     /// Render `surface` into `view`'s current drawable. `orientation`
@@ -361,6 +435,94 @@ final class SimulatorMetalRenderer {
         return traceInstalled
     }
 
+    /// Draw one frame of a posed foldable into `view`: each of `scene`'s
+    /// quads in order, the inner picture from `inner` and the cover from
+    /// `cover`, either black where it's nil, and frames in `frameColor`.
+    ///
+    /// Both leases are held until the GPU is done with them, like the steady
+    /// path's one. `readback` works as it does for `render`. Returns whether
+    /// it drew.
+    func renderTurnover(
+        scene: FoldTurnoverScene,
+        inner: SurfaceLease?,
+        innerOrientation: Orientation,
+        cover: SurfaceLease?,
+        coverOrientation: Orientation,
+        frameColor: SIMD4<Float>,
+        in view: MTKView,
+        readback: SimulatorFrameReadback? = nil
+    ) -> Bool {
+        guard let drawable = view.currentDrawable,
+            let descriptor = view.currentRenderPassDescriptor,
+            let pipeline = turnoverPipelineState,
+            let queue,
+            let device = view.device,
+            let blank = blankTexture(device: device),
+            let commandBuffer = queue.makeCommandBuffer(),
+            let enc = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
+        else { return false }
+        let innerTexture = inner.flatMap { Self.texture(for: $0.surface, device: device) }
+        let coverTexture = cover.flatMap { Self.texture(for: $0.surface, device: device) }
+        enc.setRenderPipelineState(pipeline)
+        for quad in scene.quads() {
+            let texture: MTLTexture?
+            let orientation: Orientation
+            var color = frameColor
+            switch quad.fill {
+            case .frame:
+                (texture, orientation) = (nil, innerOrientation)
+
+            case .innerPicture:
+                (texture, orientation) = (innerTexture, innerOrientation)
+                color = SIMD4(0, 0, 0, 1)
+
+            case .coverPicture:
+                (texture, orientation) = (coverTexture, coverOrientation)
+                color = SIMD4(0, 0, 0, 1)
+            }
+            var params = TurnoverParams(
+                uvRotation: uvRotation(for: orientation),
+                box: SIMD4(quad.halfSize.x, quad.halfSize.y, quad.hingeRadius, quad.outerRadius),
+                color: color,
+                mode: SIMD4(texture == nil ? 0 : 1, 0, 0, 0)
+            )
+            // Two triangles: hinge-low, hinge-high, outer-high; hinge-low,
+            // outer-high, outer-low.
+            var vertices = [0, 1, 2, 0, 2, 3].map { index -> CreaseVertex in
+                let vertex = quad.vertices[index]
+                let texturePoint = SIMD2<Float>((vertex.unit.x + 1) / 2, (1 - vertex.unit.y) / 2)
+                return CreaseVertex(
+                    positionUV: SIMD4(vertex.position.x, vertex.position.y, texturePoint.x, texturePoint.y),
+                    localW: SIMD4(vertex.local.x, vertex.local.y, vertex.divisor, 0)
+                )
+            }
+            enc.setFragmentTexture(texture ?? blank, index: 0)
+            enc.setVertexBytes(&params, length: MemoryLayout<TurnoverParams>.size, index: 0)
+            enc.setFragmentBytes(&params, length: MemoryLayout<TurnoverParams>.size, index: 0)
+            enc.setVertexBytes(&vertices, length: MemoryLayout<CreaseVertex>.stride * vertices.count, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+        }
+        enc.endEncoding()
+        readback?.encode(from: drawable.texture, into: commandBuffer)
+        commandBuffer.present(drawable)
+        commandBuffer.addCompletedHandler { _ in withExtendedLifetime((inner, cover)) {} }
+        commandBuffer.commit()
+        return true
+    }
+
+    private func blankTexture(device: MTLDevice) -> MTLTexture? {
+        if let blankTexture { return blankTexture }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: 1,
+            height: 1,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead]
+        blankTexture = device.makeTexture(descriptor: descriptor)
+        return blankTexture
+    }
+
     private func uvRotation(for orientation: Orientation) -> SIMD4<Float> {
         switch orientation {
         case .portrait:
@@ -499,7 +661,7 @@ final class SimulatorMetalRenderer {
         }
         """
         do {
-            let lib = try device.makeLibrary(source: source + creaseSource, options: nil)
+            let lib = try device.makeLibrary(source: source + creaseSource + Self.turnoverSource, options: nil)
             let desc = MTLRenderPipelineDescriptor()
             desc.vertexFunction = lib.makeFunction(name: "vmain")
             desc.fragmentFunction = lib.makeFunction(name: "fmain")
@@ -510,6 +672,11 @@ final class SimulatorMetalRenderer {
             creaseDesc.fragmentFunction = lib.makeFunction(name: "fcrease")
             creaseDesc.colorAttachments[0].pixelFormat = pixelFormat
             creasePipelineState = try device.makeRenderPipelineState(descriptor: creaseDesc)
+            let turnoverDesc = MTLRenderPipelineDescriptor()
+            turnoverDesc.vertexFunction = lib.makeFunction(name: "vturn")
+            turnoverDesc.fragmentFunction = lib.makeFunction(name: "fturn")
+            turnoverDesc.colorAttachments[0].pixelFormat = pixelFormat
+            turnoverPipelineState = try device.makeRenderPipelineState(descriptor: turnoverDesc)
         } catch {
             NSLog("deviceterm: metal pipeline setup failed: \(error)")
         }

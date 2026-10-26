@@ -73,7 +73,7 @@ enum FoldCreaseGeometry {
     /// Larger values flatten the effect toward an orthographic bend. Fitted to
     /// what Device Hub draws, so a pane and Device Hub sitting side by side
     /// bend by the same amount.
-    private static let viewerDistance: Double = 9.6
+    static let viewerDistance: Double = 9.6
 
     /// The crease at `degrees`, or nil when the hinge is straight enough that
     /// the picture is flat and the caller should draw it whole.

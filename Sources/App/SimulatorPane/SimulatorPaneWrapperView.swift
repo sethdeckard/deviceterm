@@ -93,6 +93,9 @@ final class SimulatorPaneWrapperView: NSView {
     private let bezelView = LayerBackedView()
     private let bezelShapeLayer = CAShapeLayer()
     private let crownLayer = CAShapeLayer()
+    /// Whether the content view is drawing a foldable whole, frame included;
+    /// every layout keeps this one hidden until it stops.
+    private var contentDrawsDevice = false
     /// Pane-local rect the crown bump occupies, read by
     /// `SimulatorContentView` so a click on the crown lights up
     /// the wrapper's `onCrownPress` instead of starting an
@@ -209,6 +212,22 @@ final class SimulatorPaneWrapperView: NSView {
     override func layout() {
         super.layout()
         applyBezel()
+    }
+
+    /// Hide the frame while the content view draws a foldable whole and
+    /// posed (`SimulatorContentView.drawsPosedFold`), and show it again after.
+    ///
+    /// A posed device has each half's frame drawn in Metal, because this layer
+    /// sits under the picture: through a turnover the swinging half's frame
+    /// has to cover the fixed half's picture where the two overlap, and a
+    /// layer underneath can't.
+    func setContentDrawsDevice(_ inProgress: Bool) {
+        contentDrawsDevice = inProgress
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bezelShapeLayer.isHidden = inProgress
+        crownLayer.isHidden = inProgress || currentCrownRect == .zero
+        CATransaction.commit()
     }
 
     /// The bezel as drawn behind the picture right now, at `pixelSize`, for
@@ -514,7 +533,7 @@ final class SimulatorPaneWrapperView: NSView {
         // bezel through several intermediate sizes.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        bezelShapeLayer.isHidden = false
+        bezelShapeLayer.isHidden = contentDrawsDevice
         currentCreasedBezelPath = bezelContext.crease.map {
             creasedBezelPath(layout: layout, imageRect: imageRect, crease: $0)
         }
@@ -523,7 +542,7 @@ final class SimulatorPaneWrapperView: NSView {
             corners: layout.cornerRadii
         )
         if let crown = layout.crownRect, let radius = layout.crownCornerRadius {
-            crownLayer.isHidden = false
+            crownLayer.isHidden = contentDrawsDevice
             crownLayer.path = CGPath(
                 roundedRect: crown,
                 cornerWidth: radius,

@@ -77,6 +77,27 @@ enum SimGestureMath {
         )
     }
 
+    /// `size`, in native pixels, turned so that `imageRect` drawing a picture
+    /// at `orientation` fits it as it's displayed at `referenceOrientation`.
+    ///
+    /// `imageRect` turns a reference the way it turns the picture, which is
+    /// right while both are drawn the same way. A foldable drawn in device
+    /// space draws its cover upright beside an inner panel drawn a quarter
+    /// turn round, and fitted to the inner panel turned the cover's way, the
+    /// cover would come out at a different scale in any pane that isn't
+    /// square.
+    static func reference(
+        _ size: CGSize,
+        displayedIn referenceOrientation: Orientation,
+        forPictureIn orientation: Orientation
+    ) -> CGSize {
+        func isLandscape(_ orientation: Orientation) -> Bool {
+            orientation == .landscapeLeft || orientation == .landscapeRight
+        }
+        guard isLandscape(referenceOrientation) != isLandscape(orientation) else { return size }
+        return CGSize(width: size.height, height: size.width)
+    }
+
     /// Map a point in view coordinates to (0..1) within the aspect-fit
     /// rendered image, or nil if outside the letterboxed image.
     ///

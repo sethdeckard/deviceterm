@@ -21,6 +21,15 @@ private let panelLog = Logger(subsystem: "com.deviceterm", category: "panel")
 /// close/reboot/state callbacks.
 @MainActor
 final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegate {
+    /// How long after the hinge last moved the hinge still decides which side
+    /// of the device is shown. iOS moves the lit panel up to a second or so
+    /// after a fold, and the pane learns of the move after that.
+    static let foldSwitchWindow: TimeInterval = 3
+    /// The shallowest fold the inner panel is drawn at. iOS can light it with
+    /// the hinge nearly shut (at boot, or along some hinge paths), and drawn
+    /// at the true angle it would be edge-on: a line, or nothing.
+    static let minimumDrawnDegrees: Double = 30
+
     // Identity forwarded from the VM for external callers (PaneLayoutViewController
     // sizes by `family`, finds panes by `udid`; TabContentViewController keys on it).
     var udid: String { viewModel.udid }
@@ -76,6 +85,13 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         let sending = viewModel.isSendingFold
         return tracking || sending
     }
+    /// The hinge angle the picture is drawn at. While the slider is being
+    /// dragged, and until the folds it sent have gone out, that's the
+    /// slider's rather than the readings', so the picture moves with the thumb
+    /// instead of waiting for the device.
+    private var drawnHingeDegrees: Double? {
+        previewsSlider ? chromeViewModel.foldDegrees : viewModel.confirmedHingeDegrees
+    }
     /// The last panel id reported by the daemon, used for `simctl io
     /// --display`. Nil until reported, and always nil on single-panel
     /// devices. Captures pass it so they record what the pane shows rather
@@ -85,8 +101,18 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// so its cover is drawn at the inner panel's pixel scale as the device
     /// holds them, and the pane doesn't change size between panels. Nil fits
     /// the surface on show.
+    ///
+    /// Turned to the inner panel's own displayed shape, which in device space
+    /// can differ from the picture on show by a quarter turn
+    /// (`SimGestureMath.reference(_:displayedIn:forPictureIn:)`).
     var fitReferenceSize: CGSize? {
-        viewModel.capabilities.fold ? viewModel.spanningPanelSize : nil
+        guard viewModel.capabilities.fold, let spanning = viewModel.spanningPanelSize else { return nil }
+        guard let device = viewModel.currentDeviceOrientation else { return spanning }
+        return SimGestureMath.reference(
+            spanning,
+            displayedIn: FoldablePanelOrientation.display(forDevice: device, onInnerPanel: true),
+            forPictureIn: drawnOrientation
+        )
     }
     /// The orientation the picture is drawn in. A foldable is drawn in device
     /// space: each panel at the orientation it holds for the way the device
@@ -104,6 +130,12 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// The orientation the last render handed the picture. Internal so a test
     /// can check what was drawn rather than what would be drawn now.
     var contentOrientation: Orientation? { contentView?.orientation }
+    /// Whether the device is shown closed, nil before a foldable has shown
+    /// anything. Internal so a test can read what the hinge decided.
+    private(set) var foldShownClosed: Bool?
+    /// Whether the picture is drawn as the whole device posed. Internal so a
+    /// test can read it without a Metal device and a rendered frame.
+    var drawsPosedFold: Bool { contentView?.drawsPosedFold ?? false }
     /// Whether the frame on show is the hinge-spanning panel's, read off the
     /// frame's own size where that's known (see `FoldablePanelShape`), so the
     /// shape it's drawn in always matches the picture.
@@ -182,6 +214,16 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// The last foldable draw state written to the `panel` log, so only a
     /// change is logged.
     private var loggedDrawState: String?
+    /// Until when a fold counts as under way, so the hinge rather than the
+    /// lit panel decides the side shown: a while after the hinge last moved.
+    private var foldActiveUntil = Date.distantPast
+    private var seenHingeDegrees: Double?
+    /// Hands the side shown back to the lit panel once the fold is over.
+    private var foldSettle: DispatchWorkItem?
+    /// The cover's frame size, from the last cover frame. Until one has been
+    /// seen the device can't be posed closed, and the pane cuts between
+    /// panels instead.
+    private var coverSize: CGSize?
     /// The preset the pane state arrived carrying, so a pane whose view
     /// controller was rebuilt keeps the sizing the user chose instead of
     /// falling back to the family default. Nil when the pane state carries
@@ -439,6 +481,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     override func loadView() {
         let content = SimulatorContentView()
         content.inputDelegate = self
+        content.onPosedDrawingChange = { [weak self] posed in
+            self?.wrapperView?.setContentDrawsDevice(posed)
+        }
         // Producer stamps only physical-device frames, so only device panes
         // trace on the consumer side; sim panes leave this nil.
         content.tracePaneId = isPhysicalDevice ? viewModel.paneId : nil
@@ -871,6 +916,83 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         panelLog.notice("\(state, privacy: .public)")
     }
 
+    /// Decide which side of a foldable is shown, and hand the content view
+    /// the pose that goes with it (`FoldTurnover.showsClosed`). A change of
+    /// side turns the device over.
+    private func updatePosedFold(lease: SurfaceLease?) {
+        guard viewModel.capabilities.fold, let content = contentView else { return }
+        let degrees = viewModel.confirmedHingeDegrees
+        if degrees != seenHingeDegrees || previewsSlider {
+            seenHingeDegrees = degrees
+            foldActiveUntil = Date().addingTimeInterval(Self.foldSwitchWindow)
+        }
+        guard lease != nil else {
+            // Hidden, or nothing to show yet: nothing to pose either, and the
+            // next frame is shown as it is rather than turned over to.
+            foldShownClosed = nil
+            content.setPosedFold(nil)
+            return
+        }
+        let innerLit = drawnPanelSpansHinge
+        if !innerLit { coverSize = content.surfaceSize }
+        let folding = Date() < foldActiveUntil
+        let closed = FoldTurnover.showsClosed(
+            wasClosed: foldShownClosed,
+            foldingAt: folding ? drawnHingeDegrees : nil,
+            coverLit: !innerLit
+        )
+        let wasClosed = foldShownClosed
+        foldShownClosed = closed
+        if folding, closed == innerLit { scheduleFoldSettle() }
+        let posable = viewModel.currentDeviceOrientation != nil && viewModel.spanningPanelSize != nil
+            && coverSize != nil
+        if let wasClosed, wasClosed != closed {
+            let angle = drawnHingeDegrees.map { String(format: "%.1f", $0) } ?? "unknown"
+            panelLog.notice(
+                """
+                fold shown \(closed ? "closed" : "open", privacy: .public) at \(angle, privacy: .public)°, \
+                from \(folding ? (self.previewsSlider ? "slider" : "hinge") : "lit panel", privacy: .public), \
+                lit \(innerLit ? "inner" : "cover", privacy: .public), \
+                \(posable ? "turns over" : "cuts, panel sizes unknown", privacy: .public)
+                """
+            )
+        }
+        guard let device = viewModel.currentDeviceOrientation,
+            let spanning = viewModel.spanningPanelSize,
+            let coverSize
+        else {
+            content.setPosedFold(nil)
+            return
+        }
+        let openDegrees = max(drawnHingeDegrees ?? 180, Self.minimumDrawnDegrees)
+        content.setPosedFold(
+            SimulatorContentView.PosedFold(
+                closed: closed,
+                openTurn: max(0, (180 - openDegrees) / 2) * .pi / 180,
+                closedHinge: max(0, drawnHingeDegrees ?? 0) * .pi / 180,
+                showsInnerFrame: innerLit,
+                innerOrientation: FoldablePanelOrientation.display(forDevice: device, onInnerPanel: true),
+                coverOrientation: FoldablePanelOrientation.display(forDevice: device, onInnerPanel: false),
+                innerSize: spanning,
+                coverSize: coverSize,
+                family: DeviceFamily(wire: viewModel.family)
+            )
+        )
+    }
+
+    /// Look again once the fold is over, when the side shown goes back to
+    /// the lit panel: nothing else may arrive to prompt it.
+    private func scheduleFoldSettle() {
+        foldSettle?.cancel()
+        let settle = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.updatePosedFold(lease: self.viewModel.currentSurface)
+        }
+        foldSettle = settle
+        let delay = foldActiveUntil.timeIntervalSinceNow + 0.05
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay), execute: settle)
+    }
+
     /// A point in the drawn picture's displayed space, re-expressed in the
     /// presentation orientation the daemon maps input through.
     private func presented(_ point: CGPoint) -> CGPoint {
@@ -943,13 +1065,16 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     private func snapshotState() -> PaneSnapshotFrame.State {
         let size = contentView?.surfaceSize ?? .zero
         return PaneSnapshotFrame.State(
-            hingeDegrees: previewsSlider ? chromeViewModel.foldDegrees : viewModel.confirmedHingeDegrees,
+            hingeDegrees: drawnHingeDegrees,
             spansHinge: drawnPanelSpansHinge,
             creased: currentCrease() != nil,
             drawnOrientation: drawnOrientation.rawValue,
             presentedOrientation: viewModel.currentOrientation.rawValue,
             surfaceWidth: Int(size.width),
-            surfaceHeight: Int(size.height)
+            surfaceHeight: Int(size.height),
+            shownClosed: foldShownClosed,
+            drawsPosed: drawsPosedFold,
+            turningOver: contentView?.isTurningOver ?? false
         )
     }
 
@@ -968,6 +1093,7 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // swap's first frame would be turned for the panel it replaced.
         let orientation = drawnOrientation
         contentView?.setOrientation(orientation)
+        updatePosedFold(lease: lease)
         contentView?.presentationOrientation = viewModel.currentOrientation
         contentView?.setFitReference(fitReferenceSize)
         adoptConfirmedHinge()
@@ -1027,7 +1153,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         // fits to the larger panel inside a pane sized for the smaller one,
         // so replay the preset against the reference once it lands or moves.
         logDrawStateIfChanged(orientation: orientation)
-        let reference = fitReferenceSize
+        // The panel's own size rather than `fitReferenceSize`, which turns with
+        // the picture on show and would replay the preset on every fold.
+        let reference = viewModel.capabilities.fold ? viewModel.spanningPanelSize : nil
         if reference != sizedFitReference, view.window != nil {
             sizedFitReference = reference
             if !pendingAutoFit, reference != nil {
@@ -1192,21 +1320,14 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// Only the panel the hinge runs through ever bends. A foldable's cover
     /// panel sits outside the fold, so it stays flat at every angle, and the
     /// angle alone cannot tell the two apart: which panel is lit depends on
-    /// the path the hinge took rather than where it stopped.
-    ///
-    /// While the slider is being dragged, and until the folds it sent have
-    /// gone out, the bend follows the slider rather than the readings, so the
-    /// picture moves with the thumb instead of waiting for the device. The
-    /// panel gate still comes from the device either way.
+    /// the path the hinge took rather than where it stopped. The bend follows
+    /// `drawnHingeDegrees`; the panel gate comes from the device.
     ///
     /// Internal rather than private so a test can read the gate without a
     /// Metal device and a rendered frame.
     func currentCrease() -> FoldCreaseGeometry.Crease? {
-        let degrees = previewsSlider
-            ? chromeViewModel.foldDegrees
-            : viewModel.confirmedHingeDegrees
-        guard drawnPanelSpansHinge, let degrees else { return nil }
-        return FoldCreaseGeometry.crease(degrees: degrees)
+        guard drawnPanelSpansHinge, let degrees = drawnHingeDegrees else { return nil }
+        return FoldCreaseGeometry.crease(degrees: max(degrees, Self.minimumDrawnDegrees))
     }
 
     /// Open or collapse the fold bar's host to match whether it is drawn.

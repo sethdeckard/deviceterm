@@ -31,6 +31,14 @@ struct PaneSnapshotFrame: Codable, Equatable {
         /// The frame's surface size, in pixels.
         var surfaceWidth: Int
         var surfaceHeight: Int
+        /// For a foldable, whether the device is shown closed; nil while the
+        /// pane has no frame to show (before the first, or while hidden) and
+        /// for every other device.
+        var shownClosed: Bool?
+        /// Whether the whole device is drawn posed rather than the frame on
+        /// show, and whether that's a turnover between the two sides.
+        var drawsPosed = false
+        var turningOver = false
     }
 
     let index: Int

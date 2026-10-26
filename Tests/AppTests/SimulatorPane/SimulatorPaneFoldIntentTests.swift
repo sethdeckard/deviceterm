@@ -571,6 +571,70 @@ struct SimulatorPaneDeviceSpaceTests {
         #expect(viewController.contentOrientation == .landscapeRight)
     }
 
+    private func frame(width: Int, height: Int, sequence: UInt64) throws -> PaneEvent {
+        let props: [String: Any] = [
+            kIOSurfaceWidth as String: width,
+            kIOSurfaceHeight as String: height,
+            kIOSurfaceBytesPerElement as String: 4,
+            kIOSurfacePixelFormat as String: 0x42_47_52_41
+        ]
+        let surface = try #require(IOSurfaceCreate(props as CFDictionary))
+        let lease = SurfaceLease(
+            surface: surface,
+            paneId: "p1",
+            subscriptionToken: UUID(),
+            leaseEpoch: 0,
+            generation: sequence,
+            onRelease: nil
+        )
+        return .surfaceChanged(SurfaceChangedEvent(paneId: "p1", sequence: sequence), lease)
+    }
+
+    private func panel(spansHinge: Bool, spanning: CGSize) -> PaneEvent {
+        .panelChanged(
+            PanelChangedEvent(
+                paneId: "p1",
+                screenID: spansHinge ? 3 : 1,
+                spansHinge: spansHinge,
+                spanningPanelWidth: Int(spanning.width),
+                spanningPanelHeight: Int(spanning.height)
+            )
+        )
+    }
+
+    @Test("the hinge closes the device before iOS lights the cover, and a hidden pane drops the pose")
+    func theHingeClosesTheDeviceAheadOfThePanel() async throws {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        let inner = CGSize(width: 8, height: 12)
+        await send(fake, panel(spansHinge: false, spanning: inner))
+        await send(fake, orientation(.portrait, device: .portrait))
+        await send(fake, .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 0, spansHinge: false)))
+        await send(fake, try frame(width: 6, height: 9, sequence: 1))
+        await settle(viewController) { viewController.foldShownClosed == true }
+        #expect(viewController.foldShownClosed == true)
+
+        await send(fake, .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 120, spansHinge: true)))
+        await send(fake, panel(spansHinge: true, spanning: inner))
+        await send(fake, try frame(width: 8, height: 12, sequence: 2))
+        await settle(viewController) { viewController.foldShownClosed == false }
+        #expect(viewController.foldShownClosed == false)
+        await settle(viewController) { !viewController.drawsPosedFold }
+        #expect(!viewController.drawsPosedFold)
+
+        // Past the closing angle with the inner panel still lit: the device
+        // shows closed, drawn posed with its cover black until iOS lights it.
+        await send(fake, .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 30, spansHinge: true)))
+        await settle(viewController) { viewController.foldShownClosed == true }
+        #expect(viewController.foldShownClosed == true)
+        #expect(viewController.drawsPosedFold)
+
+        viewController.setFrameDemand(false)
+        await settle(viewController) { viewController.foldShownClosed == nil }
+        #expect(viewController.foldShownClosed == nil)
+        #expect(!viewController.drawsPosedFold)
+    }
+
     @Test("an unknown device orientation draws the presentation orientation")
     func noDeviceOrientationFallsBack() async {
         let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()

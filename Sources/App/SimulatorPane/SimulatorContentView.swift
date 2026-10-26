@@ -20,6 +20,34 @@ import SurfaceTrace
 /// sees the daemon; it reports gestures through `SimulatorInputDelegate`
 /// and the VC forwards them to the view model.
 final class SimulatorContentView: MTKView, MTKViewDelegate {
+    /// A foldable as the hinge has it: open or closed, whichever panel iOS
+    /// has lit. The view draws the whole device posed from this, rather than
+    /// the frame on show, while it turns over between the two and while the
+    /// side shown is a panel iOS hasn't lit, whose face is black until it is.
+    struct PosedFold: Equatable {
+        /// Whether the device is shown closed.
+        var closed: Bool
+        /// The open fold's turn, from the hinge's angle.
+        var openTurn: Double
+        /// The hinge's angle in radians, which the device leans by while
+        /// it's shown closed (`FoldPose.closed(hinge:)`); `0` lies flat.
+        var closedHinge: Double = 0
+        /// Whether the frame on show is the inner panel's rather than the
+        /// cover's.
+        var showsInnerFrame: Bool
+        var innerOrientation: Orientation
+        var coverOrientation: Orientation
+        var innerSize: CGSize
+        var coverSize: CGSize
+        var family: DeviceFamily
+    }
+
+    /// A turnover under way: which way, and when it started.
+    private struct Turnover {
+        let direction: FoldTurnover.Direction
+        let started: CFTimeInterval
+    }
+
     /// A dev-seat snapshot burst: where its frames go, how long it runs, and
     /// how to read what's around the picture at each frame.
     struct SnapshotBurst {
@@ -118,6 +146,40 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     /// The orientation input goes out in, when the picture is drawn in
     /// another (a foldable drawn in device space). Nil means the two agree.
     var presentationOrientation: Orientation?
+    /// The foldable's pose, nil for every other device and for a foldable
+    /// whose panels aren't both measured yet.
+    private(set) var posedFold: PosedFold?
+    /// The turnover under way, if the foldable is turning over between its
+    /// panels. While it runs the view draws every display frame.
+    private var turnover: Turnover?
+    /// Drives a turnover's frames; nil between turnovers, which keeps the
+    /// view change-driven the rest of the time.
+    private var turnoverLink: CADisplayLink?
+    /// Told when the view starts or stops drawing the whole device posed, so
+    /// the owner can hide the frame it draws itself, and put it back.
+    var onPosedDrawingChange: ((Bool) -> Void)?
+    /// Whether the view draws the whole device posed rather than the frame on
+    /// show: through a turnover, and while the side shown is a panel iOS
+    /// hasn't lit, and while the closed device leans with the hinge. Through
+    /// the first two no new click or two-finger gesture starts, since what it
+    /// shows isn't what a touch would reach; one already under way finishes,
+    /// and keys still go through. A leaning cover takes input as usual.
+    var drawsPosedFold: Bool {
+        guard let posedFold else { return false }
+        return turnover != nil || posedFold.closed == posedFold.showsInnerFrame || leansClosed
+    }
+    /// Whether the device rests shown closed on the lit cover but leaning
+    /// with the hinge, which the frame on show can't draw flat. Input still
+    /// reaches the cover then, mapped back through the lean
+    /// (`picturePoint(at:)`).
+    private var leansClosed: Bool {
+        guard let posedFold, turnover == nil else { return false }
+        return posedFold.closed && !posedFold.showsInnerFrame && posedFold.closedHinge > 0.001
+    }
+    /// Whether a turnover between the two sides is under way.
+    var isTurningOver: Bool { turnover != nil }
+    /// What `onPosedDrawingChange` last said.
+    private var reportedPosedDrawing = false
     private var dragStart: CGPoint?
     private var dragStartTime: Date?
     private var liveTouchActive = false
@@ -322,6 +384,70 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         requestRedraw()
     }
 
+    // MARK: Turnover
+
+    /// Push the foldable's pose in, nil for none. A change of side turns the
+    /// device over; reversing one under way turns back from where it had
+    /// got to.
+    ///
+    /// The display link only ticks while the view is on a screen, so a
+    /// deadline ends the turnover too: one started just before a tab switch
+    /// would otherwise never finish, leaving the frame hidden and input shut.
+    func setPosedFold(_ fold: PosedFold?) {
+        guard fold != posedFold else { return }
+        let previous = posedFold
+        posedFold = fold
+        if let fold, let previous, fold.closed != previous.closed {
+            let now = CACurrentMediaTime()
+            let done = turnover.map { min(now - $0.started, FoldTurnover.duration) } ?? FoldTurnover.duration
+            let started = now - (FoldTurnover.duration - done)
+            turnover = Turnover(direction: fold.closed ? .closing : .opening, started: started)
+            if turnoverLink == nil {
+                let link = displayLink(target: self, selector: #selector(turnoverTick))
+                link.add(to: .main, forMode: .common)
+                turnoverLink = link
+            }
+            let remaining = started + FoldTurnover.duration - now
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.1) { [weak self] in
+                guard let self, self.turnover?.started == started else { return }
+                self.endTurnover()
+            }
+        } else if fold == nil {
+            endTurnover()
+        }
+        requestRedraw()
+        reportPosedDrawing()
+    }
+
+    @objc
+    private func turnoverTick(_ link: CADisplayLink) {
+        guard let turnover else {
+            endTurnover()
+            return
+        }
+        if FoldTurnover.isFinished(elapsed: CACurrentMediaTime() - turnover.started) {
+            endTurnover()
+            return
+        }
+        requestRedraw()
+    }
+
+    private func endTurnover() {
+        turnoverLink?.invalidate()
+        turnoverLink = nil
+        guard turnover != nil else { return }
+        turnover = nil
+        requestRedraw()
+        reportPosedDrawing()
+    }
+
+    private func reportPosedDrawing() {
+        let posed = drawsPosedFold
+        guard posed != reportedPosedDrawing else { return }
+        reportedPosedDrawing = posed
+        onPosedDrawingChange?(posed)
+    }
+
     // MARK: Snapshot
 
     /// Try to capture each frame drawn for `burst.seconds`, then report through
@@ -395,6 +521,11 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     // MARK: MTKViewDelegate
 
     func draw(in view: MTKView) {
+        let readback = snapshotReadback(drawableSize: view.drawableSize)
+        // Whatever the render did, the frame promised to a snapshot is
+        // settled: a draw that never reached the readback delivers nothing.
+        defer { readback?.settleUnread() }
+        if let posedFold, drawsPosedFold, drawPosed(posedFold, in: view, readback: readback) { return }
         // Peek (don't consume) the pending trace: retire it only if the
         // renderer actually installs it (reached commit), so an early
         // return or a full scan pool leaves it for the next draw. The next
@@ -403,10 +534,6 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         // tolerates that, and re-requesting a draw would spin while the
         // pool stayed full.
         let trace = peekConsumerTrace()
-        let readback = snapshotReadback(drawableSize: view.drawableSize)
-        // Whatever the render did, the frame promised to a snapshot is
-        // settled: a draw that never reached the readback delivers nothing.
-        defer { readback?.settleUnread() }
         let installed = renderer.render(
             lease: currentSurface,
             orientation: orientation,
@@ -419,6 +546,72 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             readback: readback
         )
         if installed { pendingTraceSequence = nil }
+    }
+
+    /// Draw the whole device posed: the turnover's frame for now, or the side
+    /// shown at rest. The live frame goes on its own panel's face, and the
+    /// other face is black.
+    private func drawPosed(_ fold: PosedFold, in view: MTKView, readback: SimulatorFrameReadback?) -> Bool {
+        guard let scene = posedScene(fold, drawable: view.drawableSize) else { return false }
+        return renderer.renderTurnover(
+            scene: scene,
+            inner: fold.showsInnerFrame ? currentSurface : nil,
+            innerOrientation: fold.innerOrientation,
+            cover: fold.showsInnerFrame ? nil : currentSurface,
+            coverOrientation: fold.coverOrientation,
+            frameColor: SIMD4(0.15, 0.15, 0.15, 1),
+            in: view,
+            readback: readback
+        )
+    }
+
+    /// The posed device for the moment, measured against `drawable`: the
+    /// turnover's frame while one runs, else the end of the motion that leads
+    /// to the side shown.
+    private func posedScene(_ fold: PosedFold, drawable size: CGSize) -> FoldTurnoverScene? {
+        let backing = max(1, window?.backingScaleFactor ?? 2)
+        let drawable = CGSize(width: max(1, size.width), height: max(1, size.height))
+        let direction = turnover?.direction ?? (fold.closed ? .closing : .opening)
+        let elapsed = turnover.map { CACurrentMediaTime() - $0.started } ?? FoldTurnover.duration
+        return FoldTurnoverScene.measuring(
+            innerSize: fold.innerSize,
+            coverSize: fold.coverSize,
+            innerOrientation: fold.innerOrientation,
+            coverOrientation: fold.coverOrientation,
+            family: fold.family,
+            drawable: drawable,
+            backing: backing,
+            insetPoints: displayInset,
+            direction: direction,
+            elapsed: elapsed,
+            openTurn: fold.openTurn,
+            closedHinge: fold.closedHinge
+        )
+    }
+
+    /// Where `viewPoint` lands on the picture, in its displayed space, or nil
+    /// off it. A closed device leaning with the hinge is mapped back through
+    /// its perspective; anything else through the flat or creased picture.
+    private func picturePoint(at viewPoint: CGPoint) -> CGPoint? {
+        if leansClosed, let posedFold {
+            guard bounds.width > 0, bounds.height > 0,
+                let scene = posedScene(posedFold, drawable: drawableSize)
+            else { return nil }
+            // View points run top-down; normalized device coordinates bottom-up.
+            return scene.coverPoint(ndc: SIMD2(
+                Double(viewPoint.x / bounds.width) * 2 - 1,
+                1 - Double(viewPoint.y / bounds.height) * 2
+            ))
+        }
+        return SimGestureMath.normalizedPoint(
+            viewPoint: viewPoint,
+            viewSize: bounds.size,
+            surfaceSize: surfaceSize,
+            orientation: orientation,
+            displayInset: displayInset,
+            crease: crease,
+            referenceSize: fitReferenceSize
+        )
     }
 
     /// Ask AppKit for one draw on the next display cycle. Several requests
@@ -485,6 +678,11 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Drawn posed, through a turnover or with the side shown on a panel
+        // iOS hasn't lit, the picture under the pointer isn't what a touch
+        // would reach. A gesture already under way finishes, so no contact
+        // is left down. A leaning cover is the lit panel, mapped through.
+        guard !drawsPosedFold || leansClosed else { return }
         window?.makeFirstResponder(self)
         cancelLongPressHold()
         liveTouchIsEdgeGesture = false
@@ -518,15 +716,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             crownDragMoved = false
             return
         }
-        if let normalized = SimGestureMath.normalizedPoint(
-            viewPoint: viewPoint,
-            viewSize: bounds.size,
-            surfaceSize: surfaceSize,
-            orientation: orientation,
-            displayInset: displayInset,
-            crease: crease,
-            referenceSize: fitReferenceSize
-        ) {
+        if let normalized = picturePoint(at: viewPoint) {
             dragStart = normalized
             dragStartTime = Date()
             liveTouchIsEdgeGesture = isEdgeGestureStart(viewPoint: viewPoint)
@@ -899,18 +1089,10 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
 
     private func normalizedTouchPoint(for event: NSEvent) -> CGPoint? {
         let viewPoint = convert(event.locationInWindow, from: nil)
-        if let inScreen = SimGestureMath.normalizedPoint(
-            viewPoint: viewPoint,
-            viewSize: bounds.size,
-            surfaceSize: surfaceSize,
-            orientation: orientation,
-            displayInset: displayInset,
-            crease: crease,
-            referenceSize: fitReferenceSize
-        ) {
+        if let inScreen = picturePoint(at: viewPoint) {
             return inScreen
         }
-        if isPointInBezel(viewPoint),
+        if !leansClosed, isPointInBezel(viewPoint),
             let extended = SimGestureMath.extendedNormalizedPoint(
                 viewPoint: viewPoint,
                 viewSize: bounds.size,
@@ -950,17 +1132,14 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         return crown.insetBy(dx: -4, dy: -4).contains(viewPoint)
     }
 
+    /// Start a two-finger gesture at `viewPoint` unless one is already under
+    /// way. None starts through a turnover or on an unlit panel's face, since
+    /// the picture under the pointer isn't what a touch would reach; one
+    /// already under way runs on to its end. A leaning cover maps through.
     private func startGestureIfNeeded(at viewPoint: NSPoint) {
         if gestureActive { return }
-        guard let center = SimGestureMath.normalizedPoint(
-            viewPoint: viewPoint,
-            viewSize: bounds.size,
-            surfaceSize: surfaceSize,
-            orientation: orientation,
-            displayInset: displayInset,
-            crease: crease,
-            referenceSize: fitReferenceSize
-        )
+        guard !drawsPosedFold || leansClosed else { return }
+        guard let center = picturePoint(at: viewPoint)
         else { return }
         gestureCenter = center
         gestureSeparation = SimGestureMath.pinchInitialSeparation

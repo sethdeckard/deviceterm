@@ -273,6 +273,39 @@ struct DevSeatContentViewSnapshotTests {
     }
 
     @Test
+    func aPosedDrawSettlesItsFrameToo() async throws {
+        let view = SimulatorContentView()
+        // Shown closed while the inner panel is still lit: drawn posed.
+        view.setPosedFold(
+            SimulatorContentView.PosedFold(
+                closed: true,
+                openTurn: 1,
+                showsInnerFrame: true,
+                innerOrientation: .landscapeRight,
+                coverOrientation: .portrait,
+                innerSize: CGSize(width: 8, height: 12),
+                coverSize: CGSize(width: 6, height: 9),
+                family: .phone
+            )
+        )
+        #expect(view.drawsPosedFold)
+        let writer = try PaneSnapshotWriter(directory: try temporaryDirectory())
+        let outcome: PaneSnapshotOutcome = await withCheckedContinuation { continuation in
+            view.beginSnapshot(
+                SimulatorContentView.SnapshotBurst(
+                    writer: writer,
+                    seconds: 0.1,
+                    bezel: { _ in nil },
+                    state: { .unknown },
+                    completion: { continuation.resume(returning: $0) }
+                )
+            )
+            view.draw(in: view)
+        }
+        #expect(outcome == PaneSnapshotOutcome(ok: true, frames: 0, error: nil))
+    }
+
+    @Test
     func aReadbackSettlesOnce() {
         final class Count: @unchecked Sendable { var value = 0 }
         let count = Count()

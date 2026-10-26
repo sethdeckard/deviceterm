@@ -466,6 +466,30 @@ struct SimGestureMathReferenceTests {
         #expect(abs(coverRect.midY - view.height / 2) < 1e-9)
     }
 
+    @Test("a cover drawn upright beside a turned inner panel keeps the inner panel's scale")
+    func aTurnedReferenceKeepsOneScale() throws {
+        // Device space: the device upright draws the inner panel landscapeRight
+        // and the cover portrait, in a pane that isn't square.
+        let wide = CGSize(width: 2_400, height: 1_300)
+        let innerRect = try #require(
+            SimGestureMath.imageRect(
+                viewSize: wide, surfaceSize: inner, orientation: .landscapeRight, displayInset: 36, referenceSize: inner
+            )
+        )
+        let coverRect = try #require(
+            SimGestureMath.imageRect(
+                viewSize: wide,
+                surfaceSize: cover,
+                orientation: .portrait,
+                displayInset: 36,
+                referenceSize: SimGestureMath.reference(inner, displayedIn: .landscapeRight, forPictureIn: .portrait)
+            )
+        )
+        let innerScale = innerRect.width / inner.height
+        let coverScale = coverRect.height / cover.height
+        #expect(abs(innerScale - coverScale) < 1e-9)
+    }
+
     @Test("an unusable reference falls back to fitting the surface")
     func zeroReferenceFallsBack() {
         let plain = SimGestureMath.imageRect(viewSize: view, surfaceSize: cover)
