@@ -17,8 +17,11 @@ NS_ASSUME_NONNULL_BEGIN
 NS_SWIFT_SENDABLE
 @protocol CSBRemoteHIDMessageBuilding <NSObject>
 
-/// The daemon service that takes touch and keyboard reports.
+/// The daemon service that takes touch reports.
 @property (nonatomic, readonly, copy) NSString *touchServiceName;
+
+/// The daemon service that takes key events for its own keyboard.
+@property (nonatomic, readonly, copy) NSString *keyboardServiceName;
 
 /// The daemon service that takes hardware-button events.
 @property (nonatomic, readonly, copy) NSString *buttonServiceName;
@@ -55,15 +58,9 @@ NS_SWIFT_SENDABLE
                                    edge:(NSInteger)edge
                               serviceID:(uint64_t)serviceID;
 
-/// The request that registers the virtual keyboard.
-- (xpc_object_t)keyboardRegistration;
-
-/// The service id the reply to `keyboardRegistration` names.
-- (uint64_t)keyboardServiceIDFromReply:(xpc_object_t)reply;
-
-/// The keyboard report for every HID usage held down now.
-- (xpc_object_t)keyboardReportWithPressedUsages:(NSSet<NSNumber *> *)usages
-                                      serviceID:(uint64_t)serviceID;
+/// One phase of the key with HID usage `usage` (keyboard page), for the
+/// daemon's own keyboard.
+- (xpc_object_t)keyboardEventForUsage:(unsigned int)usage down:(BOOL)down;
 
 /// One phase of a hardware button, or nil for a button the vocabulary has
 /// no event for. `button` is a `CSBHardwareButton`.

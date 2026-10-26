@@ -22,6 +22,13 @@ static NSError *CSBRemoteError(NSString *description) {
                            userInfo:@{NSLocalizedDescriptionKey: description}];
 }
 
+/// `CSBRemoteError`, keeping the error that caused it as the underlying one.
+static NSError *CSBRemoteErrorCausedBy(NSString *description, NSError *cause) {
+    return [NSError errorWithDomain:CSBHIDClientErrorDomain
+                               code:CSBHIDClientErrorRemoteUnavailable
+                           userInfo:@{NSLocalizedDescriptionKey: description, NSUnderlyingErrorKey: cause}];
+}
+
 @interface SimRemoteHIDChannel ()
 @property (atomic, readwrite) BOOL lost;
 @property (nonatomic, strong) xpc_connection_t connection;
@@ -47,8 +54,12 @@ static NSError *CSBRemoteError(NSString *description) {
     mach_port_t port = [device lookup:service error:&lookupError];
     if (port == MACH_PORT_NULL) {
         if (error) {
-            *error = lookupError ?: CSBRemoteError(
-                [NSString stringWithFormat:@"%@ is not in the simulator's bootstrap.", service]);
+            NSString *description = [NSString stringWithFormat:@"%@ is not in the simulator's bootstrap.", service];
+            *error = lookupError
+                ? CSBRemoteErrorCausedBy([NSString stringWithFormat:@"%@ is not in the simulator's bootstrap: %@",
+                                                                    service, lookupError.localizedDescription],
+                                         lookupError)
+                : CSBRemoteError(description);
         }
         return nil;
     }

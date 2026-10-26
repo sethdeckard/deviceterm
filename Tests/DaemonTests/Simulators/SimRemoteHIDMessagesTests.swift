@@ -96,20 +96,16 @@ func unmappedButtonHasNoMessage() {
     #expect(home.map { DeviceObject(xpc: $0)["messageType"] } == .text("IndigoButtonEvent"))
 }
 
-@Test("a keyboard report carries every held usage and the replied service id")
-func keyboardReportCarriesHeldUsages() throws {
-    let report = DeviceObject(xpc: SimRemoteHIDMessages(hasHomeButton: false).keyboardReport(
-        withPressedUsages: [NSNumber(value: 0x0B), NSNumber(value: 0x04)],
-        serviceID: 0x1_0000_2042
-    ))
-    let send = try #require(report["payload"]?["send"])
-    #expect(send["_1"] == .unsigned(0x1_0000_2042))
-    guard case let .blob(bytes) = try #require(send["_0"]) else {
-        Issue.record("the report is not a blob")
-        return
-    }
-    #expect(bytes[1 + 0x0B / 8] & UInt8(1 << (0x0B % 8)) != 0)
-    #expect(bytes[1 + 0x04 / 8] & UInt8(1 << (0x04 % 8)) != 0)
+@Test(
+    "a key event reaches XPC with its usage intact, including ones a keyboard report can't carry",
+    arguments: [UInt32(0x0B), 0xE1, 0xF0, 0x1FF]
+)
+func keyEventCarriesItsUsage(usage: UInt32) {
+    let messages = SimRemoteHIDMessages(hasHomeButton: false)
+    let event = DeviceObject(xpc: messages.keyboardEvent(forUsage: usage, down: true))
+    #expect(event["messageType"] == .text("IndigoKeyboardButtonEvent"))
+    #expect(event["payload"]?["usageCode"] == .unsigned(UInt64(usage)))
+    #expect(messages.keyboardServiceName == SimulatorHIDMessages.keyboardService)
 }
 
 @Test("a held contact and its display UUID stay on the panel it went down on")

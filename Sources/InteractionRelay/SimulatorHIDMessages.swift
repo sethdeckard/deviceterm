@@ -15,15 +15,14 @@ import ChannelBootstrap
 /// touchscreen per screen and names each one's display in its list of
 /// services, which `sessionAnchor` asks for.
 package enum SimulatorHIDMessages {
-    /// The service that takes touch and keyboard reports.
+    /// The service that takes touch reports.
     package static let touchService = HIDReports.touchAndKeyboardFeature
 
     /// The service that takes hardware-button events.
     package static let buttonService = HIDReports.buttonFeature
 
-    /// The id the keyboard asks to be registered under. The registration reply
-    /// can name another, and reports go to the one it names.
-    package static let defaultKeyboardServiceID = HIDReports.keyboardServiceID
+    /// The service that takes key events for the daemon's own keyboard.
+    package static let keyboardService = HIDReports.keyboardFeature
 
     /// The request that opens a touch session without registering anything:
     /// it asks for the session's services, which changes nothing.
@@ -95,24 +94,11 @@ package enum SimulatorHIDMessages {
         return HIDReports.sendReport(report, to: serviceID)
     }
 
-    /// The request that registers the virtual keyboard. Its reply carries the
-    /// service id to send keyboard reports to.
-    package static func registerKeyboard() -> DeviceObject {
-        HIDReports.createKeyboard(serviceID: HIDReports.keyboardServiceID)
-    }
-
-    /// The service id a keyboard registration reply names, or the requested
-    /// one when the reply names none.
-    package static func registeredKeyboardServiceID(from reply: DeviceObject) -> UInt64 {
-        reply.firstValue(under: "serviceID")?.unsigned ?? HIDReports.keyboardServiceID
-    }
-
-    /// The keyboard report for the full set of usages held down now.
-    package static func keyboard(pressed usages: Set<UInt16>, serviceID: UInt64) -> DeviceObject {
-        HIDReports.sendReport(
-            HIDReports.keyboardReport(usages: usages, timestamp: HIDReports.machTicks()),
-            to: serviceID
-        )
+    /// One phase of a key, sent to the daemon's own keyboard. The simulator
+    /// doesn't count that keyboard as attached hardware, so unlike a
+    /// registered keyboard it leaves the on-screen keyboard available.
+    package static func key(usage: UInt16, down: Bool) -> DeviceObject {
+        HIDReports.keyboardButtonEvent(usage: usage, down: down)
     }
 
     /// One phase of a hardware button.

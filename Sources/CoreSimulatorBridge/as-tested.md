@@ -100,8 +100,9 @@ in the active Xcode before its machine-wide fallbacks.
 | Mach service       | `PurpleWorkspacePort` (runtime-only)                                 | `SimPurpleHID`        | Sim-side Mach port that accepts GSEvent payloads (notably device-orientation messages). Existence verified at use time — the probe can't introspect bootstrap names without a booted device. |
 | C symbol (optional) | `xpc_endpoint_create_mach_port_4sim`                                | `SimRemoteHIDChannel` | libSystem SPI. Wraps a Mach port from the simulator's bootstrap as an XPC endpoint. Absent, every input goes through Indigo. |
 | C symbol (optional) | `xpc_connection_enable_sim2host_4sim`                               | `SimRemoteHIDChannel` | libSystem SPI. Marks the connection as host-to-simulator. Without it, `dtuhidd` drops the peer as soon as it activates. |
-| Mach service       | `com.apple.coredevice.feature.remote.universalhidservice` (runtime-only) | `SimRemoteHIDChannel` | `dtuhidd`'s touch and keyboard service. Same request vocabulary as a device's `universalhidservice`. |
+| Mach service       | `com.apple.coredevice.feature.remote.universalhidservice` (runtime-only) | `SimRemoteHIDChannel` | `dtuhidd`'s touch service. Same request vocabulary as a device's `universalhidservice`. |
 | Mach service       | `com.apple.coredevice.feature.remote.hid.button` (runtime-only)      | `SimRemoteHIDChannel` | `dtuhidd`'s hardware-button service; takes `IndigoButtonEvent`. |
+| Mach service       | `com.apple.coredevice.feature.remote.hid.keyboard` (runtime-only)    | `SimRemoteHIDChannel` | `dtuhidd`'s keyboard service; takes `IndigoKeyboardButtonEvent` and types through `dtuhidd`'s own keyboard. |
 | instance selector  | `-[SimDevice availableLocationScenarios]`                            | `SimLocation`         | The runtime's built-in location "trips". **Declared as bare `id`** with no error out-param; the live-verified shape (Xcode 26.5 / iOS 26) is an `NSArray` of `NSDictionary`, each with `name` and `localizedName` (both `NSString`, identical for the four built-ins on an English host). The wrapper vends `name` — what `setLocationScenario:` consumes — and keeps string-array / dictionary-key fallbacks since the declared type guarantees nothing. **Requires a booted device**: shut down it returns an empty array, matching `xcrun simctl location <udid> list`, which prints only the table header. The four on this runtime are City Run, City Bicycle Ride, Freeway Drive, Apple. |
 | instance selector  | `-[SimDevice setLocationWithLatitude:andLongitude:error:]`           | `SimLocation`         | Pins the device to a fixed coordinate until cleared. |
 | instance selector  | `-[SimDevice setLocationScenario:error:]`                            | `SimLocation`         | Starts a named scenario from `availableLocationScenarios`. Playback runs sim-side; the call returns on acceptance, not completion. **Does not validate the name** — an unknown scenario is accepted silently with no error and no effect (live-verified). `simctl` appears to validate only because it checks the list client-side first. Callers must validate against `availableScenarios()` or a typo silently no-ops. |
@@ -271,7 +272,7 @@ constants survive review/rebase independent of any commit body.
 
 - **When / where:** 2026-10-24 · Xcode 27.1 RC · iOS 27.0 iPhone 17 and
   iPad Pro 11 (M5), iOS 26.5 and iOS 18.1 iPhones, watchOS 27.0, iOS 27.1
-  iPhone Duo.
+  iPhone Duo. Keyboard findings 2026-10-25, iOS 27.0 iPhone 17.
 - **The gate.** The guest's `SimulatorHID.framework` (loaded by
   backboardd) watches the notify state `com.apple.coredevice.dtuhidd.active`.
   While it's set, `_locked_updateDTUHIDDAffectedServices` disconnects the
@@ -308,6 +309,21 @@ constants survive review/rebase independent of any commit body.
   iOS 27. Two side-button presses through `dtuhidd` do, logged as two
   `C/30` button events. The Wallet sheet wasn't checked, because the test
   sims had no cards.
+- **Keys and the on-screen keyboard.** A keyboard registered with
+  `createService` counts as attached hardware, so the simulator hides its
+  on-screen keyboard until that keyboard goes away. Closing the connection
+  that registered it removes it, and so does a `removeService` request
+  naming its service id.
+- **`removeService` replies with an error when it works.** The reply is an
+  XPC "Connection interrupted" dictionary, but the connection stays up and
+  `dtuhidd` logs "Removed HID service". Judge the removal by that log line or
+  by the on-screen keyboard, not by the reply.
+- **`hid.keyboard` types without hiding anything.** An
+  `IndigoKeyboardButtonEvent` (`usagePage` 7, `state` 1 to press and 2 to
+  release) goes to `dtuhidd`'s own `mainKeyboard(0x200)`, which every
+  session already has. Typed text matched, Shift included, with
+  `dtuhidd.active` set, and the on-screen keyboard stayed up. No request or
+  reply is needed first, unlike the touch connection.
 - **Device Hub at the same time.** Device Hub's input arrives through its own
   session. During one roughly ten-second overlap, its drags and
   DeviceTerm's once-a-second taps both landed, every second.

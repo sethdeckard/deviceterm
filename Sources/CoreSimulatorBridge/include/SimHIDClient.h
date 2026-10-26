@@ -64,8 +64,9 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
                                  error:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(client(forUDID:remoteMessages:));
 
-/// Whether this client has established a remote touch channel. Keys and
-/// buttons may independently fall back to Indigo.
+/// Whether this client sends through the simulator's HID daemon. Once it
+/// does, keys and the buttons the daemon has events for go only there, and
+/// fail rather than fall back to Indigo when their connection won't open.
 @property (atomic, readonly) BOOL sendsThroughRemoteHID;
 
 /// Why there's no remote touch channel, when `sendsThroughRemoteHID` is
@@ -106,8 +107,9 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
 // and fails with `CSBHIDClientErrorSendTimeout` past that. The send is not
 // cancelled: both transports send in order with no timeout of their own, so
 // it may still complete, and delivery is unknown. A daemon connection that
-// was lost and can't be replaced fails the send with
-// `CSBHIDClientErrorRemoteUnavailable`. While one is outstanding, every
+// was lost and can't be replaced, or that hasn't opened (a later send tries
+// again once five seconds have passed since the last attempt), fails the send
+// with `CSBHIDClientErrorRemoteUnavailable`. While one is outstanding, every
 // send that isn't a release fails with `CSBHIDClientErrorTransportStalled`
 // without being sent. Releases (`tapUp`, `edgeTouchUp`, `twoFingerUp`,
 // `keyUp`, `releaseHardwareButton`, and the up half of a press) still go out.
@@ -213,6 +215,12 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
 // (see `KeyboardInputMap.kVKToHIDUsage`). Callers who already have
 // HID codes, i.e. they translated upstream, pass them through
 // directly.
+//
+// Through the simulator's HID daemon, keys go to the daemon's own
+// keyboard rather than a registered one. The simulator counts a
+// registered keyboard as attached hardware and hides its on-screen
+// keyboard for as long as it stays registered; the daemon's own
+// keyboard leaves the on-screen keyboard available.
 
 - (BOOL)keyDownWithKeyCode:(unsigned int)keyCode
                      error:(NSError * _Nullable * _Nullable)error

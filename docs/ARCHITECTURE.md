@@ -3955,10 +3955,12 @@ touch, at most every five seconds and only with nothing held down. The
 `pane published` log line says which transport a pane got: `input=dtuhidd`,
 or `input=indigo (reason)`.
 
-The first key registers a virtual keyboard with `dtuhidd`, which tells the
-simulator a hardware keyboard is attached, so it hides the on-screen
-keyboard. Apple Pay is a double press of the side button, or of Home on a
-device with one.
+Keys go to `dtuhidd`'s own keyboard, which the simulator doesn't count as
+attached hardware, so the on-screen keyboard stays available. A registered
+virtual keyboard would hide it for as long as it stayed registered.
+
+Apple Pay is a double press of the side button, or of Home on a device with
+one.
 
 As with Indigo, a send completing means the message left the daemon, not
 that the guest acted on it.

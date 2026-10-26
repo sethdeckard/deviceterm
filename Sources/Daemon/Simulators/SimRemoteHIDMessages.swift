@@ -12,6 +12,7 @@ import XPC
 final class SimRemoteHIDMessages: NSObject, CSBRemoteHIDMessageBuilding {
     let touchServiceName = SimulatorHIDMessages.touchService
     let buttonServiceName = SimulatorHIDMessages.buttonService
+    let keyboardServiceName = SimulatorHIDMessages.keyboardService
     /// Whether the device has a physical Home button, which is the one Apple
     /// Pay double-presses there.
     let hasHomeButton: Bool
@@ -104,17 +105,8 @@ final class SimRemoteHIDMessages: NSObject, CSBRemoteHIDMessageBuilding {
         ).xpcObject
     }
 
-    func keyboardRegistration() -> xpc_object_t {
-        SimulatorHIDMessages.registerKeyboard().xpcObject
-    }
-
-    func keyboardServiceID(fromReply reply: xpc_object_t) -> UInt64 {
-        SimulatorHIDMessages.registeredKeyboardServiceID(from: DeviceObject(xpc: reply))
-    }
-
-    func keyboardReport(withPressedUsages usages: Set<NSNumber>, serviceID: UInt64) -> xpc_object_t {
-        let pressed = Set(usages.compactMap { UInt16(exactly: $0.uint32Value) })
-        return SimulatorHIDMessages.keyboard(pressed: pressed, serviceID: serviceID).xpcObject
+    func keyboardEvent(forUsage usage: UInt32, down: Bool) -> xpc_object_t {
+        SimulatorHIDMessages.key(usage: UInt16(truncatingIfNeeded: usage), down: down).xpcObject
     }
 
     func pressCount(forButton button: Int) -> Int {

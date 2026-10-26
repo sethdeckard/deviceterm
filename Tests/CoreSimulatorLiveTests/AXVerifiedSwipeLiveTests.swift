@@ -388,3 +388,128 @@ private func swipeScrollsTheGuest(client: SimHIDClient, booted: CSBDeviceInfo) t
     let after = try settledSettingsRow(accessibility, at: point, interface: interface, orientation: orientation)
     #expect(after != before, "the swipe did not scroll at \(point) (before: \(before); after: \(after))")
 }
+
+/// The first text field in `tree`, with its frame and current value.
+private func firstTextField(in tree: [String: Any]) -> (frame: CGRect, value: String)? {
+    if tree["role"] as? String == "TextField",
+        let frame = tree["frame"] as? [String: Any],
+        let originX = frame["x"] as? Double, let originY = frame["y"] as? Double,
+        let width = frame["w"] as? Double, let height = frame["h"] as? Double,
+        width > 0, height > 0 {
+        return (CGRect(x: originX, y: originY, width: width, height: height), tree["value"] as? String ?? "")
+    }
+    for child in tree["children"] as? [[String: Any]] ?? [] {
+        if let found = firstTextField(in: child) { return found }
+    }
+    return nil
+}
+
+/// The first text field in the frontmost tree, read until one appears or
+/// `seconds` pass. A relaunched app has a frontmost tree before it has laid
+/// out its controls.
+private func awaitTextField(
+    _ accessibility: SimAccessibility, seconds: Double = 10
+) -> (frame: CGRect, value: String)? {
+    let attempts = max(1, Int(seconds * 2))
+    for attempt in 0..<attempts {
+        if let field = (try? accessibility.frontmostTree()).flatMap(firstTextField(in:)) { return field }
+        if attempt < attempts - 1 { Thread.sleep(forTimeInterval: 0.5) }
+    }
+    return nil
+}
+
+/// The frame of the compact Search button Settings shows instead of a search
+/// field on a narrow screen (the Duo's cover). Settings' own Search row
+/// carries an identifier; this button doesn't.
+private func compactSearchButton(in tree: [String: Any]) -> CGRect? {
+    if tree["role"] as? String == "Button",
+        tree["label"] as? String == "Search",
+        (tree["identifier"] as? String ?? "").isEmpty,
+        let frame = tree["frame"] as? [String: Any],
+        let originX = frame["x"] as? Double, let originY = frame["y"] as? Double,
+        let width = frame["w"] as? Double, let height = frame["h"] as? Double,
+        width > 0, height > 0 {
+        return CGRect(x: originX, y: originY, width: width, height: height)
+    }
+    for child in tree["children"] as? [[String: Any]] ?? [] {
+        if let found = compactSearchButton(in: child) { return found }
+    }
+    return nil
+}
+
+/// Type into Settings' search field through the simulator's HID daemon and
+/// read the text back. On a single-panel iPhone the field's position also
+/// shows whether the on-screen keyboard is up: it rises with the keyboard,
+/// and sits at the bottom of the screen without one, which is where a
+/// registered hardware keyboard leaves it. On an iPad or a device with
+/// several panels, only the text is checked.
+@Test(.enabled(if: bootedDeviceHasSettingsList()))
+func typingThroughTheHIDDaemonKeepsTheOnScreenKeyboard() throws {
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let hasHomeButton = (try? SimDeviceHandle.handle(forUDID: booted.udid))?.hasHomeButton ?? false
+    let client = try SimHIDClient.client(
+        forUDID: booted.udid,
+        remoteMessages: SimRemoteHIDMessages(hasHomeButton: hasHomeButton)
+    )
+    try #require(
+        client.sendsThroughRemoteHID,
+        "the HID daemon was not reachable: \(client.remoteHIDUnavailableReason ?? "no reason given")"
+    )
+    let accessibility = try SimAccessibility.client(forUDID: booted.udid)
+    let multiplePanels = SimDisplayHandle.deviceHasMultiplePanels(udid: booted.udid)
+    if multiplePanels {
+        let display = try SimDisplayHandle.handle(forUDID: booted.udid)
+        try display.start { _ in }
+        Thread.sleep(forTimeInterval: 0.5)
+        client.touchScreenID = display.boundScreenID
+        accessibility.displayID = display.boundScreenID
+        display.stop()
+    }
+    try #require(waitForAXServer(accessibility, client: client), "the AX server never answered")
+    dismissFirstBootAlert(client, accessibility: accessibility)
+    let interface = try relaunchSettings(udid: booted.udid, accessibility: accessibility, landscape: false)
+    // The compact Search button opens the field already focused, with the
+    // keyboard rising over where the field was, so the field isn't tapped
+    // after it: a tap there lands on a key.
+    let target: CGRect
+    if awaitTextField(accessibility, seconds: 3) == nil,
+        let button = (try? accessibility.frontmostTree()).flatMap(compactSearchButton(in:)) {
+        target = button
+    } else {
+        target = try #require(awaitTextField(accessibility), "Settings shows no search field").frame
+    }
+    let point = CGPoint(x: target.midX / interface.width, y: target.midY / interface.height)
+    try client.tapDown(at: point)
+    Thread.sleep(forTimeInterval: 0.05)
+    try client.tapUp(at: point)
+    try #require(awaitTextField(accessibility) != nil, "Settings shows no search field")
+    Thread.sleep(forTimeInterval: 1.5)
+
+    // "Hello": Shift around the H, then the rest. HID keyboard-page usages.
+    let shift: UInt32 = 0xE1
+    try client.keyDown(keyCode: shift)
+    try client.keyDown(keyCode: 0x0B)
+    try client.keyUp(keyCode: 0x0B)
+    try client.keyUp(keyCode: shift)
+    for usage: UInt32 in [0x08, 0x0F, 0x0F, 0x12] {
+        try client.keyDown(keyCode: usage)
+        try client.keyUp(keyCode: usage)
+    }
+    Thread.sleep(forTimeInterval: 1.5)
+
+    let typed = try #require(awaitTextField(accessibility), "the search field is gone after typing")
+    #expect(typed.value == "Hello", "the search field reads \(typed.value)")
+    if DeviceFamilyClassifier.classify(booted.deviceTypeIdentifier) == .phone, !multiplePanels {
+        #expect(
+            typed.frame.midY < interface.height * 0.75,
+            "the search field sits at \(typed.frame), where it does with no on-screen keyboard"
+        )
+    }
+}

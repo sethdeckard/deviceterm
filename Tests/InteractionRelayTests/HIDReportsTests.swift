@@ -192,15 +192,22 @@ struct SimulatorHIDMessagesTests {
         #expect(report[11] == 0xFF && report[12] == 0xBF) // second y = 0.75
     }
 
-    @Test("the keyboard registers under the default id and reports to the replied one")
-    func keyboard() {
-        let registration = HIDReports.createKeyboard(serviceID: HIDReports.keyboardServiceID)
-        #expect(SimulatorHIDMessages.registerKeyboard() == registration)
-        let reply: DeviceObject = .object([("serviceID", .unsigned(0x1_0000_2042))])
-        #expect(SimulatorHIDMessages.registeredKeyboardServiceID(from: reply) == 0x1_0000_2042)
-        #expect(SimulatorHIDMessages.registeredKeyboardServiceID(from: .object([])) == HIDReports.keyboardServiceID)
-        let report = SimulatorHIDMessages.keyboard(pressed: [0x0B], serviceID: 0x1_0000_2042)
-        #expect(report["payload"]?["send"]?["_1"] == .unsigned(0x1_0000_2042))
+    @Test("a key goes to the daemon's own keyboard, press as 1 and release as 2", arguments: [
+        (true, UInt64(1)),
+        (false, UInt64(2))
+    ])
+    func key(down: Bool, state: UInt64) {
+        let event = SimulatorHIDMessages.key(usage: 0x0B, down: down)
+        #expect(event["messageType"] == .text("IndigoKeyboardButtonEvent"))
+        #expect(event["featureIdentifier"] == .text(SimulatorHIDMessages.keyboardService))
+        #expect(event["payload"]?["state"] == .unsigned(state))
+        #expect(event["payload"]?["usagePage"] == .unsigned(7))
+        #expect(event["payload"]?["usageCode"] == .unsigned(0x0B))
+    }
+
+    @Test("the keyboard service is the daemon's keyboard feature")
+    func keyboardService() {
+        #expect(SimulatorHIDMessages.keyboardService == "com.apple.coredevice.feature.remote.hid.keyboard")
     }
 }
 

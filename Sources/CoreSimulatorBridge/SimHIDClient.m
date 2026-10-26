@@ -84,14 +84,13 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
 /// listed them. Replaced with the connection.
 @property (atomic, copy) NSDictionary<NSString *, NSNumber *> *remoteTouchServices;
 @property (nonatomic, strong, nullable) SimRemoteHIDChannel *remoteButtons;
-/// Opened with the first key, since registering the keyboard is what tells
-/// the simulator a keyboard is attached.
-@property (nonatomic, strong, nullable) SimRemoteHIDChannel *remoteKeyboard;
-@property (nonatomic, assign) uint64_t remoteKeyboardServiceID;
-/// Why keys stay on the Indigo path, once registering the keyboard failed.
-@property (nonatomic, copy, nullable) NSString *remoteKeyboardFailure;
-/// Every HID usage held down, since a keyboard report carries the full set.
-@property (nonatomic, strong) NSMutableSet<NSNumber *> *pressedUsages;
+/// The daemon's own keyboard, which the simulator doesn't count as an
+/// attached hardware keyboard, so its on-screen keyboard stays available.
+@property (nonatomic, strong, nullable) SimRemoteHIDChannel *remoteKeys;
+/// When a missing button or key connection was last tried, so one that won't
+/// open is tried again without a lookup on every send.
+@property (nonatomic, assign) CFAbsoluteTime remoteButtonsAttemptTime;
+@property (nonatomic, assign) CFAbsoluteTime remoteKeysAttemptTime;
 @property (atomic, copy, readwrite, nullable) NSString *remoteHIDUnavailableReason;
 /// When the daemon's connections were last tried, so a client attached
 /// before the daemon was reachable tries again without trying on every send.
@@ -237,7 +236,6 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     client.sendQueue = dispatch_queue_create("deviceterm.hid.send", DISPATCH_QUEUE_SERIAL);
     client.ledger = [SimHIDSendLedger new];
     client.device = device;
-    client.pressedUsages = [NSMutableSet set];
     if (remoteMessages) {
         client.remoteMessages = remoteMessages;
         [client _openRemoteChannels];
@@ -253,8 +251,9 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
 /// session's services before answering, which takes about half a second.
 static const NSTimeInterval kCSBRemoteRequestTimeout = 3.0;
 
-/// Open the touch and button connections. A touch connection that can't be
-/// anchored leaves every input on the Indigo path, with the reason kept.
+/// Open the touch, button and key connections. A touch connection that
+/// can't be anchored leaves every input on the Indigo path, with the reason
+/// kept.
 - (void)_openRemoteChannels {
     self.remoteAttemptTime = CFAbsoluteTimeGetCurrent();
     NSError *touchError = nil;
@@ -267,6 +266,11 @@ static const NSTimeInterval kCSBRemoteRequestTimeout = 3.0;
     self.remoteButtons = [SimRemoteHIDChannel channelForDevice:self.device
                                                        service:self.remoteMessages.buttonServiceName
                                                          error:NULL];
+    self.remoteKeys = [SimRemoteHIDChannel channelForDevice:self.device
+                                                    service:self.remoteMessages.keyboardServiceName
+                                                      error:NULL];
+    self.remoteButtonsAttemptTime = self.remoteAttemptTime;
+    self.remoteKeysAttemptTime = self.remoteAttemptTime;
 }
 
 /// How long a client that couldn't reach the daemon waits before trying
@@ -295,6 +299,33 @@ static const CFTimeInterval kCSBRemoteRetryInterval = 5.0;
     return channel;
 }
 
+/// A connection to `service` that failed to open with the others, tried
+/// again at most once per retry interval since `*lastAttempt` so a service
+/// that won't open doesn't cost a lookup on every send. Nil, with a
+/// `CSBHIDClientErrorRemoteUnavailable` error, when it isn't due or still
+/// won't open.
+- (nullable SimRemoteHIDChannel *)_openMissingChannel:(NSString *)service
+                                          lastAttempt:(CFAbsoluteTime *)lastAttempt
+                                                error:(NSError **)error {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - *lastAttempt >= kCSBRemoteRetryInterval) {
+        *lastAttempt = now;
+        SimRemoteHIDChannel *channel = [SimRemoteHIDChannel channelForDevice:self.device service:service error:error];
+        if (channel) return channel;
+    }
+    if (error && !*error) {
+        *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
+                                     code:CSBHIDClientErrorRemoteUnavailable
+                                 userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@ could not be opened; a later input "
+                                                                  "tries again once %.0f seconds have passed "
+                                                                  "since the last attempt", service,
+                                                                  kCSBRemoteRetryInterval],
+        }];
+    }
+    return nil;
+}
+
 - (BOOL)sendsThroughRemoteHID {
     return self.remoteTouch != nil;
 }
@@ -308,30 +339,6 @@ static const CFTimeInterval kCSBRemoteRetryInterval = 5.0;
     SimRemoteHIDChannel *replacement = [self _openAnchoredTouchChannelWithError:error];
     if (replacement) self.remoteTouch = replacement;
     return replacement;
-}
-
-/// The keyboard connection, registering the keyboard on first use. Nil, with
-/// the failure kept, once registration has failed: keys then stay on the
-/// Indigo path rather than paying the registration wait on every key.
-- (nullable SimRemoteHIDChannel *)_liveRemoteKeyboard {
-    if (!self.remoteTouch || self.remoteKeyboardFailure) return nil;
-    if (self.remoteKeyboard && !self.remoteKeyboard.lost) return self.remoteKeyboard;
-    NSError *error = nil;
-    SimRemoteHIDChannel *channel = [SimRemoteHIDChannel channelForDevice:self.device
-                                                                 service:self.remoteMessages.touchServiceName
-                                                                   error:&error];
-    xpc_object_t reply = channel ? [channel sendRequest:[self.remoteMessages keyboardRegistration]
-                                                timeout:kCSBRemoteRequestTimeout
-                                                  error:&error] : nil;
-    if (!reply) {
-        [channel invalidate];
-        self.remoteKeyboard = nil;
-        self.remoteKeyboardFailure = error.localizedDescription ?: @"the keyboard could not be registered";
-        return nil;
-    }
-    self.remoteKeyboardServiceID = [self.remoteMessages keyboardServiceIDFromReply:reply];
-    self.remoteKeyboard = channel;
-    return channel;
 }
 
 /// Send `message` over `channel` through the ledger, the same admission and
@@ -863,38 +870,32 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
 
 #pragma mark Keyboard
 
-/// Whether `error` is the wait on a send giving up, which means the send was
-/// handed to its transport and may still complete.
-static BOOL CSBIsSendTimeout(NSError *error) {
-    return [error.domain isEqualToString:CSBHIDClientErrorDomain] && error.code == CSBHIDClientErrorSendTimeout;
-}
-
-/// Send the keyboard report for the held set with `usage` added or removed.
-///
-/// A report carries the whole held set, and reports go out in order, so the
-/// set must describe the last report handed to the transport: that is the
-/// state the simulator ends up in. It changes when the report is submitted,
-/// including when the wait on it times out, because a timed-out report still
-/// lands. It stays as it was only when the report was never submitted. NO
-/// with `handled` clear when keys go through Indigo.
+/// Send one phase of `usage` to the daemon's own keyboard, opening a missing
+/// connection or replacing a lost one first. NO with `handled` clear only
+/// for a client not using the daemon. One that is never falls back to
+/// Indigo, whose keys the simulator drops while the daemon is active, and
+/// so never has a key held on both.
 - (BOOL)_sendRemoteKey:(unsigned int)usage down:(BOOL)down handled:(BOOL *)handled error:(NSError **)error {
     *handled = NO;
-    SimRemoteHIDChannel *channel = [self _liveRemoteKeyboard];
-    if (!channel) return NO;
+    if (!self.remoteTouch) return NO;
     *handled = YES;
-    NSMutableSet<NSNumber *> *next = [self.pressedUsages mutableCopy];
-    if (down) {
-        [next addObject:@(usage)];
-    } else {
-        [next removeObject:@(usage)];
+    if (!self.remoteKeys) {
+        self.remoteKeys = [self _openMissingChannel:self.remoteMessages.keyboardServiceName
+                                        lastAttempt:&_remoteKeysAttemptTime
+                                              error:error];
     }
-    xpc_object_t report = [self.remoteMessages keyboardReportWithPressedUsages:next
-                                                                     serviceID:self.remoteKeyboardServiceID];
-    NSError *sendError = nil;
-    BOOL sent = [self _sendRemote:report channel:channel release:!down error:&sendError];
-    if (sent || CSBIsSendTimeout(sendError)) self.pressedUsages = next;
-    if (!sent && error) *error = sendError;
-    return sent;
+    SimRemoteHIDChannel *channel = self.remoteKeys;
+    if (!channel) return NO;
+    if (channel.lost) {
+        SimRemoteHIDChannel *replacement = [SimRemoteHIDChannel channelForDevice:self.device
+                                                                         service:self.remoteMessages.keyboardServiceName
+                                                                           error:error];
+        if (!replacement) return NO;
+        self.remoteKeys = replacement;
+        channel = replacement;
+    }
+    xpc_object_t event = [self.remoteMessages keyboardEventForUsage:usage down:down];
+    return [self _sendRemote:event channel:channel release:!down error:error];
 }
 
 - (BOOL)keyDownWithKeyCode:(unsigned int)keyCode error:(NSError **)error {
@@ -973,14 +974,23 @@ static const int kCSBVoiceCommandUsage = 0xCF;
     } release:YES error:error];
 }
 
-/// Send one phase of `button` over the button connection when the
-/// vocabulary has an event for it. NO with `handled` clear otherwise.
+/// Send one phase of `button` over the button connection, opening a missing
+/// one or replacing a lost one first. NO with `handled` clear for a client
+/// not using the daemon and for a button the vocabulary has no event for;
+/// both go through Indigo. Like keys, a button with an event never falls
+/// back to Indigo once the client uses the daemon.
 - (BOOL)_sendRemoteButton:(CSBHardwareButton)button down:(BOOL)down handled:(BOOL *)handled error:(NSError **)error {
     *handled = NO;
-    SimRemoteHIDChannel *channel = self.remoteButtons;
     xpc_object_t event = [self.remoteMessages buttonEventForButton:button down:down];
-    if (!channel || !event) return NO;
+    if (!self.remoteTouch || !event) return NO;
     *handled = YES;
+    if (!self.remoteButtons) {
+        self.remoteButtons = [self _openMissingChannel:self.remoteMessages.buttonServiceName
+                                           lastAttempt:&_remoteButtonsAttemptTime
+                                                 error:error];
+    }
+    SimRemoteHIDChannel *channel = self.remoteButtons;
+    if (!channel) return NO;
     if (channel.lost) {
         SimRemoteHIDChannel *replacement = [SimRemoteHIDChannel channelForDevice:self.device
                                                                          service:self.remoteMessages.buttonServiceName

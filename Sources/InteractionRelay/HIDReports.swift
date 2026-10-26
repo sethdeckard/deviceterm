@@ -19,6 +19,7 @@ enum HIDReports {
     // Feature selectors.
     static let touchAndKeyboardFeature = "com.apple.coredevice.feature.remote.universalhidservice"
     static let buttonFeature = "com.apple.coredevice.feature.remote.hid.button"
+    static let keyboardFeature = "com.apple.coredevice.feature.remote.hid.keyboard"
     static let orientationFeature = "com.apple.coredevice.feature.remote.devicecontrol.orientation"
 
     // Surface ids.
@@ -227,6 +228,20 @@ enum HIDReports {
                 ("usageCode", .unsigned(UInt64(usageCode)))
             ])),
             ("featureIdentifier", .text(buttonFeature))
+        ])
+    }
+
+    /// One phase of a key, for the daemon's own keyboard rather than a
+    /// registered one. `usage` is on the keyboard page (7).
+    static func keyboardButtonEvent(usage: UInt16, down: Bool) -> DeviceObject {
+        .object([
+            ("messageType", .text("IndigoKeyboardButtonEvent")),
+            ("payload", .object([
+                ("state", .unsigned(down ? 1 : 2)),
+                ("usagePage", .unsigned(7)),
+                ("usageCode", .unsigned(UInt64(usage)))
+            ])),
+            ("featureIdentifier", .text(keyboardFeature))
         ])
     }
 

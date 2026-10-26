@@ -2,6 +2,7 @@
 
 import CoreGraphics
 import CoreSimulatorBridge
+@testable import Daemon
 import Foundation
 import Testing
 
@@ -127,4 +128,56 @@ func crownRotationScrollsCleanlyOnWatch() throws {
     let center = CGPoint(x: 0.5, y: 0.5)
     try client.tapDown(at: center)
     try client.tapUp(at: center)
+}
+
+/// Keys through the simulator's HID daemon have been checked on iOS and
+/// iPadOS only.
+private func bootedDeviceIsPhoneOrPad() -> Bool {
+    let identifier = (try? SimDeviceHandle.singleBootedDevice())?.deviceTypeIdentifier ?? ""
+    switch DeviceFamilyClassifier.classify(identifier) {
+    case .phone, .pad:
+        return true
+
+    default:
+        return false
+    }
+}
+
+/// Once a client sends through the simulator's HID daemon, a key whose
+/// connection hasn't opened fails with `CSBHIDClientErrorRemoteUnavailable`
+/// rather than going to Indigo, and the first key after the retry interval
+/// opens the connection. Key-value coding drops the connection and moves the
+/// last attempt, the only way to put a live client in that state on demand.
+@Test(.enabled(if: bootedDeviceIsPhoneOrPad()))
+func aKeyWithNoDaemonConnectionFailsThenReconnects() throws {
+    try #require(
+        coreSimulatorAvailable,
+        "CoreSimulator probe failed — the bridge can't drive this host"
+    )
+    let booted = try #require(
+        try? SimDeviceHandle.singleBootedDevice(),
+        "no booted sim — run via `make test-live`"
+    )
+    let client = try SimHIDClient.client(
+        forUDID: booted.udid,
+        remoteMessages: SimRemoteHIDMessages(hasHomeButton: false)
+    )
+    try #require(
+        client.sendsThroughRemoteHID,
+        "the HID daemon was not reachable: \(client.remoteHIDUnavailableReason ?? "no reason given")"
+    )
+    client.setValue(nil, forKey: "remoteKeys")
+    client.setValue(CFAbsoluteTimeGetCurrent(), forKey: "remoteKeysAttemptTime")
+
+    let refusal = #expect(throws: (any Error).self, "a key with no connection went somewhere") {
+        try client.keyDown(keyCode: 0x0B)
+    } as NSError?
+    #expect(refusal?.domain == CSBHIDClientErrorDomain)
+    #expect(refusal?.code == CSBHIDClientError.remoteUnavailable.rawValue)
+    #expect(client.value(forKey: "remoteKeys") == nil, "the connection opened before its retry was due")
+
+    client.setValue(0.0, forKey: "remoteKeysAttemptTime")
+    try client.keyDown(keyCode: 0x0B)
+    try client.keyUp(keyCode: 0x0B)
+    #expect(client.value(forKey: "remoteKeys") != nil, "the retry didn't open the key connection")
 }
