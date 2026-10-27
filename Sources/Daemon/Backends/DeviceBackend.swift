@@ -43,6 +43,10 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// input, for the log. Nil for a backend with only one.
     var inputTransportDescription: String? { get }
 
+    /// Whether keys go to a simulated hardware keyboard, which the device
+    /// counts as attached hardware and so hides its on-screen keyboard.
+    var simulatesHardwareKeyboard: Bool { get }
+
     // MARK: Frames
 
     /// Begin streaming frames. `onFrame` is invoked on the producer's
@@ -239,6 +243,13 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// transfer the same way every other device-directed call does: a request
     /// admitted before a transfer must not reach the adopted device.
     func fold(toDegrees degrees: Double, generation: UInt64) async throws
+
+    /// Register (`true`) or remove (`false`) the simulated hardware keyboard.
+    /// Keys held at the switch are released on the keyboard holding them.
+    /// Only a backend advertising `hardwareKeyboard` implements this; the
+    /// default refuses. `generation` fences it against an ownership transfer
+    /// like every other device-directed call.
+    func setSimulatesHardwareKeyboard(_ enabled: Bool, generation: UInt64) async throws
 
     // MARK: Accessibility (lazy acquisition lives in the backend)
 
@@ -439,6 +450,9 @@ extension DeviceBackend {
 
     var inputTransportDescription: String? { nil }
 
+    /// Default: no simulated hardware keyboard.
+    var simulatesHardwareKeyboard: Bool { false }
+
     // Default: only the CoreSimulator backend routes a synthetic edge swipe
     // to the system recognizer. Physical devices fall back to the button
     // realization of the App Switcher.
@@ -449,6 +463,11 @@ extension DeviceBackend {
     /// only for a device that vends a second panel.
     func fold(toDegrees degrees: Double, generation: UInt64) async throws {
         throw DeviceBackendError.unsupportedFold
+    }
+
+    /// Default: refused. Only the CoreSimulator backend overrides this.
+    func setSimulatesHardwareKeyboard(_ enabled: Bool, generation: UInt64) async throws {
+        throw DeviceBackendError.unsupportedHardwareKeyboard
     }
 
     /// Default: refused. A physical device has no flat orientation to set
@@ -626,7 +645,8 @@ extension DeviceBackendCapabilities {
             crown: crown,
             accessibility: accessibility,
             location: location,
-            fold: fold
+            fold: fold,
+            hardwareKeyboard: hardwareKeyboard
         )
     }
 }

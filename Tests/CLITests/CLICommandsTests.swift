@@ -1599,3 +1599,34 @@ func axSweepRequestOmitsNilStepAndBudget() throws {
     #expect(object?["step"] == nil)
     #expect(object?["budgetMs"] == nil)
 }
+
+// MARK: - hardware-keyboard
+
+@Test("hardware-keyboard takes on, off, or status", arguments: [
+    ("on", Bool?.some(true)),
+    ("off", Bool?.some(false)),
+    ("status", Bool?.none)
+])
+func parseHardwareKeyboard(setting: String, enabled: Bool?) {
+    #expect(
+        CLICommands.parse(["deviceterm", "hardware-keyboard", setting])
+            == .hardwareKeyboard(pane: nil, enabled: enabled)
+    )
+    #expect(
+        CLICommands.parse(["deviceterm", "hardware-keyboard", setting, "--pane", "sh1"])
+            == .hardwareKeyboard(pane: "sh1", enabled: enabled)
+    )
+}
+
+@Test("hardware-keyboard refuses anything else", arguments: [
+    ["deviceterm", "hardware-keyboard"],
+    ["deviceterm", "hardware-keyboard", "toggle"],
+    ["deviceterm", "hardware-keyboard", "ON"],
+    ["deviceterm", "hardware-keyboard", "on", "off"]
+])
+func parseHardwareKeyboardRejectsMalformed(argv: [String]) {
+    guard case .usage = CLICommands.parse(argv) else {
+        Issue.record("expected .usage for \(argv)")
+        return
+    }
+}

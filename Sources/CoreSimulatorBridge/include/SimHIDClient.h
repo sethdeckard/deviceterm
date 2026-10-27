@@ -230,6 +230,22 @@ typedef NS_ENUM(NSInteger, CSBHardwareButton) {
                    error:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(keyUp(keyCode:));
 
+/// Whether keys go to a virtual keyboard registered with the simulator's HID
+/// daemon instead of the daemon's own keyboard. The simulator counts a
+/// registered keyboard as attached hardware and hides its on-screen keyboard
+/// for as long as it stays registered. Off until `simulateHardwareKeyboard:`
+/// turns it on.
+@property (atomic, readonly) BOOL simulatesHardwareKeyboard;
+
+/// Register (`YES`) or remove (`NO`) the virtual keyboard. Registering waits
+/// up to three seconds for the daemon to answer. Fails with
+/// `CSBHIDClientErrorRemoteUnavailable` for a client that doesn't send
+/// through the daemon. Release held keys first: a key held on one keyboard
+/// isn't released by a key-up on the other.
+- (BOOL)simulateHardwareKeyboard:(BOOL)enabled
+                           error:(NSError * _Nullable * _Nullable)error
+    NS_SWIFT_NAME(simulateHardwareKeyboard(_:));
+
 // MARK: Hardware buttons
 //
 // Down → 50ms gap → up. Synchronous; returns once both events are

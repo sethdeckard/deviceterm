@@ -45,6 +45,9 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     private(set) var keyDownUsages: [UInt32] = []
     private(set) var keyUpUsages: [UInt32] = []
     private(set) var typedKeystrokeBatches: [[HIDKeystroke]] = []
+    /// Each state `setSimulatesHardwareKeyboard` was asked for, in order.
+    private(set) var hardwareKeyboardRequests: [Bool] = []
+    private(set) var simulatesHardwareKeyboard = false
     /// The point each `accessibilityElement(at:)` call carried, so a test
     /// can assert the coordinate the bridge would have been hit-tested at.
     private(set) var accessibilityPoints: [CGPoint] = []
@@ -512,6 +515,11 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func fold(toDegrees degrees: Double, generation: UInt64) throws {
         folds.append(degrees)
+    }
+
+    func setSimulatesHardwareKeyboard(_ enabled: Bool, generation: UInt64) throws {
+        hardwareKeyboardRequests.append(enabled)
+        simulatesHardwareKeyboard = enabled
     }
 
     func accessibilityFrontmostTree() throws -> [String: Any] {
@@ -3966,4 +3974,39 @@ func aRotateCommandFailureKeepsItsReason(target: RotationTarget) async throws {
     await #expect(throws: PaneError.bridgeFailed(paneId: pane.paneId, operation: .rotate, message: message)) {
         try await coordinator.rotate(paneId: pane.paneId, as: .guiPeer, target: target)
     }
+}
+
+@Test
+func hardwareKeyboardSetReachesTheBackendAndReportsItsState() async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(
+        capabilities: DeviceBackendCapabilities.simulator(family: .phone).withoutLocation
+    )
+    let pane = try await coordinator.createMockPane(udid: "udid-hwkb", sessionId: UUID(), backend: backend)
+    #expect(pane.capabilities.hardwareKeyboard)
+    #expect(try await coordinator.hardwareKeyboardState(paneId: pane.paneId, as: .guiPeer).enabled == false)
+
+    let turnedOn = try await coordinator.setHardwareKeyboard(paneId: pane.paneId, as: .guiPeer, enabled: true)
+    #expect(turnedOn.enabled)
+    #expect(try await coordinator.hardwareKeyboardState(paneId: pane.paneId, as: .guiPeer).enabled)
+
+    let turnedOff = try await coordinator.setHardwareKeyboard(paneId: pane.paneId, as: .guiPeer, enabled: false)
+    #expect(!turnedOff.enabled)
+    #expect(backend.hardwareKeyboardRequests == [true, false])
+}
+
+@Test("the hardware keyboard is refused where it isn't advertised", arguments: [
+    DeviceBackendCapabilities.simulator(family: .watch).withoutLocation,
+    DeviceBackendCapabilities.physicalDevice
+])
+func hardwareKeyboardIsRefusedWithoutTheCapability(capabilities: DeviceBackendCapabilities) async throws {
+    let coordinator = PaneCoordinator()
+    let backend = MockDeviceBackend(capabilities: capabilities)
+    let pane = try await coordinator.createMockPane(udid: "udid-hwkb-refused", sessionId: UUID(), backend: backend)
+    #expect(!pane.capabilities.hardwareKeyboard)
+    await #expect(throws: PaneError.unsupportedOperation(paneId: pane.paneId, operation: .hardwareKeyboardSet)) {
+        _ = try await coordinator.setHardwareKeyboard(paneId: pane.paneId, as: .guiPeer, enabled: true)
+    }
+    #expect(backend.hardwareKeyboardRequests.isEmpty)
+    #expect(try await coordinator.hardwareKeyboardState(paneId: pane.paneId, as: .guiPeer).enabled == false)
 }

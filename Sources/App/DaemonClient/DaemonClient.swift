@@ -1888,6 +1888,18 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         return try JSONDecoder().decode(PaneLocationStateResult.self, from: data)
     }
 
+    func paneSetHardwareKeyboard(paneId: String, enabled: Bool) async throws -> PaneHardwareKeyboardState {
+        let params = try JSONEncoder().encode(PaneHardwareKeyboardSetParams(paneId: paneId, enabled: enabled))
+        let data = try await request(method: .paneHardwareKeyboardSet, params: params)
+        return try JSONDecoder().decode(PaneHardwareKeyboardState.self, from: data)
+    }
+
+    func paneHardwareKeyboardState(paneId: String) async throws -> PaneHardwareKeyboardState {
+        let params = try JSONEncoder().encode(PaneHardwareKeyboardStateParams(paneId: paneId))
+        let data = try await request(method: .paneHardwareKeyboardState, params: params)
+        return try JSONDecoder().decode(PaneHardwareKeyboardState.self, from: data)
+    }
+
     private func request(method: RPCMethod, params: Data?) async throws -> Data {
         try await requestWithGeneration(method: method, params: params).data
     }

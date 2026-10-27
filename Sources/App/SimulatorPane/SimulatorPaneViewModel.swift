@@ -78,6 +78,7 @@ final class SimulatorPaneViewModel {
     private static let touchKeepaliveJitter: CGFloat = 0.001
     /// Where a rotation that came back short of confirmed is recorded.
     private static let rotationLog = Logger(subsystem: "com.deviceterm", category: "rotation")
+    private static let keyboardLog = Logger(subsystem: "com.deviceterm", category: "keyboard")
     /// How far the hinge must come back before it counts as a turn rather
     /// than a hand's jitter.
     private static let foldTurnToleranceDegrees = 2.0
@@ -174,6 +175,11 @@ final class SimulatorPaneViewModel {
     /// subscription, because the daemon replays only a state that isn't.
     private(set) var inputHealth = InputHealth.ok
 
+    /// Whether this pane's device has a simulated hardware keyboard, as the
+    /// daemon last reported. Starts `false`, as a freshly attached device
+    /// does, and is read again each time a menu offering the toggle opens.
+    private(set) var simulatesHardwareKeyboard = false
+
     // Infrastructure, not observable state. Kept out of the registrar so
     // changes don't trigger renders and `deinit` can touch the task.
     @ObservationIgnored private let daemonClient: any PaneControlling & PaneSubscribing
@@ -191,6 +197,18 @@ final class SimulatorPaneViewModel {
     /// The furthest angle the current run of waiting folds has reached in its
     /// direction: the turning point a retreat from it would commit.
     @ObservationIgnored private var foldRunExtreme: Double?
+    /// Only one set runs at a time, and only one read. A read can overlap a
+    /// set; `hardwareKeyboardGeneration` keeps the read's older answer from
+    /// overwriting the set's.
+    @ObservationIgnored private var isSettingHardwareKeyboard = false
+    @ObservationIgnored private var isReadingHardwareKeyboard = false
+    /// Advanced when a set starts, so a read that began before it can't land
+    /// after it and overwrite its newer answer.
+    @ObservationIgnored private var hardwareKeyboardGeneration: UInt64 = 0
+    /// Everyone waiting to hear the next state taken, from a read or a set:
+    /// a second menu opening while one read is out joins it rather than
+    /// starting another.
+    @ObservationIgnored private var hardwareKeyboardWaiters: [@MainActor (Bool) -> Void] = []
     /// The pending move, tagged with the gesture that produced it.
     ///
     /// A slot shared across gestures is worse than no slot: a `down` for the
@@ -956,6 +974,72 @@ final class SimulatorPaneViewModel {
                 durationMs: 0
             )
         }
+    }
+
+    /// Turn the simulated hardware keyboard on or off, whichever it isn't.
+    /// The daemon's answer sets `simulatesHardwareKeyboard`, not the intent;
+    /// a refusal is logged, and the state is read again.
+    func toggleHardwareKeyboard() {
+        guard capabilities.hardwareKeyboard, !isSettingHardwareKeyboard else { return }
+        isSettingHardwareKeyboard = true
+        hardwareKeyboardGeneration &+= 1
+        let enabled = !simulatesHardwareKeyboard
+        let id = paneId
+        let client = daemonClient
+        Task { @MainActor [weak self] in
+            do {
+                let state = try await client.paneSetHardwareKeyboard(paneId: id, enabled: enabled)
+                self?.takeHardwareKeyboardState(state.enabled)
+            } catch {
+                let setting = enabled ? "on" : "off"
+                let reason = error.localizedDescription
+                Self.keyboardLog.notice(
+                    "hardware keyboard \(setting, privacy: .public) refused: \(reason, privacy: .public)"
+                )
+                self?.isSettingHardwareKeyboard = false
+                self?.refreshHardwareKeyboard()
+                return
+            }
+            self?.isSettingHardwareKeyboard = false
+        }
+    }
+
+    /// Read the daemon's state again, so a change made elsewhere, from the
+    /// CLI say, shows up. `applied` gets the next state taken, whether this
+    /// read's or a set's: a read already out, or a set in flight, answers it
+    /// instead of a new read. A read's answer is dropped if a set started
+    /// after the read did, since the set's answer is newer; if that set has
+    /// already finished, a fresh read starts instead, since a refused set
+    /// has no answer of its own.
+    func refreshHardwareKeyboard(applied: (@MainActor (Bool) -> Void)? = nil) {
+        guard capabilities.hardwareKeyboard else { return }
+        if let applied { hardwareKeyboardWaiters.append(applied) }
+        guard !isReadingHardwareKeyboard, !isSettingHardwareKeyboard else { return }
+        isReadingHardwareKeyboard = true
+        let generation = hardwareKeyboardGeneration
+        let id = paneId
+        let client = daemonClient
+        Task { @MainActor [weak self] in
+            let state = try? await client.paneHardwareKeyboardState(paneId: id)
+            guard let self else { return }
+            self.isReadingHardwareKeyboard = false
+            // Stale first, whether the read answered or failed: either way
+            // a set started after it, and one that has finished needs a read.
+            guard generation == self.hardwareKeyboardGeneration else {
+                if !self.isSettingHardwareKeyboard { self.refreshHardwareKeyboard() }
+                return
+            }
+            guard let state else { return }
+            self.takeHardwareKeyboardState(state.enabled)
+        }
+    }
+
+    /// Take a state the daemon reported, and tell everyone waiting for it.
+    private func takeHardwareKeyboardState(_ enabled: Bool) {
+        simulatesHardwareKeyboard = enabled
+        let waiters = hardwareKeyboardWaiters
+        hardwareKeyboardWaiters = []
+        for waiter in waiters { waiter(enabled) }
     }
 
     /// Set a foldable device's hinge angle, `0` shut and `180` flat.

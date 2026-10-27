@@ -380,6 +380,10 @@ public enum DaemonMethods {
                 .session(PaneMethods.rotate(paneCoordinator: paneCoordinator)),
             RPCMethod.paneInputFold.rawValue:
                 .session(PaneMethods.fold(paneCoordinator: paneCoordinator)),
+            RPCMethod.paneHardwareKeyboardSet.rawValue:
+                .session(PaneMethods.hardwareKeyboardSet(paneCoordinator: paneCoordinator)),
+            RPCMethod.paneHardwareKeyboardState.rawValue:
+                .session(PaneMethods.hardwareKeyboardState(paneCoordinator: paneCoordinator)),
             RPCMethod.paneInputPinch.rawValue:
                 .session(PaneMethods.pinch(paneCoordinator: paneCoordinator)),
             RPCMethod.paneInputMultitouch.rawValue:

@@ -4388,6 +4388,44 @@ public actor PaneCoordinator {
         }
     }
 
+    /// Register or remove the pane's simulated hardware keyboard, and return
+    /// the state its backend reports afterwards.
+    func setHardwareKeyboard(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal,
+        enabled: Bool
+    ) async throws -> PaneHardwareKeyboardState {
+        let input = try inputBackend(
+            paneId: paneId,
+            as: principal,
+            supporting: \.hardwareKeyboard,
+            operation: .hardwareKeyboardSet
+        )
+        do {
+            try await input.backend.setSimulatesHardwareKeyboard(enabled, generation: input.generation)
+        } catch let error as DeviceBackendError {
+            throw PaneError.mapBackendError(error, paneId: paneId, operation: .hardwareKeyboardSet)
+        } catch {
+            throw PaneError.bridgeFailed(
+                paneId: paneId,
+                operation: .hardwareKeyboardSet,
+                message: BridgeMessage.unwrap(error)
+            )
+        }
+        return PaneHardwareKeyboardState(enabled: input.backend.simulatesHardwareKeyboard)
+    }
+
+    /// Whether the pane's device has a simulated hardware keyboard. A read,
+    /// so it answers for a pane with no backend (`false`) rather than
+    /// refusing, the way `locationState` does.
+    func hardwareKeyboardState(
+        paneId: UUID,
+        as principal: PaneAccessPrincipal
+    ) throws -> PaneHardwareKeyboardState {
+        let record = try authorize(paneId: paneId, as: principal, gatesInput: false)
+        return PaneHardwareKeyboardState(enabled: record.backend?.simulatesHardwareKeyboard ?? false)
+    }
+
     /// Resolve a rotation still waiting for its reading as unconfirmed.
     private func cancelPendingRotation(record: Record) {
         guard let waiter = record.rotationConfirmationWaiter else { return }

@@ -349,6 +349,14 @@ func run(
                 output: output
             )
 
+        case let .hardwareKeyboard(pane, enabled):
+            return try handleHardwareKeyboard(
+                pane: pane,
+                enabled: enabled,
+                transport: transport,
+                output: output
+            )
+
         case let .fold(pane, degrees):
             return try sendResolved(
                 ref: pane,
@@ -872,6 +880,45 @@ func handleRotate(
                     status: result.status.rawValue,
                     targetOrientation: settled.target,
                     observedOrientation: settled.observed
+                )
+            )
+        )
+    }
+}
+
+/// Set or read a pane's simulated hardware keyboard, reporting the state the
+/// daemon answers with. `enabled` nil reads it.
+func handleHardwareKeyboard(
+    pane: String?,
+    enabled: Bool?,
+    transport: CLITransport,
+    output: OutputMode,
+    creds: (sessionId: String, cap: String)? = nil
+) throws -> CommandOutcome {
+    let resolved = try resolvePane(ref: pane, transport: transport, creds: creds)
+    let envelope = try enabled.map {
+        try CLICommands.hardwareKeyboardSetRequest(paneId: resolved.paneId, enabled: $0)
+    } ?? CLICommands.hardwareKeyboardStateRequest(paneId: resolved.paneId)
+    let response = try transport.send(envelope, timeoutSeconds: AppCommandDeadline.cliRequestTimeoutSeconds)
+    let state = try JSONDecoder().decode(PaneHardwareKeyboardState.self, from: response)
+    switch output {
+    case .human:
+        return .stdout(
+            Echo.ok(
+                udid: resolved.udid,
+                pane: resolved.displayLabel,
+                fields: [("hardwareKeyboard", state.enabled ? "on" : "off")]
+            ) + "\n"
+        )
+
+    case .json:
+        return .stdout(
+            try encodeJSONReceipt(
+                Receipt.HardwareKeyboard(
+                    udid: resolved.udid,
+                    paneId: resolved.paneId,
+                    shortId: resolved.shortId,
+                    enabled: state.enabled
                 )
             )
         )

@@ -45,6 +45,11 @@ struct DeviceBackendCapabilities: Sendable, Equatable {
     /// many sized display candidates the device vends, not from its family: a
     /// foldable and a slab report the same family.
     var fold: Bool = false
+    /// Whether keys can go to a simulated hardware keyboard instead of the
+    /// device's own, which hides its on-screen keyboard. iPhone and iPad
+    /// simulators only: those are the families keys through the simulator's
+    /// HID daemon have been checked on.
+    var hardwareKeyboard: Bool = false
 
     /// The same set with `location` cleared.
     ///
@@ -81,7 +86,8 @@ struct DeviceBackendCapabilities: Sendable, Equatable {
             crown: family == .watch,
             accessibility: true,
             location: true,
-            fold: false
+            fold: false,
+            hardwareKeyboard: family == .phone || family == .pad
         )
     }
 }

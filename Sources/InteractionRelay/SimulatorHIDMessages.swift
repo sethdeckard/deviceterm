@@ -101,6 +101,37 @@ package enum SimulatorHIDMessages {
         HIDReports.keyboardButtonEvent(usage: usage, down: down)
     }
 
+    /// The request that registers a virtual keyboard, which the simulator
+    /// counts as attached hardware: it hides the on-screen keyboard until the
+    /// keyboard is removed. Its reply carries the service id to send reports
+    /// to.
+    package static func registerKeyboard() -> DeviceObject {
+        HIDReports.createKeyboard(serviceID: HIDReports.keyboardServiceID)
+    }
+
+    /// The service id a keyboard registration reply confirms, or nil when it
+    /// confirms none. A successful registration answers with the id it
+    /// registered; a reply without one isn't treated as one.
+    package static func registeredKeyboardServiceID(from reply: DeviceObject) -> UInt64? {
+        reply.firstValue(under: "serviceID")?.unsigned
+    }
+
+    /// The registered keyboard's report for the full set of usages held down
+    /// now.
+    package static func keyboard(pressed usages: Set<UInt16>, serviceID: UInt64) -> DeviceObject {
+        HIDReports.sendReport(
+            HIDReports.keyboardReport(usages: usages, timestamp: HIDReports.machTicks()),
+            to: serviceID
+        )
+    }
+
+    /// The request that removes the registered keyboard `serviceID`, bringing
+    /// the on-screen keyboard back. Its reply is an error even when the
+    /// removal worked.
+    package static func removeKeyboard(serviceID: UInt64) -> DeviceObject {
+        HIDReports.removeService(serviceID: serviceID)
+    }
+
     /// One phase of a hardware button.
     package static func button(_ input: ButtonInput) -> DeviceObject {
         HIDReports.buttonEvent(input)

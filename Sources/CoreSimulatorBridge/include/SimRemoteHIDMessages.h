@@ -62,6 +62,23 @@ NS_SWIFT_SENDABLE
 /// daemon's own keyboard.
 - (xpc_object_t)keyboardEventForUsage:(unsigned int)usage down:(BOOL)down;
 
+/// The request that registers a virtual keyboard on a touch connection. The
+/// simulator counts it as attached hardware and hides its on-screen keyboard
+/// until it's removed.
+- (xpc_object_t)keyboardRegistration;
+
+/// The service id the reply to `keyboardRegistration` confirms, or nil when
+/// it confirms none.
+- (nullable NSNumber *)keyboardServiceIDFromReply:(xpc_object_t)reply;
+
+/// The report for the registered keyboard carrying every HID usage held down
+/// now.
+- (xpc_object_t)keyboardReportWithPressedUsages:(NSSet<NSNumber *> *)usages
+                                      serviceID:(uint64_t)serviceID;
+
+/// The request that removes the registered keyboard with `serviceID`.
+- (xpc_object_t)keyboardRemovalForServiceID:(uint64_t)serviceID;
+
 /// One phase of a hardware button, or nil for a button the vocabulary has
 /// no event for. `button` is a `CSBHardwareButton`.
 - (nullable xpc_object_t)buttonEventForButton:(NSInteger)button down:(BOOL)down;

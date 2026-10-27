@@ -142,6 +142,23 @@ device driven through several positions can stay on the inner panel well below
 that. Read the pane rather than inferring the panel from the angle. Only a
 two-panel device accepts this.
 .TP
+.B hardware-keyboard " " \fIon\fR|\fIoff\fR|\fIstatus\fR
+Turn the simulated hardware keyboard on or off.
+.I on
+registers a simulated hardware keyboard, which the Simulator counts as
+attached hardware, so it hides its on-screen keyboard.
+.I off
+removes it and brings the on-screen keyboard back.
+.I status
+reports which is in effect. Typing works either way. The setting doesn't
+survive a reboot or a reattach. Only iPhone and iPad Simulators accept
+.I on
+and
+.IR off ;
+elsewhere
+.I status
+reports off.
+.TP
 .B crown " " \fIdelta\fR " " [\fB--velocity\fR \fIv\fR] " " [\fB--duration\fR \fIms\fR]
 Rotate the watchOS Digital Crown. Signed
 .IR delta ;

@@ -253,6 +253,13 @@ public enum RPCMethod: String, Sendable, Equatable, CaseIterable {
     /// It can go stale if something else moves the device.
     case paneLocationState = "pane.location.state"
 
+    /// `pane.hardwareKeyboard.set`: register or remove a simulated hardware
+    /// keyboard on the pane's device. The device hides its on-screen
+    /// keyboard while one is registered. Returns the resulting state.
+    case paneHardwareKeyboardSet = "pane.hardwareKeyboard.set"
+    /// `pane.hardwareKeyboard.state`: whether the pane's device has one.
+    case paneHardwareKeyboardState = "pane.hardwareKeyboard.state"
+
     // subscriptions
     case paneSubscribe = "pane.subscribe"
     /// `pane.surfaceRelease`: one-way notification (no `id`, no

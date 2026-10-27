@@ -312,4 +312,17 @@ enum HIDReports {
             ]))
         ])
     }
+
+    /// The request that removes the host-registered service `serviceID`. The
+    /// daemon replies with an error even when the removal succeeded, so the
+    /// reply says nothing about the outcome.
+    static func removeService(serviceID: UInt64) -> DeviceObject {
+        .object([
+            ("featureIdentifier", .text(touchAndKeyboardFeature)),
+            ("messageType", .text("Request")),
+            ("payload", .object([
+                ("removeService", .object([("_0", .unsigned(serviceID))]))
+            ]))
+        ])
+    }
 }

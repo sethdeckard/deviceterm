@@ -844,6 +844,38 @@ public enum PaneMethods {
         }
     }
 
+    public static func hardwareKeyboardSet(paneCoordinator: PaneCoordinator) -> MethodRegistry.Handler {
+        { paramsJSON in
+            let params = try JSONDecoder().decode(PaneHardwareKeyboardSetParams.self, from: paramsJSON)
+            let paneId = try requirePaneId(params.paneId)
+            let principal = try requirePrincipal()
+            do {
+                let state = try await paneCoordinator.setHardwareKeyboard(
+                    paneId: paneId,
+                    as: principal,
+                    enabled: params.enabled
+                )
+                return try JSONEncoder().encode(state)
+            } catch let error as PaneError {
+                throw mapPaneError(error)
+            }
+        }
+    }
+
+    public static func hardwareKeyboardState(paneCoordinator: PaneCoordinator) -> MethodRegistry.Handler {
+        { paramsJSON in
+            let params = try JSONDecoder().decode(PaneHardwareKeyboardStateParams.self, from: paramsJSON)
+            let paneId = try requirePaneId(params.paneId)
+            let principal = try requirePrincipal()
+            do {
+                let state = try await paneCoordinator.hardwareKeyboardState(paneId: paneId, as: principal)
+                return try JSONEncoder().encode(state)
+            } catch let error as PaneError {
+                throw mapPaneError(error)
+            }
+        }
+    }
+
     /// `pane.deviceList({sessionId, cap}) → [{paneId, udid, state}]`. This is the
     /// session-scoped discovery the CLI resolves a paneId *through*, so it
     /// validates the payload credentials and confirms the target is the

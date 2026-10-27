@@ -304,7 +304,7 @@ public enum PaneError: Error, Equatable, Sendable {
         case let .accessibilityUnavailable(message):
             return .bridgeFailed(paneId: paneId, operation: .axAcquire, message: message)
 
-        case .unsupportedEdgeGesture, .unsupportedLocation, .unsupportedFold:
+        case .unsupportedEdgeGesture, .unsupportedLocation, .unsupportedFold, .unsupportedHardwareKeyboard:
             return .unsupportedOperation(paneId: paneId, operation: operation)
 
         case let .locationUnavailable(message):

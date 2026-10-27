@@ -117,4 +117,10 @@ protocol PaneControlling: AnyObject {
     /// `FoldPosture.degrees` first, so no two callers can drift on what a
     /// name means.
     func paneInputFold(paneId: String, degrees: Double) async throws
+    /// `pane.hardwareKeyboard.set`: register or remove the pane's simulated
+    /// hardware keyboard. The device hides its on-screen keyboard while one
+    /// is registered. Returns the state the daemon reports afterwards.
+    func paneSetHardwareKeyboard(paneId: String, enabled: Bool) async throws -> PaneHardwareKeyboardState
+    /// `pane.hardwareKeyboard.state`: whether the pane's device has one.
+    func paneHardwareKeyboardState(paneId: String) async throws -> PaneHardwareKeyboardState
 }

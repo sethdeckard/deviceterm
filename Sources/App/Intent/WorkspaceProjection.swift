@@ -465,6 +465,7 @@ final class WorkspaceProjection {
         if source.accessibility { result.append(.accessibility) }
         if source.location { result.append(.location) }
         if source.fold { result.append(.fold) }
+        if source.hardwareKeyboard { result.append(.hardwareKeyboard) }
         return result
     }
 }

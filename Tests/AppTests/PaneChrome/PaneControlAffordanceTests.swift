@@ -152,6 +152,27 @@ struct PaneControlAffordanceTests {
         ))
     }
 
+    @Test("the hardware keyboard toggle needs a simulator that offers it")
+    func hardwareKeyboardNeedsASimulatorOfferingIt() {
+        var caps = PaneCapabilities.simulator
+        caps.hardwareKeyboard = true
+        #expect(PaneControlAffordance.hardwareKeyboard.isEnabled(
+            capabilities: caps, isPhysicalDevice: false, family: .phone
+        ))
+        caps.hardwareKeyboard = false
+        #expect(!PaneControlAffordance.hardwareKeyboard.isEnabled(
+            capabilities: caps, isPhysicalDevice: false, family: .phone
+        ))
+        var device = deviceCaps
+        device.hardwareKeyboard = true
+        #expect(!PaneControlAffordance.hardwareKeyboard.isEnabled(
+            capabilities: device, isPhysicalDevice: true, family: .unknown
+        ))
+        #expect(PaneControlAffordance.forSelector(
+            #selector(SimulatorPaneViewController.toggleHardwareKeyboard(_:))
+        ) == .hardwareKeyboard)
+    }
+
     @Test("button affordance follows the capability flag")
     func buttonAffordanceFollowsCapability() {
         var caps = deviceCaps

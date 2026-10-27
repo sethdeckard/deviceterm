@@ -24,6 +24,17 @@ struct SimulatorPaneViewModelTests {
         location: true,
         fold: true
     )
+    private static let hardwareKeyboardCapabilities = PaneCapabilities(
+        touch: true,
+        key: true,
+        text: true,
+        button: true,
+        rotate: true,
+        crown: false,
+        accessibility: true,
+        location: true,
+        hardwareKeyboard: true
+    )
 
     /// Let the subscription Task / input Tasks run.
     private func settle() async {
@@ -807,6 +818,151 @@ struct SimulatorPaneViewModelTests {
         await settle()
         #expect(fake.rotateCalls.map(\.target) == [.flat(.faceUp), .flat(.faceDown)])
         #expect(viewModel.currentOrientation == .portrait)
+    }
+
+    @Test
+    func hardwareKeyboardToggleTakesTheDaemonsAnswer() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        viewModel.toggleHardwareKeyboard()
+        await settle()
+        #expect(fake.hardwareKeyboardSetCalls.map(\.enabled) == [true])
+        #expect(viewModel.simulatesHardwareKeyboard)
+        viewModel.toggleHardwareKeyboard()
+        await settle()
+        #expect(fake.hardwareKeyboardSetCalls.map(\.enabled) == [true, false])
+        #expect(!viewModel.simulatesHardwareKeyboard)
+    }
+
+    @Test
+    func aRefusedHardwareKeyboardToggleRereadsTheState() async {
+        let fake = FakeDaemonClient()
+        fake.hardwareKeyboardSetFailure = CocoaError(.featureUnsupported)
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        viewModel.toggleHardwareKeyboard()
+        await settle()
+        #expect(fake.hardwareKeyboardSetCalls.map(\.enabled) == [true])
+        #expect(fake.hardwareKeyboardStateCalls.count == 1)
+        #expect(!viewModel.simulatesHardwareKeyboard)
+    }
+
+    @Test
+    func hardwareKeyboardRefreshPicksUpAChangeMadeElsewhere() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        fake.hardwareKeyboardEnabled = true
+        viewModel.refreshHardwareKeyboard()
+        await settle()
+        #expect(viewModel.simulatesHardwareKeyboard)
+    }
+
+    @Test
+    func aReadThatStartedBeforeASetCantOverwriteIt() async {
+        let fake = FakeDaemonClient()
+        fake.holdHardwareKeyboardState = true
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        var applied: [Bool] = []
+        viewModel.refreshHardwareKeyboard { applied.append($0) }
+        await settle()
+        #expect(fake.hardwareKeyboardStateCalls.count == 1)
+
+        viewModel.toggleHardwareKeyboard()
+        await settle()
+        #expect(viewModel.simulatesHardwareKeyboard)
+
+        // The set's answer reaches the waiting menu. The read then answers
+        // the `false` it saw before the set, and is dropped.
+        #expect(applied == [true])
+        fake.releaseHardwareKeyboardState()
+        await settle()
+        #expect(viewModel.simulatesHardwareKeyboard)
+        #expect(applied == [true])
+    }
+
+    @Test
+    func aRefusedSetDuringAReadStillGetsTheStateReadAgain() async {
+        // The refresh after the refusal finds the earlier read still out, and
+        // that read's answer is stale once it lands, so it reads again.
+        let fake = FakeDaemonClient()
+        fake.holdHardwareKeyboardState = true
+        fake.hardwareKeyboardSetFailure = CocoaError(.featureUnsupported)
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        var applied: [Bool] = []
+        viewModel.refreshHardwareKeyboard { applied.append($0) }
+        await settle()
+        viewModel.toggleHardwareKeyboard()
+        await settle()
+        #expect(fake.hardwareKeyboardStateCalls.count == 1)
+
+        fake.holdHardwareKeyboardState = false
+        fake.releaseHardwareKeyboardState()
+        await settle()
+        #expect(fake.hardwareKeyboardStateCalls.count == 2)
+        #expect(applied == [false])
+        #expect(!viewModel.simulatesHardwareKeyboard)
+    }
+
+    @Test
+    func aRefusedSetDuringAReadThatFailsStillGetsTheStateReadAgain() async {
+        let fake = FakeDaemonClient()
+        fake.holdHardwareKeyboardState = true
+        fake.hardwareKeyboardSetFailure = CocoaError(.featureUnsupported)
+        fake.hardwareKeyboardStateFailsOnce = CocoaError(.fileReadUnknown)
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        var applied: [Bool] = []
+        viewModel.refreshHardwareKeyboard { applied.append($0) }
+        await settle()
+        viewModel.toggleHardwareKeyboard()
+        await settle()
+
+        // The earlier read fails once it lands; the next one answers.
+        fake.holdHardwareKeyboardState = false
+        fake.releaseHardwareKeyboardState()
+        await settle()
+        #expect(fake.hardwareKeyboardStateFailsOnce == nil)
+        #expect(fake.hardwareKeyboardStateCalls.count == 2)
+        #expect(applied == [false])
+    }
+
+    @Test
+    func aSecondMenuJoinsTheReadAlreadyOut() async {
+        let fake = FakeDaemonClient()
+        fake.holdHardwareKeyboardState = true
+        fake.hardwareKeyboardEnabled = true
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        var deviceMenu: [Bool] = []
+        var contextMenu: [Bool] = []
+        viewModel.refreshHardwareKeyboard { deviceMenu.append($0) }
+        await settle()
+        viewModel.refreshHardwareKeyboard { contextMenu.append($0) }
+        await settle()
+        #expect(fake.hardwareKeyboardStateCalls.count == 1)
+        fake.releaseHardwareKeyboardState()
+        await settle()
+        #expect(deviceMenu == [true])
+        #expect(contextMenu == [true])
+    }
+
+    @Test
+    func aRefreshReportsTheStateItTook() async {
+        let fake = FakeDaemonClient()
+        fake.hardwareKeyboardEnabled = true
+        let viewModel = makeViewModel(fake, capabilities: Self.hardwareKeyboardCapabilities)
+        var applied: [Bool] = []
+        viewModel.refreshHardwareKeyboard { applied.append($0) }
+        await settle()
+        #expect(applied == [true])
+    }
+
+    @Test
+    func aPaneWithoutTheHardwareKeyboardCapabilityNeverAsks() async {
+        let fake = FakeDaemonClient()
+        let viewModel = makeViewModel(fake, capabilities: .simulator)
+        viewModel.toggleHardwareKeyboard()
+        viewModel.refreshHardwareKeyboard()
+        await settle()
+        #expect(fake.hardwareKeyboardSetCalls.isEmpty)
+        #expect(fake.hardwareKeyboardStateCalls.isEmpty)
     }
 
     @Test

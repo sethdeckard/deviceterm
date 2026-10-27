@@ -1380,6 +1380,21 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     }
 
     @objc
+    func toggleHardwareKeyboard(_ sender: Any?) {
+        viewModel.toggleHardwareKeyboard()
+    }
+
+    /// Check the Simulate Hardware Keyboard item to match this pane, then read
+    /// the daemon's state again and update the item with it, so a change made
+    /// elsewhere shows while the menu is open.
+    func reflectHardwareKeyboard(in menuItem: NSMenuItem) {
+        menuItem.state = viewModel.simulatesHardwareKeyboard ? .on : .off
+        viewModel.refreshHardwareKeyboard { [weak menuItem] enabled in
+            menuItem?.state = enabled ? .on : .off
+        }
+    }
+
+    @objc
     func layDeviceFaceDown(_ sender: Any?) {
         viewModel.layFlat(.faceDown)
     }
@@ -1835,6 +1850,10 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             menuItem.title = recordingProcess == nil
                 ? "Record Screen"
                 : "Stop Recording"
+        }
+        if let menuItem = item as? NSMenuItem,
+            menuItem.action == #selector(toggleHardwareKeyboard(_:)) {
+            reflectHardwareKeyboard(in: menuItem)
         }
         // Gate every device-control selector on this pane's
         // capabilities + kind through the shared affordance rule, so a

@@ -28,6 +28,10 @@ enum DeviceBackendError: Error {
     /// The device has no hinge to drive: every backend that takes the
     /// protocol default, and a simulator that vends a single panel.
     case unsupportedFold
+    /// The device can't switch to a simulated hardware keyboard: every
+    /// backend that takes the protocol default, and a simulator outside the
+    /// families it's advertised for.
+    case unsupportedHardwareKeyboard
     /// The guest helper that folds and rotates a foldable could not be built
     /// or did not run cleanly. Carries what went wrong, since the causes
     /// differ in what the operator can do: a toolchain that cannot build it,

@@ -205,6 +205,25 @@ struct SimulatorHIDMessagesTests {
         #expect(event["payload"]?["usageCode"] == .unsigned(0x0B))
     }
 
+    @Test("a registered keyboard asks for the default id, and only a reply naming one confirms it")
+    func registeredKeyboard() {
+        let registration = HIDReports.createKeyboard(serviceID: HIDReports.keyboardServiceID)
+        #expect(SimulatorHIDMessages.registerKeyboard() == registration)
+        let reply: DeviceObject = .object([("serviceID", .unsigned(0x1_0000_2042))])
+        #expect(SimulatorHIDMessages.registeredKeyboardServiceID(from: reply) == 0x1_0000_2042)
+        #expect(SimulatorHIDMessages.registeredKeyboardServiceID(from: .object([])) == nil)
+        let report = SimulatorHIDMessages.keyboard(pressed: [0x0B], serviceID: 0x1_0000_2042)
+        #expect(report["payload"]?["send"]?["_1"] == .unsigned(0x1_0000_2042))
+    }
+
+    @Test("removing a keyboard names its service id")
+    func removeKeyboard() {
+        let removal = SimulatorHIDMessages.removeKeyboard(serviceID: 0x1_0000_2042)
+        #expect(removal["featureIdentifier"] == .text(SimulatorHIDMessages.touchService))
+        #expect(removal["messageType"] == .text("Request"))
+        #expect(removal["payload"]?["removeService"]?["_0"] == .unsigned(0x1_0000_2042))
+    }
+
     @Test("the keyboard service is the daemon's keyboard feature")
     func keyboardService() {
         #expect(SimulatorHIDMessages.keyboardService == "com.apple.coredevice.feature.remote.hid.keyboard")

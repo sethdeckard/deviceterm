@@ -306,3 +306,11 @@ func crownReceiptIncludesAllOptionalsWhenSet() throws {
     #expect(json.contains(#""velocity":2.5"#))
     #expect(json.contains(#""durationMs":1500"#))
 }
+
+// MARK: - Hardware keyboard
+
+@Test
+func hardwareKeyboardReceiptJSONShape() throws {
+    let receipt = Receipt.HardwareKeyboard(udid: "U", paneId: "P", shortId: "hk1234", enabled: true)
+    #expect(try encode(receipt) == #"{"enabled":true,"ok":true,"paneId":"P","shortId":"hk1234","udid":"U"}"#)
+}

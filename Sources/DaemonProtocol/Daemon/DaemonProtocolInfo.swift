@@ -41,5 +41,12 @@ public enum DaemonProtocolInfo {
     /// takes `faceUp` and `faceDown` and answers with a `dispatched` status,
     /// which an older peer would reject as an unknown orientation or fail to
     /// decode.
-    public static let wireVersion = "0.10.0"
+    ///
+    /// 0.11.0 raised from 0.10.0 for the simulated hardware keyboard: the
+    /// `pane.hardwareKeyboard.set` and `.state` methods and the
+    /// `hardwareKeyboard` capability key. The GUI gates the toggle on the
+    /// capability, which an older helper never reports, but the CLI sends
+    /// the methods regardless and would get an unknown-method error back, so
+    /// the bundle moves together, as it did for fold.
+    public static let wireVersion = "0.11.0"
 }

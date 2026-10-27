@@ -76,7 +76,8 @@ struct DevicePaneAffordanceGateTests {
             // The device reports `rotate`, but its backend refuses a flat
             // orientation.
             #selector(SimulatorPaneViewController.layDeviceFaceUp(_:)),
-            #selector(SimulatorPaneViewController.layDeviceFaceDown(_:))
+            #selector(SimulatorPaneViewController.layDeviceFaceDown(_:)),
+            #selector(SimulatorPaneViewController.toggleHardwareKeyboard(_:))
         ] {
             #expect(
                 !viewController.validateUserInterfaceItem(menuItem(selector)),

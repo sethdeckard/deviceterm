@@ -70,6 +70,8 @@ public enum Completions {
     /// completion list can enumerate.
     public static let foldValues: [String] = FoldPosture.allCases.map(\.rawValue)
 
+    public static let hardwareKeyboardValues = ["on", "off", "status"]
+
     /// Both vocabularies `rotate` takes on its one positional: the four
     /// absolute orientations, then the two relative directions.
     public static let rotateValues: [String] = [

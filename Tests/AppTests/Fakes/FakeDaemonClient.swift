@@ -389,6 +389,21 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     var locationSetFailure: Error?
     /// When set, `paneLocationState` throws it.
     var locationStateFailure: Error?
+    /// What the fake daemon holds for every pane's simulated hardware
+    /// keyboard. A successful `paneSetHardwareKeyboard` writes it.
+    var hardwareKeyboardEnabled = false
+    /// When set, `paneSetHardwareKeyboard` throws it and changes nothing.
+    var hardwareKeyboardSetFailure: Error?
+    private(set) var hardwareKeyboardSetCalls: [(paneId: String, enabled: Bool)] = []
+    private(set) var hardwareKeyboardStateCalls: [String] = []
+    /// When true, `paneHardwareKeyboardState` reads the state, then suspends
+    /// until `releaseHardwareKeyboardState()`, answering what it read: a
+    /// read in flight while something else changes the state.
+    var holdHardwareKeyboardState = false
+    /// When set, the next `paneHardwareKeyboardState` throws it, after any
+    /// hold, and clears it, so the read after that answers.
+    var hardwareKeyboardStateFailsOnce: Error?
+    private var hardwareKeyboardStateContinuations: [CheckedContinuation<Void, Never>] = []
     /// When true, `paneLocationSet` suspends after recording the call
     /// until `releaseLocationSet()`, modelling a daemon that has not
     /// answered yet. Lets a test express "dispatched but not finished".
@@ -1250,6 +1265,35 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         try await Task.sleep(nanoseconds: 0)
         if let error = locationStateFailure { throw error }
         return locationStateResult
+    }
+
+    func paneSetHardwareKeyboard(paneId: String, enabled: Bool) async throws -> PaneHardwareKeyboardState {
+        hardwareKeyboardSetCalls.append((paneId, enabled))
+        try await Task.sleep(nanoseconds: 0)
+        if let error = hardwareKeyboardSetFailure { throw error }
+        hardwareKeyboardEnabled = enabled
+        return PaneHardwareKeyboardState(enabled: enabled)
+    }
+
+    func paneHardwareKeyboardState(paneId: String) async throws -> PaneHardwareKeyboardState {
+        hardwareKeyboardStateCalls.append(paneId)
+        let enabled = hardwareKeyboardEnabled
+        if holdHardwareKeyboardState {
+            await withCheckedContinuation { continuation in
+                hardwareKeyboardStateContinuations.append(continuation)
+            }
+        }
+        try await Task.sleep(nanoseconds: 0)
+        if let error = hardwareKeyboardStateFailsOnce {
+            hardwareKeyboardStateFailsOnce = nil
+            throw error
+        }
+        return PaneHardwareKeyboardState(enabled: enabled)
+    }
+
+    func releaseHardwareKeyboardState() {
+        guard !hardwareKeyboardStateContinuations.isEmpty else { return }
+        hardwareKeyboardStateContinuations.removeFirst().resume()
     }
 
     // MARK: - TerminalBinding

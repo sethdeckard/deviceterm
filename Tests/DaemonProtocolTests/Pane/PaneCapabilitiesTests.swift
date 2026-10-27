@@ -100,6 +100,19 @@ func blockWithoutLocationDecodesAsUnsupported() throws {
     #expect(!caps.location)
 }
 
+/// A peer from before the hardware keyboard toggle omits the key, which
+/// decodes as no toggle rather than failing the enclosing response.
+@Test("a block without hardwareKeyboard decodes with it false")
+func blockWithoutHardwareKeyboardDecodesAsUnsupported() throws {
+    let json = Data("""
+    {"touch":true,"key":true,"text":true,"button":true,
+     "rotate":true,"crown":false,"accessibility":true,"location":true,"fold":false}
+    """.utf8)
+    let caps = try JSONDecoder().decode(PaneCapabilities.self, from: json)
+    #expect(caps.key && caps.location)
+    #expect(!caps.hardwareKeyboard)
+}
+
 /// The missing-block fallback keeps the original capability flags but
 /// does not assume location support.
 @Test("the missing-block fallback withholds location")

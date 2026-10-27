@@ -187,6 +187,14 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         return "indigo (\(hidClient.remoteHIDUnavailableReason ?? "reason unknown"))"
     }
 
+    /// The HID client's hardware-keyboard mode, false with no client. The
+    /// mode isn't kept anywhere else, so a backend built after a reboot or a
+    /// reattach starts with it off, and the keyboard went away with the old
+    /// client's connection.
+    var simulatesHardwareKeyboard: Bool {
+        hidClient?.simulatesHardwareKeyboard ?? false
+    }
+
     init(
         udid: String,
         family: DeviceFamily,
@@ -763,6 +771,27 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
         // Without waiting for the hinge reader to see the new angle, which
         // can lag the helper by a read.
         noteHingeMoved()
+    }
+
+    /// Switch keys between the simulator's own keyboard and a registered
+    /// one. Keys held at the switch are released first, on the keyboard
+    /// holding them, since the other one never saw them go down. A release
+    /// that fails stops the switch, rather than leaving that key held on the
+    /// keyboard being left.
+    func setSimulatesHardwareKeyboard(_ enabled: Bool, generation: UInt64) async throws {
+        guard capabilities.hardwareKeyboard else { throw DeviceBackendError.unsupportedHardwareKeyboard }
+        try await inputWorkQueue.run { [self] in
+            guard inputGate.sync(execute: { generation == inputGeneration }) else {
+                throw DeviceBackendError.notActive
+            }
+            let client = try requireHID()
+            guard client.simulatesHardwareKeyboard != enabled else { return }
+            for usage in inputGate.sync(execute: { heldKeys }) {
+                try client.keyUp(keyCode: usage)
+                inputGate.sync { _ = heldKeys.remove(usage) }
+            }
+            try client.simulateHardwareKeyboard(enabled)
+        }
     }
 
     func pixelDimensions() -> (Int?, Int?) { display.pixelDimensions() }

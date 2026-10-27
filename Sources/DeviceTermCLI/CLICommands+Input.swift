@@ -300,6 +300,23 @@ extension CLICommands {
         )
     }
 
+    public static func hardwareKeyboardSetRequest(
+        paneId: String,
+        enabled: Bool
+    ) throws -> RPCEnvelope {
+        try request(
+            method: .paneHardwareKeyboardSet,
+            body: PaneHardwareKeyboardSetParams(paneId: paneId, enabled: enabled)
+        )
+    }
+
+    public static func hardwareKeyboardStateRequest(paneId: String) throws -> RPCEnvelope {
+        try request(
+            method: .paneHardwareKeyboardState,
+            body: PaneHardwareKeyboardStateParams(paneId: paneId)
+        )
+    }
+
     public static func crownRequest(
         paneId: String,
         delta: Double,

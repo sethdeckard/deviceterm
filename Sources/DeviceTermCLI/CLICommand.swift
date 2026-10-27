@@ -103,6 +103,12 @@ public enum CLICommand: Equatable, Sendable {
         String?,
         degrees: Double
         )
+    /// `enabled` nil reads the state rather than setting it.
+    case hardwareKeyboard(
+        pane:
+        String?,
+        enabled: Bool?
+        )
     case crown(
         pane:
         String?,

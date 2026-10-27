@@ -91,6 +91,14 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
 /// open is tried again without a lookup on every send.
 @property (nonatomic, assign) CFAbsoluteTime remoteButtonsAttemptTime;
 @property (nonatomic, assign) CFAbsoluteTime remoteKeysAttemptTime;
+/// The connection that registered the virtual keyboard, while keys go to it.
+/// Closing it removes the keyboard.
+@property (nonatomic, strong, nullable) SimRemoteHIDChannel *hardwareKeyboard;
+@property (nonatomic, assign) uint64_t hardwareKeyboardServiceID;
+/// Every HID usage held on the virtual keyboard, since its report carries the
+/// full set.
+@property (nonatomic, strong) NSMutableSet<NSNumber *> *pressedUsages;
+@property (atomic, readwrite) BOOL simulatesHardwareKeyboard;
 @property (atomic, copy, readwrite, nullable) NSString *remoteHIDUnavailableReason;
 /// When the daemon's connections were last tried, so a client attached
 /// before the daemon was reachable tries again without trying on every send.
@@ -236,6 +244,7 @@ typedef IndigoMessage *(*CSBIndigoMessageForDigitalCrownFn)(double delta);
     client.sendQueue = dispatch_queue_create("deviceterm.hid.send", DISPATCH_QUEUE_SERIAL);
     client.ledger = [SimHIDSendLedger new];
     client.device = device;
+    client.pressedUsages = [NSMutableSet set];
     if (remoteMessages) {
         client.remoteMessages = remoteMessages;
         [client _openRemoteChannels];
@@ -884,6 +893,7 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
                                         lastAttempt:&_remoteKeysAttemptTime
                                               error:error];
     }
+    if (self.simulatesHardwareKeyboard) return [self _sendHardwareKey:usage down:down error:error];
     SimRemoteHIDChannel *channel = self.remoteKeys;
     if (!channel) return NO;
     if (channel.lost) {
@@ -896,6 +906,116 @@ static const unsigned int kCSBIndigoScreenTargetFlag = 0x40000000;
     }
     xpc_object_t event = [self.remoteMessages keyboardEventForUsage:usage down:down];
     return [self _sendRemote:event channel:channel release:!down error:error];
+}
+
+/// Whether `error` is the wait on a send giving up, which means the send was
+/// handed to its transport and may still complete.
+static BOOL CSBIsSendTimeout(NSError *error) {
+    return [error.domain isEqualToString:CSBHIDClientErrorDomain] && error.code == CSBHIDClientErrorSendTimeout;
+}
+
+/// Register the virtual keyboard on a connection of its own and start it
+/// with nothing held, as a keyboard just plugged in does.
+- (BOOL)_registerHardwareKeyboardWithError:(NSError **)error {
+    SimRemoteHIDChannel *channel = [SimRemoteHIDChannel channelForDevice:self.device
+                                                                 service:self.remoteMessages.touchServiceName
+                                                                   error:error];
+    if (!channel) return NO;
+    xpc_object_t reply = [channel sendRequest:[self.remoteMessages keyboardRegistration]
+                                      timeout:kCSBRemoteRequestTimeout
+                                        error:error];
+    NSNumber *serviceID = reply ? [self.remoteMessages keyboardServiceIDFromReply:reply] : nil;
+    if (!serviceID) {
+        // Closing the connection removes the keyboard if it did register.
+        [channel invalidate];
+        if (reply && error) {
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
+                                         code:CSBHIDClientErrorRemoteUnavailable
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"The simulator's HID daemon didn't confirm the keyboard registration",
+            }];
+        }
+        return NO;
+    }
+    self.hardwareKeyboardServiceID = serviceID.unsignedLongLongValue;
+    self.hardwareKeyboard = channel;
+    [self.pressedUsages removeAllObjects];
+    xpc_object_t released = [self.remoteMessages keyboardReportWithPressedUsages:[NSSet set]
+                                                                       serviceID:self.hardwareKeyboardServiceID];
+    // Best effort: a fresh registration has nothing held to release.
+    [self _sendRemote:released channel:channel release:YES error:NULL];
+    return YES;
+}
+
+/// Release every key on the virtual keyboard, ask the daemon to remove it,
+/// and close its connection, which removes it as well.
+- (void)_removeHardwareKeyboard {
+    SimRemoteHIDChannel *channel = self.hardwareKeyboard;
+    self.hardwareKeyboard = nil;
+    [self.pressedUsages removeAllObjects];
+    if (!channel) return;
+    if (!channel.lost) {
+        xpc_object_t released = [self.remoteMessages keyboardReportWithPressedUsages:[NSSet set]
+                                                                           serviceID:self.hardwareKeyboardServiceID];
+        [self _sendRemote:released channel:channel release:YES error:NULL];
+        // The reply is an error even when the removal worked, so it isn't read.
+        [channel sendRequest:[self.remoteMessages keyboardRemovalForServiceID:self.hardwareKeyboardServiceID]
+                     timeout:kCSBRemoteRequestTimeout
+                       error:NULL];
+    }
+    [channel invalidate];
+}
+
+- (BOOL)simulateHardwareKeyboard:(BOOL)enabled error:(NSError **)error {
+    if (!self.remoteTouch) {
+        if (error) {
+            *error = [NSError errorWithDomain:CSBHIDClientErrorDomain
+                                         code:CSBHIDClientErrorRemoteUnavailable
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"A hardware keyboard needs the simulator's HID daemon, which this "
+                                            "client doesn't send through",
+            }];
+        }
+        return NO;
+    }
+    if (enabled == self.simulatesHardwareKeyboard) return YES;
+    if (enabled) {
+        if (![self _registerHardwareKeyboardWithError:error]) return NO;
+    } else {
+        [self _removeHardwareKeyboard];
+    }
+    self.simulatesHardwareKeyboard = enabled;
+    return YES;
+}
+
+/// Send the virtual keyboard's report for the held set with `usage` added or
+/// removed, registering the keyboard again first if its connection was lost.
+///
+/// A report carries the whole held set, and reports go out in order, so the
+/// set describes the last report handed to the transport: it changes when the
+/// report is submitted, including when the wait on it times out, and stays as
+/// it was only when the report was never submitted.
+- (BOOL)_sendHardwareKey:(unsigned int)usage down:(BOOL)down error:(NSError **)error {
+    SimRemoteHIDChannel *channel = self.hardwareKeyboard;
+    if (!channel || channel.lost) {
+        [channel invalidate];
+        self.hardwareKeyboard = nil;
+        if (![self _registerHardwareKeyboardWithError:error]) return NO;
+        channel = self.hardwareKeyboard;
+    }
+    NSMutableSet<NSNumber *> *next = [self.pressedUsages mutableCopy];
+    if (down) {
+        [next addObject:@(usage)];
+    } else {
+        [next removeObject:@(usage)];
+    }
+    xpc_object_t report = [self.remoteMessages keyboardReportWithPressedUsages:next
+                                                                     serviceID:self.hardwareKeyboardServiceID];
+    NSError *sendError = nil;
+    BOOL sent = [self _sendRemote:report channel:channel release:!down error:&sendError];
+    if (sent || CSBIsSendTimeout(sendError)) self.pressedUsages = next;
+    if (!sent && error) *error = sendError;
+    return sent;
 }
 
 - (BOOL)keyDownWithKeyCode:(unsigned int)keyCode error:(NSError **)error {

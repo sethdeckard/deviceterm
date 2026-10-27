@@ -816,3 +816,63 @@ func aRefusedFlatRotateIsInputRefused() throws {
     let (outcome, _) = try rotateOutcome(result, target: .flat(.faceUp), output: .human)
     #expect(outcome.failure?.code == .inputRefused)
 }
+
+// MARK: - hardware-keyboard
+
+private func hardwareKeyboardOutcome(
+    enabled: Bool?,
+    answer: Bool,
+    output: OutputMode
+) throws -> (CommandOutcome, FakeTransport) {
+    let fake = FakeTransport(responses: [
+        try oneDevicePaneResponse(),
+        try encoded(PaneHardwareKeyboardState(enabled: answer))
+    ])
+    let outcome = try handleHardwareKeyboard(
+        pane: nil,
+        enabled: enabled,
+        transport: fake,
+        output: output,
+        creds: testCredentials
+    )
+    return (outcome, fake)
+}
+
+@Test("hardware-keyboard on and off send the set with the requested state", arguments: [true, false])
+func hardwareKeyboardSetSendsTheRequestedState(enabled: Bool) throws {
+    let (_, fake) = try hardwareKeyboardOutcome(enabled: enabled, answer: enabled, output: .human)
+    #expect(fake.sent.map(\.method) == [
+        RPCMethod.paneDeviceList.rawValue,
+        RPCMethod.paneHardwareKeyboardSet.rawValue
+    ])
+    guard case let .params(body) = try #require(fake.sent.last).body else {
+        Issue.record("the set request carried no params")
+        return
+    }
+    let params = try JSONDecoder().decode(PaneHardwareKeyboardSetParams.self, from: body)
+    #expect(params == PaneHardwareKeyboardSetParams(paneId: "p1", enabled: enabled))
+}
+
+@Test
+func hardwareKeyboardStatusSendsTheRead() throws {
+    let (_, fake) = try hardwareKeyboardOutcome(enabled: nil, answer: false, output: .human)
+    #expect(fake.sent.map(\.method) == [
+        RPCMethod.paneDeviceList.rawValue,
+        RPCMethod.paneHardwareKeyboardState.rawValue
+    ])
+}
+
+@Test
+func hardwareKeyboardReportsTheDaemonsAnswerNotTheRequest() throws {
+    // The daemon reads the state back from the HID client, so the receipt
+    // carries that, even where it differs from what was asked.
+    let (human, _) = try hardwareKeyboardOutcome(enabled: true, answer: false, output: .human)
+    let (json, _) = try hardwareKeyboardOutcome(enabled: true, answer: false, output: .json)
+    #expect(human == .stdout("ok udid=U1 pane=sh1 hardwareKeyboard=off\n"))
+    #expect(json == .stdout(try encodeJSONReceipt(Receipt.HardwareKeyboard(
+        udid: "U1",
+        paneId: "p1",
+        shortId: "sh1",
+        enabled: false
+    ))))
+}

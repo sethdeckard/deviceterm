@@ -34,6 +34,7 @@ struct SimulatorPaneContextMenuTests {
             "Side Button",
             "Siri",
             "Apple Pay",
+            "Simulate Hardware Keyboard",
             "",  // separator
             "Crown Press",
             "Crown Rotate Up",

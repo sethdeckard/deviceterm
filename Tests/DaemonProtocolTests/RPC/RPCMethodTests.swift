@@ -11,8 +11,8 @@ import Testing
 // see both modules.
 
 @Test
-func rpcMethodCaseCountIs77() {
-    #expect(RPCMethod.allCases.count == 77)
+func rpcMethodCaseCountIs79() {
+    #expect(RPCMethod.allCases.count == 79)
 }
 
 @Test
@@ -67,6 +67,8 @@ func rpcMethodRawValuesAreUnique() {
     (RPCMethod.paneAXSweep, "pane.ax.sweep"),
     (RPCMethod.paneLocationSet, "pane.location.set"),
     (RPCMethod.paneLocationState, "pane.location.state"),
+    (RPCMethod.paneHardwareKeyboardSet, "pane.hardwareKeyboard.set"),
+    (RPCMethod.paneHardwareKeyboardState, "pane.hardwareKeyboard.state"),
     (RPCMethod.paneSubscribe, "pane.subscribe"),
     (RPCMethod.paneSurfaceRelease, "pane.surfaceRelease"),
     (RPCMethod.paneSurfaceDrain, "pane.surfaceDrain"),

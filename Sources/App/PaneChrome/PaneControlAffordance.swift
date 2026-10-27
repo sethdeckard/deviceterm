@@ -50,6 +50,10 @@ enum PaneControlAffordance: Equatable {
     /// is what the capability already reports: the daemon sets it from the
     /// device having two integrated panels.
     case fold
+    /// Simulate Hardware Keyboard: `capabilities.hardwareKeyboard`, which the
+    /// daemon reports for iPhone and iPad simulators only. Never on a physical
+    /// device, whose backend has no way to remove its virtual keyboard.
+    case hardwareKeyboard
     /// Screenshot / Record, simulator-only. There is no device
     /// path; grabbing or recording the in-process mirror is not
     /// implemented.
@@ -93,6 +97,9 @@ enum PaneControlAffordance: Equatable {
         #selector(SimulatorPaneViewController.foldDeviceBook(_:)),
         #selector(SimulatorPaneViewController.foldDeviceOpen(_:))
     ]
+    private static let hardwareKeyboardSelectors: Set<Selector> = [
+        #selector(SimulatorPaneViewController.toggleHardwareKeyboard(_:))
+    ]
     /// Every submenu path: picking a row, walking a saved `.gpx`,
     /// taking the Mac's own position, and opening the sheet that types
     /// one. Each has to be gated, or a device with no location support
@@ -133,6 +140,7 @@ enum PaneControlAffordance: Equatable {
         if layFlatSelectors.contains(action) { return .layFlat }
         if crownSelectors.contains(action) { return .crown }
         if foldSelectors.contains(action) { return .fold }
+        if hardwareKeyboardSelectors.contains(action) { return .hardwareKeyboard }
         if captureSelectors.contains(action) { return .capture }
         if action == #selector(SimulatorPaneViewController.toggleAxInspector(_:)) {
             return .accessibility
@@ -219,6 +227,9 @@ enum PaneControlAffordance: Equatable {
 
         case .fold:
             return capabilities.fold
+
+        case .hardwareKeyboard:
+            return !isPhysicalDevice && capabilities.hardwareKeyboard
 
         case .capture:
             return !isPhysicalDevice

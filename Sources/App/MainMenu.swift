@@ -314,6 +314,14 @@ func makeMainMenu() -> NSMenu {
     mFaceDown.image = .menuSymbol("arrow.down.square", describedAs: "Face Down")
     deviceMenu.addItem(mFaceDown)
     deviceMenu.addItem(.separator())
+    let mHardwareKeyboard = NSMenuItem(
+        title: "Simulate Hardware Keyboard",
+        action: #selector(SimulatorPaneViewController.toggleHardwareKeyboard(_:)),
+        keyEquivalent: ""
+    )
+    mHardwareKeyboard.image = .menuSymbol("keyboard", describedAs: "Simulate Hardware Keyboard")
+    deviceMenu.addItem(mHardwareKeyboard)
+    deviceMenu.addItem(.separator())
     let mReboot = NSMenuItem(
         title: "Reboot",
         action: #selector(SimulatorPaneViewController.rebootDevice(_:)),

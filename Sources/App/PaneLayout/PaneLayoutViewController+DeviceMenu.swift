@@ -31,6 +31,8 @@ extension PaneLayoutViewController {
     @objc
     func layDeviceFaceUp(_ sender: Any?) { targetedSimPane()?.layDeviceFaceUp(sender) }
     @objc
+    func toggleHardwareKeyboard(_ sender: Any?) { targetedSimPane()?.toggleHardwareKeyboard(sender) }
+    @objc
     func layDeviceFaceDown(_ sender: Any?) { targetedSimPane()?.layDeviceFaceDown(sender) }
     @objc
     func applySimulatedLocation(_ sender: Any?) {

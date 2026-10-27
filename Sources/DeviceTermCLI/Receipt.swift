@@ -172,6 +172,16 @@ public enum Receipt {
         public let degrees: Double
     }
 
+    public struct HardwareKeyboard: Encodable, Sendable {
+        public let ok = true
+        public let udid: String
+        public let paneId: String
+        public let shortId: String?
+        /// What the daemon reports after the command, for `status` as much as
+        /// for `on` and `off`: read from the pane's live HID client.
+        public let enabled: Bool
+    }
+
     public struct Crown: Encodable, Sendable {
         public let ok = true
         public let udid: String

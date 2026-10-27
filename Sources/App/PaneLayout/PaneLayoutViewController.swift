@@ -898,6 +898,13 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
                 ? "Record Screen"
                 : "Stop Recording"
         }
+        if action == #selector(toggleHardwareKeyboard(_:)), let menuItem = item as? NSMenuItem {
+            if let target = targetedSimPane() {
+                target.reflectHardwareKeyboard(in: menuItem)
+            } else {
+                menuItem.state = .off
+            }
+        }
         // Scope gate, ahead of the affordance gate below. Arriving here
         // at all means the focused pane declined the selector, so no
         // device pane holds focus. A device-scoped chord pressed in that

@@ -209,6 +209,31 @@ extension HelpCatalog {
             """
         ),
         HelpTopic(
+            "hardware-keyboard",
+            .command(.hardware),
+            summary: "Turn the simulated hardware keyboard on or off",
+            detail: """
+              hardware-keyboard on
+                  Register a simulated hardware keyboard. The Simulator counts
+                  it as attached hardware and hides its on-screen keyboard.
+                  Example: deviceterm hardware-keyboard on
+
+              hardware-keyboard off
+                  Remove it. The on-screen keyboard comes back.
+
+              hardware-keyboard status
+                  Report whether one is registered.
+
+              Each form reports `hardwareKeyboard=on` or `off` as the daemon
+              answers it. Typing works either way, and keys held at the switch
+              are released first. The keyboard goes away when the device
+              reboots or the pane is reattached, and the pane then reports
+              `off`. Only iPhone and iPad Simulators accept `on` and `off`;
+              anything else refuses them with `unsupportedOperation`, and
+              `status` reports `off` there.
+            """
+        ),
+        HelpTopic(
             "crown",
             .command(.hardware),
             summary: "Rotate the watchOS Digital Crown",

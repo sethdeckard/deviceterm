@@ -184,6 +184,8 @@ struct MainMenuTests {
             "Face Up",
             "Face Down",
             "",  // separator
+            "Simulate Hardware Keyboard",
+            "",  // separator
             "Reboot",
             "Erase All Content and Settings…",
             "",  // separator

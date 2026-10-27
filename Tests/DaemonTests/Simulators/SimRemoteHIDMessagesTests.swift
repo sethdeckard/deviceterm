@@ -126,3 +126,35 @@ func touchPanelKeepsNamesTogether() {
     )
     #expect(single.0 == 0 && single.1 == nil)
 }
+
+@Test("a registered keyboard's report carries every held usage and the replied service id")
+func registeredKeyboardReportCarriesHeldUsages() throws {
+    let report = DeviceObject(xpc: SimRemoteHIDMessages(hasHomeButton: false).keyboardReport(
+        withPressedUsages: [NSNumber(value: 0x0B), NSNumber(value: 0x04)],
+        serviceID: 0x1_0000_2042
+    ))
+    let send = try #require(report["payload"]?["send"])
+    #expect(send["_1"] == .unsigned(0x1_0000_2042))
+    guard case let .blob(bytes) = try #require(send["_0"]) else {
+        Issue.record("the report is not a blob")
+        return
+    }
+    #expect(bytes[1 + 0x0B / 8] & UInt8(1 << (0x0B % 8)) != 0)
+    #expect(bytes[1 + 0x04 / 8] & UInt8(1 << (0x04 % 8)) != 0)
+}
+
+@Test("the keyboard removal reaches XPC naming the service")
+func keyboardRemovalReachesXPC() {
+    let messages = SimRemoteHIDMessages(hasHomeButton: false)
+    let removal = DeviceObject(xpc: messages.keyboardRemoval(forServiceID: 0x1_0000_2042))
+    #expect(removal["payload"]?["removeService"]?["_0"] == .unsigned(0x1_0000_2042))
+}
+
+@Test("only a registration reply naming a service id confirms the keyboard")
+func registrationReplyMustNameAServiceID() {
+    let messages = SimRemoteHIDMessages(hasHomeButton: false)
+    let confirmed: DeviceObject = .object([("serviceID", .unsigned(0x1_0000_2001))])
+    #expect(messages.keyboardServiceID(fromReply: confirmed.xpcObject)?.uint64Value == 0x1_0000_2001)
+    let unconfirmed: DeviceObject = .object([("error", .text("refused"))])
+    #expect(messages.keyboardServiceID(fromReply: unconfirmed.xpcObject) == nil)
+}

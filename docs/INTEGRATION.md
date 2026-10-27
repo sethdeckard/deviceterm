@@ -357,6 +357,7 @@ their panes unless the caller owns that protected tab.
 | `button`, `key`, `text`, `crown` with `--json` | Input receipt | Session | Daemon completed the input dispatch call | Stable-additive |
 | `rotate` with `--json` | Input receipt | Session | Requested orientation confirmed, or a flat request dispatched | Stable-additive |
 | `fold` with `--json` | Input receipt | Session | Daemon completed the fold dispatch call | Stable-additive |
+| `hardware-keyboard` with `--json` | Input receipt | Session | Daemon reported the pane's hardware keyboard state after the request | Stable-additive |
 | `wait pane <state>` with `--json` | Wait receipt | Session | Named pane state observed before the deadline | Stable-additive |
 | `wait ax` with `--json` | Wait receipt | Session | The requested accessibility condition, present or absent, observed before the deadline | Stable-additive |
 | `wait orientation <orientation>` with `--json` | Wait receipt | Session | Confirmed orientation and stable surface observed before the deadline | Stable-additive |
@@ -770,8 +771,8 @@ one of `terminal`, `simulator`, or `device` is present according to
 `kind`. `tabTitle` and `windowId` are required on every row.
 Current workspace capabilities are `sendInput`, `captureText`,
 `touch`, `key`, `text`, `button`, `rotate`, `crown`,
-`accessibility`, and `location`. Integrations should branch on the list
-rather than infer support from `kind`.
+`accessibility`, `location`, `fold`, and `hardwareKeyboard`. Integrations
+should branch on the list rather than infer support from `kind`.
 
 Inside `terminal`, `sessionId` and `title` are present on every row a current
 GUI projects; `tty`, `cwd`, and `foregroundProcess` are optional.
@@ -1007,6 +1008,10 @@ The command adds these fields:
 | `text` | `bytes` |
 | `rotate` | `orientation?`, `direction?` (exactly one), `status`, `targetOrientation`, `observedOrientation?` |
 | `crown` | `delta`, `velocity?`, `durationMs?` |
+| `hardware-keyboard` | `enabled` |
+
+A `hardware-keyboard` receipt's `enabled` is the state the daemon read back
+from the pane after the command, for `status` as well as `on` and `off`.
 
 A `rotate` receipt carries `orientation` when the command named one, and
 `direction` when it named `left` or `right`. `targetOrientation` is the

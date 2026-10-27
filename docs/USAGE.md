@@ -469,6 +469,14 @@ A script or agent can inspect and arrange the same hierarchy with singular
 Click or drag inside a device pane to send touch input. Type on the host
 keyboard to send keys and text.
 
+Typing leaves a Simulator's on-screen keyboard available. To have the
+Simulator treat your typing as a hardware keyboard instead, choose
+**Device ▸ Simulate Hardware Keyboard**, the same item in the pane's context
+menu, or run `deviceterm hardware-keyboard on`. The Simulator then hides its
+on-screen keyboard until you turn the setting off. The setting is offered on
+iPhone and iPad Simulators only, and it doesn't survive a reboot or a
+reattach: the pane comes back with it off.
+
 On a Simulator, hold Option while dragging to create a two-finger pinch or
 rotation. Drag upward from the bottom edge to send the system edge gesture.
 

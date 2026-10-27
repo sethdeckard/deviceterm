@@ -15,3 +15,12 @@ func aSimulatorAdvertisesCrownForAWatchFamilyOnly(family: DeviceFamily) {
     #expect(capabilities.rotate && capabilities.accessibility && capabilities.location)
     #expect(!capabilities.fold)
 }
+
+/// The hardware keyboard toggle is offered on the families keys through the
+/// simulator's HID daemon have been checked on, and never on a device.
+@Test("simulator hardware keyboard by family", arguments: DeviceFamily.allCases)
+func aSimulatorOffersTheHardwareKeyboardOnIPhoneAndIPadOnly(family: DeviceFamily) {
+    let capabilities = DeviceBackendCapabilities.simulator(family: family)
+    #expect(capabilities.hardwareKeyboard == (family == .phone || family == .pad))
+    #expect(!DeviceBackendCapabilities.physicalDevice.hardwareKeyboard)
+}

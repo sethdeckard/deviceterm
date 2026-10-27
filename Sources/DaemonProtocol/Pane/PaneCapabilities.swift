@@ -12,22 +12,24 @@
 /// `button` is the hardware buttons; `rotate` is device orientation;
 /// `crown` is the watch Digital Crown; `accessibility` is the `pane.ax.*`
 /// tree/element/sweep family; `location` is simulated GPS position; `fold` is
-/// the hinge of a two-panel device.
+/// the hinge of a two-panel device; `hardwareKeyboard` is switching between
+/// a simulated hardware keyboard and the device's on-screen one.
 ///
 /// The daemon always emits a full set, but the *carrying* wire fields on
 /// `PaneCreateResponse` / `PanesListEntry` are optional so a peer that
 /// omits the block still decodes; a missing block means "unknown", and
 /// clients fall back to `missingBlockFallback`.
 ///
-/// When an added key such as `location` or `fold` is absent it decodes as
-/// `false` (see `init(from:)`), so no capability is assumed on a peer's
-/// behalf.
+/// When an added key such as `location`, `fold`, or `hardwareKeyboard` is
+/// absent it decodes as `false` (see `init(from:)`), so no capability is
+/// assumed on a peer's behalf.
 public struct PaneCapabilities: Codable, Sendable, Equatable {
     /// Everything a CoreSimulator pane can support.
     ///
-    /// Two flags vary between simulators rather than between pane kinds, so
+    /// Three flags vary between simulators rather than between pane kinds, so
     /// the daemon sets them per device: `crown` is advertised for a watch
-    /// family only, and `fold` follows the panel count, so it is not here.
+    /// family only, `fold` follows the panel count, and `hardwareKeyboard`
+    /// is advertised for iPhone and iPad only, so the last two are not here.
     public static let simulator = PaneCapabilities(
         touch: true,
         key: true,
@@ -37,7 +39,8 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         crown: true,
         accessibility: true,
         location: true,
-        fold: false
+        fold: false,
+        hardwareKeyboard: false
     )
 
     /// What a client assumes when the wire omits the capability block
@@ -54,7 +57,8 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         crown: true,
         accessibility: true,
         location: false,
-        fold: false
+        fold: false,
+        hardwareKeyboard: false
     )
 
     public var touch: Bool
@@ -66,6 +70,7 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
     public var accessibility: Bool
     public var location: Bool
     public var fold: Bool
+    public var hardwareKeyboard: Bool
 
     public init(
         touch: Bool,
@@ -76,7 +81,8 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         crown: Bool,
         accessibility: Bool,
         location: Bool,
-        fold: Bool = false
+        fold: Bool = false,
+        hardwareKeyboard: Bool = false
     ) {
         self.touch = touch
         self.key = key
@@ -87,10 +93,11 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         self.accessibility = accessibility
         self.location = location
         self.fold = fold
+        self.hardwareKeyboard = hardwareKeyboard
     }
 
-    /// `location` and `fold` decode as absent ⇒ `false`; the other fields
-    /// are required.
+    /// `location`, `fold` and `hardwareKeyboard` decode as absent ⇒ `false`;
+    /// the other fields are required.
     ///
     /// Synthesized decoding would require `location` and reject the
     /// enclosing response when it is absent, because the failure lands on
@@ -109,5 +116,6 @@ public struct PaneCapabilities: Codable, Sendable, Equatable {
         accessibility = try container.decode(Bool.self, forKey: .accessibility)
         location = try container.decodeIfPresent(Bool.self, forKey: .location) ?? false
         fold = try container.decodeIfPresent(Bool.self, forKey: .fold) ?? false
+        hardwareKeyboard = try container.decodeIfPresent(Bool.self, forKey: .hardwareKeyboard) ?? false
     }
 }

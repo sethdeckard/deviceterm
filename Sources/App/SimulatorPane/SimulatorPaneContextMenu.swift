@@ -76,6 +76,13 @@ func makeSimulatorPaneContextMenu() -> NSMenu {
     )
     iApplePay.image = .menuSymbol("creditcard", describedAs: "Apple Pay")
     menu.addItem(iApplePay)
+    let iHardwareKeyboard = NSMenuItem(
+        title: "Simulate Hardware Keyboard",
+        action: #selector(SimulatorPaneViewController.toggleHardwareKeyboard(_:)),
+        keyEquivalent: ""
+    )
+    iHardwareKeyboard.image = .menuSymbol("keyboard", describedAs: "Simulate Hardware Keyboard")
+    menu.addItem(iHardwareKeyboard)
 
     menu.addItem(.separator())
     // Watch-only inputs. The VC's `validateUserInterfaceItem` gates

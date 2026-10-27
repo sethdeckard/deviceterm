@@ -437,14 +437,22 @@ private func compactSearchButton(in tree: [String: Any]) -> CGRect? {
     return nil
 }
 
-/// Type into Settings' search field through the simulator's HID daemon and
-/// read the text back. On a single-panel iPhone the field's position also
-/// shows whether the on-screen keyboard is up: it rises with the keyboard,
-/// and sits at the bottom of the screen without one, which is where a
-/// registered hardware keyboard leaves it. On an iPad or a device with
-/// several panels, only the text is checked.
-@Test(.enabled(if: bootedDeviceHasSettingsList()))
-func typingThroughTheHIDDaemonKeepsTheOnScreenKeyboard() throws {
+/// A client sending through the simulator's HID daemon, with Settings'
+/// search field focused.
+private struct FocusedSearch {
+    let client: SimHIDClient
+    let accessibility: SimAccessibility
+    let interface: CGSize
+    /// Whether the field's position shows if the on-screen keyboard is up: it
+    /// rises with the keyboard and sits at the bottom of the screen without
+    /// one. True on a single-panel iPhone only. An iPad keeps the field at the
+    /// top of its sidebar either way, and a foldable's panels aren't checked.
+    let fieldShowsKeyboard: Bool
+}
+
+/// Relaunch Settings and focus its search field through a client that sends
+/// through the simulator's HID daemon.
+private func focusSettingsSearch() throws -> FocusedSearch {
     try #require(
         coreSimulatorAvailable,
         "CoreSimulator probe failed — the bridge can't drive this host"
@@ -491,25 +499,82 @@ func typingThroughTheHIDDaemonKeepsTheOnScreenKeyboard() throws {
     try client.tapUp(at: point)
     try #require(awaitTextField(accessibility) != nil, "Settings shows no search field")
     Thread.sleep(forTimeInterval: 1.5)
+    return FocusedSearch(
+        client: client,
+        accessibility: accessibility,
+        interface: interface,
+        fieldShowsKeyboard: DeviceFamilyClassifier.classify(booted.deviceTypeIdentifier) == .phone
+            && !multiplePanels
+    )
+}
 
-    // "Hello": Shift around the H, then the rest. HID keyboard-page usages.
+/// Press and release each HID keyboard-page usage in turn, the first with
+/// Shift held when `shiftFirst`, then let the field catch up.
+private func typeKeys(_ usages: [UInt32], shiftFirst: Bool, with client: SimHIDClient) throws {
     let shift: UInt32 = 0xE1
-    try client.keyDown(keyCode: shift)
-    try client.keyDown(keyCode: 0x0B)
-    try client.keyUp(keyCode: 0x0B)
-    try client.keyUp(keyCode: shift)
-    for usage: UInt32 in [0x08, 0x0F, 0x0F, 0x12] {
+    for (index, usage) in usages.enumerated() {
+        let shifted = shiftFirst && index == 0
+        if shifted { try client.keyDown(keyCode: shift) }
         try client.keyDown(keyCode: usage)
         try client.keyUp(keyCode: usage)
+        if shifted { try client.keyUp(keyCode: shift) }
     }
     Thread.sleep(forTimeInterval: 1.5)
+}
 
-    let typed = try #require(awaitTextField(accessibility), "the search field is gone after typing")
+/// Type into Settings' search field through the simulator's HID daemon and
+/// read the text back. On a single-panel iPhone the field's position also
+/// shows whether the on-screen keyboard is up, which a registered hardware
+/// keyboard would hide. On an iPad or a device with several panels, only the
+/// text is checked.
+@Test(.enabled(if: bootedDeviceHasSettingsList()))
+func typingThroughTheHIDDaemonKeepsTheOnScreenKeyboard() throws {
+    let search = try focusSettingsSearch()
+    // "Hello". HID keyboard-page usages.
+    try typeKeys([0x0B, 0x08, 0x0F, 0x0F, 0x12], shiftFirst: true, with: search.client)
+
+    let typed = try #require(awaitTextField(search.accessibility), "the search field is gone after typing")
     #expect(typed.value == "Hello", "the search field reads \(typed.value)")
-    if DeviceFamilyClassifier.classify(booted.deviceTypeIdentifier) == .phone, !multiplePanels {
+    if search.fieldShowsKeyboard {
         #expect(
-            typed.frame.midY < interface.height * 0.75,
+            typed.frame.midY < search.interface.height * 0.75,
             "the search field sits at \(typed.frame), where it does with no on-screen keyboard"
+        )
+    }
+}
+
+/// Turn the simulated hardware keyboard on, type, then turn it off and type
+/// again. Typing lands either way. On a single-panel iPhone the field's
+/// position also shows the on-screen keyboard going away with the toggle on
+/// and coming back with it off.
+@Test(.enabled(if: bootedDeviceHasSettingsList()))
+func theHardwareKeyboardToggleHidesAndRestoresTheOnScreenKeyboard() throws {
+    let search = try focusSettingsSearch()
+    defer { try? search.client.simulateHardwareKeyboard(false) }
+
+    try search.client.simulateHardwareKeyboard(true)
+    #expect(search.client.simulatesHardwareKeyboard)
+    Thread.sleep(forTimeInterval: 1.5)
+    try typeKeys([0x0B, 0x0C], shiftFirst: true, with: search.client)  // "Hi"
+    let hidden = try #require(awaitTextField(search.accessibility), "the search field is gone after typing")
+    #expect(hidden.value == "Hi", "the search field reads \(hidden.value)")
+    if search.fieldShowsKeyboard {
+        #expect(
+            hidden.frame.midY >= search.interface.height * 0.75,
+            "the search field sits at \(hidden.frame), where it does with the on-screen keyboard up"
+        )
+    }
+
+    try search.client.simulateHardwareKeyboard(false)
+    #expect(!search.client.simulatesHardwareKeyboard)
+    Thread.sleep(forTimeInterval: 1.5)
+    try typeKeys([0x04], shiftFirst: false, with: search.client)  // "a"
+    let shown = try #require(awaitTextField(search.accessibility), "the search field is gone after typing")
+    #expect(shown.value == "Hia", "the search field reads \(shown.value)")
+    if search.fieldShowsKeyboard {
+        #expect(
+            shown.frame.midY < search.interface.height * 0.75,
+            "the search field sits at \(shown.frame), where it does with no on-screen keyboard"
         )
     }
 }

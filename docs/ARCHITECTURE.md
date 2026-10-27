@@ -2629,6 +2629,38 @@ silently appearing as an empty trip list. An unreachable or not-running
 device stays routine and logs at debug. Reads answer for a shut-down
 pane instead of faulting, because the GUI builds its menu from this.
 
+### Pane hardware keyboard
+
+#### `pane.hardwareKeyboard.set`
+
+- Params: `{paneId, enabled}`
+- Result: `{enabled}`
+- Scope: session
+
+Registers (`true`) or removes (`false`) a virtual keyboard with the
+Simulator's `dtuhidd`. The Simulator counts a registered keyboard as attached
+hardware and hides its on-screen keyboard until it's removed. With none, keys
+go to `dtuhidd`'s own keyboard and the on-screen keyboard stays available.
+
+Keys held at the switch are released first, on the keyboard holding them. A
+release that fails stops the switch, rather than leaving that key held.
+
+A pane without the `hardwareKeyboard` capability refuses with
+`unsupportedOperation`; the daemon reports it for iPhone and iPad Simulators
+only. A pane whose input fell back to Indigo fails with `bridgeFailed`, since
+only `dtuhidd` can register a keyboard.
+
+#### `pane.hardwareKeyboard.state`
+
+- Params: `{paneId}`
+- Result: `{enabled}`
+- Scope: session
+
+The result is the pane's HID client's hardware-keyboard mode, which isn't kept
+anywhere else. The keyboard goes away with the connection that registered it,
+so after a reboot or a reattach the pane reports `false` and the on-screen
+keyboard is back. A pane with no backend answers `false` rather than refusing.
+
 ### Pane surface streaming
 
 #### `pane.subscribe`
@@ -3956,8 +3988,9 @@ touch, at most every five seconds and only with nothing held down. The
 or `input=indigo (reason)`.
 
 Keys go to `dtuhidd`'s own keyboard, which the simulator doesn't count as
-attached hardware, so the on-screen keyboard stays available. A registered
-virtual keyboard would hide it for as long as it stayed registered.
+attached hardware, so the on-screen keyboard stays available.
+`pane.hardwareKeyboard.set` registers a virtual keyboard instead, which hides
+the on-screen keyboard until it's removed.
 
 Apple Pay is a double press of the side button, or of Home on a device with
 one.
