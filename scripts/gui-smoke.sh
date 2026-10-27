@@ -6,9 +6,10 @@
 # handler (Sources/App/AppDelegate.swift::runSmokeCheck) self-verifies
 # daemon spawn + libghostty load + first window/tab construction +
 # a second daemon round-trip, then drives the Router-backed nav paths
-# (newTab → closeTab, openWindow → selectWindow → closeWindow),
-# asserting nav state at each stage, before exiting 0 on success / 1 on
-# failure. By project tenet (no `.xcodeproj`, no XCTest UI) this script
+# (newTab → closeTab, openWindow → selectWindow → closeWindow) and a
+# saved-layout round trip (split + rename, snapshot, restore into a new
+# window), asserting nav state at each stage, before exiting 0 on success
+# / 1 on failure. By project tenet (no `.xcodeproj`, no XCTest UI) this script
 # is the only GUI gate, and the same script also runs inside
 # `make verify`, so regressions in dispatch / reconcile / multi-window
 # bring-up surface in the default gate.

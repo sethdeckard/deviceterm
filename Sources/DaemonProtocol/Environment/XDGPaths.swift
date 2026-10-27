@@ -103,6 +103,35 @@ public enum XDGPaths {
             .appendingPathComponent("deviceterm/welcome-seen")
     }
 
+    /// The XDG state base directory: `$XDG_STATE_HOME` when set to a
+    /// non-empty absolute path, else `~/.local/state`. Same validity rule
+    /// as `configHome`: a relative or empty value is invalid and ignored.
+    public static func stateHome(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        let xdg = environment["XDG_STATE_HOME"] ?? ""
+        if !xdg.isEmpty, (xdg as NSString).isAbsolutePath {
+            return xdg
+        }
+        return (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".local/state")
+    }
+
+    /// Absolute path to `<state home>/deviceterm/<fileName>`, where the app
+    /// keeps the window and tab layout it restores at launch.
+    ///
+    /// State rather than cache, because deleting it loses something the user
+    /// built, and state rather than config, because the app writes it. The
+    /// file name is the caller's, so a development build can keep its layout
+    /// apart from an installed app's.
+    public static func deviceTermWorkspaceSnapshot(
+        fileName: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        (stateHome(environment: environment) as NSString)
+            .appendingPathComponent("deviceterm/\(fileName)")
+    }
+
     /// Absolute path to the borrowed `<config home>/ghostty/config`.
     public static func ghosttyConfig(
         environment: [String: String] = ProcessInfo.processInfo.environment

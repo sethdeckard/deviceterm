@@ -212,6 +212,9 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     var bootDeviceErrorMarksClaimFailed = true
     private(set) var shutdownDeviceCalls: [String] = []
     private(set) var attachDeviceCalls: [AttachDeviceCall] = []
+    /// Every borrowing `pane.create` the client sent, in order. Answered from
+    /// the same scripted results and failures as `attachDeviceWithGeneration`.
+    private(set) var createSimPaneCalls: [AttachDeviceCall] = []
     /// Every `device.restoreOwnership` batch the client sent, in order.
     private(set) var restoreOwnershipCalls: [[RestoredSimOwnership]] = []
     /// UDID behind each sim pane id the fake has handed out, so a `.shutdown`
@@ -284,6 +287,10 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
     /// minted by `openTerminalPane`.
     var sessionSequence: [SessionCreateResponse] = []
     var createSessionError: Error?
+    /// Errors to throw from `createSession`, consumed one per call from the
+    /// front, ahead of `createSessionError`. A `nil` entry (or an empty queue)
+    /// creates the session, so a test can fail one terminal of several.
+    var createSessionFailures: [Error?] = []
     var deviceListResult: [DeviceListEntry] = []
     /// When set, `deviceList` throws this instead of returning. Pane-close
     /// tests use it for the unknown-result prompt path; tab and window
@@ -633,6 +640,9 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
             )
         )
         await awaitCreateSessionGate()
+        if !createSessionFailures.isEmpty, let scripted = createSessionFailures.removeFirst() {
+            throw scripted
+        }
         if let createSessionError { throw createSessionError }
         if !sessionSequence.isEmpty {
             return sessionSequence.removeFirst()
@@ -969,6 +979,24 @@ final class FakeDaemonClient: SessionControlling, DeviceControlling,
         let response = attachResponse?(udid, index) ?? attachResult
         simPaneUDIDs[response.paneId] = udid
         return (response, answeringGeneration)
+    }
+
+    func createSimPane(
+        sessionId: String,
+        capability: String,
+        udid: String
+    ) async throws -> PaneCreateResponse {
+        createSimPaneCalls.append(
+            .init(sessionId: sessionId, capability: capability, udid: udid)
+        )
+        let index = attachCallCount
+        attachCallCount += 1
+        await awaitAttachGate()
+        if let error = attachFailure?(udid, index) { throw error }
+        if let attachError { throw attachError }
+        let response = attachResponse?(udid, index) ?? attachResult
+        simPaneUDIDs[response.paneId] = udid
+        return response
     }
 
     func restoreOwnership(

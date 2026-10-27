@@ -272,7 +272,9 @@ still-valid credential. There are two restart shapes:
   restored.** A fresh GUI creates new tabs through `session.create`. Old
   on-disk simulator files (the GUI's `owned-udids.json`) are an *untrusted
   recovery hint* that can only feed an explicit, human-confirmed orphan
-  prompt: never automatic attribution, attach, or shutdown.
+  prompt: never automatic attribution, attach, or shutdown. The saved layout
+  can still reopen, rebuilt from scratch; see Layout restore on relaunch
+  below.
 
 Pane re-attach always flows through the normal attach verbs and the shared
 pane-creation core they reach: bridge
@@ -311,6 +313,51 @@ trip.
 Only a mirror that had been working earns the watch. A physical-device pane
 whose mirror never produced a frame is failed rather than shut down, and
 nothing watches for it: re-attaching would land in the same place.
+
+#### Layout restore on relaunch
+
+The GUI keeps its window, tab, and pane layout in
+`$XDG_STATE_HOME/deviceterm/workspace.json` while it runs, and reopens it at
+the next launch unless `restore-session = off`. This restores layout, not
+sessions. The file holds window frames, tab names and pins, the split tree
+with divider proportions, each terminal's last directory, and each device
+pane's UDID or device id, name, and size preset. It holds no session id,
+capability, role, command, or ownership.
+
+Everything the file names is rebuilt through the ordinary verbs. Each
+terminal gets a fresh `session.create` in its saved directory, or the home
+directory when that path no longer exists. Each sim or device pane starts as a
+placeholder in its slot and attaches from there. A shut-down sim gets the
+`deviceNotBooted` placeholder and its Boot button; nothing boots on the file's
+say-so.
+
+A restored sim pane borrows its simulator through `pane.create`, which leaves
+ownership where it was, so a relaunch never claims a simulator booted outside
+DeviceTerm. Ownership comes back only through the orphan prompt. A sim the
+user chooses to Re-attach there attaches through `device.attach` into its
+restored slot, rather than opening as a second pane.
+
+Automation tabs aren't recorded. The `automation-programs` file reopens them,
+and no automation role is minted from disk.
+
+The file is untrusted input, the same as `owned-udids.json`. A missing,
+unreadable, malformed, or other-version file opens one new window. A sim id
+that isn't a UUID, a target named twice, or proportions that don't fit their
+split are dropped rather than trusted.
+
+Pressing Retry on a borrowed placeholder claims the simulator, and so does a
+helper restart re-attaching a borrowed pane. Both go through `device.attach`,
+as they do for any pane.
+
+The GUI saves about a second after a layout change, every ten seconds for
+window frames, dividers, and directories, and a last time at quit, after which
+it stops writing. It can't tell a crash from a quit. After the last window
+closes, if the empty workspace is saved before a crash, the next launch opens
+one new window; otherwise, it restores the previous snapshot.
+
+A build run from a checkout's `.build` directory keeps its own
+`workspace-<digest>.json`, so development builds and the installed app don't
+reopen each other's layouts.
 
 ### Boot attribution convergence
 
@@ -1832,7 +1879,9 @@ daemon from idle-exiting while they are outstanding.
 
 Orphan re-attach and most pane creation use `device.attach` instead: this
 method only creates the pane and leaves daemon ownership pointed at any
-prior owner.
+prior owner. The GUI uses this method for a sim pane restored from the saved
+layout for exactly that reason, so a relaunch borrows the simulator rather
+than claiming it.
 
 #### `pane.setName`
 
@@ -3732,7 +3781,9 @@ requesting frames while the pane is visible.
   supported cross-tab move is the shim's contextual auto-attach, which
   rehomes the mirror latest-wins. One mirror per device. (Whole *tabs*
   can be dragged between windows; that's a separate path.)
-- **No layout persistence.** Each launch starts with one new tab.
+- **Layout restores, sessions don't.** A relaunch reopens the saved windows,
+  tabs, and panes with fresh sessions (see Layout restore on relaunch).
+  `restore-session = off` starts each launch with one new tab.
 
 ## Data flows
 

@@ -28,6 +28,16 @@ enum Route: Sendable {
         command:
         [String]? = nil
         )
+    /// Reopen the windows, tabs, and panes a saved layout records, in place
+    /// of the launch's single new window. Every terminal gets a fresh
+    /// session in its saved directory; every sim and device pane comes back
+    /// as a placeholder in its slot and attaches from there, booting
+    /// nothing. A sim pane borrows its simulator unless its UDID is in one
+    /// of the `reattach` orphan records the user chose to re-attach, in
+    /// which case it claims it, as re-attaching does. Those records' other
+    /// sims mount as `openWindow` mounts them. A layout that yields no tab
+    /// opens one new window instead.
+    case restoreWorkspace(WorkspaceSnapshot, reattach: [OrphanRecord] = [])
     /// Close every tab in the window then drop it. `mode` is `.detach`
     /// (sims keep running) or `.shutdown` (sims stop + scratch dirs are
     /// cleaned); the quit path uses the user-chosen mode here.

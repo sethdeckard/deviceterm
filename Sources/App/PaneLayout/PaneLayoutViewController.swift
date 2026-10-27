@@ -81,6 +81,11 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
     /// first-layout window that follows. Direct `applySizePreset`
     /// captures are unaffected, so sim pixel-exact width still persists.
     private var awaitingFirstApply = false
+    /// Divider proportions a restored tab's saved layout supplies, applied
+    /// by the next tree-changing `reconcile` after the old shape's
+    /// proportions are remapped and before the seed pass fills the rest.
+    /// Applied once, then cleared. See `seedRestoredLayout`.
+    private var restoredRatios: [[Int]: [CGFloat]]?
 
     /// Drag-overlay layer; nil when no drag is in flight.
     /// `internal` (not `private`): owned by the `+DragDestination` file.
@@ -352,6 +357,7 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
         // panes without this leaves each holding its neighbor's extent.
         ratioStore.remapRatios(from: tree, to: newTree)
         tree = newTree
+        applyRestoredRatios()
         // Raise the apply guard across the whole seed→rebuild→apply
         // sequence. `rebuildHierarchy` builds fresh NSSplitViews whose
         // transient zero-bounds layout fires `splitViewDidResizeSubviews`
@@ -489,6 +495,48 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
     }
 
     // MARK: - Ratios + auto-rebalance
+
+    /// Seed a restored tab's saved layout before its first `reconcile`:
+    /// `ratios` become the splits' proportions, and `fitPaths` become the
+    /// sims' last-mounted paths, so a sim that comes back where it was saved
+    /// reads as a re-attach and keeps those proportions rather than being
+    /// refitted as a new pane.
+    func seedRestoredLayout(ratios: [[Int]: [CGFloat]], fitPaths: [PaneTarget: [Int]]) {
+        restoredRatios = ratios
+        lastFitPaths.merge(fitPaths) { _, restored in restored }
+    }
+
+    /// Every split's current proportions, keyed by its path in `tree`. A
+    /// path the tree no longer has, or whose child count has changed, is
+    /// left out.
+    ///
+    /// A restored tab whose view hasn't loaded yet has never reconciled, so
+    /// its `tree` is still the lone primary leaf and the saved proportions
+    /// are still waiting in `restoredRatios`. Those are its proportions, keyed
+    /// against the restored tree the navigation model already holds, so they
+    /// are what it reports until the first reconcile applies them.
+    func currentRatios() -> [[Int]: [CGFloat]] {
+        if let restoredRatios { return restoredRatios }
+        var live: [[Int]: [CGFloat]] = [:]
+        walkSplits(node: tree, path: []) { node, path in
+            guard case let .split(_, children, _) = node,
+                let ratios = ratioStore.ratios(forPath: path),
+                ratios.count == children.count else { return }
+            live[path] = ratios
+        }
+        return live
+    }
+
+    private func applyRestoredRatios() {
+        guard let restored = restoredRatios else { return }
+        restoredRatios = nil
+        walkSplits(node: tree, path: []) { node, path in
+            guard case let .split(_, children, _) = node,
+                let ratios = restored[path],
+                ratios.count == children.count else { return }
+            ratioStore.setRatios(ratios, forPath: path)
+        }
+    }
 
     /// Seed the ratio store from the natural extents of every split
     /// for which we don't yet have a stored ratio. Pure proportional,

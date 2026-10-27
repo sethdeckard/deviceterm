@@ -305,6 +305,15 @@ final class TabContentViewController: NSViewController {
             daemonSessionName: primary.sessionName
         )
         titleSource = TabTitleSource(terminal: primary.id, device: nil)
+        // A tab restored from the saved layout brings the name the user gave
+        // it and its divider proportions, both owned here rather than by the
+        // navigation model. Applied once, before the first reconcile builds
+        // the tree.
+        if let restored = tabListVM.tab(id: tabID)?.restoredPresentation {
+            if let manualTitle = restored.manualTitle { titleModel.renameManually(to: manualTitle) }
+            splitVC.seedRestoredLayout(ratios: restored.ratios, fitPaths: restored.simFitPaths)
+            tabListVM.clearRestoredPresentation(id: tabID)
+        }
         discoveryObserverToken = router.addOwnedSimDiscoveryObserver { [weak self] owned in
             self?.discoverBootedSims(in: owned)
         }
@@ -593,6 +602,15 @@ final class TabContentViewController: NSViewController {
     }
 
     func focusedPane() -> PaneSlot? { splitVC.focusedSlot() }
+
+    /// Where a terminal's shell is now, for the saved layout: the directory
+    /// its shell last reported (OSC 7), else the one the kernel reports for
+    /// what the terminal is running.
+    func workingDirectory(of terminalID: TerminalPaneID) -> String? {
+        guard let terminalVC = terminalVCByID[terminalID] else { return nil }
+        return terminalVC.lastWorkingDirectory
+            ?? terminalVC.currentFacts(includeProcessFacts: true).cwd
+    }
 
     /// Each pane's slot in this tab's layout, from the top-left of the pane
     /// area. A tab that is not on screen reports the frames of its last layout.

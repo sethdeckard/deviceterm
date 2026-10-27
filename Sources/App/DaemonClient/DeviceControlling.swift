@@ -61,6 +61,16 @@ protocol DeviceControlling: AnyObject {
         udid: String,
         name: String?
     ) async throws -> (response: PaneCreateResponse, generation: Int)
+    /// `pane.create`: create a sim pane for an already-Booted `udid` under
+    /// `(sessionId, capability)` WITHOUT transferring ownership, which stays
+    /// with whoever held it. The borrowing counterpart of `attachDevice`,
+    /// for a pane the user didn't just ask to attach: one restored from the
+    /// saved layout, which must not claim a simulator booted elsewhere.
+    func createSimPane(
+        sessionId: String,
+        capability: String,
+        udid: String
+    ) async throws -> PaneCreateResponse
     /// `device.restoreOwnership`: restore deviceterm's owned-sim claims to a
     /// helper that restarted, preserving a live session attribution where one
     /// exists.

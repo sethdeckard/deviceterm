@@ -138,6 +138,15 @@ final class TabListViewModel {
         }
     }
 
+    /// Drop a restored tab's one-time presentation once its controller has
+    /// applied it, so a controller built for the tab later starts from the
+    /// live layout rather than the saved one.
+    func clearRestoredPresentation(id: TabID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }),
+            tabs[index].restoredPresentation != nil else { return }
+        tabs[index].restoredPresentation = nil
+    }
+
     /// Remove a tab, following the selection per `selectionAfterClose`.
     func removeTab(id: TabID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }

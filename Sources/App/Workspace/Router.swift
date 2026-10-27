@@ -108,6 +108,11 @@ final class Router {
     /// batch from cleaning up afterwards.
     private var orphanBatchTasks: [TabID: [Int: Task<Void, Never>]] = [:]
     private var nextOrphanBatchToken = 1
+    /// The window the last `restoreWorkspace` put in front, nil until one has
+    /// restored a window. AppKit makes each window key as it builds it, which
+    /// can leave a different one in front, so the launch reads this to put
+    /// the chosen one back.
+    private(set) var restoredFrontWindow: WindowID?
     /// Panes whose detach was deferred because another attach for the same
     /// target was still in flight, keyed by that (normalized) target. Emptied
     /// by `reconcileDeferredDetaches` once nothing is attaching the target, so
@@ -419,6 +424,9 @@ final class Router {
                 cwd: cwd,
                 command: command
             )
+
+        case let .restoreWorkspace(snapshot, reattach):
+            await restoreWorkspace(snapshot, reattach: reattach)
 
         case let .closeWindow(windowID, mode, authorizedTerminals):
             // Reserved synchronously in `dispatch`; always release it, even on
@@ -1094,32 +1102,282 @@ final class Router {
             }
         } catch {
             logError("session.create failed: \(error)")
-            // The tab itself is already the committed GUI mutation. Keep a
-            // failed, addressable workspace on screen so the originating CLI
-            // can identify and close/retry it from the structured error rather
-            // than polling for a terminal session that will never appear.
-            let placeholder = TerminalPaneState(
-                id: allocateTerminalPaneID(),
-                sessionId: "failed-\(PublicIdentifier.string(cohortID))",
-                capability: "",
-                name: name,
-                cwd: cwd,
-                command: attachCommand
-            )
             window.tabs.append(
-                TabState(
+                failedTab(
                     id: modelID,
-                    terminals: [placeholder],
-                    simPanes: [],
+                    cohortID: cohortID,
                     role: role,
-                    cohortId: cohortID,
                     name: name,
-                    lifecycle: .failed,
-                    failureMessage: "terminal session creation failed: \(error)",
-                    isPinned: pinned
+                    cwd: cwd,
+                    command: attachCommand,
+                    pinned: pinned,
+                    error: error
                 )
             )
         }
+    }
+
+    /// The tab that stands in for one whose first `session.create` failed.
+    /// The tab itself is already the committed GUI mutation. Keep a failed,
+    /// addressable workspace on screen so the originating CLI can identify
+    /// and close/retry it from the structured error rather than polling for a
+    /// terminal session that will never appear.
+    private func failedTab(
+        id modelID: TabID,
+        cohortID: UUID,
+        role: SessionRole,
+        name: String?,
+        cwd: String?,
+        command: [String]?,
+        pinned: Bool,
+        error: any Error
+    ) -> TabState {
+        let placeholder = TerminalPaneState(
+            id: allocateTerminalPaneID(),
+            sessionId: "failed-\(PublicIdentifier.string(cohortID))",
+            capability: "",
+            name: name,
+            cwd: cwd,
+            command: command
+        )
+        return TabState(
+            id: modelID,
+            terminals: [placeholder],
+            simPanes: [],
+            role: role,
+            cohortId: cohortID,
+            name: name,
+            lifecycle: .failed,
+            failureMessage: "terminal session creation failed: \(error)",
+            isPinned: pinned
+        )
+    }
+
+    /// Reopen a saved layout. See `Route.restoreWorkspace`.
+    ///
+    /// Each window joins the workspace before its tabs are built, as
+    /// `openWindow` does, because a restored placeholder's attach runs off
+    /// the drain and finds its tab through the workspace.
+    private func restoreWorkspace(_ snapshot: WorkspaceSnapshot, reattach: [OrphanRecord]) async {
+        let reclaimed = Set(
+            reattach.flatMap(\.liveSims).map { PublicIdentifier.canonicalized($0.udid) }
+        )
+        var shown: Set<PaneTarget> = []
+        var selectedWindowID: WindowID?
+        var restoredWindowIDs: [WindowID] = []
+        for (windowIndex, saved) in snapshot.windows.enumerated() {
+            let window = WindowState(
+                id: allocateWindowID(),
+                tabs: TabListViewModel(),
+                restoredFrame: saved.frame?.rect
+            )
+            workspace.addWindow(window)
+            var selectedTabID: TabID?
+            for (tabIndex, tab) in saved.tabs.enumerated() {
+                guard let restored = await restoreTab(tab, into: window, reclaimed: reclaimed) else {
+                    continue
+                }
+                shown.formUnion(restored.targets)
+                if tabIndex == saved.selectedTab { selectedTabID = restored.id }
+            }
+            guard !window.tabs.tabs.isEmpty else {
+                workspace.removeWindow(id: window.id)
+                continue
+            }
+            if let selectedTabID { window.tabs.select(id: selectedTabID) }
+            if windowIndex == snapshot.selectedWindow { selectedWindowID = window.id }
+            restoredWindowIDs.append(window.id)
+        }
+        guard let lastRestored = restoredWindowIDs.last else {
+            await handle(.openWindow(reattach: reattach))
+            return
+        }
+        let frontID = selectedWindowID ?? lastRestored
+        workspace.select(id: frontID)
+        restoredFrontWindow = frontID
+        // Re-attached orphans' remaining sims go where `openWindow` would put
+        // them: the tab in front.
+        guard let front = workspace.window(id: frontID),
+            let tabID = front.tabs.selectedTab?.id ?? front.tabs.tabs.first?.id else { return }
+        for orphan in reattach {
+            startOrphanReattach(orphan, tab: tabID, alreadyShown: shown)
+        }
+    }
+
+    /// Rebuild one saved tab whole and append it to `window`: a fresh session
+    /// per terminal leaf, a placeholder per sim or device leaf, the saved tree
+    /// over them, then the placeholders' attaches. Nil when the saved layout
+    /// has nothing to restore.
+    ///
+    /// The tab is appended complete, never grown leaf by leaf, so its
+    /// controller is built against the restored tree and applies the saved
+    /// proportions to it.
+    private func restoreTab(
+        _ saved: WorkspaceSnapshot.Tab,
+        into window: WindowState,
+        reclaimed: Set<String>
+    ) async -> (id: TabID, targets: [PaneTarget])? {
+        let sanitized = WorkspaceRestoreLayout.sanitized(saved.layout)
+        guard var layout = sanitized.node, WorkspaceRestoreLayout.hasTerminal(layout) else {
+            return nil
+        }
+        var focusedLeaf = saved.focusedLeaf.flatMap { sanitized.kept.firstIndex(of: $0) }
+        let modelID = allocateTabID()
+        let cohortID = UUID()
+        // Sessions first, one per terminal leaf. A terminal whose session
+        // can't be created leaves the layout, unless it is the first, whose
+        // failure fails the tab as it does for a new one.
+        var sessions: [Int: SessionCreateResponse] = [:]
+        var failed: Set<Int> = []
+        for (index, leaf) in WorkspaceRestoreLayout.leaves(layout).enumerated() {
+            guard case let .terminal(terminal) = leaf else { continue }
+            let isPrimary = sessions.isEmpty && failed.isEmpty
+            let name = terminal.name ?? (isPrimary ? detectWorktreeName() : nil)
+            do {
+                sessions[index] = try await daemon.createSession(
+                    label: nil,
+                    name: name,
+                    role: .agent,
+                    initialProtected: false,
+                    tabId: cohortID
+                )
+            } catch {
+                logError("session.create failed restoring a terminal: \(error)")
+                guard !isPrimary else {
+                    window.tabs.append(
+                        failedTab(
+                            id: modelID,
+                            cohortID: cohortID,
+                            role: .agent,
+                            name: saved.title ?? name,
+                            cwd: WorkspaceRestoreLayout.restorableDirectory(terminal.cwd),
+                            command: nil,
+                            pinned: saved.isPinned,
+                            error: error
+                        )
+                    )
+                    return (modelID, [])
+                }
+                failed.insert(index)
+            }
+        }
+        if !failed.isEmpty {
+            let remaining = WorkspaceRestoreLayout.removing(leaves: failed, from: layout)
+            guard let node = remaining.node else { return nil }
+            layout = node
+            focusedLeaf = focusedLeaf.flatMap { remaining.kept.firstIndex(of: $0) }
+            sessions = Dictionary(
+                uniqueKeysWithValues: sessions.compactMap { index, session in
+                    remaining.kept.firstIndex(of: index).map { ($0, session) }
+                }
+            )
+        }
+        var terminals: [TerminalPaneState] = []
+        var placeholders: [(pending: PendingPaneState, spec: PendingAttachSpec)] = []
+        var slots: [PaneSlot] = []
+        var focus: PaneSlot?
+        for (index, leaf) in WorkspaceRestoreLayout.leaves(layout).enumerated() {
+            let slot: PaneSlot
+            let focusSlot: PaneSlot
+            switch leaf {
+            case let .terminal(terminal):
+                guard let session = sessions[index] else { continue }
+                let pane = TerminalPaneState(
+                    id: allocateTerminalPaneID(),
+                    sessionId: session.sessionId,
+                    capability: session.capability,
+                    shortId: session.shortId,
+                    name: session.name,
+                    cwd: WorkspaceRestoreLayout.restorableDirectory(terminal.cwd)
+                )
+                terminals.append(pane)
+                slot = .terminal(pane.id)
+                focusSlot = slot
+
+            case let .sim(device):
+                let target = WorkspaceRestoreLayout.simTarget(device)
+                let pending = restoredPlaceholder(device, target: target, resolvesName: true)
+                placeholders.append(
+                    (
+                        pending,
+                        simAttachSpec(
+                            tab: modelID,
+                            udid: target.key,
+                            displayName: nil,
+                            carriedName: device.name,
+                            claimsOwnership: reclaimed.contains(target.key)
+                        )
+                    )
+                )
+                slot = .pending(pending.id)
+                focusSlot = .sim(udid: target.key)
+
+            case let .device(device):
+                let target = PaneTarget.device(deviceId: device.id)
+                let pending = restoredPlaceholder(device, target: target, resolvesName: false)
+                placeholders.append(
+                    (
+                        pending,
+                        deviceAttachSpec(
+                            tab: modelID,
+                            deviceId: device.id,
+                            displayName: device.displayName,
+                            carriedName: device.name
+                        )
+                    )
+                )
+                slot = .pending(pending.id)
+                focusSlot = .device(deviceId: device.id)
+
+            case .split:
+                continue
+            }
+            slots.append(slot)
+            if index == focusedLeaf { focus = focusSlot }
+        }
+        let built = WorkspaceRestoreLayout.build(layout, slots: slots)
+        var tab = TabState(
+            id: modelID,
+            terminals: terminals,
+            simPanes: [],
+            role: .agent,
+            cohortId: cohortID,
+            name: saved.title ?? terminals[0].name,
+            isPinned: saved.isPinned
+        )
+        tab.pendingPanes = placeholders.map(\.pending)
+        tab.paneTree = built.tree
+        tab.lastFocusedPane = focus
+        if case let .terminal(id)? = focus { tab.lastFocusedTerminal = id }
+        tab.restoredPresentation = RestoredTabPresentation(
+            manualTitle: saved.title,
+            ratios: built.ratios,
+            simFitPaths: built.simFitPaths
+        )
+        window.tabs.append(tab)
+        scheduleCohortReconcile(tab: modelID)
+        for placeholder in placeholders {
+            spawnAttach(tab: modelID, pendingId: placeholder.pending.id, spec: placeholder.spec)
+        }
+        return (modelID, placeholders.map(\.pending.target))
+    }
+
+    /// The placeholder a restored sim or device leaf starts as, carrying its
+    /// saved label, name, family, and size preset into the attach.
+    private func restoredPlaceholder(
+        _ device: WorkspaceSnapshot.Device,
+        target: PaneTarget,
+        resolvesName: Bool
+    ) -> PendingPaneState {
+        PendingPaneState(
+            id: allocatePendingPaneID(),
+            target: target,
+            displayName: device.displayName,
+            family: device.family,
+            name: device.name,
+            resolvesName: resolvesName,
+            sizePreset: device.sizePreset.flatMap(SimSizePreset.init(rawValue:))
+        )
     }
 
     /// Mount one adopted orphan record's sims, cleaning its session dir only
@@ -1138,7 +1396,14 @@ final class Router {
     /// attach that doesn't come back then freezes every later route, tab
     /// switching included, which is exactly what the placeholder exists to
     /// avoid.
-    private func startOrphanReattach(_ orphan: OrphanRecord, tab tabID: TabID) {
+    ///
+    /// `alreadyShown` names targets a restored tab elsewhere in the workspace
+    /// is already showing, which count as claimed the same way.
+    private func startOrphanReattach(
+        _ orphan: OrphanRecord,
+        tab tabID: TabID,
+        alreadyShown: Set<PaneTarget> = []
+    ) {
         var children: [Task<Bool, Never>] = []
         for sim in orphan.liveSims {
             // Re-resolved each pass so a record naming the same udid twice
@@ -1151,7 +1416,8 @@ final class Router {
                 continue
             }
             let target = PaneTarget.sim(udid: sim.udid)
-            if TabListViewModel.isTargetPresent(target, in: live) {
+            if TabListViewModel.isTargetPresent(target, in: live)
+                || alreadyShown.contains(.sim(udid: PublicIdentifier.canonicalized(sim.udid))) {
                 continue  // already mounted/pending → idempotent success
             }
             let pendingId = allocatePendingPaneID()
@@ -2045,19 +2311,37 @@ final class Router {
         }
     }
 
+    /// `claimsOwnership` false creates the pane with `pane.create`, which
+    /// leaves the simulator's ownership where it was, instead of
+    /// `device.attach`, which transfers it to the tab. A restored pane
+    /// borrows this way, so relaunching never claims a simulator booted
+    /// elsewhere. `pane.create` stamps no name, so a carried one is set on
+    /// the pane once it exists.
     private func simAttachSpec(
         tab tabID: TabID,
         udid: String,
         displayName: String?,
         family: String? = nil,
-        carriedName: String? = nil
+        carriedName: String? = nil,
+        claimsOwnership: Bool = true
     ) -> PendingAttachSpec {
         PendingAttachSpec(
             target: .sim(udid: udid),
             displayName: displayName,
             family: family,
-            method: .deviceAttach,
+            method: claimsOwnership ? .deviceAttach : .paneCreate,
             attach: { [weak self, daemon] primary in
+                guard claimsOwnership else {
+                    let response = try await daemon.createSimPane(
+                        sessionId: primary.sessionId,
+                        capability: primary.capability,
+                        udid: udid
+                    )
+                    if let carriedName, response.name == nil {
+                        try? await daemon.setPaneName(paneId: response.paneId, name: carriedName)
+                    }
+                    return response
+                }
                 let answer = try await daemon.attachDeviceWithGeneration(
                     sessionId: primary.sessionId,
                     capability: primary.capability,
@@ -2119,7 +2403,7 @@ final class Router {
     /// attribution session the daemon honors only for the
     /// signature-validated GUI peer, no cap), and no ownership bookkeeping
     /// (`noteSimOwned` records a sim's boot claim for cold-start orphan
-    /// recovery; device panes are never persisted).
+    /// recovery; a device pane never enters that manifest).
     ///
     /// The caller's name is the real source. Recovery sends the pane's user-set
     /// name as `carriedName` and hands its own label back rather than

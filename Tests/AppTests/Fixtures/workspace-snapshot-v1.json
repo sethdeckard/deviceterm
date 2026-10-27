@@ -1,0 +1,73 @@
+{
+  "selectedWindow" : 0,
+  "version" : 1,
+  "windows" : [
+    {
+      "frame" : {
+        "height" : 900,
+        "width" : 1200,
+        "x" : 40,
+        "y" : 60
+      },
+      "selectedTab" : 1,
+      "tabs" : [
+        {
+          "focusedLeaf" : 1,
+          "isPinned" : true,
+          "layout" : {
+            "axis" : "horizontal",
+            "children" : [
+              {
+                "terminal" : {
+                  "cwd" : "/tmp"
+                },
+                "type" : "terminal"
+              },
+              {
+                "axis" : "vertical",
+                "children" : [
+                  {
+                    "device" : {
+                      "displayName" : "iPhone 17 Pro",
+                      "family" : "iphone",
+                      "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+                      "name" : "checkout",
+                      "sizePreset" : "pointAccurate"
+                    },
+                    "type" : "sim"
+                  },
+                  {
+                    "terminal" : {
+                      "name" : "logs"
+                    },
+                    "type" : "terminal"
+                  }
+                ],
+                "ratios" : [
+                  0.7,
+                  0.3
+                ],
+                "type" : "split"
+              }
+            ],
+            "ratios" : [
+              0.4,
+              0.6
+            ],
+            "type" : "split"
+          },
+          "title" : "Checkout"
+        },
+        {
+          "isPinned" : false,
+          "layout" : {
+            "terminal" : {
+
+            },
+            "type" : "terminal"
+          }
+        }
+      ]
+    }
+  ]
+}

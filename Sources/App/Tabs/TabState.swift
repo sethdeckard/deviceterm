@@ -59,12 +59,13 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// separate typed array from `simPanes` (parallel to it) so the
     /// established sim drag / resurrect / orphan-recovery code keeps
     /// hard-referencing `simPanes` untouched; both render through the
-    /// same `SimulatorPaneViewController`. Unlike sims, device panes are
-    /// **never** persisted. Two things re-attach one, and both work from a
-    /// pane the tab is already showing rather than a pane restored from
-    /// somewhere: helper-restart recovery, and the resurrect watch that
-    /// re-mirrors a device whose mirror stopped. A new tab defaults this to
-    /// empty; the seeding loop in `init` handles state passed in explicitly.
+    /// same `SimulatorPaneViewController`. Unlike sims, device panes never
+    /// enter the orphan-recovery manifest. Besides a relaunch reopening the
+    /// saved layout (`Route.restoreWorkspace`), two things re-attach one, and
+    /// both work from a pane the tab is already showing: helper-restart
+    /// recovery, and the resurrect watch that re-mirrors a device whose
+    /// mirror stopped. A new tab defaults this to empty; the seeding loop in
+    /// `init` handles state passed in explicitly.
     var devicePanes: [DevicePaneState]
     /// Placeholder panes for sim/device attaches that are in flight (or
     /// failed, awaiting Retry). A GUI-only concept the daemon never sees:
@@ -145,6 +146,11 @@ struct TabState: Identifiable, Equatable, Sendable {
     /// contiguous prefix of its array, so set it through
     /// `TabListViewModel.setPinned`, never directly on a live tab.
     var isPinned: Bool
+    /// What a tab restored from the saved layout applies once its
+    /// controller is built: the user's tab name and the divider
+    /// proportions. Nil on every other tab, and cleared once consumed. See
+    /// `RestoredTabPresentation`.
+    var restoredPresentation: RestoredTabPresentation?
 
     /// The primary terminal pane at index 0, always present. Tab-scoped
     /// operations such as sim-pane attribution use this. Public workspace
@@ -181,6 +187,7 @@ struct TabState: Identifiable, Equatable, Sendable {
         self.lastFocusedTerminal = nil
         self.lastFocusedPane = nil
         self.isPinned = isPinned
+        self.restoredPresentation = nil
         // Seed the layout tree: primary terminal as a single leaf, then
         // sibling-append every other terminal, sim, and device along the
         // horizontal axis. The mutation methods on `TabListViewModel`

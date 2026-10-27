@@ -148,24 +148,24 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
     private static let maxNotReadyRetries = 10
     /// Methods whose work is inherently long, given
     /// `slowRequestDeadlineNanos` instead of `requestDeadlineNanos`. The
-    /// lifecycle calls block inside CoreSimulator, and `pane.create` acquires
-    /// a pane backend. Keyed by method rather than by call site so the
-    /// allowance follows the call wherever it's issued from.
+    /// lifecycle calls block inside CoreSimulator. Keyed by method rather
+    /// than by call site so the allowance follows the call wherever it's
+    /// issued from.
     private static let slowMethods: Set<RPCMethod> = [
         .deviceBoot,
-        .deviceShutdown,
-        .paneCreate
+        .deviceShutdown
     ]
     /// Calls that mint daemon state, so abandoning their reply loses the only
     /// name for what they made. They are exempt from `bounded` (which cancels
     /// the loser of its race) and bounded by their caller through
     /// `Deadline.wait`, which lets the call finish and reconciles a late
-    /// reply. The two attaches are bounded by the Router's
+    /// reply. The attaches and `pane.create` are bounded by the Router's
     /// `attachDeadlineNanos` instead.
     private static let selfReconcilingMethods: Set<RPCMethod> = [
         .sessionCreate,
         .deviceAttach,
-        .physicalDeviceAttach
+        .physicalDeviceAttach,
+        .paneCreate
     ]
     /// Ordinary app RPCs and the low-rate app-command stream. Its generation
     /// is the daemon-client generation used by version checks and recovery.
@@ -1347,6 +1347,26 @@ final class DaemonClient: SessionControlling, DeviceControlling, AutomationGrant
         let params = try JSONSerialization.data(withJSONObject: body)
         let answer = try await requestWithGeneration(method: .deviceAttach, params: params)
         return (try decode(PaneCreateResponse.self, answer.data), answer.generation)
+    }
+
+    /// `pane.create` for a sim: a pane under `(sessionId, capability)` that
+    /// leaves the simulator's ownership where it was. See
+    /// `DeviceControlling.createSimPane`.
+    func createSimPane(
+        sessionId: String,
+        capability: String,
+        udid: String
+    ) async throws -> PaneCreateResponse {
+        attachRevision &+= 1
+        let params = try JSONSerialization.data(withJSONObject: [
+            "sessionId": sessionId,
+            "cap": capability,
+            "kind": "sim",
+            "udid": udid,
+            "revision": attachRevision
+        ])
+        let data = try await request(method: .paneCreate, params: params)
+        return try decode(PaneCreateResponse.self, data)
     }
 
     /// `device.restoreOwnership`: restore deviceterm's owned-sim claims to a

@@ -809,6 +809,21 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         tabContentByID[tabID]?.focusedPane()
     }
 
+    /// A tab's live divider proportions by split path, for the saved layout.
+    func paneRatios(inTab tabID: TabID) -> [[Int]: [CGFloat]] {
+        tabContentByID[tabID]?.splitVC.currentRatios() ?? [:]
+    }
+
+    /// A terminal's current working directory, for the saved layout.
+    func workingDirectory(of terminalID: TerminalPaneID, inTab tabID: TabID) -> String? {
+        tabContentByID[tabID]?.workingDirectory(of: terminalID)
+    }
+
+    /// The name the user gave a tab, nil for the automatic title.
+    func manualTitle(inTab tabID: TabID) -> String? {
+        tabContentByID[tabID]?.manualTitle
+    }
+
     func paneFrames(inTab tabID: TabID) -> [PaneSlot: CGRect]? {
         tabContentByID[tabID]?.paneFrames()
     }

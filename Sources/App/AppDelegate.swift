@@ -357,6 +357,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// default.
     private var pendingCloseModeByID: [WindowID: PaneCloseMode] = [:]
     private var observation: ObservationToken?
+    /// Records the layout for the next launch to restore. Nil under `--smoke`,
+    /// when `restore-session` is off, and until the launch's windows are open.
+    private var snapshotWriter: WorkspaceSnapshotWriter?
     /// Observation that re-supplies the daemon's inventory when the live session
     /// set changes (see `markInventoryDirtyIfChanged`). Non-smoke only.
     private var inventoryObservation: ObservationToken?
@@ -579,9 +582,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                         // its gate asserts on a known window set.
                         Task { @MainActor [weak self] in
                             guard let self else { return }
-                            await self.router.dispatchAndWait(
-                                .openWindow(reattach: orphansToReattach)
-                            )
+                            let restoring = SessionRestorePolicy.resolve(
+                                ConfigFile().value(forKey: SessionRestorePolicy.configKey)
+                            ) == .on
+                            if restoring, let snapshot = WorkspaceSnapshotStore().read() {
+                                await self.router.dispatchAndWait(
+                                    .restoreWorkspace(snapshot, reattach: orphansToReattach)
+                                )
+                                self.bringRestoredWindowForward()
+                            } else {
+                                await self.router.dispatchAndWait(
+                                    .openWindow(reattach: orphansToReattach)
+                                )
+                            }
+                            if restoring { self.startSnapshotWriter() }
                             await self.automationPrograms.start()
                             self.startPaneSnapshotsIfSeat()
                         }
@@ -1115,6 +1129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             guard await waitForWindowCount(1, timeoutSeconds: 5) else {
                 smokeFail("closeWindow did not drop to 1 window")
             }
+            // Stage 8: a saved layout comes back in the same shape. Split and
+            // name the tab, take the snapshot the writer would, round-trip it
+            // through the on-disk encoding, and restore it as a new window.
+            await runSmokeRestoreCheck(windowID: windowID)
             // NOTE: the Detach/Shut-Down NSAlert prompt, the pane shutdown
             // overlay (needs a real booted sim), the status-item count
             // (lives in the daemon's NSStatusItem), and the ⌘Q quit-with-
@@ -1124,6 +1142,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             FileHandle.standardOutput.write(Data("smoke: ok\n".utf8))
             exit(0)
         }
+    }
+
+    /// Stage 8 of the smoke check. See `runSmokeCheck`.
+    private func runSmokeRestoreCheck(windowID: WindowID) async {
+        guard let tabID = workspace.window(id: windowID)?.tabs.tabs.first?.id else {
+            smokeFail("no tab to snapshot")
+        }
+        await router.dispatchAndWait(.openTerminalPane(tab: tabID, axis: .vertical))
+        renameTab(window: windowID, tab: tabID, to: "smoke")
+        let split = await pollState(timeoutSeconds: 5) { [weak self] in
+            self?.workspace.window(id: windowID)?.tabs.tab(id: tabID)?.terminals.count == 2
+                && self?.strip(for: windowID)?.manualTitle(inTab: tabID) == "smoke"
+        }
+        guard split else { smokeFail("split + rename did not land before the snapshot") }
+        guard let encoded = try? WorkspaceSnapshotStore.encode(currentSnapshot()),
+            let saved = WorkspaceSnapshotStore.decode(encoded) else {
+            smokeFail("workspace snapshot did not round-trip its encoding")
+        }
+        guard saved.windows.count == 1, saved.windows.first?.tabs.first?.title == "smoke" else {
+            smokeFail("workspace snapshot did not record the split, named tab")
+        }
+        await router.dispatchAndWait(.restoreWorkspace(saved))
+        guard await waitForWindowCount(2, timeoutSeconds: 8),
+            let restored = workspace.windows.last, restored.id != windowID else {
+            smokeFail("restoreWorkspace did not open a window")
+        }
+        let shapeMatches = await pollState(timeoutSeconds: 5) { [weak self] in
+            guard let self,
+                let original = workspace.window(id: windowID)?.tabs.tab(id: tabID),
+                let tab = restored.tabs.tabs.first else { return false }
+            return restored.tabs.tabs.count == 1
+                && tab.terminals.count == 2
+                && splitAxes(tab.paneTree) == splitAxes(original.paneTree)
+                && strip(for: restored.id)?.manualTitle(inTab: tab.id) == "smoke"
+        }
+        guard shapeMatches else { smokeFail("restored window does not match the saved layout") }
+        router.dispatch(.closeWindow(restored.id, mode: .detach))
+        guard await waitForWindowCount(1, timeoutSeconds: 5) else {
+            smokeFail("closing the restored window did not drop to 1 window")
+        }
+    }
+
+    /// A tree's split axes in walk order, which compares two trees' shape
+    /// without their pane ids.
+    private func splitAxes(_ node: PaneNode) -> [SplitAxis] {
+        guard case let .split(axis, children, _) = node else { return [] }
+        return [axis] + children.flatMap(splitAxes)
     }
 
     private func waitForTabCount(
@@ -1234,6 +1299,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // flag so there is nothing left to fire; no path here declines the
         // termination.
         daemonClient.onUnresponsive = nil
+        // Before any window closes: the teardown below empties the workspace,
+        // and the layout to restore is the one the user quit with.
+        snapshotWriter?.saveFinal()
         let liveIDs = workspace.windows.map(\.id)
         if liveIDs.isEmpty { return .terminateNow }
         Task { @MainActor in
@@ -1945,10 +2013,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             let windowCtl = WindowController(content: tabController)
             windowCtl.window?.delegate = self
+            if let window = windowCtl.window, let saved = windowState.restoredFrame,
+                let frame = RestoredWindowFrameDecision.frame(
+                    saved: saved,
+                    visibleScreenFrames: NSScreen.screens.map(\.visibleFrame),
+                    minSize: window.minSize
+                ) {
+                window.setFrame(frame, display: false)
+            }
             windowControllerByID[windowState.id] = windowCtl
             windowCtl.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// Put the window a restore chose in front, once every restored window
+    /// has a controller.
+    ///
+    /// Each window takes key as its controller is built, and taking key
+    /// selects it (`windowDidBecomeKey`). The restore builds its windows
+    /// across several suspensions, and the reconcile that builds the last of
+    /// them can run after the Router's own selection, so whichever was built
+    /// last would otherwise end up in front. Reconciling here first means no
+    /// controller is still to come.
+    private func bringRestoredWindowForward() {
+        guard let front = router.restoredFrontWindow else { return }
+        reconcileWindows()
+        workspace.select(id: front)
+        windowControllerByID[front]?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Start recording the layout for the next launch to restore.
+    private func startSnapshotWriter() {
+        guard snapshotWriter == nil else { return }
+        let store = WorkspaceSnapshotStore()
+        let writer = WorkspaceSnapshotWriter(write: store.write) { [weak self] in
+            self?.currentSnapshot() ?? WorkspaceSnapshot(windows: [], selectedWindow: nil)
+        }
+        snapshotWriter = writer
+        writer.start()
+    }
+
+    /// The layout as it stands, with what only the window controllers know.
+    private func currentSnapshot() -> WorkspaceSnapshot {
+        WorkspaceSnapshotBuilder.build(
+            workspace: workspace,
+            sources: WorkspaceSnapshotBuilder.Sources(
+                windowFrame: { [weak self] id in self?.windowControllerByID[id]?.window?.frame },
+                ratios: { [weak self] tabID in
+                    self?.strip(containing: tabID)?.paneRatios(inTab: tabID) ?? [:]
+                },
+                workingDirectory: { [weak self] tabID, terminalID in
+                    self?.strip(containing: tabID)?.workingDirectory(of: terminalID, inTab: tabID)
+                },
+                manualTitle: { [weak self] tabID in
+                    self?.strip(containing: tabID)?.manualTitle(inTab: tabID)
+                }
+            )
+        )
+    }
+
+    /// The tab strip of the window holding `tabID`.
+    private func strip(containing tabID: TabID) -> TabStripViewController? {
+        workspace.windowContaining(tab: tabID).flatMap { strip(for: $0.id) }
     }
 
     private func fail(_ message: String) {

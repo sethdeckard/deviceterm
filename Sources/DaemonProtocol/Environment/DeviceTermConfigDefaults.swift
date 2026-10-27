@@ -82,6 +82,15 @@ public enum DeviceTermConfigDefaults {
                 + "automatically and notifies when an update is available; download also "
                 + "installs it on relaunch; off disables automatic checks (the "
                 + "Check for Updates… menu item still works)."
+        ),
+        ConfigKeySpec(
+            key: "restore-session",
+            defaultValue: "on",
+            allowedValues: ["on", "off"],
+            summary: "Whether relaunching reopens the windows, tabs, and panes open at "
+                + "quit. on restores the layout with a fresh shell in each terminal's "
+                + "last directory and reattaches device panes without booting anything; "
+                + "off opens one new window and records nothing."
         )
     ]
 

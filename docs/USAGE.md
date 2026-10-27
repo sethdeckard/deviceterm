@@ -348,6 +348,28 @@ Closing the last window does not quit DeviceTerm. If no windows remain when you
 quit, DeviceTerm exits without presenting another window-scoped Simulator
 prompt. Detached Simulators continue running.
 
+### Relaunch DeviceTerm
+
+Relaunching reopens the windows, tabs, and panes that were open when you
+quit, with their names, pins, and divider positions. Each terminal starts a
+fresh shell in the directory it was last in. Nothing that was running in a
+terminal comes back.
+
+Simulator and device panes reattach in their slots. A Simulator that's shut
+down comes back as a placeholder with a Boot button, because a relaunch never
+boots anything.
+
+A restored Simulator pane doesn't make DeviceTerm the Simulator's owner.
+Close Tab and Shut Down All & Quit leave a borrowed Simulator running while it
+remains unowned by DeviceTerm. Retrying its attachment or reattaching after a
+helper restart claims ownership. If you quit with Keep
+Running and choose Re-attach at the next launch's prompt, those Simulators go
+back into their saved slots and DeviceTerm owns them again.
+
+If you close every window before quitting, the next launch opens one new
+window. To get that on every launch, set `restore-session = off` in
+`~/.config/deviceterm/config`.
+
 ### Use the Status Item
 
 The daemon shows a menu bar status item while at least one owned Simulator is

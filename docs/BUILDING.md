@@ -265,6 +265,7 @@ their recognized keys are disjoint. The app ignores unknown DeviceTerm keys;
 | `device-hub-advisory` | `show`, `suppress` | `show` | Whether to show the Device Hub coexistence advisory when a pane is attached while Xcode 27's Device Hub is also running. The advisory names the hazard for the pane's kind: quitting Device Hub shuts down every booted Simulator, and a physical device can be driven by only one app at a time. At most one coexistence advisory appears per launch, and this one takes priority over `simulator-app-advisory` when both apply, because its hazard reaches further: it shuts down booted Simulators Device Hub never opened. `suppress` hides it, which also makes Simulator.app's reachable again. |
 | `welcome-messages` | `show`, `suppress` | `show` | Whether to show first-run welcome windows, which explain a DeviceTerm behavior once. `suppress` hides every welcome, including ones not yet seen; each stays reachable from the Help menu. |
 | `auto-update` | `off`, `check`, `download` | `check` | How the app handles updates via Sparkle. `check` checks automatically and notifies when an update is available; `download` also installs it on relaunch; `off` disables automatic checks (the Check for Updates… menu item still works). |
+| `restore-session` | `on`, `off` | `on` | Whether relaunching reopens the windows, tabs, and panes open at quit. `on` restores the layout with a fresh shell in each terminal's last directory and reattaches device panes without booting anything; `off` opens one new window and records nothing. |
 
 Most of these keys are written when the user ticks "Don't ask again" /
 "Don't show again" on the matching prompt; deleting one from the file
@@ -277,6 +278,15 @@ self-documenting: each key the app sets is preceded by a doc comment
 hasn't set is appended as a commented-out example, so the file lists
 every available option. Hand-edited lines, comments, and unknown keys
 are preserved verbatim.
+
+DeviceTerm keeps the layout it restores in
+`$XDG_STATE_HOME/deviceterm/workspace.json` (`~/.local/state` when the
+variable is unset). The app writes this file; it isn't configuration, so
+keep it out of your dotfiles. A build run from a checkout's `.build`
+directory uses `workspace-<digest>.json` instead, named for that checkout,
+so `make run` and the installed app never reopen each other's windows.
+Delete the file while DeviceTerm isn't running and the next launch opens one
+new window.
 
 Which welcomes have already appeared is not a preference and is not kept
 here. It lives in `$XDG_CACHE_HOME/deviceterm/welcome-seen` (or
@@ -371,9 +381,11 @@ at the next launch.
 app as `DEVICETERM_AUTOMATION_PROGRAMS`, and your own file is skipped for
 that launch. A relative `cwd` there resolves against `.dev-seat/`.
 
-Relaunching the app ends every tab, so a program in this file restarts
-with each `make run`. An agent that runs `make run` itself can't live in
-one of these tabs, because its own relaunch closes the tab it runs in.
+Relaunching the app ends every shell and program running in it. Ordinary
+tabs come back with fresh shells (see `restore-session`). These tabs come
+back because this file opens them again, so a program in it restarts with
+each `make run`. An agent that runs `make run` itself can't live in one of
+these tabs, because its own relaunch ends it.
 
 ## Shell completions + man page
 
