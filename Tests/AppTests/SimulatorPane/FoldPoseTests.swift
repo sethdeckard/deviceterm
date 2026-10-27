@@ -76,14 +76,14 @@ struct FoldTurnoverTests {
         (false, 87.0, true, false)
     ])
     func theHingeTurnsTheDeviceOver(wasClosed: Bool, degrees: Double, coverLit: Bool, closed: Bool) {
-        #expect(FoldTurnover.showsClosed(wasClosed: wasClosed, foldingAt: degrees, coverLit: coverLit) == closed)
+        #expect(FoldTurnover.showsClosed(wasClosed: wasClosed, hinge: degrees, coverLit: coverLit) == closed)
     }
 
     @Test
-    func withoutAFoldTheLitPanelDecides() {
-        #expect(FoldTurnover.showsClosed(wasClosed: false, foldingAt: nil, coverLit: true))
-        #expect(!FoldTurnover.showsClosed(wasClosed: true, foldingAt: nil, coverLit: false))
-        #expect(FoldTurnover.showsClosed(wasClosed: nil, foldingAt: 120, coverLit: true))
+    func withoutAHingeReadingTheLitPanelDecides() {
+        #expect(FoldTurnover.showsClosed(wasClosed: false, hinge: nil, coverLit: true))
+        #expect(!FoldTurnover.showsClosed(wasClosed: true, hinge: nil, coverLit: false))
+        #expect(FoldTurnover.showsClosed(wasClosed: nil, hinge: 120, coverLit: true))
     }
 
     @Test

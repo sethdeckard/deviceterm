@@ -34,13 +34,13 @@ enum FoldTurnover {
 
     /// Whether to show the device closed.
     ///
-    /// While a fold is under way the hinge decides, as it does in Device Hub,
-    /// whichever panel iOS has lit so far: iOS moves the lit panel at angles
-    /// of its own, which depend on the path the hinge took, and the pane
-    /// learns of the move later still. `wasClosed` is what was shown, nil
-    /// before anything was. With nothing shown yet, or no fold under way
-    /// (`foldingAt` nil), the lit panel decides.
-    static func showsClosed(wasClosed: Bool?, foldingAt degrees: Double?, coverLit: Bool) -> Bool {
+    /// The hinge decides, as it does in Device Hub, whichever panel iOS has
+    /// lit: iOS moves the lit panel at angles of its own, well past these, and
+    /// sometimes not at all, and a panel it hasn't lit shows black rather than
+    /// the device flipping to the other side.
+    /// `wasClosed` is what was shown, nil before anything was. With nothing
+    /// shown yet, or no hinge reading (`hinge` nil), the lit panel decides.
+    static func showsClosed(wasClosed: Bool?, hinge degrees: Double?, coverLit: Bool) -> Bool {
         guard let wasClosed, let degrees else { return coverLit }
         return wasClosed ? degrees < opensAbove : degrees <= closesBelow
     }

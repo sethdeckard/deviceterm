@@ -635,6 +635,28 @@ struct SimulatorPaneDeviceSpaceTests {
         #expect(!viewController.drawsPosedFold)
     }
 
+    @Test("held open with the cover still lit, the device stays open, black, as in Device Hub")
+    func theHingeKeepsTheDeviceOpenWhileIOSKeepsTheCoverLit() async throws {
+        let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()
+        viewController.loadViewIfNeeded()
+        await send(fake, panel(spansHinge: false, spanning: CGSize(width: 8, height: 12)))
+        await send(fake, orientation(.portrait, device: .portrait))
+        await send(fake, .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 0, spansHinge: false)))
+        await send(fake, try frame(width: 6, height: 9, sequence: 1))
+        await settle(viewController) { viewController.foldShownClosed == true }
+        // Opened past where iOS would light the inner panel, which it doesn't.
+        await send(fake, .hingeChanged(HingeChangedEvent(paneId: "p1", degrees: 95, spansHinge: false)))
+        await settle(viewController) { viewController.foldShownClosed == false }
+        #expect(viewController.foldShownClosed == false)
+        #expect(viewController.drawsPosedFold)
+        // Still open once the hinge has been still a while: no hand-back to
+        // the cover iOS keeps lit.
+        try await Task.sleep(nanoseconds: 3_500_000_000)
+        await send(fake, try frame(width: 6, height: 9, sequence: 2))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(viewController.foldShownClosed == false)
+    }
+
     @Test("a cover iOS keeps lit far open leans no further than the hinge closes it")
     func aLitCoverFarOpenLeansNoFurther() async throws {
         let (viewController, fake) = SimulatorPaneFoldIntentTests().makeViewController()

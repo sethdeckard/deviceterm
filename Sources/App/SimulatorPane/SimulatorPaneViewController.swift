@@ -21,10 +21,6 @@ private let panelLog = Logger(subsystem: "com.deviceterm", category: "panel")
 /// close/reboot/state callbacks.
 @MainActor
 final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegate {
-    /// How long after the hinge last moved the hinge still decides which side
-    /// of the device is shown. iOS moves the lit panel up to a second or so
-    /// after a fold, and the pane learns of the move after that.
-    static let foldSwitchWindow: TimeInterval = 3
     /// The shallowest fold the inner panel is drawn at. iOS can light it with
     /// the hinge nearly shut (at boot, or along some hinge paths), and drawn
     /// at the true angle it would be edge-on: a line, or nothing.
@@ -218,12 +214,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// The last foldable draw state written to the `panel` log, so only a
     /// change is logged.
     private var loggedDrawState: String?
-    /// Until when a fold counts as under way, so the hinge rather than the
-    /// lit panel decides the side shown: a while after the hinge last moved.
-    private var foldActiveUntil = Date.distantPast
-    private var seenHingeDegrees: Double?
-    /// Hands the side shown back to the lit panel once the fold is over.
-    private var foldSettle: DispatchWorkItem?
     /// The cover's frame size, from the last cover frame. Until one has been
     /// seen the device can't be posed closed, and the pane cuts between
     /// panels instead.
@@ -925,11 +915,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
     /// side turns the device over.
     private func updatePosedFold(lease: SurfaceLease?) {
         guard viewModel.capabilities.fold, let content = contentView else { return }
-        let degrees = viewModel.confirmedHingeDegrees
-        if degrees != seenHingeDegrees || previewsSlider {
-            seenHingeDegrees = degrees
-            foldActiveUntil = Date().addingTimeInterval(Self.foldSwitchWindow)
-        }
         guard lease != nil else {
             // Hidden, or nothing to show yet: nothing to pose either, and the
             // next frame is shown as it is rather than turned over to.
@@ -939,23 +924,22 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
         }
         let innerLit = drawnPanelSpansHinge
         if !innerLit { coverSize = content.surfaceSize }
-        let folding = Date() < foldActiveUntil
         let closed = FoldTurnover.showsClosed(
             wasClosed: foldShownClosed,
-            foldingAt: folding ? drawnHingeDegrees : nil,
+            hinge: drawnHingeDegrees,
             coverLit: !innerLit
         )
         let wasClosed = foldShownClosed
         foldShownClosed = closed
-        if folding, closed == innerLit { scheduleFoldSettle() }
         let posable = viewModel.currentDeviceOrientation != nil && viewModel.spanningPanelSize != nil
             && coverSize != nil
         if let wasClosed, wasClosed != closed {
             let angle = drawnHingeDegrees.map { String(format: "%.1f", $0) } ?? "unknown"
+            let source = drawnHingeDegrees == nil ? "lit panel" : previewsSlider ? "slider" : "hinge"
             panelLog.notice(
                 """
                 fold shown \(closed ? "closed" : "open", privacy: .public) at \(angle, privacy: .public)°, \
-                from \(folding ? (self.previewsSlider ? "slider" : "hinge") : "lit panel", privacy: .public), \
+                from \(source, privacy: .public), \
                 lit \(innerLit ? "inner" : "cover", privacy: .public), \
                 \(posable ? "turns over" : "cuts, panel sizes unknown", privacy: .public)
                 """
@@ -973,9 +957,9 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
             SimulatorContentView.PosedFold(
                 closed: closed,
                 openTurn: max(0, (180 - openDegrees) / 2) * .pi / 180,
-                // No further than the hinge shows the device closed by itself:
-                // past that it's closed only because iOS kept the cover lit,
-                // and the lean would outgrow the pose that hides the inner half.
+                // No further than the angle the device opens at: shown closed
+                // past it, as for the first frame before the hinge has a say,
+                // the lean would outgrow the pose that hides the inner half.
                 closedHinge: min(max(0, drawnHingeDegrees ?? 0), FoldTurnover.opensAbove) * .pi / 180,
                 showsInnerFrame: innerLit,
                 innerOrientation: FoldablePanelOrientation.display(forDevice: device, onInnerPanel: true),
@@ -985,19 +969,6 @@ final class SimulatorPaneViewController: NSViewController, SimulatorInputDelegat
                 family: DeviceFamily(wire: viewModel.family)
             )
         )
-    }
-
-    /// Look again once the fold is over, when the side shown goes back to
-    /// the lit panel: nothing else may arrive to prompt it.
-    private func scheduleFoldSettle() {
-        foldSettle?.cancel()
-        let settle = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.updatePosedFold(lease: self.viewModel.currentSurface)
-        }
-        foldSettle = settle
-        let delay = foldActiveUntil.timeIntervalSinceNow + 0.05
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay), execute: settle)
     }
 
     /// A point in the drawn picture's displayed space, re-expressed in the
