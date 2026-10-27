@@ -259,24 +259,27 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
 
     // MARK: - Reconcile API
 
-    /// Replace the tree with `newTree`. `paneVCFactory` is invoked once
-    /// for any slot present in the new tree but absent from the
-    /// current pane VC registry; removed slots have their VCs dropped
-    /// (caller has already torn down the daemon-side resources).
+    /// Replace the tree with `newTree`. `paneVCFactory` is queried once
+    /// for each slot in the new tree. A non-nil answer replaces a
+    /// different mounted controller; nil preserves an existing one.
+    /// Removed slots have their VCs dropped (caller has already torn
+    /// down the daemon-side resources).
     ///
-    /// Three early-returns matter:
-    ///   1. Identical tree + identical pane VC membership → no-op.
-    ///      The observation pipeline fires this on every nav-state
-    ///      change in the tab (sim lifecycle, title, etc.), and
-    ///      re-parenting the libghostty surface during a no-op tree
-    ///      pass disturbs attach timing.
-    ///   2. Same tree, different membership → just update the VC
-    ///      registry; no view hierarchy rebuild.
-    ///   3. Different tree → full rebuild, preserving keyboard focus
-    ///      on the previously-focused slot so the user can keep
-    ///      typing after a drag rearrange or ⌘⇧← / ⌘⇧→. When that slot
-    ///      is one of the panes going away, focus hands off to the
-    ///      nearest surviving neighbor instead.
+    /// Three outcomes matter:
+    ///   1. Identical tree + the same controller behind every slot →
+    ///      no-op. The observation pipeline fires this on every
+    ///      nav-state change in the tab (sim lifecycle, title, etc.),
+    ///      and re-parenting the libghostty surface during a no-op
+    ///      tree pass disturbs attach timing.
+    ///   2. Same tree, membership changed without a replaced
+    ///      controller → just update the VC registry; no view
+    ///      hierarchy rebuild.
+    ///   3. Different tree, or a surviving slot whose controller was
+    ///      replaced → full rebuild, preserving keyboard focus on the
+    ///      previously-focused slot so the user can keep typing after a
+    ///      drag rearrange or ⌘⇧← / ⌘⇧→. When that slot is one of the
+    ///      panes going away, focus hands off to the nearest surviving
+    ///      neighbor instead.
     ///
     /// `pendingTargets` maps each placeholder in the tree to the target it
     /// represents. The tree carries only a `PendingPaneID`, so without it
@@ -312,11 +315,30 @@ final class PaneLayoutViewController: NSViewController, NSUserInterfaceValidatio
             paneVCs[slot] = paneVC
             addChild(paneVC)
         }
+        // A slot can keep its key while the controller behind it changes. A
+        // re-attach replaces the pane behind the same udid, and when its
+        // placeholder swap in and out lands in one observation pass the slot
+        // never leaves the tree. The factory's current answer is the
+        // controller to mount; a nil answer keeps what is there.
+        var replacedPane = false
+        for slot in newSlots.intersection(oldSlots) {
+            guard let paneVC = paneVCFactory(slot),
+                let current = paneVCs[slot],
+                paneVC !== current else { continue }
+            current.removeFromParent()
+            current.view.removeFromSuperview()
+            paneVCs[slot] = paneVC
+            addChild(paneVC)
+            replacedPane = true
+        }
         // Before the tree-equality early return: membership can change
         // with the tree untouched (a pending leaf swapping to the real
         // pane keeps its position), and that swap changes identity.
         applyAccessibilityIdentifiers()
-        guard newTree != tree else { return }
+        // A replaced pane needs the rebuild even under an unchanged tree,
+        // because its view is not in the hierarchy until `makeView` puts it
+        // there.
+        guard newTree != tree || replacedPane else { return }
         let fit = PaneAutoFitDecision.advance(
             previous: lastFitPaths,
             tree: newTree,
