@@ -63,16 +63,20 @@ static NSError *CSBRemoteErrorCausedBy(NSString *description, NSError *cause) {
         }
         return nil;
     }
-    // The send right is left alone: whether the endpoint takes it over is
-    // unverified, and releasing one the endpoint still uses would break the
-    // connection.
+    // `lookup:error:` adds a send reference this channel owns. The endpoint
+    // and the connection use the same name without taking one of their own,
+    // so every path out releases it: the failures below now, a channel once
+    // its connection's last event says XPC is done with it.
     xpc_endpoint_t endpoint = makeEndpoint(port);
     if (!endpoint) {
+        (void)mach_port_deallocate(mach_task_self(), port);
         if (error) *error = CSBRemoteError([NSString stringWithFormat:@"No endpoint for %@.", service]);
         return nil;
     }
     xpc_connection_t connection = xpc_connection_create_from_endpoint(endpoint);
     if (!connection) {
+        endpoint = nil;
+        (void)mach_port_deallocate(mach_task_self(), port);
         if (error) *error = CSBRemoteError([NSString stringWithFormat:@"No connection to %@.", service]);
         return nil;
     }
@@ -84,8 +88,19 @@ static NSError *CSBRemoteErrorCausedBy(NSString *description, NSError *cause) {
     channel.endpoint = endpoint;
     xpc_connection_set_target_queue(connection, dispatch_queue_create("deviceterm.hid.remote", DISPATCH_QUEUE_SERIAL));
     __weak SimRemoteHIDChannel *weakChannel = channel;
+    // Runs on the connection's serial queue, and outlives the channel: the
+    // connection keeps it until its last event.
+    __block BOOL released = NO;
     xpc_connection_set_event_handler(connection, ^(xpc_object_t event) {
-        if (xpc_get_type(event) == XPC_TYPE_ERROR) weakChannel.lost = YES;
+        if (xpc_get_type(event) != XPC_TYPE_ERROR) return;
+        weakChannel.lost = YES;
+        // `XPC_ERROR_CONNECTION_INVALID` is the last event a connection gets,
+        // after a cancel has finished or the service has gone. XPC is done
+        // with the port then, and not before.
+        if (event == XPC_ERROR_CONNECTION_INVALID && !released) {
+            released = YES;
+            (void)mach_port_deallocate(mach_task_self(), port);
+        }
     });
     xpc_connection_resume(connection);
     return channel;
@@ -143,6 +158,7 @@ static NSError *CSBRemoteErrorCausedBy(NSString *description, NSError *cause) {
     xpc_connection_cancel(self.connection);
 }
 
+/// Cancelling is what releases the port: its connection's last event does.
 - (void)dealloc {
     xpc_connection_cancel(_connection);
 }

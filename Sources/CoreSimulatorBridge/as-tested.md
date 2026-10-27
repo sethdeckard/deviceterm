@@ -98,7 +98,7 @@ in the active Xcode before its machine-wide fallbacks.
 | C symbol (optional) | `IndigoHIDMessageForDigitalCrownEvent`                             | `SimHIDClient`        | `IndigoMessage * (^)(double delta)` — builds a watchOS Digital Crown rotary event; signed `delta` is the rotation (sign = direction). **Optional / best-effort**: watchOS-only, absent on older SimulatorKit; the probe reports but does not fail on its absence, and only `rotateCrown(delta:)` requires it (other HID is unaffected). Single-`double` signature reverse-engineered + live-confirmed (see "Digital Crown (watchOS)" below). |
 | instance selector  | `-[SimDevice lookup:error:]`                                         | `SimPurpleHID`        | Look up a named Mach service in the simulator's bootstrap namespace; used to resolve `PurpleWorkspacePort`. Also resolves `dtuhidd`'s services for `SimRemoteHIDChannel`. |
 | Mach service       | `PurpleWorkspacePort` (runtime-only)                                 | `SimPurpleHID`        | Sim-side Mach port that accepts GSEvent payloads (notably device-orientation messages). Existence verified at use time — the probe can't introspect bootstrap names without a booted device. |
-| C symbol (optional) | `xpc_endpoint_create_mach_port_4sim`                                | `SimRemoteHIDChannel` | libSystem SPI. Wraps a Mach port from the simulator's bootstrap as an XPC endpoint. Absent, every input goes through Indigo. |
+| C symbol (optional) | `xpc_endpoint_create_mach_port_4sim`                                | `SimRemoteHIDChannel` | libSystem SPI. Wraps a Mach port from the simulator's bootstrap as an XPC endpoint. It takes no send reference of its own, so the caller still owns the one `lookup:error:` returned. Absent, every input goes through Indigo. |
 | C symbol (optional) | `xpc_connection_enable_sim2host_4sim`                               | `SimRemoteHIDChannel` | libSystem SPI. Marks the connection as host-to-simulator. Without it, `dtuhidd` drops the peer as soon as it activates. |
 | Mach service       | `com.apple.coredevice.feature.remote.universalhidservice` (runtime-only) | `SimRemoteHIDChannel` | `dtuhidd`'s touch service, and where a simulated hardware keyboard is registered and removed. Same request vocabulary as a device's `universalhidservice`. |
 | Mach service       | `com.apple.coredevice.feature.remote.hid.button` (runtime-only)      | `SimRemoteHIDChannel` | `dtuhidd`'s hardware-button service; takes `IndigoButtonEvent`. |
@@ -272,7 +272,8 @@ constants survive review/rebase independent of any commit body.
 
 - **When / where:** 2026-10-24 · Xcode 27.1 RC · iOS 27.0 iPhone 17 and
   iPad Pro 11 (M5), iOS 26.5 and iOS 18.1 iPhones, watchOS 27.0, iOS 27.1
-  iPhone Duo. Keyboard findings 2026-10-25, iOS 27.0 iPhone 17.
+  iPhone Duo. Keyboard findings 2026-10-25, iOS 27.0 iPhone 17. Send-right
+  finding 2026-10-26, iOS 27.0 iPhone 17.
 - **The gate.** The guest's `SimulatorHID.framework` (loaded by
   backboardd) watches the notify state `com.apple.coredevice.dtuhidd.active`.
   While it's set, `_locked_updateDTUHIDDAffectedServices` disconnects the
@@ -288,6 +289,15 @@ constants survive review/rebase independent of any commit body.
   `xpc_connection_create_from_endpoint`, then call
   `xpc_connection_enable_sim2host_4sim`. This is what CoreDevice's
   `SimulatorCoreDevicePlugin` does.
+- **The lookup's send reference is yours to release.** Each
+  `lookup:error:` adds a send reference to the service's port. The endpoint
+  and its connection use the same name without taking one, and releasing
+  the endpoint gives nothing back. Deallocate it when the connection's last
+  event, `XPC_ERROR_CONNECTION_INVALID`, arrives: after a cancel has
+  finished, or after the service went away. `xpc_connection_cancel` is
+  asynchronous, so releasing it right after the cancel can pull the port
+  from under a connection XPC hasn't finished with. Skipping it leaks one
+  reference per connection.
 - **The first message on a touch connection must be a request.**
   `dtuhidd` keeps a session only once it has answered one. Otherwise it logs
   "Event received for deallocated peer" after every message and rebuilds the
