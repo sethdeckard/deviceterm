@@ -85,6 +85,11 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
 
     weak var inputDelegate: SimulatorInputDelegate?
     private(set) var surfaceSize: CGSize = .zero
+    /// Modifier keys this view sent down and hasn't released, so they can be
+    /// released when key events stop arriving here: focus moves away, the
+    /// window stops being key, or the view leaves its window.
+    private(set) var heldModifierKeys: Set<UInt16> = []
+    private var windowKeyObserver: (any NSObjectProtocol)?
     /// The lease on the surface the view is drawing. Held here (and by
     /// each in-flight command buffer) so a device frame's pool hold isn't
     /// released until the surface is no longer current and every draw that
@@ -308,6 +313,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { requestRedraw() }
+        observeWindowKey()
     }
 
     /// The draw reads the window's backing scale for the bezel inset, so a
@@ -950,6 +956,7 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
         if event.modifierFlags.contains(.command) || KeybindingCatalog.claims(event) {
             super.keyDown(with: event); return
         }
+        reconcileModifierKeys(with: event.modifierFlags)
         inputDelegate?.simulatorPaneKeyDown(keyCode: event.keyCode)
     }
 
@@ -958,6 +965,70 @@ final class SimulatorContentView: MTKView, MTKViewDelegate {
             super.keyUp(with: event); return
         }
         inputDelegate?.simulatorPaneKeyUp(keyCode: event.keyCode)
+    }
+
+    /// Forward Shift, Control and Option presses and releases, which AppKit
+    /// reports only here. A release this view never sent the press for, from
+    /// a key held before focus arrived, isn't forwarded.
+    override func flagsChanged(with event: NSEvent) {
+        guard let pressed = SimModifierKeys.isPressed(keyCode: event.keyCode, modifierFlags: event.modifierFlags) else {
+            super.flagsChanged(with: event); return
+        }
+        if pressed {
+            guard heldModifierKeys.insert(event.keyCode).inserted else { return }
+            inputDelegate?.simulatorPaneKeyDown(keyCode: event.keyCode)
+        } else {
+            guard heldModifierKeys.remove(event.keyCode) != nil else { return }
+            inputDelegate?.simulatorPaneKeyUp(keyCode: event.keyCode)
+        }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        releaseHeldModifierKeys()
+        return super.resignFirstResponder()
+    }
+
+    /// Bring the modifiers the device holds in line with the ones a key event
+    /// shows held, before the key itself goes. A modifier held through a
+    /// focus change was released on the way out and never pressed again on
+    /// the way back, so without this Shift-`;` would type `;` until Shift was
+    /// pressed afresh.
+    private func reconcileModifierKeys(with modifierFlags: NSEvent.ModifierFlags) {
+        let held = SimModifierKeys.pressedKeyCodes(in: modifierFlags)
+        for keyCode in heldModifierKeys.subtracting(held).sorted() {
+            heldModifierKeys.remove(keyCode)
+            inputDelegate?.simulatorPaneKeyUp(keyCode: keyCode)
+        }
+        for keyCode in held.subtracting(heldModifierKeys).sorted() {
+            heldModifierKeys.insert(keyCode)
+            inputDelegate?.simulatorPaneKeyDown(keyCode: keyCode)
+        }
+    }
+
+    /// Release every modifier this view sent down. Their key-ups would go to
+    /// whatever has focus next, so the device would keep them held.
+    func releaseHeldModifierKeys() {
+        let held = heldModifierKeys
+        heldModifierKeys = []
+        for keyCode in held.sorted() { inputDelegate?.simulatorPaneKeyUp(keyCode: keyCode) }
+    }
+
+    /// Release held modifiers when the window stops being key (⌘-Tab, say),
+    /// re-armed for whichever window the view is in now.
+    private func observeWindowKey() {
+        if let windowKeyObserver { NotificationCenter.default.removeObserver(windowKeyObserver) }
+        windowKeyObserver = nil
+        guard let window else {
+            releaseHeldModifierKeys()
+            return
+        }
+        windowKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.releaseHeldModifierKeys() }
+        }
     }
 
     override func magnify(with event: NSEvent) {
